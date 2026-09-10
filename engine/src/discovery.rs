@@ -797,19 +797,21 @@ mod tests {
         let _home =
             temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
                 temp_env::with_var("XDG_DATA_HOME", Some(xdg_data.to_str().unwrap()), || {
-                    temp_env::with_var("PI_CONFIG_DIR", Some("/pi/config"), || {
-                        temp_env::with_var("PI_CODING_AGENT_DIR", Some("/pi/agent"), || {
-                            temp_env::with_var("PI_PROFILE", Some("pi-profile"), || {
-                                temp_env::with_var("OMP_PROFILE", Some("work"), || {
-                                    let roots = crate::omp_session::configured_session_roots(&cwd);
-                                    assert!(roots
-                                        .contains(&xdg_data.join("omp/profiles/work/sessions")));
-                                    assert!(roots
-                                        .contains(&xdg_data.join("omp/profiles/other/sessions")));
-                                    assert!(roots.contains(&std::path::PathBuf::from(
-                                        "/pi/config/profiles/work/agent/sessions",
-                                    )));
-                                    assert!(!roots.iter().any(|root| root.starts_with("/pi/agent")));
+                    temp_env::with_var("LONGHOUSE_OMP_CONFIG_DIR", Some("/omp/config"), || {
+                        temp_env::with_var("PI_CONFIG_DIR", Some("/pi/config"), || {
+                            temp_env::with_var("PI_CODING_AGENT_DIR", Some("/pi/agent"), || {
+                                temp_env::with_var("PI_PROFILE", Some("pi-profile"), || {
+                                    temp_env::with_var("OMP_PROFILE", Some("work"), || {
+                                        let roots = crate::omp_session::configured_session_roots(&cwd);
+                                        assert!(roots
+                                            .contains(&xdg_data.join("omp/profiles/work/sessions")));
+                                        assert!(roots
+                                            .contains(&xdg_data.join("omp/profiles/other/sessions")));
+                                        assert!(roots.contains(&std::path::PathBuf::from(
+                                            "/omp/config/profiles/work/agent/sessions",
+                                        )));
+                                        assert!(!roots.iter().any(|root| root.starts_with("/pi")));
+                                    })
                                 })
                             })
                         })

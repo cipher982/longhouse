@@ -1165,7 +1165,11 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         .env(
             "LONGHOUSE_OMP_HELM_INITIAL_PROMPT",
             config.prompt.as_deref().unwrap_or(""),
-        );
+        )
+        .env_remove("PI_CONFIG_DIR")
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("PI_CODING_AGENT_SESSION_DIR")
+        .env_remove("PI_PROFILE");
     if let Some(profile) = profile.as_deref() {
         command.arg("--profile").arg(profile);
     }

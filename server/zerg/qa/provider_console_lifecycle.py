@@ -1064,6 +1064,8 @@ def _served_run_inventory_evidence(
     """Prove the served run inventory retired the provider execution owner."""
 
     terminal_claims = [claim for claim in claims if claim.get("state") == "terminal"]
+    claim_run_ids = [str(claim.get("run_id") or "").strip() for claim in claims]
+    expected_run_id = claim_run_ids[-1] if claim_run_ids and claim_run_ids[-1] else None
     try:
         diagnostic = _request(api_url, token, "GET", f"/api/agents/sessions/{session_id}/state-diagnostics")
     except Exception as exc:  # noqa: BLE001 - cleanup evidence must fail closed
@@ -1071,6 +1073,7 @@ def _served_run_inventory_evidence(
             "retired": False,
             "active_run_count": None,
             "session_id": session_id,
+            "expected_run_id": expected_run_id,
             "error": f"{type(exc).__name__}: {exc}",
         }
     shadow = diagnostic.get("shadow") if isinstance(diagnostic.get("shadow"), Mapping) else {}
@@ -1078,21 +1081,34 @@ def _served_run_inventory_evidence(
     activity = shadow.get("activity") if isinstance(shadow, Mapping) and isinstance(shadow.get("activity"), Mapping) else {}
     terminal_state = str(run.get("lifecycle") or run.get("state") or "").lower()
     activity_state = str(activity.get("state") or "").lower()
+    served_session_id = str(diagnostic.get("session_id") or "")
+    served_run_id = str(run.get("id") or "")
+    session_identity_match = served_session_id == session_id
+    run_identity_match = expected_run_id is not None and served_run_id == expected_run_id
     retired = (
         len(terminal_claims) == len(claims)
         and bool(claims)
+        and len(claim_run_ids) == len(claims)
+        and all(claim_run_ids)
         and diagnostic.get("served_path") == "canonical_session_detail"
-        and terminal_state in {"completed", "failed", "cancelled", "terminal", "stopped"}
+        and session_identity_match
+        and run_identity_match
+        and terminal_state in {"completed", "ended", "failed", "cancelled", "terminal", "stopped"}
         and activity_state in {"", "quiescent", "idle", "finished"}
     )
     return {
         "retired": retired,
-        "active_run_count": 0 if retired else sum(claim.get("state") != "terminal" for claim in claims),
+        "active_run_count": 0 if retired else None,
         "session_id": session_id,
+        "served_session_id": served_session_id,
+        "expected_run_id": expected_run_id,
+        "served_run_id": served_run_id or None,
+        "session_identity_match": session_identity_match,
+        "run_identity_match": run_identity_match,
         "served_path": diagnostic.get("served_path"),
         "terminal_state": terminal_state or None,
         "activity_state": activity_state or None,
-        "run_ids": [claim.get("run_id") for claim in claims],
+        "run_ids": claim_run_ids,
     }
 
 
@@ -1388,6 +1404,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
     shipper: TranscriptShipper | None = None
     session_id: str | None = None
     cleanup_written = False
+    continuation_context_recalled = provider not in {"pi", "omp"}
     try:
         shipper = start_transcript_shipper(
             provider,
@@ -1417,6 +1434,8 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                 f"Remember this context phrase: {context_marker}. Use the read tool to read "
                 f"{workspace / 'pi-console-proof.txt'}, then reply with exactly {marker} and nothing else."
             )
+        elif provider == "omp":
+            message = f"Remember this context phrase: {context_marker}. Then reply with exactly {marker} and nothing else."
         request_id = f"console-release-{uuid4()}"
         first = _start_turn(
             api_url=api_url,
@@ -1468,10 +1487,10 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         first_native_source_path: Path | None = None
         first_native_source_size: int | None = None
         second_native_source_size: int | None = None
-        if provider == "pi":
+        if provider in {"pi", "omp"}:
             raw_first_native_source = first_claim.get("source_path")
             if not isinstance(raw_first_native_source, str) or not raw_first_native_source:
-                raise RuntimeError("first Console Pi turn has no retained native source boundary")
+                raise RuntimeError(f"first Console {provider} turn has no retained native source boundary")
             first_native_source_path = Path(raw_first_native_source)
             first_native_source_size = len(first_native_source_path.read_bytes())
         first_native_response = _pi_native_marker_evidence(first_native_source_path, marker) if provider == "pi" else None
@@ -1555,7 +1574,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         if provider in CAN_RESUME:
             resume_marker = f"LH_{provider.upper()}_RESUME_{uuid4().hex}"
             resume_message = f"Reply with exactly {resume_marker} and nothing else."
-            if provider == "pi":
+            if provider in {"pi", "omp"}:
                 resume_message = f"Reply with the context phrase you remember, followed by exactly {resume_marker} and nothing else."
             resume_request_id = f"console-resume-{uuid4()}"
             resume = _start_turn(
@@ -1581,20 +1600,32 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             )
             resume_events = _wait_exact_assistant_marker(api_url, token, session_id, resume_marker)
             resume_native_response: dict[str, object] | None = None
-            if provider == "pi":
+            if provider in {"pi", "omp"}:
                 raw_resume_source = resume_claim.get("source_path") or resume_claim.get("stdout_path")
                 if not isinstance(raw_resume_source, str) or not first_native_source_size:
-                    raise RuntimeError("second Console Pi turn has no native source boundary")
-                resume_native_response = _pi_native_marker_evidence(
-                    Path(raw_resume_source),
-                    resume_marker,
-                    minimum_source_offset=first_native_source_size,
-                )
-                if resume_native_response is None:
-                    raise RuntimeError("second Console Pi turn has no unique native assistant marker message")
-            resume_context_marker_count = event_text(resume_events[0]).count(context_marker) if provider == "pi" and resume_events else None
-            if provider == "pi" and resume_context_marker_count != 1:
-                raise RuntimeError("second Console turn did not recall the seeded first-turn context")
+                    raise RuntimeError(f"second Console {provider} turn has no native source boundary")
+                if provider == "pi":
+                    resume_native_response = _pi_native_marker_evidence(
+                        Path(raw_resume_source),
+                        resume_marker,
+                        minimum_source_offset=first_native_source_size,
+                    )
+                second_native_source_size = len(Path(raw_resume_source).read_bytes())
+                if second_native_source_size <= first_native_source_size:
+                    raise RuntimeError(f"second Console {provider} turn has no complete native source boundary")
+                if provider == "pi":
+                    resume_native_response = _pi_native_marker_evidence(
+                        Path(raw_resume_source),
+                        resume_marker,
+                        minimum_source_offset=first_native_source_size,
+                        maximum_source_offset=second_native_source_size,
+                    )
+                    if resume_native_response is None:
+                        raise RuntimeError("second Console Pi marker escaped its pre-interrupt native boundary")
+            resume_context_marker_count = (
+                event_text(resume_events[0]).count(context_marker) if provider in {"pi", "omp"} and resume_events else None
+            )
+            continuation_context_recalled = provider not in {"pi", "omp"} or resume_context_marker_count == 1
             if first_claim.get("provider_thread_id") is None or resume_claim.get("provider_thread_id") != first_claim.get(
                 "provider_thread_id"
             ):
@@ -1614,23 +1645,13 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             )
             if provider == "pi" and continuation_linkage is not None and continuation_linkage.get("proven") is not True:
                 raise RuntimeError("Console Pi continuation did not prove native/projected assistant linkage")
-            if provider == "pi":
-                second_native_source_size = len(Path(raw_resume_source).read_bytes())
-                if second_native_source_size <= first_native_source_size:
-                    raise RuntimeError("second Console Pi turn has no complete native source boundary")
-                resume_native_response = _pi_native_marker_evidence(
-                    Path(raw_resume_source),
-                    resume_marker,
-                    minimum_source_offset=first_native_source_size,
-                    maximum_source_offset=second_native_source_size,
-                )
-                if resume_native_response is None:
-                    raise RuntimeError("second Console Pi marker escaped its pre-interrupt native boundary")
             dispatch["resume_run_id"] = resume.get("run_id")
             dispatch["native_thread_resumed"] = True
             write_json(root / "adapter-dispatch-receipt.json", dispatch)
             continuation_receipt = {
-                "status": "pass",
+                "status": "pass" if continuation_context_recalled else "fail",
+                "failure_code": None if continuation_context_recalled else "context_not_recalled",
+                "context_recalled": continuation_context_recalled,
                 "provider": provider,
                 "session_id": session_id,
                 "thread_id": thread_id,
@@ -1874,7 +1895,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         )
         write_json(root / "cleanup-receipt.json", cleanup)
         native_tool_receipt: dict[str, object] | None = None
-        if provider == "pi":
+        if provider in {"pi", "omp"}:
             retained_by_source = {
                 str(item["source"]): root / Path(str(item["path"]))
                 for item in retained_sources
@@ -1885,25 +1906,26 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                 for item in retained_sources
                 if item.get("retained") is True and isinstance(item.get("source"), str) and isinstance(item.get("path"), str)
             }
-            raw_native_source = first_claim.get("source_path")
-            native_source = retained_by_source.get(raw_native_source) if isinstance(raw_native_source, str) else None
-            raw_response_source = first_claim.get(str(binding.get("provider_response_source_kind") or ""))
-            provider_response_source = retained_by_source.get(raw_response_source) if isinstance(raw_response_source, str) else None
-            native_tool_receipt = _pi_native_tool_receipt(
-                native_source=native_source,
-                provider_response_source=provider_response_source,
-                inspection=pi_tool_evidence,
-                dispatch=dispatch,
-                binding=binding,
-                binary_receipt=binary_receipt,
-                cleanup=cleanup,
-                marker=marker,
-                native_retained_path=retained_path_by_source.get(raw_native_source) if isinstance(raw_native_source, str) else None,
-                provider_response_retained_path=retained_path_by_source.get(raw_response_source)
-                if isinstance(raw_response_source, str)
-                else None,
-            )
-            write_json(root / "native-tool-receipt.json", native_tool_receipt)
+            if provider == "pi":
+                raw_native_source = first_claim.get("source_path")
+                native_source = retained_by_source.get(raw_native_source) if isinstance(raw_native_source, str) else None
+                raw_response_source = first_claim.get(str(binding.get("provider_response_source_kind") or ""))
+                provider_response_source = retained_by_source.get(raw_response_source) if isinstance(raw_response_source, str) else None
+                native_tool_receipt = _pi_native_tool_receipt(
+                    native_source=native_source,
+                    provider_response_source=provider_response_source,
+                    inspection=pi_tool_evidence,
+                    dispatch=dispatch,
+                    binding=binding,
+                    binary_receipt=binary_receipt,
+                    cleanup=cleanup,
+                    marker=marker,
+                    native_retained_path=retained_path_by_source.get(raw_native_source) if isinstance(raw_native_source, str) else None,
+                    provider_response_retained_path=retained_path_by_source.get(raw_response_source)
+                    if isinstance(raw_response_source, str)
+                    else None,
+                )
+                write_json(root / "native-tool-receipt.json", native_tool_receipt)
             if continuation_receipt is not None:
                 raw_first_source = str(first_native_source_path) if first_native_source_path is not None else None
                 raw_second_source = resume_claim.get("source_path") or resume_claim.get("stdout_path")
@@ -1914,11 +1936,11 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                     or raw_first_source != raw_second_source
                     or first_native_source_size is None
                 ):
-                    raise RuntimeError("Console Pi continuation does not share one bounded native source")
+                    raise RuntimeError(f"Console {provider} continuation does not share one bounded native source")
                 second_payload = Path(str(raw_second_source)).read_bytes()
                 second_end_offset = second_native_source_size or len(second_payload)
                 if first_native_source_size >= second_end_offset or second_end_offset > len(second_payload):
-                    raise RuntimeError("Console Pi continuation did not append to the retained native source")
+                    raise RuntimeError(f"Console {provider} continuation did not append to the retained native source")
                 first_retained = retained_path_by_source.get(raw_first_source)
                 if first_retained is None:
                     raise RuntimeError("first Console turn has no retained provider source")
@@ -1973,6 +1995,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             interrupt=interrupt_receipt,
             cleanup=cleanup,
         )
+        observation["continuation_context_recalled"] = continuation_context_recalled
         if provider == "pi":
             observation.update(
                 {

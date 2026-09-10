@@ -28,9 +28,9 @@ SUPPORTED_VARIANT = lifecycle.SUPPORTED_VARIANT
 
 REGISTRATION = ProducerRegistration(
     producer_id="omp.console_lifecycle.v1",
-    producer_revision=1,
+    producer_revision=2,
     scenario_id=SCENARIO_ID,
-    scenario_revision=1,
+    scenario_revision=2,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -42,6 +42,7 @@ REGISTRATION = ProducerRegistration(
         "omp_agent_end_terminal_observed",
         "omp_stream_drained",
         "omp_native_archive_bound",
+        "omp_continuation_context_recalled",
         "no_orphan_provider_processes",
     ),
     acquisition_methods=("staged_release",),
@@ -54,6 +55,7 @@ REGISTRATION = ProducerRegistration(
         "transcript_flush_receipt",
         "console_boundary_receipt",
         "provider_response_binding_receipt",
+        "console_continuation_receipt",
         "interrupt_contract_receipt",
         "cleanup_receipt",
         "omp_settlement_receipt",
@@ -148,6 +150,7 @@ def omp_console_assertions(observation: Mapping[str, object]) -> dict[str, bool]
                 settlement.get("agent_end_terminal") is True,
                 settlement.get("stream_drained") is True,
                 settlement.get("native_archive_bound") is True,
+                observation.get("omp_continuation_context_recalled") is True,
                 observation.get("no_orphan_provider_processes") is True,
             )
         )
@@ -167,6 +170,7 @@ def run_omp_console(args: argparse.Namespace) -> dict[str, object]:
             "omp_agent_end_terminal_observed": settlement.get("agent_end_terminal") is True,
             "omp_stream_drained": settlement.get("stream_drained") is True,
             "omp_native_archive_bound": settlement.get("native_archive_bound") is True,
+            "omp_continuation_context_recalled": observation.get("continuation_context_recalled") is True,
         }
     )
     lifecycle.write_json(root / "omp-settlement-receipt.json", settlement)

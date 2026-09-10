@@ -167,7 +167,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "618f4dbdebfaff311cd099ef252207214e091b050fe989789e797189496d55e0"
+              "oracle_digest": "691564e859d34c57e9f42289fffa394357ce4e977b3540f2c9aa480b57ff9ae1"
             }
           ]
         },
@@ -1041,7 +1041,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "618f4dbdebfaff311cd099ef252207214e091b050fe989789e797189496d55e0"
+              "oracle_digest": "691564e859d34c57e9f42289fffa394357ce4e977b3540f2c9aa480b57ff9ae1"
             },
             {
               "id": "real_print_marker_returned",
@@ -1552,7 +1552,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "618f4dbdebfaff311cd099ef252207214e091b050fe989789e797189496d55e0"
+              "oracle_digest": "691564e859d34c57e9f42289fffa394357ce4e977b3540f2c9aa480b57ff9ae1"
             }
           ]
         },
@@ -2280,7 +2280,7 @@
           "owner_action": "run the transcript census for antigravity and name the raw source"
         }
       },
-      "adapter_digest": "e2cf59fce0cc36a5ccfb2066f5360ef3707dad65e8c380aa02c14f20441f64ff"
+      "adapter_digest": "99bfa17c3e78b972568e437389654a48f7d6a80e1e5fcf03ad4c9eda0aecc405"
     },
     {
       "provider": "cursor",
@@ -2434,7 +2434,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "618f4dbdebfaff311cd099ef252207214e091b050fe989789e797189496d55e0"
+              "oracle_digest": "691564e859d34c57e9f42289fffa394357ce4e977b3540f2c9aa480b57ff9ae1"
             }
           ]
         },
@@ -3088,7 +3088,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "f447294a7fe4dc47937cdad90844c44289568cf75f9a3ec9f5f6ae4e29e6dc86"
+              "oracle_digest": "d654edf33d1e29605ac0bb4a776fe38c544aec9e3de9e0a40704d47867ed27db"
             }
           ]
         }
@@ -3353,7 +3353,7 @@
         }
       },
       "permission_prompt_surface": false,
-      "external_event_channel": null,
+      "external_event_channel": "omp_helm_channel",
       "pause_tool_name": "omp_pause_request",
       "harness_safe_no_token_prompt": false,
       "harness_safe_managed_session_scenarios": [],
@@ -3610,12 +3610,12 @@
               "id": "omp_console_turn_settled_and_bound",
               "scenario_id": "omp_console_lifecycle",
               "oracle_source": "server/zerg/qa/omp_console_producer.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 2,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "0d505519562aab1d30a60708062ad5e22b8443c7ddb24615ebef45c2514bc988"
+              "oracle_digest": "ea22ebc2e9dfbb1611a9ef0e0e44803c5ecd1ef5f28762c9557e49224ce45cbd"
             }
           ]
         }
@@ -3678,7 +3678,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "616f81750e3a05ca1c7a82606df9fe468f63c776bd183b33fa8f02162d534b3c"
+      "adapter_digest": "fc20c6292d3e6367d1511248c97b92e04f4c2e30d317b4662e0016b281e56b72"
     }
   ]
 }

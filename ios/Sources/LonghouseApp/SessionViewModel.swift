@@ -43,8 +43,8 @@ final class SessionViewModel: ObservableObject {
     /// It stays true for a valid empty session, and gates the composer during
     /// cold-load errors so metadata cannot make sends appear prematurely.
     @Published private(set) var hasLoadedTranscript = false
-    /// Watermark belonging to the accepted transcript snapshot. Compact
-    /// navigation detail can be newer than the rows that are on screen.
+    /// The watermark attached to the payload whose frame WebKit has actually
+    /// presented. It is intentionally nil while a newer payload is in flight.
     @Published private(set) var renderedTranscriptReadThrough: String?
     /// True only after the mounted transcript document has presented a frame.
     /// Having cached rows is not the same thing as having pixels on screen.
@@ -134,6 +134,8 @@ final class SessionViewModel: ObservableObject {
     private var realtimeRefreshTask: Task<Void, Never>?
     private var realtimeRefreshPending = false
     private var openWaterfall: SessionOpenWaterfall?
+    private var pendingTranscriptReadThrough: String?
+    private var transcriptFrameNeedsReadThrough = false
     private var detailWasLoadedFromTail = false
     private var detailWasLoadedFromPrimary = false
     private let apiFactory: (String) -> SessionWorkspaceClient?
@@ -190,6 +192,8 @@ final class SessionViewModel: ObservableObject {
             }
             hasLoadedTranscript = false
             activeSessionId = sessionId
+            pendingTranscriptReadThrough = nil
+            transcriptFrameNeedsReadThrough = false
             activeServerURL = appState.serverURL
             renderedTranscriptReadThrough = nil
             isInitialLoading = true
@@ -280,7 +284,6 @@ final class SessionViewModel: ObservableObject {
                         applySnapshot(restored)
                         // A snapshot is an instant paint, not the source of
                         // truth. The already-started tail will reconcile it.
-                        cancelPrimaryDetailLoad()
                         restoredFromCache = true
                         shouldRefreshCachedTail = true
                     } else {
@@ -294,12 +297,46 @@ final class SessionViewModel: ObservableObject {
             }
         } else {
             activeServerURL = appState.serverURL
+            if let api = apiFactory(appState.serverURL),
+               detail == nil,
+               primaryDetailTask == nil {
+                // Keep compact chrome independent from a cold cache read.
+                loadPrimaryDetail(api: api, sessionId: sessionId)
+            }
             if isTranscriptFrameReady,
                hasLoadedTranscript,
                let api = apiFactory(appState.serverURL) {
                 // Re-entry is an explicit secondary-lane refresh. Stream
                 // wakes and ordinary polls do not need to refetch workers.
                 loadSubagents(api: api, sessionId: sessionId)
+            }
+            // A scene transition can interrupt the first disk hydration while
+            // leaving the same route mounted. Retry that cache lookup on
+            // re-entry; otherwise an offline resume falls through to a blank
+            // network-only load despite a valid saved transcript.
+            if !hasLoadedTranscript,
+               items.isEmpty,
+               let snapshotStore {
+                let restored = await snapshotStore.loadAsync(
+                    serverURL: appState.serverURL,
+                    sessionId: sessionId
+                )
+                guard activeSessionId == sessionId,
+                      routeLoadGeneration == startGeneration,
+                      !Task.isCancelled,
+                      !realtimePaused
+                else { return }
+                if let restored {
+                    openWaterfall?.mark(
+                        "cache_hit",
+                        "tier=\(restored.tier.rawValue) events=\(restored.snapshot.events.count)"
+                    )
+                    applySnapshot(restored)
+                    restoredFromCache = true
+                    shouldRefreshCachedTail = true
+                } else {
+                    openWaterfall?.mark("cache_miss")
+                }
             }
         }
         if let api = apiFactory(appState.serverURL),
@@ -796,8 +833,13 @@ final class SessionViewModel: ObservableObject {
         transcriptFrameReady: Bool = true,
         renderedReadThrough: String? = nil
     ) -> String? {
-        guard transcriptFrameReady, sceneIsActive, let facts, facts.unread else { return nil }
-        return renderedReadThrough ?? facts.lastResultAt
+        guard transcriptFrameReady,
+              sceneIsActive,
+              let facts,
+              facts.unread,
+              let renderedReadThrough
+        else { return nil }
+        return renderedReadThrough
     }
 
     func acknowledgeUnreadIfNeeded(
@@ -890,8 +932,16 @@ final class SessionViewModel: ObservableObject {
         )
     }
 
+    private func markTranscriptNeedsReadThrough(_ readThrough: String?, force: Bool = false) {
+        pendingTranscriptReadThrough = readThrough
+        guard force || renderedTranscriptReadThrough != readThrough else { return }
+        transcriptFrameNeedsReadThrough = true
+        renderedTranscriptReadThrough = nil
+    }
+
     func prepareTranscriptRetry() {
         guard hasLoadedTranscript else { return }
+        markTranscriptNeedsReadThrough(renderedTranscriptReadThrough, force: true)
         isTranscriptFrameReady = false
         transcriptRendererErrorMessage = nil
         transcriptRenderRetryRevision &+= 1
@@ -904,6 +954,11 @@ final class SessionViewModel: ObservableObject {
             let wasReady = isTranscriptFrameReady
             isTranscriptFrameReady = true
             transcriptRendererErrorMessage = nil
+            if transcriptFrameNeedsReadThrough {
+                renderedTranscriptReadThrough = pendingTranscriptReadThrough
+                pendingTranscriptReadThrough = nil
+                transcriptFrameNeedsReadThrough = false
+            }
             guard !wasReady else { return }
             guard
                 let sessionId = activeSessionId,
@@ -920,15 +975,24 @@ final class SessionViewModel: ObservableObject {
             }
         case "transcript_frame_failed":
             transcriptRendererErrorMessage = "Transcript rendering was interrupted."
+        case "webview_document_failed":
+            isTranscriptFrameReady = false
+            markTranscriptNeedsReadThrough(
+                pendingTranscriptReadThrough ?? renderedTranscriptReadThrough,
+                force: true
+            )
+            transcriptRendererErrorMessage = "Transcript document could not be loaded."
         case "webview_content_process_terminated":
             isTranscriptFrameReady = false
+            markTranscriptNeedsReadThrough(
+                pendingTranscriptReadThrough ?? renderedTranscriptReadThrough,
+                force: true
+            )
             transcriptRendererErrorMessage = nil
         default:
             break
         }
     }
-
-    /// Starts secondary worker metadata only after SwiftUI has observed the
     /// transcript's first ready frame. Keeping this outside the lifecycle
     /// mutation lets the history prefetch arm without another main-actor task
     /// competing for the same opening turn.
@@ -1180,6 +1244,12 @@ final class SessionViewModel: ObservableObject {
             realtimeRefreshPending = true
             return
         }
+        // Joining an older request is not enough: that request may have
+        // captured its snapshot before this wake. Force one coalesced
+        // post-request fetch so the invalidation cannot be lost.
+        if tailRefreshTask != nil {
+            realtimeRefreshPending = true
+        }
         realtimeRefreshTask = Task { [weak self] in
             guard let self else { return }
             repeat {
@@ -1284,6 +1354,13 @@ final class SessionViewModel: ObservableObject {
             openWaterfall?.mark("older_skipped", "reason=in_flight loaded=\(loadedProjectionItemCount)")
             return 0
         }
+        if let prefetchTask,
+           prefetchInFlightCursor == tailNextCursor,
+           prefetchInFlightSnapshotEventId == tailSnapshotEventId {
+            openWaterfall?.mark("older_joined", "loaded=\(loadedProjectionItemCount)")
+            await prefetchTask.value
+            guard activeSessionId == sessionId, !Task.isCancelled else { return 0 }
+        }
 
         if let prefetchedOlderTail,
            prefetchedOlderCursor == tailNextCursor,
@@ -1363,6 +1440,15 @@ final class SessionViewModel: ObservableObject {
             if !allowFailure { throw error }
         }
     }
+    private func shouldAcceptTailDetail(_ incoming: SessionDetail) -> Bool {
+        guard let incomingCommit = incoming.stateFacts.commitSeq else {
+            return detail?.stateFacts.commitSeq == nil
+        }
+        guard let existingCommit = detail?.stateFacts.commitSeq else {
+            return true
+        }
+        return incomingCommit >= existingCommit
+    }
 
     private func performRefreshTail(
         api: SessionWorkspaceClient,
@@ -1393,9 +1479,17 @@ final class SessionViewModel: ObservableObject {
                 "elapsed_ms=\(requestMs) events=\(tail.events.count) total=\(tail.projection.total)"
             )
             let clearingBlockingLoadError = !hasLoadedTranscript
-            detailWasLoadedFromTail = true
-            self.detail = tail.session
-            renderedTranscriptReadThrough = tail.session.stateFacts.lastResultAt
+            if shouldAcceptTailDetail(tail.session) {
+                detailWasLoadedFromTail = true
+                self.detail = tail.session
+            } else {
+                openWaterfall?.mark(
+                    "detail_discarded",
+                    "reason=older_commit incoming=\(tail.session.stateFacts.commitSeq ?? -1) existing=\(detail?.stateFacts.commitSeq ?? -1)"
+                )
+            }
+            let renderedDetail = detail ?? tail.session
+            markTranscriptNeedsReadThrough(renderedDetail.stateFacts.lastResultAt)
             let events = tail.events
             let buildStartedAt = Date()
             let mergedEvents = mergeRefreshedTail(events)
@@ -1428,7 +1522,7 @@ final class SessionViewModel: ObservableObject {
                 items: projectionItemsWithTranscriptPreview(
                     mergedProjectionItems,
                     durableEvents: mergedEvents,
-                    preview: tail.session.transcriptPreview
+                    preview: renderedDetail.transcriptPreview
                 )
             )
             // Batch both mutations so SwiftUI coalesces them into one render pass,
@@ -1660,11 +1754,11 @@ final class SessionViewModel: ObservableObject {
         let blockingLoadError = errorMessage
         if shouldApplySnapshotDetail {
             detail = snapshot.detail
-            // A restored snapshot is a previously accepted tail. Its detail is
-            // authoritative until the fresh tail reconciles it.
-            detailWasLoadedFromTail = true
+            // A restored snapshot provides immediate chrome, but it does not
+            // outrank a fresh compact-detail response. The tail remains the
+            // final transcript/state authority when it arrives.
         }
-        renderedTranscriptReadThrough = snapshot.detail.stateFacts.lastResultAt
+        markTranscriptNeedsReadThrough(snapshot.detail.stateFacts.lastResultAt)
         lastWorkspaceEvents = snapshot.events
         let projectionItems = snapshot.projectionItems ?? projectionItemsFromEvents(snapshot.events)
         lastWorkspaceProjectionItems = projectionItems

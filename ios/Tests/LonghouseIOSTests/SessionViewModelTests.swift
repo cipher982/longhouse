@@ -440,7 +440,7 @@ struct SessionViewModelTests {
     }
 
     @Test
-    func cachedHookPlaceholderIsReplacedByStructuredPauseRequestOnRefresh() async throws {
+    func primaryDetailWinsBeforePausedTailAndTailReconcilesTranscript() async throws {
         let cachedPauseRequestJSON = """
         {
           "id": "pause-hook-placeholder",
@@ -530,8 +530,8 @@ struct SessionViewModelTests {
 
         await model.start(sessionId: "session-1", appState: appState)
         await waitForTailRequestCount(api, atLeast: 1)
-        #expect(model.detail?.activePauseRequest?.id == "pause-hook-placeholder")
-        #expect(model.detail?.activePauseRequest?.questions.first?.id == "terminal_answer")
+        #expect(model.detail?.activePauseRequest?.id == "pause-scope")
+        #expect(model.detail?.activePauseRequest?.questions.first?.id == "scope")
 
         await api.resumePausedTailResponses()
         await waitForTailResponseCount(api, atLeast: 1)

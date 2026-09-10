@@ -32,11 +32,15 @@ enum TranscriptDisplayState: Equatable {
     /// Content is on screen and healthy.
     case content
     /// Cached/network content exists, but WebKit has not presented its first
+    /// frame and the latest attempt failed. Keep stale DOM covered by an opaque
+    /// retry surface until this session has a valid frame.
+    case restoringWithError(String)
+    /// Cached/network content exists, but WebKit has not presented its first
     /// frame. Keep the renderer mounted behind an honest native surface.
     case restoring
+
     /// Cold load failed with nothing cached. Full-screen, actionable error.
     case hardError(String)
-
     /// Derive the state from the raw view-model flags. Order matters: a
     /// blocking load takes precedence, then "do we have anything to show",
     /// then refresh health.
@@ -53,6 +57,9 @@ enum TranscriptDisplayState: Equatable {
             return .loading
         }
         if hasContent {
+            if let rendererErrorMessage, !rendererReady {
+                return .restoringWithError(rendererErrorMessage)
+            }
             if let rendererErrorMessage {
                 return .contentWithRefreshError(rendererErrorMessage)
             }
@@ -89,9 +96,9 @@ enum TranscriptDisplayState: Equatable {
         switch self {
         case .loading, .empty, .emptyWithRefreshError, .syncing, .syncingWithRefreshError, .hardError:
             return false
-        case .content, .contentWithRefreshError, .restoring:
+        case .content, .contentWithRefreshError, .restoring, .restoringWithError:
             return true
-        }
+    }
     }
 }
 
@@ -115,6 +122,8 @@ struct TranscriptStateOverlay: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Loading transcript")
             .accessibilityIdentifier("session-transcript-loading")
+        case .restoringWithError(let message):
+            restoringWithError(message)
         case .restoring:
             restoring
         case .hardError(let message):
@@ -176,6 +185,26 @@ struct TranscriptStateOverlay: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(.systemBackground))
         .accessibilityIdentifier("session-transcript-restoring")
+    }
+
+    private func restoringWithError(_ message: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "arrow.clockwise.circle")
+                .font(.system(size: 32))
+                .foregroundStyle(.secondary)
+            Text("Transcript unavailable")
+                .font(.headline)
+            Text(message)
+                .font(.callout)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+            Button("Try again", action: onRetry)
+                .buttonStyle(.borderedProminent)
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
+        .accessibilityIdentifier("session-transcript-restoring-error")
     }
 
     private var syncing: some View {

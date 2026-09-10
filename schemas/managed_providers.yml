@@ -2145,7 +2145,7 @@ providers:
       windows-x86_64: omp-windows-x64.exe
       windows-aarch64: omp-windows-arm64.exe
   permission_prompt_surface: false
-  external_event_channel: null
+  external_event_channel: omp_helm_channel
   pause_tool_name: "omp_pause_request"
   harness_safe_no_token_prompt: false
   harness_safe_managed_session_scenarios: []
@@ -2233,7 +2233,7 @@ providers:
       - id: omp_console_turn_settled_and_bound
         scenario_id: omp_console_lifecycle
         oracle_source: server/zerg/qa/omp_console_producer.py
-        minimum_scenario_revision: 1
+        minimum_scenario_revision: 2
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
   transcript_signals:

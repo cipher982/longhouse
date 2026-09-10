@@ -20,8 +20,6 @@ pub const OMP_SESSION_DIR_ENV: &str = "LONGHOUSE_OMP_SESSION_DIR";
 pub const OMP_SESSION_DIR_NAME: &str = "sessions";
 const OMP_DATA_DIR_NAME: &str = "omp";
 const OMP_CONFIG_DIR_ENV: &str = "LONGHOUSE_OMP_CONFIG_DIR";
-const PI_CONFIG_DIR_ENV: &str = "PI_CONFIG_DIR";
-const PI_AGENT_DIR_ENV: &str = "PI_CODING_AGENT_DIR";
 const OMP_PROFILE_ENV: &str = "OMP_PROFILE";
 const MAX_HEADER_SCAN_BYTES: u64 = 1024 * 1024;
 const OMP_TITLE_SLOT_BYTES: usize = 256;
@@ -76,11 +74,7 @@ fn safe_profile_name(profile: &str) -> Option<&str> {
 }
 
 fn provider_config_root() -> PathBuf {
-    match nonempty_env_path(PI_CONFIG_DIR_ENV) {
-        Some(path) if path.is_absolute() => path,
-        Some(path) => home_dir().join(path),
-        None => home_dir().join(".omp"),
-    }
+    home_dir().join(".omp")
 }
 
 fn configured_config_roots(cwd: &Path) -> Vec<PathBuf> {
@@ -157,11 +151,6 @@ pub fn configured_session_roots(cwd: &Path) -> Vec<PathBuf> {
         roots.push(resolve_path(PathBuf::from(value), cwd));
     }
     let profile = active_profile();
-    if profile.is_none() {
-        if let Some(agent_dir) = nonempty_env_path(PI_AGENT_DIR_ENV) {
-            roots.push(resolve_path(agent_dir, cwd).join(OMP_SESSION_DIR_NAME));
-        }
-    }
     for data_root in configured_data_roots(cwd) {
         roots.extend(profile_session_roots(&data_root));
     }
@@ -185,12 +174,6 @@ pub fn session_dir_for_launch(cwd: &Path, profile: Option<&str>) -> Result<PathB
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .or_else(active_profile);
-
-    if profile.is_none() {
-        if let Some(agent_dir) = nonempty_env_path(PI_AGENT_DIR_ENV) {
-            return Ok(resolve_path(agent_dir, cwd).join(OMP_SESSION_DIR_NAME));
-        }
-    }
 
     let explicit_data = nonempty_env_path(OMP_DATA_DIR_ENV).map(|path| resolve_path(path, cwd));
     if let Some(data_root) = explicit_data {
@@ -688,10 +671,11 @@ mod tests {
     }
 
     #[test]
-    fn omp_xdg_roots_include_existing_named_profiles_and_pi_compatibility_roots() {
+    fn omp_xdg_roots_include_existing_named_profiles_and_config_roots() {
         let home = tempfile::tempdir().unwrap();
         let cwd = home.path().join("workspace");
         let xdg_data = home.path().join("xdg-data");
+        let omp_config = home.path().join("omp-config");
         fs::create_dir_all(xdg_data.join("omp/sessions")).unwrap();
         fs::create_dir_all(xdg_data.join("omp/profiles/work/sessions")).unwrap();
         fs::create_dir_all(xdg_data.join("omp/profiles/archive/sessions")).unwrap();
@@ -699,13 +683,15 @@ mod tests {
 
         let roots = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
             temp_env::with_var("XDG_DATA_HOME", Some(xdg_data.to_str().unwrap()), || {
-                temp_env::with_var("PI_CONFIG_DIR", Some("/pi/config"), || {
-                    temp_env::with_var("PI_CODING_AGENT_DIR", Some("/pi/agent"), || {
-                        temp_env::with_var("PI_PROFILE", Some("pi"), || {
-                            temp_env::with_var("OMP_PROFILE", Some("work"), || {
-                                temp_env::with_var(OMP_DATA_DIR_ENV, None::<&str>, || {
-                                    temp_env::with_var(OMP_SESSION_DIR_ENV, None::<&str>, || {
-                                        configured_session_roots(&cwd)
+                temp_env::with_var(OMP_CONFIG_DIR_ENV, Some(omp_config.to_str().unwrap()), || {
+                    temp_env::with_var("PI_CONFIG_DIR", Some("/pi/config"), || {
+                        temp_env::with_var("PI_CODING_AGENT_DIR", Some("/pi/agent"), || {
+                            temp_env::with_var("PI_PROFILE", Some("pi"), || {
+                                temp_env::with_var("OMP_PROFILE", Some("work"), || {
+                                    temp_env::with_var(OMP_DATA_DIR_ENV, None::<&str>, || {
+                                        temp_env::with_var(OMP_SESSION_DIR_ENV, None::<&str>, || {
+                                            configured_session_roots(&cwd)
+                                        })
                                     })
                                 })
                             })
@@ -719,26 +705,8 @@ mod tests {
         assert!(roots.contains(&xdg_data.join("omp/profiles/work/sessions")));
         assert!(roots.contains(&xdg_data.join("omp/profiles/archive/sessions")));
         assert!(roots.contains(&home.path().join(".omp/agent/sessions")));
-        assert!(roots.contains(&PathBuf::from("/pi/config/profiles/work/agent/sessions")));
-        assert!(!roots.iter().any(|root| root.starts_with("/pi/agent")));
-    }
-
-    #[test]
-    fn explicit_resume_path_does_not_apply_native_filename_suffix_validation() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("arbitrary_name.jsonl");
-        fs::write(&path, format!("{}\n", session_line("native-id"))).unwrap();
-        assert_eq!(read_session_header(&path).unwrap().native_id, "native-id");
-
-        let native_root = dir.path().join("sessions");
-        let bucket = native_root.join("--workspace--");
-        fs::create_dir_all(&bucket).unwrap();
-        let wrong = bucket.join("2026-09-09T00-00-00Z_other-id.jsonl");
-        fs::write(&wrong, format!("{}\n", session_line("native-id"))).unwrap();
-        assert!(!is_session_path(&native_root, &wrong));
-        let arbitrary = bucket.join("custom_name.jsonl");
-        fs::write(&arbitrary, format!("{}\n", session_line("native-id"))).unwrap();
-        assert!(is_session_path(&native_root, &arbitrary));
+        assert!(roots.contains(&omp_config.join("profiles/work/agent/sessions")));
+        assert!(!roots.iter().any(|root| root.starts_with("/pi")));
     }
 
     #[test]
@@ -783,22 +751,24 @@ mod tests {
     }
 
     #[test]
-    fn omp_profile_aliases_and_pi_roots_match_stock_omp_compatibility() {
+    fn omp_config_profile_roots_ignore_pi_environment_aliases() {
         let home = tempfile::tempdir().unwrap();
         let cwd = home.path().join("workspace");
-        let pi_config = home.path().join("omp-config");
+        let omp_config = home.path().join("omp-config");
         let pi_agent = home.path().join("omp-agent");
         fs::create_dir_all(&cwd).unwrap();
-        fs::create_dir_all(pi_config.join("profiles/work/agent/sessions")).unwrap();
+        fs::create_dir_all(omp_config.join("profiles/work/agent/sessions")).unwrap();
         fs::create_dir_all(&pi_agent).unwrap();
 
         let roots = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
             temp_env::with_var("XDG_DATA_HOME", None::<&str>, || {
-                temp_env::with_var("PI_CONFIG_DIR", Some("omp-config"), || {
-                    temp_env::with_var("PI_CODING_AGENT_DIR", Some("omp-agent"), || {
-                        temp_env::with_var("OMP_PROFILE", None::<&str>, || {
-                            temp_env::with_var("PI_PROFILE", Some("work"), || {
-                                configured_session_roots(&cwd)
+            temp_env::with_var(OMP_CONFIG_DIR_ENV, Some(omp_config.to_str().unwrap()), || {
+                    temp_env::with_var("PI_CONFIG_DIR", Some("/pi/config"), || {
+                        temp_env::with_var("PI_CODING_AGENT_DIR", Some("omp-agent"), || {
+                            temp_env::with_var("OMP_PROFILE", Some("work"), || {
+                                temp_env::with_var("PI_PROFILE", Some("work"), || {
+                                    configured_session_roots(&cwd)
+                                })
                             })
                         })
                     })
@@ -806,11 +776,12 @@ mod tests {
             })
         });
 
-        assert!(!roots.contains(&pi_config.join("profiles/work/agent/sessions")));
+        assert!(roots.contains(&omp_config.join("profiles/work/agent/sessions")));
         assert!(!roots.contains(&pi_agent.join("sessions")));
+        assert!(!roots.iter().any(|root| root.starts_with("/pi")));
 
         let roots = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
-            temp_env::with_var("PI_CONFIG_DIR", Some("omp-config"), || {
+            temp_env::with_var(OMP_CONFIG_DIR_ENV, Some(omp_config.to_str().unwrap()), || {
                 temp_env::with_var("OMP_PROFILE", Some("work"), || {
                     temp_env::with_var("PI_PROFILE", Some("other"), || {
                         configured_session_roots(&cwd)
@@ -818,14 +789,12 @@ mod tests {
                 })
             })
         });
-        assert!(roots.contains(&pi_config.join("profiles/work/agent/sessions")));
-        assert!(!roots
-            .iter()
-            .any(|root| root.ends_with("profiles/other/agent/sessions")));
+        assert!(roots.contains(&omp_config.join("profiles/work/agent/sessions")));
+        assert!(!roots.iter().any(|root| root.ends_with("profiles/other/agent/sessions")));
     }
 
     #[test]
-    fn omp_fresh_launch_prefers_active_xdg_or_legacy_root_without_profile() {
+    fn omp_fresh_launch_prefers_active_xdg_or_legacy_root_without_pi_aliases() {
         let home = tempfile::tempdir().unwrap();
         let cwd = home.path().join("workspace");
         let xdg_data = home.path().join("xdg-data");
@@ -833,7 +802,7 @@ mod tests {
 
         let legacy = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
             temp_env::with_var("XDG_DATA_HOME", Some(xdg_data.to_str().unwrap()), || {
-                temp_env::with_var("PI_CODING_AGENT_DIR", None::<&str>, || {
+                temp_env::with_var("PI_CODING_AGENT_DIR", Some("/pi/agent"), || {
                     session_dir_for_launch(&cwd, None).unwrap()
                 })
             })
@@ -843,7 +812,7 @@ mod tests {
         fs::create_dir_all(xdg_data.join("omp")).unwrap();
         let xdg = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
             temp_env::with_var("XDG_DATA_HOME", Some(xdg_data.to_str().unwrap()), || {
-                temp_env::with_var("PI_CODING_AGENT_DIR", None::<&str>, || {
+                temp_env::with_var("PI_CODING_AGENT_DIR", Some("/pi/agent"), || {
                     session_dir_for_launch(&cwd, None).unwrap()
                 })
             })

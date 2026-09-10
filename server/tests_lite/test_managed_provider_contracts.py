@@ -88,6 +88,7 @@ def test_omp_helm_contract_declares_the_native_managed_transport():
     assert omp.operation_evidence_for("answer_pause")["disposition"] == "not_implemented"
     assert omp.managed_transport == ManagedSessionTransport.OMP_HELM_CHANNEL
     assert omp.control_plane == "omp_helm_channel"
+    assert omp.external_event_channel == "omp_helm_channel"
     assert omp.control_planes == ("omp_helm_channel",)
     assert ManagedSessionTransport.for_provider("omp") == ManagedSessionTransport.OMP_HELM_CHANNEL
 

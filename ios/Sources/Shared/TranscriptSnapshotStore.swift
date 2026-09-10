@@ -135,6 +135,7 @@ struct TranscriptSnapshotStore: Sendable {
         sessionId: String,
         now: Date
     ) -> Restored? {
+        let generation = memory.invalidationGeneration()
         let url = fileURL(serverURL: serverURL, sessionId: sessionId)
         guard let data = try? Data(contentsOf: url) else { return nil }
         guard let stored = try? Self.decoder.decode(StoredSnapshot.self, from: data) else {
@@ -150,6 +151,11 @@ struct TranscriptSnapshotStore: Sendable {
             try? FileManager.default.removeItem(at: url)
             return nil
         }
+        guard memory.invalidationGeneration() == generation else {
+            // Sign-out/server-switch invalidated this read while it was
+            // decoding. Do not return or rewarm content from the old account.
+            return nil
+        }
         let key = TranscriptSnapshot.cacheKey(serverURL: serverURL, sessionId: sessionId)
         // A save may have warmed RAM after the initial fast-path check but
         // before this serialized disk read completed. Never hand the caller
@@ -158,7 +164,15 @@ struct TranscriptSnapshotStore: Sendable {
            warm.savedAt > stored.transcript.savedAt {
             return Restored(snapshot: warm, tier: .memory)
         }
-        memory.storeIfNewer(stored.transcript, forKey: key, now: now)
+        memory.storeIfNewer(
+            stored.transcript,
+            forKey: key,
+            now: now,
+            expectedGeneration: generation
+        )
+        guard memory.invalidationGeneration() == generation else {
+            return nil
+        }
         return Restored(snapshot: stored.transcript, tier: .disk)
     }
 
@@ -168,7 +182,7 @@ struct TranscriptSnapshotStore: Sendable {
     /// oversized payloads are dropped rather than stored.
     func save(serverURL: String, sessionId: String, snapshot: TranscriptSnapshot) {
         let key = TranscriptSnapshot.cacheKey(serverURL: serverURL, sessionId: sessionId)
-        memory.store(snapshot, forKey: key, now: snapshot.savedAt)
+        let generation = memory.store(snapshot, forKey: key, now: snapshot.savedAt)
         let stored = StoredSnapshot(
             schemaVersion: Self.schemaVersion,
             serverURL: TranscriptSnapshot.normalizedServerURL(serverURL),
@@ -179,6 +193,7 @@ struct TranscriptSnapshotStore: Sendable {
         let maxBytes = maxBytesPerFile
         let limit = maxFiles
         io.async {
+            guard self.memory.invalidationGeneration() == generation else { return }
             guard let data = try? Self.encoder.encode(stored) else { return }
             guard data.count <= maxBytes else {
                 try? FileManager.default.removeItem(at: url)
@@ -198,16 +213,16 @@ struct TranscriptSnapshotStore: Sendable {
     // MARK: - Eviction / clearing
 
     func remove(serverURL: String, sessionId: String) {
-        memory.remove(forKey: TranscriptSnapshot.cacheKey(serverURL: serverURL, sessionId: sessionId))
+        memory.invalidateAndRemove(key: TranscriptSnapshot.cacheKey(serverURL: serverURL, sessionId: sessionId))
         let url = fileURL(serverURL: serverURL, sessionId: sessionId)
-        io.async { try? FileManager.default.removeItem(at: url) }
+        io.sync { try? FileManager.default.removeItem(at: url) }
     }
 
     /// Remove every snapshot belonging to a server (sign-out / server switch).
     func clear(serverURL: String) {
         let target = TranscriptSnapshot.normalizedServerURL(serverURL)
-        memory.removeAll(withKeyPrefix: "\(target)|")
-        io.async {
+        memory.invalidateAndRemoveAll(withKeyPrefix: "\(target)|")
+        io.sync {
             let files = (try? FileManager.default.contentsOfDirectory(
                 at: self.directory,
                 includingPropertiesForKeys: nil
@@ -228,8 +243,8 @@ struct TranscriptSnapshotStore: Sendable {
     }
 
     func clearAll() {
-        memory.removeAll()
-        io.async {
+        memory.invalidateAndRemoveAll()
+        io.sync {
             try? FileManager.default.removeItem(at: self.directory)
             self.ensureDirectory()
         }
@@ -257,10 +272,17 @@ struct TranscriptSnapshotStore: Sendable {
         private let ttl: TimeInterval
         private var entries: [String: Entry] = [:]
         private var totalBytes = 0
+        private var invalidationVersion: UInt64 = 0
 
         init(maxBytes: Int, ttl: TimeInterval) {
             self.maxBytes = maxBytes
             self.ttl = ttl
+        }
+
+        func invalidationGeneration() -> UInt64 {
+            lock.lock()
+            defer { lock.unlock() }
+            return invalidationVersion
         }
 
         func snapshot(forKey key: String, now: Date) -> TranscriptSnapshot? {
@@ -273,26 +295,34 @@ struct TranscriptSnapshotStore: Sendable {
             return entry.snapshot
         }
 
-        func store(_ snapshot: TranscriptSnapshot, forKey key: String, now: Date) {
-            guard maxBytes > 0 else { return }
-            let estimatedBytes = snapshot.estimatedBytes
+        @discardableResult
+        func store(_ snapshot: TranscriptSnapshot, forKey key: String, now: Date) -> UInt64 {
             lock.lock()
             defer { lock.unlock() }
+            guard maxBytes > 0 else { return invalidationVersion }
+            let estimatedBytes = snapshot.estimatedBytes
             remove(key)
-            guard estimatedBytes <= maxBytes else { return }
+            guard estimatedBytes <= maxBytes else { return invalidationVersion }
             entries[key] = Entry(snapshot: snapshot, estimatedBytes: estimatedBytes, lastAccessedAt: now)
             totalBytes += estimatedBytes
             while totalBytes > maxBytes,
                   let victim = entries.min(by: { $0.value.lastAccessedAt < $1.value.lastAccessedAt })?.key {
                 remove(victim)
             }
+            return invalidationVersion
         }
 
-        func storeIfNewer(_ snapshot: TranscriptSnapshot, forKey key: String, now: Date) {
-            guard maxBytes > 0 else { return }
-            let estimatedBytes = snapshot.estimatedBytes
+        func storeIfNewer(
+            _ snapshot: TranscriptSnapshot,
+            forKey key: String,
+            now: Date,
+            expectedGeneration: UInt64? = nil
+        ) {
             lock.lock()
             defer { lock.unlock() }
+            guard expectedGeneration == nil || expectedGeneration == invalidationVersion else { return }
+            guard maxBytes > 0 else { return }
+            let estimatedBytes = snapshot.estimatedBytes
             if let existing = entries[key],
                existing.snapshot.savedAt >= snapshot.savedAt {
                 return
@@ -307,25 +337,25 @@ struct TranscriptSnapshotStore: Sendable {
             }
         }
 
-        func remove(forKey key: String) {
+        func invalidateAndRemove(key: String) {
             lock.lock()
             defer { lock.unlock() }
+            invalidationVersion &+= 1
             remove(key)
         }
 
-        func removeAll(withKeyPrefix prefix: String) {
+        func invalidateAndRemoveAll(withKeyPrefix prefix: String? = nil) {
             lock.lock()
             defer { lock.unlock() }
-            for key in entries.keys where key.hasPrefix(prefix) {
-                remove(key)
+            invalidationVersion &+= 1
+            if let prefix {
+                for key in entries.keys where key.hasPrefix(prefix) {
+                    remove(key)
+                }
+            } else {
+                entries.removeAll()
+                totalBytes = 0
             }
-        }
-
-        func removeAll() {
-            lock.lock()
-            defer { lock.unlock() }
-            entries.removeAll()
-            totalBytes = 0
         }
 
         /// Callers hold `lock`.

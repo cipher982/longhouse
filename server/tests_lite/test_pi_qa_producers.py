@@ -92,6 +92,24 @@ def test_pi_native_taxonomy_rejects_reordered_or_mismatched_tool_pairs(rows) -> 
 def test_pi_console_tool_oracle_requires_complete_generic_lifecycle() -> None:
     assert pi_console_tool_assertions({"pi_tool_enabled": True})["pi_console_tool_enabled"] is False
 
+def test_pi_console_tool_oracle_requires_context_recall() -> None:
+    observation = {
+        "adapter_dispatch_started": True,
+        "qualification_model_bound": True,
+        "stock_provider_response_bound": True,
+        "exact_session_thread_run_binding": True,
+        "transcript_converged_exactly_once": True,
+        "interrupt_contract_preserved": True,
+        "post_interrupt_sendable": True,
+        "no_orphan_provider_processes": True,
+        "pi_tool_enabled": True,
+        "continuation_context_recalled": False,
+    }
+
+    assert pi_console_tool_assertions(observation)["pi_console_tool_enabled"] is False
+    observation["continuation_context_recalled"] = True
+    assert pi_console_tool_assertions(observation)["pi_console_tool_enabled"] is True
+
 
 def test_pi_console_tool_oracle_rejects_unpaired_native_tool_evidence() -> None:
     observation = {
@@ -241,8 +259,8 @@ def test_pi_native_tool_receipt_rejects_missing_or_mismatched_native_pair(tmp_pa
 def test_pi_console_contract_revision_advances_with_native_receipt() -> None:
     registration = PI_CONSOLE_REGISTRATION.to_dict()
 
-    assert registration["producer_revision"] == 3
-    assert registration["scenario_revision"] == 3
+    assert registration["producer_revision"] == 4
+    assert registration["scenario_revision"] == 4
     assert "native_tool_receipt" in registration["required_artifacts"]
 
 

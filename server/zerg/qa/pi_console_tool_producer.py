@@ -18,9 +18,9 @@ SCENARIO_ID = "pi_console_tool_lifecycle"
 ASSERTION_ID = "pi_console_tool_enabled"
 REGISTRATION = ProducerRegistration(
     producer_id="pi.console_tool.v1",
-    producer_revision=3,
+    producer_revision=4,
     scenario_id=SCENARIO_ID,
-    scenario_revision=3,
+    scenario_revision=4,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -61,7 +61,9 @@ _VARIANT = execution_variant_key(provider="pi", assertion_id=ASSERTION_ID, scena
 
 def pi_console_tool_assertions(observation: dict[str, object]) -> dict[str, bool]:
     generic = lifecycle.console_lifecycle_assertions(observation).get(lifecycle.ASSERTION_ID) is True
-    return {ASSERTION_ID: generic and observation.get("pi_tool_enabled") is True}
+    return {
+        ASSERTION_ID: generic and observation.get("pi_tool_enabled") is True and observation.get("continuation_context_recalled") is True
+    }
 
 
 def _parser() -> argparse.ArgumentParser:

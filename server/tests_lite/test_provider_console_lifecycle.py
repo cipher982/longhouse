@@ -458,6 +458,59 @@ def test_archive_convergence_rejects_duplicate_markers_within_one_reply(monkeypa
     with pytest.raises(RuntimeError, match="exactly one occurrence"):
         lifecycle._wait_exact_assistant_marker("https://runtime.example", "token", "session-1", marker)
 
+def test_served_run_inventory_accepts_canonical_ended_terminal_state(monkeypatch):
+    monkeypatch.setattr(
+        lifecycle,
+        "_request",
+        lambda *_args: {
+            "session_id": "session-1",
+            "served_path": "canonical_session_detail",
+            "shadow": {
+                "run": {"id": "run-1", "lifecycle": "ended"},
+                "activity": {"state": "quiescent"},
+            },
+        },
+    )
+
+    evidence = lifecycle._served_run_inventory_evidence(
+        "https://runtime.example",
+        "token",
+        "session-1",
+        [{"run_id": "run-1", "state": "terminal"}],
+    )
+
+    assert evidence["retired"] is True
+    assert evidence["active_run_count"] == 0
+
+@pytest.mark.parametrize(
+    ("served_session_id", "served_run_id"),
+    [("other-session", "run-1"), ("session-1", "old-run")],
+)
+def test_served_run_inventory_rejects_wrong_session_or_run_identity(
+    monkeypatch, served_session_id, served_run_id
+):
+    monkeypatch.setattr(
+        lifecycle,
+        "_request",
+        lambda *_args: {
+            "session_id": served_session_id,
+            "served_path": "canonical_session_detail",
+            "shadow": {
+                "run": {"id": served_run_id, "lifecycle": "ended"},
+                "activity": {"state": "quiescent"},
+            },
+        },
+    )
+
+    evidence = lifecycle._served_run_inventory_evidence(
+        "https://runtime.example",
+        "token",
+        "session-1",
+        [{"run_id": "run-1", "state": "terminal"}],
+    )
+
+    assert evidence["retired"] is False
+    assert evidence["active_run_count"] is None
 
 @pytest.mark.parametrize("projected_id", ["longhouse-event-9", "pi-message-42"])
 def test_pi_continuation_linkage_accepts_native_projection_identity_relationships(tmp_path, projected_id):

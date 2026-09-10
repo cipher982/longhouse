@@ -65,7 +65,7 @@ final class SessionChatUITests: XCTestCase {
         add(screenshot)
     }
 
-    func testSessionLoadingShellKeepsNavigationTitleAndDockStable() {
+    func testSessionLoadingShellKeepsNavigationTitleAndPrimaryChromeStable() {
         let app = launchChatFixture(
             name: "basic",
             eventCount: 9,
@@ -73,12 +73,12 @@ final class SessionChatUITests: XCTestCase {
             tailDelayMs: 30000
         )
 
-        let loadingDock = app.descendants(matching: .any)["session-loading-dock"]
-        XCTAssertTrue(loadingDock.waitForExistence(timeout: 8))
+        let primaryChrome = app.descendants(matching: .any)["session-chat-bottom-chrome-card"]
+        XCTAssertTrue(primaryChrome.waitForExistence(timeout: 8))
         XCTAssertTrue(app.descendants(matching: .any)["session-navigation-title"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.descendants(matching: .any)["session-transcript-loading"].waitForExistence(timeout: 8))
-        XCTAssertTrue(app.descendants(matching: .any)["session-navigation-loading"].exists)
-        XCTAssertFalse(app.buttons["Session actions"].exists)
+        XCTAssertTrue(app.buttons["Session actions"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["session-loading-dock"].exists)
 
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "session-loading-shell"
@@ -95,12 +95,10 @@ final class SessionChatUITests: XCTestCase {
         )
 
         let title = app.descendants(matching: .any)["session-navigation-title"]
-        let loadingActions = app.descendants(matching: .any)["session-navigation-loading"].firstMatch
         let actions = app.buttons["Session actions"]
         XCTAssertTrue(title.waitForExistence(timeout: 8))
-        XCTAssertTrue(loadingActions.waitForExistence(timeout: 8))
-        XCTAssertFalse(actions.exists)
-        XCTAssertLessThan(title.frame.maxX, loadingActions.frame.minX)
+        XCTAssertTrue(actions.waitForExistence(timeout: 8))
+        XCTAssertLessThan(title.frame.maxX, actions.frame.minX)
 
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "session-loading-long-title"

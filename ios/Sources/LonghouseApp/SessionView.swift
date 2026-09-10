@@ -261,15 +261,15 @@ struct SessionView: View {
                     .labelStyle(.iconOnly)
             }
         }
-        .disabled(!isSessionInteractionReady)
-        .opacity(isSessionInteractionReady ? 1 : 0.55)
+        .disabled(viewModel.detail == nil)
+        .opacity(viewModel.detail == nil ? 0.55 : 1)
         .accessibilityLabel(
-            isSessionInteractionReady
-                ? "Session actions"
-                : "Session actions unavailable until transcript is ready"
+            viewModel.detail == nil
+                ? "Session actions unavailable until session metadata is ready"
+                : "Session actions"
         )
         .accessibilityIdentifier(
-            isSessionInteractionReady ? "session-overflow-menu" : "session-navigation-loading"
+            viewModel.detail == nil ? "session-navigation-loading" : "session-overflow-menu"
         )
     }
 
@@ -311,13 +311,10 @@ struct SessionView: View {
     }
 
     private var isSessionInteractionReady: Bool {
-        // Native chrome is a separate lane from WebKit. Once detail and a
-        // successful tail exist, keep the composer/runtime controls mounted
-        // through first-frame restoration, refresh errors, and renderer
-        // retries instead of making their identity depend on a JS callback.
+        // The compact detail lane owns native session chrome. It can paint the
+        // runtime dock, composer, and menu while the transcript tail/WebKit
+        // render continues independently.
         viewModel.detail != nil
-            && !viewModel.isInitialLoading
-            && viewModel.hasLoadedTranscript
     }
 
     private var transcriptState: TranscriptDisplayState {

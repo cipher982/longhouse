@@ -163,7 +163,11 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         .current_dir(&config.cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_file))
-        .stderr(Stdio::from(stderr_file));
+        .stderr(Stdio::from(stderr_file))
+        .env_remove("PI_CONFIG_DIR")
+        .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("PI_CODING_AGENT_SESSION_DIR")
+        .env_remove("PI_PROFILE");
     ManagedIdentity::new(ManagedProvider::Omp, &config.session_id)
         .with_run_id(&config.run_id)
         .apply(&mut command, &[]);
@@ -542,7 +546,7 @@ impl OmpStreamProjection {
                     self.final_stop_reason = message.get("stopReason").and_then(Value::as_str).map(str::to_string);
                 }
             }
-            Some("agent_settled") => self.turn_settled = true,
+            Some("agent_settled" | "session_stop" | "turn_end") => {}
             Some("agent_end") => {
                 let is_terminal = event
                     .get("isTerminal")
@@ -550,12 +554,6 @@ impl OmpStreamProjection {
                     .or_else(|| event.get("willContinue").and_then(Value::as_bool).map(|value| !value))
                     .unwrap_or(false);
                 if is_terminal {
-                    self.turn_settled = true;
-                }
-            }
-            Some("session_stop") => self.turn_settled = true,
-            Some("turn_end") => {
-                if event.get("isTerminal").and_then(Value::as_bool) == Some(true) {
                     self.turn_settled = true;
                 }
             }
@@ -625,7 +623,6 @@ fn omp_phase_from_event(event: &Value) -> Option<(&'static str, Option<String>)>
                 .map(str::to_string),
         )),
         Some("tool_execution_end") => Some(("thinking", None)),
-        Some("agent_settled") => Some(("idle", None)),
         Some("agent_end")
             if event.get("isTerminal").and_then(Value::as_bool) == Some(true)
                 || (event.get("isTerminal").is_none()
@@ -795,12 +792,15 @@ mod tests {
     }
 
     #[test]
-    fn terminal_requires_identity_settlement_and_source_drain() {
+    fn terminal_requires_native_agent_end_and_source_drain() {
         let mut projection = OmpStreamProjection::default();
         projection.apply(None, &json!({"type":"session","id":"01a08857-826d-72f6-b816-672b54116504"})).unwrap();
         projection.apply(None, &json!({"type":"agent_start"})).unwrap();
         projection.apply(None, &json!({"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"stop"}})).unwrap();
         projection.apply(None, &json!({"type":"agent_settled"})).unwrap();
+        projection.apply(None, &json!({"type":"session_stop"})).unwrap();
+        assert_eq!(terminal_state_for_projection(&projection, Some(true), false, None, true, true, true).0, "run_failed");
+        projection.apply(None, &json!({"type":"agent_end","isTerminal":true,"willContinue":false})).unwrap();
         assert_eq!(terminal_state_for_projection(&projection, Some(true), false, None, true, true, false).0, "run_failed");
         assert_eq!(terminal_state_for_projection(&projection, Some(true), false, None, true, true, true).0, "run_completed");
     }
@@ -837,7 +837,7 @@ events = [
     {"type":"message_start","message":{"role":"assistant","content":[]}},
     {"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":prompt}},
     {"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":prompt}],"stopReason":"stop"}},
-    {"type":"agent_settled"},
+    {"type":"agent_end","isTerminal":True,"willContinue":False},
 ]
 for event in events:
     print(json.dumps(event, separators=(",", ":")), flush=True)

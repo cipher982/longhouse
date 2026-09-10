@@ -11,8 +11,10 @@ from zerg.qa.provider_qualification import _PROFILES
 
 def test_omp_qualification_producers_are_registered_on_their_own_contracts() -> None:
     assert CONSOLE_REGISTRATION.producer_id == "omp.console_lifecycle.v1"
+    assert CONSOLE_REGISTRATION.producer_revision == 2
     assert CONSOLE_REGISTRATION.providers == ("omp",)
     assert CONSOLE_REGISTRATION.scenario_id == "omp_console_lifecycle"
+    assert "console_continuation_receipt" in CONSOLE_REGISTRATION.required_artifacts
     assert HELM_REGISTRATION.producer_id == "omp.helm_lifecycle.v1"
     assert HELM_REGISTRATION.providers == ("omp",)
     assert HELM_REGISTRATION.scenario_id == "omp_helm_lifecycle"
@@ -20,9 +22,10 @@ def test_omp_qualification_producers_are_registered_on_their_own_contracts() -> 
     assert ("omp", "omp_helm_v1") in _PROFILES
 
 
-def test_omp_console_settlement_requires_native_agent_end_and_archive() -> None:
+def test_omp_console_settlement_and_context_recall_are_required() -> None:
     observation = {
         "runtime_host_turn_dispatch": True,
+        "omp_continuation_context_recalled": True,
         "omp_settlement": {
             "agent_end_terminal": True,
             "stream_drained": True,
@@ -32,9 +35,11 @@ def test_omp_console_settlement_requires_native_agent_end_and_archive() -> None:
     }
 
     assert omp_console_assertions(observation) == {CONSOLE_ASSERTION: True}
+    observation["omp_continuation_context_recalled"] = False
+    assert omp_console_assertions(observation)[CONSOLE_ASSERTION] is False
+    observation["omp_continuation_context_recalled"] = True
     observation["omp_settlement"]["agent_end_terminal"] = False
     assert omp_console_assertions(observation)[CONSOLE_ASSERTION] is False
-
 
 def test_omp_helm_assertions_do_not_use_agent_settled_as_completion() -> None:
     observation = {

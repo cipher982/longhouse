@@ -1027,6 +1027,35 @@ struct WebTranscriptView: UIViewRepresentable {
                 onDiagnostics: onDiagnostics
             )
         }
+        func webView(
+            _ webView: WKWebView,
+            didFail navigation: WKNavigation!,
+            withError error: Error
+        ) {
+            documentLoadFailed(on: webView, error: error)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            didFailProvisionalNavigation navigation: WKNavigation!,
+            withError error: Error
+        ) {
+            documentLoadFailed(on: webView, error: error)
+        }
+
+        private func documentLoadFailed(on webView: WKWebView, error: Error) {
+            isLoaded = false
+            awaitingDocumentNavigation = false
+            pendingPayload = pendingPayload ?? inFlightPayload ?? lastRenderedPayload
+            inFlightPayload = nil
+            lastPayload = nil
+            lastDuplicatePayload = nil
+            preparedIdentity = nil
+            logger.error("webkit document load failed: \(error.localizedDescription, privacy: .public)")
+            Task { @MainActor in
+                self.onLifecycle?("webview_document_failed")
+            }
+        }
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
             Task { @MainActor in
@@ -1338,6 +1367,12 @@ struct WebTranscriptView: UIViewRepresentable {
             lastDuplicatePayload = nil
             pendingPayload = payload
             guard isLoaded else {
+                if forceRender, let serverURL = documentServerURL {
+                    // A failed initial navigation leaves WebKit without a
+                    // document. The retry revision is the explicit user
+                    // request to start that one document load again.
+                    loadDocument(serverURL: serverURL, on: webView)
+                }
                 emitDiagnostics(
                     stage: "queued",
                     payload: payload,
