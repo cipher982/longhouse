@@ -125,7 +125,9 @@ def test_omp_native_model_evidence_binds_provider_event_to_retained_source(tmp_p
     artifact = evidence["source_artifacts"][0]
     assert artifact["path"] == source.relative_to(tmp_path).as_posix()
     assert artifact["sha256"].startswith("sha256:") and len(artifact["sha256"]) == 71
+    assert artifact["event_sha256"].startswith("sha256:") and len(artifact["event_sha256"]) == 71
     assert artifact["native_event_sha256"].startswith("sha256:") and len(artifact["native_event_sha256"]) == 71
+    assert evidence["result_event"]["model_source"] == "provider_event"
 
 
 def test_omp_helm_controls_use_runtime_agents_api(monkeypatch, tmp_path) -> None:
@@ -176,6 +178,15 @@ def test_omp_helm_controls_use_runtime_agents_api(monkeypatch, tmp_path) -> None
     assert body["client_request_id"].startswith("omp-helm-steer-")
     assert "native_session_id" not in result["payload"]
     assert "status" not in result["payload"]
+    assert result["argv"] == [
+        "longhouse-engine",
+        "omp-helm",
+        "steer",
+        "--session-id",
+        session_id,
+        "--text",
+        "redirect now",
+    ]
 
 
 def test_omp_helm_settlement_requires_terminal_channel_evidence(tmp_path) -> None:

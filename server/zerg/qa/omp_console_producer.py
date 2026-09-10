@@ -207,7 +207,7 @@ def omp_native_model_evidence(
     model_source = "provider_event"
     if not isinstance(event_model, str) or not event_model.strip():
         event_model = message.get("modelId") or message.get("model")
-        model_source = "message"
+        model_source = "provider_event"
     if not isinstance(event_model, str) or not event_model.strip():
         return None
     native_model = event_model.strip()

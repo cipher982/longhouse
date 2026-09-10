@@ -16,10 +16,10 @@
 //!      roots via `discovery::discover_all_files`, filtered by mtime.
 //!   2. Enumerate candidate provider-CLI processes with
 //!      `ps -axo pid=,lstart=,command=`. Filter by command basename
-//!      (`claude`, `codex`, `agy`, `opencode`) plus the stock Node-backed
-//!      launcher shapes (`node .../codex`, `node .../opencode`, etc.) - never
-//!      `longhouse-*` wrappers (those are managed sessions and get their
-//!      own lease surface).
+//!      (`claude`, `codex`, `agy`, `opencode`, `pi`, `omp`) plus the stock
+//!      Node-backed launcher shapes (`node .../codex`, `node .../opencode`,
+//!      etc.) - never `longhouse-*` wrappers (those are managed sessions and
+//!      get their own lease surface).
 //!   3. For each candidate pid, ask `lsof -F n -p <pid>` which regular
 //!      files it has open, and look for transcript paths.
 //!   4. Emit one [`UnmanagedSessionBinding`] per `(provider,
@@ -258,12 +258,12 @@ pub(crate) fn is_provider_process(command: &str) -> Option<&'static str> {
     if script_basename.starts_with("longhouse-") {
         return None;
     }
-    // Claude and legacy Gemini are not Node-launched on supported installs today.
     match script_basename {
         "opencode" | "opencode.js" => Some("opencode"),
         "codex" | "codex.js" if matches!(basename, "node" | "nodejs") => Some("codex"),
         "agy" | "agy.js" | "antigravity" | "antigravity.js" => Some("antigravity"),
         "pi" | "pi.js" => Some("pi"),
+        "omp" | "omp.js" | "oh-my-pi" | "oh-my-pi.js" => Some("omp"),
         _ => None,
     }
 }
@@ -314,6 +314,7 @@ fn provider_from_argv0_basename(basename: &str) -> Option<&'static str> {
         "gemini" => Some("antigravity"),
         "opencode" => Some("opencode"),
         "pi" => Some("pi"),
+        "omp" => Some("omp"),
         _ => None,
     }
 }
@@ -672,6 +673,15 @@ mod tests {
             None
         );
         assert_eq!(is_provider_process("claude"), Some("claude"));
+        assert_eq!(is_provider_process("omp --print"), Some("omp"));
+        assert_eq!(
+            is_provider_process("node /opt/homebrew/bin/omp --print"),
+            Some("omp")
+        );
+        assert_eq!(
+            is_provider_process("node /opt/homebrew/lib/node_modules/oh-my-pi/bin/omp.js"),
+            Some("omp")
+        );
         assert_eq!(is_provider_process("gemini chat"), Some("antigravity"));
         assert_eq!(is_provider_process("longhouse-codex --attach"), None);
         assert_eq!(is_provider_process("longhouse-opencode serve"), None);

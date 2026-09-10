@@ -941,7 +941,7 @@ def _run_engine(
     else:
         accepted = response.get("terminate_dispatched") is True
     return {
-        "argv": [path],
+        "argv": ["longhouse-engine", "omp-helm", command, "--session-id", session_id] + (["--text", text] if text is not None else []),
         "returncode": 0,
         "accepted": accepted,
         "payload": response,
@@ -2008,7 +2008,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             evidence = record.get("evidence")
             if isinstance(evidence, dict):
                 evidence["retained_source_path"] = retained_by_source.get(str(evidence.get("source_path") or ""))
-            for evidence_key in ("marker_evidence", "terminal_evidence"):
+            for evidence_key in ("context_evidence", "marker_evidence", "terminal_evidence"):
                 nested = record.get(evidence_key)
                 if isinstance(nested, dict):
                     nested["retained_source_path"] = retained_by_source.get(str(nested.get("source_path") or ""))
@@ -2079,6 +2079,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         "producer": REGISTRATION.to_dict(),
         "provider": "omp",
         "variant": None,
+        "observation_scope": "scenario",
         "scenario_id": SCENARIO_ID,
         "scenario_revision": REGISTRATION.scenario_revision,
         "evidence_class": "live_token",

@@ -432,7 +432,14 @@ fn row_is_plausible(table: &str, values: &[rusqlite::types::Value]) -> bool {
     fn is_known_provider(provider: &str) -> bool {
         matches!(
             provider,
-            "claude" | "codex" | "cursor" | "opencode" | "antigravity" | "gemini" | "pi"
+            "claude"
+                | "codex"
+                | "cursor"
+                | "opencode"
+                | "antigravity"
+                | "gemini"
+                | "pi"
+                | "omp"
         )
     }
     fn file_length(path: &str) -> Option<u64> {
@@ -1253,6 +1260,15 @@ mod tests {
                 Value::Text("claude".into()),
                 Value::Integer(84444),
                 Value::Integer(84444),
+            ]
+        ));
+        assert!(row_is_plausible(
+            "file_state",
+            &[
+                Value::Text("/Users/d/.omp/sessions/omp.jsonl".into()),
+                Value::Text("omp".into()),
+                Value::Integer(12),
+                Value::Integer(12),
             ]
         ));
         // A source_epoch_registry row that page reuse attributed to file_state.
