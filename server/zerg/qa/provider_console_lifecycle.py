@@ -1557,8 +1557,10 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
     engine_evidence.mkdir(mode=0o700, parents=True)
     workspace.mkdir(mode=0o700, parents=True)
     tool_marker = f"{provider.upper()}_CONSOLE_TOOL_{uuid4().hex}"
+    proof_path: Path | None = None
     if provider in {"pi", "omp"}:
-        (workspace / f"{provider}-console-proof.txt").write_text(tool_marker + "\n", encoding="utf-8")
+        proof_path = workspace / f"{provider}-console-proof.txt"
+        proof_path.write_text(tool_marker + "\n", encoding="utf-8")
     if provider == "cursor":
         completed = subprocess.run(
             ["git", "init", "--quiet"],
@@ -1603,11 +1605,16 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         thread_id = str(created["thread_id"])
         marker = f"LH_{provider.upper()}_CONSOLE_{uuid4().hex}"
         context_marker = f"LH_{provider.upper()}_CONTEXT_{uuid4().hex}"
+        if proof_path is not None:
+            # Let the native read result supply the exact response token. Long
+            # random tokens are intentionally strict evidence, but asking a
+            # model to transcribe one from the prompt makes the canary flaky.
+            proof_path.write_text(f"{tool_marker}\n{marker}\n", encoding="utf-8")
         message = f"Reply with exactly {marker} and nothing else."
         if provider in {"pi", "omp"}:
             message = (
                 f"Remember this context phrase: {context_marker}. Use the read tool to read "
-                f"{workspace / f'{provider}-console-proof.txt'}, then reply with exactly {marker} and nothing else."
+                f"{proof_path}, then reply with exactly the marker on the second line ({marker}) and nothing else."
             )
         request_id = f"console-release-{uuid4()}"
         first = _start_turn(
