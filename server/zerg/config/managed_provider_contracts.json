@@ -2806,7 +2806,7 @@
           "owner_action": "run the transcript census for cursor and name the raw source"
         }
       },
-      "adapter_digest": "dbd19f20d40f9241cdf7f22b6b04e9565e6cdedecd04e168098379289aa87f27"
+      "adapter_digest": "a57baf91990ee5868611748c9ae5c449674f092566540062cc50f9449459d479"
     },
     {
       "provider": "pi",

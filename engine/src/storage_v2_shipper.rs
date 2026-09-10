@@ -251,6 +251,13 @@ fn prepare_next_envelope_with_limit(
             let oversized_unattempted = pending.raw_bytes > maximum_batch_bytes as u64
                 && pending.attempt_count == 0
                 && maximum_batch_bytes < MAX_RAW_BATCH_BYTES;
+            // An envelope prepared before this binary decided the Cursor
+            // projection is raw-only still carries a render, and shipping it
+            // would take the current generation back from the store. Drop the
+            // unattempted one and re-prepare from the same bytes.
+            let obsolete_unattempted_cursor_render = pending.attempt_count == 0
+                && cursor_projection_is_raw_only(provider, path)
+                && pending_carries_render(&pending)?;
             if oversized_render_rejected {
                 if !pending_source_envelope::discard_after_cursor_resync(
                     conn,
@@ -259,7 +266,7 @@ fn prepare_next_envelope_with_limit(
                 )? {
                     return pending_to_prepared(pending).map(Some);
                 }
-            } else if !oversized_unattempted
+            } else if !(oversized_unattempted || obsolete_unattempted_cursor_render)
                 || !pending_source_envelope::discard_unattempted(
                     conn,
                     pending.source_epoch,
@@ -594,7 +601,14 @@ fn prepare_next_envelope_with_limit(
             // current generation, so attaching a render here is what let the
             // lossy projection overwrite the authoritative one. Keep shipping
             // its bytes; never let it claim render authority.
-            render: (!is_cursor_agent_transcript_path(provider, path)).then(|| StorageV2Render {
+            // Suppressed outright when store.db owns this conversation's render;
+            // otherwise the original rule stands, because a Cursor snapshot
+            // without a clock cannot certify an empty transcript.
+            render: (!cursor_projection_is_raw_only(provider, path)
+                && (!is_cursor_agent_transcript_path(provider, path)
+                    || parse_result.metadata.started_at.is_some()
+                    || !render_records.is_empty()))
+            .then(|| StorageV2Render {
                 generation_id: render_generation.to_string(),
                 parser_revision: PARSER_REVISION.to_string(),
                 ordering_revision: ORDERING_REVISION.to_string(),
@@ -2809,9 +2823,22 @@ impl CursorPromptHistory {
             .unwrap_or_default()
     }
 
-    /// Replace `[Pasted text #<id> ...]` with the sidecar's content. An id the
-    /// sidecar does not carry is left exactly as Cursor wrote it.
+    /// Replace `[Pasted text #<id> ...]` with the sidecar's content. A pasted
+    /// block can itself quote a placeholder, so expansion repeats until it
+    /// reaches a fixed point, bounded so a self-referential sidecar cannot spin.
     fn expand_pastes(entry: &str, pastes: &HashMap<String, String>) -> String {
+        let mut expanded = Self::expand_pastes_once(entry, pastes);
+        for _ in 0..4 {
+            let next = Self::expand_pastes_once(&expanded, pastes);
+            if next == expanded {
+                break;
+            }
+            expanded = next;
+        }
+        expanded
+    }
+
+    fn expand_pastes_once(entry: &str, pastes: &HashMap<String, String>) -> String {
         const OPEN: &str = "[Pasted text #";
         let mut out = String::with_capacity(entry.len());
         let mut rest = entry;
@@ -2912,10 +2939,15 @@ fn cursor_message_blocks(message: &Value) -> Vec<Value> {
     }
 }
 
+/// Turn alignment deliberately does not consult the prompt-history witness.
+/// A store turn is whatever Cursor sent the model, and dropping one shifts every
+/// later receipt: the turn's assistant blocks would attach to the previous turn,
+/// `unique_cursor_receipt_path` would fail to reconstruct that receipt, and a
+/// committed reply would be suppressed. The witness decides a row's *label*, and
+/// a label must never be able to hide an answer.
 fn cursor_text_projection(
     snapshot: &cursor_store::CursorStoreSnapshot,
     evidence: Option<&crate::cursor_visibility::CursorVisibilityEvidence>,
-    witness: Option<&CursorPromptHistory>,
 ) -> CursorTextProjection {
     let Some(evidence) = evidence else {
         return CursorTextProjection::default();
@@ -2947,8 +2979,7 @@ fn cursor_text_projection(
                 .iter()
                 .filter_map(|block| block.get("text").and_then(Value::as_str))
                 .find_map(|text| {
-                    let (effective_role, effective_text, _) =
-                        classify_cursor_text_with_witness(role, text, witness);
+                    let (effective_role, effective_text) = classify_cursor_text(role, text);
                     (effective_role == "user").then_some(effective_text)
                 });
             // Cursor stores injected context as a user-role message, but it
@@ -3189,7 +3220,7 @@ fn cursor_render_records(
             (record.source_position, raw_record_ordinal, bytes),
         );
     }
-    let projection = cursor_text_projection(snapshot, visibility_evidence, witness);
+    let projection = cursor_text_projection(snapshot, visibility_evidence);
     // The conversation's last message decides which page owns a turn-outcome
     // row, so a paged capture emits it once instead of once per page.
     let carries_conversation_tail = root_ids
@@ -4879,6 +4910,25 @@ fn hash_file(path: &Path) -> Result<String> {
 /// is still in flight, so a byte offset that was valid for the previous file
 /// contents can land in the middle of a different line. Source revisions make
 /// that rewrite an explicit source epoch and restart framing at byte zero.
+/// The projection loses its render only when the authoritative source for the
+/// same conversation actually exists. A conversation Cursor never gave a
+/// `store.db` has no other source, and suppressing its render would leave the
+/// session with no current generation rather than a lossy one.
+fn cursor_projection_is_raw_only(provider: &str, path: &Path) -> bool {
+    cursor_agent_transcript_conversation_id(provider, path).is_some_and(|conversation_id| {
+        crate::cursor_visibility::cursor_store_exists(&conversation_id)
+    })
+}
+
+fn pending_carries_render(
+    pending: &pending_source_envelope::PendingSourceEnvelope,
+) -> Result<bool> {
+    Ok(pending_to_prepared(pending.clone())?
+        .envelope
+        .render
+        .is_some())
+}
+
 fn is_cursor_agent_transcript_path(provider: &str, path: &Path) -> bool {
     provider.eq_ignore_ascii_case("cursor")
         && path
@@ -6091,6 +6141,114 @@ mod tests {
             .0,
             "user"
         );
+    }
+
+    /// A label must never be able to hide an answer. The witness demotes a row
+    /// at render time only; turn alignment still sees every store user turn, so
+    /// a wrongly demoted prompt cannot shift receipts and suppress the reply
+    /// that followed it.
+    #[test]
+    fn a_demoted_prompt_still_anchors_its_turn_for_receipt_alignment() {
+        let first_user = "1111111111111111111111111111111111111111111111111111111111111111";
+        let first_reply = "2222222222222222222222222222222222222222222222222222222222222222";
+        let second_user = "3333333333333333333333333333333333333333333333333333333333333333";
+        let second_reply = "4444444444444444444444444444444444444444444444444444444444444444";
+        let (snapshot, selected) = cursor_visibility_fixture(vec![
+            (
+                first_user,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>do work</user_query>"}]}),
+            ),
+            (
+                first_reply,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"first answer"}]}),
+            ),
+            (
+                second_user,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>keep going</user_query>"}]}),
+            ),
+            (
+                second_reply,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"second answer"}]}),
+            ),
+        ]);
+        let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
+            turns: vec![
+                crate::cursor_visibility::CursorProviderTurn {
+                    generation_id: "g1".to_string(),
+                    prompt: "do work".to_string(),
+                    response_text: Some("first answer".to_string()),
+                    stop_status: Some("completed".to_string()),
+                    stop_observed_at: None,
+                },
+                crate::cursor_visibility::CursorProviderTurn {
+                    generation_id: "g2".to_string(),
+                    prompt: "keep going".to_string(),
+                    response_text: Some("second answer".to_string()),
+                    stop_status: Some("completed".to_string()),
+                    stop_observed_at: None,
+                },
+            ],
+            ..Default::default()
+        };
+        // A history that covers only the first prompt: the second is exactly
+        // the capped/rotated case that must cost a label, not an answer.
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("prompt_history.json"),
+            serde_json::to_vec(&serde_json::json!(["do work"])).unwrap(),
+        )
+        .unwrap();
+        let witness = CursorPromptHistory::load(&dir.path().join("store.db"));
+
+        let rendered =
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), Some(&witness))
+                .unwrap();
+
+        let text: Vec<&str> = rendered
+            .iter()
+            .filter_map(|record| record.content_text.as_deref())
+            .collect();
+        assert!(text.contains(&"first answer"));
+        assert!(
+            text.contains(&"second answer"),
+            "the demoted prompt must not suppress the reply that followed it"
+        );
+        let demoted = rendered
+            .iter()
+            .find(|record| record.content_text.as_deref() == Some("keep going"))
+            .expect("the demoted prompt is still rendered");
+        assert_eq!(demoted.role, "system");
+        assert_eq!(
+            demoted.interaction_kind.as_deref(),
+            Some("provider_notification")
+        );
+    }
+
+    /// A pasted block can quote a placeholder of its own; the store holds the
+    /// fully expanded text, so one pass would leave a real prompt unmatched.
+    #[test]
+    fn cursor_prompt_history_expands_nested_paste_placeholders() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("prompt_history.json"),
+            serde_json::to_vec(&serde_json::json!([
+                "before [Pasted text #1 +2 lines] after"
+            ]))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("pasted_text.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "entries": {"1": "outer [Pasted text #2 +1 lines]", "2": "inner"}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let history = CursorPromptHistory::load(&dir.path().join("store.db"));
+
+        assert!(history.contains("before outer inner after"));
     }
 
     #[test]

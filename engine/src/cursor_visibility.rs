@@ -202,7 +202,23 @@ pub(crate) fn has_cursor_prompt_receipt(
     })
 }
 
+/// Whether Cursor has a store for this conversation at all, however many
+/// workspaces hold one. Distinct from `configured_cursor_store`, which needs a
+/// single unambiguous path to wake; here the question is only whether an
+/// authoritative source exists, so ambiguity still answers yes.
+pub(crate) fn cursor_store_exists(conversation_id: &str) -> bool {
+    !cursor_store_candidates(conversation_id).is_empty()
+}
+
 pub(crate) fn configured_cursor_store(conversation_id: &str) -> Option<PathBuf> {
+    let candidates = cursor_store_candidates(conversation_id);
+    let [store] = candidates.as_slice() else {
+        return None;
+    };
+    Some(store.clone())
+}
+
+fn cursor_store_candidates(conversation_id: &str) -> Vec<PathBuf> {
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
     let cursor_home = std::env::var_os("CURSOR_HOME")
         .map(PathBuf::from)
@@ -222,11 +238,9 @@ pub(crate) fn configured_cursor_store(conversation_id: &str) -> Option<PathBuf> 
             .map(|entry| entry.path().join(conversation_id).join("store.db"))
             .filter(|path| path.is_file())
             .collect::<Vec<_>>();
-        let [store] = stores.as_slice() else {
-            return None;
-        };
-        Some(store.clone())
+        (!stores.is_empty()).then_some(stores)
     })
+    .unwrap_or_default()
 }
 
 #[cfg(unix)]
@@ -255,8 +269,9 @@ pub(crate) fn wake_cursor_transcript(
         return;
     };
     for transcript in targets {
+        // One failed connect must not cost the other target its wake.
         let Ok(mut stream) = UnixStream::connect(&socket) else {
-            return;
+            continue;
         };
         let _ = stream.set_write_timeout(Some(StdDuration::from_millis(75)));
         let payload = json!({
