@@ -16,8 +16,6 @@ from collections.abc import Mapping
 from collections.abc import MutableMapping
 from typing import Any
 
-from zerg.services.raw_json_compression import decode_raw_json
-
 INTERACTION_DURABLE_USER_MESSAGE = "durable_user_message"
 INTERACTION_LOCAL_CONTROL = "local_control"
 INTERACTION_LOCAL_CONTROL_OUTPUT = "local_control_output"
@@ -674,6 +672,8 @@ def seed_persisted_provider_interaction_context(
 
                     return decompress_raw_json(blob)
             return raw_json
+        from zerg.services.raw_json_compression import decode_raw_json
+
         return decode_raw_json(event)
 
     def set_field(event: Any, name: str, value: Any) -> None:
