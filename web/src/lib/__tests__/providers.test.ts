@@ -5,6 +5,7 @@ import {
   getLaunchProviderSupport,
   getLaunchProviderSupportList,
   getProviderLabel,
+  getProviderColor,
   type LaunchProviderId,
 } from "../providers";
 
@@ -62,6 +63,11 @@ describe("providers launch support", () => {
     expect(getLaunchProviderSupport("codex")?.marketingName).toBe("Codex CLI");
   });
 
+  it("keeps Cursor on its own brand color", () => {
+    expect(getProviderColor("cursor")).toBe("var(--color-provider-cursor)");
+    expect(getProviderColor("pi")).toBe("var(--color-provider-pi)");
+  });
+
   it("keeps the launch provider capability contract explicit", () => {
     const providers = getLaunchProviderSupportList();
     expect(providers.map((provider) => provider.id)).toEqual([
@@ -70,6 +76,7 @@ describe("providers launch support", () => {
       "cursor",
       "opencode",
       "pi",
+      "omp",
       "antigravity",
     ]);
     expect(providers.every((provider) => provider.archiveVisibility === "live")).toBe(true);

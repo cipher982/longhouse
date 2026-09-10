@@ -9,7 +9,7 @@
 import { GENERATED_PROVIDER_CAPABILITIES } from "../generated/provider-capabilities";
 import { lookupProviderBrand, providerDisplayName } from "../generated/provider-brands";
 
-export type LaunchProviderId = "claude" | "codex" | "opencode" | "antigravity" | "cursor" | "pi";
+export type LaunchProviderId = "claude" | "codex" | "opencode" | "antigravity" | "cursor" | "pi" | "omp";
 
 export type LaunchProviderSupport = {
   id: LaunchProviderId;
@@ -74,6 +74,11 @@ const LAUNCH_PROVIDER_PRESENTATION: Record<LaunchProviderId, Omit<LaunchProvider
     hooksSupport: "none",
     telemetryQuality: "structured",
   },
+  omp: {
+    archiveVisibility: "live",
+    hooksSupport: "none",
+    telemetryQuality: "structured",
+  },
 };
 
 const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> = Object.fromEntries(
@@ -115,6 +120,10 @@ export function getProviderColor(provider: string): string {
       return "var(--color-provider-antigravity)";
     case "cursor":
       return "var(--color-provider-cursor)";
+    case "pi":
+      return "var(--color-provider-pi)";
+    case "omp":
+      return "var(--color-provider-omp)";
     case "zai":
       return "var(--color-provider-zai)";
     default:
@@ -141,6 +150,7 @@ export function getLaunchProviderSupportList(): LaunchProviderSupport[] {
     LAUNCH_PROVIDER_SUPPORT.cursor,
     LAUNCH_PROVIDER_SUPPORT.opencode,
     LAUNCH_PROVIDER_SUPPORT.pi,
+    LAUNCH_PROVIDER_SUPPORT.omp,
     LAUNCH_PROVIDER_SUPPORT.antigravity,
   ];
 }

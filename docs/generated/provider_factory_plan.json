@@ -2272,10 +2272,12 @@
       "reason": "deployed release-lane profiles for omp",
       "qualification_profile": "omp_print_v1",
       "qualification_profiles": [
-        "omp_print_v1"
+        "omp_print_v1",
+        "omp_helm_v1"
       ],
       "scenario_ids": [
-        "omp_console_lifecycle"
+        "omp_console_lifecycle",
+        "omp_helm_lifecycle"
       ],
       "harness_scenarios": [
         "probe_identity",
@@ -2314,14 +2316,135 @@
       "credential_requirement": [
         "OPENROUTER_API_KEY",
         "LONGHOUSE_OMP_LIVE",
-        "LONGHOUSE_OMP_QUALIFICATION_MODEL"
+        "LONGHOUSE_OMP_QUALIFICATION_MODEL",
+        "LONGHOUSE_ENGINE_BIN",
+        "LONGHOUSE_CLI_BIN",
+        "LONGHOUSE_RUNTIME_API_URL",
+        "LONGHOUSE_RUNTIME_AGENTS_TOKEN"
       ],
       "assertion_status": [
+        {
+          "assertion_id": "omp_helm_launch_registration",
+          "variant": null,
+          "scenario_id": "omp_helm_lifecycle",
+          "minimum_scenario_revision": 5,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "omp_helm_send_idle",
+          "variant": null,
+          "scenario_id": "omp_helm_lifecycle",
+          "minimum_scenario_revision": 5,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "omp_helm_follow_up_native",
+          "variant": null,
+          "scenario_id": "omp_helm_lifecycle",
+          "minimum_scenario_revision": 5,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "omp_helm_steer_active",
+          "variant": null,
+          "scenario_id": "omp_helm_lifecycle",
+          "minimum_scenario_revision": 5,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "omp_helm_abort_native",
+          "variant": null,
+          "scenario_id": "omp_helm_lifecycle",
+          "minimum_scenario_revision": 5,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "omp_helm_terminate_owned",
+          "variant": null,
+          "scenario_id": "omp_helm_lifecycle",
+          "minimum_scenario_revision": 5,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "omp_helm_native_replacement_bound",
+          "variant": null,
+          "scenario_id": "omp_helm_lifecycle",
+          "minimum_scenario_revision": 5,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "omp_helm_cold_resume_exact_file",
+          "variant": null,
+          "scenario_id": "omp_helm_lifecycle",
+          "minimum_scenario_revision": 5,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "omp_helm_stale_owner_refused",
+          "variant": null,
+          "scenario_id": "omp_helm_lifecycle",
+          "minimum_scenario_revision": 5,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
         {
           "assertion_id": "omp_console_turn_settled_and_bound",
           "variant": null,
           "scenario_id": "omp_console_lifecycle",
-          "minimum_scenario_revision": 4,
+          "minimum_scenario_revision": 5,
           "acceptable_evidence": [
             "live_token"
           ],

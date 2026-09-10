@@ -167,7 +167,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "abc35608f3fc66ebeb6893132c768a1a88e102f487ae25d0322138e91760dea2"
+              "oracle_digest": "f6ea4d9bd72553c99930ea3ad14b7e5515ff203b0f560e3cc84b63387d325222"
             }
           ]
         },
@@ -1041,7 +1041,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "abc35608f3fc66ebeb6893132c768a1a88e102f487ae25d0322138e91760dea2"
+              "oracle_digest": "f6ea4d9bd72553c99930ea3ad14b7e5515ff203b0f560e3cc84b63387d325222"
             },
             {
               "id": "real_print_marker_returned",
@@ -1552,7 +1552,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "abc35608f3fc66ebeb6893132c768a1a88e102f487ae25d0322138e91760dea2"
+              "oracle_digest": "f6ea4d9bd72553c99930ea3ad14b7e5515ff203b0f560e3cc84b63387d325222"
             }
           ]
         },
@@ -2434,7 +2434,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "abc35608f3fc66ebeb6893132c768a1a88e102f487ae25d0322138e91760dea2"
+              "oracle_digest": "f6ea4d9bd72553c99930ea3ad14b7e5515ff203b0f560e3cc84b63387d325222"
             }
           ]
         },
@@ -3520,78 +3520,78 @@
               "id": "omp_helm_launch_registration",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 4,
+              "minimum_scenario_revision": 5,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "ef5f481b688938af22a89f78a044f590f3b0de71c46fb38bdf9738a6f16c2aff"
+              "oracle_digest": "0885c0f66eaf8accf2b308495dc9d16409a62a90aba976b150ff90b49185e166"
             },
             {
               "id": "omp_helm_send_idle",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 4,
+              "minimum_scenario_revision": 5,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "ef5f481b688938af22a89f78a044f590f3b0de71c46fb38bdf9738a6f16c2aff"
+              "oracle_digest": "0885c0f66eaf8accf2b308495dc9d16409a62a90aba976b150ff90b49185e166"
             },
             {
               "id": "omp_helm_follow_up_native",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 4,
+              "minimum_scenario_revision": 5,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "ef5f481b688938af22a89f78a044f590f3b0de71c46fb38bdf9738a6f16c2aff"
+              "oracle_digest": "0885c0f66eaf8accf2b308495dc9d16409a62a90aba976b150ff90b49185e166"
             },
             {
               "id": "omp_helm_steer_active",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 4,
+              "minimum_scenario_revision": 5,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "ef5f481b688938af22a89f78a044f590f3b0de71c46fb38bdf9738a6f16c2aff"
+              "oracle_digest": "0885c0f66eaf8accf2b308495dc9d16409a62a90aba976b150ff90b49185e166"
             },
             {
               "id": "omp_helm_abort_native",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 4,
+              "minimum_scenario_revision": 5,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "ef5f481b688938af22a89f78a044f590f3b0de71c46fb38bdf9738a6f16c2aff"
+              "oracle_digest": "0885c0f66eaf8accf2b308495dc9d16409a62a90aba976b150ff90b49185e166"
             },
             {
               "id": "omp_helm_terminate_owned",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 4,
+              "minimum_scenario_revision": 5,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "ef5f481b688938af22a89f78a044f590f3b0de71c46fb38bdf9738a6f16c2aff"
+              "oracle_digest": "0885c0f66eaf8accf2b308495dc9d16409a62a90aba976b150ff90b49185e166"
             },
             {
               "id": "omp_helm_native_replacement_bound",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 4,
+              "minimum_scenario_revision": 5,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "ef5f481b688938af22a89f78a044f590f3b0de71c46fb38bdf9738a6f16c2aff"
+              "oracle_digest": "0885c0f66eaf8accf2b308495dc9d16409a62a90aba976b150ff90b49185e166"
             }
           ]
         },
@@ -3613,23 +3613,23 @@
               "id": "omp_helm_cold_resume_exact_file",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 4,
+              "minimum_scenario_revision": 5,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "ef5f481b688938af22a89f78a044f590f3b0de71c46fb38bdf9738a6f16c2aff"
+              "oracle_digest": "0885c0f66eaf8accf2b308495dc9d16409a62a90aba976b150ff90b49185e166"
             },
             {
               "id": "omp_helm_stale_owner_refused",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 4,
+              "minimum_scenario_revision": 5,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "ef5f481b688938af22a89f78a044f590f3b0de71c46fb38bdf9738a6f16c2aff"
+              "oracle_digest": "0885c0f66eaf8accf2b308495dc9d16409a62a90aba976b150ff90b49185e166"
             }
           ]
         },
@@ -3651,12 +3651,12 @@
               "id": "omp_console_turn_settled_and_bound",
               "scenario_id": "omp_console_lifecycle",
               "oracle_source": "server/zerg/qa/omp_console_producer.py",
-              "minimum_scenario_revision": 4,
+              "minimum_scenario_revision": 5,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "41a4a4181d38783f0eadcf3074a51e9b3af23ca5bc9dbd658980193a63bcadee"
+              "oracle_digest": "410bf288f9261b2241198fa69dfc346bbf84d124f43cb1483c1614666fb4d0eb"
             }
           ]
         }
@@ -3719,7 +3719,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "d173426ff2f5230a0dc9cb84de6c5a1f40a9cc901da707570675f679e4504666"
+      "adapter_digest": "1f86420b777d382caf0546ff488d2f90b124e2a820f710d69c4ec74717e2cf18"
     }
   ]
 }

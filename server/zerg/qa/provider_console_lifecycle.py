@@ -45,6 +45,10 @@ from zerg.qa.resume_assurance import ProducerRegistration
 PROVIDERS = ("codex", "claude", "opencode", "cursor")
 INTERRUPT_SUPPORTED = frozenset({"claude", "opencode", "cursor", "pi", "omp"})
 INTERRUPT_UNSUPPORTED = frozenset({"codex"})
+# Only OMP's retained JSONL stream carries the terminal agent_end contract used
+# by the post-interrupt evidence check. The other supported adapters settle via
+# their own Runtime Host/claim contracts.
+INTERRUPT_OUTPUT_TERMINAL_PROVIDERS = frozenset({"omp"})
 ASSERTION_ID = "console_adapter_release_contract_preserved"
 SUPPORTED_VARIANT = "interrupt_supported"
 UNSUPPORTED_VARIANT = "interrupt_unsupported"
@@ -155,6 +159,10 @@ def _artifact_manifest_after_shipper_stopped(
 
 def _expected_variant(provider: str) -> str:
     return SUPPORTED_VARIANT if provider in INTERRUPT_SUPPORTED else UNSUPPORTED_VARIANT
+
+
+def _interrupt_output_contract_applies(provider: str) -> bool:
+    return provider in INTERRUPT_OUTPUT_TERMINAL_PROVIDERS
 
 
 def _scenario_id(provider: str) -> str:
@@ -1001,6 +1009,122 @@ def _wait_owned_processes_dead(claims: list[dict[str, Any]], timeout: float = 15
     return all(_pid_dead(claim.get("pid")) and _process_group_dead(claim.get("process_group_id")) for claim in claims)
 
 
+def _owned_process_evidence(claims: list[dict[str, Any]]) -> list[dict[str, object]]:
+    """Retain exact provider owners and their independently observed cleanup state."""
+
+    return [
+        {
+            "pid": claim.get("pid"),
+            "process_group_id": claim.get("process_group_id"),
+            "boot_id": claim.get("boot_id"),
+            "process_start_time": claim.get("process_start_time"),
+            "run_id": claim.get("run_id"),
+            "turn_id": claim.get("turn_id"),
+            "state": claim.get("state"),
+            "pid_positive": isinstance(claim.get("pid"), int) and not isinstance(claim.get("pid"), bool) and claim["pid"] > 0,
+            "process_group_positive": (
+                isinstance(claim.get("process_group_id"), int)
+                and not isinstance(claim.get("process_group_id"), bool)
+                and claim["process_group_id"] > 0
+            ),
+            "birth_identity_present": (
+                isinstance(claim.get("boot_id"), str)
+                and bool(claim["boot_id"])
+                and isinstance(claim.get("process_start_time"), str)
+                and bool(claim["process_start_time"])
+            ),
+            "pid_dead": _pid_dead(claim.get("pid")),
+            "process_group_dead": _process_group_dead(claim.get("process_group_id")),
+        }
+        for claim in claims
+    ]
+
+
+def _retained_post_interrupt_output_evidence(
+    provider: str,
+    claim: Mapping[str, Any],
+    marker: str,
+    retained_sources: list[dict[str, object]],
+    root: Path,
+) -> dict[str, object]:
+    """Bind the recovery marker and terminal event to retained provider output."""
+
+    if not _interrupt_output_contract_applies(provider):
+        return {
+            "valid": None,
+            "applicable": False,
+            "provider": provider,
+            "marker": marker,
+            "assistant_marker_count": 0,
+            "terminal_event_count": 0,
+        }
+
+    for field in ("stdout_path", "source_path"):
+        source_path = claim.get(field)
+        if not isinstance(source_path, str) or not source_path:
+            continue
+        retained = next(
+            (
+                item
+                for item in retained_sources
+                if item.get("retained") is True and item.get("source") == source_path and item.get("kind") == field
+            ),
+            None,
+        )
+        retained_path = retained.get("path") if isinstance(retained, Mapping) else None
+        if not isinstance(retained_path, str):
+            continue
+        try:
+            lines = (root / retained_path).read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        events: list[Mapping[str, Any]] = []
+        for line in lines:
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, Mapping):
+                events.append(value)
+        marker_indices: list[int] = []
+        terminal_indices: list[int] = []
+        for index, event in enumerate(events):
+            output_text = "\n".join(_assistant_output_texts(provider, json.dumps(event, sort_keys=True)))
+            if output_text.count(marker) == 1:
+                marker_indices.append(index)
+            is_terminal = event.get("isTerminal")
+            if not isinstance(is_terminal, bool):
+                is_terminal = event.get("willContinue") is False
+            if event.get("type") == "agent_end" and is_terminal is True:
+                terminal_indices.append(index)
+        return {
+            "valid": len(marker_indices) == 1 and bool(terminal_indices) and any(index > marker_indices[0] for index in terminal_indices),
+            "applicable": True,
+            "provider": provider,
+            "source_kind": field,
+            "source_path": source_path,
+            "retained_path": retained_path,
+            "marker": marker,
+            "assistant_marker_count": len(marker_indices),
+            "marker_event_index": marker_indices[0] if len(marker_indices) == 1 else None,
+            "marker_event_type": events[marker_indices[0]].get("type") if len(marker_indices) == 1 else None,
+            "terminal_event_count": len(terminal_indices),
+            "terminal_event_index": next(
+                (index for index in terminal_indices if marker_indices and index > marker_indices[0]),
+                None,
+            ),
+            "terminal_event_type": "agent_end" if terminal_indices else None,
+        }
+    return {
+        "valid": False,
+        "applicable": True,
+        "provider": provider,
+        "marker": marker,
+        "assistant_marker_count": 0,
+        "terminal_event_count": 0,
+    }
+
+
 def _console_cleanup_receipt(
     claims: list[dict[str, Any]],
     retained_sources: list[dict[str, object]],
@@ -1061,6 +1185,8 @@ def _console_cleanup_receipt(
             "owned_process_count": len(claims),
             "wait_completed": process_stop_wait_completed,
         },
+        "owned_processes": _owned_process_evidence(claims),
+        "owned_process_count": len(claims),
         "source_retention_verified": source_retention_verified,
         "source_retention": {
             "verified": source_retention_verified,
@@ -1260,8 +1386,10 @@ def _retain_claim_sources(
     root: Path,
     claims: list[dict[str, Any]],
     environment: Mapping[str, str],
+    *,
+    complete: bool = False,
 ) -> list[dict[str, object]]:
-    """Keep bounded provider-native sources before the isolated HOME disappears."""
+    """Keep provider-native sources before the isolated HOME disappears."""
 
     secrets = [value for name, value in environment.items() if value and (name.endswith("_KEY") or name.endswith("_TOKEN"))]
     target_root = root / "provider-sources"
@@ -1283,7 +1411,7 @@ def _retain_claim_sources(
             for secret in secrets:
                 content = content.replace(secret.encode(), b"[REDACTED]")
             max_bytes = 16 * 1024 * 1024
-            truncated = len(content) > max_bytes
+            truncated = not complete and len(content) > max_bytes
             if truncated:
                 content = content[:max_bytes] + b"\n[truncated by QA evidence bound]\n"
             target = target_root / f"{index}-{run_id}-{field}.raw"
@@ -1295,6 +1423,7 @@ def _retain_claim_sources(
                     "kind": field,
                     "path": target.relative_to(root).as_posix(),
                     "retained": True,
+                    "complete": not truncated,
                     "truncated": truncated,
                     "bytes": len(content),
                 }
@@ -1548,6 +1677,9 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             and flush_receipt.get("exit_code") == 0
             and flush_receipt.get("daemon_paused") is True
             and flush_receipt.get("daemon_restarted") is True
+            and isinstance(flush_receipt.get("events_shipped"), int)
+            and not isinstance(flush_receipt.get("events_shipped"), bool)
+            and flush_receipt.get("events_shipped") >= 0
         )
         boundary_receipt = {
             "status": "pass" if flush_ok and isinstance(marker_count, int) and marker_count >= 1 else "fail",
@@ -1586,6 +1718,8 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             "bound_assistant_event_id": first_events[0].get("id"),
             "bound_assistant_event_origin": first_events[0].get("event_origin", "durable"),
             "bound_assistant_event_excerpt": event_text(first_events[0])[:512],
+            "bound_assistant_event": dict(first_events[0]),
+            "bound_assistant_event_count": len(first_events),
             "bound_assistant_marker_count": event_text(first_events[0]).count(marker),
             "marker_in_provider_response": True,
             "marker_in_bound_assistant_event": True,
@@ -1686,6 +1820,8 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                     "run_id": first_claim.get("run_id"),
                     "turn_id": first_claim.get("turn_id"),
                     "provider_thread_id": first_claim.get("provider_thread_id"),
+                    "boot_id": first_claim.get("boot_id"),
+                    "process_start_time": first_claim.get("process_start_time"),
                 },
                 "second_process": {
                     "pid": resume_claim.get("pid"),
@@ -1693,6 +1829,8 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                     "run_id": resume_claim.get("run_id"),
                     "turn_id": resume_claim.get("turn_id"),
                     "provider_thread_id": resume_claim.get("provider_thread_id"),
+                    "boot_id": resume_claim.get("boot_id"),
+                    "process_start_time": resume_claim.get("process_start_time"),
                 },
                 "context": {
                     "seed_marker": context_marker,
@@ -1804,12 +1942,26 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                     "run_id": active_claim.get("run_id"),
                     "turn_id": active_claim.get("turn_id"),
                     "provider_thread_id": active_claim.get("provider_thread_id"),
+                    "boot_id": active_claim.get("boot_id"),
+                    "process_start_time": active_claim.get("process_start_time"),
                 },
                 "active_terminal": {
                     "claim_state": terminal.get("state"),
                     "terminal_state": (terminal.get("result") or {}).get("terminal_state"),
                     "pid": active_claim.get("pid"),
                     "process_group_id": active_claim.get("process_group_id"),
+                    "pid_positive": (
+                        isinstance(active_claim.get("pid"), int)
+                        and not isinstance(active_claim.get("pid"), bool)
+                        and active_claim.get("pid", 0) > 0
+                    ),
+                    "process_group_positive": (
+                        isinstance(active_claim.get("process_group_id"), int)
+                        and not isinstance(active_claim.get("process_group_id"), bool)
+                        and active_claim.get("process_group_id", 0) > 0
+                    ),
+                    "boot_id": active_claim.get("boot_id"),
+                    "process_start_time": active_claim.get("process_start_time"),
                 },
                 "cancellation_claim": {
                     "claim_state": terminal.get("state"),
@@ -1821,6 +1973,10 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                     "provider": provider,
                     "session_id": post_claim.get("session_id"),
                     "thread_id": post_claim.get("thread_id"),
+                    "pid": post_claim.get("pid"),
+                    "process_group_id": post_claim.get("process_group_id"),
+                    "boot_id": post_claim.get("boot_id"),
+                    "process_start_time": post_claim.get("process_start_time"),
                     "run_id": post_claim.get("run_id"),
                     "turn_id": post_claim.get("turn_id"),
                     "provider_thread_id": post_claim.get("provider_thread_id"),
@@ -1909,6 +2065,19 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
 
         naturally_dead = _wait_owned_processes_dead(claims)
         retained_sources = _retain_claim_sources(root, claims, environment)
+        if variant == SUPPORTED_VARIANT and _interrupt_output_contract_applies(provider):
+            post_interrupt_output = _retained_post_interrupt_output_evidence(
+                provider,
+                post_claim,
+                post_marker,
+                retained_sources,
+                root,
+            )
+            interrupt_receipt["post_interrupt_output"] = post_interrupt_output
+            interrupt_receipt["status"] = (
+                "pass" if interrupt_receipt.get("status") == "pass" and post_interrupt_output.get("valid") is True else "fail"
+            )
+            write_json(root / "interrupt-contract-receipt.json", interrupt_receipt)
         shipper_stop = shipper.stop() if shipper is not None else {}
         served_run_inventory = _served_run_inventory_evidence(api_url, token, session_id, claims)
         session_retirement = retire_qualification_session(

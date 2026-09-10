@@ -44,6 +44,7 @@ longhouse codex        # managed app-server session: send, interrupt, steer, res
 longhouse opencode     # managed server session: send, interrupt, reattach (not active-turn steer)
 longhouse cursor       # managed PTY session: send, interrupt, reattach (not active-turn steer)
 longhouse pi           # stock Pi TUI: send, interrupt, boundary steer, cold resume
+longhouse omp          # stock Oh My Pi TUI: send, interrupt, steer, cold resume
 longhouse antigravity  # managed hook-inbox session: send only
 ```
 
@@ -57,11 +58,18 @@ previous owner exits, `longhouse pi --resume-session <session-id>` opens a
 new TUI on the exact native session file; it is not live terminal attachment.
 Pi Console uses the configured tools, context, model, and local credentials
 and resumes that native history in a new process for each turn.
+
+OMP Helm keeps the stock Oh My Pi terminal UI through a launch-scoped
+Longhouse extension. Its active-turn steer uses OMP's native delivery mode,
+and cold resume starts a new owner on the exact native session file after the
+previous owner exits. OMP Console runs one stock JSON turn per request while
+preserving the configured model, tools, context, extensions, skills, auth, and
+native history.
 Keep Pi's Node runtime current: Node 23.6.1 lacks the Zstandard API used by
 some model HTTP responses and can crash stock Pi. Longhouse does not replace
 your Pi or Node installation.
 
-OpenCode Helm supports send, interrupt, terminate, and pause-answer but not active-turn steer. Cursor Helm supports send, interrupt, terminate, and reattach but not active-turn steer or pause-answer. Antigravity is the narrowest of the six: it launches under Longhouse's hook inbox and accepts send, but not interrupt, terminate, or reattach — and it refuses to start at all if its hook is not installed, rather than opening an unmanaged session wearing a managed session id.
+OpenCode Helm supports send, interrupt, terminate, and pause-answer but not active-turn steer. Cursor Helm supports send, interrupt, terminate, and reattach (not active-turn steer or pause-answer). OMP supports send, interrupt, native active-turn steer, terminate, and exact-file cold resume. Antigravity is the narrowest of the seven: it launches under Longhouse's hook inbox and accepts send, but not interrupt, terminate, or reattach — and it refuses to start at all if its hook is not installed, rather than opening an unmanaged session wearing a managed session id.
 
 Bare provider CLI sessions still get ingested into the timeline — they stay unmanaged: searchable and observable, but without Longhouse-owned remote control.
 
@@ -138,6 +146,7 @@ Actively developed pre-release. Every provider Longhouse supports syncs into one
 | OpenCode | ✓ | ✓ | ✓ | — | ✓ |
 | Antigravity | ✓ | ✓ | — | — | — |
 | Pi Agent | ✓ | ✓ | ✓ | ✓ | ✓ |
+| OMP (Oh My Pi) | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 The iOS client lives in `ios/` and handles APNs push on `needs_user`, but there is no
 TestFlight or App Store build and no `.ipa` in any release. Getting it on a phone today

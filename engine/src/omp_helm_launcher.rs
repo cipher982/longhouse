@@ -327,21 +327,6 @@ impl OmpHelmServer {
             .get("session_file")
             .and_then(Value::as_str)
             .context("OMP extension frame has no native session file")?;
-        let deadline = Instant::now() + SOCKET_TIMEOUT;
-        let header = loop {
-            match crate::omp_session::read_session_header(Path::new(source)) {
-                Ok(header) => break header,
-                Err(error) if Instant::now() < deadline => {
-                    thread::sleep(Duration::from_millis(25));
-                    drop(error);
-                }
-                Err(error) => return Err(error).context("waiting for OMP native session header"),
-            }
-        };
-        anyhow::ensure!(
-            header.native_id == native_id,
-            "OMP extension native identity does not match its source header"
-        );
         let (session_id, previous, previous_source) = {
             let state = self.shared.lock().expect("OMP state mutex poisoned");
             anyhow::ensure!(
@@ -363,8 +348,32 @@ impl OmpHelmServer {
         if !previous.is_empty() && previous != native_id && !replacement {
             anyhow::bail!("OMP native session changed without a replacement fence");
         }
+        // Reserve the exact replacement path before waiting for OMP to finish
+        // materializing its header. Discovery then keeps the path pending
+        // instead of minting a Shadow session in this transition window.
         let db_path = crate::config::get_agent_db_path()?;
         let conn = crate::state::db::open_client_connection(&db_path, Duration::from_millis(500))?;
+        crate::omp_session::reserve_source_for_thread(
+            &conn,
+            Path::new(source),
+            &session_id,
+            Some(native_id),
+        )?;
+        let deadline = Instant::now() + SOCKET_TIMEOUT;
+        let header = loop {
+            match crate::omp_session::read_session_header(Path::new(source)) {
+                Ok(header) => break header,
+                Err(error) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(25));
+                    drop(error);
+                }
+                Err(error) => return Err(error).context("waiting for OMP native session header"),
+            }
+        };
+        anyhow::ensure!(
+            header.native_id == native_id,
+            "OMP extension native identity does not match its source header"
+        );
         crate::omp_session::bind_source_for_thread(
             &conn,
             Path::new(source),
@@ -962,6 +971,10 @@ fn effective_resume_settings(
     }
 }
 
+fn initial_prompt_delivered(prompt: Option<&str>) -> bool {
+    prompt.map(str::trim).is_none_or(str::is_empty)
+}
+
 fn select_session_storage(
     resume_state: Option<&OmpHelmStateFile>,
     configured_session_dir: Option<&Path>,
@@ -1215,12 +1228,9 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         title: None,
         ready: false,
         pending_transition: false,
-        initial_prompt_delivered: resume_state.is_some()
-            || config
-                .prompt
-                .as_deref()
-                .map(str::trim)
-                .is_none_or(str::is_empty),
+        // A resume prompt is delivered by the extension through Pi's native
+        // sendUserMessage path after the resumed session is bound.
+        initial_prompt_delivered: initial_prompt_delivered(config.prompt.as_deref()),
         agent_end_observed: false,
         agent_end_is_terminal: None,
         agent_end_will_continue: None,
@@ -1545,5 +1555,14 @@ mod tests {
         assert_eq!(session_file, PathBuf::from(&retained.session_file));
         assert!(!temp.path().join("original-sessions").exists());
         assert!(!temp.path().join("new-sessions").exists());
+    }
+
+    #[test]
+    fn supplied_resume_prompt_stays_pending_for_native_delivery() {
+        assert!(!initial_prompt_delivered(Some(
+            "continue from the retained session"
+        )));
+        assert!(initial_prompt_delivered(Some("  ")));
+        assert!(initial_prompt_delivered(None));
     }
 }

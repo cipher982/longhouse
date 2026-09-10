@@ -23,6 +23,7 @@ const OMP_CONFIG_DIR_ENV: &str = "LONGHOUSE_OMP_CONFIG_DIR";
 const OMP_PROFILE_ENV: &str = "OMP_PROFILE";
 const MAX_HEADER_SCAN_BYTES: u64 = 1024 * 1024;
 const OMP_TITLE_SLOT_BYTES: usize = 256;
+const MAX_RECORD_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OmpSessionHeader {
@@ -393,6 +394,48 @@ pub fn verify_exact_session_file(
             "OMP resume workspace does not match the exact binding"
         );
     }
+    let file = File::open(path)
+        .with_context(|| format!("opening OMP resume history: {}", path.display()))?;
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+    let mut session_headers = 0_u32;
+    loop {
+        line.clear();
+        let bytes = reader.read_line(&mut line)?;
+        if bytes == 0 {
+            break;
+        }
+        anyhow::ensure!(
+            line.len() <= MAX_RECORD_BYTES,
+            "OMP resume record exceeds the validation limit"
+        );
+        if line.trim().is_empty() {
+            bail!("OMP resume history contains a blank record");
+        }
+        let value: Value = serde_json::from_str(line.trim())
+            .with_context(|| format!("OMP resume history contains malformed JSON: {}", path.display()))?;
+        let object = value
+            .as_object()
+            .context("OMP resume history contains a non-object record")?;
+        if object.get("type").and_then(Value::as_str) != Some("session") {
+            continue;
+        }
+        session_headers += 1;
+        anyhow::ensure!(
+            object.get("id").and_then(Value::as_str) == Some(expected_native_id),
+            "OMP resume history contains a different native session identity"
+        );
+        if let Some(expected_cwd) = expected_cwd {
+            anyhow::ensure!(
+                object.get("cwd").and_then(Value::as_str) == Some(expected_cwd),
+                "OMP resume history contains a different workspace identity"
+            );
+        }
+    }
+    anyhow::ensure!(
+        session_headers == 1,
+        "OMP resume history must contain exactly one native session header"
+    );
     Ok(header)
 }
 
@@ -780,6 +823,30 @@ mod tests {
             verify_exact_session_file(&dir.path().join("corrupt.jsonl"), "native-id", None)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn exact_resume_rejects_malformed_or_conflicting_history_after_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let malformed = dir.path().join("malformed.jsonl");
+        fs::write(
+            &malformed,
+            format!("{}\n{{\"type\":\"message\",\"message\":", session_line("native-id")),
+        )
+        .unwrap();
+        assert!(verify_exact_session_file(&malformed, "native-id", Some("/workspace")).is_err());
+
+        let conflicting = dir.path().join("conflicting.jsonl");
+        fs::write(
+            &conflicting,
+            format!(
+                "{}\n{}\n",
+                session_line("native-id"),
+                session_line("other-native-id")
+            ),
+        )
+        .unwrap();
+        assert!(verify_exact_session_file(&conflicting, "native-id", Some("/workspace")).is_err());
     }
 
     #[test]

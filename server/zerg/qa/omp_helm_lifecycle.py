@@ -12,6 +12,8 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -19,8 +21,12 @@ from typing import Any
 from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
+from zerg.qa.console_served_state_core import assistant_marker_events
+from zerg.qa.console_served_state_core import event_text
 from zerg.qa.live_session_toolkit import redact_state_for_evidence
 from zerg.qa.live_session_toolkit import retire_qualification_session
+from zerg.qa.live_session_toolkit import start_transcript_shipper
+from zerg.qa.omp_console_producer import omp_native_model_evidence
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.provider_release_identity import now
@@ -52,12 +58,21 @@ _VARIANTS = tuple(
     )
     for assertion in ASSERTIONS
 )
+_CELL_BY_VARIANT = {
+    execution_variant_key(
+        provider="omp",
+        assertion_id=assertion,
+        scenario_id=SCENARIO_ID,
+        variant=None,
+    ): assertion
+    for assertion in ASSERTIONS
+}
 
 REGISTRATION = ProducerRegistration(
     producer_id="omp.helm_lifecycle.v1",
-    producer_revision=4,
+    producer_revision=5,
     scenario_id=SCENARIO_ID,
-    scenario_revision=4,
+    scenario_revision=5,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -68,6 +83,9 @@ REGISTRATION = ProducerRegistration(
         "omp_native_extension_channel_bound",
         "omp_agent_end_settlement_observed",
         "omp_native_archive_bound",
+        "omp_transcript_shipper_started",
+        "omp_transcript_flush_completed",
+        "omp_runtime_transcript_converged",
         "omp_owned_processes_dead",
     ),
     acquisition_methods=("staged_release",),
@@ -78,6 +96,9 @@ REGISTRATION = ProducerRegistration(
         "provider_binary_receipt",
         "omp_helm_receipt",
         "omp_native_settlement_receipt",
+        "transcript_flush_receipt",
+        "transcript_shipper_receipt",
+        "runtime_convergence_receipt",
         "provider_source_retention",
         "cleanup_receipt",
     ),
@@ -105,17 +126,34 @@ _PROFILE = identity.IdentityProfile(
 )
 
 
+def _requested_assertion_id(variant: object) -> str | None:
+    return _CELL_BY_VARIANT.get(str(variant)) if isinstance(variant, str) else None
+
+
+def _assertion_result_status(assertions: Mapping[str, bool], variant: object) -> str:
+    requested = _requested_assertion_id(variant)
+    passed = assertions.get(requested) is True if requested is not None else all(assertions.values())
+    return "pass" if passed else "fail"
+
+
+def _helm_result_status(
+    assertions: Mapping[str, bool],
+    variant: object,
+    *,
+    cleanup_ready: bool,
+    manifest_stable: bool,
+) -> str:
+    # The result envelope is the scenario-level status consumed by the private
+    # verifier. Per-cell selection happens in semantic qualification; a
+    # passing selected assertion must not hide failed siblings here.
+    _ = variant
+    return "pass" if cleanup_ready and manifest_stable and bool(assertions) and all(assertions.values()) else "fail"
+
+
 def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str, bool]:
     cleanup = observation.get("cleanup")
     cleanup = cleanup if isinstance(cleanup, Mapping) else {}
-    cleanup_ok = (
-        cleanup.get("status") == "pass"
-        and cleanup.get("provider_process_dead") is True
-        and cleanup.get("process_group_dead") is True
-        and cleanup.get("orphan_count") == 0
-        and cleanup.get("canary_session_hidden") is True
-        and cleanup.get("isolation_removed") is True
-    )
+    cleanup_ok = _helm_cleanup_ready(cleanup)
     channel = observation.get("channel_binding")
     channel = channel if isinstance(channel, Mapping) else {}
     send = observation.get("send_evidence")
@@ -152,6 +190,9 @@ def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str
             and channel.get("connection_id_present") is True
             and channel.get("lease_generation_present") is True
             and channel.get("session_file_present") is True
+            and observation.get("omp_transcript_shipper_started") is True
+            and observation.get("omp_transcript_flush_completed") is True
+            and observation.get("omp_runtime_transcript_converged") is True
             and settlement_ok
         ),
         "omp_helm_send_idle": (
@@ -219,6 +260,225 @@ def _wait(
             return last
         time.sleep(0.2)
     raise RuntimeError(f"timed out waiting for {description}: {last!r}")
+
+
+_RUNTIME_HOST_RETRY_STATUSES = frozenset({404, 429, 500, 502, 503, 504})
+
+
+def _runtime_get(api_url: str, token: str, path: str) -> dict[str, Any]:
+    request = urllib.request.Request(
+        f"{api_url.rstrip('/')}{path}",
+        headers={
+            "X-Agents-Token": token,
+            "Accept": "application/json",
+            "User-Agent": "LonghouseProviderFactory/1.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            payload = json.loads(response.read())
+    except urllib.error.HTTPError as exc:
+        if exc.code in _RUNTIME_HOST_RETRY_STATUSES:
+            raise RuntimeError(f"Runtime Host HTTP {exc.code}") from exc
+        raise
+    if not isinstance(payload, dict):
+        raise RuntimeError("Runtime Host returned a non-object response")
+    return payload
+
+
+def _runtime_snapshot(api_url: str, token: str, session_id: str) -> dict[str, Any]:
+    return {
+        "detail": _runtime_get(api_url, token, f"/api/agents/sessions/{session_id}"),
+        "thread": _runtime_get(api_url, token, f"/api/agents/sessions/{session_id}/thread"),
+        "events": _runtime_get(
+            api_url,
+            token,
+            f"/api/agents/sessions/{session_id}/events?anchor=start&branch_mode=head&limit=1000",
+        ),
+        "diagnostic": _runtime_get(api_url, token, f"/api/agents/sessions/{session_id}/state-diagnostics"),
+    }
+
+
+def _flush_receipt_complete(receipt: Mapping[str, Any]) -> bool:
+    events_shipped = receipt.get("events_shipped")
+    return (
+        receipt.get("status") == "pass"
+        and receipt.get("exit_code") == 0
+        and receipt.get("daemon_paused") is True
+        and receipt.get("daemon_restarted") is True
+        and isinstance(events_shipped, int)
+        and not isinstance(events_shipped, bool)
+        and events_shipped >= 0
+    )
+
+
+def _events_page_metadata(payload: Mapping[str, Any], *, requested_limit: int = 1000) -> dict[str, Any]:
+    events = payload.get("events") if isinstance(payload.get("events"), list) else []
+    has_more = payload.get("has_more")
+    next_cursor = payload.get("next_cursor")
+    total = payload.get("total")
+    generation_id = payload.get("generation_id")
+    return {
+        "requested_anchor": "start",
+        "requested_branch_mode": "head",
+        "requested_limit": requested_limit,
+        "requested_cursor": None,
+        "returned_count": len(events),
+        "total": total,
+        "generation_id": generation_id,
+        "branch_mode": payload.get("branch_mode"),
+        "abandoned_events": payload.get("abandoned_events"),
+        "next_cursor": next_cursor,
+        "has_more": has_more,
+        "complete": (
+            payload.get("branch_mode") == "head"
+            and isinstance(total, int)
+            and not isinstance(total, bool)
+            and total == len(events)
+            and isinstance(generation_id, str)
+            and bool(generation_id)
+            and has_more is False
+            and next_cursor is None
+        ),
+    }
+
+
+def _stable_event_id(value: object) -> bool:
+    return isinstance(value, (int, str)) and not isinstance(value, bool) and bool(str(value))
+
+
+def _served_projection_evidence(
+    snapshot: Mapping[str, Any],
+    *,
+    session_id: str,
+    native_session_id: str,
+    marker: str,
+) -> dict[str, Any]:
+    """Keep only structural fields from the served Runtime Host responses."""
+
+    detail = snapshot.get("detail") if isinstance(snapshot.get("detail"), Mapping) else {}
+    thread = snapshot.get("thread") if isinstance(snapshot.get("thread"), Mapping) else {}
+    events_payload = snapshot.get("events") if isinstance(snapshot.get("events"), Mapping) else {}
+    events = events_payload.get("events") if isinstance(events_payload.get("events"), list) else []
+    events_page = _events_page_metadata(events_payload)
+    members = thread.get("sessions") if isinstance(thread.get("sessions"), list) else []
+    marker_matches = assistant_marker_events(events, marker, default_origin="durable")
+    marker_event_id = marker_matches[0].get("id") if len(marker_matches) == 1 else None
+    diagnostic = snapshot.get("diagnostic") if isinstance(snapshot.get("diagnostic"), Mapping) else {}
+    return {
+        "requested_session_id": session_id,
+        "detail": {
+            "id": detail.get("id"),
+            "provider": detail.get("provider"),
+            "provider_session_id": detail.get("provider_session_id"),
+        },
+        "thread": {
+            "root_session_id": thread.get("root_session_id"),
+            "head_session_id": thread.get("head_session_id"),
+            "session_ids": [member.get("id") for member in members if isinstance(member, Mapping) and member.get("id") is not None],
+        },
+        "events": [
+            {
+                "id": event.get("id"),
+                "role": event.get("role"),
+                "event_origin": event.get("event_origin", "durable"),
+                "tool_name_present": bool(event.get("tool_name")),
+                "marker_occurrences": event_text(event).count(marker),
+            }
+            for event in events
+            if isinstance(event, Mapping)
+        ],
+        # Retain the marker-bearing served records themselves. Counts and
+        # identities are useful indexes, not independent proof of content.
+        "marker_events": [dict(event) for event in marker_matches],
+        "marker_event_id": marker_event_id,
+        "marker_event_durable": (len(marker_matches) == 1 and marker_matches[0].get("event_origin", "durable") == "durable"),
+        "marker_event_identity_bound": len(marker_matches) == 1 and _stable_event_id(marker_event_id),
+        "events_page": events_page,
+        "diagnostic": {
+            "session_id": diagnostic.get("session_id"),
+            "served_path": diagnostic.get("served_path"),
+        },
+    }
+
+
+def _runtime_convergence(
+    api_url: str,
+    token: str,
+    *,
+    session_id: str,
+    native_session_id: str,
+    marker: str,
+    flush: Mapping[str, Any],
+    native_source_path: str,
+    timeout: float = 90,
+) -> dict[str, Any]:
+    def observe() -> dict[str, Any] | None:
+        try:
+            snapshot = _runtime_snapshot(api_url, token, session_id)
+        except RuntimeError as exc:
+            if str(exc).startswith("Runtime Host HTTP"):
+                return None
+            raise
+        events_payload = snapshot.get("events") if isinstance(snapshot.get("events"), Mapping) else {}
+        events = events_payload.get("events") if isinstance(events_payload.get("events"), list) else []
+        matches = assistant_marker_events(events, marker, default_origin="durable")
+        served_projection = _served_projection_evidence(
+            snapshot,
+            session_id=session_id,
+            native_session_id=native_session_id,
+            marker=marker,
+        )
+        events_page = served_projection["events_page"]
+        if not isinstance(events_page, Mapping) or events_page.get("complete") is not True:
+            return {
+                "status": "unproven",
+                "reason": "runtime_events_page_incomplete",
+                "provider": "omp",
+                "session_id": session_id,
+                "native_session_id": native_session_id,
+                "marker": marker,
+                "flush": dict(flush),
+                "native_source_path": native_source_path,
+                "events_page": dict(events_page) if isinstance(events_page, Mapping) else {},
+                "served_projection": served_projection,
+            }
+        diagnostic = snapshot.get("diagnostic") if isinstance(snapshot.get("diagnostic"), Mapping) else {}
+        detail = served_projection.get("detail") if isinstance(served_projection.get("detail"), Mapping) else {}
+        thread = served_projection.get("thread") if isinstance(served_projection.get("thread"), Mapping) else {}
+        served_events = served_projection.get("events") if isinstance(served_projection.get("events"), list) else []
+        served_event_ids = [event.get("id") for event in served_events if isinstance(event, Mapping)]
+        exact_served_identity = (
+            detail.get("id") == session_id
+            and detail.get("provider") == "omp"
+            and detail.get("provider_session_id") == native_session_id
+            and thread.get("root_session_id") == session_id
+            and thread.get("head_session_id") == session_id
+            and session_id in (thread.get("session_ids") if isinstance(thread.get("session_ids"), list) else [])
+        )
+        marker_bound_durable_event = (
+            len(matches) == 1
+            and event_text(matches[0]).count(marker) == 1
+            and matches[0].get("event_origin", "durable") == "durable"
+            and _stable_event_id(served_projection.get("marker_event_id"))
+            and served_projection.get("marker_event_id") in served_event_ids
+            and served_projection.get("marker_event_durable") is True
+            and served_projection.get("marker_event_identity_bound") is True
+        )
+        if not exact_served_identity or not marker_bound_durable_event or diagnostic.get("served_path") != "canonical_session_detail":
+            return None
+        return {
+            "status": "pass",
+            "provider": "omp",
+            "session_id": session_id,
+            "native_session_id": native_session_id,
+            "marker": marker,
+            "flush": dict(flush),
+            "native_source_path": native_source_path,
+            "served_projection": served_projection,
+        }
+
+    return _wait(observe, timeout=timeout, description=f"Runtime Host convergence for OMP marker {marker}")
 
 
 def _wait_state(
@@ -672,6 +932,51 @@ def _read_source_size(path: Path) -> int:
         return 0
 
 
+def _register_native_source(
+    claims: list[dict[str, Any]],
+    *,
+    label: str,
+    source_path: object,
+    session_id: object,
+    native_session_id: object,
+) -> None:
+    """Claim a native source before later lifecycle work can fail."""
+
+    if not isinstance(source_path, str) or not source_path:
+        return
+    if any(item.get("source_path") == source_path for item in claims):
+        return
+    claims.append(
+        {
+            "label": label,
+            "run_id": label,
+            "source_path": source_path,
+            "session_id": session_id,
+            "native_session_id": native_session_id,
+        }
+    )
+
+
+def _remove_isolation_after_source_retention(
+    isolation: Path,
+    *,
+    source_retention_verified: bool,
+    cleanup: dict[str, Any],
+) -> bool:
+    if not source_retention_verified:
+        cleanup["isolation_retained"] = True
+        cleanup["authoritative_source_evidence_retained"] = isolation.exists()
+        return False
+    try:
+        shutil.rmtree(isolation)
+    except FileNotFoundError:
+        return True
+    except OSError as exc:
+        cleanup["isolation_remove_error"] = f"{type(exc).__name__}: {exc}"
+        return False
+    return not isolation.exists()
+
+
 def _wait_native_agent_end(
     session_file: Path,
     *,
@@ -687,9 +992,21 @@ def _wait_native_agent_end(
     return _wait(observe, timeout=timeout, description="OMP native agent_end")
 
 
-def _process_record(pid: object, expected_birth: object, label: str) -> dict[str, Any]:
+def _process_record(pid: object, expected_birth: object, label: str, *, owner: str) -> dict[str, Any]:
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-        return {"label": label, "pid": pid, "birth_matches": False, "pgid": None, "alive": False}
+        return {
+            "owner": owner,
+            "label": label,
+            "pid": pid,
+            "process_group_id": None,
+            "pgid": None,
+            "birth_matches": False,
+            "pid_positive": False,
+            "process_group_positive": False,
+            "pid_dead": False,
+            "process_group_dead": False,
+            "alive": False,
+        }
     try:
         completed = subprocess.run(
             ["ps", "-o", "pid=", "-o", "pgid=", "-o", "lstart=", "-p", str(pid)],
@@ -705,12 +1022,18 @@ def _process_record(pid: object, expected_birth: object, label: str) -> dict[str
         pgid = None
         birth = None
     return {
+        "owner": owner,
         "label": label,
         "pid": pid,
+        "process_group_id": pgid,
         "pgid": pgid,
         "birth": birth,
         "expected_birth": expected_birth,
         "birth_matches": bool(birth and expected_birth and birth == str(expected_birth)),
+        "pid_positive": True,
+        "process_group_positive": isinstance(pgid, int) and not isinstance(pgid, bool) and pgid > 0,
+        "pid_dead": _pid_dead(pid),
+        "process_group_dead": _pgid_dead(pgid),
         "alive": _pid_alive(pid),
     }
 
@@ -752,13 +1075,33 @@ def _pgid_dead(pgid: object) -> bool:
 
 
 def _cleanup_receipt(records: list[dict[str, Any]]) -> dict[str, Any]:
-    unique = {(item.get("label"), item.get("pid"), item.get("pgid"), item.get("expected_birth")): item for item in records}
+    unique = {
+        (
+            item.get("owner"),
+            item.get("label"),
+            item.get("pid"),
+            item.get("process_group_id", item.get("pgid")),
+            item.get("expected_birth"),
+        ): dict(item)
+        for item in records
+    }
     records = list(unique.values())
+    for item in records:
+        process_group_id = item.get("process_group_id", item.get("pgid"))
+        item["process_group_id"] = process_group_id
+        item["pgid"] = process_group_id
+        item["pid_positive"] = isinstance(item.get("pid"), int) and not isinstance(item.get("pid"), bool) and item["pid"] > 0
+        item["process_group_positive"] = (
+            isinstance(process_group_id, int) and not isinstance(process_group_id, bool) and process_group_id > 0
+        )
+        item["pid_dead"] = _pid_dead(item.get("pid"))
+        item["process_group_dead"] = _pgid_dead(process_group_id)
+        item["alive"] = not item["pid_dead"]
     provider_records = [item for item in records if item.get("label") == "provider"]
-    provider_dead = bool(provider_records) and all(_pid_dead(item.get("pid")) for item in provider_records)
-    groups_dead = bool(records) and all(_pgid_dead(item.get("pgid")) for item in records)
+    provider_dead = bool(provider_records) and all(item.get("pid_dead") is True for item in provider_records)
+    groups_dead = bool(records) and all(item.get("process_group_dead") is True for item in records)
     birth_verified = bool(records) and all(item.get("birth_matches") is True for item in records)
-    orphan_count = sum(not (_pid_dead(item.get("pid")) and _pgid_dead(item.get("pgid"))) for item in records)
+    orphan_count = sum(not (item.get("pid_dead") is True and item.get("process_group_dead") is True) for item in records)
     return {
         "status": "pass" if provider_dead and groups_dead and birth_verified and orphan_count == 0 else "fail",
         "provider_process_dead": provider_dead,
@@ -766,8 +1109,29 @@ def _cleanup_receipt(records: list[dict[str, Any]]) -> dict[str, Any]:
         "no_orphan_provider_processes": orphan_count == 0 and birth_verified,
         "birth_identities_verified": birth_verified,
         "orphan_count": orphan_count,
+        "owned_process_count": len(records),
         "owned_processes": records,
     }
+
+
+def _helm_cleanup_ready(cleanup: Mapping[str, Any]) -> bool:
+    return (
+        cleanup.get("status") == "pass"
+        and cleanup.get("provider_process_dead") is True
+        and cleanup.get("process_group_dead") is True
+        and cleanup.get("orphan_count") == 0
+        and cleanup.get("shipper_stop_verified") is True
+        and cleanup.get("canary_session_hidden") is True
+        and cleanup.get("served_run_retired") is True
+        and cleanup.get("source_retention_verified") is True
+        and cleanup.get("isolation_removed") is True
+    )
+
+
+def _manifest_is_stable(root: Path, manifest: list[dict[str, Any]]) -> bool:
+    """Require the final evidence tree to remain unchanged before publishing."""
+
+    return bool(manifest) and manifest == artifact_manifest(root)
 
 
 def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
@@ -801,13 +1165,18 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
     )
 
     sessions: list[ProviderPtySession] = []
+    shipper = None
     owner_records: list[dict[str, Any]] = []
+    source_claims: list[dict[str, Any]] = []
     controls: dict[str, object] = {}
     observation: dict[str, object] = {
         "observation_scope": "scenario",
         "omp_native_extension_channel_bound": False,
         "omp_agent_end_settlement_observed": False,
         "omp_native_archive_bound": False,
+        "omp_transcript_shipper_started": False,
+        "omp_transcript_flush_completed": False,
+        "omp_runtime_transcript_converged": False,
         "send_idle": False,
         "follow_up_native": False,
         "steer_active": False,
@@ -818,12 +1187,25 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         "settlement": {},
         "cleanup": {},
     }
+    initial_flush: dict[str, Any] = {}
+    final_flush: dict[str, Any] = {}
+    runtime_convergence: dict[str, Any] = {}
     current_session_id: str | None = None
     current_session_file: Path | None = None
     current_state: dict[str, Any] = {}
     source_generations: list[dict[str, Any]] = []
 
     try:
+        shipper = start_transcript_shipper(
+            "omp",
+            args,
+            home=provider_home,
+            environment=env,
+            evidence_root=root / "shipper",
+            longhouse_home=longhouse_home,
+        )
+        observation["omp_transcript_shipper_started"] = shipper.receipt.get("ready") is True
+        lifecycle.write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
         initial_marker = f"OMP_HELM_INITIAL_{os.urandom(8).hex()}"
         first = ProviderPtySession.start(
             argv=_launch_argv(
@@ -840,6 +1222,13 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         current_state = _wait_state(longhouse_home)
         current_session_id = str(current_state["session_id"])
         current_session_file = Path(str(current_state["session_file"]))
+        _register_native_source(
+            source_claims,
+            label="initial",
+            source_path=str(current_session_file),
+            session_id=current_session_id,
+            native_session_id=current_state.get("native_session_id"),
+        )
         initial_session_file = current_session_file
         initial_row = _wait_native_marker(current_session_file, initial_marker)
         _wait_channel_terminal(
@@ -848,11 +1237,28 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             native_session_id=str(current_state.get("native_session_id") or ""),
             session_file=current_session_file,
         )
+        initial_flush = shipper.flush("omp-helm-initial")
+        if not _flush_receipt_complete(initial_flush):
+            raise RuntimeError("OMP Helm transcript flush did not complete a bounded ship")
+        initial_convergence = _runtime_convergence(
+            str(args.api_url),
+            str(args.agents_token),
+            session_id=current_session_id,
+            native_session_id=str(current_state.get("native_session_id") or ""),
+            marker=initial_marker,
+            flush=initial_flush,
+            native_source_path=str(current_session_file),
+        )
+        runtime_convergence = {"initial": initial_convergence}
+        observation["omp_transcript_flush_completed"] = initial_convergence.get("status") == "pass"
+        observation["omp_runtime_transcript_converged"] = observation["omp_transcript_flush_completed"]
+        observation["runtime_convergence"] = runtime_convergence
         owner_records.append(
             _process_record(
                 current_state.get("launcher_pid"),
                 current_state.get("launcher_process_start_time"),
                 "launcher",
+                owner="initial",
             )
         )
         owner_records.append(
@@ -860,6 +1266,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
                 current_state.get("provider_pid"),
                 current_state.get("provider_process_start_time"),
                 "provider",
+                owner="initial",
             )
         )
         old_state = dict(current_state)
@@ -877,6 +1284,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
                 "label": "initial",
                 "native_session_id": current_state.get("native_session_id"),
                 "source_path": str(current_session_file),
+                "marker": initial_marker,
                 "controls": ["send", "follow_up", "steer", "abort"],
             }
         )
@@ -1054,15 +1462,23 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         current_state = replaced_state
         current_session_file = Path(str(replaced_state["session_file"]))
         current_native_id = str(replaced_state["native_session_id"])
+        _register_native_source(
+            source_claims,
+            label="replacement",
+            source_path=str(current_session_file),
+            session_id=current_session_id,
+            native_session_id=current_native_id,
+        )
+        replacement_marker = f"OMP_HELM_REPLACEMENT_{os.urandom(8).hex()}"
         source_generations.append(
             {
                 "label": "replacement",
                 "native_session_id": current_native_id,
                 "source_path": str(current_session_file),
+                "marker": replacement_marker,
                 "controls": ["replacement", "cold_resume"],
             }
         )
-        replacement_marker = f"OMP_HELM_REPLACEMENT_{os.urandom(8).hex()}"
         replacement_offset = _read_source_size(current_session_file)
         replacement = _run_engine(
             args.engine,
@@ -1104,6 +1520,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
                 current_state.get("launcher_pid"),
                 current_state.get("launcher_process_start_time"),
                 "launcher",
+                owner="replacement",
             )
         )
         owner_records.append(
@@ -1111,6 +1528,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
                 current_state.get("provider_pid"),
                 current_state.get("provider_process_start_time"),
                 "provider",
+                owner="replacement",
             )
         )
         terminate = _run_engine(args.engine, "terminate", current_session_id, env)
@@ -1141,11 +1559,19 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         sessions.append(resumed)
         resume_state = _wait_state(longhouse_home, session_id=current_session_id)
         resume_file = Path(str(resume_state["session_file"]))
+        _register_native_source(
+            source_claims,
+            label="cold_resume",
+            source_path=str(resume_file),
+            session_id=current_session_id,
+            native_session_id=resume_state.get("native_session_id"),
+        )
         source_generations.append(
             {
                 "label": "cold_resume",
                 "native_session_id": resume_state.get("native_session_id"),
                 "source_path": str(resume_file),
+                "marker": resume_marker,
                 "controls": ["cold_resume"],
             }
         )
@@ -1176,11 +1602,13 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
                 resume_state.get("launcher_pid"),
                 resume_state.get("launcher_process_start_time"),
                 "launcher",
+                owner="cold_resume",
             ),
             _process_record(
                 resume_state.get("provider_pid"),
                 resume_state.get("provider_process_start_time"),
                 "provider",
+                owner="cold_resume",
             ),
         ]
         owner_records.extend(resume_owner_records)
@@ -1195,6 +1623,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             **resume_marker_evidence,
             "native_source_bound": resume_marker_evidence["native_source_bound"],
             "channel_terminal_bound": resume_terminal_evidence["channel_source_bound"],
+            "terminal": resume_terminal_evidence["terminal"],
             "exact_file": (
                 resume_state.get("native_session_id") == current_native_id
                 and resume_state.get("session_file") == str(current_session_file)
@@ -1221,6 +1650,27 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
                 and value.get("updated_at") != resume_state.get("updated_at")
             ),
         )
+        final_flush = shipper.flush("omp-helm-final")
+        if not _flush_receipt_complete(final_flush):
+            raise RuntimeError("OMP Helm cold-resume transcript flush did not complete a bounded ship")
+        final_convergence = _runtime_convergence(
+            str(args.api_url),
+            str(args.agents_token),
+            session_id=current_session_id,
+            native_session_id=str(resume_state.get("native_session_id") or ""),
+            marker=resume_marker,
+            flush=final_flush,
+            native_source_path=str(resume_file),
+        )
+        runtime_convergence["final"] = final_convergence
+        observation["omp_transcript_flush_completed"] = (
+            observation["omp_transcript_flush_completed"] is True and final_convergence.get("status") == "pass"
+        )
+        observation["omp_runtime_transcript_converged"] = (
+            observation["omp_runtime_transcript_converged"] is True and final_convergence.get("status") == "pass"
+        )
+        observation["runtime_convergence"] = runtime_convergence
+        lifecycle.write_json(root / "runtime-convergence-receipt.json", runtime_convergence)
         observation["settlement"] = _native_settlement(
             resume_file,
             channel_state=settled_state,
@@ -1256,6 +1706,26 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
                     except ProcessLookupError:
                         pass
             provider_session.close()
+        cleanup_errors: list[str] = []
+        cleanup_flush: dict[str, Any] = {}
+        shipper_stop: dict[str, Any] = {}
+        if shipper is not None:
+            try:
+                cleanup_flush = shipper.flush("omp-helm-cleanup")
+            except Exception as exc:  # noqa: BLE001 - cleanup evidence must remain visible
+                cleanup_errors.append(f"{type(exc).__name__}: {exc}")
+            try:
+                shipper_stop = shipper.stop()
+            except Exception as exc:  # noqa: BLE001 - cleanup evidence must remain visible
+                cleanup_errors.append(f"{type(exc).__name__}: {exc}")
+                shipper_stop = {"status": "fail", "error": f"{type(exc).__name__}: {exc}"}
+        lifecycle.write_json(root / "transcript-shipper-receipt.json", shipper_stop or {"status": "fail", "stopped": False})
+        flush_receipt: dict[str, Any] = {
+            "initial": dict(initial_flush),
+            "final": dict(final_flush),
+            "cleanup": cleanup_flush,
+        }
+        lifecycle.write_json(root / "transcript-flush-receipt.json", flush_receipt)
         cleanup = (
             _cleanup_receipt(owner_records)
             if owner_records
@@ -1300,6 +1770,16 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             and cleanup.get("process_group_dead") is True
             and cleanup.get("orphan_count") == 0,
         }
+        cleanup["shipper_stop"] = shipper_stop
+        cleanup["shipper_stop_verified"] = (
+            shipper_stop.get("stopped") is True
+            and shipper_stop.get("process_dead") is True
+            and shipper_stop.get("process_group_dead") is True
+        )
+        cleanup["cleanup_flush"] = cleanup_flush
+        cleanup["cleanup_errors"] = cleanup_errors
+        if not cleanup["shipper_stop_verified"] or cleanup_errors:
+            cleanup["status"] = "fail"
         cleanup["canary_session_hidden"] = _exact_session_retirement(session_retirement, current_session_id)
         if not (
             cleanup["status"] == "pass"
@@ -1310,26 +1790,37 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             cleanup["status"] = "fail"
         cleanup = redact_state_for_evidence(cleanup)
         observation["cleanup"] = cleanup
-        source_claims = [
-            {"run_id": generation["label"], "source_path": generation["source_path"]}
-            for generation in source_generations
-            if isinstance(generation.get("source_path"), str) and generation["source_path"]
-        ]
-        try:
-            retained_sources = lifecycle._retain_claim_sources(root, source_claims, env)
-        except Exception as exc:  # noqa: BLE001 - preserve cleanup evidence on producer failure
+        owners_stopped = cleanup.get("provider_process_dead") is True and cleanup.get("process_group_dead") is True
+        if owners_stopped:
+            try:
+                retained_sources = lifecycle._retain_claim_sources(root, source_claims, env, complete=True)
+            except Exception as exc:  # noqa: BLE001 - preserve cleanup evidence on producer failure
+                retained_sources = [
+                    {
+                        "source": source_claim.get("source_path"),
+                        "kind": "source_path",
+                        "retained": False,
+                        "complete": False,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                    for source_claim in source_claims
+                ]
+                lifecycle.write_json(root / "provider-source-retention.json", {"sources": retained_sources})
+        else:
             retained_sources = [
                 {
                     "source": source_claim.get("source_path"),
                     "kind": "source_path",
                     "retained": False,
-                    "error": f"{type(exc).__name__}: {exc}",
+                    "complete": False,
+                    "error": "provider owners did not stop; authoritative source remains in isolation",
                 }
                 for source_claim in source_claims
             ]
             lifecycle.write_json(root / "provider-source-retention.json", {"sources": retained_sources})
         source_retention_verified = bool(retained_sources) and all(
-            item.get("retained") is True and isinstance(item.get("path"), str) and bool(item.get("path")) for item in retained_sources
+            item.get("retained") is True and item.get("complete") is True and isinstance(item.get("path"), str) and bool(item.get("path"))
+            for item in retained_sources
         )
         cleanup["source_retention_verified"] = source_retention_verified
         cleanup["source_retention"] = {
@@ -1339,15 +1830,11 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         }
         if not source_retention_verified:
             cleanup["status"] = "fail"
-        try:
-            shutil.rmtree(isolation)
-        except FileNotFoundError:
-            isolation_removed = True
-        except OSError as exc:
-            isolation_removed = False
-            cleanup["isolation_remove_error"] = f"{type(exc).__name__}: {exc}"
-        else:
-            isolation_removed = not isolation.exists()
+        isolation_removed = _remove_isolation_after_source_retention(
+            isolation,
+            source_retention_verified=source_retention_verified,
+            cleanup=cleanup,
+        )
         cleanup["isolation_removed"] = isolation_removed
         if not isolation_removed:
             cleanup["status"] = "fail"
@@ -1390,6 +1877,13 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         "sha256": sha256_file(args.provider_bin),
         "version": args.provider_version,
     }
+    cleanup_ready = _helm_cleanup_ready(cleanup)
+    observation["final_evidence"] = {
+        "cleanup_ready": cleanup_ready,
+        "source_retention_verified": cleanup.get("source_retention_verified") is True,
+        "isolation_removed": cleanup.get("isolation_removed") is True,
+        "cleanup_receipt_written": True,
+    }
     lifecycle.write_json(root / "provider-binary-receipt.json", binary_receipt)
     lifecycle.write_json(root / "omp-native-settlement-receipt.json", observation["settlement"])
     lifecycle.write_json(
@@ -1404,6 +1898,14 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
     )
     lifecycle.write_json(root / "cleanup-receipt.json", cleanup)
     assertions = omp_helm_lifecycle_assertions(observation)
+    final_manifest = artifact_manifest(root)
+    manifest_stable = _manifest_is_stable(root, final_manifest)
+    result_status = _helm_result_status(
+        assertions,
+        getattr(args, "variant", None),
+        cleanup_ready=cleanup_ready,
+        manifest_stable=manifest_stable,
+    )
     result = {
         "schema_version": 1,
         "artifact_kind": "omp_helm_lifecycle_result",
@@ -1414,43 +1916,70 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         "scenario_revision": REGISTRATION.scenario_revision,
         "evidence_class": "live_token",
         "generated_at": now(),
-        "status": "pass" if all(assertions.values()) else "fail",
+        "status": result_status,
         "assertions": assertions,
         "provider_binary": binary_receipt,
         "observation": observation,
-        "artifact_manifest": artifact_manifest(root),
+        "final_evidence": {
+            **dict(observation["final_evidence"]),
+            "manifest_stable": manifest_stable,
+            "manifest_entry_count": len(final_manifest),
+        },
+        "artifact_manifest": final_manifest,
     }
     lifecycle.write_json(root / "result.json", result)
     return result
 
 
-def _request_args(request_path: Path, output_root: Path) -> argparse.Namespace:
-    request = json.loads(request_path.read_text(encoding="utf-8"))
+def _request_args(
+    request_path: Path,
+    output_root: Path,
+    *,
+    request: Mapping[str, Any] | None = None,
+    variant: str | None = None,
+    agents_token: str | None = None,
+) -> argparse.Namespace:
+    request = dict(request) if request is not None else json.loads(request_path.read_text(encoding="utf-8"))
+    runtime_token = agents_token if agents_token is not None else os.environ.get("LONGHOUSE_RUNTIME_AGENTS_TOKEN")
     return argparse.Namespace(
         evidence_root=output_root,
+        repo_root=Path(__file__).resolve().parents[3],
         provider_bin=Path(str(request["provider_bin"])),
         provider_version=str(request["expected_provider_version"]),
         engine=Path(os.environ.get("LONGHOUSE_ENGINE_BIN") or ""),
         longhouse_cli=Path(os.environ.get("LONGHOUSE_CLI_BIN") or "longhouse"),
         api_url=os.environ.get("LONGHOUSE_RUNTIME_API_URL"),
-        agents_token=os.environ.get("LONGHOUSE_RUNTIME_AGENTS_TOKEN"),
+        agents_token=runtime_token,
         model=os.environ.get("LONGHOUSE_OMP_QUALIFICATION_MODEL", ""),
+        variant=variant,
     )
 
 
 def run(request_path: Path, output_root: Path) -> dict[str, object]:
-    identity.load_request(
+    request = identity.load_request(
         request_path,
         provider="omp",
         profile=PROFILE,
         version_grammar=_PROFILE.version_grammar,
     )
+    runtime_token = str(os.environ.get("LONGHOUSE_RUNTIME_AGENTS_TOKEN") or "")
 
     def execute(binary: Path, evidence_root: Path):
-        args = _request_args(request_path, evidence_root)
-        args.provider_bin = binary
-        result = run_omp_helm(args)
+        # The semantic entrypoint executes every registered cell; selection is
+        # only meaningful for the direct CLI path. The validated request owns
+        # the provider binary/version, while the runtime token remains secret.
+        run_args = _request_args(request_path, evidence_root, request=request, agents_token=runtime_token)
+        run_args.provider_bin = binary
+        result = run_omp_helm(run_args)
         observation = dict(result.get("observation") or {})
+        model_evidence = omp_native_model_evidence(
+            evidence_root,
+            source_canary=PROFILE,
+            api_key_configured=bool(str(os.environ.get("OPENROUTER_API_KEY") or "").strip()),
+            qualification_model=run_args.model,
+        )
+        if model_evidence is not None:
+            observation["live_model_evidence"] = model_evidence
         assertions = omp_helm_lifecycle_assertions(observation)
         semantic_assertions = tuple(
             semantic.SemanticAssertion(
@@ -1467,7 +1996,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, object]:
                 dict.fromkeys(
                     value
                     for value in (
-                        args.agents_token,
+                        runtime_token,
                         str(os.environ.get("OPENROUTER_API_KEY") or "").strip(),
                     )
                     if value

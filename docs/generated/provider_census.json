@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 265,
+  "file_count": 266,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1138,6 +1138,13 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_omp_qa_producers.py",
+      "providers": [
+        "codex",
+        "omp"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_onboard_cli.py",
       "providers": [
         "claude",
@@ -1198,7 +1205,9 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "omp",
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -1215,6 +1224,7 @@
         "claude",
         "codex",
         "cursor",
+        "omp",
         "opencode",
         "pi"
       ]
@@ -2198,6 +2208,7 @@
         "claude",
         "codex",
         "cursor",
+        "omp",
         "opencode",
         "pi"
       ]
@@ -2217,6 +2228,7 @@
         "claude",
         "codex",
         "cursor",
+        "omp",
         "opencode",
         "pi"
       ]

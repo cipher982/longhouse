@@ -28,7 +28,7 @@
 | pi | push | generated_fake | runs — 4 scenarios |
 | pi | weekly_cron | generated_fake | runs — 32 scenarios |
 | pi | manual | observed_install | never runs — every capability-proof assertion declared for pi is already satisfiable by an automated trigger |
-| omp | release_poll | staged_release | runs — 1 qualification scenario + 32 harness scenarios |
+| omp | release_poll | staged_release | runs — 2 qualification scenarios + 32 harness scenarios |
 | omp | push | generated_fake | runs — 4 scenarios |
 | omp | weekly_cron | generated_fake | runs — 32 scenarios |
 | omp | manual | observed_install | never runs — every capability-proof assertion declared for omp is already satisfiable by an automated trigger |

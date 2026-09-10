@@ -221,6 +221,23 @@ def test_opencode_release_poll_runs_the_full_staged_column(facts) -> None:
     )
 
 
+def test_omp_release_poll_runs_both_staged_profiles_and_full_column(facts) -> None:
+    cell = plan_run(facts, "omp", "staged_release", "release_poll")
+
+    assert cell.status == "runs"
+    assert cell.qualification_profiles == ("omp_print_v1", "omp_helm_v1")
+    assert cell.harness_scenarios == facts.default_harness_scenarios
+    assert cell.scenario_ids == ("omp_console_lifecycle", "omp_helm_lifecycle")
+    assert cell.credential_requirement == (
+        "OPENROUTER_API_KEY",
+        "LONGHOUSE_OMP_LIVE",
+        "LONGHOUSE_OMP_QUALIFICATION_MODEL",
+        "LONGHOUSE_ENGINE_BIN",
+        "LONGHOUSE_CLI_BIN",
+        "LONGHOUSE_RUNTIME_API_URL",
+        "LONGHOUSE_RUNTIME_AGENTS_TOKEN",
+    )
+
 def test_antigravity_release_poll_runs_like_every_other_launch_provider(facts) -> None:
     # It was manual-only while maintenance tier. A release lane that only runs
     # when someone remembers to run it cannot gate a release, which is the

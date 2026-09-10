@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -14,6 +15,7 @@ from typing import Any
 from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
+from zerg.qa.provider_event_digest import raw_event_digest
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.provider_release_identity import now
@@ -28,9 +30,9 @@ SUPPORTED_VARIANT = lifecycle.SUPPORTED_VARIANT
 
 REGISTRATION = ProducerRegistration(
     producer_id="omp.console_lifecycle.v1",
-    producer_revision=4,
+    producer_revision=5,
     scenario_id=SCENARIO_ID,
-    scenario_revision=4,
+    scenario_revision=5,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -102,6 +104,138 @@ def _native_message_text(message: Mapping[str, Any]) -> str:
             if isinstance(block, Mapping) and block.get("type") == "text" and isinstance(block.get("text"), str)
         )
     return ""
+
+
+def _numeric_usage(value: object, prefix: str = "") -> dict[str, int | float]:
+    if not isinstance(value, Mapping):
+        return {}
+    usage: dict[str, int | float] = {}
+    for key, item in value.items():
+        name = f"{prefix}{key}"
+        if type(item) in {int, float}:
+            usage[name] = item
+        elif isinstance(item, Mapping):
+            usage.update(_numeric_usage(item, f"{name}."))
+    return usage
+
+
+def _successful_assistant_event(event: Mapping[str, Any]) -> bool:
+    message = event.get("message")
+    if event.get("type") != "message" or not isinstance(message, Mapping):
+        return False
+    if message.get("role") != "assistant" or message.get("stopReason") not in {"stop", "length"}:
+        return False
+    if message.get("errorMessage"):
+        return False
+    usage = message.get("usage")
+    output_tokens = usage.get("output") if isinstance(usage, Mapping) else None
+    if type(output_tokens) not in {int, float} or output_tokens <= 0:
+        return False
+    native_model = event.get("model")
+    if not isinstance(native_model, str) or not native_model.strip():
+        message_model = message.get("model")
+        if not isinstance(message_model, str) or not message_model.strip():
+            return False
+    return True
+
+
+def omp_native_model_evidence(
+    root: Path,
+    *,
+    source_canary: str,
+    api_key_configured: bool,
+    qualification_model: str | None = None,
+) -> dict[str, Any] | None:
+    """Bind OMP's provider-reported model call to one retained JSONL source."""
+
+    retention = _read_json(root / "provider-source-retention.json") or {}
+    sources = retention.get("sources") if isinstance(retention.get("sources"), list) else []
+    selected_source: Path | None = None
+    selected_event: Mapping[str, Any] | None = None
+    selected_events: list[Mapping[str, Any]] = []
+    for item in sources:
+        if not isinstance(item, Mapping) or item.get("retained") is not True or item.get("kind") != "source_path":
+            continue
+        raw_path = item.get("path")
+        if not isinstance(raw_path, str) or not raw_path:
+            continue
+        path = Path(raw_path)
+        try:
+            events = [
+                value
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+                for value in [json.loads(line)]
+                if isinstance(value, Mapping)
+            ]
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        assistant_messages = [
+            event
+            for event in events
+            if event.get("type") == "message" and isinstance(event.get("message"), Mapping) and event["message"].get("role") == "assistant"
+        ]
+        assistants = [event for event in assistant_messages if _successful_assistant_event(event)]
+        if assistants:
+            selected_source = path.resolve()
+            selected_event = assistants[-1]
+            selected_events = assistant_messages
+    if selected_source is None or selected_event is None:
+        return None
+
+    raw_message = selected_event.get("message")
+    message = raw_message if isinstance(raw_message, Mapping) else {}
+    usage: dict[str, int | float] = {}
+    for event in selected_events:
+        event_message = event.get("message")
+        if isinstance(event_message, Mapping):
+            for key, value in _numeric_usage(event_message.get("usage")).items():
+                previous = usage.get(key, 0)
+                total = previous + value
+                usage[key] = round(total, 12) if isinstance(total, float) else total
+    native_model = selected_event.get("model")
+    if not isinstance(native_model, str) or not native_model.strip():
+        native_model = message.get("model")
+    if not isinstance(native_model, str) or not native_model.strip():
+        return None
+    native_model = native_model.strip()
+    message_model = message.get("model")
+    if isinstance(message_model, str) and message_model.strip() and message_model.strip() != native_model:
+        return None
+    requested_model = qualification_model.strip() if isinstance(qualification_model, str) and qualification_model.strip() else None
+    if requested_model is not None and native_model != requested_model:
+        return None
+    model = native_model
+    event_digest = raw_event_digest(selected_event)
+    return {
+        "source_canary": source_canary,
+        "operation_evidence": {"model_call": {"status": "pass", "level": "live_token"}},
+        "model": model,
+        "auth": {
+            "credential_mode": "api_key",
+            "api_key_source": "env",
+            "api_key_configured": api_key_configured,
+        },
+        "result_event": {
+            "type": "message",
+            "provider": message.get("provider"),
+            "model": model,
+            "model_source": "provider_event" if native_model else "invocation",
+            "usage": usage,
+            "total_cost_usd": usage.get("cost.total"),
+            "native_event_sha256": event_digest,
+        },
+        "source_artifacts": [
+            {
+                "path": str(selected_source),
+                "sha256": hashlib.sha256(selected_source.read_bytes()).hexdigest(),
+                "kind": "provider_jsonl_stream",
+                "event_type": "message",
+                "event_sha256": event_digest,
+                "native_event_sha256": event_digest,
+            }
+        ],
+    }
 
 
 def _exact_session_retirement(receipt: Mapping[str, Any] | None, session_id: str | None) -> bool:
@@ -321,6 +455,14 @@ def run_omp_console(args: argparse.Namespace) -> dict[str, object]:
         }
     )
     lifecycle.write_json(root / "omp-settlement-receipt.json", settlement)
+    model_evidence = omp_native_model_evidence(
+        root,
+        source_canary=PROFILE,
+        api_key_configured=bool(str(os.environ.get("OPENROUTER_API_KEY") or "").strip()),
+        qualification_model=str(getattr(args, "model", "") or ""),
+    )
+    if model_evidence is not None:
+        observation["live_model_evidence"] = model_evidence
     assertions = omp_console_assertions(observation)
     result = {
         "schema_version": 1,

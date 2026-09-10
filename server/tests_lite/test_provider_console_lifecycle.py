@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+
 from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.services.provider_capability_schema import load_capability_assertions
 
@@ -175,6 +176,51 @@ def test_console_oracle_fails_closed_on_missing_binding_or_cleanup(receipt_index
 )
 def test_interrupt_expectation_is_provider_typed(provider: str, variant: str):
     assert lifecycle._expected_variant(provider) == variant
+
+
+@pytest.mark.parametrize("provider", ["pi", "claude", "cursor", "opencode"])
+def test_interrupt_output_terminal_contract_is_omp_only(provider: str):
+    assert lifecycle._expected_variant(provider) == lifecycle.SUPPORTED_VARIANT
+    assert lifecycle._interrupt_output_contract_applies(provider) is False
+    evidence = lifecycle._retained_post_interrupt_output_evidence(provider, {}, "MARKER", [], Path("/tmp"))
+    assert evidence["applicable"] is False
+    assert evidence["valid"] is None
+
+
+@pytest.mark.parametrize(
+    ("is_terminal", "will_continue", "valid"),
+    [(False, False, False), (True, True, True), (None, False, True)],
+)
+def test_omp_interrupt_output_preserves_terminal_precedence(tmp_path, is_terminal, will_continue, valid):
+    source = tmp_path / "post.jsonl"
+    terminal = {"type": "agent_end", "willContinue": will_continue}
+    if is_terminal is not None:
+        terminal["isTerminal"] = is_terminal
+    source.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "message_end",
+                        "message": {"role": "assistant", "content": [{"type": "text", "text": "MARKER"}]},
+                    }
+                ),
+                json.dumps(terminal),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    evidence = lifecycle._retained_post_interrupt_output_evidence(
+        "omp",
+        {"stdout_path": str(source)},
+        "MARKER",
+        [{"source": str(source), "kind": "stdout_path", "path": "post.jsonl", "retained": True}],
+        tmp_path,
+    )
+
+    assert evidence["valid"] is valid
 
 
 def test_codex_model_argument_controls_spawned_machine_agent_environment(monkeypatch, tmp_path):
@@ -576,7 +622,7 @@ def test_pi_native_marker_evidence_stops_at_the_pre_interrupt_boundary(tmp_path)
 def test_console_cleanup_cannot_pass_on_a_failure_path(monkeypatch):
     monkeypatch.setattr(lifecycle, "_pid_dead", lambda _pid: True)
     monkeypatch.setattr(lifecycle, "_process_group_dead", lambda _pgid: True)
-    claims = [{"pid": 1, "process_group_id": 1, "state": "terminal"}]
+    claims = [{"pid": 1, "process_group_id": 1, "boot_id": "boot-1", "process_start_time": "start-1", "state": "terminal"}]
     shipper = {"stopped": True, "process_dead": True, "process_group_dead": True}
     inventory = {"retired": True, "active_run_count": 0, "session_id": "session-1"}
 
@@ -614,3 +660,51 @@ def test_console_cleanup_cannot_pass_on_a_failure_path(monkeypatch):
 
     assert passed["status"] == "pass"
     assert failed["status"] == "fail"
+    assert passed["owned_process_count"] == 1
+    assert passed["owned_processes"] == [
+        {
+            "pid": 1,
+            "process_group_id": 1,
+            "boot_id": "boot-1",
+            "process_start_time": "start-1",
+            "run_id": None,
+            "turn_id": None,
+            "state": "terminal",
+            "pid_positive": True,
+            "process_group_positive": True,
+            "birth_identity_present": True,
+            "pid_dead": True,
+            "process_group_dead": True,
+        }
+    ]
+
+
+def test_omp_interrupt_recovery_is_bound_to_retained_marker_and_terminal_output(tmp_path):
+    source = tmp_path / "post.jsonl"
+    source.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "message_end",
+                        "message": {"role": "assistant", "content": [{"type": "text", "text": "POST_MARKER"}]},
+                    }
+                ),
+                json.dumps({"type": "agent_end", "isTerminal": True, "willContinue": False}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    evidence = lifecycle._retained_post_interrupt_output_evidence(
+        "omp",
+        {"stdout_path": str(source)},
+        "POST_MARKER",
+        [{"source": str(source), "kind": "stdout_path", "path": "post.jsonl", "retained": True}],
+        tmp_path,
+    )
+
+    assert evidence["valid"] is True
+    assert evidence["assistant_marker_count"] == 1
+    assert evidence["terminal_event_index"] > evidence["marker_event_index"]
