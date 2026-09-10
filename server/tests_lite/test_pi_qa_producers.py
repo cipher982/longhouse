@@ -28,6 +28,7 @@ def test_helm_retained_evidence_excludes_live_channel_authority() -> None:
     assert "channel_token" not in retained["owner"]
     assert "auth_token" not in retained["frame"]
 
+
 def test_helm_authoritative_retention_does_not_truncate_large_source(tmp_path) -> None:
     source = tmp_path / "native.jsonl"
     source.write_bytes(b"x" * (16 * 1024 * 1024 + 1))
