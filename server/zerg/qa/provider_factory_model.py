@@ -115,8 +115,6 @@ FULL_COLUMN_RELEASE_PROFILES = frozenset(
         "antigravity_hook_inbox_v1",
         "cursor_observed_install_v1",
         "cursor_observed_install_grok_v1",
-        "pi_print_v1",
-        "omp_print_v1",
     }
 )
 

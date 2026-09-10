@@ -791,6 +791,11 @@ fn message_text(message: &Value) -> String {
 }
 
 fn is_terminal_agent_end(event: &Value) -> bool {
+    for field in ["isTerminal", "willContinue"] {
+        if event.get(field).is_some_and(|value| !value.is_boolean()) {
+            return false;
+        }
+    }
     event
         .get("isTerminal")
         .and_then(Value::as_bool)
@@ -1486,6 +1491,18 @@ mod tests {
             terminal_state_for_projection(&projection, Some(true), false, None, true, true, true).0,
             "run_completed"
         );
+    }
+
+    #[test]
+    fn malformed_agent_end_lifecycle_fields_are_not_terminal() {
+        assert!(!is_terminal_agent_end(&json!({
+            "type": "agent_end",
+            "isTerminal": "true"
+        })));
+        assert!(!is_terminal_agent_end(&json!({
+            "type": "agent_end",
+            "willContinue": "false"
+        })));
     }
 
     fn write_fake_omp(path: &Path) {

@@ -167,7 +167,7 @@ def test_release_poll_runs_for_pi_observed_install(facts) -> None:
     assert cell.status == "runs"
     assert cell.qualification_profile == "pi_print_v1"
     assert cell.qualification_profiles == DEPLOYED_RELEASE_LANE_PROFILES["pi"]
-    assert cell.harness_scenarios == facts.default_harness_scenarios
+    assert cell.harness_scenarios == ()
     assert cell.scenario_ids == ("pi_print",)
     assert cell.credential_requirement == (
         "OPENROUTER_API_KEY",
@@ -221,12 +221,12 @@ def test_opencode_release_poll_runs_the_full_staged_column(facts) -> None:
     )
 
 
-def test_omp_release_poll_runs_both_staged_profiles_and_full_column(facts) -> None:
+def test_omp_release_poll_runs_both_staged_tier1_profiles_without_universal_column(facts) -> None:
     cell = plan_run(facts, "omp", "staged_release", "release_poll")
 
     assert cell.status == "runs"
     assert cell.qualification_profiles == ("omp_print_v1", "omp_helm_v1")
-    assert cell.harness_scenarios == facts.default_harness_scenarios
+    assert cell.harness_scenarios == ()
     assert cell.scenario_ids == ("omp_console_lifecycle", "omp_helm_lifecycle")
     assert cell.credential_requirement == (
         "OPENROUTER_API_KEY",

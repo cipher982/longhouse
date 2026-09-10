@@ -122,7 +122,7 @@ _PROFILE = identity.IdentityProfile(
     provider="omp",
     profile=PROFILE,
     scenario_id=SCENARIO_ID,
-    version_line=identity.semver_version_line(),
+    version_line=identity.semver_version_line(version_prefix=r"omp/"),
     oracle_source=Path(__file__),
 )
 
@@ -214,6 +214,11 @@ def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str
             and steer.get("native_source_bound") is True
             and steer.get("marker_count") == 1
             and steer.get("channel_ack_bound") is True
+            and steer.get("active_command_bound") is True
+            and steer.get("steer_command_bound") is True
+            and isinstance(steer.get("active_state"), Mapping)
+            and steer["active_state"].get("phase") in {"running", "thinking"}
+            and steer.get("native_session_id") == steer["active_state"].get("native_session_id")
         ),
         "omp_helm_abort_native": (
             observation.get("abort_native") is True
@@ -635,7 +640,7 @@ def _channel_terminal_evidence(
     session_file: Path,
 ) -> dict[str, Any]:
     terminal = event.get("type") == "agent_end" and _is_terminal_agent_end(event)
-    return {
+    evidence = {
         "channel_source_bound": (
             terminal
             and event.get("source") == "omp_helm_extension_channel"
@@ -652,9 +657,12 @@ def _channel_terminal_evidence(
         "connection_id": state.get("connection_id"),
         "lease_generation": state.get("lease_generation"),
         "terminal": terminal,
-        "is_terminal": event.get("isTerminal"),
-        "will_continue": event.get("willContinue"),
     }
+    if "isTerminal" in event:
+        evidence["is_terminal"] = event["isTerminal"]
+    if "willContinue" in event:
+        evidence["will_continue"] = event["willContinue"]
+    return evidence
 
 
 def _channel_binding_evidence(state: Mapping[str, Any]) -> dict[str, Any]:
@@ -669,19 +677,41 @@ def _channel_binding_evidence(state: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _redacted_state_snapshot(state: Mapping[str, Any]) -> dict[str, Any]:
+    redacted = redact_state_for_evidence(dict(state))
+    return redacted if isinstance(redacted, dict) else {}
+
+
 def _channel_command_evidence(command: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, Any]:
     payload = command.get("payload")
     payload = payload if isinstance(payload, Mapping) else {}
-    native_session_id = payload.get("native_session_id")
+    request = command.get("request")
+    request = request if isinstance(request, Mapping) else {}
+    request_payload = request.get("payload")
+    request_payload = request_payload if isinstance(request_payload, Mapping) else {}
+    expected_path = f"/api/agents/sessions/{state.get('session_id')}/input"
+    response_client_request_id = payload.get("client_request_id")
+    request_client_request_id = request_payload.get("client_request_id")
+    native_session_id = state.get("native_session_id")
+    accepted = command.get("accepted") is True
+    request_bound = (
+        request.get("method") == "POST"
+        and request.get("path") == expected_path
+        and isinstance(request_payload.get("text"), str)
+        and bool(request_payload.get("text"))
+        and request_payload.get("intent") in {"auto", "steer"}
+        and isinstance(request_client_request_id, str)
+        and bool(request_client_request_id)
+        and response_client_request_id == request_client_request_id
+    )
     return {
-        "accepted": command.get("accepted") is True,
+        "accepted": accepted,
         "native_session_id": native_session_id,
-        "status": payload.get("status"),
-        "channel_ack_bound": (
-            command.get("accepted") is True
-            and native_session_id == state.get("native_session_id")
-            and payload.get("status") in {"active", "idle"}
-        ),
+        "status": state.get("phase"),
+        "request_path": request.get("path"),
+        "request_client_request_id": request_client_request_id,
+        "response_client_request_id": response_client_request_id,
+        "channel_ack_bound": (accepted and request_bound and state.get("ready") is True and bool(native_session_id)),
     }
 
 
@@ -736,9 +766,9 @@ def _wait_channel_terminal(
             return (
                 {
                     "type": "agent_end",
-                    "isTerminal": state["agent_end_is_terminal"],
-                    "willContinue": state.get("agent_end_will_continue"),
                     "source": "omp_helm_extension_channel",
+                    **({"isTerminal": state["agent_end_is_terminal"]} if state.get("agent_end_is_terminal_present") is True else {}),
+                    **({"willContinue": state["agent_end_will_continue"]} if state.get("agent_end_will_continue_present") is True else {}),
                 },
                 state,
             )
@@ -941,12 +971,16 @@ def _run_engine(
     else:
         accepted = response.get("terminate_dispatched") is True
     return {
-        "argv": ["longhouse-engine", "omp-helm", command, "--session-id", session_id] + (["--text", text] if text is not None else []),
         "returncode": 0,
         "accepted": accepted,
         "payload": response,
         "transport": "runtime_host_agents_api",
         "path": path,
+        "request": {
+            "method": "POST",
+            "path": path,
+            "payload": dict(payload) if isinstance(payload, Mapping) else None,
+        },
     }
 
 
@@ -1404,6 +1438,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         send_evidence.update({"observation_scope": "initial", "source_generation": "initial"})
         controls["send"] = {
             "action_label": "send",
+            "prompt": f"Reply with exactly {send_marker}.",
             "state": dict(current_state),
             "command": send,
             "marker_row": send_row,
@@ -1418,14 +1453,14 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         follow_up_marker = f"OMP_HELM_FOLLOW_UP_{os.urandom(8).hex()}"
         steer_marker = f"OMP_HELM_STEER_{os.urandom(8).hex()}"
         active_offset = _read_source_size(current_session_file)
-        active = _run_engine(
+        follow_up_active = _run_engine(
             args.engine,
             "send",
             current_session_id,
             env,
             text=f"Run the shell command `sleep 8`, then reply with exactly {active_marker}.",
         )
-        _wait_state(
+        active_state = _wait_state(
             longhouse_home,
             session_id=current_session_id,
             predicate=lambda value: value.get("phase") in {"running", "thinking"},
@@ -1438,8 +1473,6 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             env,
             text=f"Reply with exactly {follow_up_marker}.",
         )
-        steer = _run_engine(args.engine, "steer", current_session_id, env, text=f"Reply with exactly {steer_marker}.")
-        steer_row = _wait_native_marker(current_session_file, steer_marker, minimum_offset=active_offset)
         follow_up_row = _wait_native_marker(current_session_file, follow_up_marker, minimum_offset=active_offset)
         follow_up_evidence = _native_marker_evidence(
             follow_up_row,
@@ -1448,19 +1481,22 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             minimum_offset=active_offset,
             native_session_id=str(current_state.get("native_session_id") or ""),
         )
-        follow_up_evidence["active_command_bound"] = _channel_command_evidence(active, current_state)["channel_ack_bound"]
-        follow_up_evidence["follow_up_delivery"] = (
-            follow_up.get("accepted") is True
-            and isinstance(follow_up.get("payload"), Mapping)
-            and follow_up["payload"].get("status") == "active"
+        active_command_evidence = _channel_command_evidence(follow_up_active, active_state)
+        follow_up_command_evidence = _channel_command_evidence(follow_up, current_state)
+        follow_up_evidence["active_state"] = _redacted_state_snapshot(active_state)
+        follow_up_evidence["active_command_bound"] = (
+            active_state.get("phase") in {"running", "thinking"} and active_command_evidence["channel_ack_bound"]
         )
+        follow_up_evidence["follow_up_delivery"] = follow_up_command_evidence["channel_ack_bound"]
         follow_up_evidence.update(_channel_command_evidence(follow_up, current_state))
         follow_up_evidence.update({"observation_scope": "initial", "source_generation": "initial"})
         controls["follow_up"] = {
             "action_label": "follow_up",
+            "prompt": f"Reply with exactly {follow_up_marker}.",
             "state": dict(current_state),
             "active_action_label": "active_turn_setup",
-            "active_command": active,
+            "active_command": follow_up_active,
+            "active_state": dict(active_state),
             "command": follow_up,
             "marker_row": follow_up_row,
             "evidence": follow_up_evidence,
@@ -1473,21 +1509,51 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             and follow_up_evidence["marker_count"] == 1
         )
         observation["follow_up_evidence"] = follow_up_evidence
+
+        _wait_state(
+            longhouse_home,
+            session_id=current_session_id,
+            predicate=lambda value: value.get("phase") == "idle",
+            timeout=30,
+        )
+        steer_active_offset = _read_source_size(current_session_file)
+        steer_active_marker = f"OMP_HELM_STEER_ACTIVE_{os.urandom(8).hex()}"
+        steer_active = _run_engine(
+            args.engine,
+            "send",
+            current_session_id,
+            env,
+            text=f"Run the shell command `sleep 8`, then reply with exactly {steer_active_marker}.",
+        )
+        steer_active_state = _wait_state(
+            longhouse_home,
+            session_id=current_session_id,
+            predicate=lambda value: value.get("phase") in {"running", "thinking"},
+            timeout=30,
+        )
+        steer = _run_engine(args.engine, "steer", current_session_id, env, text=f"Reply with exactly {steer_marker}.")
+        steer_row = _wait_native_marker(current_session_file, steer_marker, minimum_offset=steer_active_offset)
         steer_evidence = _native_marker_evidence(
             steer_row,
             current_session_file,
             marker=steer_marker,
-            minimum_offset=active_offset,
-            native_session_id=str(current_state.get("native_session_id") or ""),
+            minimum_offset=steer_active_offset,
+            native_session_id=str(steer_active_state.get("native_session_id") or ""),
         )
-        steer_evidence["active_command_bound"] = _channel_command_evidence(active, current_state)["channel_ack_bound"]
-        steer_evidence.update(_channel_command_evidence(steer, current_state))
+        steer_active_command_evidence = _channel_command_evidence(steer_active, steer_active_state)
+        steer_command_evidence = _channel_command_evidence(steer, steer_active_state)
+        steer_evidence["active_state"] = _redacted_state_snapshot(steer_active_state)
+        steer_evidence["active_command_bound"] = steer_active_command_evidence["channel_ack_bound"]
+        steer_evidence["steer_command_bound"] = steer_command_evidence["channel_ack_bound"]
+        steer_evidence.update(steer_command_evidence)
         steer_evidence.update({"observation_scope": "initial", "source_generation": "initial"})
         controls["steer"] = {
             "action_label": "steer",
-            "state": dict(current_state),
+            "prompt": f"Reply with exactly {steer_marker}.",
+            "state": dict(steer_active_state),
             "active_action_label": "active_turn_setup",
-            "active_command": active,
+            "active_command": steer_active,
+            "active_state": dict(steer_active_state),
             "command": steer,
             "marker_row": steer_row,
             "evidence": steer_evidence,
@@ -1628,6 +1694,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         replacement_evidence.update({"observation_scope": "replacement", "source_generation": "replacement"})
         controls["replacement"] = {
             "action_label": "replacement_send",
+            "prompt": f"Remember this context phrase: {context_phrase}. Then reply with exactly {replacement_marker}.",
             "state": dict(replaced_state),
             "command": replacement,
             "marker_row": replacement_row,
@@ -1671,6 +1738,8 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
 
         resume_marker = f"OMP_HELM_RESUME_{os.urandom(8).hex()}"
         resume_offset = _read_source_size(current_session_file)
+        pre_resume_source = root / "pre-resume-native-source.raw"
+        pre_resume_source.write_bytes(current_session_file.read_bytes())
         resume_prompt = f"Without reading any files, reply with the context phrase you remember followed by exactly {resume_marker}."
         resumed = ProviderPtySession.start(
             argv=_launch_argv(
@@ -1704,6 +1773,12 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             }
         )
         resume_row = _wait_native_marker(resume_file, resume_marker, minimum_offset=resume_offset)
+        resume_input_row = _wait_native_marker(
+            resume_file,
+            resume_prompt,
+            minimum_offset=resume_offset,
+            role="user",
+        )
         resume_context_row = _wait_native_marker(
             resume_file,
             context_phrase,
@@ -1730,11 +1805,21 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             minimum_offset=resume_offset,
             native_session_id=str(resume_state.get("native_session_id") or ""),
         )
+        resume_input_evidence = _native_marker_evidence(
+            resume_input_row,
+            resume_file,
+            marker=resume_prompt,
+            minimum_offset=resume_offset,
+            native_session_id=str(resume_state.get("native_session_id") or ""),
+            role="user",
+        )
         context_recalled = (
             context_seed_evidence["native_source_bound"]
             and context_seed_evidence["marker_count"] == 1
             and resume_context_evidence["native_source_bound"]
             and resume_context_evidence["marker_count"] == 1
+            and resume_input_evidence["native_source_bound"]
+            and resume_input_evidence["marker_count"] == 1
             and context_phrase not in resume_prompt
         )
         resume_terminal_evidence = _channel_terminal_evidence(
@@ -1771,10 +1856,13 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             **resume_marker_evidence,
             "context_phrase": context_phrase,
             "resume_prompt": resume_prompt,
+            "pre_resume_source_path": pre_resume_source.name,
+            "pre_resume_source_offset": resume_offset,
             "context_recalled": context_recalled,
             "context_marker_count": resume_context_evidence["marker_count"],
             "context_seed": context_seed_evidence,
             "context_resume": resume_context_evidence,
+            "resume_input": resume_input_evidence,
             "native_source_bound": resume_marker_evidence["native_source_bound"],
             "channel_terminal_bound": resume_terminal_evidence["channel_source_bound"],
             "terminal": resume_terminal_evidence["terminal"],
@@ -1790,6 +1878,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "state": dict(resume_state),
             "marker_row": resume_row,
             "context_row": resume_context_row,
+            "prompt_evidence": resume_input_evidence,
             "terminal": resume_terminal_evidence["terminal"],
             "marker_evidence": resume_marker_evidence,
             "context_evidence": resume_context_evidence,
@@ -2008,7 +2097,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             evidence = record.get("evidence")
             if isinstance(evidence, dict):
                 evidence["retained_source_path"] = retained_by_source.get(str(evidence.get("source_path") or ""))
-            for evidence_key in ("context_evidence", "marker_evidence", "terminal_evidence"):
+            for evidence_key in ("context_evidence", "marker_evidence", "prompt_evidence", "terminal_evidence"):
                 nested = record.get(evidence_key)
                 if isinstance(nested, dict):
                     nested["retained_source_path"] = retained_by_source.get(str(nested.get("source_path") or ""))

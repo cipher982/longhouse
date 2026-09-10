@@ -35,6 +35,10 @@ def omp_agent_end_is_terminal(event: Mapping[str, Any]) -> bool:
     continuation, with an unmarked event treated as terminal.
     """
 
+    for field in ("isTerminal", "willContinue"):
+        if field in event and not isinstance(event[field], bool):
+            return False
+
     is_terminal = event.get("isTerminal")
     if isinstance(is_terminal, bool):
         return is_terminal

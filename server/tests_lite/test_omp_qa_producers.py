@@ -5,16 +5,20 @@ from pathlib import Path
 
 import pytest
 
+from zerg.qa import omp_helm_lifecycle
 from zerg.qa import provider_console_lifecycle as lifecycle
+from zerg.qa.omp_console_producer import _PROFILE as CONSOLE_PROFILE
 from zerg.qa.omp_console_producer import ASSERTION_ID as CONSOLE_ASSERTION
 from zerg.qa.omp_console_producer import REGISTRATION as CONSOLE_REGISTRATION
 from zerg.qa.omp_console_producer import _is_terminal_agent_end
 from zerg.qa.omp_console_producer import omp_console_assertions
 from zerg.qa.omp_console_producer import omp_native_model_evidence
+from zerg.qa.omp_helm_lifecycle import _PROFILE as HELM_PROFILE
 from zerg.qa.omp_helm_lifecycle import _VARIANTS
 from zerg.qa.omp_helm_lifecycle import ASSERTIONS as HELM_ASSERTIONS
 from zerg.qa.omp_helm_lifecycle import REGISTRATION as HELM_REGISTRATION
 from zerg.qa.omp_helm_lifecycle import _assertion_result_status
+from zerg.qa.omp_helm_lifecycle import _channel_command_evidence
 from zerg.qa.omp_helm_lifecycle import _cleanup_receipt
 from zerg.qa.omp_helm_lifecycle import _events_page_metadata
 from zerg.qa.omp_helm_lifecycle import _exact_session_retirement
@@ -23,6 +27,7 @@ from zerg.qa.omp_helm_lifecycle import _helm_cleanup_ready
 from zerg.qa.omp_helm_lifecycle import _helm_result_status
 from zerg.qa.omp_helm_lifecycle import _manifest_is_stable
 from zerg.qa.omp_helm_lifecycle import _native_settlement
+from zerg.qa.omp_helm_lifecycle import _redacted_state_snapshot
 from zerg.qa.omp_helm_lifecycle import _register_native_source
 from zerg.qa.omp_helm_lifecycle import _remove_isolation_after_source_retention
 from zerg.qa.omp_helm_lifecycle import _runtime_convergence
@@ -50,10 +55,71 @@ def test_omp_qualification_producers_are_registered_on_their_own_contracts() -> 
     assert ("omp", "omp_helm_v1") in _PROFILES
 
 
-def test_omp_agent_end_without_optional_terminal_fields_is_terminal() -> None:
-    assert _is_terminal_agent_end({"type": "agent_end"}) is True
-    assert _is_terminal_agent_end({"type": "agent_end", "willContinue": True}) is False
-    assert _is_terminal_agent_end({"type": "agent_end", "isTerminal": False, "willContinue": False}) is False
+def test_omp_stock_version_line_is_prefixed_for_both_release_profiles() -> None:
+    assert CONSOLE_PROFILE.version_line.fullmatch("omp/18.1.14")
+    assert HELM_PROFILE.version_line.fullmatch("omp/18.1.14")
+    assert CONSOLE_PROFILE.version_line.fullmatch("18.1.14") is None
+    assert HELM_PROFILE.version_line.fullmatch("18.1.14") is None
+
+
+@pytest.mark.parametrize(
+    ("event", "expected"),
+    (
+        ({"type": "agent_end"}, True),
+        ({"type": "agent_end", "willContinue": True}, False),
+        ({"type": "agent_end", "isTerminal": False, "willContinue": False}, False),
+        ({"type": "agent_end", "isTerminal": "true"}, False),
+        ({"type": "agent_end", "willContinue": "false"}, False),
+        ({"type": "agent_end", "isTerminal": True, "willContinue": "false"}, False),
+    ),
+)
+def test_omp_agent_end_lifecycle_fields_are_strict(event: dict[str, object], expected: bool) -> None:
+    assert _is_terminal_agent_end(event) is expected
+
+
+def test_omp_helm_channel_terminal_evidence_preserves_lifecycle_field_presence(monkeypatch, tmp_path) -> None:
+    state = {
+        "ready": True,
+        "native_session_id": "native-1",
+        "session_file": str(tmp_path / "omp.jsonl"),
+        "agent_end_observed": True,
+        "agent_end_is_terminal": True,
+        "agent_end_will_continue": None,
+        "agent_end_is_terminal_present": False,
+        "agent_end_will_continue_present": False,
+    }
+    monkeypatch.setattr(omp_helm_lifecycle, "_read_state", lambda _path: state)
+    monkeypatch.setattr(
+        omp_helm_lifecycle,
+        "_wait",
+        lambda observe, *, timeout, description: observe(),
+    )
+
+    event, _ = omp_helm_lifecycle._wait_channel_terminal(
+        tmp_path,
+        session_id="session-1",
+        native_session_id="native-1",
+        session_file=tmp_path / "omp.jsonl",
+    )
+
+    assert event == {"type": "agent_end", "source": "omp_helm_extension_channel"}
+    assert _is_terminal_agent_end(event) is True
+
+    state.update(
+        {
+            "agent_end_is_terminal_present": True,
+            "agent_end_will_continue_present": True,
+            "agent_end_will_continue": False,
+        }
+    )
+    event, _ = omp_helm_lifecycle._wait_channel_terminal(
+        tmp_path,
+        session_id="session-1",
+        native_session_id="native-1",
+        session_file=tmp_path / "omp.jsonl",
+    )
+    assert event["isTerminal"] is True
+    assert event["willContinue"] is False
 
 
 def test_omp_native_model_evidence_binds_provider_event_to_retained_source(tmp_path) -> None:
@@ -150,7 +216,7 @@ def test_omp_helm_controls_use_runtime_agents_api(monkeypatch, tmp_path) -> None
             return False
 
         def read(self):
-            return json.dumps({"outcome": "sent"}).encode("utf-8")
+            return json.dumps({"outcome": "sent", "client_request_id": "fixture-request"}).encode("utf-8")
 
     def _urlopen(request, timeout):
         seen["request"] = request
@@ -178,15 +244,57 @@ def test_omp_helm_controls_use_runtime_agents_api(monkeypatch, tmp_path) -> None
     assert body["client_request_id"].startswith("omp-helm-steer-")
     assert "native_session_id" not in result["payload"]
     assert "status" not in result["payload"]
-    assert result["argv"] == [
-        "longhouse-engine",
-        "omp-helm",
-        "steer",
-        "--session-id",
-        session_id,
-        "--text",
-        "redirect now",
-    ]
+    assert result["transport"] == "runtime_host_agents_api"
+    assert result["path"] == f"/api/agents/sessions/{session_id}/input"
+    assert result["request"]["method"] == "POST"
+    assert result["request"]["path"] == result["path"]
+    assert result["request"]["payload"]["text"] == "redirect now"
+    assert result["request"]["payload"]["intent"] == "steer"
+
+
+def test_omp_channel_ack_binds_real_runtime_input_response_to_channel_state() -> None:
+    state = {
+        "ready": True,
+        "session_id": "session-1",
+        "native_session_id": "native-1",
+        "phase": "running",
+    }
+    command = {
+        "accepted": True,
+        "payload": {"outcome": "sent", "client_request_id": "request-1"},
+        "request": {
+            "method": "POST",
+            "path": "/api/agents/sessions/session-1/input",
+            "payload": {"text": "redirect now", "intent": "steer", "client_request_id": "request-1"},
+        },
+    }
+
+    evidence = _channel_command_evidence(command, state)
+
+    assert evidence["channel_ack_bound"] is True
+    assert evidence["native_session_id"] == "native-1"
+    assert evidence["status"] == "running"
+    assert "argv" not in command
+    command["payload"]["client_request_id"] = "other-request"
+    assert _channel_command_evidence(command, state)["channel_ack_bound"] is False
+
+
+def test_omp_helm_active_state_evidence_redacts_secret_fields() -> None:
+    snapshot = _redacted_state_snapshot(
+        {
+            "provider": "omp",
+            "session_id": "session-1",
+            "native_session_id": "native-1",
+            "model": "fixture-model",
+            "channel_token": "<fixture-channel-token>",
+            "nested": {"client_secret": "<fixture-client-secret>", "owner": "fixture-owner"},
+        }
+    )
+
+    assert snapshot["model"] == "fixture-model"
+    assert snapshot["session_id"] == "session-1"
+    assert snapshot["channel_token"] == "<redacted>"
+    assert snapshot["nested"] == {"client_secret": "<redacted>", "owner": "fixture-owner"}
 
 
 def test_omp_helm_settlement_requires_terminal_channel_evidence(tmp_path) -> None:
@@ -507,7 +615,15 @@ def test_omp_helm_assertions_do_not_use_agent_settled_as_completion() -> None:
         },
         "send_evidence": {"native_source_bound": True, "marker_count": 1, "channel_ack_bound": True},
         "follow_up_evidence": {"native_source_bound": True, "marker_count": 1, "channel_ack_bound": True},
-        "steer_evidence": {"native_source_bound": True, "marker_count": 1, "channel_ack_bound": True},
+        "steer_evidence": {
+            "native_source_bound": True,
+            "marker_count": 1,
+            "channel_ack_bound": True,
+            "active_command_bound": True,
+            "steer_command_bound": True,
+            "active_state": {"phase": "thinking", "native_session_id": "native-1"},
+            "native_session_id": "native-1",
+        },
         "cold_resume_evidence": {
             "native_source_bound": True,
             "channel_terminal_bound": True,

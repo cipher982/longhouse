@@ -40,7 +40,10 @@ from zerg.qa import codex_helm_interrupt
 from zerg.qa import codex_release_identity as identity_bridge
 from zerg.qa import codex_tool_call_result
 from zerg.qa import cursor_release_identity
+from zerg.qa import omp_console_producer
+from zerg.qa import omp_helm_lifecycle
 from zerg.qa import opencode_server_qualification
+from zerg.qa import pi_qualification
 from zerg.qa import provider_interaction_semantics as interaction_semantics
 from zerg.qa import provider_release_identity
 from zerg.qa import provider_release_identity as release_identity
@@ -1188,6 +1191,9 @@ _PROFILES = {
     ("opencode", opencode_server_qualification.PROFILE): run_opencode_server_contract,
     ("antigravity", antigravity_hook_qualification.PROFILE): run_antigravity_hook_inbox,
     ("cursor", cursor_release_identity.OBSERVED_INSTALL_PROFILE): run_cursor_observed_install,
+    ("pi", pi_qualification.PROFILE): pi_qualification.run,
+    ("omp", omp_console_producer.PROFILE): omp_console_producer.run,
+    ("omp", omp_helm_lifecycle.PROFILE): omp_helm_lifecycle.run,
 }
 
 

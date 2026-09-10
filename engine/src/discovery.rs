@@ -1,6 +1,6 @@
 //! Multi-provider session file discovery.
 //!
-//! Discovers session files across Claude, Codex, and Antigravity providers.
+//! Discovers session files across all supported providers.
 //! Replaces the Claude-only `bench::discover_session_files()`.
 
 use std::borrow::Cow;
@@ -1023,6 +1023,150 @@ mod tests {
             discover_all_files(&[provider]),
             vec![(bucket.join("session.jsonl"), "omp")]
         );
+    }
+
+    #[test]
+    fn omp_shadow_factory_certification_covers_restart_reload_serving_profiles_and_pi_separation() {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/golden/omp/native.jsonl");
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().join("workspace");
+        let custom_root = dir.path().join("custom-omp/sessions");
+        let xdg_root = dir.path().join("xdg");
+        let profile_root = xdg_root.join("omp/profiles/work/sessions");
+        let bucket = profile_root.join("-tmp-workspace");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::create_dir_all(&bucket).unwrap();
+        let source = bucket.join("session.jsonl");
+        std::fs::copy(&fixture, &source).unwrap();
+        let provider = ProviderConfig {
+            name: "omp",
+            root: profile_root.clone(),
+            extension: "jsonl",
+        };
+
+        let first_discovery = discover_all_files(std::slice::from_ref(&provider));
+        assert_eq!(first_discovery, vec![(source.clone(), "omp")]);
+        let duplicate_root = dir.path().join("duplicate/sessions");
+        std::fs::create_dir_all(duplicate_root.join("-tmp-workspace")).unwrap();
+        std::fs::copy(
+            &fixture,
+            duplicate_root.join("-tmp-workspace/session.jsonl"),
+        )
+        .unwrap();
+        assert!(discover_all_files(&[
+            provider.clone(),
+            ProviderConfig {
+                name: "omp",
+                root: duplicate_root,
+                extension: "jsonl",
+            },
+        ])
+        .is_empty());
+
+        let roots = temp_env::with_var("HOME", Some(dir.path().to_str().unwrap()), || {
+            temp_env::with_var("XDG_DATA_HOME", Some(xdg_root.to_str().unwrap()), || {
+                temp_env::with_var(
+                    "LONGHOUSE_OMP_SESSION_DIR",
+                    Some(custom_root.to_str().unwrap()),
+                    || {
+                        temp_env::with_var("OMP_PROFILE", Some("work"), || {
+                            crate::omp_session::configured_session_roots(&cwd)
+                        })
+                    },
+                )
+            })
+        });
+        assert!(roots.contains(&profile_root));
+        assert!(roots.contains(&custom_root));
+        assert!(!roots
+            .iter()
+            .any(|root| root.starts_with(dir.path().join("pi"))));
+
+        let capabilities = crate::shipping::storage_v2::StorageV2Capabilities {
+            protocol_version: 2,
+            cutover: true,
+            tenant_id: "tenant-a".to_string(),
+            machine_id: "test-machine".to_string(),
+            ingest_path: "/api/agents/storage/v2/envelopes".to_string(),
+            max_wire_body_bytes: 12 * 1024 * 1024,
+            max_raw_record_bytes: 4 * 1024 * 1024,
+            max_records: 10_000,
+            media_claim_path: "/api/agents/storage/v2/media/claims".to_string(),
+            media_upload_path_template: "/api/agents/storage/v2/media/{sha256}".to_string(),
+            max_media_bytes: 32 * 1024 * 1024,
+            max_media_claims: 512,
+            range_kinds: vec!["byte_offset".to_string(), "record_ordinal".to_string()],
+            lanes: vec!["live".to_string(), "repair".to_string()],
+            lane_header: "X-Longhouse-Storage-Lane".to_string(),
+        };
+        let state_path = dir.path().join("engine/state.sqlite");
+        let (first_body, first_prepared) = {
+            let mut conn = crate::state::db::open_db(Some(&state_path)).unwrap();
+            crate::storage_v2_shipper::prepare_next_envelope_body_for_lane(
+                &mut conn,
+                &capabilities,
+                &source,
+                "omp",
+                "live",
+            )
+            .unwrap()
+            .expect("OMP source should produce a durable Shadow envelope")
+        };
+        let served_projection: serde_json::Value = serde_json::from_slice(&first_body).unwrap();
+        let served_records = served_projection["render"]["records"]
+            .as_array()
+            .expect("OMP Shadow envelope should carry served render records");
+        let event_ids: BTreeSet<&str> = served_records
+            .iter()
+            .filter_map(|record| record["event_id"].as_str())
+            .collect();
+        assert_eq!(
+            event_ids.len(),
+            served_records.len(),
+            "served OMP transcript must converge exactly once"
+        );
+        assert_eq!(
+            served_records
+                .iter()
+                .filter(|record| record["event_id"] == "omp-assistant-01")
+                .count(),
+            1
+        );
+
+        let (reloaded_body, reloaded_prepared) = {
+            let mut conn = crate::state::db::open_db(Some(&state_path)).unwrap();
+            crate::storage_v2_shipper::prepare_next_envelope_body_for_lane(
+                &mut conn,
+                &capabilities,
+                &source,
+                "omp",
+                "live",
+            )
+            .unwrap()
+            .expect("restart must reload the exact pending envelope")
+        };
+        assert_eq!(reloaded_body, first_body);
+        assert_eq!(
+            reloaded_prepared.envelope.expected_envelope_id,
+            first_prepared.envelope.expected_envelope_id
+        );
+        assert_eq!(reloaded_prepared.range_start, first_prepared.range_start);
+        assert_eq!(reloaded_prepared.range_end, first_prepared.range_end);
+
+        let pi_root = dir.path().join("pi/sessions");
+        assert!(crate::omp_session::ensure_session_dir_is_disjoint_from_pi(&cwd, &pi_root).is_ok());
+        let overlap = temp_env::with_var(
+            "PI_CODING_AGENT_DIR",
+            Some(dir.path().join("pi").to_str().unwrap()),
+            || crate::omp_session::ensure_session_dir_is_disjoint_from_pi(&cwd, &pi_root),
+        );
+        assert!(overlap.is_err());
+        assert!(crate::omp_session::ensure_session_dir_is_disjoint_from_pi(
+            &cwd,
+            &pi_root.join("nested")
+        )
+        .is_ok());
     }
 
     #[test]
