@@ -125,6 +125,11 @@ final class SessionViewModel: ObservableObject {
     /// one refresh per stream session, reset once a connection succeeds.
     private var streamAuthRefreshAttempted = false
     var hasRealtimeStreamTaskForTesting: Bool { streamTask != nil }
+    /// True while a durable tail refresh is in flight. The realtime wake loop
+    /// reads this as "a refresh is still running" and re-arms on it, so a
+    /// refresh that has finished must never leave this true: the loop would
+    /// join a completed task, never suspend, and pin the main actor forever.
+    var hasTailRefreshInFlightForTesting: Bool { tailRefreshTask != nil }
     private var pendingRealtimeTelemetry: PendingRealtimeTelemetry?
     private var activeSessionId: String?
     private var activeServerURL: String?
@@ -244,6 +249,9 @@ final class SessionViewModel: ObservableObject {
             openWaterfall = SessionOpenWaterfall(sessionId: sessionId)
             if let api = apiFactory(appState.serverURL) {
                 ClientDiagnosticsReporter.shared.sink = { payload in await api.postClientDiagnostics(payload) }
+                // The channel has a sink now, so this is the first point the
+                // previous run's outcome can actually be shipped.
+                RunBreadcrumb.shared.reportPreviousRunIfNeeded()
             }
             transcriptReadThrough = nil
             hasLoadedTranscript = false
@@ -1491,19 +1499,27 @@ final class SessionViewModel: ObservableObject {
             realtimeRefreshPending = true
             return
         }
-        // Joining an older request is not enough: that request may have
-        // captured its snapshot before this wake. Force one coalesced
-        // post-request fetch so the invalidation cannot be lost.
-        if tailRefreshTask != nil {
-            realtimeRefreshPending = true
-        }
         realtimeRefreshRequestToken &+= 1
         let requestToken = realtimeRefreshRequestToken
         realtimeRefreshTask = Task { [weak self] in
             guard let self else { return }
+            // The forced follow-up is a one-shot per joined request: "the
+            // request I joined may have captured its snapshot before this
+            // wake", which one fetch settles. Re-arming it on every pass
+            // instead made the loop depend on a handle it kept re-joining —
+            // and a join that resolves without suspending never yields the
+            // actor, so nothing could release it and the main thread was
+            // pinned for as long as the app lived.
+            var forcedFollowUp = false
             repeat {
                 self.realtimeRefreshPending = false
-                await self.refreshTailAfterRealtimeWake(api: api, sessionId: sessionId)
+                let joined = await self.refreshTailAfterRealtimeWake(api: api, sessionId: sessionId)
+                if joined, !forcedFollowUp {
+                    forcedFollowUp = true
+                    self.realtimeRefreshPending = true
+                } else if !joined {
+                    forcedFollowUp = false
+                }
             } while self.realtimeRefreshPending
                 && self.activeSessionId == sessionId
                 && self.realtimeRefreshRequestToken == requestToken
@@ -1514,29 +1530,33 @@ final class SessionViewModel: ObservableObject {
         }
     }
 
-    private func refreshTailAfterRealtimeWake(api: SessionWorkspaceClient, sessionId: String) async {
-        guard activeSessionId == sessionId, !realtimePaused else { return }
+    /// Returns whether this pass joined a refresh already in flight, which is
+    /// what the caller's follow-up rule is about. It deliberately does not
+    /// re-arm anything by itself: the loop owns its own exit condition.
+    @discardableResult
+    private func refreshTailAfterRealtimeWake(
+        api: SessionWorkspaceClient,
+        sessionId: String
+    ) async -> Bool {
+        guard activeSessionId == sessionId, !realtimePaused else { return false }
         let generation = routeLoadGeneration
         let joinedExistingTail = tailRefreshTask != nil
         do {
             try await refreshTail(api: api, sessionId: sessionId)
-            guard isCurrentRoute(sessionId: sessionId, generation: generation) else { return }
-            // A wake that joined a pre-existing request still needs one
-            // post-wake fetch: that request may have captured its snapshot
-            // before the invalidation arrived.
-            if joinedExistingTail {
-                realtimeRefreshPending = true
-            }
+            guard isCurrentRoute(sessionId: sessionId, generation: generation) else { return joinedExistingTail }
             realtimeRefreshFailureCount = 0
             realtimeRefreshRetryTask?.cancel()
             realtimeRefreshRetryTask = nil
             refreshErrorMessage = nil
         } catch is CancellationError {
-            return
+            return joinedExistingTail
         } catch {
-            guard isCurrentRoute(sessionId: sessionId, generation: generation), !realtimePaused else { return }
+            guard isCurrentRoute(sessionId: sessionId, generation: generation), !realtimePaused else {
+                return joinedExistingTail
+            }
             scheduleRealtimeRefreshRetry(api: api, sessionId: sessionId)
         }
+        return joinedExistingTail
     }
 
     private func scheduleRealtimeRefreshRetry(api: SessionWorkspaceClient, sessionId: String) {
@@ -1555,7 +1575,12 @@ final class SessionViewModel: ObservableObject {
         realtimeRefreshRetryTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: delay)
             if Task.isCancelled { return }
-            await self?.refreshTailAfterRealtimeWake(api: api, sessionId: sessionId)
+            guard let self, self.activeSessionId == sessionId, !self.realtimePaused else { return }
+            // Route the retry through the coalescing entry point rather than
+            // calling the fetch directly. A retry that lands while a refresh is
+            // already in flight then gets the same bounded follow-up every
+            // other wake gets, instead of joining and dropping it.
+            self.requestRealtimeRefresh(api: api, sessionId: sessionId)
         }
     }
 
@@ -1844,6 +1869,20 @@ final class SessionViewModel: ObservableObject {
             if !allowFailure { throw error }
         }
     }
+    /// The non-destructive form of a blocking load failure. Same cause, and
+    /// the same thing for the user to do, without the instruction to reload a
+    /// screen that is already showing saved content.
+    private static func bannerMessage(for blocking: String) -> String {
+        switch blocking {
+        case "Couldn't load session. Pull to refresh.":
+            return "Live update temporarily unavailable. Showing saved messages."
+        case "Session expired.":
+            return "Session expired. Pull to refresh."
+        default:
+            return blocking
+        }
+    }
+
     private func shouldAcceptDetail(_ incoming: SessionDetail) -> Bool {
         guard let incomingCommit = incoming.stateFacts.commitSeq else {
             return detail?.stateFacts.commitSeq == nil
@@ -2340,7 +2379,12 @@ final class SessionViewModel: ObservableObject {
             return false
         }
 
-        let blockingLoadError = errorMessage
+        // A failure that landed before the cache painted was reported as a
+        // blocking error. Once saved rows are on screen the same failure has
+        // to read as the banner — the blocking copy tells the user to reload a
+        // screen that already has content — and which of the two they saw
+        // otherwise depended on whether the disk read beat the network.
+        let blockingLoadError = errorMessage.map(Self.bannerMessage(for:))
         let shouldApplySnapshotDetail = !detailWasLoadedFromPrimary
             && !detailWasLoadedFromTail
         // The cache becomes visible in one commit. Nothing mutates the

@@ -364,6 +364,27 @@ struct SessionStreamResumeTests {
         try? await Task.sleep(nanoseconds: 300_000_000)
         let requests = await api.tailRequestCount() - baseline
         #expect(requests >= 1 && requests <= 2, "expected 1-2 coalesced tail reads, got \(requests)")
+
+        // The refresh the burst joined must release its handle when it lands.
+        // If it does not, the wake loop joins a completed task, never suspends,
+        // and pins the main actor — that is how a large live session hung the
+        // app, blank past its skeleton, until the process was killed. The
+        // request count above cannot see that failure: the spin issues no
+        // further requests, it only re-arms.
+        await waitForTailHandleRelease(model)
+        #expect(
+            !model.hasTailRefreshInFlightForTesting,
+            "a finished tail refresh left its handle set"
+        )
+
+        // And a later wake must still get through, rather than joining the
+        // handle the burst already retired.
+        recorder.emitChanged(latestEventId: 99, pubsubSeq: 999)
+        await waitForTailRequests(api, atLeast: baseline + 2)
+        #expect(
+            await api.tailRequestCount() >= baseline + 2,
+            "a wake after the burst must still be able to refresh"
+        )
         model.stop()
     }
 
@@ -520,6 +541,14 @@ struct SessionStreamResumeTests {
             if await api.tailRequestCount() >= count {
                 return
             }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
+    private func waitForTailHandleRelease(_ model: SessionViewModel) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: waitBudget)
+        while clock.now < deadline, model.hasTailRefreshInFlightForTesting {
             try? await Task.sleep(nanoseconds: 20_000_000)
         }
     }
