@@ -3190,6 +3190,11 @@ fn cursor_render_records(
         );
     }
     let projection = cursor_text_projection(snapshot, visibility_evidence, witness);
+    // The conversation's last message decides which page owns a turn-outcome
+    // row, so a paged capture emits it once instead of once per page.
+    let carries_conversation_tail = root_ids
+        .last()
+        .is_some_and(|tail| selected_blobs.contains_key(tail));
     let mut records = Vec::new();
     for (message_order, blob_id) in root_ids.iter().enumerate() {
         let Some((source_position, raw_record_ordinal, blob_bytes)) = selected_blobs.get(blob_id)
@@ -3306,7 +3311,9 @@ fn cursor_render_records(
             });
         }
     }
-    append_cursor_turn_failures(&mut records, visibility_evidence, started_at_us);
+    if carries_conversation_tail {
+        append_cursor_turn_failure(&mut records, visibility_evidence, started_at_us);
+    }
     Ok(records)
 }
 
@@ -3315,56 +3322,56 @@ fn cursor_render_records(
 /// reply) and says nothing about the outcome. Without this row a failed turn
 /// reads as a session that simply stopped talking — which is exactly what the
 /// phone showed while the terminal showed an error.
-fn append_cursor_turn_failures(
+///
+/// Exactly one row, on the page that carries the conversation's last message,
+/// and only while nothing has superseded the failure. `event_key` is derived
+/// per render object, so appending to every page of a paged capture would put
+/// one duplicate in the timeline per page.
+fn append_cursor_turn_failure(
     records: &mut Vec<StorageV2RenderRecord>,
     visibility_evidence: Option<&crate::cursor_visibility::CursorVisibilityEvidence>,
     started_at_us: i64,
 ) {
-    let Some(evidence) = visibility_evidence else {
+    let Some(failure) = visibility_evidence.and_then(|evidence| evidence.unsuperseded_failure())
+    else {
         return;
     };
-    if evidence.failures.is_empty() {
-        return;
-    }
-    // Anchor to the last selected record: the row is a read of raw evidence
-    // this envelope already carries, not a record that invents its own.
-    let Some(anchor) = records.last().map(|record| {
-        (
-            record.source_position,
-            record.raw_record_ordinal,
-            record.order_time_us,
-        )
-    }) else {
+    // Anchor to the last selected record: the row reads raw evidence this
+    // envelope already carries rather than inventing a record of its own.
+    let Some((source_position, raw_record_ordinal, last_order_time_us)) =
+        records.last().map(|record| {
+            (
+                record.source_position,
+                record.raw_record_ordinal,
+                record.order_time_us,
+            )
+        })
+    else {
         return;
     };
-    let (source_position, raw_record_ordinal, last_order_time_us) = anchor;
-    for (index, failure) in evidence.failures.iter().enumerate() {
-        let event_id_material = format!("cursor:turn-failed:{}", failure.generation_id);
-        let label = if failure.status == "aborted" {
-            "Cursor stopped this turn before it finished."
-        } else {
-            "Cursor reported this turn failed. Its output was not committed as a reply."
-        };
-        records.push(StorageV2RenderRecord {
-            event_id: Uuid::new_v5(&Uuid::NAMESPACE_URL, event_id_material.as_bytes()).to_string(),
-            parent_uuid: None,
-            order_time_us: last_order_time_us
-                .max(started_at_us)
-                .saturating_add(index as i64 + 1),
-            source_position,
-            event_subordinal: 0,
-            role: "system".to_string(),
-            content_text: Some(label.to_string()),
-            tool_name: None,
-            tool_input_json: None,
-            tool_output_text: None,
-            tool_call_id: None,
-            thread_id: None,
-            branch_kind: None,
-            interaction_kind: Some("provider_notification".to_string()),
-            raw_record_ordinal,
-        });
-    }
+    let event_id_material = format!("cursor:turn-failed:{}", failure.generation_id);
+    let label = if failure.status == "aborted" {
+        "Cursor stopped this turn before it finished."
+    } else {
+        "Cursor reported this turn failed. Its output was not committed as a reply."
+    };
+    records.push(StorageV2RenderRecord {
+        event_id: Uuid::new_v5(&Uuid::NAMESPACE_URL, event_id_material.as_bytes()).to_string(),
+        parent_uuid: None,
+        order_time_us: last_order_time_us.max(started_at_us).saturating_add(1),
+        source_position,
+        event_subordinal: 0,
+        role: "system".to_string(),
+        content_text: Some(label.to_string()),
+        tool_name: None,
+        tool_input_json: None,
+        tool_output_text: None,
+        tool_call_id: None,
+        thread_id: None,
+        branch_kind: None,
+        interaction_kind: Some("provider_notification".to_string()),
+        raw_record_ordinal,
+    });
 }
 
 /// Cursor's own record of typed prompts decides authorship when it covers this
@@ -5977,6 +5984,7 @@ mod tests {
                 status: "error".to_string(),
                 observed_at: None,
             }],
+            latest_terminal: Some(("continuation".to_string(), true)),
             ..Default::default()
         };
 
@@ -6129,6 +6137,45 @@ mod tests {
             serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>do work</user_query>"}]}),
         )]);
         assert!(cursor_human_prompt_witness(&snapshot, &dir.path().join("store.db")).is_none());
+    }
+
+    /// A later completed turn supersedes an earlier failure, so the outcome row
+    /// clears itself without anyone tracking acknowledgement.
+    #[test]
+    fn cursor_superseded_failure_renders_no_outcome_row() {
+        let user = "1111111111111111111111111111111111111111111111111111111111111111";
+        let final_text = "4444444444444444444444444444444444444444444444444444444444444444";
+        let (snapshot, selected) = cursor_visibility_fixture(vec![
+            (
+                user,
+                serde_json::json!({"role":"user","content":[{"type":"text","text":"<user_query>do work</user_query>"}]}),
+            ),
+            (
+                final_text,
+                serde_json::json!({"role":"assistant","content":[{"type":"text","text":"done"}]}),
+            ),
+        ]);
+        let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
+            turns: vec![crate::cursor_visibility::CursorProviderTurn {
+                generation_id: "generation-2".to_string(),
+                prompt: "do work".to_string(),
+                response_text: Some("done".to_string()),
+                stop_status: Some("completed".to_string()),
+                stop_observed_at: None,
+            }],
+            failures: vec![crate::cursor_visibility::CursorTurnFailure {
+                generation_id: "older".to_string(),
+                status: "error".to_string(),
+                observed_at: None,
+            }],
+            latest_terminal: Some(("generation-2".to_string(), false)),
+            ..Default::default()
+        };
+        let rendered =
+            cursor_render_records(&snapshot, &selected, 0, Some(&evidence), None).unwrap();
+        assert!(rendered
+            .iter()
+            .all(|record| record.interaction_kind.is_none()));
     }
 
     #[test]

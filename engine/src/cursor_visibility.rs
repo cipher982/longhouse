@@ -87,10 +87,30 @@ pub(crate) struct CursorTurnFailure {
 pub(crate) struct CursorVisibilityEvidence {
     pub turns: Vec<CursorProviderTurn>,
     pub failures: Vec<CursorTurnFailure>,
+    /// Generation of the newest terminal receipt, and whether it failed.
+    /// A failure is worth telling the user about only while nothing has
+    /// superseded it.
+    pub latest_terminal: Option<(String, bool)>,
     pub session_ended: bool,
     pub ambiguous: bool,
     pub first_activity_at: Option<DateTime<Utc>>,
     pub last_activity_at: Option<DateTime<Utc>>,
+}
+
+impl CursorVisibilityEvidence {
+    /// The failure to surface, if the session's most recent turn is the one
+    /// that failed. A later completed turn supersedes it, so the row clears
+    /// itself without anyone tracking acknowledgement.
+    pub(crate) fn unsuperseded_failure(&self) -> Option<&CursorTurnFailure> {
+        let (generation_id, failed) = self.latest_terminal.as_ref()?;
+        failed
+            .then(|| {
+                self.failures
+                    .iter()
+                    .find(|failure| &failure.generation_id == generation_id)
+            })
+            .flatten()
+    }
 }
 
 impl CursorVisibilityEvidence {
@@ -316,6 +336,7 @@ pub(crate) fn parse_cursor_visibility_evidence(
 ) -> Result<CursorVisibilityEvidence> {
     let mut turns = Vec::<CursorProviderTurn>::new();
     let mut failures = Vec::<CursorTurnFailure>::new();
+    let mut latest_terminal: Option<(String, bool)> = None;
     let mut failure_indices = HashMap::<String, usize>::new();
     let mut indices = HashMap::<String, usize>::new();
     let mut session_ended = false;
@@ -396,7 +417,23 @@ pub(crate) fn parse_cursor_visibility_evidence(
         // Outcome first: a terminal failure is evidence about the session even
         // when its generation never produced a prompt receipt, and the lookup
         // below would otherwise drop the whole generation on the floor.
+        // A committed response is itself a successful terminal receipt, so a
+        // turn that answers after a failed one supersedes it even when its own
+        // stop hook is dropped.
+        if event == "afterAgentResponse" {
+            latest_terminal = Some((generation_id.to_string(), false));
+        }
         if event == "stop" {
+            if let Some(status) = payload
+                .and_then(|payload| payload.get("status"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+            {
+                latest_terminal = Some((
+                    generation_id.to_string(),
+                    matches!(status, "error" | "aborted"),
+                ));
+            }
             if let Some(status) = payload
                 .and_then(|payload| payload.get("status"))
                 .and_then(Value::as_str)
@@ -480,6 +517,7 @@ pub(crate) fn parse_cursor_visibility_evidence(
     Ok(CursorVisibilityEvidence {
         turns,
         failures,
+        latest_terminal,
         session_ended,
         ambiguous,
         first_activity_at,
@@ -524,6 +562,45 @@ mod tests {
             .failures
             .iter()
             .any(|entry| entry.generation_id == "human" || entry.generation_id == "elsewhere"));
+        // Nothing has answered since, so this failure is the session's outcome.
+        assert_eq!(
+            evidence
+                .unsuperseded_failure()
+                .map(|entry| entry.generation_id.as_str()),
+            Some("continuation")
+        );
+    }
+
+    /// A turn that answers after a failed one is the session's outcome now, so
+    /// the failure row clears itself.
+    #[test]
+    fn a_later_completed_turn_supersedes_an_earlier_failure() {
+        let evidence = parse_cursor_visibility_evidence(
+            r#"{"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"conversation","payload":{"generation_id":"failed","status":"error"}}
+{"event":"beforeSubmitPrompt","observed_at":"2026-09-09T21:10:00Z","conversation_id":"conversation","payload":{"generation_id":"next","prompt":"try again"}}
+{"event":"afterAgentResponse","observed_at":"2026-09-09T21:11:00Z","conversation_id":"conversation","payload":{"generation_id":"next","text":"fixed"}}
+{"event":"stop","observed_at":"2026-09-09T21:11:01Z","conversation_id":"conversation","payload":{"generation_id":"next","status":"completed"}}"#,
+            "conversation",
+        )
+        .unwrap();
+
+        assert_eq!(evidence.failures.len(), 1);
+        assert!(evidence.unsuperseded_failure().is_none());
+    }
+
+    /// A dropped stop hook must not resurrect a superseded failure: a committed
+    /// response is itself a successful terminal receipt.
+    #[test]
+    fn a_committed_response_supersedes_without_its_stop_hook() {
+        let evidence = parse_cursor_visibility_evidence(
+            r#"{"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"conversation","payload":{"generation_id":"failed","status":"error"}}
+{"event":"beforeSubmitPrompt","observed_at":"2026-09-09T21:10:00Z","conversation_id":"conversation","payload":{"generation_id":"next","prompt":"try again"}}
+{"event":"afterAgentResponse","observed_at":"2026-09-09T21:11:00Z","conversation_id":"conversation","payload":{"generation_id":"next","text":"fixed"}}"#,
+            "conversation",
+        )
+        .unwrap();
+
+        assert!(evidence.unsuperseded_failure().is_none());
     }
 
     #[test]
