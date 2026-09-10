@@ -795,6 +795,60 @@ export function buildSessionDetailStressFixture(): {
   return { session, thread, projection, workspace, turns };
 }
 
+/**
+ * A live Helm session whose provider activity evidence expired while its
+ * control lease stayed healthy: the shape behind "Last observed idle". Cursor
+ * posts presence only on hook events, so every quiet session lands here ten
+ * minutes after its last turn.
+ */
+export function buildSessionStaleObservationFixture(): ReturnType<
+  typeof buildSessionDetailStressFixture
+> {
+  const fixture = buildSessionDetailStressFixture();
+  const observedAt = "2026-04-15T13:12:00Z";
+  const leaseObservedAt = "2026-04-15T16:12:00Z";
+  fixture.session.presence_state = null;
+  fixture.session.active_tool = null;
+  fixture.session.session_state = makeSessionState({
+    run: { lifecycle: "running", started_at: "2026-04-15T12:00:00Z", ended_at: null },
+    activity: {
+      state: "unknown",
+      raw_kind: "idle",
+      tool: null,
+      source: "cursor_hook",
+      observed_at: observedAt,
+      valid_until: "2026-04-15T13:25:00Z",
+    },
+    control: {
+      ownership: "owned",
+      connection: "connected",
+      terminal_attached: true,
+      observed_at: leaseObservedAt,
+      actions: {
+        send_input: { state: "available" },
+        interrupt: { state: "available" },
+        terminate: { state: "available" },
+        reattach: { state: "unavailable", reason: "already_connected" },
+        resume: { state: "unavailable", reason: "run_active" },
+        start_turn: { state: "unavailable", reason: "not_console" },
+        branch: { state: "unavailable", reason: "run_active" },
+      },
+    },
+    host: { state: "online", observed_at: leaseObservedAt },
+    presentation: {
+      primary: {
+        key: "no_recent_activity",
+        label: "Last observed idle",
+        tone: "quiet",
+        observed_at: observedAt,
+      },
+      access: { key: "live_control", label: "Live control", tone: "live", observed_at: leaseObservedAt },
+      transcript: null,
+    },
+  });
+  return fixture;
+}
+
 export function buildSessionResumeFixture(): ReturnType<typeof buildSessionDetailStressFixture> {
   const fixture = buildSessionDetailStressFixture();
   const endedAt = "2026-04-15T16:12:00Z";

@@ -414,7 +414,8 @@
       "path": "ios/Sources/LonghouseApp/SessionViewPreviews.swift",
       "providers": [
         "claude",
-        "codex"
+        "codex",
+        "cursor"
       ]
     },
     {

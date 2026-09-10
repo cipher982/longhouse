@@ -29,6 +29,7 @@ import path from "path";
 import {
   buildSessionDetailStressFixture,
   buildSessionResumeFixture,
+  buildSessionStaleObservationFixture,
   SESSION_DETAIL_STRESS_NOW,
   SESSION_DETAIL_STRESS_SESSION_ID,
 } from "./ui-fixtures/sessionDetailStress";
@@ -57,6 +58,7 @@ const SCENES = [
   "timeline-card-stress",
   "session-detail-stress",
   "session-resume",
+  "session-stale-observation",
 ] as const;
 type SceneName = (typeof SCENES)[number];
 
@@ -183,16 +185,24 @@ function parseViewport(value: string | undefined): ViewportConfig {
 }
 
 function sceneUsesMockApi(scene: SceneName): boolean {
-  return scene === "timeline-card-stress" || scene === "session-detail-stress" || scene === "session-resume";
+  return (
+    scene === "timeline-card-stress" ||
+    scene === "session-detail-stress" ||
+    scene === "session-resume" ||
+    scene === "session-stale-observation"
+  );
 }
 
 function validateOptions(opts: Options): void {
-  if (opts.page === "session-detail" && !["session-detail-stress", "session-resume"].includes(opts.scene)) {
+  if (
+    opts.page === "session-detail" &&
+    !["session-detail-stress", "session-resume", "session-stale-observation"].includes(opts.scene)
+  ) {
     throw new Error(
-      "session-detail requires --scene=session-detail-stress or --scene=session-resume.",
+      "session-detail requires --scene=session-detail-stress, --scene=session-resume or --scene=session-stale-observation.",
     );
   }
-  if (opts.all && ["session-detail-stress", "session-resume"].includes(opts.scene)) {
+  if (opts.all && ["session-detail-stress", "session-resume", "session-stale-observation"].includes(opts.scene)) {
     throw new Error("Session-detail scenes capture PAGE=session-detail only; omit ALL=1.");
   }
 }
@@ -294,8 +304,13 @@ async function installSceneMocks(
 
   const appOrigin = new URL(baseUrl).origin;
 
-  if (scene === "session-detail-stress" || scene === "session-resume") {
-    const fixture = scene === "session-resume" ? buildSessionResumeFixture() : buildSessionDetailStressFixture();
+  if (["session-detail-stress", "session-resume", "session-stale-observation"].includes(scene)) {
+    const fixture =
+      scene === "session-resume"
+        ? buildSessionResumeFixture()
+        : scene === "session-stale-observation"
+          ? buildSessionStaleObservationFixture()
+          : buildSessionDetailStressFixture();
     const sessionBasePath = `/api/timeline/sessions/${fixture.session.id}`;
 
     await context.route(`${appOrigin}/api/**`, async (route) => {
@@ -500,7 +515,7 @@ async function installScenePageOverrides(page: Page, scene: SceneName, pageName:
     return;
   }
 
-  const fixtureNowIso = ["session-detail-stress", "session-resume"].includes(scene)
+  const fixtureNowIso = ["session-detail-stress", "session-resume", "session-stale-observation"].includes(scene)
     ? SESSION_DETAIL_STRESS_NOW
     : "2026-04-15T16:12:00Z";
   await page.addInitScript((nowIso) => {

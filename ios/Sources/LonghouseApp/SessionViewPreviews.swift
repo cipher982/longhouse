@@ -692,6 +692,29 @@ private struct PreviewConnectionDrop: View {
     .preferredColorScheme(.dark)
 }
 
+/// The shape behind the old "No recent activity (last: idle)": provider
+/// evidence expired while the control lease stayed healthy. The dock names what
+/// was last seen and shows how long ago, without claiming a current state.
+#Preview("Last observed idle · live lease · Dark") {
+    SessionScreenPreview(
+        detail: .mock(
+            provider: "cursor",
+            executing: false,
+            stateFactsJSON: factsJSON(
+                activity: "unknown",
+                observedAt: isoDate(secondsAgo: 10_920),
+                primaryKey: "no_recent_activity",
+                primaryLabel: "Last observed idle",
+                primaryTone: "quiet",
+                access: ("live_control", "Live control", "success")
+            )
+        ),
+        activity: ActivityPulseStore(),
+        transcript: ["All 136 unit tests across gating, middleware, schema validation, and CRUD passed cleanly."]
+    )
+    .preferredColorScheme(.dark)
+}
+
 #Preview("Control offline · chip · Dark") {
     SessionScreenPreview(
         detail: .mock(
