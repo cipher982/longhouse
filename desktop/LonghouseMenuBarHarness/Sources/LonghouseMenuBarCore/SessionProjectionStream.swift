@@ -239,16 +239,6 @@ enum SessionProjectionStream {
         let ownsSession = session == nil
         let session = session ?? makeStreamSession()
         return AsyncStream { continuation in
-            continuation.onTermination = { _ in
-                // The consumer stopped. The producer's own defer only runs once
-                // its drain actually unwinds, and a stalled body read is exactly
-                // what this stream is built to survive, so tear the owned
-                // session down from here as well: `finishTasksAndInvalidate` in
-                // the defer is then a no-op.
-                if ownsSession {
-                    session.invalidateAndCancel()
-                }
-            }
             let task = Task.detached(priority: .userInitiated) {
                 defer {
                     if ownsSession {
@@ -292,7 +282,17 @@ enum SessionProjectionStream {
                 }
                 continuation.finish()
             }
-            continuation.onTermination = { _ in task.cancel() }
+            continuation.onTermination = { _ in
+                task.cancel()
+                // The consumer stopped. The producer's own defer only runs once
+                // its drain actually unwinds, and a stalled body read is exactly
+                // what this stream exists to survive, so tear an owned session
+                // down here as well; its finishTasksAndInvalidate is then a
+                // no-op. A caller-supplied session belongs to the caller.
+                if ownsSession {
+                    session.invalidateAndCancel()
+                }
+            }
         }
     }
 
