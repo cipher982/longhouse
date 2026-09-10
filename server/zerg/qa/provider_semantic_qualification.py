@@ -127,7 +127,8 @@ def _select_redacted_native_event(
     previous_digest: str | None,
 ) -> dict[str, Any] | None:
     if previous_digest:
-        exact = next((event for event in events if _native_event_digest(event) == previous_digest), None)
+        expected_digest = previous_digest.removeprefix("sha256:")
+        exact = next((event for event in events if _native_event_digest(event) == expected_digest), None)
         if exact is not None:
             return exact
     candidates = [event for event in events if event.get("type") == event_type]
@@ -173,7 +174,7 @@ def _rewrite_native_event_digests(value: Any, rewrites: dict[str, str]) -> Any:
     return rewritten
 
 
-def _refresh_native_source_digests(value: Any, *, artifact_root: Path) -> Any:
+def _refresh_native_source_digests(value: Any, *, artifact_root: Path, source_root: Path | None = None) -> Any:
     """Refresh and relativize source references after redaction.
 
     Redaction can change a JSONL event's bytes, so refresh both the file
@@ -183,10 +184,12 @@ def _refresh_native_source_digests(value: Any, *, artifact_root: Path) -> Any:
     """
 
     if isinstance(value, list):
-        return [_refresh_native_source_digests(item, artifact_root=artifact_root) for item in value]
+        return [_refresh_native_source_digests(item, artifact_root=artifact_root, source_root=source_root) for item in value]
     if not isinstance(value, dict):
         return value
-    refreshed = {key: _refresh_native_source_digests(item, artifact_root=artifact_root) for key, item in value.items()}
+    refreshed = {
+        key: _refresh_native_source_digests(item, artifact_root=artifact_root, source_root=source_root) for key, item in value.items()
+    }
     source_artifacts = refreshed.get("source_artifacts")
     if not isinstance(source_artifacts, list):
         return refreshed
@@ -194,14 +197,24 @@ def _refresh_native_source_digests(value: Any, *, artifact_root: Path) -> Any:
     rewrites: dict[str, str] = {}
     updated_sources: list[Any] = []
     root = artifact_root.resolve()
+    relative_root = (source_root or artifact_root).resolve()
     for source in source_artifacts:
         if not isinstance(source, dict) or not isinstance(source.get("path"), str):
             updated_sources.append(source)
             continue
         try:
             raw_path = Path(source["path"]).expanduser()
-            path = (raw_path if raw_path.is_absolute() else root / raw_path).resolve(strict=True)
-            if not path.is_relative_to(root) or not path.is_file():
+            candidates = [raw_path] if raw_path.is_absolute() else [relative_root / raw_path, root / raw_path]
+            path = None
+            for candidate in candidates:
+                try:
+                    resolved = candidate.resolve(strict=True)
+                except (OSError, ValueError):
+                    continue
+                if resolved.is_relative_to(root) and resolved.is_file():
+                    path = resolved
+                    break
+            if path is None:
                 raise identity.RequestError("native source artifact escapes the qualification bundle or is missing")
             source_events = _native_jsonl_events(path) if source.get("kind") == "provider_jsonl_stream" else []
             previous_event_digest = source.get("event_sha256")
@@ -245,6 +258,8 @@ def _refresh_native_source_digests(value: Any, *, artifact_root: Path) -> Any:
             for event in _native_jsonl_events((root / source["path"]).resolve())
         ]
         model_source_event = _select_model_source_event(source_events, source_canary=source_canary)
+        if model_source_event is None:
+            raise identity.RequestError("native model source event could not be selected")
         model_source_event_digest = _native_event_digest(model_source_event)
         if model_source_digest.startswith("sha256:"):
             model_source_event_digest = f"sha256:{model_source_event_digest}"
@@ -338,14 +353,18 @@ def run_semantic_profile(
             for item in semantic_assertions
         )
 
+    observation = _redact_value(observation, secrets)
     evidence_root = output_root / "semantic-evidence"
     evidence_root.mkdir(parents=True, exist_ok=True)
-    observation = _redact_value(observation, secrets)
     _scrub_tree(evidence_root, secrets)
     # The factory manifest is relative to the invocation root (the parent of
     # qualification-v2), not merely semantic-evidence. Keep source references
     # portable when the complete run bundle is copied to another node.
-    observation = _refresh_native_source_digests(observation, artifact_root=output_root.parent)
+    observation = _refresh_native_source_digests(
+        observation,
+        artifact_root=output_root.parent,
+        source_root=evidence_root,
+    )
     semantic_path = evidence_root / "semantic-observation.json"
     identity.atomic_json(semantic_path, observation)
     raw_digest = identity.sha256(semantic_path.read_bytes())

@@ -91,6 +91,75 @@ def test_native_source_digest_refresh_fails_closed_for_missing_artifact(tmp_path
         semantic._refresh_native_source_digests(observation, artifact_root=tmp_path)  # noqa: SLF001
 
 
+def test_redacted_native_event_selection_normalizes_sha256_prefix() -> None:
+    events = [
+        {"type": "result", "subtype": "success", "marker": "first"},
+        {"type": "result", "subtype": "success", "marker": "later"},
+    ]
+    previous_digest = "sha256:" + semantic._native_event_digest(events[0])  # noqa: SLF001
+
+    selected = semantic._select_redacted_native_event(  # noqa: SLF001
+        events,
+        source_canary="cursor_model_probe",
+        event_type="result",
+        previous_digest=previous_digest,
+    )
+
+    assert selected == events[0]
+
+
+def test_native_source_digest_refresh_fails_closed_without_model_event(tmp_path: Path) -> None:
+    source_path = tmp_path / "native.jsonl"
+    event = {"type": "result", "subtype": "success", "marker": "result"}
+    source_path.write_text(json.dumps(event) + "\n", encoding="utf-8")
+    observation = {
+        "live_model_evidence": {
+            "source_canary": "cursor_model_probe",
+            "result_event": {"model_source_event_sha256": "sha256:" + "a" * 64},
+            "source_artifacts": [
+                {
+                    "path": str(source_path),
+                    "kind": "provider_jsonl_stream",
+                    "event_type": "result",
+                    "event_sha256": "sha256:" + semantic._native_event_digest(event),  # noqa: SLF001
+                }
+            ],
+        }
+    }
+
+    with pytest.raises(identity.RequestError, match="model source event"):
+        semantic._refresh_native_source_digests(observation, artifact_root=tmp_path)  # noqa: SLF001
+
+
+def test_native_source_digest_refresh_rebases_semantic_evidence_paths(tmp_path: Path) -> None:
+    invocation_root = tmp_path / "invocation"
+    output_root = invocation_root / "qualification-v2"
+    evidence_root = output_root / "semantic-evidence"
+    evidence_root.mkdir(parents=True)
+    source_path = evidence_root / "native.jsonl"
+    source_path.write_text('{"type":"message","role":"assistant"}\n', encoding="utf-8")
+    observation = {
+        "live_model_evidence": {
+            "source_artifacts": [
+                {
+                    "path": "native.jsonl",
+                    "kind": "provider_jsonl_stream",
+                }
+            ]
+        }
+    }
+
+    refreshed = semantic._refresh_native_source_digests(  # noqa: SLF001
+        observation,
+        artifact_root=invocation_root,
+        source_root=evidence_root,
+    )
+
+    assert refreshed["live_model_evidence"]["source_artifacts"][0]["path"] == (
+        "qualification-v2/semantic-evidence/native.jsonl"
+    )
+
+
 @pytest.fixture(autouse=True)
 def _stable_runner_and_no_live_authority(monkeypatch) -> None:
     monkeypatch.setattr(identity, "git_sha", lambda _root: TEST_SHA)
