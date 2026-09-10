@@ -651,10 +651,14 @@ fn shipping_source_path(
                 .map(|path| path.display().to_string());
         }
     }
-    // A file source's opaque id is `path-sha256:…`, which is not reversible, so
-    // a source with neither a pending envelope nor a session binding has no path
-    // to report. Say nothing rather than inventing one; only an opaque id that
-    // is actually a path is treated as one.
+    // A file source's opaque id is a hash of its path, which is not reversible,
+    // so a source with neither a pending envelope nor a session binding has no
+    // path to report. Reject the hashed forms by name before touching the
+    // filesystem: a file that happens to be named like a hash must not turn an
+    // identity into a path.
+    if opaque_source_id.starts_with("path-sha256:") {
+        return None;
+    }
     let path = Path::new(opaque_source_id);
     (path.is_absolute() || path.exists()).then(|| opaque_source_id.to_string())
 }
@@ -4784,6 +4788,31 @@ mod tests {
         let ended = load_shipping_sources(&conn, Some(&ended_epoch.to_string())).unwrap();
         assert_eq!(ended.len(), 1);
         assert!(ended[0]["ended_at"].is_string());
+    }
+
+    #[test]
+    fn shipping_source_path_never_invents_a_path_from_a_hashed_identity() {
+        // The fixture above cannot create a file named like a hash in the
+        // process's own directory, which is exactly the case this guards.
+        assert_eq!(
+            shipping_source_path("claude", "path-sha256:deadbeef", None, None, None),
+            None
+        );
+        assert_eq!(
+            shipping_source_path("cursor", "cursor-store-v1:whatever", None, None, None),
+            None,
+            "a Cursor conversation with no configured store still reports no path"
+        );
+        assert_eq!(
+            shipping_source_path("claude", "/tmp/real-source.jsonl", None, None, None),
+            Some("/tmp/real-source.jsonl".to_string()),
+            "an opaque id that is genuinely a path is still usable"
+        );
+        assert_eq!(
+            shipping_source_path("claude", "path-sha256:deadbeef", None, None, Some("/tmp/bound.jsonl")),
+            Some("/tmp/bound.jsonl".to_string()),
+            "a session binding outranks the opaque id"
+        );
     }
 
     #[test]
