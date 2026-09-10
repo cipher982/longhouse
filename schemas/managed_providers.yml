@@ -1834,6 +1834,22 @@ providers:
   proof_profiles: *factory_proof_profiles
   support_tier: launch
   interaction_probes:
+  - probe_id: pi_shadow_archive
+    surface: shadow
+    input_sequence: ["observe an existing Pi JSONL source"]
+    acknowledgement_oracle: pi_native_archive_discovered_once
+    native_sources: [native_archive]
+    raw_markers: ["type", "session"]
+    raw_output_markers: ["message"]
+    expected_interaction_kind: provider_notification
+    expected_title_eligibility: false
+    expected_model_turn: false
+    changes_provider_state: false
+    source_surface: provider_file
+    state_mutation_scope: none
+    evidence_class: hermetic
+    disposition: implemented
+    canary: engine/tests/fixtures/golden/pi/native.jsonl
   - probe_id: pi_print_model
     surface: console
     input_sequence: ["pi -p <prompt> --provider openrouter --model <fixture-model> --session-dir <workspace> --session-id <native-id>"]
@@ -2108,7 +2124,7 @@ providers:
     raw_markers: ["type", "session"]
     raw_output_markers: ["message"]
     expected_interaction_kind: provider_notification
-    expected_title_eligibility: true
+    expected_title_eligibility: false
     expected_model_turn: false
     changes_provider_state: false
     source_surface: provider_file
@@ -2121,9 +2137,9 @@ providers:
     input_sequence: ["omp --mode json --session-dir <session-dir> --resume <exact-session-file> -p <prompt>"]
     acknowledgement_oracle: omp_console_turn_settled_and_bound
     native_sources: [native_archive]
-    raw_markers: ["type", "session", "stopReason", "isTerminal", "willContinue"]
+    raw_markers: ["type", "session", "stopReason", "isTerminal", "willContinue", "toolCall", "toolResult", "toolCallId"]
     raw_output_markers: ["message", "agent_end"]
-    expected_interaction_kind: durable_user_message
+    expected_interaction_kind: provider_system
     expected_title_eligibility: false
     expected_model_turn: true
     changes_provider_state: true
@@ -2195,7 +2211,7 @@ providers:
         id: omp_helm_launch_registration
         scenario_id: omp_helm_lifecycle
         oracle_source: server/zerg/qa/omp_helm_lifecycle.py
-        minimum_scenario_revision: 3
+        minimum_scenario_revision: 4
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
       - <<: *omp_helm_lifecycle_assertion
@@ -2233,7 +2249,7 @@ providers:
       - id: omp_console_turn_settled_and_bound
         scenario_id: omp_console_lifecycle
         oracle_source: server/zerg/qa/omp_console_producer.py
-        minimum_scenario_revision: 2
+        minimum_scenario_revision: 4
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
   transcript_signals:

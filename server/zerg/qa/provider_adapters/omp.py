@@ -21,21 +21,39 @@ class OmpHarnessAdapter(UniversalProviderAdapter):
             rows = [json.loads(line) for line in fixture_path.read_text(encoding="utf-8").splitlines() if line.strip()]
         except (OSError, json.JSONDecodeError):
             return result
+
+        def is_terminal_agent_end(row: dict[str, Any]) -> bool:
+            is_terminal = row.get("isTerminal")
+            if isinstance(is_terminal, bool):
+                return is_terminal
+            return row.get("willContinue") is False
+
         headers = [row for row in rows if isinstance(row, dict) and row.get("type") == "session" and row.get("id")]
         agent_ends = [row for row in rows if isinstance(row, dict) and row.get("type") == "agent_end"]
-        terminal_agent_ends = [row for row in agent_ends if row.get("isTerminal") is True or row.get("willContinue") is False]
+        terminal_agent_ends = [row for row in agent_ends if is_terminal_agent_end(row)]
+        assistant_messages = [
+            (index, row)
+            for index, row in enumerate(rows)
+            if isinstance(row, dict)
+            and row.get("type") == "message"
+            and isinstance(row.get("message"), dict)
+            and row["message"].get("role") == "assistant"
+        ]
         native = {
             "provider": "omp",
-            "native_session_id": headers[0].get("id") if headers else None,
+            "native_session_id": headers[0].get("id") if len(headers) == 1 else None,
             "session_header_count": len(headers),
+            "assistant_message_count": len(assistant_messages),
             "agent_end_count": len(agent_ends),
             "terminal_agent_end_count": len(terminal_agent_ends),
+            "native_archive_excludes_live_settlement": not agent_ends,
+            "terminal_after_assistant": False,
             "agent_settled_is_not_completion_contract": True,
             "source": str(fixture_path),
         }
         package.write_json("assertions/omp-native-settlement.json", native)
         result["omp_native_settlement"] = native
-        if not headers or not terminal_agent_ends:
+        if len(headers) != 1 or not assistant_messages or agent_ends:
             result["status"] = "fail"
-            result["failure_code"] = "omp_terminal_agent_end_missing"
+            result["failure_code"] = "omp_native_archive_shape_missing"
         return result

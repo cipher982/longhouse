@@ -203,9 +203,9 @@ def test_claude_release_poll_runs_the_full_staged_column(facts) -> None:
     assert cell.qualification_profiles == ("claude_real_print_v1",)
     assert cell.harness_scenarios == facts.default_harness_scenarios
     assert cell.credential_requirement == (
-        "ANTHROPIC_API_KEY",
-        "LONGHOUSE_CLAUDE_QUALIFICATION_LIVE",
-        "LONGHOUSE_ENGINE_BIN",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "LONGHOUSE_CLAUDE_LIVE",
+        "LONGHOUSE_CLAUDE_QUALIFICATION_MODEL",
     )
 
 
@@ -214,7 +214,11 @@ def test_opencode_release_poll_runs_the_full_staged_column(facts) -> None:
 
     assert cell.qualification_profiles == ("opencode_server_contract_v1",)
     assert cell.harness_scenarios == facts.default_harness_scenarios
-    assert cell.credential_requirement == ("OPENROUTER_API_KEY",)
+    assert cell.credential_requirement == (
+        "OPENROUTER_API_KEY",
+        "LONGHOUSE_OPENCODE_LIVE",
+        "LONGHOUSE_OPENCODE_QUALIFICATION_MODEL",
+    )
 
 
 def test_antigravity_release_poll_runs_like_every_other_launch_provider(facts) -> None:

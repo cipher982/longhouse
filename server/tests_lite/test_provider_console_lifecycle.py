@@ -476,7 +476,7 @@ def test_served_run_inventory_accepts_canonical_ended_terminal_state(monkeypatch
         "https://runtime.example",
         "token",
         "session-1",
-        [{"run_id": "run-1", "state": "terminal"}],
+        [{"session_id": "session-1", "run_id": "run-1", "state": "terminal"}],
     )
 
     assert evidence["retired"] is True
@@ -506,7 +506,7 @@ def test_served_run_inventory_rejects_wrong_session_or_run_identity(
         "https://runtime.example",
         "token",
         "session-1",
-        [{"run_id": "run-1", "state": "terminal"}],
+        [{"session_id": "session-1", "run_id": "run-1", "state": "terminal"}],
     )
 
     assert evidence["retired"] is False
@@ -578,7 +578,7 @@ def test_console_cleanup_cannot_pass_on_a_failure_path(monkeypatch):
     monkeypatch.setattr(lifecycle, "_process_group_dead", lambda _pgid: True)
     claims = [{"pid": 1, "process_group_id": 1, "state": "terminal"}]
     shipper = {"stopped": True, "process_dead": True, "process_group_dead": True}
-    inventory = {"retired": True, "active_run_count": 0}
+    inventory = {"retired": True, "active_run_count": 0, "session_id": "session-1"}
 
     passed = lifecycle._console_cleanup_receipt(
         claims,
@@ -586,6 +586,13 @@ def test_console_cleanup_cannot_pass_on_a_failure_path(monkeypatch):
         process_stop_wait_completed=True,
         shipper_stop=shipper,
         served_run_inventory=inventory,
+        session_retirement={
+            "status": "pass",
+            "session_id": "session-1",
+            "hidden": True,
+            "archived": True,
+            "present_in_served_inventory": False,
+        },
     )
     failed = lifecycle._console_cleanup_receipt(
         claims,
@@ -595,6 +602,15 @@ def test_console_cleanup_cannot_pass_on_a_failure_path(monkeypatch):
         served_run_inventory=inventory,
         run_failed=True,
     )
+    unretired = lifecycle._console_cleanup_receipt(
+        claims,
+        [{"retained": True, "path": "source.raw"}],
+        process_stop_wait_completed=True,
+        shipper_stop=shipper,
+        served_run_inventory=inventory,
+    )
+
+    assert unretired["status"] == "fail"
 
     assert passed["status"] == "pass"
     assert failed["status"] == "fail"

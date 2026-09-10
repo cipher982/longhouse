@@ -545,6 +545,10 @@ def test_codex_exec_is_direct_one_shot_control_not_a_steer_alias():
         ("opencode", "session.terminate", "opencode.terminate"),
         ("opencode", "session.turn.start", "opencode.turn_start"),
         ("opencode", "session.turn.interrupt", "opencode.turn_interrupt"),
+        ("pi", "session.turn.start", "pi.turn_start"),
+        ("pi", "session.turn.interrupt", "pi.turn_interrupt"),
+        ("omp", "session.turn.start", "omp.turn_start"),
+        ("omp", "session.turn.interrupt", "omp.turn_interrupt"),
         # Maintenance-tier Antigravity remains hook-driven and has no Console
         # turn admission, regardless of the dormant print adapter.
         ("antigravity", "session.send_text", "antigravity.send"),

@@ -551,8 +551,13 @@ impl OmpStreamProjection {
                 let is_terminal = event
                     .get("isTerminal")
                     .and_then(Value::as_bool)
-                    .or_else(|| event.get("willContinue").and_then(Value::as_bool).map(|value| !value))
-                    .unwrap_or(false);
+                    .unwrap_or_else(|| {
+                        event
+                            .get("willContinue")
+                            .and_then(Value::as_bool)
+                            .map(|value| !value)
+                            .unwrap_or(false)
+                    });
                 if is_terminal {
                     self.turn_settled = true;
                 }
@@ -624,9 +629,16 @@ fn omp_phase_from_event(event: &Value) -> Option<(&'static str, Option<String>)>
         )),
         Some("tool_execution_end") => Some(("thinking", None)),
         Some("agent_end")
-            if event.get("isTerminal").and_then(Value::as_bool) == Some(true)
-                || (event.get("isTerminal").is_none()
-                    && event.get("willContinue").and_then(Value::as_bool) == Some(false)) =>
+            if event
+                .get("isTerminal")
+                .and_then(Value::as_bool)
+                .unwrap_or_else(|| {
+                    event
+                        .get("willContinue")
+                        .and_then(Value::as_bool)
+                        .map(|value| !value)
+                        .unwrap_or(false)
+                }) =>
         {
             Some(("idle", None))
         }
@@ -799,6 +811,8 @@ mod tests {
         projection.apply(None, &json!({"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"stop"}})).unwrap();
         projection.apply(None, &json!({"type":"agent_settled"})).unwrap();
         projection.apply(None, &json!({"type":"session_stop"})).unwrap();
+        assert_eq!(terminal_state_for_projection(&projection, Some(true), false, None, true, true, true).0, "run_failed");
+        projection.apply(None, &json!({"type":"agent_end","isTerminal":false,"willContinue":false})).unwrap();
         assert_eq!(terminal_state_for_projection(&projection, Some(true), false, None, true, true, true).0, "run_failed");
         projection.apply(None, &json!({"type":"agent_end","isTerminal":true,"willContinue":false})).unwrap();
         assert_eq!(terminal_state_for_projection(&projection, Some(true), false, None, true, true, false).0, "run_failed");

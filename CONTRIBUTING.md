@@ -102,6 +102,14 @@ connection loss, not cellular hardware; app termination is not iOS background
 suspension. These are hidden Shadow imports, not real provider/Console command
 tests. No physical phone, provider credentials, or personal transcripts are used.
 
+Provider proofs own cleanup end to end. A hidden `launch_surface` keeps a
+session out of the default timeline, but it is not a deletion/retirement
+receipt: before sealing evidence, archive and user-hide each exact QA session,
+verify its ID is absent from the served inventory, stop owned processes, close
+tabs/simulators, and remove scratch homes. Do not make proof cleanup depend on a
+downstream archive, backup, or ingest worker; those paths may be degraded while
+the proof remains valid.
+
 For real provider sessions, use `make test-console-served-state-e2e ARGS="--help"`
 to create explicit hidden proof sessions, then feed their actual assistant replies
 to the real-client checks:

@@ -9,6 +9,7 @@ public names. These tests keep the boundary from eroding back.
 from __future__ import annotations
 
 import ast
+import json
 import pathlib
 import re
 
@@ -128,3 +129,65 @@ def test_toolkit_write_json_replaces_atomically(tmp_path: pathlib.Path) -> None:
 
     assert target.read_text(encoding="utf-8") == '{\n  "fresh": true\n}\n'
     assert [p.name for p in tmp_path.iterdir()] == ["evidence.json"]
+
+
+def test_qualification_session_retirement_paginates_served_inventory(monkeypatch: pytest.MonkeyPatch) -> None:
+    responses = iter(
+        [
+            {"hidden": True},
+            {"user_state": "archived"},
+            {"sessions": [{"id": "other-1"}, {"id": "other-2"}], "total": 3},
+            {"sessions": [{"id": "other-3"}], "total": 3},
+        ]
+    )
+    requests: list[tuple[str, str]] = []
+
+    class Response:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(self._payload).encode("utf-8")
+
+    def opener(request: object, *, timeout: float) -> Response:
+        del timeout
+        requests.append((request.get_method(), request.full_url))  # type: ignore[attr-defined]
+        return Response(next(responses))
+
+    monkeypatch.setattr(live_session_toolkit.urllib.request, "urlopen", opener)
+
+    receipt = live_session_toolkit.retire_qualification_session(
+        "http://runtime.example",
+        "agents-token",
+        "session-1",
+        provider="pi",
+        project="provider-console-pi",
+    )
+
+    assert receipt["status"] == "pass"
+    assert receipt["hidden"] is True
+    assert receipt["archived"] is True
+    assert receipt["present_in_served_inventory"] is False
+    assert receipt["served_inventory_total"] == 3
+    assert requests[0][0] == "PATCH"
+    assert requests[1][0] == "POST"
+    assert "offset=0" in requests[2][1]
+    assert "offset=2" in requests[3][1]
+
+
+def test_qualification_secrets_include_provider_specific_live_keys() -> None:
+    secrets = live_session_toolkit.qualification_secrets(
+        {
+            "PI_OPENROUTER_API_KEY": "pi-secret",
+            "OMP_OPENROUTER_API_KEY": "omp-secret",
+        },
+        "agents-token",
+    )
+
+    assert {"pi-secret", "omp-secret", "agents-token"} <= set(secrets)

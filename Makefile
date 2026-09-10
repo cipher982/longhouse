@@ -161,6 +161,7 @@ test-ios-session-open: ## iOS simulator timeline tap-to-transcript benchmark
 		-destination "$$DESTINATION" \
 		-derivedDataPath "$$DERIVED_DATA_PATH" \
 		-only-testing:LonghouseChatStressUITests/SessionOpenPerformanceUITests/testTimelineTapToTranscriptPaintPerformance \
+		-only-testing:LonghouseChatStressUITests/SessionOpenPerformanceUITests/testTimelinePushKeepsLoadingChromeBounded \
 		-only-testing:LonghouseChatStressUITests/SessionOpenPerformanceUITests/testComposerFocusRemainsResponsiveDuringStreaming \
 		-only-testing:LonghouseChatStressUITests/SessionOpenPerformanceUITests/testWorkspacePickerSelectionRespondsImmediately \
 		-only-testing:LonghouseChatStressUITests/SessionOpenPerformanceUITests/testCachedTimelineScrollRespondsImmediately \

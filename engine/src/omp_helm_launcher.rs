@@ -17,6 +17,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::os::unix::process::CommandExt;
 use uuid::Uuid;
 
@@ -64,6 +65,8 @@ struct OmpHelmStateFile {
     session_file: String,
     cwd: String,
     provider_binary: String,
+    #[serde(default)]
+    provider_binary_sha256: Option<String>,
     session_dir: String,
     socket_path: String,
     channel_token: String,
@@ -81,6 +84,12 @@ struct OmpHelmStateFile {
     pending_transition: bool,
     #[serde(default)]
     initial_prompt_delivered: bool,
+    #[serde(default)]
+    agent_end_observed: bool,
+    #[serde(default)]
+    agent_end_is_terminal: Option<bool>,
+    #[serde(default)]
+    agent_end_will_continue: Option<bool>,
     terminal_state: Option<String>,
     terminal_reason: Option<String>,
     exit_code: Option<i32>,
@@ -241,7 +250,10 @@ impl OmpHelmServer {
     }
 
     fn extension_authority_matches(&self, connection_id: &str, frame: &Value) -> bool {
-        let kind = frame.get("kind").and_then(Value::as_str).unwrap_or_default();
+        let kind = frame
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let state = self.shared.lock().expect("OMP state mutex poisoned");
         let base = state.extension_connection_id.as_deref() == Some(connection_id)
             && frame.get("auth_token").and_then(Value::as_str)
@@ -330,7 +342,7 @@ impl OmpHelmServer {
             header.native_id == native_id,
             "OMP extension native identity does not match its source header"
         );
-        let (session_id, previous) = {
+        let (session_id, previous, previous_source) = {
             let state = self.shared.lock().expect("OMP state mutex poisoned");
             anyhow::ensure!(
                 state.extension_connection_id.as_deref() == Some(connection_id),
@@ -339,8 +351,15 @@ impl OmpHelmServer {
             (
                 state.state.session_id.clone(),
                 state.state.native_session_id.clone(),
+                state.state.session_file.clone(),
             )
         };
+        if !replacement {
+            anyhow::ensure!(
+                source == previous_source,
+                "OMP native session source changed without a replacement fence"
+            );
+        }
         if !previous.is_empty() && previous != native_id && !replacement {
             anyhow::bail!("OMP native session changed without a replacement fence");
         }
@@ -455,9 +474,12 @@ impl OmpHelmServer {
                     .and_then(|value| value.get("title"))
                     .and_then(Value::as_str),
             ),
-            "activity" | "agent_start" | "tool_execution_start" | "tool_execution_end" => {
-                self.record_activity(kind, &frame)
-            }
+            "activity"
+            | "agent_start"
+            | "tool_execution_start"
+            | "tool_execution_update"
+            | "tool_execution_end"
+            | "message_update" => self.record_activity(kind, &frame),
             "agent_end" => {
                 // OMP's session event is the authoritative distinction between
                 // an intermediate agent loop and a terminal settle. `session_stop`
@@ -473,12 +495,28 @@ impl OmpHelmServer {
     fn record_activity(&self, kind: &str, frame: &Value) {
         let event = frame.get("event");
         let phase = match kind {
-            "agent_end" => match event.and_then(|value| value.get("isTerminal")).and_then(Value::as_bool) {
-                Some(true) => "idle",
-                Some(false) => "running",
-                None => return,
-            },
-            "agent_start" | "activity" | "tool_execution_start" | "tool_execution_end" => "running",
+            "agent_end" => {
+                let is_terminal = event
+                    .and_then(|value| value.get("isTerminal"))
+                    .and_then(Value::as_bool)
+                    .or_else(|| {
+                        event
+                            .and_then(|value| value.get("willContinue"))
+                            .and_then(Value::as_bool)
+                            .map(|value| !value)
+                    });
+                match is_terminal {
+                    Some(true) => "idle",
+                    Some(false) => "running",
+                    None => return,
+                }
+            }
+            "agent_start"
+            | "activity"
+            | "tool_execution_start"
+            | "tool_execution_update"
+            | "tool_execution_end" => "running",
+            "message_update" => "thinking",
             _ => return,
         };
         let tool = event
@@ -486,6 +524,26 @@ impl OmpHelmServer {
             .and_then(Value::as_str)
             .map(str::to_string);
         let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+        if kind == "agent_start" {
+            state.state.agent_end_observed = false;
+            state.state.agent_end_is_terminal = None;
+            state.state.agent_end_will_continue = None;
+        } else if kind == "agent_end" {
+            let is_terminal = event
+                .and_then(|value| value.get("isTerminal"))
+                .and_then(Value::as_bool)
+                .or_else(|| {
+                    event
+                        .and_then(|value| value.get("willContinue"))
+                        .and_then(Value::as_bool)
+                        .map(|value| !value)
+                });
+            state.state.agent_end_observed = true;
+            state.state.agent_end_is_terminal = is_terminal;
+            state.state.agent_end_will_continue = event
+                .and_then(|value| value.get("willContinue"))
+                .and_then(Value::as_bool);
+        }
         state.state.phase = phase.into();
         state.state.tool_name = tool.clone();
         state.state.updated_at = Utc::now().to_rfc3339();
@@ -508,7 +566,6 @@ impl OmpHelmServer {
         }
         self.publish_phase(phase, tool);
     }
-
 
     fn publish_binding(&self, source: &Path, native_id: &str, replacement: bool) -> Result<()> {
         let state = self.current_state();
@@ -769,7 +826,27 @@ pub fn resolve_binary(explicit: Option<String>) -> Result<String> {
             return Ok(found.display().to_string());
         }
     }
+
     anyhow::bail!("OMP executable not found. Install stock `omp` or set --omp-bin.")
+}
+
+fn provider_binary_sha256(path: &Path) -> Result<String> {
+    let mut file = File::open(path).with_context(|| {
+        format!(
+            "open OMP executable for integrity check: {}",
+            path.display()
+        )
+    })?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let bytes_read = file.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn write_extension_file(dir: &Path) -> Result<PathBuf> {
@@ -835,6 +912,11 @@ fn read_resume_state(session_id: &str, cwd: &Path, binary: &str) -> Result<OmpHe
     anyhow::ensure!(
         fs::canonicalize(&state.provider_binary).ok() == fs::canonicalize(binary).ok(),
         "OMP Resume binary does not match the retained launch"
+    );
+    let current_binary_sha256 = provider_binary_sha256(Path::new(binary))?;
+    anyhow::ensure!(
+        state.provider_binary_sha256.as_deref() == Some(current_binary_sha256.as_str()),
+        "OMP Resume binary integrity does not match the retained launch"
     );
     anyhow::ensure!(
         !state.native_session_id.is_empty(),
@@ -981,6 +1063,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     let cwd = fs::canonicalize(&config.cwd)
         .with_context(|| format!("resolve OMP workspace {}", config.cwd.display()))?;
     let binary = resolve_binary(config.omp_bin.clone())?;
+    let binary_sha256 = provider_binary_sha256(Path::new(&binary))?;
     let state_root = state_dir()?;
     fs::create_dir_all(&state_root)?;
     let (resume_state, session_id) = if let Some(session_id) = config.resume_session.as_deref() {
@@ -1116,6 +1199,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
             .unwrap_or_else(|_| PathBuf::from(&binary))
             .display()
             .to_string(),
+        provider_binary_sha256: Some(binary_sha256),
         session_dir: session_dir.display().to_string(),
         socket_path: socket.display().to_string(),
         channel_token,
@@ -1131,7 +1215,15 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         title: None,
         ready: false,
         pending_transition: false,
-        initial_prompt_delivered: resume_state.is_some(),
+        initial_prompt_delivered: resume_state.is_some()
+            || config
+                .prompt
+                .as_deref()
+                .map(str::trim)
+                .is_none_or(str::is_empty),
+        agent_end_observed: false,
+        agent_end_is_terminal: None,
+        agent_end_will_continue: None,
         terminal_state: None,
         terminal_reason: None,
         exit_code: None,
@@ -1166,6 +1258,14 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
             "LONGHOUSE_OMP_HELM_INITIAL_PROMPT",
             config.prompt.as_deref().unwrap_or(""),
         )
+        .env(
+            "LONGHOUSE_OMP_HELM_INITIAL_PROMPT_DELIVERED",
+            if server.current_state().initial_prompt_delivered {
+                "1"
+            } else {
+                "0"
+            },
+        )
         .env_remove("PI_CONFIG_DIR")
         .env_remove("PI_CODING_AGENT_DIR")
         .env_remove("PI_CODING_AGENT_SESSION_DIR")
@@ -1192,6 +1292,14 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
                 (
                     "LONGHOUSE_OMP_HELM_INITIAL_PROMPT",
                     config.prompt.as_deref().unwrap_or(""),
+                ),
+                (
+                    "LONGHOUSE_OMP_HELM_INITIAL_PROMPT_DELIVERED",
+                    if server.current_state().initial_prompt_delivered {
+                        "1"
+                    } else {
+                        "0"
+                    },
                 ),
             ],
         );
@@ -1322,6 +1430,7 @@ mod tests {
             session_file: "/tmp/session.jsonl".into(),
             cwd: "/tmp".into(),
             provider_binary: "/tmp/omp".into(),
+            provider_binary_sha256: None,
             session_dir: "/tmp".into(),
             socket_path: "/tmp/socket".into(),
             channel_token: "token".into(),
@@ -1336,6 +1445,9 @@ mod tests {
             tool_name: None,
             title: None,
             initial_prompt_delivered: false,
+            agent_end_observed: false,
+            agent_end_is_terminal: None,
+            agent_end_will_continue: None,
             ready: true,
             pending_transition: false,
             terminal_state: None,
@@ -1383,10 +1495,14 @@ mod tests {
     fn omp_extension_preserves_terminal_and_transition_events() {
         assert!(EXTENSION_ASSET.contains("const write ="));
         assert!(EXTENSION_ASSET.contains("const close ="));
+        assert!(EXTENSION_ASSET.contains("const scheduleReconnect ="));
+        assert!(EXTENSION_ASSET.contains("MAX_FRAME_BYTES"));
         assert!(EXTENSION_ASSET.contains("initial_prompt_request"));
+        assert!(EXTENSION_ASSET.contains("LONGHOUSE_OMP_HELM_INITIAL_PROMPT_DELIVERED"));
         assert!(EXTENSION_ASSET.contains("initial_prompt_grant"));
         assert!(EXTENSION_ASSET.contains("session_stop"));
         assert!(EXTENSION_ASSET.contains("pi.on(\"agent_end\""));
+        assert!(EXTENSION_ASSET.contains("tool_execution_update"));
         assert!(EXTENSION_ASSET.contains("isTerminal"));
     }
 

@@ -43,11 +43,11 @@ providers:
     allow_failure: false
     max_build_age_seconds: 2592000
   - provider: omp
-    release_cadence: pinned_observed_install
+    release_cadence: release_event
     release_executor: private_factory
     weekly_unconditional: true
     allow_failure: false
-    max_build_age_seconds: 2592000
+    max_build_age_seconds: 3888000
 live_token:
   cadence: private_factory_tick
   executor: private_factory

@@ -34,6 +34,7 @@ from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import TranscriptShipper
 from zerg.qa.live_session_toolkit import isolated_provider_home
+from zerg.qa.live_session_toolkit import retire_qualification_session
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.live_session_toolkit import write_json
 from zerg.qa.pi_native import pi_transcript_rows
@@ -122,6 +123,7 @@ REGISTRATION = ProducerRegistration(
         "provider_process_dead",
         "process_group_dead",
         "no_orphan_provider_processes",
+        "canary_session_hidden",
     ),
     implementation="server/zerg/qa/provider_console_lifecycle.py",
     oracle_source="server/zerg/qa/provider_console_lifecycle.py",
@@ -500,6 +502,7 @@ def _claim_output_evidence(provider: str, claim: Mapping[str, object], marker: s
         candidates.append(
             {
                 "provider_response_source_kind": key,
+                "provider_response_source_path": raw,
                 "provider_response_marker_count": assistant_output.count(marker),
                 "provider_response_excerpt": _bounded_marker_excerpt(assistant_output, marker),
                 "provider_response_source_bytes": len(content.encode("utf-8")),
@@ -1005,6 +1008,8 @@ def _console_cleanup_receipt(
     process_stop_wait_completed: bool | None = None,
     shipper_stop: Mapping[str, object] | None = None,
     served_run_inventory: Mapping[str, object] | None = None,
+    session_retirement: Mapping[str, object] | None = None,
+    expected_session_id: str | None = None,
     run_failed: bool = False,
 ) -> dict[str, object]:
     provider_process_dead = bool(claims) and all(_pid_dead(claim.get("pid")) for claim in claims)
@@ -1022,10 +1027,26 @@ def _console_cleanup_receipt(
     )
     served_run_retired = (
         isinstance(served_run_inventory, Mapping)
+        and (expected_session_id is None or served_run_inventory.get("session_id") == expected_session_id)
         and served_run_inventory.get("retired") is True
         and served_run_inventory.get("active_run_count") == 0
     )
-    cleanup_pass = not run_failed and process_stop_verified and shipper_stop_verified and served_run_retired
+    canary_session_hidden = (
+        isinstance(session_retirement, Mapping)
+        and session_retirement.get("status") == "pass"
+        and session_retirement.get("session_id") == (served_run_inventory or {}).get("session_id")
+        and session_retirement.get("hidden") is True
+        and session_retirement.get("archived") is True
+        and session_retirement.get("present_in_served_inventory") is False
+    )
+    cleanup_pass = (
+        not run_failed
+        and process_stop_verified
+        and source_retention_verified
+        and shipper_stop_verified
+        and served_run_retired
+        and canary_session_hidden
+    )
     return {
         "status": "pass" if cleanup_pass else "fail",
         "provider_process_dead": provider_process_dead,
@@ -1051,6 +1072,8 @@ def _console_cleanup_receipt(
         "shipper_stop_verified": shipper_stop_verified,
         "served_run_inventory": dict(served_run_inventory) if isinstance(served_run_inventory, Mapping) else None,
         "served_run_retired": served_run_retired,
+        "session_retirement": dict(session_retirement) if isinstance(session_retirement, Mapping) else None,
+        "canary_session_hidden": canary_session_hidden,
         "run_failed": run_failed,
     }
 
@@ -1064,6 +1087,7 @@ def _served_run_inventory_evidence(
     """Prove the served run inventory retired the provider execution owner."""
 
     terminal_claims = [claim for claim in claims if claim.get("state") == "terminal"]
+    claim_session_ids = [str(claim.get("session_id") or "").strip() for claim in claims]
     claim_run_ids = [str(claim.get("run_id") or "").strip() for claim in claims]
     expected_run_id = claim_run_ids[-1] if claim_run_ids and claim_run_ids[-1] else None
     try:
@@ -1088,6 +1112,7 @@ def _served_run_inventory_evidence(
     retired = (
         len(terminal_claims) == len(claims)
         and bool(claims)
+        and all(session_id == claim_session_id for claim_session_id in claim_session_ids)
         and len(claim_run_ids) == len(claims)
         and all(claim_run_ids)
         and diagnostic.get("served_path") == "canonical_session_detail"
@@ -1241,19 +1266,19 @@ def _retain_claim_sources(
     secrets = [value for name, value in environment.items() if value and (name.endswith("_KEY") or name.endswith("_TOKEN"))]
     target_root = root / "provider-sources"
     retained: list[dict[str, object]] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     for index, claim in enumerate(claims):
         run_id = str(claim.get("run_id") or index)
         for field in ("source_path", "stdout_path"):
             raw_path = claim.get(field)
-            if not isinstance(raw_path, str) or not raw_path or raw_path in seen:
+            if not isinstance(raw_path, str) or not raw_path or (raw_path, field) in seen:
                 continue
-            seen.add(raw_path)
+            seen.add((raw_path, field))
             source = Path(raw_path)
             try:
                 content = source.read_bytes()
             except OSError as exc:
-                retained.append({"source": raw_path, "retained": False, "error": f"{type(exc).__name__}: {exc}"})
+                retained.append({"source": raw_path, "kind": field, "retained": False, "error": f"{type(exc).__name__}: {exc}"})
                 continue
             for secret in secrets:
                 content = content.replace(secret.encode(), b"[REDACTED]")
@@ -1267,6 +1292,7 @@ def _retain_claim_sources(
             retained.append(
                 {
                     "source": raw_path,
+                    "kind": field,
                     "path": target.relative_to(root).as_posix(),
                     "retained": True,
                     "truncated": truncated,
@@ -1381,9 +1407,9 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
     engine_evidence = root / "shipper"
     engine_evidence.mkdir(mode=0o700, parents=True)
     workspace.mkdir(mode=0o700, parents=True)
-    pi_tool_marker = f"PI_CONSOLE_TOOL_{uuid4().hex}"
-    if provider == "pi":
-        (workspace / "pi-console-proof.txt").write_text(pi_tool_marker + "\n", encoding="utf-8")
+    tool_marker = f"{provider.upper()}_CONSOLE_TOOL_{uuid4().hex}"
+    if provider in {"pi", "omp"}:
+        (workspace / f"{provider}-console-proof.txt").write_text(tool_marker + "\n", encoding="utf-8")
     if provider == "cursor":
         completed = subprocess.run(
             ["git", "init", "--quiet"],
@@ -1429,13 +1455,11 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         marker = f"LH_{provider.upper()}_CONSOLE_{uuid4().hex}"
         context_marker = f"LH_{provider.upper()}_CONTEXT_{uuid4().hex}"
         message = f"Reply with exactly {marker} and nothing else."
-        if provider == "pi":
+        if provider in {"pi", "omp"}:
             message = (
                 f"Remember this context phrase: {context_marker}. Use the read tool to read "
-                f"{workspace / 'pi-console-proof.txt'}, then reply with exactly {marker} and nothing else."
+                f"{workspace / f'{provider}-console-proof.txt'}, then reply with exactly {marker} and nothing else."
             )
-        elif provider == "omp":
-            message = f"Remember this context phrase: {context_marker}. Then reply with exactly {marker} and nothing else."
         request_id = f"console-release-{uuid4()}"
         first = _start_turn(
             api_url=api_url,
@@ -1483,7 +1507,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             run_id=run_id,
         )
         provider_response_evidence = _claim_output_evidence(provider, first_claim, marker)
-        pi_tool_evidence = _pi_tool_evidence(first_claim, pi_tool_marker) if provider == "pi" else None
+        pi_tool_evidence = _pi_tool_evidence(first_claim, tool_marker) if provider == "pi" else None
         first_native_source_path: Path | None = None
         first_native_source_size: int | None = None
         second_native_source_size: int | None = None
@@ -1557,6 +1581,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             "prompt_digest": dispatch["prompt_digest"],
             "provider_thread_id": first_claim.get("provider_thread_id"),
             "marker": marker,
+            "tool_marker": tool_marker,
             **provider_response_evidence,
             "bound_assistant_event_id": first_events[0].get("id"),
             "bound_assistant_event_origin": first_events[0].get("event_origin", "durable"),
@@ -1886,12 +1911,21 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         retained_sources = _retain_claim_sources(root, claims, environment)
         shipper_stop = shipper.stop() if shipper is not None else {}
         served_run_inventory = _served_run_inventory_evidence(api_url, token, session_id, claims)
+        session_retirement = retire_qualification_session(
+            api_url,
+            token,
+            session_id,
+            provider=provider,
+            project=f"provider-console-{provider}",
+        )
         cleanup = _console_cleanup_receipt(
             claims,
             retained_sources,
             process_stop_wait_completed=naturally_dead,
             shipper_stop=shipper_stop,
             served_run_inventory=served_run_inventory,
+            session_retirement=session_retirement,
+            expected_session_id=session_id,
         )
         write_json(root / "cleanup-receipt.json", cleanup)
         native_tool_receipt: dict[str, object] | None = None
@@ -2053,12 +2087,21 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                 if session_id is not None
                 else {"retired": False, "active_run_count": None, "error": "session_id_unavailable"}
             )
+            session_retirement = retire_qualification_session(
+                api_url,
+                token,
+                str(session_id or ""),
+                provider=provider,
+                project=f"provider-console-{provider}",
+            )
             cleanup = _console_cleanup_receipt(
                 claims,
                 retained_sources,
                 process_stop_wait_completed=_wait_owned_processes_dead(claims),
                 shipper_stop=shipper_stop,
                 served_run_inventory=served_run_inventory,
+                session_retirement=session_retirement,
+                expected_session_id=session_id,
                 run_failed=True,
             )
             write_json(root / "cleanup-receipt.json", cleanup)

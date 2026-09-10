@@ -50,7 +50,7 @@ REGISTRATION = ProducerRegistration(
         "console_continuation_receipt",
         "cleanup_receipt",
     ),
-    required_cleanup=("provider_process_dead", "process_group_dead", "no_orphan_provider_processes"),
+    required_cleanup=("provider_process_dead", "process_group_dead", "no_orphan_provider_processes", "canary_session_hidden"),
     implementation="server/zerg/qa/pi_console_tool_producer.py",
     oracle_source="server/zerg/qa/pi_console_tool_producer.py",
     oracle_entrypoint="pi_console_tool_assertions",

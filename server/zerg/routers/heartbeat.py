@@ -96,7 +96,7 @@ CODEX_ROLLOUT_ID_RE = re.compile(r"^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-
 # per-session files, so absence from a snapshot is not evidence its process is
 # gone. Closing that gap is engine work, tracked separately.
 MISSING_UNBOUND_UNMANAGED_PROVIDERS = {"claude", "codex", "antigravity", "opencode", "pi"}
-UNMANAGED_PROCESS_SNAPSHOT_UNCOVERED_PROVIDERS = {"cursor"}
+UNMANAGED_PROCESS_SNAPSHOT_UNCOVERED_PROVIDERS = {"cursor", "omp"}
 UNBOUND_UNMANAGED_CLOSE_GRACE = timedelta(seconds=90)
 _HOT_HEARTBEAT_QUEUE_TIMEOUT_SECONDS = 2.0
 _HEARTBEAT_BOOKKEEPING_EXEC_TIMEOUT_SECONDS = 5.0

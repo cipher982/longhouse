@@ -2321,7 +2321,7 @@
           "assertion_id": "omp_console_turn_settled_and_bound",
           "variant": null,
           "scenario_id": "omp_console_lifecycle",
-          "minimum_scenario_revision": 1,
+          "minimum_scenario_revision": 4,
           "acceptable_evidence": [
             "live_token"
           ],

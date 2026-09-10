@@ -263,6 +263,7 @@ def test_collects_provider_status_artifacts_for_all_managed_providers(monkeypatc
         "antigravity": "0.6.7",
         "cursor": "cursor-agent 0.48.0",
         "pi": "pi 9.9.9",
+        "omp": "omp 18.1.14",
     }
     for provider, version in artifacts.items():
         (tmp_path / f"{provider}.json").write_text(
@@ -297,6 +298,7 @@ def test_collects_provider_status_artifacts_for_all_managed_providers(monkeypatc
         "opencode": "ok",
         "cursor": "ok",
         "pi": "ok",
+        "omp": "ok",
     }
 
 

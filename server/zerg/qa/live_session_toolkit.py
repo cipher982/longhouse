@@ -30,6 +30,7 @@ import subprocess
 import termios
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Collection
 from dataclasses import dataclass
@@ -100,12 +101,108 @@ def qualification_secrets(environment: dict[str, str], agents_token: str) -> tup
         "CURSOR_API_KEY",
         "OPENAI_API_KEY",
         "OPENROUTER_API_KEY",
+        "PI_OPENROUTER_API_KEY",
+        "OMP_OPENROUTER_API_KEY",
         "PROVIDER_FACTORY_PUBLISH_TOKEN",
         "PROVIDER_FACTORY_TRIAGE_API_KEY",
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
     )
     return tuple(dict.fromkeys(value for value in (agents_token, *(environment.get(name, "") for name in names)) if value))
+
+
+def retire_qualification_session(
+    api_url: str,
+    token: str,
+    session_id: str,
+    *,
+    provider: str,
+    project: str | None = None,
+    timeout: float = 15,
+) -> dict[str, Any]:
+    """Archive and hide a QA session, then prove it left the served inventory."""
+
+    base = api_url.rstrip("/")
+
+    def request(method: str, path: str, payload: dict[str, object] | None = None) -> dict[str, Any]:
+        body = json.dumps(payload).encode("utf-8") if payload is not None else None
+        http_request = urllib.request.Request(
+            f"{base}{path}",
+            data=body,
+            method=method,
+            headers={
+                "X-Agents-Token": token,
+                "Content-Type": "application/json",
+                "User-Agent": _RUNTIME_HOST_USER_AGENT,
+            },
+        )
+        try:
+            with urllib.request.urlopen(http_request, timeout=timeout) as response:
+                value = json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[:500]
+            raise RuntimeError(f"{method} {path} returned HTTP {exc.code}: {detail}") from exc
+        if not isinstance(value, dict):
+            raise RuntimeError(f"{method} {path} returned a non-object response")
+        return value
+
+    receipt: dict[str, Any] = {
+        "status": "fail",
+        "session_id": session_id,
+        "hidden": False,
+        "archived": False,
+        "present_in_served_inventory": None,
+    }
+    try:
+        hidden = request("PATCH", f"/api/agents/sessions/{session_id}/timeline-visibility", {"hidden": True})
+        archived = request("POST", f"/api/agents/sessions/{session_id}/action", {"action": "archive"})
+        limit = 100
+        offset = 0
+        present = False
+        total: int | None = None
+        while True:
+            query = {
+                "provider": provider,
+                "include_test": "true",
+                "hide_autonomous": "false",
+                "days_back": "90",
+                "limit": str(limit),
+                "offset": str(offset),
+            }
+            if project:
+                query["project"] = project
+            inventory = request(
+                "GET",
+                f"/api/agents/sessions?{urllib.parse.urlencode(query)}",
+            )
+            sessions = inventory.get("sessions")
+            if not isinstance(sessions, list):
+                raise RuntimeError("served session inventory has no valid sessions list")
+            inventory_total = inventory.get("total")
+            if type(inventory_total) is not int or inventory_total < 0:
+                raise RuntimeError("served session inventory has no valid total")
+            if total is None:
+                total = inventory_total
+            elif inventory_total != total:
+                raise RuntimeError("served session inventory total changed during retirement verification")
+            present = present or any(isinstance(item, dict) and str(item.get("id") or "") == session_id for item in sessions)
+            offset += len(sessions)
+            if offset >= total:
+                break
+            if not sessions:
+                raise RuntimeError("served session inventory pagination ended early")
+        receipt.update(
+            {
+                "hidden": hidden.get("hidden") is True,
+                "archived": archived.get("user_state") == "archived",
+                "present_in_served_inventory": present,
+                "served_inventory_total": total,
+            }
+        )
+        receipt["status"] = "pass" if receipt["hidden"] is True and receipt["archived"] is True and present is False else "fail"
+    except Exception as exc:  # noqa: BLE001 - cleanup evidence must remain available
+        receipt["error"] = f"{type(exc).__name__}: {exc}"
+    return receipt
 
 
 @dataclass(frozen=True)

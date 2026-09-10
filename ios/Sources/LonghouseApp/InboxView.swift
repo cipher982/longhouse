@@ -173,6 +173,16 @@ struct TimelineView: View {
                         Image(systemName: "plus.circle.fill")
                             .accessibilityLabel("Start session")
                     }
+                    // Keep the parent toolbar slot stable during a push, but
+                    // remove its controls immediately once the session route
+                    // owns the navigation bar. Otherwise UIKit cross-fades
+                    // the timeline actions over the destination controls.
+                    .transaction { transaction in
+                        transaction.animation = nil
+                    }
+                    .opacity(path.isEmpty ? 1 : 0)
+                    .disabled(!path.isEmpty)
+                    .accessibilityHidden(!path.isEmpty)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -181,6 +191,12 @@ struct TimelineView: View {
                         Image(systemName: "gearshape")
                             .accessibilityLabel("Settings")
                     }
+                    .transaction { transaction in
+                        transaction.animation = nil
+                    }
+                    .opacity(path.isEmpty ? 1 : 0)
+                    .disabled(!path.isEmpty)
+                    .accessibilityHidden(!path.isEmpty)
                 }
                 #if DEBUG
                 ToolbarItem(placement: .topBarLeading) {
@@ -201,6 +217,12 @@ struct TimelineView: View {
                         Image(systemName: "ladybug")
                             .accessibilityLabel("Debug: force connection state")
                     }
+                    .transaction { transaction in
+                        transaction.animation = nil
+                    }
+                    .opacity(path.isEmpty ? 1 : 0)
+                    .disabled(!path.isEmpty)
+                    .accessibilityHidden(!path.isEmpty)
                 }
                 #endif
             }
@@ -235,6 +257,7 @@ struct TimelineView: View {
             }
             .task {
                 await viewModel.load(using: appState)
+                WebTranscriptWebViewPool.prewarm()
                 if scenePhase == .active {
                     viewModel.startStream(using: appState)
                 }

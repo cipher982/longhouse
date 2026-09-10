@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -18,6 +19,8 @@ from typing import Any
 from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa import provider_release_identity as identity
 from zerg.qa import provider_semantic_qualification as semantic
+from zerg.qa.live_session_toolkit import redact_state_for_evidence
+from zerg.qa.live_session_toolkit import retire_qualification_session
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.provider_release_identity import now
@@ -32,6 +35,7 @@ SCENARIO_ID = "omp_helm_lifecycle"
 ASSERTIONS = (
     "omp_helm_launch_registration",
     "omp_helm_send_idle",
+    "omp_helm_follow_up_native",
     "omp_helm_steer_active",
     "omp_helm_abort_native",
     "omp_helm_terminate_owned",
@@ -51,9 +55,9 @@ _VARIANTS = tuple(
 
 REGISTRATION = ProducerRegistration(
     producer_id="omp.helm_lifecycle.v1",
-    producer_revision=3,
+    producer_revision=4,
     scenario_id=SCENARIO_ID,
-    scenario_revision=3,
+    scenario_revision=4,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -74,9 +78,16 @@ REGISTRATION = ProducerRegistration(
         "provider_binary_receipt",
         "omp_helm_receipt",
         "omp_native_settlement_receipt",
+        "provider_source_retention",
         "cleanup_receipt",
     ),
-    required_cleanup=("provider_process_dead", "process_group_dead", "no_orphan_provider_processes"),
+    required_cleanup=(
+        "provider_process_dead",
+        "process_group_dead",
+        "no_orphan_provider_processes",
+        "canary_session_hidden",
+        "isolation_removed",
+    ),
     implementation="server/zerg/qa/omp_helm_lifecycle.py",
     oracle_source="server/zerg/qa/omp_helm_lifecycle.py",
     oracle_entrypoint="omp_helm_lifecycle_assertions",
@@ -95,8 +106,6 @@ _PROFILE = identity.IdentityProfile(
 
 
 def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str, bool]:
-    settlement = observation.get("settlement")
-    settlement = settlement if isinstance(settlement, Mapping) else {}
     cleanup = observation.get("cleanup")
     cleanup = cleanup if isinstance(cleanup, Mapping) else {}
     cleanup_ok = (
@@ -104,17 +113,87 @@ def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str
         and cleanup.get("provider_process_dead") is True
         and cleanup.get("process_group_dead") is True
         and cleanup.get("orphan_count") == 0
+        and cleanup.get("canary_session_hidden") is True
+        and cleanup.get("isolation_removed") is True
+    )
+    channel = observation.get("channel_binding")
+    channel = channel if isinstance(channel, Mapping) else {}
+    send = observation.get("send_evidence")
+    send = send if isinstance(send, Mapping) else {}
+    follow_up = observation.get("follow_up_evidence")
+    follow_up = follow_up if isinstance(follow_up, Mapping) else {}
+    steer = observation.get("steer_evidence")
+    steer = steer if isinstance(steer, Mapping) else {}
+    abort = observation.get("abort_evidence")
+    abort = abort if isinstance(abort, Mapping) else {}
+    resume = observation.get("cold_resume_evidence")
+    resume = resume if isinstance(resume, Mapping) else {}
+    replacement = observation.get("replacement_evidence")
+    replacement = replacement if isinstance(replacement, Mapping) else {}
+    stale = observation.get("stale_owner_evidence")
+    stale = stale if isinstance(stale, Mapping) else {}
+    settlement = observation.get("settlement")
+    settlement = settlement if isinstance(settlement, Mapping) else {}
+    settlement_ok = (
+        settlement.get("status") == "pass"
+        and settlement.get("agent_end_terminal") is True
+        and settlement.get("agent_end_evidence_shape") is True
+        and settlement.get("native_archive_bound") is True
+        and settlement.get("native_session_header_count") == 1
+        and settlement.get("malformed_source") is False
+        and settlement.get("agent_settled_is_not_completion_contract") is True
     )
     return {
-        "omp_helm_launch_registration": observation.get("omp_native_extension_channel_bound") is True,
-        "omp_helm_send_idle": observation.get("send_idle") is True,
-        "omp_helm_steer_active": observation.get("steer_active") is True,
-        "omp_helm_abort_native": observation.get("abort_native") is True and settlement.get("agent_end_terminal") is True,
-        "omp_helm_terminate_owned": observation.get("terminate_owned") is True and cleanup_ok,
-        "omp_helm_cold_resume_exact_file": observation.get("cold_resume_exact_file") is True
-        and settlement.get("native_archive_bound") is True,
-        "omp_helm_stale_owner_refused": observation.get("stale_owner_refused") is True,
-        "omp_helm_native_replacement_bound": observation.get("native_replacement_bound") is True,
+        "omp_helm_launch_registration": (
+            observation.get("observation_scope") == "scenario"
+            and channel.get("ready") is True
+            and channel.get("session_id_present") is True
+            and channel.get("native_session_id_present") is True
+            and channel.get("connection_id_present") is True
+            and channel.get("lease_generation_present") is True
+            and channel.get("session_file_present") is True
+            and settlement_ok
+        ),
+        "omp_helm_send_idle": (
+            observation.get("send_idle") is True
+            and send.get("native_source_bound") is True
+            and send.get("marker_count") == 1
+            and send.get("channel_ack_bound") is True
+        ),
+        "omp_helm_follow_up_native": (
+            observation.get("follow_up_native") is True
+            and follow_up.get("native_source_bound") is True
+            and follow_up.get("marker_count") == 1
+            and follow_up.get("channel_ack_bound") is True
+        ),
+        "omp_helm_steer_active": (
+            observation.get("steer_active") is True
+            and steer.get("native_source_bound") is True
+            and steer.get("marker_count") == 1
+            and steer.get("channel_ack_bound") is True
+        ),
+        "omp_helm_abort_native": (
+            observation.get("abort_native") is True
+            and abort.get("channel_source_bound") is True
+            and abort.get("terminal") is True
+            and abort.get("channel_ack_bound") is True
+        ),
+        "omp_helm_terminate_owned": observation.get("terminate_owned") is True and cleanup_ok and settlement_ok,
+        "omp_helm_cold_resume_exact_file": (
+            observation.get("cold_resume_exact_file") is True
+            and resume.get("native_source_bound") is True
+            and resume.get("marker_count") == 1
+            and resume.get("channel_terminal_bound") is True
+            and resume.get("terminal") is True
+            and resume.get("exact_file") is True
+        ),
+        "omp_helm_stale_owner_refused": (observation.get("stale_owner_refused") is True and stale.get("error_code") == "stale_channel"),
+        "omp_helm_native_replacement_bound": (
+            observation.get("native_replacement_bound") is True
+            and replacement.get("native_source_bound") is True
+            and replacement.get("marker_count") == 1
+            and replacement.get("channel_ack_bound") is True
+        ),
     }
 
 
@@ -212,6 +291,148 @@ def _wait_native_marker(
     return _wait(observe, timeout=timeout, description=f"OMP native marker {marker}")
 
 
+def _native_message_text(message: Mapping[str, Any]) -> str:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            str(block.get("text"))
+            for block in content
+            if isinstance(block, Mapping) and block.get("type") == "text" and isinstance(block.get("text"), str)
+        )
+    return ""
+
+
+def _is_terminal_agent_end(event: Mapping[str, Any]) -> bool:
+    is_terminal = event.get("isTerminal")
+    if isinstance(is_terminal, bool):
+        return is_terminal
+    return event.get("willContinue") is False
+
+
+def _native_marker_evidence(
+    row: Mapping[str, Any],
+    session_file: Path,
+    *,
+    marker: str,
+    minimum_offset: int,
+    native_session_id: str,
+) -> dict[str, Any]:
+    message = row.get("message")
+    text = _native_message_text(message) if isinstance(message, Mapping) else ""
+    offset = row.get("_source_offset")
+    return {
+        "native_source_bound": (
+            session_file.is_file()
+            and row.get("type") == "message"
+            and isinstance(message, Mapping)
+            and message.get("role") == "assistant"
+            and isinstance(row.get("id"), str)
+            and isinstance(offset, int)
+            and offset >= minimum_offset
+            and bool(native_session_id)
+        ),
+        "source_path": str(session_file),
+        "source_offset": offset,
+        "minimum_source_offset": minimum_offset,
+        "native_session_id": native_session_id,
+        "event_id": row.get("id"),
+        "marker": marker,
+        "marker_count": text.count(marker),
+    }
+
+
+def _native_terminal_evidence(
+    row: Mapping[str, Any],
+    session_file: Path,
+    *,
+    minimum_offset: int,
+    native_session_id: str,
+) -> dict[str, Any]:
+    offset = row.get("_source_offset")
+    terminal = row.get("type") == "agent_end" and _is_terminal_agent_end(row)
+    return {
+        "native_source_bound": session_file.is_file() and terminal and isinstance(offset, int) and offset >= minimum_offset,
+        "source_path": str(session_file),
+        "source_offset": offset,
+        "minimum_source_offset": minimum_offset,
+        "native_session_id": native_session_id,
+        "event_type": row.get("type"),
+        "terminal": terminal,
+    }
+
+
+def _channel_terminal_evidence(
+    event: Mapping[str, Any],
+    state: Mapping[str, Any],
+    *,
+    native_session_id: str,
+    session_file: Path,
+) -> dict[str, Any]:
+    terminal = event.get("type") == "agent_end" and _is_terminal_agent_end(event)
+    return {
+        "channel_source_bound": (
+            terminal
+            and event.get("source") == "omp_helm_extension_channel"
+            and state.get("status") == "ready"
+            and state.get("native_session_id") == native_session_id
+            and state.get("session_file") == str(session_file)
+            and bool(state.get("connection_id"))
+            and bool(state.get("lease_generation"))
+        ),
+        "source": "omp_helm_extension_channel",
+        "event_type": event.get("type"),
+        "native_session_id": native_session_id,
+        "session_file": str(session_file),
+        "connection_id": state.get("connection_id"),
+        "lease_generation": state.get("lease_generation"),
+        "terminal": terminal,
+        "is_terminal": event.get("isTerminal"),
+        "will_continue": event.get("willContinue"),
+    }
+
+
+def _channel_binding_evidence(state: Mapping[str, Any]) -> dict[str, Any]:
+    session_file = Path(str(state.get("session_file") or ""))
+    return {
+        "ready": state.get("ready") is True,
+        "session_id_present": bool(state.get("session_id")),
+        "native_session_id_present": bool(state.get("native_session_id")),
+        "connection_id_present": bool(state.get("connection_id")),
+        "lease_generation_present": bool(state.get("lease_generation")),
+        "session_file_present": session_file.is_file(),
+    }
+
+
+def _channel_command_evidence(command: Mapping[str, Any], state: Mapping[str, Any]) -> dict[str, Any]:
+    payload = command.get("payload")
+    payload = payload if isinstance(payload, Mapping) else {}
+    native_session_id = payload.get("native_session_id")
+    return {
+        "accepted": command.get("accepted") is True,
+        "native_session_id": native_session_id,
+        "status": payload.get("status"),
+        "channel_ack_bound": (
+            command.get("accepted") is True
+            and native_session_id == state.get("native_session_id")
+            and payload.get("status") in {"active", "idle"}
+        ),
+    }
+
+
+def _exact_session_retirement(receipt: Mapping[str, Any] | None, session_id: str | None) -> bool:
+    return (
+        isinstance(receipt, Mapping)
+        and bool(session_id)
+        and receipt.get("status") == "pass"
+        and receipt.get("session_id") == session_id
+        and receipt.get("hidden") is True
+        and receipt.get("archived") is True
+        and receipt.get("present_in_served_inventory") is False
+    )
+
+
 def _wait_native_terminal(
     session_file: Path,
     *,
@@ -222,24 +443,132 @@ def _wait_native_terminal(
         for row in _native_rows(session_file, minimum_offset):
             if row.get("type") != "agent_end":
                 continue
-            if row.get("isTerminal") is True or row.get("willContinue") is False:
+            if _is_terminal_agent_end(row):
                 return row
         return None
 
     return _wait(observe, timeout=timeout, description="OMP native terminal agent_end")
 
 
-def _native_settlement(session_file: Path) -> dict[str, object]:
-    rows = _native_rows(session_file)
-    agent_end_terminal = any(
-        row.get("type") == "agent_end" and (row.get("isTerminal") is True or row.get("willContinue") is False) for row in rows
+def _wait_channel_terminal(
+    home: Path,
+    *,
+    session_id: str,
+    native_session_id: str,
+    session_file: Path,
+    timeout: float = 90,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    def observe() -> tuple[dict[str, Any], dict[str, Any]] | None:
+        state = _read_state(home / "managed-local" / "omp-helm" / f"{session_id}.json")
+        if not isinstance(state, dict):
+            return None
+        if (
+            state.get("ready") is True
+            and state.get("native_session_id") == native_session_id
+            and state.get("session_file") == str(session_file)
+            and state.get("agent_end_observed") is True
+            and state.get("agent_end_is_terminal") is True
+        ):
+            return (
+                {
+                    "type": "agent_end",
+                    "isTerminal": state["agent_end_is_terminal"],
+                    "willContinue": state.get("agent_end_will_continue"),
+                    "source": "omp_helm_extension_channel",
+                },
+                state,
+            )
+        return None
+
+    return _wait(observe, timeout=timeout, description="OMP Helm extension-channel agent_end")
+
+
+def _native_settlement(
+    session_file: Path,
+    *,
+    channel_state: Mapping[str, Any],
+    native_session_id: str,
+) -> dict[str, object]:
+    try:
+        payload = session_file.read_bytes()
+    except OSError as exc:
+        return {
+            "status": "fail",
+            "error": f"{type(exc).__name__}: {exc}",
+            "agent_end_terminal": False,
+            "agent_end_evidence_shape": False,
+            "native_archive_bound": False,
+            "native_terminal_after_assistant": False,
+            "malformed_source": True,
+            "session_file": str(session_file),
+        }
+    rows: list[dict[str, Any]] = []
+    malformed_source = False
+    offset = 0
+    for raw in payload.splitlines(keepends=True):
+        end = offset + len(raw)
+        if not raw.strip():
+            offset = end
+            continue
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError:
+            malformed_source = True
+            offset = end
+            continue
+        if isinstance(value, dict):
+            row = dict(value)
+            row["_source_offset"] = offset
+            rows.append(row)
+        else:
+            malformed_source = True
+        offset = end
+    headers = [row for row in rows if row.get("type") == "session" and row.get("id") == native_session_id]
+    assistant_rows = [
+        row
+        for row in rows
+        if row.get("type") in {"message", "message_end"}
+        and isinstance(row.get("message"), Mapping)
+        and row["message"].get("role") == "assistant"
+    ]
+    native_archive_bound = len(headers) == 1
+    native_terminal_after_assistant = False
+    channel_bound = (
+        channel_state.get("status") == "ready"
+        and channel_state.get("phase") == "idle"
+        and channel_state.get("native_session_id") == native_session_id
+        and channel_state.get("session_file") == str(session_file)
+        and isinstance(channel_state.get("updated_at"), str)
+        and bool(channel_state.get("updated_at"))
     )
-    native_archive_bound = any(row.get("type") == "session" and row.get("id") for row in rows)
+    channel_agent_end_observed = channel_state.get("agent_end_observed") is True and isinstance(
+        channel_state.get("agent_end_is_terminal"), bool
+    )
+    agent_end_terminal = channel_agent_end_observed and channel_state.get("agent_end_is_terminal") is True
     return {
-        "status": "pass" if agent_end_terminal and native_archive_bound else "fail",
+        "status": (
+            "pass"
+            if agent_end_terminal
+            and native_archive_bound
+            and bool(assistant_rows)
+            and agent_end_terminal
+            and channel_bound
+            and not malformed_source
+            else "fail"
+        ),
         "agent_end_terminal": agent_end_terminal,
+        "agent_end_evidence_shape": channel_bound and channel_agent_end_observed,
+        "agent_end_evidence_source": "omp_helm_extension_channel" if channel_bound and channel_agent_end_observed else None,
         "native_archive_bound": native_archive_bound,
+        "native_session_header_count": len(headers),
+        "native_terminal_after_assistant": native_terminal_after_assistant,
+        "malformed_source": malformed_source,
         "agent_settled_is_not_completion_contract": True,
+        "channel_phase": channel_state.get("phase"),
+        "channel_status": channel_state.get("status"),
+        "channel_native_session_id": channel_state.get("native_session_id"),
+        "channel_session_file": channel_state.get("session_file"),
+        "channel_updated_at": channel_state.get("updated_at"),
         "session_file": str(session_file),
     }
 
@@ -475,10 +804,12 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
     owner_records: list[dict[str, Any]] = []
     controls: dict[str, object] = {}
     observation: dict[str, object] = {
+        "observation_scope": "scenario",
         "omp_native_extension_channel_bound": False,
         "omp_agent_end_settlement_observed": False,
         "omp_native_archive_bound": False,
         "send_idle": False,
+        "follow_up_native": False,
         "steer_active": False,
         "abort_native": False,
         "terminate_owned": False,
@@ -490,6 +821,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
     current_session_id: str | None = None
     current_session_file: Path | None = None
     current_state: dict[str, Any] = {}
+    source_generations: list[dict[str, Any]] = []
 
     try:
         initial_marker = f"OMP_HELM_INITIAL_{os.urandom(8).hex()}"
@@ -508,8 +840,14 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         current_state = _wait_state(longhouse_home)
         current_session_id = str(current_state["session_id"])
         current_session_file = Path(str(current_state["session_file"]))
+        initial_session_file = current_session_file
         initial_row = _wait_native_marker(current_session_file, initial_marker)
-        _wait_native_terminal(current_session_file, minimum_offset=int(initial_row["_source_offset"]))
+        _wait_channel_terminal(
+            longhouse_home,
+            session_id=current_session_id,
+            native_session_id=str(current_state.get("native_session_id") or ""),
+            session_file=current_session_file,
+        )
         owner_records.append(
             _process_record(
                 current_state.get("launcher_pid"),
@@ -533,15 +871,44 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             and current_state.get("native_session_id")
             and current_state.get("session_file")
         )
+        observation["channel_binding"] = _channel_binding_evidence(current_state)
+        source_generations.append(
+            {
+                "label": "initial",
+                "native_session_id": current_state.get("native_session_id"),
+                "source_path": str(current_session_file),
+                "controls": ["send", "follow_up", "steer", "abort"],
+            }
+        )
 
         send_marker = f"OMP_HELM_SEND_{os.urandom(8).hex()}"
         send_offset = _read_source_size(current_session_file)
         send = _run_engine(args.engine, "send", current_session_id, env, text=f"Reply with exactly {send_marker}.")
         send_row = _wait_native_marker(current_session_file, send_marker, minimum_offset=send_offset)
-        controls["send"] = {"command": send, "marker_row": send_row}
-        observation["send_idle"] = send.get("accepted") is True
+        send_evidence = _native_marker_evidence(
+            send_row,
+            current_session_file,
+            marker=send_marker,
+            minimum_offset=send_offset,
+            native_session_id=str(current_state.get("native_session_id") or ""),
+        )
+        send_evidence.update(_channel_command_evidence(send, current_state))
+        send_evidence.update({"observation_scope": "initial", "source_generation": "initial"})
+        controls["send"] = {
+            "action_label": "send",
+            "state": dict(current_state),
+            "command": send,
+            "marker_row": send_row,
+            "evidence": send_evidence,
+        }
+        observation["send_idle"] = (
+            send_evidence["channel_ack_bound"] and send_evidence["native_source_bound"] and send_evidence["marker_count"] == 1
+        )
+        observation["send_evidence"] = send_evidence
 
-        active_marker = f"OMP_HELM_STEER_{os.urandom(8).hex()}"
+        active_marker = f"OMP_HELM_ACTIVE_{os.urandom(8).hex()}"
+        follow_up_marker = f"OMP_HELM_FOLLOW_UP_{os.urandom(8).hex()}"
+        steer_marker = f"OMP_HELM_STEER_{os.urandom(8).hex()}"
         active_offset = _read_source_size(current_session_file)
         active = _run_engine(
             args.engine,
@@ -556,10 +923,74 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             predicate=lambda value: value.get("phase") in {"running", "thinking"},
             timeout=30,
         )
-        steer = _run_engine(args.engine, "steer", current_session_id, env, text=f"Reply with exactly {active_marker}.")
-        steer_row = _wait_native_marker(current_session_file, active_marker, minimum_offset=active_offset)
-        controls["steer"] = {"active_command": active, "command": steer, "marker_row": steer_row}
-        observation["steer_active"] = active.get("accepted") is True and steer.get("accepted") is True
+        follow_up = _run_engine(
+            args.engine,
+            "send",
+            current_session_id,
+            env,
+            text=f"Reply with exactly {follow_up_marker}.",
+        )
+        steer = _run_engine(args.engine, "steer", current_session_id, env, text=f"Reply with exactly {steer_marker}.")
+        steer_row = _wait_native_marker(current_session_file, steer_marker, minimum_offset=active_offset)
+        follow_up_row = _wait_native_marker(current_session_file, follow_up_marker, minimum_offset=active_offset)
+        follow_up_evidence = _native_marker_evidence(
+            follow_up_row,
+            current_session_file,
+            marker=follow_up_marker,
+            minimum_offset=active_offset,
+            native_session_id=str(current_state.get("native_session_id") or ""),
+        )
+        follow_up_evidence["active_command_bound"] = _channel_command_evidence(active, current_state)["channel_ack_bound"]
+        follow_up_evidence["follow_up_delivery"] = (
+            follow_up.get("accepted") is True
+            and isinstance(follow_up.get("payload"), Mapping)
+            and follow_up["payload"].get("status") == "active"
+        )
+        follow_up_evidence.update(_channel_command_evidence(follow_up, current_state))
+        follow_up_evidence.update({"observation_scope": "initial", "source_generation": "initial"})
+        controls["follow_up"] = {
+            "action_label": "follow_up",
+            "state": dict(current_state),
+            "active_action_label": "active_turn_setup",
+            "active_command": active,
+            "command": follow_up,
+            "marker_row": follow_up_row,
+            "evidence": follow_up_evidence,
+        }
+        observation["follow_up_native"] = (
+            follow_up_evidence["active_command_bound"]
+            and follow_up_evidence["follow_up_delivery"]
+            and follow_up_evidence["channel_ack_bound"]
+            and follow_up_evidence["native_source_bound"]
+            and follow_up_evidence["marker_count"] == 1
+        )
+        observation["follow_up_evidence"] = follow_up_evidence
+        steer_evidence = _native_marker_evidence(
+            steer_row,
+            current_session_file,
+            marker=steer_marker,
+            minimum_offset=active_offset,
+            native_session_id=str(current_state.get("native_session_id") or ""),
+        )
+        steer_evidence["active_command_bound"] = _channel_command_evidence(active, current_state)["channel_ack_bound"]
+        steer_evidence.update(_channel_command_evidence(steer, current_state))
+        steer_evidence.update({"observation_scope": "initial", "source_generation": "initial"})
+        controls["steer"] = {
+            "action_label": "steer",
+            "state": dict(current_state),
+            "active_action_label": "active_turn_setup",
+            "active_command": active,
+            "command": steer,
+            "marker_row": steer_row,
+            "evidence": steer_evidence,
+        }
+        observation["steer_active"] = (
+            steer_evidence["active_command_bound"]
+            and steer_evidence["channel_ack_bound"]
+            and steer_evidence["native_source_bound"]
+            and steer_evidence["marker_count"] == 1
+        )
+        observation["steer_evidence"] = steer_evidence
 
         abort_marker = f"OMP_HELM_ABORT_{os.urandom(8).hex()}"
         active_for_abort = _run_engine(
@@ -577,13 +1008,31 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         )
         abort_offset = _read_source_size(current_session_file)
         abort = _run_engine(args.engine, "abort", current_session_id, env)
-        abort_end = _wait_native_agent_end(current_session_file, minimum_offset=abort_offset)
+        abort_end, abort_channel_state = _wait_channel_terminal(
+            longhouse_home,
+            session_id=current_session_id,
+            native_session_id=str(current_state.get("native_session_id") or ""),
+            session_file=current_session_file,
+        )
+        abort_evidence = _channel_terminal_evidence(
+            abort_end,
+            abort_channel_state,
+            native_session_id=str(current_state.get("native_session_id") or ""),
+            session_file=current_session_file,
+        )
+        abort_evidence["channel_ack_bound"] = abort.get("accepted") is True and observation["channel_binding"]["ready"] is True
+        abort_evidence.update({"observation_scope": "initial", "source_generation": "initial"})
         controls["abort"] = {
+            "action_label": "abort",
+            "state": dict(current_state),
+            "active_action_label": "abort_turn_setup",
             "active_command": active_for_abort,
             "command": abort,
             "agent_end": abort_end,
+            "evidence": abort_evidence,
         }
-        observation["abort_native"] = abort.get("accepted") is True and abort_end.get("type") == "agent_end"
+        observation["abort_native"] = abort_evidence["channel_ack_bound"] and abort_evidence["channel_source_bound"]
+        observation["abort_evidence"] = abort_evidence
 
         first.submit_line("/new")
         replaced_state = _wait_state(
@@ -597,9 +1046,22 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         stale = _stale_frame(old_state, text="stale OMP owner must be refused")
         controls["stale_owner"] = {"response": stale, "old_state": old_state, "new_state": replaced_state}
         observation["stale_owner_refused"] = stale.get("ok") is False and (stale.get("error") or {}).get("code") == "stale_channel"
+        observation["stale_owner_evidence"] = {
+            "error_code": (stale.get("error") or {}).get("code"),
+            "old_native_session_id": old_state.get("native_session_id"),
+            "new_native_session_id": replaced_state.get("native_session_id"),
+        }
         current_state = replaced_state
         current_session_file = Path(str(replaced_state["session_file"]))
         current_native_id = str(replaced_state["native_session_id"])
+        source_generations.append(
+            {
+                "label": "replacement",
+                "native_session_id": current_native_id,
+                "source_path": str(current_session_file),
+                "controls": ["replacement", "cold_resume"],
+            }
+        )
         replacement_marker = f"OMP_HELM_REPLACEMENT_{os.urandom(8).hex()}"
         replacement_offset = _read_source_size(current_session_file)
         replacement = _run_engine(
@@ -614,12 +1076,28 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             replacement_marker,
             minimum_offset=replacement_offset,
         )
-        controls["replacement"] = {"command": replacement, "marker_row": replacement_row}
-        observation["native_replacement_bound"] = (
-            replacement.get("accepted") is True
-            and replaced_state.get("native_session_id") == current_native_id
-            and replacement_row.get("_source_offset", -1) >= replacement_offset
+        replacement_evidence = _native_marker_evidence(
+            replacement_row,
+            current_session_file,
+            marker=replacement_marker,
+            minimum_offset=replacement_offset,
+            native_session_id=current_native_id,
         )
+        replacement_evidence.update(_channel_command_evidence(replacement, replaced_state))
+        replacement_evidence.update({"observation_scope": "replacement", "source_generation": "replacement"})
+        controls["replacement"] = {
+            "action_label": "replacement_send",
+            "state": dict(replaced_state),
+            "command": replacement,
+            "marker_row": replacement_row,
+            "evidence": replacement_evidence,
+        }
+        observation["native_replacement_bound"] = (
+            replacement_evidence["channel_ack_bound"]
+            and replaced_state.get("native_session_id") == current_native_id
+            and replacement_evidence["native_source_bound"]
+        )
+        observation["replacement_evidence"] = replacement_evidence
 
         owner_records.append(
             _process_record(
@@ -638,10 +1116,16 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         terminate = _run_engine(args.engine, "terminate", current_session_id, env)
         stopped = _wait_stopped(longhouse_home, current_session_id)
         first.process.wait(timeout=15)
-        controls["terminate"] = {"command": terminate, "stopped_state": stopped}
+        controls["terminate"] = {
+            "action_label": "terminate",
+            "state": dict(replaced_state),
+            "command": terminate,
+            "stopped_state": stopped,
+        }
         observation["terminate_owned"] = terminate.get("accepted") is True and stopped.get("terminal_reason") == "remote_terminate"
 
         resume_marker = f"OMP_HELM_RESUME_{os.urandom(8).hex()}"
+        resume_offset = _read_source_size(current_session_file)
         resumed = ProviderPtySession.start(
             argv=_launch_argv(
                 args,
@@ -657,11 +1141,36 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         sessions.append(resumed)
         resume_state = _wait_state(longhouse_home, session_id=current_session_id)
         resume_file = Path(str(resume_state["session_file"]))
-        resume_row = _wait_native_marker(resume_file, resume_marker)
-        resume_terminal = _wait_native_terminal(
-            resume_file,
-            minimum_offset=int(resume_row["_source_offset"]),
+        source_generations.append(
+            {
+                "label": "cold_resume",
+                "native_session_id": resume_state.get("native_session_id"),
+                "source_path": str(resume_file),
+                "controls": ["cold_resume"],
+            }
         )
+        resume_row = _wait_native_marker(resume_file, resume_marker, minimum_offset=resume_offset)
+        resume_terminal, resume_channel_state = _wait_channel_terminal(
+            longhouse_home,
+            session_id=current_session_id,
+            native_session_id=str(resume_state.get("native_session_id") or ""),
+            session_file=resume_file,
+        )
+        resume_marker_evidence = _native_marker_evidence(
+            resume_row,
+            resume_file,
+            marker=resume_marker,
+            minimum_offset=resume_offset,
+            native_session_id=str(resume_state.get("native_session_id") or ""),
+        )
+        resume_terminal_evidence = _channel_terminal_evidence(
+            resume_terminal,
+            resume_channel_state,
+            native_session_id=str(resume_state.get("native_session_id") or ""),
+            session_file=resume_file,
+        )
+        resume_marker_evidence.update({"observation_scope": "cold_resume", "source_generation": "cold_resume"})
+        resume_terminal_evidence.update({"observation_scope": "cold_resume", "source_generation": "cold_resume"})
         resume_owner_records = [
             _process_record(
                 resume_state.get("launcher_pid"),
@@ -682,16 +1191,56 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             and resume_row.get("_source_offset", -1) >= 0
             and resume_terminal.get("type") == "agent_end"
         )
-        controls["cold_resume"] = {
-            "state": resume_state,
-            "marker_row": resume_row,
-            "terminal": resume_terminal,
+        observation["cold_resume_evidence"] = {
+            **resume_marker_evidence,
+            "native_source_bound": resume_marker_evidence["native_source_bound"],
+            "channel_terminal_bound": resume_terminal_evidence["channel_source_bound"],
+            "exact_file": (
+                resume_state.get("native_session_id") == current_native_id
+                and resume_state.get("session_file") == str(current_session_file)
+                and resume_file == current_session_file
+            ),
         }
-        observation["settlement"] = _native_settlement(resume_file)
+        controls["cold_resume"] = {
+            "action_label": "cold_resume",
+            "prompt": f"Reply with exactly {resume_marker}.",
+            "state": dict(resume_state),
+            "marker_row": resume_row,
+            "terminal": resume_terminal_evidence["terminal"],
+            "marker_evidence": resume_marker_evidence,
+            "evidence": resume_marker_evidence,
+            "terminal_evidence": resume_terminal_evidence,
+        }
+        settled_state = _wait_state(
+            longhouse_home,
+            session_id=current_session_id,
+            predicate=lambda value: (
+                value.get("phase") == "idle"
+                and value.get("native_session_id") == str(resume_state.get("native_session_id") or "")
+                and value.get("session_file") == str(resume_file)
+                and value.get("updated_at") != resume_state.get("updated_at")
+            ),
+        )
+        observation["settlement"] = _native_settlement(
+            resume_file,
+            channel_state=settled_state,
+            native_session_id=str(resume_state.get("native_session_id") or ""),
+        )
+        settlement = observation["settlement"]
+        if isinstance(settlement, Mapping):
+            observation["omp_agent_end_settlement_observed"] = settlement.get("agent_end_terminal") is True
+            observation["omp_native_archive_bound"] = settlement.get("native_archive_bound") is True
+            observation["omp_native_extension_channel_bound"] = settlement.get("agent_end_evidence_shape") is True
+        current_state = dict(resume_state)
         final_terminate = _run_engine(args.engine, "terminate", current_session_id, env)
         final_stopped = _wait_stopped(longhouse_home, current_session_id)
         resumed.process.wait(timeout=15)
-        controls["final_terminate"] = {"command": final_terminate, "stopped_state": final_stopped}
+        controls["final_terminate"] = {
+            "action_label": "final_terminate",
+            "state": dict(resume_state),
+            "command": final_terminate,
+            "stopped_state": final_stopped,
+        }
     finally:
         for provider_session in sessions:
             if provider_session.alive():
@@ -717,7 +1266,122 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
                 "orphan_count": 1,
             }
         )
+        dispatch_session_id = str(current_session_id or "")
+        dispatch_run_id = str(current_state.get("run_id") or "")
+        served_run_inventory = lifecycle._served_run_inventory_evidence(
+            args.api_url,
+            args.agents_token,
+            dispatch_session_id,
+            [
+                {
+                    "session_id": dispatch_session_id,
+                    "run_id": dispatch_run_id,
+                    "state": "terminal",
+                }
+            ],
+        )
+        session_retirement = retire_qualification_session(
+            args.api_url,
+            args.agents_token,
+            str(current_session_id or ""),
+            provider="omp",
+        )
+        cleanup["session_retirement"] = session_retirement
+        cleanup["served_run_inventory"] = served_run_inventory
+        cleanup["served_run_retired"] = (
+            served_run_inventory.get("retired") is True
+            and served_run_inventory.get("session_id") == dispatch_session_id
+            and served_run_inventory.get("active_run_count") == 0
+        )
+        cleanup["dispatch_session_id"] = dispatch_session_id
+        cleanup["dispatch_run_id"] = dispatch_run_id
+        cleanup["process_stop"] = {
+            "verified": cleanup.get("provider_process_dead") is True
+            and cleanup.get("process_group_dead") is True
+            and cleanup.get("orphan_count") == 0,
+        }
+        cleanup["canary_session_hidden"] = _exact_session_retirement(session_retirement, current_session_id)
+        if not (
+            cleanup["status"] == "pass"
+            and cleanup["canary_session_hidden"] is True
+            and cleanup["served_run_retired"] is True
+            and cleanup["process_stop"]["verified"] is True
+        ):
+            cleanup["status"] = "fail"
+        cleanup = redact_state_for_evidence(cleanup)
         observation["cleanup"] = cleanup
+        source_claims = [
+            {"run_id": generation["label"], "source_path": generation["source_path"]}
+            for generation in source_generations
+            if isinstance(generation.get("source_path"), str) and generation["source_path"]
+        ]
+        try:
+            retained_sources = lifecycle._retain_claim_sources(root, source_claims, env)
+        except Exception as exc:  # noqa: BLE001 - preserve cleanup evidence on producer failure
+            retained_sources = [
+                {
+                    "source": source_claim.get("source_path"),
+                    "kind": "source_path",
+                    "retained": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+                for source_claim in source_claims
+            ]
+            lifecycle.write_json(root / "provider-source-retention.json", {"sources": retained_sources})
+        source_retention_verified = bool(retained_sources) and all(
+            item.get("retained") is True and isinstance(item.get("path"), str) and bool(item.get("path")) for item in retained_sources
+        )
+        cleanup["source_retention_verified"] = source_retention_verified
+        cleanup["source_retention"] = {
+            "verified": source_retention_verified,
+            "source_count": len(retained_sources),
+            "retained_source_count": sum(item.get("retained") is True for item in retained_sources),
+        }
+        if not source_retention_verified:
+            cleanup["status"] = "fail"
+        try:
+            shutil.rmtree(isolation)
+        except FileNotFoundError:
+            isolation_removed = True
+        except OSError as exc:
+            isolation_removed = False
+            cleanup["isolation_remove_error"] = f"{type(exc).__name__}: {exc}"
+        else:
+            isolation_removed = not isolation.exists()
+        cleanup["isolation_removed"] = isolation_removed
+        if not isolation_removed:
+            cleanup["status"] = "fail"
+        lifecycle.write_json(root / "cleanup-receipt.json", cleanup)
+        retained_by_source = {
+            str(item["source"]): str(item["path"])
+            for item in retained_sources
+            if item.get("retained") is True and isinstance(item.get("source"), str) and isinstance(item.get("path"), str)
+        }
+        for generation in source_generations:
+            generation["retained_path"] = retained_by_source.get(str(generation.get("source_path") or ""))
+        for record in controls.values():
+            if not isinstance(record, dict):
+                continue
+            evidence = record.get("evidence")
+            if isinstance(evidence, dict):
+                evidence["retained_source_path"] = retained_by_source.get(str(evidence.get("source_path") or ""))
+            for evidence_key in ("marker_evidence", "terminal_evidence"):
+                nested = record.get(evidence_key)
+                if isinstance(nested, dict):
+                    nested["retained_source_path"] = retained_by_source.get(str(nested.get("source_path") or ""))
+        if isinstance(observation.get("cold_resume_evidence"), dict):
+            observation["cold_resume_evidence"]["retained_source_path"] = retained_by_source.get(
+                str(observation["cold_resume_evidence"].get("source_path") or "")
+            )
+        settlement = observation.get("settlement")
+        settlement = settlement if isinstance(settlement, dict) else {}
+        native_source = settlement.get("session_file") or ""
+        settlement["retained_source_path"] = retained_by_source.get(str(native_source))
+        settlement["retained_source"] = native_source
+        settlement["retained_sources"] = retained_by_source
+        observation["native_source_generations"] = source_generations
+        observation["provider_source_retention"] = retained_sources
+        observation["settlement"] = settlement
 
     observation["omp_owned_processes_dead"] = cleanup.get("provider_process_dead") is True and cleanup.get("process_group_dead") is True
     binary_receipt = {
@@ -732,9 +1396,9 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         root / "omp-helm-receipt.json",
         {
             "managed_transport": "omp_helm_channel",
-            "state": current_state,
-            "old_state": old_state if "old_state" in locals() else {},
-            "controls": controls,
+            "state": redact_state_for_evidence(current_state),
+            "old_state": redact_state_for_evidence(old_state if "old_state" in locals() else {}),
+            "controls": redact_state_for_evidence(controls),
             "observation": observation,
         },
     )
@@ -799,7 +1463,16 @@ def run(request_path: Path, output_root: Path) -> dict[str, object]:
         return (
             observation,
             semantic_assertions,
-            tuple(value for name in ("OPENROUTER_API_KEY",) if (value := str(os.environ.get(name) or "").strip())),
+            tuple(
+                dict.fromkeys(
+                    value
+                    for value in (
+                        args.agents_token,
+                        str(os.environ.get("OPENROUTER_API_KEY") or "").strip(),
+                    )
+                    if value
+                )
+            ),
         )
 
     return semantic.run_semantic_profile(

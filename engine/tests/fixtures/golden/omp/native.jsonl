@@ -6,5 +6,6 @@
 {"type":"message","id":"omp-tool-01","parentId":"omp-assistant-01","timestamp":"2026-09-09T00:00:03.000Z","message":{"role":"toolResult","toolCallId":"omp-call-01","toolName":"read","content":[{"type":"text","text":"file contents"}],"isError":false}}
 {"type":"title_change","id":"omp-title-01","parentId":"omp-tool-01","timestamp":"2026-09-09T00:00:04.000Z","title":"Updated OMP title"}
 {"type":"model_change","id":"omp-model-01","parentId":"omp-title-01","timestamp":"2026-09-09T00:00:04.500Z","role":"assistant","model":"gpt-5.2"}
-{"type":"reset_boundary","id":"omp-reset-01","parentId":"omp-model-01","timestamp":"2026-09-09T00:00:05.000Z","reason":"compaction"}
+{"type":"reset_boundary","id":"omp-reset-01","parentId":"omp-model-01","timestamp":"2026-09-09T00:00:05.000Z","reason":"clear"}
+{"type":"compaction","id":"omp-compaction-01","parentId":"omp-reset-01","timestamp":"2026-09-09T00:00:05.500Z","tokensBefore":1200,"summary":"Retained context"}
 {"type":"unknown_future_record","id":"omp-unknown-01","parentId":"omp-reset-01","timestamp":"2026-09-09T00:00:06.000Z","opaque":{"keep":"raw"}}

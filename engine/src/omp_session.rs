@@ -139,6 +139,17 @@ fn legacy_profile_session_roots(config_root: &Path, profile: Option<&str>) -> Ve
                 .join(OMP_SESSION_DIR_NAME),
         );
     }
+    let profiles = config_root.join("profiles");
+    if let Ok(entries) = fs::read_dir(profiles) {
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                let candidate = entry.path().join("agent").join(OMP_SESSION_DIR_NAME);
+                if !roots.contains(&candidate) {
+                    roots.push(candidate);
+                }
+            }
+        }
+    }
     roots
 }
 
@@ -707,6 +718,27 @@ mod tests {
         assert!(roots.contains(&home.path().join(".omp/agent/sessions")));
         assert!(roots.contains(&omp_config.join("profiles/work/agent/sessions")));
         assert!(!roots.iter().any(|root| root.starts_with("/pi")));
+    }
+
+    #[test]
+    fn legacy_profile_roots_are_discovered_without_an_active_profile() {
+        let home = tempfile::tempdir().unwrap();
+        let cwd = home.path().join("workspace");
+        let omp_config = home.path().join("omp-config");
+        fs::create_dir_all(&cwd).unwrap();
+        fs::create_dir_all(omp_config.join("profiles/archive/agent/sessions")).unwrap();
+        fs::create_dir_all(home.path().join(".omp/profiles/default/agent/sessions")).unwrap();
+
+        let roots = temp_env::with_var("HOME", Some(home.path().to_str().unwrap()), || {
+            temp_env::with_var("XDG_DATA_HOME", None::<&str>, || {
+                temp_env::with_var(OMP_CONFIG_DIR_ENV, Some(omp_config.to_str().unwrap()), || {
+                    temp_env::with_var("OMP_PROFILE", None::<&str>, || configured_session_roots(&cwd))
+                })
+            })
+        });
+
+        assert!(roots.contains(&omp_config.join("profiles/archive/agent/sessions")));
+        assert!(roots.contains(&home.path().join(".omp/profiles/default/agent/sessions")));
     }
 
     #[test]

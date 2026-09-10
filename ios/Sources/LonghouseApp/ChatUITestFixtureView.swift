@@ -237,6 +237,7 @@ struct ChatUITestFixtureView: View {
 
 @MainActor
 struct TimelineOpenUITestFixtureView: View {
+    @State private var path: [TimelineOpenRoute] = []
     @State private var probe = ChatUITestProbe(path: UITestHooks.chatFixtureProbePath)
 
     private let sessions: [TimelineOpenFixtureSession]
@@ -245,20 +246,23 @@ struct TimelineOpenUITestFixtureView: View {
         sessions = (1...40).map { index in
             TimelineOpenFixtureSession(
                 id: "ui-test-timeline-session-\(index)",
-                title: "Timeline open fixture \(index)",
-                fixture: ChatUITestFixture(name: index == 1 ? "stress" : "basic")
+                title: index == 1
+                    ? "A very long session title that must stay inside the navigation bar"
+                    : "Timeline open fixture \(index)",
+                fixture: ChatUITestFixture(name: index == 1 ? "loading-long-title" : "basic")
             )
         }
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             ScrollView {
                 LazyVStack(spacing: 10) {
                     ForEach(sessions) { session in
-                        NavigationLink {
-                            destination(for: session)
-                        } label: {
+                        NavigationLink(value: TimelineOpenRoute(
+                            id: session.id,
+                            title: session.title
+                        )) {
                             TimelineSessionCardRow(session: session.summary, role: .recent)
                         }
                         .buttonStyle(.plain)
@@ -269,6 +273,37 @@ struct TimelineOpenUITestFixtureView: View {
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Timeline")
+            .navigationDestination(for: TimelineOpenRoute.self) { route in
+                if let session = sessions.first(where: { $0.id == route.id }) {
+                    destination(for: session)
+                } else {
+                    Text("Session unavailable")
+                }
+            }
+            .toolbar {
+                // Mirror the production parent toolbar so the test includes
+                // the same push-time opacity/geometry transition.
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {} label: {
+                        Image(systemName: "plus.circle.fill")
+                            .accessibilityLabel("Start session")
+                    }
+                    .transaction { transaction in transaction.animation = nil }
+                    .opacity(path.isEmpty ? 1 : 0)
+                    .disabled(!path.isEmpty)
+                    .accessibilityHidden(!path.isEmpty)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {} label: {
+                        Image(systemName: "gearshape")
+                            .accessibilityLabel("Settings")
+                    }
+                    .transaction { transaction in transaction.animation = nil }
+                    .opacity(path.isEmpty ? 1 : 0)
+                    .disabled(!path.isEmpty)
+                    .accessibilityHidden(!path.isEmpty)
+                }
+            }
             .task {
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 guard !Task.isCancelled else { return }
@@ -295,6 +330,11 @@ struct TimelineOpenUITestFixtureView: View {
             }
         )
     }
+}
+
+private struct TimelineOpenRoute: Hashable {
+    let id: String
+    let title: String
 }
 
 private struct TimelineOpenFixtureSession: Identifiable {
@@ -759,7 +799,10 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     }
 
     func sessionDetail(id: String) async throws -> SessionDetail {
-        Self.makeDetail(
+        if let delayMs = UITestHooks.mobileDetailDelayMs, delayMs > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+        }
+        return Self.makeDetail(
             sessionID: sessionID,
             events: events,
             title: Self.titleForFixture(fixtureName)

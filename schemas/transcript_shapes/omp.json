@@ -17,6 +17,8 @@
     "message": "omp_message",
     "tool_call": "omp_tool_call",
     "tool_result": "omp_tool_result",
-    "title": "session.title"
+    "title": "session.title",
+    "reset_boundary": "omp_reset_boundary",
+    "compaction": "context.compaction"
   }
 }

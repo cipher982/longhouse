@@ -5,7 +5,9 @@ type Frame = Record<string, unknown>;
 const socketPath = process.env.LONGHOUSE_OMP_HELM_CHANNEL_PATH;
 const authToken = process.env.LONGHOUSE_OMP_HELM_CHANNEL_TOKEN;
 const launchSessionId = process.env.LONGHOUSE_MANAGED_SESSION_ID;
-const initialPrompt = process.env.LONGHOUSE_OMP_HELM_INITIAL_PROMPT;
+const initialPrompt = process.env.LONGHOUSE_OMP_HELM_INITIAL_PROMPT ?? "";
+const initialPromptDeliveredAtLaunch =
+  process.env.LONGHOUSE_OMP_HELM_INITIAL_PROMPT_DELIVERED === "1";
 const MAX_FRAME_BYTES = 512 * 1024;
 
 if (!socketPath || !authToken || !launchSessionId) {
@@ -21,10 +23,11 @@ export default function (pi: any) {
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let connectionPromise: Promise<void> | undefined;
   let connectionId = "";
+  let reconnectAttempts = 0;
   let leaseGeneration = "";
   let commandChain = Promise.resolve();
   let initialPromptRequested = false;
-  let initialPromptDelivered = false;
+  let initialPromptDelivered = initialPromptDeliveredAtLaunch;
   const generationWaiters: Array<() => void> = [];
 
   const waitForGenerationChange = (previous: string) =>
@@ -115,6 +118,21 @@ export default function (pi: any) {
     }
   };
 
+  const scheduleReconnect = (ctx: any) => {
+    if (shuttingDown || reconnectTimer) return;
+    reconnectTimer = setTimeout(async () => {
+      reconnectTimer = undefined;
+      reconnectAttempts += 1;
+      try {
+        await connectChannel(ctx);
+        reconnectAttempts = 0;
+        sendEvent("session_reconnect", { type: "session_reconnect" }, ctx);
+      } catch {
+        scheduleReconnect(ctx);
+      }
+    }, Math.min(1000, 100 * 2 ** Math.max(0, reconnectAttempts - 1)));
+  };
+
   const connectChannel = (ctx: any): Promise<void> => {
     if (connectionPromise) return connectionPromise;
     const ownGeneration = ++generation;
@@ -132,6 +150,11 @@ export default function (pi: any) {
       candidate.on("data", (chunk: Buffer) => {
         if (ownGeneration !== generation) return;
         buffer += chunk.toString("utf8");
+        if (Buffer.byteLength(buffer, "utf8") > MAX_FRAME_BYTES) {
+          fail(new Error("OMP Helm channel frame exceeds limit"));
+          candidate.destroy();
+          return;
+        }
         let newline = buffer.indexOf("\n");
         while (newline >= 0) {
           const raw = buffer.slice(0, newline);
@@ -154,17 +177,7 @@ export default function (pi: any) {
         ready = false;
         socket = undefined;
         connectionPromise = undefined;
-        if (!shuttingDown) {
-          reconnectTimer = setTimeout(async () => {
-            reconnectTimer = undefined;
-            try {
-              await connectChannel(ctx);
-              sendEvent("session_reconnect", { type: "session_reconnect" }, ctx);
-            } catch {
-              if (!shuttingDown) reconnectTimer = setTimeout(() => void connectChannel(ctx), 500);
-            }
-          }, 100);
-        }
+        scheduleReconnect(ctx);
       });
     });
     return connectionPromise;
@@ -182,11 +195,11 @@ export default function (pi: any) {
       if (!authorityMatches) throw new Error("OMP Helm command authority is stale");
       if (["send", "steer"].includes(kind) && !text.trim()) throw new Error("OMP Helm input text must not be empty");
       if (kind === "send") {
-        if (ctx.isIdle()) pi.sendUserMessage(text);
-        else pi.sendUserMessage(text, { deliverAs: "followUp" });
+        if (ctx.isIdle()) await Promise.resolve(pi.sendUserMessage(text));
+        else await Promise.resolve(pi.sendUserMessage(text, { deliverAs: "followUp" }));
       } else if (kind === "steer") {
         if (ctx.isIdle()) throw new Error("OMP provider has no active turn to steer");
-        pi.sendUserMessage(text, { deliverAs: "steer" });
+        await Promise.resolve(pi.sendUserMessage(text, { deliverAs: "steer" }));
       } else if (kind === "abort") {
         await Promise.resolve(ctx.abort());
       } else if (kind === "terminate") {
@@ -249,8 +262,12 @@ export default function (pi: any) {
   });
   pi.on("title_change", async (event: Frame, ctx: any) => lifecycle("title_change", event, ctx));
   pi.on("agent_start", async (event: Frame, ctx: any) => lifecycle("agent_start", event, ctx));
+  pi.on("tool_execution_start", async (event: Frame, ctx: any) => lifecycle("tool_execution_start", event, ctx));
+  pi.on("tool_execution_update", async (event: Frame, ctx: any) => lifecycle("tool_execution_update", event, ctx));
+  pi.on("tool_execution_end", async (event: Frame, ctx: any) => lifecycle("tool_execution_end", event, ctx));
+  pi.on("message_update", async (event: Frame, ctx: any) => lifecycle("message_update", event, ctx));
   pi.on("agent_end", async (event: Frame, ctx: any) => {
-    const isTerminal = event.isTerminal === true || event.willContinue === false;
+    const isTerminal = typeof event.isTerminal === "boolean" ? event.isTerminal : event.willContinue === false;
     lifecycle("agent_end", { ...event, isTerminal }, ctx);
   });
   pi.on("session_stop", async (event: Frame, ctx: any) => lifecycle("session_stop", event, ctx));

@@ -15,9 +15,9 @@ def test_status_table_has_one_row_per_provider_per_wired_combination() -> None:
 
 
 def test_harness_backed_profiles_fill_the_staged_release_diagonal() -> None:
-    # Antigravity joined the harness-backed set on 2026-08-20 with its tier
-    # promotion; cursor and pi still sit outside it on observed-install lanes.
-    harness_backed = {"codex", "claude", "opencode", "antigravity"}
+    # OMP joined the staged release lane with its native Helm/Console
+    # qualification profiles.
+    harness_backed = {"codex", "claude", "opencode", "antigravity", "omp"}
     diagonal = render_diagonal_status(load_facts())
     for provider in harness_backed:
         line = next(line for line in diagonal.splitlines() if line.startswith(f"| {provider} |"))

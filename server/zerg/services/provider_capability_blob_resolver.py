@@ -12,10 +12,21 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
-import boto3
-from botocore.config import Config
-from botocore.exceptions import BotoCoreError
-from botocore.exceptions import ClientError
+try:
+    import boto3
+    from botocore.config import Config
+    from botocore.exceptions import BotoCoreError
+    from botocore.exceptions import ClientError
+except ModuleNotFoundError:  # Optional: only required when resolving a configured blob.
+    boto3 = None
+    Config = None
+
+    class BotoCoreError(Exception):
+        pass
+
+    class ClientError(Exception):
+        pass
+
 
 FACTORY_BLOB_NAMESPACE = "longhouse/provider-factory/v1/blobs/sha256"
 MAX_FACTORY_BLOB_BYTES = 50 * 1024 * 1024
@@ -162,6 +173,11 @@ class ProviderCapabilityBlobResolver:
         self.config = config
         # Supplying both credentials is deliberate: this client never consults
         # the ambient AWS credential chain and has no write/delete methods here.
+        if client is None and (boto3 is None or Config is None):
+            raise ProviderCapabilityBlobResolverConfigurationError(
+                "dependency_missing",
+                "provider capability blob resolution requires the optional boto3 dependency",
+            )
         self.client = client or boto3.client(
             "s3",
             endpoint_url=config.endpoint,

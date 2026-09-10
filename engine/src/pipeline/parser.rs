@@ -256,6 +256,7 @@ struct RawLine {
     label: Option<String>,
     name: Option<String>,
     title: Option<String>,
+    reason: Option<String>,
     #[serde(rename = "tokensBefore")]
     tokens_before: Option<u64>,
     #[serde(rename = "isSidechain")]
@@ -3287,7 +3288,6 @@ fn extract_pi_provider_facts(obj: &RawLine, line_offset: u64, facts: &mut Vec<Pa
         _ => {}
     }
 }
-
 fn extract_omp_provider_facts(obj: &RawLine, line_offset: u64, facts: &mut Vec<ParsedProviderFact>) {
     let start = facts.len();
     if matches!(obj.r#type.as_deref(), Some("title") | Some("title_change")) {
@@ -5537,8 +5537,24 @@ mod tests {
         assert!(result.provider_facts.iter().any(|fact| {
             fact.kind == "session.title" && fact.payload["title"] == "Updated OMP title"
         }));
+        assert!(result.events.iter().any(|event| event.raw_type == "omp_reset_boundary"));
+        let compaction = result
+            .provider_facts
+            .iter()
+            .find(|fact| fact.kind == "context.compaction")
+            .unwrap();
+        assert_eq!(
+            result
+                .provider_facts
+                .iter()
+                .filter(|fact| fact.kind == "context.compaction")
+                .count(),
+            1
+        );
+        assert_eq!(compaction.payload["provider"], "omp");
+        assert_eq!(compaction.payload["pre_tokens"], 1200);
         assert!(result.events.iter().any(|event| event.raw_type == "omp_model_change"));
-        assert_eq!(result.source_lines.len(), 10);
+        assert_eq!(result.source_lines.len(), 11);
     }
 
     #[test]
