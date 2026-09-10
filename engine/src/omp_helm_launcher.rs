@@ -92,6 +92,10 @@ struct OmpHelmStateFile {
     agent_end_is_terminal: Option<bool>,
     #[serde(default)]
     agent_end_will_continue: Option<bool>,
+    #[serde(default)]
+    agent_end_is_terminal_present: bool,
+    #[serde(default)]
+    agent_end_will_continue_present: bool,
     terminal_state: Option<String>,
     terminal_reason: Option<String>,
     exit_code: Option<i32>,
@@ -649,13 +653,21 @@ impl OmpHelmServer {
             state.state.agent_end_observed = false;
             state.state.agent_end_is_terminal = None;
             state.state.agent_end_will_continue = None;
+            state.state.agent_end_is_terminal_present = false;
+            state.state.agent_end_will_continue_present = false;
         } else if kind == "agent_end" {
             let is_terminal = is_terminal_agent_end(event);
             state.state.agent_end_observed = true;
             state.state.agent_end_is_terminal = Some(is_terminal);
+            state.state.agent_end_is_terminal_present = event
+                .and_then(|value| value.get("isTerminal"))
+                .is_some();
             state.state.agent_end_will_continue = event
                 .and_then(|value| value.get("willContinue"))
                 .and_then(Value::as_bool);
+            state.state.agent_end_will_continue_present = event
+                .and_then(|value| value.get("willContinue"))
+                .is_some();
         }
         state.state.phase = phase.into();
         state.state.tool_name = tool.clone();
@@ -880,6 +892,14 @@ fn identity_commit_authority_matches_locked(
 }
 
 fn is_terminal_agent_end(event: Option<&Value>) -> bool {
+    for field in ["isTerminal", "willContinue"] {
+        if event
+            .and_then(|value| value.get(field))
+            .is_some_and(|value| !value.is_boolean())
+        {
+            return false;
+        }
+    }
     event
         .and_then(|value| value.get("isTerminal"))
         .and_then(Value::as_bool)
@@ -1412,6 +1432,8 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         agent_end_observed: false,
         agent_end_is_terminal: None,
         agent_end_will_continue: None,
+        agent_end_is_terminal_present: false,
+        agent_end_will_continue_present: false,
         terminal_state: None,
         terminal_reason: None,
         exit_code: None,
@@ -1636,6 +1658,8 @@ mod tests {
             agent_end_observed: false,
             agent_end_is_terminal: None,
             agent_end_will_continue: None,
+            agent_end_is_terminal_present: false,
+            agent_end_will_continue_present: false,
             ready: true,
             pending_transition: false,
             terminal_state: None,
@@ -1873,6 +1897,8 @@ mod tests {
         assert!(!EXTENSION_ASSET.contains("event, ...session(ctx)"));
         assert!(EXTENSION_ASSET.contains("tool_execution_update"));
         assert!(EXTENSION_ASSET.contains("isTerminal"));
+        assert!(EXTENSION_ASSET.contains("MALFORMED_BOOLEAN_MARKER"));
+        assert!(EXTENSION_ASSET.contains("key in event"));
     }
 
     #[test]
@@ -1887,6 +1913,12 @@ mod tests {
         )));
         assert!(is_terminal_agent_end(Some(
             &json!({"type": "agent_end", "isTerminal": true, "willContinue": true})
+        )));
+        assert!(!is_terminal_agent_end(Some(
+            &json!({"type": "agent_end", "isTerminal": "true"})
+        )));
+        assert!(!is_terminal_agent_end(Some(
+            &json!({"type": "agent_end", "willContinue": "false"})
         )));
     }
 

@@ -2280,7 +2280,7 @@
           "owner_action": "run the transcript census for antigravity and name the raw source"
         }
       },
-      "adapter_digest": "adb03acbdbaeb81e0a438edca93d5d60adbf9f9facea295432e3093fac6d3f02"
+      "adapter_digest": "19419ed89b7cacd6e253c139ac3be649bf7768e2eb7881286b0bec34ec472c91"
     },
     {
       "provider": "cursor",
@@ -3525,7 +3525,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "5e6f2379207844fc2eed42481594e8781ccc4f573596526e74d937e0af61d55a"
+              "oracle_digest": "c0f4cffced406e03600798c6e2794c3a193e5332c7321f1a0e1ded567a908397"
             },
             {
               "id": "omp_helm_send_idle",
@@ -3536,7 +3536,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "5e6f2379207844fc2eed42481594e8781ccc4f573596526e74d937e0af61d55a"
+              "oracle_digest": "c0f4cffced406e03600798c6e2794c3a193e5332c7321f1a0e1ded567a908397"
             },
             {
               "id": "omp_helm_follow_up_native",
@@ -3547,7 +3547,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "5e6f2379207844fc2eed42481594e8781ccc4f573596526e74d937e0af61d55a"
+              "oracle_digest": "c0f4cffced406e03600798c6e2794c3a193e5332c7321f1a0e1ded567a908397"
             },
             {
               "id": "omp_helm_steer_active",
@@ -3558,7 +3558,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "5e6f2379207844fc2eed42481594e8781ccc4f573596526e74d937e0af61d55a"
+              "oracle_digest": "c0f4cffced406e03600798c6e2794c3a193e5332c7321f1a0e1ded567a908397"
             },
             {
               "id": "omp_helm_abort_native",
@@ -3569,7 +3569,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "5e6f2379207844fc2eed42481594e8781ccc4f573596526e74d937e0af61d55a"
+              "oracle_digest": "c0f4cffced406e03600798c6e2794c3a193e5332c7321f1a0e1ded567a908397"
             },
             {
               "id": "omp_helm_terminate_owned",
@@ -3580,7 +3580,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "5e6f2379207844fc2eed42481594e8781ccc4f573596526e74d937e0af61d55a"
+              "oracle_digest": "c0f4cffced406e03600798c6e2794c3a193e5332c7321f1a0e1ded567a908397"
             },
             {
               "id": "omp_helm_native_replacement_bound",
@@ -3591,7 +3591,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "5e6f2379207844fc2eed42481594e8781ccc4f573596526e74d937e0af61d55a"
+              "oracle_digest": "c0f4cffced406e03600798c6e2794c3a193e5332c7321f1a0e1ded567a908397"
             }
           ]
         },
@@ -3618,7 +3618,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "5e6f2379207844fc2eed42481594e8781ccc4f573596526e74d937e0af61d55a"
+              "oracle_digest": "c0f4cffced406e03600798c6e2794c3a193e5332c7321f1a0e1ded567a908397"
             },
             {
               "id": "omp_helm_stale_owner_refused",
@@ -3629,7 +3629,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "5e6f2379207844fc2eed42481594e8781ccc4f573596526e74d937e0af61d55a"
+              "oracle_digest": "c0f4cffced406e03600798c6e2794c3a193e5332c7321f1a0e1ded567a908397"
             }
           ]
         },
@@ -3656,7 +3656,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "082be0b8c840dd762add2678c510f56052f968e93f67520310b5162a14b06374"
+              "oracle_digest": "8975c2070b4e563aa37450cfbffb67e8c6a403dc4c842828dcb7890560afebfa"
             }
           ]
         }
@@ -3719,7 +3719,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "1892f5d1059cb6b242c59094efc903ccbac3eef16ed984f2481321b0ab25c6fe"
+      "adapter_digest": "71d0a450c01abb69432cd559db787c14cbc09279b461239b8e18d0e53b2570ef"
     }
   ]
 }

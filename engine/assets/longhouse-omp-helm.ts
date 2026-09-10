@@ -10,6 +10,7 @@ const initialPromptDeliveredAtLaunch =
   process.env.LONGHOUSE_OMP_HELM_INITIAL_PROMPT_DELIVERED === "1";
 const MAX_FRAME_BYTES = 512 * 1024;
 const MAX_METADATA_STRING_LENGTH = 256;
+const MALFORMED_BOOLEAN_MARKER = "__omp_malformed_boolean__";
 
 if (!socketPath || !authToken || !launchSessionId) {
   throw new Error("Longhouse OMP Helm extension is missing launch-scoped channel identity");
@@ -89,7 +90,12 @@ export default function (pi: any) {
         compact[key] = event[key].slice(0, MAX_METADATA_STRING_LENGTH);
       }
     }
-    for (const key of ["isTerminal", "willContinue", "success", "isError"]) {
+    for (const key of ["isTerminal", "willContinue"]) {
+      if (key in event) {
+        compact[key] = typeof event[key] === "boolean" ? event[key] : MALFORMED_BOOLEAN_MARKER;
+      }
+    }
+    for (const key of ["success", "isError"]) {
       if (typeof event[key] === "boolean") compact[key] = event[key];
     }
     if (typeof event.status === "string") compact.status = event.status.slice(0, MAX_METADATA_STRING_LENGTH);
@@ -293,22 +299,6 @@ export default function (pi: any) {
   pi.on("tool_execution_update", async (event: Frame, ctx: any) => lifecycle("tool_execution_update", event, ctx));
   pi.on("tool_execution_end", async (event: Frame, ctx: any) => lifecycle("tool_execution_end", event, ctx));
   pi.on("message_update", async (event: Frame, ctx: any) => lifecycle("message_update", event, ctx));
-  pi.on("agent_end", async (event: Frame, ctx: any) => {
-    const isTerminal =
-      typeof event.isTerminal === "boolean"
-        ? event.isTerminal
-        : typeof event.willContinue === "boolean"
-          ? event.willContinue === false
-          : true;
-    lifecycle(
-      "agent_end",
-      {
-        type: "agent_end",
-        isTerminal,
-        ...(typeof event.willContinue === "boolean" ? { willContinue: event.willContinue } : {}),
-      },
-      ctx,
-    );
-  });
+  pi.on("agent_end", async (event: Frame, ctx: any) => lifecycle("agent_end", event, ctx));
   pi.on("session_stop", async (event: Frame, ctx: any) => lifecycle("session_stop", event, ctx));
 }

@@ -81,7 +81,7 @@ _PROFILE = identity.IdentityProfile(
     provider="omp",
     profile=PROFILE,
     scenario_id=SCENARIO_ID,
-    version_line=identity.semver_version_line(),
+    version_line=identity.semver_version_line(version_prefix=r"omp/"),
     oracle_source=Path(__file__),
 )
 

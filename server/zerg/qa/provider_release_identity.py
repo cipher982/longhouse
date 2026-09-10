@@ -109,13 +109,13 @@ def atomic_json(path: Path, payload: Any, *, canonical: bool = False) -> None:
         Path(name).unlink(missing_ok=True)
 
 
-def semver_version_line(version_suffix: str = "") -> Pattern[str]:
-    r"""A `<semver>` version line, optionally followed by a fixed regex suffix.
+def semver_version_line(version_suffix: str = "", *, version_prefix: str = "") -> Pattern[str]:
+    r"""A version line with an optional fixed prefix and regex suffix.
 
     `version_suffix` is raw regex, not an escaped literal, so a caller wanting
     Claude's parenthesised product name passes ``r" \(Claude Code\)"``.
     """
-    return re.compile(rf"^(?P<version>{SEMVER}){version_suffix}$")
+    return re.compile(rf"^{version_prefix}(?P<version>{SEMVER}){version_suffix}$")
 
 
 def identity_runner(profile: IdentityProfile) -> Callable[[Path, Path], dict[str, Any]]:

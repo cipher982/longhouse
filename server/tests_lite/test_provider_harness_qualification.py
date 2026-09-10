@@ -1280,6 +1280,31 @@ def test_unsupported_profile_is_rejected(tmp_path: Path) -> None:
         bridge.run(request, tmp_path / "output")
 
 
+@pytest.mark.parametrize(
+    ("provider", "profile"),
+    (("pi", "pi_print_v1"), ("omp", "omp_print_v1"), ("omp", "omp_helm_v1")),
+)
+def test_tier1_profile_dispatch_runs_the_native_profile_producer(
+    tmp_path: Path,
+    monkeypatch,
+    provider: str,
+    profile: str,
+) -> None:
+    request = tmp_path / f"{provider}-{profile}.json"
+    request.write_text(json.dumps({"provider": provider, "profile": profile}), encoding="utf-8")
+    captured: list[tuple[Path, Path]] = []
+
+    def producer(request_path: Path, output_root: Path) -> dict[str, object]:
+        captured.append((request_path, output_root))
+        return {"valid": True, "producer": profile}
+
+    monkeypatch.setitem(bridge._PROFILES, (provider, profile), producer)
+
+    output_root = tmp_path / "output"
+    assert bridge.run(request, output_root) == {"valid": True, "producer": profile}
+    assert captured == [(request, output_root)]
+
+
 def test_helm_interrupt_uses_probe_and_interrupt_scenarios(tmp_path: Path, monkeypatch) -> None:
     from zerg.qa import universal_agent_harness as uah
 

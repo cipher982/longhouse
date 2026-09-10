@@ -1239,7 +1239,9 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "omp",
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -1358,7 +1360,6 @@
         "claude",
         "codex",
         "cursor",
-        "omp",
         "opencode"
       ]
     },
@@ -1820,7 +1821,8 @@
         "codex",
         "cursor",
         "omp",
-        "opencode"
+        "opencode",
+        "pi"
       ]
     },
     {
