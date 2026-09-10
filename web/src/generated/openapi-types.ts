@@ -3910,7 +3910,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "codex" | "claude" | "cursor" | "opencode" | "pi";
+            provider: "codex" | "claude" | "cursor" | "opencode" | "pi" | "omp";
             /** Session Id */
             session_id: string;
             /** Provider Session Id */
@@ -3950,7 +3950,7 @@ export interface components {
              * Provider
              * @enum {string}
              */
-            provider: "codex" | "claude" | "opencode" | "cursor" | "antigravity" | "pi";
+            provider: "codex" | "claude" | "opencode" | "cursor" | "antigravity" | "pi" | "omp";
             /** Session Id */
             session_id: string;
             /** Connection Id */
@@ -5501,7 +5501,7 @@ export interface components {
          *     Transport is auto-determined by launch context — not user-selectable.
          * @enum {string}
          */
-        ManagedSessionTransport: "claude_channel_bridge" | "codex_app_server" | "opencode_server_bridge" | "opencode_process" | "antigravity_hook_inbox" | "antigravity_process" | "cursor_exec" | "cursor_acp" | "cursor_helm" | "pi_print" | "pi_helm_channel";
+        ManagedSessionTransport: "claude_channel_bridge" | "codex_app_server" | "opencode_server_bridge" | "opencode_process" | "antigravity_hook_inbox" | "antigravity_process" | "cursor_exec" | "cursor_acp" | "cursor_helm" | "pi_print" | "pi_helm_channel" | "omp_helm_channel";
         /** ManagedTurnProviderSummaryResponse */
         ManagedTurnProviderSummaryResponse: {
             /** Completed Turns */
