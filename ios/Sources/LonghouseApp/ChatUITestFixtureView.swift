@@ -759,7 +759,10 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     }
 
     func sessionDetail(id: String) async throws -> SessionDetail {
-        Self.makeDetail(
+        if let delayMs = UITestHooks.mobileDetailDelayMs, delayMs > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+        }
+        return Self.makeDetail(
             sessionID: sessionID,
             events: events,
             title: Self.titleForFixture(fixtureName)

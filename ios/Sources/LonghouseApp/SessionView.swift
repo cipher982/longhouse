@@ -313,10 +313,9 @@ struct SessionView: View {
     }
 
     private var isSessionInteractionReady: Bool {
-        // Primary detail can arrive before the transcript tail. Keep the
-        // header responsive, but leave the composer and actions in their
-        // bounded loading shell until the initial transcript lane settles.
-        viewModel.detail != nil && !viewModel.isInitialLoading
+        // Compact native chrome is owned by the primary detail lane. It may
+        // become available while the transcript tail/WebKit render continues.
+        viewModel.detail != nil
     }
 
     private var transcriptState: TranscriptDisplayState {
