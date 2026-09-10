@@ -37,7 +37,7 @@ check finishes; a later build, review, or release is not a reason to keep QA ope
   and its visible window is closed; device/process state alone is not UI cleanup.
 - Never delete a pre-existing simulator. Restore its original boot state and
   close only windows/apps you opened. Do not quit Simulator or kill browsers
-  globally when other windows or sessions may belong to David or another agent.
+  globally when other windows or sessions may belong to another user or agent.
 - Close owned browser tabs and stop owned Runtime Hosts, engines, relays,
   log followers, and web servers. Do not use `make stop` against a shared stack.
 - Provider verification must use an isolated `HOME`/profile and disposable
@@ -48,17 +48,17 @@ check finishes; a later build, review, or release is not a reason to keep QA ope
   environment that produced them.
 
 Before handoff, verify no owned QA window, device, listener, or process remains.
-Retaining a running environment requires an explicit request from David.
+Retaining a running environment requires an explicit owner request.
 Every command that can outlive the shell is an owned resource. Record its PID/process group and launch command before starting it; run it under a cleanup trap or the repo's process supervisor, never as an untracked background child. This includes `make test-ios`, `xcodebuild`, `simlab`, `sim-deploy`, `sim-shot`, log followers, and local servers.
 
-If a check is interrupted, inspect and clean its exact process group before doing anything else. Do not start a replacement run while an older `xcodebuild` or app is still alive. At the end, check the exact owned process names/PIDs and `xcrun simctl list devices`; a green test is not a clean handoff. Stop the test process, app, and owned simulator/window in the same teardown path. Never leave an iOS verification window open for a later reviewer unless David explicitly asked to retain it.
+If a check is interrupted, inspect and clean its exact process group before doing anything else. Do not start a replacement run while an older `xcodebuild` or app is still alive. At the end, check the exact owned process names/PIDs and `xcrun simctl list devices`; a green test is not a clean handoff. Stop the test process, app, and owned simulator/window in the same teardown path. Never leave an iOS verification window open for a later reviewer unless retention was explicitly requested.
 
 ## iOS
 
 ### Autonomous recovery dogfood (simlab)
 
-Use this before asking David to reproduce transcript-delivery or reconnect
-problems on his phone. Run from the product repo on a Mac with Xcode and a
+Use this before asking a user to reproduce transcript-delivery or reconnect
+problems on a phone. Run from the product repo on a Mac with Xcode and a
 simulator:
 
 ```bash
@@ -163,8 +163,7 @@ where to look before blaming a style.
 
 ### Phone
 Only for device-only behavior (APNS, Live Activity, cellular):
-`make phone-deploy`, `make phone-shot`, `make phone-logs`. The App Store
-build David uses is an Xcode build he runs; tell him when the phone needs one.
+The App Store build is an Xcode build; state clearly when the phone needs one.
 
 ## Web
 
