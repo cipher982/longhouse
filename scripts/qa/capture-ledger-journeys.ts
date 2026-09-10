@@ -715,6 +715,12 @@ try {
       session.session_state.run.lifecycle = "ended";
       session.session_state.run.ended_at = iso();
       session.session_state.activity.state = "quiescent";
+      session.session_state.presentation.primary = {
+        key: "closed",
+        label: "Closed",
+        tone: "closed",
+        observed_at: session.session_state.disposition.closed_at,
+      };
       publish();
       await page.waitForFunction(
         () =>

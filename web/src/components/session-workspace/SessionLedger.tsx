@@ -173,6 +173,14 @@ export function SessionLedger({
       data-surface={surface}
       data-prominence={prominence}
     >
+      <span
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {connectionLabel ? state.observation : ""}
+      </span>
       <details className="session-ledger__observation">
         <summary
           className="session-ledger__primary"
@@ -242,7 +250,6 @@ export function SessionLedger({
             </span>
           )}
           <span className="session-ledger__link">
-            {connectionLabel ? <span>{connectionLabel}</span> : null}
             <span className="session-ledger__disclosure" aria-hidden="true">
               ⌄
             </span>
@@ -294,14 +301,7 @@ export function SessionLedger({
           {notice && surface !== "dock" ? (
             <p className="session-ledger__note">{notice}</p>
           ) : showContext && state.observation ? (
-            <p
-              className="session-ledger__note"
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
-            >
-              {state.observation}
-            </p>
+            <p className="session-ledger__note">{state.observation}</p>
           ) : state.detail &&
             (showContext || state.detailKind === "explanation") ? (
             <p

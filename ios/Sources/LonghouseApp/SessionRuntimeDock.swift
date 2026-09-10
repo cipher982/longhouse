@@ -296,7 +296,6 @@ struct SessionRuntimeDock: View {
         ledger(asOf: evidenceNow) == .uncertain
             || detail.activePauseRequest != nil
             || detail.stateFacts.pendingInteractionKind != nil
-            || ["offline", "stale"].contains(detail.runtimeDisplay.hostState)
             || detail.controlBlock.isFault
             || detail.isTranscriptSyncing
     }
