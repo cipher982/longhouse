@@ -1530,9 +1530,13 @@ final class SessionViewModel: ObservableObject {
         }
     }
 
-    /// Returns whether this pass joined a refresh already in flight, which is
-    /// what the caller's follow-up rule is about. It deliberately does not
-    /// re-arm anything by itself: the loop owns its own exit condition.
+    /// Returns whether this pass joined a refresh that then completed
+    /// successfully. Only that case earns the caller's follow-up: the request
+    /// it joined may have captured its snapshot before this wake. A pass that
+    /// fetched for itself needs nothing, and a pass that failed has already
+    /// scheduled its own retry — forcing a second attempt alongside that retry
+    /// would double-count the failure and defeat the backoff. The loop owns its
+    /// own exit condition; this does not re-arm anything by itself.
     @discardableResult
     private func refreshTailAfterRealtimeWake(
         api: SessionWorkspaceClient,
@@ -1543,16 +1547,16 @@ final class SessionViewModel: ObservableObject {
         let joinedExistingTail = tailRefreshTask != nil
         do {
             try await refreshTail(api: api, sessionId: sessionId)
-            guard isCurrentRoute(sessionId: sessionId, generation: generation) else { return joinedExistingTail }
+            guard isCurrentRoute(sessionId: sessionId, generation: generation) else { return false }
             realtimeRefreshFailureCount = 0
             realtimeRefreshRetryTask?.cancel()
             realtimeRefreshRetryTask = nil
             refreshErrorMessage = nil
         } catch is CancellationError {
-            return joinedExistingTail
+            return false
         } catch {
             guard isCurrentRoute(sessionId: sessionId, generation: generation), !realtimePaused else {
-                return joinedExistingTail
+                return false
             }
             scheduleRealtimeRefreshRetry(api: api, sessionId: sessionId)
         }
