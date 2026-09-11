@@ -363,6 +363,21 @@ struct NativeRestartCommand {
     display: String,
 }
 
+#[derive(Debug)]
+struct NativeServiceCommandFailure {
+    exit_code: Option<i32>,
+    message: String,
+}
+
+impl From<String> for NativeServiceCommandFailure {
+    fn from(message: String) -> Self {
+        Self {
+            exit_code: None,
+            message,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct NativeServiceManagerCommand {
     id: &'static str,
@@ -2147,12 +2162,13 @@ fn collect_native_repair_execution(
             run_service_manager_command,
         )
     } else {
+        let existing_service = service_path(NativeServicePlatform::current(), &home);
         collect_native_repair_execution_with_runner(
             state_root,
             dry_run,
             NativeServicePlatform::current(),
             &home,
-            run_restart_command,
+            |command| run_restart_command(command, existing_service.as_deref()),
         )
     }
 }
@@ -4362,6 +4378,7 @@ fn write_text_atomic(path: &Path, content: &str) -> Result<(), String> {
 
 fn run_service_manager_command(command: &NativeServiceManagerCommand) -> Result<(), String> {
     run_bounded_service_command(command.program, &command.args, Duration::from_secs(10))
+        .map_err(|failure| failure.message)
 }
 
 fn redact_service_error(error: &str, redactions: &[String]) -> String {
@@ -4473,8 +4490,30 @@ fn current_uid() -> u32 {
     }
 }
 
-fn run_restart_command(command: &NativeRestartCommand) -> Result<(), String> {
-    run_bounded_service_command(command.program, &command.args, Duration::from_secs(10))
+fn run_restart_command(
+    command: &NativeRestartCommand,
+    existing_service: Option<&Path>,
+) -> Result<(), String> {
+    match run_bounded_service_command(command.program, &command.args, Duration::from_secs(10)) {
+        Err(failure)
+            if failure.exit_code == Some(113)
+                && command.program == "launchctl"
+                && command.args.first().is_some_and(|arg| arg == "kickstart") =>
+        {
+            // launchctl 113 means the inspected service is not registered.
+            // Load its existing definition; do not regenerate it or treat
+            // permission failures and unknown service state as absence.
+            let path = existing_service.ok_or(failure.message)?;
+            let (_, start) = recovery_service_commands(NativeServicePlatform::Macos, path)
+                .expect("macOS has a service bootstrap command");
+            eprintln!(
+                "Longhouse repair: loading the existing, unregistered Machine Agent service."
+            );
+            run_bounded_service_command(start.program, &start.args, Duration::from_secs(10))
+                .map_err(|failure| failure.message)
+        }
+        result => result.map_err(|failure| failure.message),
+    }
 }
 
 /// Bound the service-manager client, never signal the service's provider children.
@@ -4482,7 +4521,7 @@ fn run_bounded_service_command(
     program: &str,
     args: &[String],
     timeout: Duration,
-) -> Result<(), String> {
+) -> Result<(), NativeServiceCommandFailure> {
     use std::io::Read;
     use std::process::Stdio;
     let mut command = Command::new(program);
@@ -4523,23 +4562,28 @@ fn run_bounded_service_command(
                         break if status.success() {
                             Ok(())
                         } else {
-                            Err(format_process_failure(status.code(), &[], &stderr))
+                            Err(NativeServiceCommandFailure {
+                                exit_code: status.code(),
+                                message: format_process_failure(status.code(), &[], &stderr),
+                            })
                         }
                     }
                     Err(_) => {
                         break Err(format!(
                             "{program} output did not close within {}s",
                             timeout.as_secs()
-                        ))
+                        )
+                        .into())
                     }
                 }
             }
-            Err(error) => break Err(format!("waiting for {program}: {error}")),
+            Err(error) => break Err(format!("waiting for {program}: {error}").into()),
             Ok(None) if std::time::Instant::now() >= deadline => {
                 break Err(format!(
                     "{program} did not finish within {}s; service state remains unverified",
                     timeout.as_secs()
-                ));
+                )
+                .into());
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(20)),
         }
