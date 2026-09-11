@@ -85,12 +85,11 @@ capture_fixture_render() {
   local input_json="$1"
   local output_png="$2"
 
-  # SnapshotRenderer already anchors relative labels to collected_at. Use that
-  # same fixture input for deterministic captures instead of letting the window
-  # host compare historical events with the wall clock.
-  raw_snapshot_exec --input "$input_json" --output "$output_png"
-  verify_png_has_visible_content "$output_png"
-  echo "$output_png"
+  # Capture the actual native material/appearance. The window host freezes
+  # fixture labels to collected_at while keeping producer trust on wall time.
+  local app_bin
+  app_bin="$(build_app_binary)"
+  capture_window_render "$app_bin" "$input_json" "$output_png"
 }
 
 app_exec() {

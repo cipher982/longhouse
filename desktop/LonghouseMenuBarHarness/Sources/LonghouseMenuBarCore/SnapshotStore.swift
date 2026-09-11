@@ -129,6 +129,15 @@ public final class SnapshotStore: ObservableObject {
         }
     }
 
+    // Freeze fixture labels without changing the wall clock that governs
+    // producer/projection trust in the live window host.
+    var snapshotPresentationDate: Date {
+        if source is FixtureHealthSnapshotSource, let collectedAt = snapshot?.collectedAtDate {
+            return collectedAt
+        }
+        return presentationDate
+    }
+
     /// How much the app may trust what it is currently displaying.
     ///
     /// Derived only from producer refresh outcomes. Callers pass the current

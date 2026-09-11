@@ -38,7 +38,7 @@ public struct HarnessRootView: View {
                 MenuBarPanelView(
                     snapshot: displayedSnapshot,
                     history: store.history,
-                    presentationDate: store.presentationDate,
+                    presentationDate: store.snapshotPresentationDate,
                     feedback: store.feedback,
                     setFeedback: store.setFeedback,
                     actionSink: actionSink,
