@@ -523,7 +523,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     public var lastShipLabel: String {
-        engineStatus?.payload?.lastShipAt ?? "No shipments yet"
+        engineStatus?.payload?.lastShipAt ?? "Unknown"
     }
 
     public var collectedAtDate: Date? {
@@ -562,7 +562,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
 
     public func lastShipSummaryLabel(relativeTo referenceDate: Date) -> String {
         guard let raw = engineStatus?.payload?.lastShipAt else {
-            return "No shipments yet"
+            return "Last receipt time unknown"
         }
         guard let parsed = Self.parseISO8601(raw) else {
             return "Last ship \(raw)"
@@ -576,7 +576,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
 
     public func lastShipValueLabel(relativeTo referenceDate: Date) -> String {
         guard let raw = engineStatus?.payload?.lastShipAt else {
-            return "No shipments yet"
+            return "Unknown"
         }
         guard let parsed = Self.parseISO8601(raw) else {
             return raw
