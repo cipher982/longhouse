@@ -39,6 +39,7 @@ class ProviderPtySession:
         columns: int = 132,
         thread_name: str = "provider-qualification-terminal-drain",
     ) -> ProviderPtySession:
+        terminal_path.parent.mkdir(parents=True, exist_ok=True)
         master_fd, slave_fd = pty.openpty()
         fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
 
@@ -58,10 +59,13 @@ class ProviderPtySession:
         )
         os.close(slave_fd)
         stop_reader = threading.Event()
-        terminal_path.parent.mkdir(parents=True, exist_ok=True)
 
         def drain() -> None:
-            with terminal_path.open("ab", buffering=0) as output:
+            try:
+                output = terminal_path.open("ab", buffering=0)
+            except OSError:
+                return
+            with output:
                 while not stop_reader.is_set():
                     try:
                         ready, _, _ = select.select([master_fd], [], [], 0.2)
@@ -145,11 +149,11 @@ class ProviderPtySession:
                     self.process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     pass
+        self._reader.join(timeout=2)
         try:
             os.close(self.master_fd)
         except OSError:
             pass
-        self._reader.join(timeout=2)
 
 
 def wait_for_terminal_quiescence(

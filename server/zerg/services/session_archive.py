@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import gzip
 import hashlib
+import logging
 from datetime import datetime
 from datetime import timezone
 from typing import Optional
@@ -25,6 +27,13 @@ from zerg.storage_v2.raw_objects import RawObjectCorruptError
 from zerg.utils.time import UTCBaseModel
 
 BUNDLE_VERSION = 1
+
+logger = logging.getLogger(__name__)
+
+# Above this the bundle is carrying a session too large to build as one artifact.
+# Object-level replication is the answer for these; until that path is cut over,
+# this warning is how the offending sessions stay visible.
+ARCHIVE_BUNDLE_WARN_BYTES = 64 * 1024 * 1024
 
 
 class SessionArchivePayloadResponse(BaseModel):
@@ -87,7 +96,14 @@ class SessionArchiveBundleResponse(UTCBaseModel):
     archive: SessionArchivePayloadResponse = Field(..., description="Encoded raw archive payload")
 
 
-def _encode_jsonl_payload(jsonl_bytes: bytes) -> tuple[str, str]:
+def _encode_jsonl_payload(jsonl_bytes: bytes | bytearray) -> tuple[str, str]:
+    """Hash, compress and encode a whole-session payload.
+
+    Synchronous and proportional to payload size: callers must run this off the
+    event loop. It accepts the caller's mutable buffer rather than a copy, so a
+    multi-gigabyte session does not pay for a second full-size allocation.
+    """
+
     raw_sha = hashlib.sha256(jsonl_bytes).hexdigest()
     compressed = gzip.compress(jsonl_bytes, mtime=0)
     encoded = base64.b64encode(compressed).decode("ascii")
@@ -166,7 +182,16 @@ async def build_storage_v2_archive_bundle(
         if manifest.get("objects_truncated") is not True:
             break
 
-    payload_sha, encoded_payload = _encode_jsonl_payload(bytes(payload))
+    if len(payload) >= ARCHIVE_BUNDLE_WARN_BYTES:
+        logger.warning(
+            "Archive bundle payload is large session_id=%s bytes=%d",
+            session_id,
+            len(payload),
+        )
+    # Proportional to session size and synchronous by nature: hashing,
+    # compression and base64 encoding a whole session on the event loop thread
+    # stops every other route on this host for its whole duration. Offload it.
+    payload_sha, encoded_payload = await asyncio.to_thread(_encode_jsonl_payload, payload)
     catalog_facts = facts.get("catalog") if isinstance(facts.get("catalog"), dict) else {}
     connections = facts.get("connections") if isinstance(facts.get("connections"), list) else []
     managed_transport = next(

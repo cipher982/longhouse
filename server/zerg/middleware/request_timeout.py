@@ -90,6 +90,11 @@ def _product_read_route_class(api_path: str, method: str) -> str | None:
 
 def _session_read_route_class(remainder: str, *, storage_v2: bool) -> str | None:
     parts = remainder.strip("/").split("/")
+    if parts and parts[0] == "objects":
+        # Replication inventory and per-object fetch. Labelled as one class so a
+        # replica sweep is visible in product-read metrics without turning a
+        # hash into a label.
+        return "object_read" if len(parts) == 2 else None
     try:
         UUID(parts[0])
     except (ValueError, IndexError):
@@ -185,6 +190,16 @@ class RequestTimeoutMiddleware:
 
         # Skip SSE / streaming / WebSocket-upgrade endpoints.
         if any(frag in api_path for frag in _STREAMING_FRAGMENTS):
+            await self.app(scope, receive, send)
+            return
+
+        # A transcript download is a stream the client asked for, and it
+        # legitimately outlives a request deadline. Once the response has
+        # started, a deadline cannot produce an error response — it only
+        # truncates a 200 mid-file, which reads as a complete download and is
+        # worse than failing. The bound has to live on the unit instead: every
+        # object read inside the stream carries its own deadline.
+        if api_path.endswith("/export"):
             await self.app(scope, receive, send)
             return
 

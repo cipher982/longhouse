@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -9,15 +11,35 @@ from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa.pi_console_tool_producer import REGISTRATION as PI_CONSOLE_REGISTRATION
 from zerg.qa.pi_console_tool_producer import pi_console_tool_assertions
 from zerg.qa.pi_helm_lifecycle import _cleanup_receipt
-from zerg.qa.pi_helm_lifecycle import _write_scenario_receipts
 from zerg.qa.pi_helm_lifecycle import _native_snapshot
 from zerg.qa.pi_helm_lifecycle import _redact_value
 from zerg.qa.pi_helm_lifecycle import _retain_source
 from zerg.qa.pi_helm_lifecycle import _state_identity
+from zerg.qa.pi_helm_lifecycle import _write_scenario_receipts
 from zerg.qa.pi_helm_lifecycle import pi_helm_lifecycle_assertions
 from zerg.qa.pi_native import pi_native_model_evidence
 from zerg.qa.pi_native import pi_native_shadow_taxonomy
 from zerg.qa.pi_native import pi_transcript_rows
+from zerg.qa.provider_adapters.pi import _run_pi_with_pty
+
+
+def test_pi_print_runner_allocates_tty_for_stock_cli(tmp_path) -> None:
+    script = tmp_path / "tty_probe.py"
+    script.write_text(
+        "import os\nprint(f'PI_STDOUT_IS_TTY={os.isatty(1)}')\nprint('PI_TTY_PROOF')\n",
+        encoding="utf-8",
+    )
+    result, timed_out = _run_pi_with_pty(
+        [sys.executable, str(script)],
+        cwd=tmp_path,
+        env={"PATH": os.environ.get("PATH", "")},
+        timeout=10,
+    )
+
+    assert timed_out is False
+    assert result.returncode == 0
+    assert "PI_STDOUT_IS_TTY=True" in result.stdout
+    assert "PI_TTY_PROOF" in result.stdout
 
 
 def test_helm_retained_evidence_excludes_live_channel_authority() -> None:

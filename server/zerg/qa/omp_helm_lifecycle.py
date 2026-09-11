@@ -1851,7 +1851,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "send",
             current_session_id,
             env,
-            text=f"Run the shell command `sleep 8`, then reply with exactly {active_marker}.",
+            text=f"Use the bash tool to run `sleep 8`, then reply with exactly {active_marker}.",
         )
         active_state = _wait_state(
             longhouse_home,
@@ -1916,7 +1916,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "send",
             current_session_id,
             env,
-            text=f"Run the shell command `sleep 8`, then reply with exactly {steer_active_marker}.",
+            text=f"Use the bash tool to run `sleep 8`, then reply with exactly {steer_active_marker}.",
         )
         steer_active_state = _wait_state(
             longhouse_home,
@@ -1971,7 +1971,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "send",
             current_session_id,
             env,
-            text=f"Run the shell command `sleep 15`, then reply with exactly {abort_marker}.",
+            text=f"Use the bash tool to run `sleep 15`, then reply with exactly {abort_marker}.",
         )
         abort_active_state = _wait_state(
             longhouse_home,
@@ -2198,18 +2198,25 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
                 "controls": ["cold_resume"],
             }
         )
-        resume_row = _wait_native_marker(resume_file, resume_marker, minimum_offset=resume_offset)
+        resume_row = _wait_native_marker(
+            resume_file,
+            resume_marker,
+            minimum_offset=resume_offset,
+            timeout=180,
+        )
         resume_input_row = _wait_native_marker(
             resume_file,
             resume_prompt,
             minimum_offset=resume_offset,
             role="user",
+            timeout=300,
         )
         resume_context_row = _wait_native_marker(
             resume_file,
             context_phrase,
             minimum_offset=resume_offset,
             role="assistant",
+            timeout=300,
         )
         resume_terminal, resume_channel_state = _wait_channel_terminal(
             longhouse_home,
@@ -2284,6 +2291,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "context_phrase": context_phrase,
             "resume_prompt": resume_prompt,
             "pre_resume_source_path": pre_resume_source.name,
+            "pre_resume_source_offset": resume_offset,
             "context_recalled": context_recalled,
             "context_marker_count": resume_context_evidence["marker_count"],
             "context_marker_present": resume_context_evidence["marker_count"] >= 1,

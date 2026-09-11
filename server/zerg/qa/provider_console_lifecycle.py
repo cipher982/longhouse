@@ -1833,6 +1833,10 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         if not isinstance(marker_count, int) or isinstance(marker_count, bool) or marker_count < 1:
             raise RuntimeError("stock provider assistant output did not contain the qualification marker")
         first_events = _wait_exact_assistant_marker(api_url, token, session_id, marker)
+        bound_assistant_event = {
+            **first_events[0],
+            "tool_name_present": bool(first_events[0].get("tool_name")),
+        }
         binding = {
             "status": "pass",
             "provider": provider,
@@ -1844,12 +1848,12 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             "marker": marker,
             "tool_marker": tool_marker,
             **provider_response_evidence,
-            "bound_assistant_event_id": first_events[0].get("id"),
-            "bound_assistant_event_origin": first_events[0].get("event_origin", "durable"),
-            "bound_assistant_event_excerpt": event_text(first_events[0])[:512],
-            "bound_assistant_event": dict(first_events[0]),
+            "bound_assistant_event_id": bound_assistant_event.get("id"),
+            "bound_assistant_event_origin": bound_assistant_event.get("event_origin", "durable"),
+            "bound_assistant_event_excerpt": event_text(bound_assistant_event)[:512],
+            "bound_assistant_event": bound_assistant_event,
             "bound_assistant_event_count": len(first_events),
-            "bound_assistant_marker_count": event_text(first_events[0]).count(marker),
+            "bound_assistant_marker_count": event_text(bound_assistant_event).count(marker),
             "marker_in_provider_response": True,
             "marker_in_bound_assistant_event": True,
             "assistant_event_count": len(first_events),
