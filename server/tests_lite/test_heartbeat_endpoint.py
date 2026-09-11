@@ -34,12 +34,14 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from tests_lite.live_catalog_harness import live_catalog  # noqa: E402, F401
 from tests_lite.live_catalog_harness import live_catalog_client  # noqa: E402, F401
+from zerg.catalogd.models import FactHead  # noqa: E402
 from zerg.catalogd.schema import create_catalog_engine  # noqa: E402
 from zerg.machine_evidence import canonical_evidence_hash  # noqa: E402
 from zerg.machine_evidence import validate_machine_evidence_identities  # noqa: E402
 from zerg.models.live_store import LiveControlLease  # noqa: E402
 from zerg.models.live_store import LiveHeartbeatStamp  # noqa: E402
 from zerg.models.live_store import LiveSessionCatalog  # noqa: E402
+from zerg.models.live_store import LiveSessionConnection  # noqa: E402
 from zerg.models.live_store import LiveSessionRun  # noqa: E402
 from zerg.models.live_store import LiveSessionThread  # noqa: E402
 from zerg.services.catalogd_supervisor import catalogd_paths  # noqa: E402
@@ -947,6 +949,111 @@ def test_heartbeat_admits_omp_evidence_and_omp_process_exit_authority():
     assert evidence.control[0].provider == "omp"
     assert evidence.continuation[0].provider == "omp"
     assert evidence.run[0].source == "omp_helm_scan"
+
+
+@pytest.mark.parametrize("unavailable_reason", ("execution_owner_alive", "owner_unverifiable"))
+def test_heartbeat_accepts_live_omp_owner_with_invalid_resume_reason(
+    live_catalog, live_catalog_client, unavailable_reason
+):
+    session_id = str(uuid4())
+    _thread_id, run_id = _seed_open_run(session_id, provider="omp")
+    connection_id = str(uuid4())
+    lease_generation = str(uuid4())
+    observed_at = datetime.now(UTC).replace(microsecond=0)
+    control = {
+        "authority_class": "provider_control",
+        "provider": "omp",
+        "session_id": session_id,
+        "run_id": run_id,
+        "provider_session_id": "omp-native",
+        "connection_id": connection_id,
+        "lease_generation": lease_generation,
+        "ownership": "managed",
+        "state": "attached",
+        "terminal_attached": True,
+        "bridge_status": "ready",
+        "lease_ttl_ms": 900_000,
+        "granted_operations": ["interrupt", "send_input", "terminate"],
+        "source": "omp_helm_scan",
+        "observed_at": observed_at.isoformat(),
+    }
+    continuation = {
+        "authority_class": "retained_launch_contract",
+        "provider": "omp",
+        "session_id": session_id,
+        "provider_session_id": "omp-native",
+        "cwd": "/tmp/omp",
+        "contract_state": "invalid",
+        "unavailable_reason": unavailable_reason,
+        "observed_at": observed_at.isoformat(),
+        "valid_until": (observed_at + timedelta(minutes=20)).isoformat(),
+        "source": "managed_resume_contract_scan",
+        "raw_locator": f"omp/{session_id}",
+    }
+    evidence = {
+        "schema_version": 3,
+        "observed_at": observed_at.isoformat(),
+        "control": [control],
+        "continuation": [continuation],
+        "identities": [
+            {
+                "fact_family": "control",
+                "fact_index": 0,
+                "subject_key": f"connection:{connection_id}:{lease_generation}",
+                "source": control["source"],
+                "source_epoch": lease_generation,
+                "source_seq": None,
+                "sequenced": False,
+                "dedupe_key": "a" * 64,
+                "evidence_hash": canonical_evidence_hash(control),
+            }
+        ],
+    }
+    engine = create_catalog_engine(catalogd_paths()[0])
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                LiveSessionConnection.__table__.insert().values(
+                    run_id=run_id,
+                    adapter_connection_id=None,
+                    lease_generation=None,
+                    control_plane="omp_helm_channel",
+                    acquisition_kind="spawned_control",
+                    state="attached",
+                    device_id=DEVICE_ID,
+                    can_send_input=1,
+                    can_interrupt=1,
+                    can_terminate=1,
+                    can_tail_output=1,
+                    can_resume=1,
+                    acquired_at=observed_at,
+                    last_health_at=observed_at,
+                )
+            )
+    finally:
+        engine.dispose()
+
+    response = live_catalog_client.post(
+        "/agents/heartbeat",
+        headers=_headers(live_catalog),
+        json={"version": "omp-owner-reason", "daemon_pid": 42, "machine_evidence": evidence},
+    )
+    assert response.status_code == 204, response.text
+
+    retained = json.loads(_one_stamp()["raw_json"])["machine_evidence"]
+    assert retained["continuation"][0]["unavailable_reason"] == unavailable_reason
+    heads = [
+        row
+        for row in _catalog_rows(FactHead.__table__)
+        if row["family"] == "control" and row["session_id"] == session_id
+    ]
+    assert len(heads) == 1
+    assert heads[0]["subject_key"] == f"connection:{connection_id}:{lease_generation}"
+    assert json.loads(heads[0]["value_json"])["provider"] == "omp"
+    connections = _catalog_rows(LiveSessionConnection.__table__)
+    assert len(connections) == 1
+    assert connections[0]["adapter_connection_id"] == connection_id
+    assert connections[0]["lease_generation"] == lease_generation
 
 
 def test_heartbeat_machine_evidence_rejects_invalid_and_unbounded_claims(live_catalog, live_catalog_client):

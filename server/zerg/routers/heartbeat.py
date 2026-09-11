@@ -273,7 +273,17 @@ class ContinuationEvidenceIn(UTCBaseModel):
     provider_session_id: str | None = Field(None, min_length=1, max_length=255)
     cwd: str | None = Field(None, min_length=1, max_length=1024)
     contract_state: Literal["valid", "invalid"]
-    unavailable_reason: Literal["contract_invalid", "workspace_missing", "provider_incompatible", "provider_state_missing"] | None = None
+    unavailable_reason: (
+        Literal[
+            "contract_invalid",
+            "workspace_missing",
+            "provider_incompatible",
+            "provider_state_missing",
+            "execution_owner_alive",
+            "owner_unverifiable",
+        ]
+        | None
+    ) = None
     observed_at: datetime
     valid_until: datetime
     source: Literal["managed_resume_contract_scan"]
