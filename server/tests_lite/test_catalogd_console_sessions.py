@@ -109,6 +109,68 @@ def test_pi_console_persists_provider_local_policy_through_turn_dispatch(tmp_pat
     assert turn["turn"]["provider_config"]["permission_mode"] == "provider_local"
 
 
+def test_pi_console_continuation_forwards_exact_native_source_file(tmp_path):
+    engine = create_catalog_engine(tmp_path / "catalog-pi-continuation.db")
+    initialize_catalog_schema(engine)
+    with Session(engine) as db:
+        db.add(LiveUser(id=1, email="owner@example.com", is_active=True))
+        db.commit()
+    store = CatalogStore(engine)
+    session_id = uuid4()
+    thread_id = uuid4()
+    store.create_console_session(
+        data={
+            "session_id": str(session_id),
+            "thread_id": str(thread_id),
+            "owner_id": 1,
+            "provider": "pi",
+            "device_id": "cinder",
+            "cwd": "/tmp/pi-console",
+            "project": "pi-console",
+            "provider_config": {"permission_mode": "provider_local", "pi_provider": "openrouter"},
+            "started_at": datetime.now(UTC),
+        }
+    )
+    now = datetime.now(UTC)
+    native_id = "019f6b93-edf6-7bd0-a757-b5195a61abdd"
+    native_source = "/tmp/pi-console-native.jsonl"
+    with Session(engine) as db:
+        db.add_all(
+            [
+                LiveSessionThreadAlias(
+                    thread_id=str(thread_id),
+                    provider="pi",
+                    alias_kind="provider_session_id",
+                    alias_value=native_id,
+                    first_seen_at=now,
+                    last_seen_at=now,
+                ),
+                LiveSessionThreadAlias(
+                    thread_id=str(thread_id),
+                    provider="pi",
+                    alias_kind="source_path",
+                    alias_value=native_source,
+                    first_seen_at=now,
+                    last_seen_at=now,
+                ),
+            ]
+        )
+        db.commit()
+
+    turn = store.enqueue_console_turn(
+        data={
+            "session_id": str(session_id),
+            "owner_id": 1,
+            "message": "continue from native history",
+            "client_request_id": "pi-console-continuation-1",
+            "created_at": now,
+        }
+    )
+
+    assert turn["turn"]["resume_provider_thread_id"] == native_id
+    assert turn["turn"]["resume_session_file"] == native_source
+
+
 def test_catalog_test_console_session_retains_automation_provenance(tmp_path):
     engine = create_catalog_engine(tmp_path / "catalog-automation.db")
     initialize_catalog_schema(engine)

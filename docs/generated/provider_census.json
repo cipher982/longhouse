@@ -905,7 +905,8 @@
       "path": "server/tests_lite/test_console_turns.py",
       "providers": [
         "claude",
-        "codex"
+        "codex",
+        "pi"
       ]
     },
     {

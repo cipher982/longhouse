@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from dataclasses import dataclass
@@ -94,6 +95,7 @@ async def _persist_native_binding_result(catalog, *, turn: dict[str, object], re
     source_path = str(result.get("session_file") or "").strip()
     if not provider_session_id or not source_path:
         return
+    binding_identity = ":".join((str(turn["run_id"]), provider_session_id, source_path))
     from zerg.services.session_runtime import RuntimeEventIngest
 
     occurred_at = datetime.now(timezone.utc)
@@ -107,7 +109,7 @@ async def _persist_native_binding_result(catalog, *, turn: dict[str, object], re
         source="console_turn_start",
         kind="binding_signal",
         occurred_at=occurred_at,
-        dedupe_key=f"console-binding:{turn['run_id']}:{provider_session_id}:{source_path}",
+        dedupe_key=f"console-binding:{hashlib.sha256(binding_identity.encode('utf-8')).hexdigest()}",
         payload={"provider_session_id": provider_session_id, "source_path": source_path},
     )
     try:

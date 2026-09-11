@@ -1442,7 +1442,10 @@ def _claim_uses_provider_binary(claim: Mapping[str, object], provider_binary: Pa
 
 
 def _native_model(provider: str, model: str) -> str:
-    return f"openrouter/{model}" if provider in {"opencode", "pi"} and not model.startswith("openrouter/") else model
+    # Pi receives the provider separately and its native model argument is the
+    # OpenRouter model id without the provider prefix. OpenCode's CLI expects
+    # the fully qualified provider/model token instead.
+    return f"openrouter/{model}" if provider == "opencode" and not model.startswith("openrouter/") else model
 
 
 def _omp_continuation_prompt(resume_marker: str) -> str:

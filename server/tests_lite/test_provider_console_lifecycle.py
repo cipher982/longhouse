@@ -315,6 +315,28 @@ def test_dispatch_claim_must_name_the_exact_staged_binary(tmp_path):
     assert not lifecycle._claim_uses_provider_binary({"result": {"argv": [str(tmp_path / "other"), "--print"]}}, staged)
 
 
+def test_pi_console_model_binding_uses_native_openrouter_model_id():
+    claim = {
+        "result": {
+            "argv": [
+                "/opt/pi",
+                "-p",
+                "prompt",
+                "--provider",
+                "openrouter",
+                "--model",
+                "deepseek/deepseek-v4-flash",
+            ]
+        }
+    }
+
+    assert lifecycle._claim_uses_selected_model(
+        claim,
+        provider="pi",
+        model="deepseek/deepseek-v4-flash",
+    )
+
+
 def test_codex_local_output_evidence_ignores_prompt_echo(tmp_path):
     marker = "LH_CODEX_CONSOLE_" + "c" * 32
     rollout = tmp_path / "rollout.jsonl"

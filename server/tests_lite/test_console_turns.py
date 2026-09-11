@@ -13,6 +13,7 @@ from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
 from zerg.services.console_sessions import create_empty_console_session
 from zerg.services.console_turns import dispatch_catalog_claimed_turn
+from zerg.services.console_turns import _persist_native_binding_result
 from zerg.services.console_turns import reconcile_starting_console_turns_for_device
 from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
 from zerg.services.session_turns import SESSION_TURN_STATE_FAILED
@@ -106,6 +107,40 @@ async def test_catalog_console_create_uses_human_facing_write_budget(monkeypatch
     assert created.created is True
     assert observed["method"] == "session.console.create.v2"
     assert observed["timeout_seconds"] == console_sessions.CONSOLE_CREATE_CATALOG_TIMEOUT_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_native_console_binding_dedupe_key_is_bounded_without_truncating_identity():
+    observed: dict[str, object] = {}
+
+    class Catalog:
+        async def call(self, method, params, *, timeout_seconds=None):
+            observed.update(method=method, params=params, timeout_seconds=timeout_seconds)
+            return {"accepted": True}
+
+    source_path = "/tmp/provider/" + ("nested/" * 120) + "session.jsonl"
+    run_id = uuid4()
+    await _persist_native_binding_result(
+        Catalog(),
+        turn={
+            "session_id": str(uuid4()),
+            "thread_id": str(uuid4()),
+            "run_id": str(run_id),
+            "provider": "pi",
+            "device_id": "provider-factory-resume",
+        },
+        response_message={
+            "result": {
+                "provider_thread_id": str(uuid4()),
+                "session_file": source_path,
+            }
+        },
+    )
+
+    event = observed["params"]["events"][0]
+    assert len(event["dedupe_key"]) <= 255
+    assert event["dedupe_key"].startswith("console-binding:")
+    assert event["payload"]["source_path"] == source_path
 
 
 @pytest.mark.asyncio
