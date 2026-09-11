@@ -913,3 +913,29 @@ def test_machine_health_route_lets_stale_heartbeat_outrank_dead_archive_ranges(l
     assert machine["status_reason"] == "heartbeat_stale"
     assert machine["is_stale"] is True
     assert machine["reasons"] == ["heartbeat_stale", "spool_dead"]
+
+
+def test_machine_health_prioritizes_unknown_before_healthy_when_limited(live_catalog, live_catalog_client, monkeypatch):
+    pinned_now = datetime(2026, 9, 11, 20, 15, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    owner_id, headers = _enroll(live_catalog, "healthy-machine", "unknown-machine")
+    _apply_heartbeat(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="healthy-machine",
+        received_at=pinned_now,
+    )
+    _apply_heartbeat(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="unknown-machine",
+        received_at=pinned_now - timedelta(seconds=1),
+        raw_json=json.dumps({"shipping_progress": None}),
+    )
+
+    response = live_catalog_client.get("/agents/machines/health", params={"limit": 1}, headers=headers)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["total"] == 2
+    assert [(machine["device_id"], machine["status"]) for machine in payload["machines"]] == [("unknown-machine", "unknown")]

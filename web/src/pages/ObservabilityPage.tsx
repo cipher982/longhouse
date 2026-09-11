@@ -258,6 +258,7 @@ function machineStatusVariant(status: string): DiagnosisTone {
     case "broken":
       return "error";
     case "offline":
+    case "unknown":
       return "neutral";
     default:
       return "warning";
@@ -358,7 +359,7 @@ function buildDiagnosisCards(
         ? `${machineCount} machine${machineCount === 1 ? "" : "s"} blocked or offline`
         : degradedMachines > 0
           ? `${machineCount} machine${machineCount === 1 ? "" : "s"} degraded`
-          : `${machineCount} machine${machineCount === 1 ? "" : "s"} have unknown transport health`;
+          : `${machineCount} machine${machineCount === 1 ? "" : "s"} with unknown transport health`;
 
     cards.push({
       key: "machine",
@@ -367,7 +368,7 @@ function buildDiagnosisCards(
       description: unhealthyMachine
         ? `${unhealthyMachine.device_id}: ${unhealthyMachine.status_summary}`
         : "Shipping is not fully healthy on this runtime right now.",
-      tone: blockedMachines > 0 ? "error" : "warning",
+      tone: blockedMachines > 0 ? "error" : degradedMachines > 0 ? "warning" : "neutral",
       to: unhealthyMachine?.device_id
         ? buildTimelineSlicePath({ deviceId: unhealthyMachine.device_id })
         : "/runners",

@@ -31,8 +31,8 @@ _STATE_SORT_ORDER = {
     "broken": 0,
     "offline": 1,
     "degraded": 2,
-    "healthy": 3,
-    "unknown": 4,
+    "unknown": 3,
+    "healthy": 4,
 }
 
 _MACHINE_ACTION_IDS_BY_REASON: dict[str, str] = {

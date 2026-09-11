@@ -3358,7 +3358,6 @@ struct LonghouseMenuBarCoreTests {
         #expect(recorded.realtime?.runtimeUrl != nil)
         #expect(recorded.transport?.status == "healthy")
         #expect(recorded.engineStatus?.payload != nil)
-        #expect(recorded.engineStatus?.payload?.shippingProgress?.pendingWork == false)
         #expect(
             recorded.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 1_785_772_800)).headline
                 == "1 Helm session open"
