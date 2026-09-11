@@ -1378,7 +1378,13 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             );
         }
     }
-    emit_warp_session_marker(&session_id, &cwd, config.project.as_deref(), "session_start");
+    crate::warp_cli_agent::emit_session_event(
+        "cursor",
+        "session_start",
+        &session_id,
+        &cwd,
+        config.project.as_deref(),
+    );
     // Cursor creates the durable transcript during `create-chat`, before the
     // conversation-specific binding claim can be written. Reserve the launch
     // first so the engine holds that fresh source instead of publishing it as
@@ -1779,29 +1785,14 @@ pub fn launch(config: LaunchConfig) -> anyhow::Result<i32> {
             );
         }
     }
-    emit_warp_session_marker(&session_id, &cwd, config.project.as_deref(), "stop");
+    crate::warp_cli_agent::emit_session_event(
+        "cursor",
+        "stop",
+        &session_id,
+        &cwd,
+        config.project.as_deref(),
+    );
     Ok(exit_code)
-}
-
-fn emit_warp_session_marker(session_id: &str, cwd: &Path, project: Option<&str>, event: &str) {
-    if std::env::var("TERM_PROGRAM").as_deref() != Ok("WarpTerminal")
-        || !std::io::stdout().is_terminal()
-    {
-        return;
-    }
-    let payload = json!({
-        "v": 1,
-        "agent": "agent",
-        "event": event,
-        "session_id": session_id,
-        "cwd": cwd,
-        "project": project.unwrap_or_else(|| {
-            cwd.file_name().and_then(|name| name.to_str()).unwrap_or("longhouse")
-        }),
-    });
-    let marker = format!("\x1b]777;notify;warp://cli-agent;{payload}\x07");
-    let mut stdout = std::io::stdout().lock();
-    let _ = stdout.write_all(marker.as_bytes()).and_then(|()| stdout.flush());
 }
 
 fn fs2_lock(file: &fs::File) -> std::io::Result<()> {

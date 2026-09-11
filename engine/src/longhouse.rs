@@ -1338,6 +1338,13 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
         url.trim_end_matches('/'),
         session_id.split('-').next().unwrap_or(&session_id)
     );
+    crate::warp_cli_agent::emit_session_event(
+        "antigravity",
+        "session_start",
+        &session_id,
+        &cwd,
+        args.project.as_deref(),
+    );
     let run_result = run_foreground_command_after_spawn(&mut command, || {
         // The child is spawned but still blocked on the terminal-release
         // barrier, so confirmation must degrade in place rather than fail the
@@ -1351,10 +1358,18 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
     // Drop before draining so an un-confirmed transaction reports its abort
     // while the terminal is already restored.
     drop(launch_transaction);
+    let exit = run_result?;
+    crate::warp_cli_agent::emit_session_event(
+        "antigravity",
+        "stop",
+        &session_id,
+        &cwd,
+        args.project.as_deref(),
+    );
     for notice in deferred_notices.drain() {
         eprintln!("{notice}");
     }
-    std::process::exit(run_result?);
+    std::process::exit(exit);
 }
 
 /// Seed the control identity the hook cannot mint for itself.
@@ -1838,6 +1853,13 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         if let Some(transaction) = launch_transaction.as_mut() {
             transaction.confirm_or_degrade("Claude", &confirm_agent_dir, &confirm_notices);
         }
+        crate::warp_cli_agent::emit_session_event(
+            "claude",
+            "session_start",
+            &session_id,
+            &cwd,
+            args.project.as_deref(),
+        );
         Ok(())
     });
     let exit = match run_result {
@@ -1852,6 +1874,13 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             return Err(error);
         }
     };
+    crate::warp_cli_agent::emit_session_event(
+        "claude",
+        "stop",
+        &session_id,
+        &cwd,
+        args.project.as_deref(),
+    );
     if let Some(registration) = &degraded_registration {
         registration.provider_alive.store(false, Ordering::Release);
     }
@@ -2114,12 +2143,22 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         && !args.no_attach
         && std::io::stdin().is_terminal()
         && std::io::stdout().is_terminal();
+    if attached {
+        crate::warp_cli_agent::emit_session_event(
+            "opencode",
+            "session_start",
+            &session_id,
+            &cwd,
+            args.project.as_deref(),
+        );
+    }
     if !attached {
         println!(
             "Attach: longhouse opencode attach --session-id {}",
             session_id
         );
         if let Some(registration) = &degraded_registration {
+            registration.provider_alive.store(false, Ordering::Release);
             registration.abandon();
             eprintln!(
                 "Longhouse warning: OpenCode started without Longhouse control and this launcher is exiting, so registration will not retry. Relaunch once the Runtime Host is reachable to restore control."
@@ -2160,6 +2199,13 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     }
     let exit = run_result?;
     stop_result?;
+    crate::warp_cli_agent::emit_session_event(
+        "opencode",
+        "stop",
+        &session_id,
+        &cwd,
+        args.project.as_deref(),
+    );
     if exit != 0 {
         std::process::exit(exit);
     }
@@ -2248,10 +2294,19 @@ fn attach_managed_opencode(args: OpencodeAttachArgs) -> anyhow::Result<()> {
     if let Some(model) = args.model {
         command.arg("--model").arg(model);
     }
+    let cwd = std::env::current_dir()?;
+    crate::warp_cli_agent::emit_session_event(
+        "opencode",
+        "session_start",
+        &args.session_id,
+        &cwd,
+        None,
+    );
     let run_result = run_foreground_command(&mut command);
     let stop_result = stop_opencode_bridge(&args.session_id, None);
     let exit = run_result?;
     stop_result?;
+    crate::warp_cli_agent::emit_session_event("opencode", "stop", &args.session_id, &cwd, None);
     if exit != 0 {
         std::process::exit(exit);
     }

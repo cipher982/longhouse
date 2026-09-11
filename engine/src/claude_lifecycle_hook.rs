@@ -5,7 +5,7 @@
 //! projections such as managed transcript bindings.
 
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::{json, Value};
@@ -92,6 +92,21 @@ fn run_inner() -> anyhow::Result<()> {
         }
     }
     crate::hook_outbox::enqueue_presence(&longhouse_home()?, &payload)?;
+    let marker_event = match event.as_str() {
+        "UserPromptSubmit" => Some("prompt_submit"),
+        "PermissionRequest" => Some("permission_request"),
+        "Stop" => Some("stop"),
+        _ => None,
+    };
+    if let Some(marker_event) = marker_event {
+        crate::warp_cli_agent::emit_tty_event(
+            "claude",
+            marker_event,
+            &session_id,
+            Path::new(cwd.as_deref().unwrap_or(".")),
+            None,
+        );
+    }
     if event == "SessionStart" && managed_session_id.is_some() && coordination_bootstrap_enabled() {
         println!(
             "{}",

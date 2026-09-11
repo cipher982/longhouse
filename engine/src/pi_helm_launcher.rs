@@ -440,18 +440,54 @@ impl PiHelmServer {
                     .get("tool_name")
                     .and_then(Value::as_str)
                     .map(str::to_string);
-                let mut guard = self.shared.lock().expect("Pi Helm state mutex poisoned");
-                if guard.state.phase == phase
-                    && guard.state.tool_name.as_deref() == tool_name.as_deref()
-                {
-                    return;
-                }
-                guard.state.phase = phase.to_string();
-                guard.state.tool_name = tool_name.clone();
-                guard.state.updated_at = Utc::now().to_rfc3339();
-                drop(guard);
+                let (became_active, became_idle, became_authority) = {
+                    let mut guard = self.shared.lock().expect("Pi Helm state mutex poisoned");
+                    if guard.state.phase == phase
+                        && guard.state.tool_name.as_deref() == tool_name.as_deref()
+                    {
+                        return;
+                    }
+                    let previous_phase = guard.state.phase.as_str();
+                    let was_active = matches!(previous_phase, "running" | "thinking" | "authority");
+                    let is_active = matches!(phase, "running" | "thinking" | "authority");
+                    let became_active = !was_active && is_active;
+                    let became_idle = was_active && phase == "idle";
+                    let became_authority = previous_phase != "authority" && phase == "authority";
+                    guard.state.phase = phase.to_string();
+                    guard.state.tool_name = tool_name.clone();
+                    guard.state.updated_at = Utc::now().to_rfc3339();
+                    (became_active, became_idle, became_authority)
+                };
                 let _ = self.persist_state();
                 self.publish_phase(phase, tool_name);
+                let state = self.current_state();
+                if became_active {
+                    crate::warp_cli_agent::emit_tty_event(
+                        "pi",
+                        "prompt_submit",
+                        &state.session_id,
+                        Path::new(&state.cwd),
+                        None,
+                    );
+                }
+                if became_authority {
+                    crate::warp_cli_agent::emit_tty_event(
+                        "pi",
+                        "permission_request",
+                        &state.session_id,
+                        Path::new(&state.cwd),
+                        None,
+                    );
+                }
+                if became_idle {
+                    crate::warp_cli_agent::emit_tty_event(
+                        "pi",
+                        "stop",
+                        &state.session_id,
+                        Path::new(&state.cwd),
+                        None,
+                    );
+                }
             }
             "session_shutdown" => self.disconnect_extension(connection_id),
             _ => {}
@@ -1391,6 +1427,14 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         if let Some(registration) = degraded.as_ref() {
             registration.provider_alive.store(true, Ordering::Release);
         }
+        let state = server_for_spawn.current_state();
+        crate::warp_cli_agent::emit_session_event(
+            "pi",
+            "session_start",
+            &state.session_id,
+            Path::new(&state.cwd),
+            None,
+        );
         Ok(())
     }) {
         Ok(exit_code) => exit_code,
@@ -1410,6 +1454,13 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     };
     server.mark_stopped(exit_code, reason)?;
     let final_state = server.current_state();
+    crate::warp_cli_agent::emit_session_event(
+        "pi",
+        "stop",
+        &final_state.session_id,
+        Path::new(&final_state.cwd),
+        None,
+    );
     let _ = enqueue_terminal_event(&final_state, &machine_name, exit_code, reason);
     server.shutdown();
     drop(degraded);

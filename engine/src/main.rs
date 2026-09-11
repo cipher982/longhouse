@@ -86,6 +86,7 @@ mod text;
 mod turn_claims;
 mod unmanaged_bindings;
 mod update;
+mod warp_cli_agent;
 mod watcher;
 
 use std::path::PathBuf;

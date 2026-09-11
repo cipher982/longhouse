@@ -255,7 +255,7 @@ fn warp_lifecycle_payload(
             let osc9 = "Cursor: Task completed".to_string();
             let msg = json!({
                 "v": 1,
-                "agent": "agent",
+                "agent": "cursor",
                 "event": "stop",
                 "session_id": session_id,
                 "cwd": cwd,
@@ -271,7 +271,7 @@ fn warp_lifecycle_payload(
             let summary = format!("Cursor needs approval for {tool}");
             let msg = json!({
                 "v": 1,
-                "agent": "agent",
+                "agent": "cursor",
                 "event": "permission_request",
                 "session_id": session_id,
                 "cwd": cwd,
@@ -283,7 +283,7 @@ fn warp_lifecycle_payload(
         "beforeSubmitPrompt" => {
             let msg = json!({
                 "v": 1,
-                "agent": "agent",
+                "agent": "cursor",
                 "event": "prompt_submit",
                 "session_id": session_id,
                 "cwd": cwd,
@@ -301,7 +301,10 @@ fn emit_warp_lifecycle_notification(
     cwd: Option<&str>,
     payload: &Value,
 ) {
-    if std::env::var("TERM_PROGRAM").as_deref() != Ok("WarpTerminal") {
+    if std::env::var("TERM_PROGRAM").as_deref() != Ok("WarpTerminal")
+        || std::env::var_os("WARP_CLI_AGENT_PROTOCOL_VERSION").is_none()
+        || std::env::var_os("WARP_CLIENT_VERSION").is_none()
+    {
         return;
     }
     let Some((osc9_text, osc777)) = warp_lifecycle_payload(event, session_id, cwd, payload) else {
@@ -659,7 +662,7 @@ mod tests {
         assert_eq!(osc9.as_deref(), Some("Cursor: Task completed"));
         assert!(osc777.starts_with("\x1b]777;notify;warp://cli-agent;"));
         assert!(osc777.ends_with('\x07'));
-        assert!(osc777.contains(r#""agent":"agent""#));
+        assert!(osc777.contains(r#""agent":"cursor""#));
         assert!(osc777.contains(r#""event":"stop""#));
 
         let (osc9, osc777) = warp_lifecycle_payload(

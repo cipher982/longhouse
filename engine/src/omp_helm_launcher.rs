@@ -754,6 +754,24 @@ impl OmpHelmServer {
                 turn_completed,
             );
         }
+        if kind == "agent_start" {
+            crate::warp_cli_agent::emit_tty_event(
+                "omp",
+                "prompt_submit",
+                &current.session_id,
+                Path::new(&current.cwd),
+                None,
+            );
+        }
+        if turn_completed {
+            crate::warp_cli_agent::emit_tty_event(
+                "omp",
+                "stop",
+                &current.session_id,
+                Path::new(&current.cwd),
+                None,
+            );
+        }
     }
 
     fn publish_binding(&self, source: &Path, native_id: &str, replacement: bool) -> Result<()> {
@@ -1680,6 +1698,14 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         if let Some(registration) = degraded.as_ref() {
             registration.provider_alive.store(true, Ordering::Release);
         }
+        let current = server_for_spawn.current_state();
+        crate::warp_cli_agent::emit_session_event(
+            "omp",
+            "session_start",
+            &current.session_id,
+            Path::new(&current.cwd),
+            None,
+        );
         Ok(())
     }) {
         Ok(exit) => exit,
@@ -1696,6 +1722,13 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     };
     let stop_result = server.mark_stopped(Some(exit), reason);
     let current = server.current_state();
+    crate::warp_cli_agent::emit_session_event(
+        "omp",
+        "stop",
+        &current.session_id,
+        Path::new(&current.cwd),
+        None,
+    );
     let root = home_state()?;
     let runtime_key = format!("omp:{}", current.session_id);
     let event = ManagedTerminalEvent {
