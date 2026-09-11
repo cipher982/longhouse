@@ -1013,7 +1013,6 @@ impl Drop for RecoveryWorkspace {
     }
 }
 
-
 fn surviving_sidecar(db_path: &Path) -> Option<PathBuf> {
     for suffix in ["-wal", "-shm", "-journal"] {
         let mut path = db_path.as_os_str().to_os_string();

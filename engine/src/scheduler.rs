@@ -662,6 +662,13 @@ impl PathScheduler {
         }
     }
 
+    /// Complete a failed job without admitting an observation that arrived
+    /// while it was in flight. The daemon owns the bounded retry deadline and
+    /// will re-admit the path when that deadline expires.
+    pub fn complete_without_rerun(&mut self, path: &Path) {
+        self.in_flight.remove(path);
+    }
+
     pub fn has_in_flight(&self) -> bool {
         !self.in_flight.is_empty()
     }
@@ -1182,6 +1189,21 @@ mod tests {
         assert_eq!(rerun.priority, WorkPriority::Live);
         assert_eq!(rerun.observation.source, "fsevent");
         assert_eq!(rerun.observation.observed_at_ms, 200);
+    }
+
+    #[test]
+    fn failed_inflight_path_can_drop_external_rerun_until_retry_deadline() {
+        let mut scheduler = PathScheduler::new(1);
+        let path = PathBuf::from("/tmp/a.jsonl");
+
+        scheduler.enqueue(path.clone(), "codex", WorkPriority::Live);
+        let _job = scheduler.pop_launchable().unwrap();
+        scheduler.enqueue_observed(path.clone(), "codex", WorkPriority::Live, "fsevent", 200);
+
+        scheduler.complete_without_rerun(&path);
+
+        assert!(scheduler.pop_launchable().is_none());
+        assert!(!scheduler.has_path(&path));
     }
 
     #[test]

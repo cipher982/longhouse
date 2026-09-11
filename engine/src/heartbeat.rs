@@ -172,6 +172,11 @@ pub struct ShippingProgress {
     pub observed_at: String,
 }
 
+// Leave a small publication/observer margin inside the 60s product target.
+// Native status publication and its consumer add latency after the daemon's
+// monotonic observation crosses the boundary.
+const SHIPPING_PROGRESS_STALL_THRESHOLD_SECS: u64 = 55;
+
 impl Default for ShippingProgress {
     fn default() -> Self {
         Self {
@@ -221,7 +226,9 @@ impl ShippingProgressObservation {
         };
         ShippingProgress {
             pending_work,
-            stalled: pending_work && !is_offline && seconds_without_progress >= 60,
+            stalled: pending_work
+                && !is_offline
+                && seconds_without_progress >= SHIPPING_PROGRESS_STALL_THRESHOLD_SECS,
             seconds_without_progress,
             observed_at: chrono::Utc::now().to_rfc3339(),
         }
@@ -4099,16 +4106,16 @@ mod tests {
         let mut observation = ShippingProgressObservation::new(start);
         observation.observe_pending_work(true, start);
 
-        let within_budget = observation.snapshot(true, false, start + Duration::from_secs(59));
+        let within_budget = observation.snapshot(true, false, start + Duration::from_secs(54));
         assert!(within_budget.pending_work);
         assert!(!within_budget.stalled);
 
-        let stalled = observation.snapshot(true, false, start + Duration::from_secs(60));
+        let stalled = observation.snapshot(true, false, start + Duration::from_secs(55));
         assert!(stalled.stalled);
-        assert_eq!(stalled.seconds_without_progress, 60);
+        assert_eq!(stalled.seconds_without_progress, 55);
 
-        observation.record_progress(start + Duration::from_secs(61));
-        let recovered = observation.snapshot(true, false, start + Duration::from_secs(62));
+        observation.record_progress(start + Duration::from_secs(56));
+        let recovered = observation.snapshot(true, false, start + Duration::from_secs(57));
         assert!(!recovered.stalled);
         assert_eq!(recovered.seconds_without_progress, 1);
 
