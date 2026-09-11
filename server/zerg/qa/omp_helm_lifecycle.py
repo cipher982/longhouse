@@ -2636,6 +2636,7 @@ def run(request_path: Path, output_root: Path) -> dict[str, object]:
         assertion_ids=ASSERTIONS,
         executor=execute,
         oracle_source=Path(__file__),
+        scenario_revision=REGISTRATION.scenario_revision,
     )
 
 

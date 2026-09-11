@@ -1131,6 +1131,14 @@ fn provisional_run_id(session_id: &str) -> String {
     .to_string()
 }
 
+fn resume_run_id(session_id: &str, resume_attempt_id: &str) -> String {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!("longhouse:managed-local-resume:{session_id}:{resume_attempt_id}").as_bytes(),
+    )
+    .to_string()
+}
+
 pub fn launch(config: LaunchConfig) -> Result<i32> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         anyhow::bail!(
@@ -1179,7 +1187,11 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     let (url, token, machine_name) = registration_credentials(&config)?;
     // Degraded registration must publish the same run identity as the Runtime
     // Host; otherwise later control observations are rejected as another run.
-    let run_id = provisional_run_id(&session_id);
+    let resume_attempt_id = resume_state.as_ref().map(|_| Uuid::new_v4().to_string());
+    let run_id = resume_attempt_id
+        .as_deref()
+        .map(|attempt_id| resume_run_id(&session_id, attempt_id))
+        .unwrap_or_else(|| provisional_run_id(&session_id));
     let connection_id = Uuid::new_v4().to_string();
     let lease_generation = Uuid::new_v4().to_string();
     let channel_token = Uuid::new_v4().to_string();
@@ -1216,8 +1228,8 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     }
     .to_json();
     payload["session_id"] = json!(session_id);
-    if resume_state.is_some() {
-        payload["resume_attempt_id"] = json!(Uuid::new_v4().to_string());
+    if let Some(resume_attempt_id) = resume_attempt_id.as_deref() {
+        payload["resume_attempt_id"] = json!(resume_attempt_id);
         payload["provider_thread_id"] = json!(target.provider_thread_id);
     }
     let runtime = tokio::runtime::Runtime::new()?;
@@ -1409,7 +1421,7 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
 
 #[cfg(test)]
 mod tests {
-    use super::provisional_run_id;
+    use super::{provisional_run_id, resume_run_id};
 
     #[test]
     fn provisional_run_matches_runtime_host_identity() {
@@ -1417,6 +1429,17 @@ mod tests {
         assert_eq!(
             provisional_run_id("00000000-0000-4000-8000-000000000001"),
             "b376f5d6-ced2-55c0-aa01-af65366a9984"
+        );
+    }
+
+    #[test]
+    fn resume_run_matches_runtime_host_identity() {
+        assert_eq!(
+            resume_run_id(
+                "00000000-0000-4000-8000-000000000001",
+                "00000000-0000-4000-8000-000000000002",
+            ),
+            "9103238b-f01a-5c1d-aef5-08c9296d6642"
         );
     }
 }

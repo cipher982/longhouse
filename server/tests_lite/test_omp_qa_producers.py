@@ -1613,6 +1613,7 @@ def test_omp_semantic_entrypoint_uses_validated_request_and_runtime_token(tmp_pa
         return {"status": "pass", "observation": {}}
 
     def fake_semantic(_request_path, _output_root, **kwargs):
+        captured["scenario_revision"] = kwargs["scenario_revision"]
         observation, assertions, secrets = kwargs["executor"](Path("/factory/omp"), tmp_path / "semantic-evidence")
         captured["secrets"] = secrets
         captured["assertion_count"] = len(assertions)
@@ -1629,6 +1630,7 @@ def test_omp_semantic_entrypoint_uses_validated_request_and_runtime_token(tmp_pa
         "provider_version": "1.2.3",
         "agents_token": "runtime-token",
         "variant": None,
+        "scenario_revision": 8,
         "secrets": ("runtime-token",),
         "assertion_count": len(HELM_ASSERTIONS),
     }

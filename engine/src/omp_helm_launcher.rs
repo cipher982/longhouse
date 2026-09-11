@@ -1333,6 +1333,22 @@ fn select_session_storage(
     Ok((session_dir, session_file))
 }
 
+fn provisional_run_id(session_id: &str) -> String {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!("longhouse:managed-local-run:{session_id}").as_bytes(),
+    )
+    .to_string()
+}
+
+fn resume_run_id(session_id: &str, resume_attempt_id: &str) -> String {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!("longhouse:managed-local-resume:{session_id}:{resume_attempt_id}").as_bytes(),
+    )
+    .to_string()
+}
+
 fn run_provider(
     command: &mut Command,
     server: &OmpHelmServer,
@@ -1448,11 +1464,11 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         (!native_id.is_empty()).then_some(native_id.as_str()),
     )?;
     let (url, token, machine_name) = registration_credentials(&config)?;
-    let run_id = Uuid::new_v5(
-        &Uuid::NAMESPACE_URL,
-        format!("longhouse:managed-local-run:{session_id}").as_bytes(),
-    )
-    .to_string();
+    let resume_attempt_id = resume_state.as_ref().map(|_| Uuid::new_v4().to_string());
+    let run_id = resume_attempt_id
+        .as_deref()
+        .map(|attempt_id| resume_run_id(&session_id, attempt_id))
+        .unwrap_or_else(|| provisional_run_id(&session_id));
     let connection_id = Uuid::new_v4().to_string();
     let lease_generation = Uuid::new_v4().to_string();
     let channel_token = Uuid::new_v4().to_string();
@@ -1484,8 +1500,8 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     }
     .to_json();
     let mut registration = registration;
-    if resume_state.is_some() {
-        registration["resume_attempt_id"] = json!(Uuid::new_v4().to_string());
+    if let Some(resume_attempt_id) = resume_attempt_id.as_deref() {
+        registration["resume_attempt_id"] = json!(resume_attempt_id);
         registration["provider_thread_id"] = json!(native_id);
     }
     let runtime = tokio::runtime::Runtime::new()?;
@@ -1815,6 +1831,17 @@ mod tests {
             assert_eq!(directory.parent(), Some(Path::new("/tmp")));
             assert!(socket.to_string_lossy().len() < 104);
         }
+    }
+
+    #[test]
+    fn resume_run_matches_runtime_host_identity() {
+        assert_eq!(
+            resume_run_id(
+                "00000000-0000-4000-8000-000000000001",
+                "00000000-0000-4000-8000-000000000002",
+            ),
+            "9103238b-f01a-5c1d-aef5-08c9296d6642"
+        );
     }
 
     #[test]

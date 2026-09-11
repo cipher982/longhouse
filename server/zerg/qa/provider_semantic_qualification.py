@@ -289,7 +289,12 @@ def run_semantic_profile(
     assertion_ids: tuple[str, ...],
     executor: SemanticExecutor,
     oracle_source: Path,
+    scenario_revision: int | None = None,
 ) -> dict[str, Any]:
+    if scenario_revision is None:
+        scenario_revision = identity.SCENARIO_REVISION
+    if scenario_revision < 1:
+        raise ValueError("semantic scenario_revision must be positive")
     repo_root = Path(__file__).resolve().parents[3]
     identity_result = identity.run_identity_profile(
         request_path,
@@ -388,7 +393,7 @@ def run_semantic_profile(
             provider_contract_digest=template.provider_contract_digest,
             adapter_digest=template.adapter_digest,
             scenario_id=profile.scenario_id,
-            scenario_revision=identity.SCENARIO_REVISION,
+            scenario_revision=scenario_revision,
             oracle_digest=oracle_digest,
             assertion_id=item.assertion_id,
             outcome=item.outcome,
@@ -411,7 +416,7 @@ def run_semantic_profile(
     coverage = {
         "profile": profile.profile,
         "scenario_id": profile.scenario_id,
-        "scenario_revision": identity.SCENARIO_REVISION,
+        "scenario_revision": scenario_revision,
         "assertions": [record.assertion_id for record in records],
         "outcomes": outcomes,
         "complete": set(outcomes) == set(identity.ASSERTIONS) | set(assertion_ids),
