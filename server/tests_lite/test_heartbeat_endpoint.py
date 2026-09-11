@@ -952,9 +952,7 @@ def test_heartbeat_admits_omp_evidence_and_omp_process_exit_authority():
 
 
 @pytest.mark.parametrize("unavailable_reason", ("execution_owner_alive", "owner_unverifiable"))
-def test_heartbeat_accepts_live_omp_owner_with_invalid_resume_reason(
-    live_catalog, live_catalog_client, unavailable_reason
-):
+def test_heartbeat_accepts_live_omp_owner_with_invalid_resume_reason(live_catalog, live_catalog_client, unavailable_reason):
     session_id = str(uuid4())
     _thread_id, run_id = _seed_open_run(session_id, provider="omp")
     connection_id = str(uuid4())
@@ -1042,11 +1040,7 @@ def test_heartbeat_accepts_live_omp_owner_with_invalid_resume_reason(
 
     retained = json.loads(_one_stamp()["raw_json"])["machine_evidence"]
     assert retained["continuation"][0]["unavailable_reason"] == unavailable_reason
-    heads = [
-        row
-        for row in _catalog_rows(FactHead.__table__)
-        if row["family"] == "control" and row["session_id"] == session_id
-    ]
+    heads = [row for row in _catalog_rows(FactHead.__table__) if row["family"] == "control" and row["session_id"] == session_id]
     assert len(heads) == 1
     assert heads[0]["subject_key"] == f"connection:{connection_id}:{lease_generation}"
     assert json.loads(heads[0]["value_json"])["provider"] == "omp"
