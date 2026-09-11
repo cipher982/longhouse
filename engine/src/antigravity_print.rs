@@ -541,6 +541,10 @@ pub fn interrupt_antigravity_print_turn(
     let pgid = claim
         .process_group_id
         .context("Antigravity Console turn has no process-group identity")?;
+    let actual_pgid = unsafe { libc::getpgid(pid as libc::pid_t) };
+    if actual_pgid != pgid || crate::process_group::leader_group_for(pid) != Some(pgid) {
+        anyhow::bail!("Antigravity Console provider process-group identity changed");
+    }
     registry.mark_cancel_requested(run_id)?;
     // agy leaves run_command children behind when it is signalled, so the
     // group -- not the pid -- is the unit of termination.

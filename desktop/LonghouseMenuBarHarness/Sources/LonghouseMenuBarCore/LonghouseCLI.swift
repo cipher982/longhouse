@@ -118,7 +118,23 @@ enum LonghouseCLI {
     }
 
     private static func shouldRepairServiceArtifact(_ snapshot: HealthSnapshot) -> Bool {
-        guard snapshot.launchReadiness?.state?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "ready" else {
+        guard let readiness = snapshot.launchReadiness,
+              let machineName = readiness.machineName, !machineName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let storedURL = readiness.storedURL, !storedURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              readiness.state?.lowercased() != "unconfigured" else {
+            return false
+        }
+        let invalidMachineState: (String) -> Bool = {
+            switch $0 {
+            case "machine_state_invalid", "machine_state_missing",
+                 "machine_state_missing_runtime_url", "machine_state_missing_machine_name":
+                return true
+            default:
+                return false
+            }
+        }
+        if snapshot.reasons.contains(where: invalidMachineState)
+            || readiness.reasons?.contains(where: invalidMachineState) == true {
             return false
         }
 
@@ -129,7 +145,7 @@ enum LonghouseCLI {
             return true
         }
 
-        return snapshot.reasons.contains {
+        let serviceMismatch: (String) -> Bool = {
             switch $0 {
             case "service_generation_mismatch", "service_machine_name_mismatch",
                  "service_state_hash_mismatch", "service_runner_name_mismatch":
@@ -138,6 +154,8 @@ enum LonghouseCLI {
                 return false
             }
         }
+        return snapshot.reasons.contains(where: serviceMismatch)
+            || readiness.reasons?.contains(where: serviceMismatch) == true
     }
 
     static func setupInvocation() -> (launchPath: String, arguments: [String])? {

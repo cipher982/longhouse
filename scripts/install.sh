@@ -273,8 +273,8 @@ install_native_pair() {
     step "Installing Longhouse"
     CURRENT_INSTALL_STAGE="native_binary_install"
     local target source_dir="${LONGHOUSE_NATIVE_BIN_DIR:-}" version base_url tmp_dir checksums facade_asset engine_asset sqlite_asset sqlite_required
-    local native_bin_dir="$HOME/.local/bin" native_root="$HOME/.local/share/longhouse" release_id release_dir
-    local current_link="$native_root/current" next_current existing_facade component component_path facade_link engine_link core_version
+    local native_bin_dir="$HOME/.local/bin" native_root="$HOME/.local/share/longhouse" release_id release_dir legacy_release_id="" legacy_release_dir=""
+    local current_link="$native_root/current" next_current existing_facade component component_path facade_link engine_link core_version legacy_conversion=0
     existing_facade="$native_bin_dir/longhouse"
     [[ ! -e "$current_link" || -L "$current_link" ]] || { error "Refusing to replace non-link native current path: $current_link"; return 1; }
     # Recognize our own links even when their previous target needs repair.
@@ -283,10 +283,11 @@ install_native_pair() {
         component_path="$native_bin_dir/$component"
         if [[ ! -e "$component_path" && ! -L "$component_path" ]]; then continue; fi
         if [[ -L "$component_path" && "$(readlink "$component_path")" == "../share/longhouse/current/$component" ]]; then continue; fi
-        if [[ -L "$existing_facade" || ! -x "$existing_facade" ]] || ! LONGHOUSE_ENGINE_BIN="$native_bin_dir/longhouse-engine" "$existing_facade" verify-pair >/dev/null 2>&1; then
+        if [[ -L "$component_path" || ! -x "$existing_facade" ]] || ! LONGHOUSE_ENGINE_BIN="$native_bin_dir/longhouse-engine" "$existing_facade" verify-pair >/dev/null 2>&1; then
             error "Refusing to overwrite unrecognized native path: $component_path"
             return 1
         fi
+        legacy_conversion=1
     done
     target="$(native_target)"; facade_asset="longhouse-${target}"; engine_asset="longhouse-engine-${target}"; tmp_dir="$(mktemp -d)"
     if [[ -n "$source_dir" ]]; then
@@ -321,18 +322,20 @@ install_native_pair() {
         release_dir="$native_root/releases/$release_id"
         next_current="$native_root/.current-${tmp_dir##*/}"
         local previous_current="$native_root/.previous-${tmp_dir##*/}"
+        local predecessor_current="$native_root/.predecessor-current-${tmp_dir##*/}"
         facade_link="$native_bin_dir/.longhouse-native-${tmp_dir##*/}"
         engine_link="$native_bin_dir/.longhouse-engine-native-${tmp_dir##*/}"
 
         cleanup_native_pair() {
-            local status=$? rollback_failed=0 path saved
+            local status=$? rollback_failed=0 path saved current_target
             trap - EXIT INT TERM
             if [[ "$status" != 0 ]]; then
-                if [[ -L "$current_link" && "$(readlink "$current_link")" == "releases/$release_id" ]]; then
-                    if [[ -L "$previous_current" ]]; then
-                        replace_native_link "$previous_current" "$current_link" || rollback_failed=1
-                    else
-                        rm -f "$current_link" || rollback_failed=1
+                # If candidate verification failed after publication, return all
+                # linked entries to the predecessor before restoring any files.
+                if [[ -n "$legacy_release_dir" && -L "$current_link" && "$(readlink "$current_link")" == "releases/$release_id" ]]; then
+                    if ! ln -s "releases/$legacy_release_id" "$predecessor_current" || ! replace_native_link "$predecessor_current" "$current_link"; then
+                        error "Native install rollback needs repair; retained files: $tmp_dir $release_dir $legacy_release_dir"
+                        return "$status"
                     fi
                 fi
                 for component in longhouse longhouse-engine; do
@@ -345,13 +348,24 @@ install_native_pair() {
                         fi
                     fi
                 done
+                if [[ -L "$current_link" ]]; then
+                    current_target="$(readlink "$current_link")"
+                    if [[ "$current_target" == "releases/$release_id" || "$current_target" == "releases/$legacy_release_id" ]]; then
+                        if [[ -L "$previous_current" ]]; then
+                            replace_native_link "$previous_current" "$current_link" || rollback_failed=1
+                        else
+                            rm -f "$current_link" || rollback_failed=1
+                        fi
+                    fi
+                fi
                 if [[ "$rollback_failed" != 0 ]]; then
-                    error "Native install rollback needs repair; retained files: $tmp_dir $release_dir $previous_current"
+                    error "Native install rollback needs repair; retained files: $tmp_dir $release_dir $legacy_release_dir $previous_current"
                     return "$status"
                 fi
                 rm -rf "$release_dir"
+                [[ -z "$legacy_release_dir" ]] || rm -rf "$legacy_release_dir"
             fi
-            rm -f "$next_current" "$previous_current" "$facade_link" "$engine_link"
+            rm -f "$next_current" "$predecessor_current" "$previous_current" "$facade_link" "$engine_link"
             rm -rf "$tmp_dir"
             return "$status"
         }
@@ -365,14 +379,31 @@ install_native_pair() {
         [[ ! -e "$tmp_dir/longhouse-sqlite3" ]] || mv "$tmp_dir/longhouse-sqlite3" "$release_dir/longhouse-sqlite3"
         "$release_dir/longhouse" verify-pair >/dev/null
 
-        # Publish a complete target before exposing either public executable to
-        # it. During conversion from standalone binaries, the old public pair
-        # remains runnable until the facade is switched; its canonical path then
-        # resolves the engine beside this same release. Keep facade-first order:
-        # switching the engine first would make a legacy facade resolve a mixed
-        # pair through the public directory.
-        ln -s "releases/$release_id" "$next_current"
-        replace_native_link "$next_current" "$current_link"
+        if [[ "$legacy_conversion" == "1" ]]; then
+            legacy_release_id="legacy-${tmp_dir##*/}"
+            legacy_release_dir="$native_root/releases/$legacy_release_id"
+            mkdir -p "$legacy_release_dir"
+            cp -pL "$native_bin_dir/longhouse" "$legacy_release_dir/longhouse"
+            cp -pL "$native_bin_dir/longhouse-engine" "$legacy_release_dir/longhouse-engine"
+            if [[ -L "$existing_facade" && -x "$current_link/longhouse-sqlite3" ]]; then
+                cp -pL "$current_link/longhouse-sqlite3" "$legacy_release_dir/longhouse-sqlite3"
+            elif [[ -x "$native_bin_dir/longhouse-sqlite3" ]]; then
+                cp -pL "$native_bin_dir/longhouse-sqlite3" "$legacy_release_dir/longhouse-sqlite3"
+            fi
+            "$legacy_release_dir/longhouse" verify-pair >/dev/null
+
+            # Keep both standalone predecessor binaries authoritative while the
+            # two public entries are converted. The later current rename then
+            # switches both public links to the complete candidate together.
+            ln -s "releases/$legacy_release_id" "$predecessor_current"
+            replace_native_link "$predecessor_current" "$current_link"
+        else
+            # A first install and an existing paired install can expose the
+            # complete candidate directly. Existing paired installs require
+            # this single current rename and no public-link conversion.
+            ln -s "releases/$release_id" "$next_current"
+            replace_native_link "$next_current" "$current_link"
+        fi
 
         for component in longhouse longhouse-engine; do
             component_path="$native_bin_dir/$component"
@@ -387,6 +418,16 @@ install_native_pair() {
             ln -s "../share/longhouse/current/$component" "$component_path"
             replace_native_link "$component_path" "$native_bin_dir/$component"
         done
+        if [[ "$legacy_conversion" == "1" ]]; then
+            # Both public entries now resolve through the same complete
+            # predecessor generation. Only this atomic current rename exposes
+            # the new generation to either public entry.
+            "$native_bin_dir/longhouse" verify-pair >/dev/null
+            ln -s "releases/$release_id" "$next_current"
+            replace_native_link "$next_current" "$current_link"
+            # Retain the predecessor like any other previous release: an
+            # already-running facade may still need its adjacent engine/tool.
+        fi
         "$native_bin_dir/longhouse" verify-pair >/dev/null
     )
     export PATH="$native_bin_dir:$PATH"

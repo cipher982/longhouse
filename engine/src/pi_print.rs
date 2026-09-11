@@ -368,6 +368,10 @@ pub fn interrupt_pi_print_turn(
     let pgid = claim
         .process_group_id
         .context("Pi Console turn has no process-group identity")?;
+    let actual_pgid = unsafe { libc::getpgid(pid as libc::pid_t) };
+    if actual_pgid != pgid || crate::process_group::leader_group_for(pid) != Some(pgid) {
+        anyhow::bail!("Pi Console provider process-group identity changed");
+    }
     registry.mark_cancel_requested(run_id)?;
     let result = unsafe { libc::killpg(pgid, libc::SIGINT) };
     if result != 0 {

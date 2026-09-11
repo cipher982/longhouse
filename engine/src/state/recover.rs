@@ -656,12 +656,13 @@ pub fn recover_state_database(db_path: &Path, dry_run: bool) -> Result<RecoveryR
         );
     }
 
-    // A `-wal` holds committed frames that live only there, and a `-shm` is
-    // evidence of a connection that may still hold a writable fd — renaming the
-    // path does not take that fd away. Recovery copies the main database only,
-    // so proceeding past either would silently drop committed work or race a
-    // writer. Both are the agent's to clear by stopping.
-    for sidecar in ["-wal", "-shm"] {
+    // A `-wal` holds committed frames that live only there, a `-shm` is evidence
+    // of a connection that may still hold a writable fd, and a `-journal` is
+    // evidence of an active rollback transaction. Renaming the path does not
+    // take a writer's fd or transaction away. Recovery copies the main database
+    // only, so proceeding past any of them would silently drop committed work or
+    // race a writer. All are the agent's to clear by stopping.
+    for sidecar in ["-wal", "-shm", "-journal"] {
         let mut path = db_path.as_os_str().to_os_string();
         path.push(sidecar);
         let path = PathBuf::from(path);
@@ -944,7 +945,7 @@ fn staged_path(db_path: &Path) -> PathBuf {
 }
 
 fn surviving_sidecar(db_path: &Path) -> Option<PathBuf> {
-    for suffix in ["-wal", "-shm"] {
+    for suffix in ["-wal", "-shm", "-journal"] {
         let mut path = db_path.as_os_str().to_os_string();
         path.push(suffix);
         let path = PathBuf::from(path);
@@ -1639,6 +1640,94 @@ mod tests {
         assert!(error.contains("surviving SQLite sidecar"), "{error}");
         assert_eq!(std::fs::read(&path).unwrap(), original);
         assert_eq!(std::fs::read(&sidecar).unwrap(), sidecar_before);
+    }
+
+    #[test]
+    fn surviving_rollback_journal_is_refused_before_any_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollback.db");
+        seed_legacy_shape(&path);
+
+        let blocker = Connection::open(&path).unwrap();
+        blocker
+            .execute_batch(
+                "PRAGMA journal_mode=DELETE;
+                 BEGIN EXCLUSIVE;
+                 UPDATE file_state SET last_updated = '2026-08-25T00:01:00Z';",
+            )
+            .unwrap();
+        let sidecar = dir.path().join("rollback.db-journal");
+        assert!(
+            sidecar.is_file(),
+            "the exclusive writer must leave its journal"
+        );
+
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.write_all(&[0u8; 16]).unwrap();
+        file.flush().unwrap();
+        drop(file);
+
+        let original = std::fs::read(&path).unwrap();
+        let journal_before = std::fs::read(&sidecar).unwrap();
+        let mut entries_before: Vec<_> = dir
+            .path()
+            .read_dir()
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        entries_before.sort();
+        let error = recover_state_database(&path, false)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("surviving SQLite sidecar"), "{error}");
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(std::fs::read(&sidecar).unwrap(), journal_before);
+        let mut entries_after: Vec<_> = dir
+            .path()
+            .read_dir()
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        entries_after.sort();
+        assert_eq!(entries_after, entries_before);
+        blocker.execute_batch("ROLLBACK").unwrap();
+    }
+
+    #[test]
+    fn exclusive_writer_without_a_journal_is_refused_without_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("busy.db");
+        seed_legacy_shape(&path);
+
+        let blocker = Connection::open(&path).unwrap();
+        blocker
+            .execute_batch("PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE;")
+            .unwrap();
+        assert!(!dir.path().join("busy.db-journal").exists());
+
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.write_all(&[0u8; 16]).unwrap();
+        file.flush().unwrap();
+        drop(file);
+        let original = std::fs::read(&path).unwrap();
+
+        let error = recover_state_database(&path, false)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("cannot inspect state"), "{error}");
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert!(
+            dir.path()
+                .read_dir()
+                .unwrap()
+                .all(|entry| entry.unwrap().file_name().to_str() == Some("busy.db")),
+            "busy recovery must not create a workspace or replacement"
+        );
+        blocker.execute_batch("ROLLBACK").unwrap();
     }
 
     #[test]

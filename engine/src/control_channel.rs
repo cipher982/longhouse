@@ -3348,6 +3348,134 @@ mod tests {
         }
     }
 
+    #[test]
+    fn console_interrupt_refuses_a_foreign_process_group() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.block_on(crate::console_adapter::longhouse_home_test_guard());
+        let temp = tempfile::tempdir().unwrap();
+        temp_env::with_var("LONGHOUSE_HOME", Some(temp.path()), || {
+            runtime.block_on(async {
+                for (provider, adapter) in [
+                    ("claude", CLAUDE_PRINT_ADAPTER),
+                    ("cursor", CURSOR_PRINT_ADAPTER),
+                    ("opencode", OPENCODE_RUN_ADAPTER),
+                    ("pi", PI_PRINT_ADAPTER),
+                    ("omp", OMP_PRINT_ADAPTER),
+                    ("antigravity", ANTIGRAVITY_PRINT_ADAPTER),
+                ] {
+                    let mut owner = tokio::process::Command::new("sleep")
+                        .arg("30")
+                        .process_group(0)
+                        .kill_on_drop(true)
+                        .spawn()
+                        .unwrap();
+                    let mut unrelated = tokio::process::Command::new("sleep")
+                        .arg("30")
+                        .process_group(0)
+                        .kill_on_drop(true)
+                        .spawn()
+                        .unwrap();
+                    let pid = owner.id().unwrap();
+                    let run_id = Uuid::new_v4().to_string();
+                    let session_id = Uuid::new_v4().to_string();
+                    let thread_id = Uuid::new_v4().to_string();
+                    let registry = crate::turn_claims::default_registry().unwrap();
+                    registry
+                        .claim(
+                            &run_id,
+                            &session_id,
+                            &thread_id,
+                            Some("turn"),
+                            None,
+                            provider,
+                        )
+                        .unwrap();
+                    registry
+                        .mark_spawned_invocation(
+                            &run_id,
+                            pid,
+                            unrelated.id().unwrap() as i32,
+                            crate::turn_claims::process_start_time_for_pid(Some(pid)),
+                            adapter,
+                            "launch",
+                            None,
+                            "/unused/stdout",
+                            "/unused/stderr",
+                            json!({}),
+                        )
+                        .unwrap();
+                    let command = json!({
+                        "command_type": COMMAND_TURN_INTERRUPT,
+                        "session_id": session_id,
+                        "payload": {
+                            "provider": provider, "run_id": run_id,
+                            "thread_id": thread_id, "turn_id": "turn"
+                        }
+                    });
+                    let refused = execute_command(&command, &test_config()).await;
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    assert!(
+                        refused.is_err(),
+                        "{provider} accepted a foreign process group"
+                    );
+                    assert!(
+                        unrelated.try_wait().unwrap().is_none()
+                            && owner.try_wait().unwrap().is_none(),
+                        "{provider} signalled an unowned group"
+                    );
+                    assert!(registry
+                        .read(&run_id)
+                        .unwrap()
+                        .cancel_requested_at
+                        .is_none());
+
+                    registry
+                        .mark_spawned_invocation(
+                            &run_id,
+                            pid,
+                            pid as i32,
+                            crate::turn_claims::process_start_time_for_pid(Some(pid)),
+                            adapter,
+                            "launch",
+                            None,
+                            "/unused/stdout",
+                            "/unused/stderr",
+                            json!({}),
+                        )
+                        .unwrap();
+                    // Production has a provider monitor reaping the child while
+                    // an interrupt may synchronously verify group termination.
+                    let mut owner_wait = tokio::spawn(async move { owner.wait().await });
+                    let accepted = execute_command(&command, &test_config()).await;
+                    let owner_exited =
+                        tokio::time::timeout(Duration::from_secs(2), &mut owner_wait).await;
+                    if owner_exited.is_err() {
+                        owner_wait.abort();
+                        let _ = owner_wait.await;
+                    }
+                    let unrelated_survived = unrelated.try_wait().unwrap().is_none();
+                    let _ = unrelated.kill().await;
+                    assert!(
+                        accepted.is_ok(),
+                        "{provider} refused its owned group: {accepted:?}"
+                    );
+                    assert!(
+                        matches!(owner_exited, Ok(Ok(Ok(_)))),
+                        "{provider} did not interrupt its owner"
+                    );
+                    assert!(
+                        unrelated_survived,
+                        "{provider} interrupted the unrelated process"
+                    );
+                }
+            });
+        });
+    }
+
     fn write_test_executable(path: &Path, body: &str) {
         std::fs::write(path, body).unwrap();
         #[cfg(unix)]
