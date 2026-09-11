@@ -661,6 +661,7 @@ fn full_integrity_check(path: &Path) -> Result<bool> {
 }
 
 fn ensure_recovery_tool_available() -> Result<()> {
+    // no managed identity: this only probes the SQLite recovery utility; it is not a provider launch.
     let binary = sqlite_recovery_binary();
     let status = std::process::Command::new(&binary)
         .arg("--version")
