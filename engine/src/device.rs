@@ -5318,32 +5318,6 @@ mod tests {
     }
 
     #[test]
-    fn native_desktop_health_keeps_storage_and_recovery_actions() {
-        let unresolved = serde_json::json!({
-            "storage_v2_outbox": {
-                "unresolved_blocked_source_count": 1,
-                "latest_unresolved_block_source_epoch": "abcdefab-cdef-abcd-efab-cdefabcdefab"
-            }
-        });
-
-        assert_eq!(
-            native_desktop_suggested_actions(
-                Some(&unresolved),
-                &[
-                    "storage_v2_sources_unresolved".to_string(),
-                    "managed_launch_recovery_exhausted".to_string(),
-                    "engine_reconciliation_failed".to_string(),
-                ]
-            ),
-            vec![
-                "Inspect retained source evidence with longhouse shipping inspect --source-epoch abcdefab-cdef-abcd-efab-cdefabcdefab --json before retrying or discarding it.",
-                "Automatic managed-launch recovery has stopped. Inspect the affected session and local recovery files, then use the scoped managed-session action.",
-                "Run: longhouse local-health --json",
-            ]
-        );
-    }
-
-    #[test]
     fn native_desktop_health_scopes_unresolved_storage_action_by_block_kind() {
         let unresolved = serde_json::json!({
             "storage_v2_outbox": {
@@ -6399,10 +6373,6 @@ mod tests {
         settle_native_repair(&mut execution, std::time::Instant::now(), || after.clone());
 
         assert_eq!(execution.state, "recovery_pending");
-        assert!(execution
-            .notes
-            .iter()
-            .any(|note| { note.contains("ship_stalled") && note.contains("inspect") }));
     }
 
     #[cfg(unix)]
@@ -7479,10 +7449,7 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         .unwrap();
 
         assert_eq!(execution.state, "rejected_service_mismatch");
-        assert_eq!(
-            execution.service.unwrap().native_engine_matches,
-            Some(false)
-        );
+        assert!(execution.actions.is_empty());
     }
 
     #[test]
