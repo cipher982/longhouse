@@ -239,7 +239,84 @@ pub fn lifecycle(event: &str) {
             payload.get("transcript_path").and_then(Value::as_str),
         );
     }
+    let cwd_hint = payload.get("cwd").and_then(Value::as_str);
+    emit_warp_lifecycle_notification(event, &session_id, cwd_hint, &payload);
     println!("{{}}");
+}
+
+fn warp_lifecycle_payload(
+    event: &str,
+    session_id: &str,
+    cwd: Option<&str>,
+    payload: &Value,
+) -> Option<(Option<String>, String)> {
+    match event {
+        "stop" | "afterAgentResponse" => {
+            let osc9 = "Cursor: Task completed".to_string();
+            let msg = json!({
+                "v": 1,
+                "agent": "agent",
+                "event": "stop",
+                "session_id": session_id,
+                "cwd": cwd,
+            });
+            let osc777 = format!("\x1b]777;notify;warp://cli-agent;{msg}\x07");
+            Some((Some(osc9), osc777))
+        }
+        "beforeShellExecution" | "beforeMCPExecution" => {
+            let tool = payload
+                .get("tool_name")
+                .and_then(Value::as_str)
+                .unwrap_or("command");
+            let summary = format!("Cursor needs approval for {tool}");
+            let msg = json!({
+                "v": 1,
+                "agent": "agent",
+                "event": "permission_request",
+                "session_id": session_id,
+                "cwd": cwd,
+                "summary": summary,
+            });
+            let osc777 = format!("\x1b]777;notify;warp://cli-agent;{msg}\x07");
+            Some((Some(summary), osc777))
+        }
+        "beforeSubmitPrompt" => {
+            let msg = json!({
+                "v": 1,
+                "agent": "agent",
+                "event": "prompt_submit",
+                "session_id": session_id,
+                "cwd": cwd,
+            });
+            let osc777 = format!("\x1b]777;notify;warp://cli-agent;{msg}\x07");
+            Some((None, osc777))
+        }
+        _ => None,
+    }
+}
+
+fn emit_warp_lifecycle_notification(
+    event: &str,
+    session_id: &str,
+    cwd: Option<&str>,
+    payload: &Value,
+) {
+    if std::env::var("TERM_PROGRAM").as_deref() != Ok("WarpTerminal") {
+        return;
+    }
+    let Some((osc9_text, osc777)) = warp_lifecycle_payload(event, session_id, cwd, payload) else {
+        return;
+    };
+    let Ok(mut tty) = std::fs::OpenOptions::new().write(true).open("/dev/tty") else {
+        return;
+    };
+    use std::io::Write;
+    if let Some(text) = osc9_text {
+        let osc9 = format!("\x1b]9;{text}\x07");
+        let _ = tty.write_all(osc9.as_bytes());
+    }
+    let _ = tty.write_all(osc777.as_bytes());
+    let _ = tty.flush();
 }
 
 fn is_foreground_conversation_rollover(event: &str, payload: &Value) -> bool {
@@ -573,5 +650,39 @@ mod tests {
             "afterAgentThought",
             &json!({})
         ));
+    }
+
+    #[test]
+    fn warp_lifecycle_payload_formats_expected_sequences() {
+        let (osc9, osc777) = warp_lifecycle_payload("stop", "test-session", Some("/tmp"), &json!({}))
+            .expect("payload for stop");
+        assert_eq!(osc9.as_deref(), Some("Cursor: Task completed"));
+        assert!(osc777.starts_with("\x1b]777;notify;warp://cli-agent;"));
+        assert!(osc777.ends_with('\x07'));
+        assert!(osc777.contains(r#""agent":"agent""#));
+        assert!(osc777.contains(r#""event":"stop""#));
+
+        let (osc9, osc777) = warp_lifecycle_payload(
+            "beforeShellExecution",
+            "test-session",
+            Some("/tmp"),
+            &json!({"tool_name": "Bash"}),
+        )
+        .expect("payload for beforeShellExecution");
+        assert_eq!(osc9.as_deref(), Some("Cursor needs approval for Bash"));
+        assert!(osc777.contains(r#""event":"permission_request""#));
+        assert!(osc777.contains(r#""summary":"Cursor needs approval for Bash""#));
+
+        let (osc9, osc777) = warp_lifecycle_payload(
+            "beforeSubmitPrompt",
+            "test-session",
+            Some("/tmp"),
+            &json!({}),
+        )
+        .expect("payload for beforeSubmitPrompt");
+        assert!(osc9.is_none());
+        assert!(osc777.contains(r#""event":"prompt_submit""#));
+
+        assert!(warp_lifecycle_payload("unhandledEvent", "test-session", None, &json!({})).is_none());
     }
 }
