@@ -9,6 +9,7 @@ public names. These tests keep the boundary from eroding back.
 from __future__ import annotations
 
 import ast
+import io
 import json
 import pathlib
 import re
@@ -179,6 +180,64 @@ def test_qualification_session_retirement_paginates_served_inventory(monkeypatch
     assert requests[1][0] == "POST"
     assert "offset=0" in requests[2][1]
     assert "offset=2" in requests[3][1]
+
+
+def test_qualification_session_retirement_retries_transient_inventory_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transient = live_session_toolkit.urllib.error.HTTPError(
+        "http://runtime.example/api/agents/sessions",
+        503,
+        "busy",
+        {},
+        io.BytesIO(b'{"detail": "busy"}'),
+    )
+    responses = iter(
+        [
+            {"hidden": True},
+            {"user_state": "archived"},
+            transient,
+            {"sessions": [], "total": 0},
+        ]
+    )
+    requests: list[tuple[str, str]] = []
+
+    class Response:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(self._payload).encode("utf-8")
+
+    def opener(request: object, *, timeout: float) -> Response:
+        del timeout
+        requests.append((request.get_method(), request.full_url))  # type: ignore[attr-defined]
+        value = next(responses)
+        if isinstance(value, Exception):
+            raise value
+        return Response(value)
+
+    monkeypatch.setattr(live_session_toolkit.urllib.request, "urlopen", opener)
+    monkeypatch.setattr(live_session_toolkit.time, "sleep", lambda _seconds: None)
+
+    receipt = live_session_toolkit.retire_qualification_session(
+        "http://runtime.example",
+        "agents-token",
+        "session-1",
+        provider="omp",
+    )
+
+    assert receipt["status"] == "pass"
+    assert receipt["served_inventory_retry_count"] == 1
+    assert receipt["served_inventory_transient_errors"] == ["HTTP 503"]
+    assert requests[2][0] == "GET"
+    assert requests[3][0] == "GET"
 
 
 def test_qualification_secrets_include_provider_specific_live_keys() -> None:

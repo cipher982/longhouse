@@ -87,6 +87,36 @@ _HTTP_STATUS_ERROR_RE = re.compile(r"HTTP status [^\r\n]*\((?P<status>[45]\d{2})
 
 
 _TRANSCRIPT_CAPABILITY_RETRY_SLEEP_SECS = 1.0
+_RETIREMENT_HTTP_ERROR_RE = re.compile(r" returned HTTP (?P<status>[45]\d{2})")
+_RETIREMENT_TRANSIENT_HTTP_STATUSES = frozenset({429, 500, 502, 503, 504})
+_RETIREMENT_INVENTORY_MAX_ATTEMPTS = 4
+_RETIREMENT_INVENTORY_RETRY_SLEEP_SECS = 0.5
+
+
+def _retirement_http_status(error: RuntimeError) -> int | None:
+    match = _RETIREMENT_HTTP_ERROR_RE.search(str(error))
+    return int(match.group("status")) if match is not None else None
+
+
+def _retirement_inventory_request(
+    request: Any,
+    path: str,
+    *,
+    retry_count: int,
+    transient_errors: list[str],
+) -> tuple[dict[str, Any], int]:
+    attempts = 0
+    while True:
+        try:
+            return request("GET", path), retry_count
+        except RuntimeError as exc:
+            status = _retirement_http_status(exc)
+            if status not in _RETIREMENT_TRANSIENT_HTTP_STATUSES or attempts + 1 >= _RETIREMENT_INVENTORY_MAX_ATTEMPTS:
+                raise
+            attempts += 1
+            retry_count += 1
+            transient_errors.append(f"HTTP {status}")
+            time.sleep(min(2.0, _RETIREMENT_INVENTORY_RETRY_SLEEP_SECS * (2 ** (attempts - 1))))
 
 
 _SAFE_DIAGNOSTIC_DETAIL_RE = re.compile(r"^[a-z0-9][a-z0-9_.:+-]{0,127}$")
@@ -162,6 +192,8 @@ def retire_qualification_session(
         "hidden": False,
         "archived": False,
         "present_in_served_inventory": None,
+        "served_inventory_retry_count": 0,
+        "served_inventory_transient_errors": [],
     }
     try:
         hidden = request("PATCH", f"/api/agents/sessions/{session_id}/timeline-visibility", {"hidden": True})
@@ -170,6 +202,8 @@ def retire_qualification_session(
         offset = 0
         present = False
         total: int | None = None
+        inventory_retry_count = 0
+        inventory_transient_errors: list[str] = []
         while True:
             query = {
                 "provider": provider,
@@ -181,9 +215,11 @@ def retire_qualification_session(
             }
             if project:
                 query["project"] = project
-            inventory = request(
-                "GET",
+            inventory, inventory_retry_count = _retirement_inventory_request(
+                request,
                 f"/api/agents/sessions?{urllib.parse.urlencode(query)}",
+                retry_count=inventory_retry_count,
+                transient_errors=inventory_transient_errors,
             )
             sessions = inventory.get("sessions")
             if not isinstance(sessions, list):
@@ -207,6 +243,8 @@ def retire_qualification_session(
                 "archived": archived.get("user_state") == "archived",
                 "present_in_served_inventory": present,
                 "served_inventory_total": total,
+                "served_inventory_retry_count": inventory_retry_count,
+                "served_inventory_transient_errors": inventory_transient_errors,
             }
         )
         receipt["status"] = "pass" if receipt["hidden"] is True and receipt["archived"] is True and present is False else "fail"
