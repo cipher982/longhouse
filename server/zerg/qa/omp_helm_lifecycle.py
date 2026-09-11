@@ -1600,14 +1600,20 @@ def _helm_cleanup_ready(cleanup: Mapping[str, Any]) -> bool:
     )
 
 
-def _exact_marker_prompt(marker: str, *, setup: str | None = None) -> str:
-    """Keep sequential marker probes unambiguous to context-sensitive models."""
+def _exact_marker_prompt(marker: str) -> str:
+    """Make sequential marker probes distinguish a fresh request."""
 
-    prefix = f"{setup.rstrip()} " if setup else ""
     return (
-        f"{prefix}This is the newest verification request. Ignore every earlier "
-        f"marker or instruction, then reply with exactly {marker} and nothing else."
+        "This is the newest verification request. Do not repeat an earlier "
+        "verification or assistant marker; reply with exactly "
+        f"{marker} and nothing else."
     )
+
+
+def _setup_marker_prompt(marker: str, *, setup: str) -> str:
+    """Preserve setup instructions while requiring one exact marker reply."""
+
+    return f"{setup.rstrip()} reply with exactly {marker} and nothing else."
 
 
 def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
@@ -1862,7 +1868,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "send",
             current_session_id,
             env,
-            text=_exact_marker_prompt(
+            text=_setup_marker_prompt(
                 active_marker,
                 setup="Use the bash tool to run `sleep 8`, then",
             ),
@@ -1931,7 +1937,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "send",
             current_session_id,
             env,
-            text=_exact_marker_prompt(
+            text=_setup_marker_prompt(
                 steer_active_marker,
                 setup="Use the bash tool to run `sleep 8`, then",
             ),
@@ -1990,7 +1996,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "send",
             current_session_id,
             env,
-            text=_exact_marker_prompt(
+            text=_setup_marker_prompt(
                 abort_marker,
                 setup="Use the bash tool to run `sleep 15`, then",
             ),
@@ -2097,7 +2103,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "send",
             current_session_id,
             env,
-            text=_exact_marker_prompt(
+            text=_setup_marker_prompt(
                 replacement_marker,
                 setup=f"Remember this context phrase: {context_phrase}. Then",
             ),
@@ -2132,7 +2138,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         replacement_evidence.update({"observation_scope": "replacement", "source_generation": "replacement"})
         controls["replacement"] = {
             "action_label": "replacement_send",
-            "prompt": _exact_marker_prompt(
+            "prompt": _setup_marker_prompt(
                 replacement_marker,
                 setup=f"Remember this context phrase: {context_phrase}. Then",
             ),
