@@ -3943,7 +3943,7 @@ export interface components {
              */
             contract_state: "valid" | "invalid";
             /** Unavailable Reason */
-            unavailable_reason?: ("contract_invalid" | "workspace_missing" | "provider_incompatible" | "provider_state_missing") | null;
+            unavailable_reason?: ("contract_invalid" | "workspace_missing" | "provider_incompatible" | "provider_state_missing" | "execution_owner_alive" | "owner_unverifiable") | null;
             /**
              * Observed At
              * Format: date-time
