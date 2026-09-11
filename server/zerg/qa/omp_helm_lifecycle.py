@@ -2284,6 +2284,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "context_phrase": context_phrase,
             "resume_prompt": resume_prompt,
             "pre_resume_source_path": pre_resume_source.name,
+            "pre_resume_source_offset": resume_offset,
             "context_recalled": context_recalled,
             "context_marker_count": resume_context_evidence["marker_count"],
             "context_marker_present": resume_context_evidence["marker_count"] >= 1,
