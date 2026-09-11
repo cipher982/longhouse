@@ -315,26 +315,72 @@ install_native_pair() {
     chmod 755 "$tmp_dir/longhouse" "$tmp_dir/longhouse-engine"
     [[ ! -e "$tmp_dir/longhouse-sqlite3" ]] || chmod 755 "$tmp_dir/longhouse-sqlite3"
     "$tmp_dir/longhouse" verify-pair >/dev/null || { rm -rf "$tmp_dir"; return 1; }
-    release_id="${version:-local}-${tmp_dir##*/}"
-    release_dir="$native_root/releases/$release_id"
-    mkdir -p "$native_bin_dir" "$release_dir"
-    mv "$tmp_dir/longhouse" "$release_dir/longhouse"
-    mv "$tmp_dir/longhouse-engine" "$release_dir/longhouse-engine"
-    [[ ! -e "$tmp_dir/longhouse-sqlite3" ]] || mv "$tmp_dir/longhouse-sqlite3" "$release_dir/longhouse-sqlite3"
-    "$release_dir/longhouse" verify-pair >/dev/null || { rm -rf "$tmp_dir"; return 1; }
-    next_current="$native_root/.current-${tmp_dir##*/}"
-    facade_link="$native_bin_dir/.longhouse-native-${tmp_dir##*/}"
-    engine_link="$native_bin_dir/.longhouse-engine-native-${tmp_dir##*/}"
-    ln -s "releases/$release_id" "$next_current"
-    ln -s "../share/longhouse/current/longhouse" "$facade_link"
-    ln -s "../share/longhouse/current/longhouse-engine" "$engine_link"
-    # Existing versioned installs continue using the old pair until the one
-    # current-link rename commits the upgrade. Never unlink that authority.
-    if [[ ! -L "$current_link" ]]; then replace_native_link "$next_current" "$current_link"; fi
-    replace_native_link "$facade_link" "$existing_facade"
-    replace_native_link "$engine_link" "$native_bin_dir/longhouse-engine"
-    if [[ -L "$next_current" ]]; then replace_native_link "$next_current" "$current_link"; fi
-    rm -rf "$tmp_dir"; "$native_bin_dir/longhouse" verify-pair >/dev/null
+    (
+        set -e
+        release_id="${version:-local}-${tmp_dir##*/}"
+        release_dir="$native_root/releases/$release_id"
+        next_current="$native_root/.current-${tmp_dir##*/}"
+        local previous_current="$native_root/.previous-${tmp_dir##*/}"
+        facade_link="$native_bin_dir/.longhouse-native-${tmp_dir##*/}"
+        engine_link="$native_bin_dir/.longhouse-engine-native-${tmp_dir##*/}"
+
+        cleanup_native_pair() {
+            local status=$? rollback_failed=0 path saved
+            trap - EXIT INT TERM
+            if [[ "$status" != 0 ]]; then
+                if [[ -L "$current_link" && "$(readlink "$current_link")" == "releases/$release_id" ]]; then
+                    if [[ -L "$previous_current" ]]; then
+                        replace_native_link "$previous_current" "$current_link" || rollback_failed=1
+                    else
+                        rm -f "$current_link" || rollback_failed=1
+                    fi
+                fi
+                for component in longhouse longhouse-engine; do
+                    path="$native_bin_dir/$component"; saved="$tmp_dir/previous-$component"
+                    if [[ -L "$path" && "$(readlink "$path")" == "../share/longhouse/current/$component" ]]; then
+                        if [[ -e "$saved" || -L "$saved" ]]; then
+                            replace_native_link "$saved" "$path" || rollback_failed=1
+                        elif [[ -f "$tmp_dir/created-$component" ]]; then
+                            rm -f "$path" || rollback_failed=1
+                        fi
+                    fi
+                done
+                if [[ "$rollback_failed" != 0 ]]; then
+                    error "Native install rollback needs repair; retained files: $tmp_dir $release_dir $previous_current"
+                    return "$status"
+                fi
+                rm -rf "$release_dir"
+            fi
+            rm -f "$next_current" "$previous_current" "$facade_link" "$engine_link"
+            rm -rf "$tmp_dir"
+            return "$status"
+        }
+        trap cleanup_native_pair EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        mkdir -p "$native_bin_dir" "$release_dir"
+        [[ ! -L "$current_link" ]] || ln -s "$(readlink "$current_link")" "$previous_current"
+        mv "$tmp_dir/longhouse" "$release_dir/longhouse"
+        mv "$tmp_dir/longhouse-engine" "$release_dir/longhouse-engine"
+        [[ ! -e "$tmp_dir/longhouse-sqlite3" ]] || mv "$tmp_dir/longhouse-sqlite3" "$release_dir/longhouse-sqlite3"
+        "$release_dir/longhouse" verify-pair >/dev/null
+        for component in longhouse longhouse-engine; do
+            component_path="$native_bin_dir/$component"
+            # Existing versioned installs need only the single current rename.
+            if [[ -L "$component_path" && "$(readlink "$component_path")" == "../share/longhouse/current/$component" ]]; then continue; fi
+            if [[ -e "$component_path" || -L "$component_path" ]]; then
+                cp -pP "$component_path" "$tmp_dir/previous-$component"
+            else
+                touch "$tmp_dir/created-$component"
+            fi
+            component_path="$native_bin_dir/.$component-native-${tmp_dir##*/}"
+            ln -s "../share/longhouse/current/$component" "$component_path"
+            replace_native_link "$component_path" "$native_bin_dir/$component"
+        done
+        ln -s "releases/$release_id" "$next_current"
+        replace_native_link "$next_current" "$current_link"
+        "$native_bin_dir/longhouse" verify-pair >/dev/null
+    )
     export PATH="$native_bin_dir:$PATH"
     emit_installer_telemetry "native_binary_install" "$CURRENT_INSTALL_STAGE" "$INSTALL_TELEMETRY_SOURCE" "$INSTALL_TELEMETRY_PACKAGE_REF" "0"
     success "Longhouse installed: $($native_bin_dir/longhouse build-identity)"
