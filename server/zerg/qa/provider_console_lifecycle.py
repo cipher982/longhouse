@@ -1800,6 +1800,31 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         write_json(root / "adapter-dispatch-receipt.json", dispatch)
         flush_receipt = _retain_flush_diagnostics(shipper.flush("console-first-turn"))
         write_json(root / "transcript-flush-receipt.json", flush_receipt)
+
+        def flush_for_projection(label: str) -> dict[str, object]:
+            if shipper is None:
+                raise RuntimeError(f"Console transcript shipper unavailable for {label}")
+            receipt = _retain_flush_diagnostics(shipper.flush(label))
+            turn_receipts = flush_receipt.setdefault("turns", {})
+            if not isinstance(turn_receipts, dict):
+                raise RuntimeError("Console transcript flush receipt has an invalid turns field")
+            turn_receipts[label] = receipt
+            write_json(root / "transcript-flush-receipt.json", flush_receipt)
+            flush_ok = (
+                receipt.get("status") == "pass"
+                and receipt.get("exit_code") == 0
+                and receipt.get("daemon_paused") is True
+                and receipt.get("daemon_restarted") is True
+                and isinstance(receipt.get("events_shipped"), int)
+                and not isinstance(receipt.get("events_shipped"), bool)
+                and receipt.get("events_shipped") >= 0
+            )
+            if not flush_ok:
+                raise RuntimeError(f"Console transcript flush failed before {label} projection")
+            return receipt
+
+        flush_receipt["turns"] = {"console-first-turn": flush_receipt.copy()}
+        write_json(root / "transcript-flush-receipt.json", flush_receipt)
         marker_count = provider_response_evidence.get("provider_response_marker_count") if provider_response_evidence is not None else None
         flush_ok = (
             flush_receipt.get("status") == "pass"
@@ -1890,6 +1915,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                 turn_id=str(resume["turn_id"]),
                 run_id=str(resume["run_id"]),
             )
+            flush_for_projection("console-resume-turn")
             resume_events = _wait_exact_assistant_marker(api_url, token, session_id, resume_marker)
             resume_native_response: dict[str, object] | None = None
             if provider in {"pi", "omp"}:
@@ -2051,6 +2077,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                 turn_id=str(post["turn_id"]),
                 run_id=str(post["run_id"]),
             )
+            flush_for_projection("console-post-interrupt-turn")
             post_events = _wait_exact_assistant_marker(api_url, token, session_id, post_marker)
             post_completed = (post_claim.get("result") or {}).get("terminal_state") == "run_completed"
             interrupt_receipt = {
@@ -2153,6 +2180,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                 turn_id=str(interrupt_turn["turn_id"]),
                 run_id=str(interrupt_turn["run_id"]),
             )
+            flush_for_projection("console-unsupported-interrupt-turn")
             _wait_exact_assistant_marker(api_url, token, session_id, interrupt_marker, timeout=60)
             post_marker = f"LH_{provider.upper()}_AFTER_UNSUPPORTED_{uuid4().hex}"
             post_message = f"Reply with exactly {post_marker} and nothing else."
@@ -2178,6 +2206,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                 turn_id=str(post["turn_id"]),
                 run_id=str(post["run_id"]),
             )
+            flush_for_projection("console-after-unsupported-post-turn")
             _wait_exact_assistant_marker(api_url, token, session_id, post_marker)
             normal_completed = (terminal.get("result") or {}).get("terminal_state") == "run_completed" and (
                 post_claim.get("result") or {}
