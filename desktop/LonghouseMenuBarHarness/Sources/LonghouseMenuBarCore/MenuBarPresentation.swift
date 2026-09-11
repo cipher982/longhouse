@@ -96,7 +96,9 @@ extension HealthSnapshot {
             "storage_v2_sources_unresolved",
             "engine_status_unreadable", "orphaned_managed_bridge",
             "managed_launch_recovery_unreadable",
-            "service_stopped", "spool_dead", "desktop_app_setup_required",
+            "service_stopped", "service_not_installed", "service_generation_mismatch",
+            "service_machine_name_mismatch", "service_state_hash_mismatch",
+            "service_runner_name_mismatch", "desktop_app_setup_required",
             "desktop_app_wrong_install_location",
         ]
         let inspectReasons: Set<String> = Set([
@@ -104,7 +106,7 @@ extension HealthSnapshot {
             "managed_session_control_degraded", "provider_release_blocked",
             "storage_v2_sources_proof_unknown", "managed_launch_recovery_active",
             "managed_launch_recovery_exhausted", "parse_errors",
-            "payload_rejected", "payload_too_large",
+            "payload_rejected", "payload_too_large", "spool_dead", "spool_dead_letters",
         ]).union(menuBarTransportAttentionReasons)
         let transportAttentionReason = reasons.first {
             menuBarTransportAttentionReasons.contains($0)
@@ -120,6 +122,11 @@ extension HealthSnapshot {
         let rowLevelRedReasons: Set<String> = ["managed_unknown_phase"]
         let storageBlockRequiresRepair = self.storageBlockRequiresRepair
         let storageBlockIsRecovering = self.storageBlockIsRecovering
+        let deadLetterCount = max(
+            engineStatus?.payload?.spoolDeadCount ?? 0,
+            reasons.contains("spool_dead") || reasons.contains("spool_dead_letters") ? 1 : 0
+        )
+        let hasDeadLetters = deadLetterCount > 0
         let nativeRedRequiresRepair = parsedSeverity == .red
             && rowLevelRedReasons.isDisjoint(with: reasons)
 
@@ -161,6 +168,8 @@ extension HealthSnapshot {
             headline = "Source upload reconciliation pending for \(storageBlockedCount) source\(storageBlockedCount == 1 ? "" : "s")"
         case .inspect where storageBlockProofUnknown:
             headline = "Durable upload proof unavailable for \(storageBlockedCount) source\(storageBlockedCount == 1 ? "" : "s")"
+        case .inspect where hasDeadLetters:
+            headline = "Durable upload needs inspection for \(deadLetterCount) dead letter\(deadLetterCount == 1 ? "" : "s")"
         case .inspect where reasons.contains("managed_launch_recovery_exhausted"):
             headline = "Managed session recovery needs attention"
         case .inspect where transportAttentionReason != nil:
@@ -214,6 +223,11 @@ extension HealthSnapshot {
     ) -> [MenuBarSystemFact] {
         let localEvidenceUnavailable = !localEvidenceTrust.isCurrent
         let projectionUnavailable = !projectionTrust.isCurrent
+        let deadLetterCount = max(
+            engineStatus?.payload?.spoolDeadCount ?? 0,
+            reasons.contains("spool_dead") || reasons.contains("spool_dead_letters") ? 1 : 0
+        )
+        let hasDeadLetters = deadLetterCount > 0
         // Native health intentionally has no service-manager block. A
         // fresh engine pulse with a daemon pid is sufficient local-process
         // evidence; otherwise the panel reports Unknown instead of inventing
@@ -274,6 +288,9 @@ extension HealthSnapshot {
         } else if storageBlockedCount > 0 {
             durableValue = "\(storageBlockedCount) source conflict\(storageBlockedCount == 1 ? "" : "s")"
             durablePromotion = storageBlockRequiresRepair ? .repair : .inspect
+        } else if hasDeadLetters {
+            durableValue = "\(deadLetterCount) dead letter\(deadLetterCount == 1 ? "" : "s")"
+            durablePromotion = .inspect
         } else if engineStatus?.payload?.shippingProgress?.pendingWork == true {
             let stalled = engineStatus?.payload?.shippingProgress?.stalled == true
                 || reasons.contains("ship_stalled")
@@ -336,7 +353,9 @@ extension HealthSnapshot {
         }
 
         let durableDetail: String
-        if durableValue == "Stalled",
+        if hasDeadLetters {
+            durableDetail = "\(deadLetterCount) dead letter\(deadLetterCount == 1 ? "" : "s") retained · inspect shipping before retrying"
+        } else if durableValue == "Stalled",
            let seconds = engineStatus?.payload?.shippingProgress?.secondsWithoutProgress,
            seconds > 0 {
             durableDetail = "no progress \(Self.compactSeconds(seconds)) · last receipt \(lastShipValueLabel(relativeTo: referenceDate))"

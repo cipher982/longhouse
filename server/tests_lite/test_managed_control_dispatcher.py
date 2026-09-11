@@ -1082,6 +1082,57 @@ def test_dispatch_managed_control_command_rejects_malformed_engine_success(live_
     assert operation["status"] == "running"
 
 
+def test_engine_result_with_catalog_finish_failure_is_indeterminate_without_resend(live_catalog, monkeypatch):  # noqa: F811
+    session_id, _lease = _seed_lease_for_new_session()
+    database_path, _socket_path = catalogd_supervisor.catalogd_paths()
+    calls = []
+
+    class _SuccessfulRegistry:
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **kwargs):
+            calls.append(kwargs)
+            return MachineControlCommandResponse(
+                transport_ok=True,
+                message={
+                    "type": "command_result",
+                    "command_id": kwargs["command_id"],
+                    "ok": True,
+                    "result": {"exit_code": 0, "stdout": "accepted", "stderr": ""},
+                },
+            )
+
+    async def _finish_without_receipt(**_kwargs):
+        return dispatcher_module.ManagedControlFinishResult(
+            durable=False,
+            error="catalogd unavailable",
+        )
+
+    monkeypatch.setattr(dispatcher_module, "get_machine_control_channel_registry", lambda: _SuccessfulRegistry())
+    monkeypatch.setattr(dispatcher_module, "_finish_live_managed_control_operation", _finish_without_receipt)
+
+    result = asyncio.run(
+        dispatch_managed_control_command(
+            db=object(),
+            owner_id=42,
+            session=_session(id=session_id, source_runner_id=None),
+            timeout_secs=1,
+            command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+            payload={"text": "continue"},
+            request_id="req-finish-failure",
+        )
+    )
+
+    command_id = f"managed-control:{session_id}:session.send_text:req-finish-failure"
+    operation = _read_control_operation(database_path, command_id=command_id)
+    assert result.ok is False
+    assert result.failure_reason == "indeterminate"
+    assert "was not replayed" in (result.error or "")
+    assert [call["command_id"] for call in calls] == [command_id]
+    assert operation["status"] == "running"
+
+
 def test_command_indeterminate_retries_with_the_same_open_operation(live_catalog, monkeypatch):  # noqa: F811
     session_id, _lease = _seed_lease_for_new_session()
     database_path, _socket_path = catalogd_supervisor.catalogd_paths()

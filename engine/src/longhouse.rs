@@ -1083,13 +1083,23 @@ fn native_machine_repair(args: MachineRepairArgs) -> anyhow::Result<()> {
     if let Some(root) = args.state_root {
         command.arg("--state-root").arg(root);
     }
-    let status = command
-        .status()
-        .context("run paired native machine repair")?;
-    if !status.success() {
-        std::process::exit(status.code().unwrap_or(1));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Keep Desktop's repair process identity attached to the real control
+        // operation so timeout/cancellation cannot orphan a second process.
+        Err(command.exec()).context("exec paired native machine repair")
     }
-    Ok(())
+    #[cfg(not(unix))]
+    {
+        let status = command
+            .status()
+            .context("run paired native machine repair")?;
+        if !status.success() {
+            std::process::exit(status.code().unwrap_or(1));
+        }
+        Ok(())
+    }
 }
 
 fn launch_managed_cursor(args: CursorLaunchArgs) -> anyhow::Result<()> {
@@ -2297,13 +2307,7 @@ fn attach_managed_opencode(args: OpencodeAttachArgs) -> anyhow::Result<()> {
         command.arg("--model").arg(model);
     }
     let cwd = std::env::current_dir()?;
-    warp_cli_agent::emit_session_event(
-        "opencode",
-        "session_start",
-        &args.session_id,
-        &cwd,
-        None,
-    );
+    warp_cli_agent::emit_session_event("opencode", "session_start", &args.session_id, &cwd, None);
     let run_result = run_foreground_command(&mut command);
     let stop_result = stop_opencode_bridge(&args.session_id, None);
     let exit = run_result?;

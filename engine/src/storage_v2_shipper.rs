@@ -10260,11 +10260,9 @@ mod tests {
             source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap();
         let mut foreign = manifest_for(&prepared, 0, None);
         foreign.source_epoch.tenant_id = "foreign-tenant".to_string();
-        assert!(
-            resync_behind_host(&mut conn, &prepared, &foreign)
-                .unwrap()
-                .is_none()
-        );
+        assert!(resync_behind_host(&mut conn, &prepared, &foreign)
+            .unwrap()
+            .is_none());
         assert_eq!(
             source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
             local_before
@@ -10272,11 +10270,9 @@ mod tests {
 
         let (_dir, mut conn, path, prepared) = fixture();
         let future = manifest_for(&prepared, prepared.range_start + 1, None);
-        assert!(
-            resync_behind_host(&mut conn, &prepared, &future)
-                .unwrap()
-                .is_none()
-        );
+        assert!(resync_behind_host(&mut conn, &prepared, &future)
+            .unwrap()
+            .is_none());
         assert_eq!(
             source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
             prepared.range_start
@@ -10285,13 +10281,11 @@ mod tests {
         let (_dir, mut conn, path, prepared) = fixture();
         let predecessor = Uuid::new_v4().to_string();
         let mismatched_predecessor = manifest_for(&prepared, 0, Some(predecessor));
-        assert!(resync_behind_host(
-            &mut conn,
-            &prepared,
-            &mismatched_predecessor
-        )
-        .unwrap()
-        .is_none());
+        assert!(
+            resync_behind_host(&mut conn, &prepared, &mismatched_predecessor)
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(
             source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
             prepared.range_start
@@ -10307,7 +10301,10 @@ mod tests {
         let error = resync_behind_host(&mut conn, &prepared, &stale)
             .unwrap_err()
             .to_string();
-        assert!(error.contains("preserved the immutable envelope"), "{error}");
+        assert!(
+            error.contains("preserved the immutable envelope"),
+            "{error}"
+        );
         assert_eq!(
             source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
             local_before
@@ -10316,7 +10313,10 @@ mod tests {
             .unwrap()
             .expect("source conflict must retain the pending envelope");
         assert_eq!(pending_after.envelope_id, pending_before.envelope_id);
-        assert_eq!(pending_after.request_body_zstd, pending_before.request_body_zstd);
+        assert_eq!(
+            pending_after.request_body_zstd,
+            pending_before.request_body_zstd
+        );
 
         let (_dir, mut conn, path, prepared) = fixture();
         let stale = manifest_for(&prepared, 0, None);
@@ -10332,7 +10332,10 @@ mod tests {
         let error = resync_behind_host(&mut conn, &prepared, &stale)
             .unwrap_err()
             .to_string();
-        assert!(error.contains("preserved the immutable envelope"), "{error}");
+        assert!(
+            error.contains("preserved the immutable envelope"),
+            "{error}"
+        );
         assert_eq!(
             source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
             local_before

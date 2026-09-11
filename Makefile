@@ -529,6 +529,7 @@ test-managed-launch-lifecycle: ## @internal Real Runtime Host + real `longhouse 
 test-install: ## Installer syntax + first-run smoke
 	@bash -n scripts/install.sh
 	@bash scripts/ci/native-installer-smoke.sh
+	@bash scripts/tests/native-installer-conversion.test.sh
 
 test-hosted-instance: ## @internal Hosted-instance helper tests
 	@bash scripts/tests/hosted-instance-auth.test.sh

@@ -380,11 +380,22 @@ pub async fn recover_omp_print_turns(
     Ok(recovered)
 }
 
-pub async fn interrupt_omp_print_turn(run_id: &str, session_id: &str) -> Result<()> {
+pub async fn interrupt_omp_print_turn(
+    run_id: &str,
+    session_id: &str,
+    thread_id: &str,
+    turn_id: &str,
+) -> Result<()> {
     let registry = crate::turn_claims::default_registry()?;
     let claim = registry.read(run_id)?;
-    if claim.session_id != session_id || claim.provider != "omp" {
-        anyhow::bail!("OMP Console turn claim does not match the requested session");
+    if claim.session_id != session_id
+        || claim.thread_id != thread_id
+        || claim.turn_id.as_deref() != Some(turn_id)
+        || claim.provider != "omp"
+    {
+        anyhow::bail!(
+            "OMP Console turn claim does not match the requested session, thread, or turn"
+        );
     }
     if claim.adapter.as_deref() != Some(OMP_PRINT_ADAPTER) || claim.state != "spawned" {
         anyhow::bail!("OMP Console turn is not active");

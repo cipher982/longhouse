@@ -81,6 +81,18 @@ raw_snapshot_exec() {
   swift run --package-path "$PKG_PATH" LonghouseMenuBarHarnessSnapshot "$@"
 }
 
+capture_fixture_render() {
+  local input_json="$1"
+  local output_png="$2"
+
+  # SnapshotRenderer already anchors relative labels to collected_at. Use that
+  # same fixture input for deterministic captures instead of letting the window
+  # host compare historical events with the wall clock.
+  raw_snapshot_exec --input "$input_json" --output "$output_png"
+  verify_png_has_visible_content "$output_png"
+  echo "$output_png"
+}
+
 app_exec() {
   swift run --package-path "$PKG_PATH" LonghouseMenuBarHarnessApp "$@"
 }
@@ -368,8 +380,7 @@ case "$cmd" in
       exit 2
     fi
     output="${2:-$ARTIFACT_DIR/${fixture}.png}"
-    app_bin="$(build_app_binary)"
-    capture_window_render "$app_bin" "$(fixture_path "$fixture")" "$output"
+    capture_fixture_render "$(fixture_path "$fixture")" "$output"
     ;;
   snapshot-live)
     output="${1:-$ARTIFACT_DIR/live.png}"
@@ -410,10 +421,9 @@ case "$cmd" in
     done
     ;;
   render-fixtures)
-    app_bin="$(build_app_binary)"
     while IFS= read -r fixture_json; do
       fixture_name="$(basename "$fixture_json" .json)"
-      capture_window_render "$app_bin" "$fixture_json" "$ARTIFACT_DIR/${fixture_name}.png"
+      capture_fixture_render "$fixture_json" "$ARTIFACT_DIR/${fixture_name}.png"
     done < <(find "$PKG_PATH/Fixtures" -maxdepth 1 -name '*.json' -print | sort)
     ;;
   render-trust-states)

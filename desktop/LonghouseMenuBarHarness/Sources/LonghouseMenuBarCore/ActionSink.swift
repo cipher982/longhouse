@@ -1,7 +1,8 @@
 import AppKit
+import Darwin
 import Foundation
 
-public enum HarnessAction: String, Codable {
+public enum HarnessAction: String, Codable, Sendable {
     case refresh
     case runDoctor
     case inspectStorageSource
@@ -19,14 +20,14 @@ public enum HarnessEffectMode: String {
     case logOnly = "log-only"
 }
 
-public enum HealthActionFeedbackStyle: String, Equatable {
+public enum HealthActionFeedbackStyle: String, Equatable, Sendable {
     case info
     case success
     case warning
     case failure
 }
 
-public struct HealthActionFeedback: Equatable {
+public struct HealthActionFeedback: Equatable, Sendable {
     public let action: HarnessAction
     public let style: HealthActionFeedbackStyle
     public let title: String
@@ -48,6 +49,13 @@ public struct HealthActionFeedback: Equatable {
 public protocol HealthActionSink {
     @discardableResult
     func handle(_ action: HarnessAction, snapshot: HealthSnapshot) -> HealthActionFeedback?
+
+    @discardableResult
+    func handle(
+        _ action: HarnessAction,
+        snapshot: HealthSnapshot,
+        onFeedback: @escaping @MainActor (HealthActionFeedback?) -> Void
+    ) -> HealthActionFeedback?
 
     @discardableResult
     func handleStopManagedBridge(
@@ -86,6 +94,15 @@ public struct ManagedStopTarget: Equatable, Sendable {
 }
 
 public extension HealthActionSink {
+    @discardableResult
+    func handle(
+        _ action: HarnessAction,
+        snapshot: HealthSnapshot,
+        onFeedback: @escaping @MainActor (HealthActionFeedback?) -> Void
+    ) -> HealthActionFeedback? {
+        handle(action, snapshot: snapshot)
+    }
+
     @discardableResult
     func handleStopManagedBridge(
         sessionID: String,
@@ -129,6 +146,14 @@ public struct SpyHealthActionSink: HealthActionSink {
     }
 
     public func handle(_ action: HarnessAction, snapshot: HealthSnapshot) -> HealthActionFeedback? {
+        handle(action, snapshot: snapshot, onFeedback: { _ in })
+    }
+
+    public func handle(
+        _ action: HarnessAction,
+        snapshot: HealthSnapshot,
+        onFeedback: @escaping @MainActor (HealthActionFeedback?) -> Void
+    ) -> HealthActionFeedback? {
         appendActionRecord(action: action.rawValue, snapshot: snapshot, target: nil)
 
         guard effectMode == .live else {
@@ -200,7 +225,7 @@ public struct SpyHealthActionSink: HealthActionSink {
                 detail: "Open System Settings > General > Storage and free local disk space."
             )
         case .repairInstall:
-            return startRepair(snapshot: snapshot)
+            return startRepair(snapshot: snapshot, onFeedback: onFeedback)
         case .stopManagedBridge:
             return feedback(
                 for: action,
@@ -537,25 +562,11 @@ public struct SpyHealthActionSink: HealthActionSink {
         return result
     }
 
-    private func startBundledSetup() -> URL? {
-        guard let invocation = LonghouseCLI.setupInvocation() else {
-            return nil
-        }
-
-        return startBackgroundProcess(
-            launchPath: invocation.launchPath,
-            arguments: invocation.arguments
-        )
-    }
-
-    private func startRepairInstall(snapshot: HealthSnapshot) -> URL? {
+    private func startRepairInstall(snapshot: HealthSnapshot, onFeedback: @escaping @MainActor (HealthActionFeedback?) -> Void) -> Bool {
         guard let invocation = LonghouseCLI.repairInstallInvocation(snapshot: snapshot) else {
-            return nil
+            return false
         }
-        return startBackgroundProcess(
-            launchPath: invocation.launchPath,
-            arguments: invocation.arguments
-        )
+        return startBoundedRepairProcess(invocation: invocation, onFeedback: onFeedback)
     }
 
     enum ManagedStopOutcome {
@@ -743,7 +754,10 @@ public struct SpyHealthActionSink: HealthActionSink {
         return error == nil
     }
 
-    private func startRepair(snapshot: HealthSnapshot) -> HealthActionFeedback {
+    private func startRepair(
+        snapshot: HealthSnapshot,
+        onFeedback: @escaping @MainActor (HealthActionFeedback?) -> Void
+    ) -> HealthActionFeedback {
         if snapshot.isInstallLocationBlocked {
             return feedback(
                 for: .repairInstall,
@@ -754,28 +768,20 @@ public struct SpyHealthActionSink: HealthActionSink {
         }
 
         if snapshot.isSetupRequired {
-            if startBundledSetup() != nil {
-                return feedback(
-                    for: .repairInstall,
-                    style: .info,
-                    title: "Setup running",
-                    detail: "Longhouse started its built-in setup in the background. Open Logs for progress or errors."
-                )
-            }
             return feedback(
                 for: .repairInstall,
-                style: .failure,
-                title: "Setup could not start",
-                detail: "Longhouse could not start its built-in setup on this Mac."
+                style: .warning,
+                title: "Setup required",
+                detail: "This Mac is not configured for native repair. Complete Longhouse setup and authentication first; no setup or reauthentication was started in the background."
             )
         }
 
-        if startRepairInstall(snapshot: snapshot) != nil {
+        if startRepairInstall(snapshot: snapshot, onFeedback: onFeedback) {
             return feedback(
                 for: .repairInstall,
                 style: .info,
                 title: "Repair running",
-                detail: "Longhouse is reconciling the local runtime and collecting health in the background. Open Logs for progress or a remaining action."
+                detail: "Longhouse is running the bounded native repair and will report the terminal result here."
             )
         }
 
@@ -783,8 +789,47 @@ public struct SpyHealthActionSink: HealthActionSink {
             for: .repairInstall,
             style: .failure,
             title: "Repair could not start",
-            detail: "Longhouse could not start `longhouse machine repair` on this Mac. Open setup from the explicit setup-required state or inspect Logs for the missing prerequisite."
+            detail: "Longhouse could not start `longhouse machine repair --json` on this Mac. Inspect Logs for the missing prerequisite."
         )
+    }
+
+    private func startBoundedRepairProcess(
+        invocation: (launchPath: String, arguments: [String]),
+        onFeedback: @escaping @MainActor (HealthActionFeedback?) -> Void
+    ) -> Bool {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        Task.detached(priority: .userInitiated) {
+            let feedback: HealthActionFeedback
+            do {
+                let result = try runNativeCommand(
+                    launchPath: invocation.launchPath, arguments: invocation.arguments,
+                    timeoutSeconds: 120, currentDirectory: home
+                )
+                guard result.status == 0 else {
+                    throw SnapshotSourceError.commandFailed(
+                        "The repair command exited with status \(result.status): "
+                            + (String(data: result.errorOutput, encoding: .utf8) ?? "")
+                    )
+                }
+                let decoder = JSONDecoder()
+                decoder.keyDecodingStrategy = .convertFromSnakeCase
+                feedback = try decoder.decode(NativeRepairExecution.self, from: result.output).feedback()
+            } catch SnapshotSourceError.timedOut {
+                feedback = HealthActionFeedback(
+                    action: .repairInstall, style: .failure,
+                    title: "Native repair timed out",
+                    detail: "The repair control process stopped after its time limit. Current service and archive recovery are not verified; inspect local health before retrying."
+                )
+            } catch {
+                feedback = HealthActionFeedback(
+                    action: .repairInstall, style: .failure,
+                    title: "Native repair failed",
+                    detail: error.localizedDescription
+                )
+            }
+            await onFeedback(feedback)
+        }
+        return true
     }
 
     private func dryRunFeedback(for action: HarnessAction, snapshot: HealthSnapshot) -> HealthActionFeedback? {
@@ -827,7 +872,7 @@ public struct SpyHealthActionSink: HealthActionSink {
                 title: snapshot.isSetupRequired ? "Setup dry run recorded" : "Repair dry run recorded",
                 detail: snapshot.isSetupRequired
                     ? "The harness logged the built-in Longhouse setup command without changing your machine."
-                    : "The harness logged `longhouse machine repair` without changing your machine."
+                    : "The harness logged the native repair command without changing your machine."
             )
         case .openLonghouse:
             return feedback(
@@ -878,6 +923,111 @@ public struct SpyHealthActionSink: HealthActionSink {
         HealthActionFeedback(action: action, style: style, title: title, detail: detail)
     }
 }
+
+struct NativeRepairExecution: Decodable, Equatable, Sendable {
+    let state: String
+    let headline: String
+    let actions: [NativeRepairExecutionAction]
+    let notes: [String]
+    let beforeHealth: NativeRepairHealth?
+    let afterHealth: NativeRepairHealth?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        state = try container.decode(String.self, forKey: .state)
+        headline = try container.decode(String.self, forKey: .headline)
+        actions = try container.decodeIfPresent([NativeRepairExecutionAction].self, forKey: .actions) ?? []
+        notes = try container.decodeIfPresent([String].self, forKey: .notes) ?? []
+        beforeHealth = try container.decodeIfPresent(NativeRepairHealth.self, forKey: .beforeHealth)
+        afterHealth = try container.decodeIfPresent(NativeRepairHealth.self, forKey: .afterHealth)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case state
+        case headline
+        case actions
+        case notes
+        case beforeHealth
+        case afterHealth
+    }
+
+    func feedback() -> HealthActionFeedback {
+        let normalizedState = state.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let detail = ([headline] + notes + actions.compactMap { action in
+            guard let error = action.error, !error.isEmpty else { return nil }
+            return "\(action.label ?? "Native repair action") failed: \(error)"
+        }).joined(separator: " ")
+
+        switch normalizedState {
+        case "service_recovered":
+            return HealthActionFeedback(
+                action: .repairInstall,
+                style: .success,
+                title: headline,
+                detail: detail
+            )
+        case "recovery_pending":
+            return HealthActionFeedback(
+                action: .repairInstall,
+                style: .warning,
+                title: "Recovery still pending",
+                detail: detail
+            )
+        case let state where state.hasPrefix("rejected_"):
+            return HealthActionFeedback(
+                action: .repairInstall,
+                style: .warning,
+                title: "Native repair refused",
+                detail: detailWithState(detail, state: normalizedState)
+            )
+        case "failed":
+            return HealthActionFeedback(
+                action: .repairInstall,
+                style: .failure,
+                title: "Native repair failed",
+                detail: detail
+            )
+        default:
+            return HealthActionFeedback(
+                action: .repairInstall,
+                style: .failure,
+                title: "Native repair returned an unknown result",
+                detail: detailWithState(detail, state: normalizedState)
+            )
+        }
+    }
+
+    private func detailWithState(_ detail: String, state: String) -> String {
+        "state: \(state). \(detail)"
+    }
+}
+
+struct NativeRepairExecutionAction: Decodable, Equatable, Sendable {
+    let id: String?
+    let label: String?
+    let status: String?
+    let error: String?
+}
+
+struct NativeRepairHealth: Decodable, Equatable, Sendable {
+    let healthState: String?
+    let status: String?
+    let reason: String?
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        healthState = try container.decodeIfPresent(String.self, forKey: .healthState)
+        status = try container.decodeIfPresent(String.self, forKey: .status)
+        reason = try container.decodeIfPresent(String.self, forKey: .reason)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case healthState
+        case status
+        case reason
+    }
+}
+
 
 private struct ActionRecord: Codable {
     let action: String

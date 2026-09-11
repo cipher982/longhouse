@@ -59,6 +59,14 @@ class ManagedControlDispatchResult:
     failure_reason: str | None = None
 
 
+@dataclass(frozen=True)
+class ManagedControlFinishResult:
+    """Whether the catalog has a durable terminal receipt for the command."""
+
+    durable: bool
+    error: str | None = None
+
+
 def _session_device_id(session: AgentSession | None) -> str | None:
     device_id = str(getattr(session, "device_id", "") or "").strip()
     return device_id or None
@@ -225,17 +233,20 @@ async def _finish_live_managed_control_operation(
     status: str,
     result: Mapping[str, Any] | None = None,
     error: Mapping[str, Any] | None = None,
-) -> None:
+) -> ManagedControlFinishResult:
     if not operation_id or not database_module.live_store_configured():
-        return
+        return ManagedControlFinishResult(durable=True)
     from zerg.services.catalogd_supervisor import get_catalogd_client
 
     catalogd = get_catalogd_client()
     if catalogd is None:
         logger.warning("Catalogd is unavailable while finishing managed-control operation %s", operation_id)
-        return
+        return ManagedControlFinishResult(
+            durable=False,
+            error="catalogd is unavailable while recording the managed-control result",
+        )
     try:
-        await catalogd.call(
+        response = await catalogd.call(
             "control.operation.finish.v2",
             {
                 "operation_id": operation_id,
@@ -247,6 +258,31 @@ async def _finish_live_managed_control_operation(
         )
     except Exception:
         logger.warning("Failed to finish catalog managed-control operation %s", operation_id, exc_info=True)
+        return ManagedControlFinishResult(
+            durable=False,
+            error="catalogd failed while recording the managed-control result",
+        )
+    if not isinstance(response, Mapping) or response.get("found") is not True:
+        logger.warning("Catalogd did not find managed-control operation %s while finishing", operation_id)
+        return ManagedControlFinishResult(
+            durable=False,
+            error="catalogd did not confirm the managed-control receipt",
+        )
+    return ManagedControlFinishResult(durable=True)
+
+
+def _indeterminate_after_engine_reply(error: str | None) -> ManagedControlDispatchResult:
+    detail = error or "catalogd did not durably record the terminal result"
+    return ManagedControlDispatchResult(
+        ok=False,
+        transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
+        error=(
+            "Machine Agent control command executed, but catalog completion failed; "
+            f"outcome is indeterminate and it was not replayed: {detail}"
+        ),
+        failure_kind=DISPATCH_FAILURE_TRANSPORT,
+        failure_reason="indeterminate",
+    )
 
 
 async def dispatch_managed_control_command(
@@ -458,11 +494,13 @@ async def _dispatch_engine_channel(
                 failure_kind=DISPATCH_FAILURE_TRANSPORT,
                 failure_reason="indeterminate",
             )
-        await _finish_live_managed_control_operation(
+        finish = await _finish_live_managed_control_operation(
             operation_id=live_operation_id,
             status="succeeded",
             result=data,
         )
+        if not finish.durable:
+            return _indeterminate_after_engine_reply(finish.error)
         return ManagedControlDispatchResult(
             ok=True,
             transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
@@ -482,7 +520,7 @@ async def _dispatch_engine_channel(
             failure_kind=DISPATCH_FAILURE_TRANSPORT,
             failure_reason="indeterminate",
         )
-    await _finish_live_managed_control_operation(
+    finish = await _finish_live_managed_control_operation(
         operation_id=live_operation_id,
         status="failed",
         error={
@@ -490,6 +528,8 @@ async def _dispatch_engine_channel(
             "message": error,
         },
     )
+    if not finish.durable:
+        return _indeterminate_after_engine_reply(finish.error)
     if code == "turn_ended":
         return ManagedControlDispatchResult(
             ok=True,

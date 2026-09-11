@@ -34,6 +34,21 @@
         "stalled": false,
         "seconds_without_progress": 0,
         "observed_at": "2026-04-08T01:52:00Z"
+      },
+      "archive_backlog": {
+        "state": "idle",
+        "mode": "trickle",
+        "pending_ranges": 0,
+        "pending_bytes": 0,
+        "dead_ranges": 0,
+        "dead_bytes": 0
+      },
+      "storage_v2_outbox": {
+        "pending_count": 0,
+        "pending_bytes": 0,
+        "blocked_source_count": 0,
+        "blocked_bytes": 0,
+        "byte_limit": 1073741824
       }
     },
     "error": null

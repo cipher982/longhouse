@@ -1124,37 +1124,66 @@ async fn execute_command(
         COMMAND_TURN_INTERRUPT => {
             let run_id = payload_required_string(&payload, "run_id")?;
             let provider = payload_required_string(&payload, "provider")?;
+            let turn_id = payload_required_string(&payload, "turn_id")?;
+            let thread_id = payload_required_string(&payload, "thread_id")?;
             let transport = match provider.as_str() {
                 "cursor" => {
-                    crate::cursor_print::interrupt_cursor_print_turn(&run_id, &session_id)
-                        .map_err(CommandError::command_failed)?;
+                    crate::cursor_print::interrupt_cursor_print_turn(
+                        &run_id,
+                        &session_id,
+                        &thread_id,
+                        &turn_id,
+                    )
+                    .map_err(CommandError::command_failed)?;
                     CURSOR_PRINT_ADAPTER
                 }
                 "opencode" => {
-                    crate::opencode_run::interrupt_opencode_run_turn(&run_id, &session_id)
-                        .map_err(CommandError::command_failed)?;
+                    crate::opencode_run::interrupt_opencode_run_turn(
+                        &run_id,
+                        &session_id,
+                        &thread_id,
+                        &turn_id,
+                    )
+                    .map_err(CommandError::command_failed)?;
                     OPENCODE_RUN_ADAPTER
                 }
                 "claude" => {
-                    crate::claude_print::interrupt_claude_print_turn(&run_id, &session_id)
-                        .map_err(CommandError::command_failed)?;
+                    crate::claude_print::interrupt_claude_print_turn(
+                        &run_id,
+                        &session_id,
+                        &thread_id,
+                        &turn_id,
+                    )
+                    .map_err(CommandError::command_failed)?;
                     CLAUDE_PRINT_ADAPTER
                 }
                 "pi" => {
-                    crate::pi_print::interrupt_pi_print_turn(&run_id, &session_id)
-                        .map_err(CommandError::command_failed)?;
+                    crate::pi_print::interrupt_pi_print_turn(
+                        &run_id,
+                        &session_id,
+                        &thread_id,
+                        &turn_id,
+                    )
+                    .map_err(CommandError::command_failed)?;
                     PI_PRINT_ADAPTER
                 }
                 "omp" => {
-                    crate::omp_print::interrupt_omp_print_turn(&run_id, &session_id)
-                        .await
-                        .map_err(CommandError::command_failed)?;
+                    crate::omp_print::interrupt_omp_print_turn(
+                        &run_id,
+                        &session_id,
+                        &thread_id,
+                        &turn_id,
+                    )
+                    .await
+                    .map_err(CommandError::command_failed)?;
                     OMP_PRINT_ADAPTER
                 }
                 "antigravity" => {
                     crate::antigravity_print::interrupt_antigravity_print_turn(
                         &run_id,
                         &session_id,
+                        &thread_id,
+                        &turn_id,
                     )
                     .map_err(CommandError::command_failed)?;
                     ANTIGRAVITY_PRINT_ADAPTER
@@ -4214,6 +4243,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handle_command_frame_rejects_turn_interrupt_without_exact_identity() {
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-malformed-turn-interrupt",
+                "session_id": "session-1",
+                "command_type": COMMAND_TURN_INTERRUPT,
+                "payload": {
+                    "provider": "cursor",
+                    "run_id": "run-1",
+                },
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+
+        assert_eq!(result["command_id"], "cmd-malformed-turn-interrupt");
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"]["code"], "invalid_command");
+        assert!(result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("payload.turn_id"));
+    }
+
+    #[tokio::test]
     async fn handle_command_frame_rejects_malformed_codex_attachments_before_dispatch() {
         let mut cache = command_cache();
         let result = handle_command_frame(
@@ -5481,8 +5538,13 @@ printf '{{"type":"result","subtype":"success","is_error":false}}\n'
                 assert!(std::time::Instant::now() < interrupt_deadline);
                 runtime.block_on(async { tokio::time::sleep(Duration::from_millis(20)).await });
             }
-            crate::claude_print::interrupt_claude_print_turn(&interrupt_run_id, &session_id)
-                .unwrap();
+            crate::claude_print::interrupt_claude_print_turn(
+                &interrupt_run_id,
+                &session_id,
+                &thread_id,
+                &interrupt_turn_id,
+            )
+            .unwrap();
             let cancel_deadline = std::time::Instant::now() + Duration::from_secs(5);
             loop {
                 let claim = crate::turn_claims::default_registry()

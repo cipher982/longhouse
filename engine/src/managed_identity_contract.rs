@@ -54,10 +54,8 @@ pub const ALL_MANAGED_PROVIDERS: &[ManagedProvider] = &[
 ];
 
 /// Keys the overlay always sets on a managed provider process.
-pub const REQUIRED_IDENTITY_KEYS: &[&str] = &[
-    "LONGHOUSE_MANAGED_SESSION_ID",
-    "LONGHOUSE_MANAGED_PROVIDER",
-];
+pub const REQUIRED_IDENTITY_KEYS: &[&str] =
+    &["LONGHOUSE_MANAGED_SESSION_ID", "LONGHOUSE_MANAGED_PROVIDER"];
 
 /// Keys a provider process never inherits. The overlay scrubs all of them;
 /// a launcher then sets back only the ones it owns.

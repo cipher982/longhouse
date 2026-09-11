@@ -657,8 +657,9 @@ mod tests {
 
     #[test]
     fn warp_lifecycle_payload_formats_expected_sequences() {
-        let (osc9, osc777) = warp_lifecycle_payload("stop", "test-session", Some("/tmp"), &json!({}))
-            .expect("payload for stop");
+        let (osc9, osc777) =
+            warp_lifecycle_payload("stop", "test-session", Some("/tmp"), &json!({}))
+                .expect("payload for stop");
         assert_eq!(osc9.as_deref(), Some("Cursor: Task completed"));
         assert!(osc777.starts_with("\x1b]777;notify;warp://cli-agent;"));
         assert!(osc777.ends_with('\x07'));
@@ -686,6 +687,8 @@ mod tests {
         assert!(osc9.is_none());
         assert!(osc777.contains(r#""event":"prompt_submit""#));
 
-        assert!(warp_lifecycle_payload("unhandledEvent", "test-session", None, &json!({})).is_none());
+        assert!(
+            warp_lifecycle_payload("unhandledEvent", "test-session", None, &json!({})).is_none()
+        );
     }
 }

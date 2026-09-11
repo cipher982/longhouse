@@ -972,18 +972,9 @@ fn settle_native_repair(
                 != execution.before_health.engine_status.last_updated;
         let new_owner = after.engine_status.daemon_pid.is_some()
             && after.engine_status.daemon_pid != execution.before_health.engine_status.daemon_pid;
-        let useful_service = new_sample
-            && new_owner
-            && after.engine_status.fresh
-            && !after.reasons.iter().any(|reason| {
-                matches!(
-                    reason.as_str(),
-                    "engine_projection_stale"
-                        | "engine_reconciliation_failed"
-                        | "storage_v2_outbox_unreadable"
-                        | "transport_unavailable"
-                )
-            });
+        let blocking_reasons = native_repair_blocking_reasons(&after);
+        let useful_service =
+            new_sample && new_owner && after.engine_status.fresh && blocking_reasons.is_empty();
         let terminal = after.health_state == "broken" && new_sample && new_owner;
         execution.after_health = Some(after);
         if useful_service || terminal || std::time::Instant::now() >= deadline {
@@ -998,7 +989,10 @@ fn settle_native_repair(
                 execution.state = "recovery_pending".to_string();
                 execution.headline =
                     "Repair ran, but useful Machine Agent service is not yet verified".to_string();
-                execution.notes.push(if after.reasons.is_empty() {
+                let blocking_reasons = native_repair_blocking_reasons(after);
+                execution.notes.push(if !blocking_reasons.is_empty() {
+                    native_repair_remaining_action_note(&blocking_reasons)
+                } else if after.reasons.is_empty() {
                     "No new producer identity and status were observed. The previous cached snapshot is not recovery proof.".to_string()
                 } else {
                     format!("Remaining local health reasons: {}", after.reasons.join(", "))
@@ -1007,6 +1001,55 @@ fn settle_native_repair(
             break;
         }
         std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+fn native_repair_blocking_reasons(health: &NativeLocalHealth) -> Vec<String> {
+    let mut reasons = health
+        .reasons
+        .iter()
+        .filter(|reason| {
+            matches!(
+                reason.as_str(),
+                "engine_projection_stale"
+                    | "engine_reconciliation_failed"
+                    | "storage_v2_outbox_unreadable"
+                    | "storage_v2_sources_unresolved"
+                    | "storage_v2_sources_proof_unknown"
+                    | "transport_unavailable"
+                    | "ship_stalled"
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if matches!(
+        health.transport.status_reason.as_str(),
+        "transport_unavailable" | "ship_stalled"
+    ) && !reasons
+        .iter()
+        .any(|reason| reason == &health.transport.status_reason)
+    {
+        reasons.push(health.transport.status_reason.clone());
+    }
+    reasons
+}
+
+fn native_repair_remaining_action_note(reasons: &[String]) -> String {
+    let actions = native_desktop_suggested_action_ids(reasons)
+        .into_iter()
+        .map(|action_id| native_desktop_action_text(&action_id))
+        .collect::<Vec<_>>();
+    if actions.is_empty() {
+        format!(
+            "The service restart was observed, but local work remains blocked by: {}.",
+            reasons.join(", ")
+        )
+    } else {
+        format!(
+            "The service restart was observed, but local work remains blocked by: {}. Remaining action: {}",
+            reasons.join(", "),
+            actions.join(" ")
+        )
     }
 }
 
@@ -2673,6 +2716,39 @@ where
     }
 
     let mut actions = Vec::new();
+    let predecessor = if service.exists {
+        match fs::read_to_string(&artifact.service_path) {
+            Ok(content) => Some(content),
+            Err(error) => {
+                actions.push(NativeRepairExecutionAction {
+                    id: "read_service_file",
+                    label: "Retain existing Machine Agent service file",
+                    status: "failed",
+                    platform: artifact.platform.as_str(),
+                    command: Some(format!("read {}", artifact.service_path.display())),
+                    error: Some(redact_service_error(
+                        &format!("reading predecessor service file: {error}"),
+                        &artifact.redactions,
+                    )),
+                });
+                return Ok(native_service_repair_execution_result(
+                    false,
+                    "failed",
+                    "Longhouse could not retain the existing Machine Agent service artifact",
+                    actions,
+                    machine_detail.status,
+                    Some(service),
+                    before_health,
+                    None,
+                    vec![
+                        "Native service repair refused to replace a positively identified service without retaining its original bytes.",
+                    ],
+                ));
+            }
+        }
+    } else {
+        None
+    };
     if let Err(error) = write_service_artifact(&artifact) {
         actions.push(NativeRepairExecutionAction {
             id: "write_service_file",
@@ -2703,16 +2779,20 @@ where
         error: None,
     });
 
+    let mut completed_manager_commands = Vec::new();
     for command in service_manager_commands(&artifact, service.exists) {
         match command_runner(&command) {
-            Ok(()) => actions.push(NativeRepairExecutionAction {
-                id: command.id,
-                label: command.label,
-                status: "completed",
-                platform: artifact.platform.as_str(),
-                command: Some(command.display),
-                error: None,
-            }),
+            Ok(()) => {
+                completed_manager_commands.push(command.clone());
+                actions.push(NativeRepairExecutionAction {
+                    id: command.id,
+                    label: command.label,
+                    status: "completed",
+                    platform: artifact.platform.as_str(),
+                    command: Some(command.display),
+                    error: None,
+                });
+            }
             Err(error) => {
                 actions.push(NativeRepairExecutionAction {
                     id: command.id,
@@ -2722,6 +2802,25 @@ where
                     command: Some(command.display),
                     error: Some(redact_service_error(&error, &artifact.redactions)),
                 });
+                let (rollback_actions, rollback_notes) = rollback_service_artifact(
+                    &artifact,
+                    service.exists,
+                    predecessor.as_deref(),
+                    &completed_manager_commands,
+                    &mut command_runner,
+                );
+                let rollback_failed = rollback_actions
+                    .iter()
+                    .any(|action| action.status == "failed");
+                actions.extend(rollback_actions);
+                let mut notes =
+                    vec!["Native service repair does not kill fallback processes.".to_string()];
+                notes.extend(rollback_notes);
+                if rollback_failed {
+                    notes.push(
+                        "The service artifact or its prior authority could not be fully restored; native service state is unverified.".to_string(),
+                    );
+                }
                 return Ok(native_service_repair_execution_result(
                     false,
                     "failed",
@@ -2731,7 +2830,7 @@ where
                     Some(service),
                     before_health,
                     None,
-                    vec!["Native service repair does not kill fallback processes."],
+                    notes,
                 ));
             }
         }
@@ -3634,6 +3733,7 @@ fn service_environment(
     // Unset, Claude resolves the same ~/.claude for transcripts and state, so
     // dropping it changes nothing else.
     let mut env = vec![
+        ("HOME".to_string(), home.display().to_string()),
         (
             "LONGHOUSE_HOME".to_string(),
             longhouse_home.display().to_string(),
@@ -3872,6 +3972,226 @@ fn service_artifact_actions(
         });
     }
     actions
+}
+
+fn rollback_service_artifact<F>(
+    artifact: &NativeServiceArtifactPlan,
+    existing_service: bool,
+    predecessor: Option<&str>,
+    completed_manager_commands: &[NativeServiceManagerCommand],
+    command_runner: &mut F,
+) -> (Vec<NativeRepairExecutionAction>, Vec<String>)
+where
+    F: FnMut(&NativeServiceManagerCommand) -> Result<(), String>,
+{
+    let mut actions = Vec::new();
+    let mut notes = Vec::new();
+    let restore_status = if existing_service {
+        match predecessor {
+            Some(content) => match write_text_atomic(&artifact.service_path, content) {
+                Ok(()) => {
+                    notes.push(
+                        "Restored the original bytes of the positively identified predecessor service artifact.".to_string(),
+                    );
+                    "completed"
+                }
+                Err(error) => {
+                    notes.push(format!(
+                        "Could not restore the predecessor service artifact: {}",
+                        redact_service_error(&error, &artifact.redactions)
+                    ));
+                    "failed"
+                }
+            },
+            None => {
+                notes.push(
+                    "The existing service was positively identified, but its predecessor bytes were unavailable for rollback.".to_string(),
+                );
+                "failed"
+            }
+        }
+    } else {
+        match fs::remove_file(&artifact.service_path) {
+            Ok(()) => {
+                notes.push(
+                    "Removed the newly written service artifact to preserve the previously absent-service state.".to_string(),
+                );
+                "completed"
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                notes.push(
+                    "The newly written service artifact was already absent; the previously absent-service state is preserved.".to_string(),
+                );
+                "completed"
+            }
+            Err(error) => {
+                notes.push(format!(
+                    "Could not remove the newly written service artifact: {error}"
+                ));
+                "failed"
+            }
+        }
+    };
+    actions.push(NativeRepairExecutionAction {
+        id: "rollback_service_file",
+        label: if existing_service {
+            "Restore predecessor Machine Agent service file"
+        } else {
+            "Remove newly written Machine Agent service file"
+        },
+        status: restore_status,
+        platform: artifact.platform.as_str(),
+        command: Some(if existing_service {
+            format!("restore {}", artifact.service_path.display())
+        } else {
+            format!("remove {}", artifact.service_path.display())
+        }),
+        error: if restore_status == "failed" {
+            notes.last().cloned()
+        } else {
+            None
+        },
+    });
+
+    for command in
+        service_manager_rollback_commands(artifact, existing_service, completed_manager_commands)
+    {
+        match command_runner(&command) {
+            Ok(()) => actions.push(NativeRepairExecutionAction {
+                id: command.id,
+                label: command.label,
+                status: "completed",
+                platform: artifact.platform.as_str(),
+                command: Some(command.display),
+                error: None,
+            }),
+            Err(error) => {
+                let error = redact_service_error(&error, &artifact.redactions);
+                notes.push(format!(
+                    "Could not restore predecessor service authority with {}: {error}",
+                    command.display
+                ));
+                actions.push(NativeRepairExecutionAction {
+                    id: command.id,
+                    label: command.label,
+                    status: "failed",
+                    platform: artifact.platform.as_str(),
+                    command: Some(command.display),
+                    error: Some(error),
+                });
+            }
+        }
+    }
+
+    let unload_completed = completed_manager_commands
+        .iter()
+        .any(|command| command.id == "unload_launchd_service");
+    if existing_service && artifact.platform == NativeServicePlatform::Macos && !unload_completed {
+        let error =
+            "Predecessor launchd authority was not reactivated because unloading it did not complete; service state is unverified.";
+        notes.push(error.to_string());
+        actions.push(NativeRepairExecutionAction {
+            id: "rollback_load_launchd_service",
+            label: "Re-activate predecessor launchd service",
+            status: "failed",
+            platform: artifact.platform.as_str(),
+            command: None,
+            error: Some(error.to_string()),
+        });
+    }
+
+    (actions, notes)
+}
+
+fn service_manager_rollback_commands(
+    artifact: &NativeServiceArtifactPlan,
+    existing_service: bool,
+    completed_manager_commands: &[NativeServiceManagerCommand],
+) -> Vec<NativeServiceManagerCommand> {
+    let completed = |id: &str| {
+        completed_manager_commands
+            .iter()
+            .any(|command| command.id == id)
+    };
+    match artifact.platform {
+        NativeServicePlatform::Macos if existing_service && completed("unload_launchd_service") => {
+            vec![NativeServiceManagerCommand {
+                id: "rollback_load_launchd_service",
+                label: "Re-activate predecessor launchd service",
+                program: "launchctl",
+                args: vec![
+                    "load".to_string(),
+                    artifact.service_path.display().to_string(),
+                ],
+                display: format!(
+                    "launchctl load {}",
+                    shell_quote(&artifact.service_path.display().to_string())
+                ),
+            }]
+        }
+        NativeServicePlatform::Linux if existing_service && completed("systemd_daemon_reload") => {
+            service_manager_commands(artifact, true)
+        }
+        NativeServicePlatform::Linux
+            if !existing_service
+                && (completed("systemd_enable_service") || completed("systemd_start_service")) =>
+        {
+            vec![
+                systemd_unit_command(
+                    "rollback_systemd_stop_service",
+                    "Stop newly started systemd user service",
+                    "stop",
+                ),
+                systemd_unit_command(
+                    "rollback_systemd_disable_service",
+                    "Disable newly enabled systemd user service",
+                    "disable",
+                ),
+                systemd_daemon_reload_command(
+                    "rollback_systemd_daemon_reload",
+                    "Reload systemd user manager after rollback",
+                ),
+            ]
+        }
+        NativeServicePlatform::Linux if !existing_service && completed("systemd_daemon_reload") => {
+            vec![systemd_daemon_reload_command(
+                "rollback_systemd_daemon_reload",
+                "Reload systemd user manager after rollback",
+            )]
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn systemd_unit_command(
+    id: &'static str,
+    label: &'static str,
+    verb: &'static str,
+) -> NativeServiceManagerCommand {
+    NativeServiceManagerCommand {
+        id,
+        label,
+        program: "systemctl",
+        args: vec![
+            "--user".to_string(),
+            verb.to_string(),
+            SYSTEMD_UNIT.to_string(),
+        ],
+        display: format!("systemctl --user {verb} {SYSTEMD_UNIT}"),
+    }
+}
+
+fn systemd_daemon_reload_command(
+    id: &'static str,
+    label: &'static str,
+) -> NativeServiceManagerCommand {
+    NativeServiceManagerCommand {
+        id,
+        label,
+        program: "systemctl",
+        args: vec!["--user".to_string(), "daemon-reload".to_string()],
+        display: "systemctl --user daemon-reload".to_string(),
+    }
 }
 
 fn service_manager_commands(
@@ -4249,6 +4569,17 @@ fn native_transport_status(
     let rate_limited = get_u64(object, "ship_rate_limited_10m");
     let retryable_client_errors = get_u64(object, "ship_retryable_client_errors_10m");
     let last_ship_result = object.get("last_ship_result").and_then(Value::as_str);
+    let pending_work = native_payload_has_pending_work(object);
+    let progress = object.get("shipping_progress").and_then(|value| {
+        serde_json::from_value::<crate::heartbeat::ShippingProgress>(value.clone()).ok()
+    });
+    let progress_age = progress
+        .as_ref()
+        .and_then(|value| rfc3339_age_seconds(&value.observed_at));
+    let progress_is_unavailable =
+        progress.is_none() || progress_age.is_none_or(|age| age >= ENGINE_STALE_SECONDS);
+    let progress_claims_pending = progress.as_ref().is_some_and(|value| value.pending_work);
+    let effective_pending_work = pending_work.or(progress.as_ref().map(|value| value.pending_work));
 
     let connect_error_burst = is_transport_error_burst(
         connect_errors,
@@ -4334,33 +4665,23 @@ fn native_transport_status(
             "retryable_client_errors",
             &format!("{retryable_client_errors} retryable client error(s) in the active window."),
         )
-    } else if object.get("shipping_progress").is_some_and(|progress| {
-        progress.get("pending_work").and_then(Value::as_bool) == Some(true)
-            && (progress.get("stalled").and_then(Value::as_bool) == Some(true)
-                || progress
-                    .get("seconds_without_progress")
-                    .and_then(Value::as_u64)
-                    .zip(
-                        progress
-                            .get("observed_at")
-                            .and_then(Value::as_str)
-                            .and_then(rfc3339_age_seconds),
-                    )
-                    .is_some_and(|(elapsed, age)| elapsed.saturating_add(age) >= 60))
-    }) {
+    } else if effective_pending_work == Some(true)
+        && progress.as_ref().is_some_and(|progress| {
+            progress.pending_work
+                && (progress.stalled
+                    || progress
+                        .seconds_without_progress
+                        .saturating_add(progress_age.unwrap_or(0))
+                        >= 60)
+        })
+    {
         transport_status(
             "degraded",
             "ship_stalled",
             "Pending uploads have made no useful progress for at least 60 awake seconds.",
         )
-    } else if object.get("shipping_progress").is_some_and(|progress| {
-        progress
-            .get("observed_at")
-            .and_then(Value::as_str)
-            .and_then(rfc3339_age_seconds)
-            .is_none_or(|age| age >= ENGINE_STALE_SECONDS)
-    }) || (object.get("shipping_progress").is_none()
-        && spool_pending.is_some_and(|count| count > 0))
+    } else if effective_pending_work != Some(false)
+        && (progress_is_unavailable || (pending_work != Some(false) && !progress_claims_pending))
     {
         transport_status(
             "unknown", "transport_unavailable",
@@ -4375,6 +4696,70 @@ fn native_transport_status(
     } else {
         transport_status("healthy", "healthy", "Shipping healthy.")
     }
+}
+
+/// Mirror `heartbeat::payload_has_pending_work` at the native JSON boundary.
+/// Compact/legacy status fixtures are reduced conservatively so a newly
+/// observed lane can never be treated as zero.
+fn native_payload_has_pending_work(object: &serde_json::Map<String, Value>) -> Option<bool> {
+    let archive_paused = object
+        .get("archive_backlog")
+        .and_then(Value::as_object)
+        .is_some_and(|archive| {
+            archive.get("mode").and_then(Value::as_str) == Some("paused")
+                || archive.get("state").and_then(Value::as_str) == Some("paused")
+        });
+    let mut observed_lane = false;
+    let mut pending = false;
+
+    if let Some(value) = object.get("spool_pending_count") {
+        observed_lane = true;
+        pending |= value.as_u64()? > 0 && !archive_paused;
+    }
+
+    if let Some(value) = object.get("storage_v2_outbox") {
+        let outbox = value.as_object()?;
+        let count = outbox.get("pending_count").and_then(Value::as_u64)?;
+        observed_lane = true;
+        pending |= count > 0;
+    }
+
+    if let Some(value) = object.get("archive_backlog") {
+        let archive = value.as_object()?;
+        if let Some(value) = archive.get("pending_ranges") {
+            observed_lane = true;
+            pending |= value.as_u64()? > 0 && !archive_paused;
+        }
+        if let Some(value) = archive.get("pending_bytes") {
+            observed_lane = true;
+            pending |= value.as_u64()? > 0 && !archive_paused;
+        }
+    }
+
+    if let Some(value) = object.get("ship_scheduler") {
+        let scheduler = value.as_object()?;
+        for key in [
+            "ready_live",
+            "in_flight_live",
+            "ready_retry",
+            "ready_scan",
+            "in_flight_retry",
+            "in_flight_scan",
+            "ready_backlog",
+            "in_flight_backlog",
+        ] {
+            if let Some(value) = scheduler.get(key) {
+                observed_lane = true;
+                let count = value.as_u64()?;
+                let archive_work =
+                    !archive_paused && !matches!(key, "ready_live" | "in_flight_live");
+                pending |=
+                    count > 0 && (archive_work || matches!(key, "ready_live" | "in_flight_live"));
+            }
+        }
+    }
+
+    observed_lane.then_some(pending)
 }
 
 fn print_native_repair_plan(plan: &NativeRepairPlan) {
@@ -5713,6 +6098,120 @@ mod tests {
             native_transport_status(payload.as_object()).status_reason,
             "transport_unavailable"
         );
+    }
+
+    #[test]
+    fn native_transport_missing_progress_checks_every_pending_lane() {
+        let payload = json!({
+            "ship_attempts_10m": 0,
+            "spool_pending_count": 0,
+            "spool_dead_count": 0,
+            "storage_v2_outbox": {"pending_count": 1},
+            "archive_backlog": {"pending_ranges": 0, "pending_bytes": 0},
+            "ship_scheduler": {
+                "ready_live": 0,
+                "in_flight_live": 0,
+                "ready_retry": 0,
+                "ready_scan": 0,
+                "in_flight_retry": 0,
+                "in_flight_scan": 0,
+                "ready_backlog": 0,
+                "in_flight_backlog": 0
+            }
+        });
+
+        assert_eq!(
+            native_payload_has_pending_work(payload.as_object().unwrap()),
+            Some(true)
+        );
+        assert_eq!(
+            native_transport_status(payload.as_object()).status_reason,
+            "transport_unavailable"
+        );
+
+        let archive_payload = json!({
+            "ship_attempts_10m": 0,
+            "spool_pending_count": 0,
+            "spool_dead_count": 0,
+            "storage_v2_outbox": {"pending_count": 0},
+            "archive_backlog": {"pending_ranges": 2, "pending_bytes": 128}
+        });
+        assert_eq!(
+            native_payload_has_pending_work(archive_payload.as_object().unwrap()),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn native_repair_does_not_settle_recovered_with_stalled_core_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let status_path = dir.path().join("agent").join("engine-status.json");
+        let now = chrono::Utc::now().to_rfc3339();
+        let before = native_health_from_parts(
+            &status_path,
+            true,
+            Some(0),
+            Some(json!({
+                "last_updated": "before",
+                "daemon_pid": 1,
+                "ship_attempts_10m": 0,
+                "spool_pending_count": 1,
+                "spool_dead_count": 0,
+                "shipping_progress": {
+                    "pending_work": true,
+                    "stalled": true,
+                    "seconds_without_progress": 61,
+                    "observed_at": now
+                }
+            })),
+            None,
+        );
+        let after = native_health_from_parts(
+            &status_path,
+            true,
+            Some(0),
+            Some(json!({
+                "last_updated": "after",
+                "daemon_pid": 2,
+                "ship_attempts_10m": 0,
+                "spool_pending_count": 1,
+                "spool_dead_count": 0,
+                "shipping_progress": {
+                    "pending_work": true,
+                    "stalled": true,
+                    "seconds_without_progress": 61,
+                    "observed_at": chrono::Utc::now().to_rfc3339()
+                }
+            })),
+            None,
+        );
+        let mut execution = native_repair_execution_result(
+            false,
+            "completed",
+            "restart observed",
+            Vec::new(),
+            NativeMachineStateStatus {
+                path: dir.path().display().to_string(),
+                exists: true,
+                readable: true,
+                configured: true,
+                runtime_url_present: true,
+                machine_name_present: true,
+                error: None,
+            },
+            None,
+            before,
+            None,
+            Vec::<&'static str>::new(),
+        );
+
+        settle_native_repair(&mut execution, std::time::Instant::now(), || after.clone());
+
+        assert_eq!(execution.state, "recovery_pending");
+        assert!(execution
+            .notes
+            .iter()
+            .any(|note| { note.contains("ship_stalled") && note.contains("inspect") }));
     }
 
     #[cfg(unix)]
@@ -7479,6 +7978,95 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         assert!(!raw.contains("david010.longhouse.ai"));
         assert!(!raw.contains("secret-machine"));
         assert!(raw.contains("<redacted>"));
+    }
+
+    #[test]
+    fn native_service_repair_restores_predecessor_after_activation_failure() {
+        let state = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let engine = write_fake_engine(home.path());
+        write_configured_machine_state(state.path());
+        let machine_detail =
+            collect_native_machine_state_detail(&machine_state_path(Some(state.path())).unwrap())
+                .unwrap();
+        let plan = build_native_service_artifact_plan(
+            NativeServicePlatform::Macos,
+            home.path(),
+            Some(state.path()),
+            &machine_detail,
+            Some(&engine),
+        )
+        .unwrap();
+        write_service_artifact(&plan).unwrap();
+        let predecessor = format!("{}\n<!-- predecessor -->\n", plan.content);
+        std::fs::write(&plan.service_path, &predecessor).unwrap();
+
+        let mut calls = Vec::new();
+        let mut failed_load = false;
+        let execution = collect_native_service_artifact_repair_execution_with_runner(
+            Some(state.path()),
+            false,
+            NativeServicePlatform::Macos,
+            home.path(),
+            service_repair_options(&engine),
+            |command| {
+                calls.push(command.id);
+                if command.id == "load_launchd_service" && !failed_load {
+                    failed_load = true;
+                    Err("load failed".to_string())
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap();
+
+        assert_eq!(execution.state, "failed");
+        assert_eq!(
+            calls,
+            vec![
+                "unload_launchd_service",
+                "load_launchd_service",
+                "rollback_load_launchd_service"
+            ]
+        );
+        assert_eq!(
+            std::fs::read_to_string(&plan.service_path).unwrap(),
+            predecessor
+        );
+        assert!(execution.actions.iter().any(|action| {
+            action.id == "rollback_service_file" && action.status == "completed"
+        }));
+        assert!(execution.actions.iter().any(|action| {
+            action.id == "rollback_load_launchd_service" && action.status == "completed"
+        }));
+    }
+
+    #[test]
+    fn native_service_repair_preserves_absent_service_after_activation_failure() {
+        let state = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let engine = write_fake_engine(home.path());
+        write_configured_machine_state(state.path());
+        let service_path = service_path(NativeServicePlatform::Macos, home.path()).unwrap();
+        let execution = collect_native_service_artifact_repair_execution_with_runner(
+            Some(state.path()),
+            false,
+            NativeServicePlatform::Macos,
+            home.path(),
+            service_repair_options(&engine),
+            |command| {
+                assert_eq!(command.id, "load_launchd_service");
+                Err("load failed".to_string())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(execution.state, "failed");
+        assert!(!service_path.exists());
+        assert!(execution.actions.iter().any(|action| {
+            action.id == "rollback_service_file" && action.status == "completed"
+        }));
     }
 
     #[test]

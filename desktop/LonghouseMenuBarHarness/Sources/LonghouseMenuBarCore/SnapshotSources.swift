@@ -34,6 +34,60 @@ public enum SnapshotSourceError: Error, LocalizedError {
     }
 }
 
+/// Capture both streams without pipe backpressure. The caller owns the timeout.
+func runNativeCommand(
+    launchPath: String,
+    arguments: [String],
+    timeoutSeconds: TimeInterval,
+    currentDirectory: URL? = nil
+) throws -> (status: Int32, output: Data, errorOutput: Data) {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("longhouse-command-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(
+        at: directory, withIntermediateDirectories: false,
+        attributes: [.posixPermissions: 0o700]
+    )
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let stdoutURL = directory.appendingPathComponent("stdout")
+    let stderrURL = directory.appendingPathComponent("stderr")
+    try Data().write(to: stdoutURL)
+    try Data().write(to: stderrURL)
+    let stdout = try FileHandle(forWritingTo: stdoutURL)
+    defer { try? stdout.close() }
+    let stderr = try FileHandle(forWritingTo: stderrURL)
+    defer { try? stderr.close() }
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: launchPath)
+    process.arguments = arguments
+    process.currentDirectoryURL = currentDirectory
+    process.environment = LonghouseCLI.environment(prependingExecutablePath: launchPath)
+    process.standardOutput = stdout
+    process.standardError = stderr
+    let didExit = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in didExit.signal() }
+    defer { process.terminationHandler = nil }
+    try process.run()
+    if didExit.wait(timeout: .now() + timeoutSeconds) == .timedOut {
+        process.terminate()
+        if didExit.wait(timeout: .now() + 2) == .timedOut, process.isRunning {
+            kill(process.processIdentifier, SIGKILL)
+            _ = didExit.wait(timeout: .now() + 2)
+        }
+        guard !process.isRunning else {
+            throw SnapshotSourceError.commandFailed(
+                "The native command timed out and its control process could not be stopped."
+            )
+        }
+        throw SnapshotSourceError.timedOut(seconds: timeoutSeconds)
+    }
+    return (
+        process.terminationStatus,
+        try Data(contentsOf: stdoutURL),
+        try Data(contentsOf: stderrURL)
+    )
+}
+
 public struct FixtureHealthSnapshotSource: HealthSnapshotSource {
     public let fileURL: URL
 
@@ -91,63 +145,20 @@ public struct CLIHealthSnapshotSource: HealthSnapshotSource {
             return HealthSnapshot.installLocationBlockedSnapshot(currentPath: unsupportedBundlePath)
         }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: launchPath)
-        process.arguments = arguments
-        process.environment = LonghouseCLI.environment(prependingExecutablePath: launchPath)
-
-        let stdoutURL = Self.temporaryOutputURL(suffix: "stdout")
-        let stderrURL = Self.temporaryOutputURL(suffix: "stderr")
-        FileManager.default.createFile(atPath: stdoutURL.path, contents: nil)
-        FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
-
-        let stdout = try FileHandle(forWritingTo: stdoutURL)
-        let stderr = try FileHandle(forWritingTo: stderrURL)
-        defer {
-            try? FileManager.default.removeItem(at: stdoutURL)
-            try? FileManager.default.removeItem(at: stderrURL)
-        }
-
-        process.standardOutput = stdout
-        process.standardError = stderr
-        let didExit = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in
-            didExit.signal()
-        }
-        do {
-            try process.run()
-        } catch {
-            try? stdout.close()
-            try? stderr.close()
-            throw error
-        }
-        if didExit.wait(timeout: .now() + commandTimeoutSeconds) == .timedOut {
-            process.terminate()
-            _ = didExit.wait(timeout: .now() + 2)
-            try? stdout.close()
-            try? stderr.close()
-            throw SnapshotSourceError.timedOut(seconds: commandTimeoutSeconds)
-        }
-
-        try? stdout.close()
-        try? stderr.close()
-
-        let output = try Data(contentsOf: stdoutURL)
-        let errorOutput = try Data(contentsOf: stderrURL)
-        guard process.terminationStatus == 0 else {
-            let message = String(data: errorOutput, encoding: .utf8) ?? "Longhouse status snapshot failed"
-            if shouldSynthesizeSetupRequiredSnapshot(message: message, terminationStatus: process.terminationStatus) {
+        let result = try runNativeCommand(
+            launchPath: launchPath, arguments: arguments,
+            timeoutSeconds: commandTimeoutSeconds
+        )
+        guard result.status == 0 else {
+            let message = String(data: result.errorOutput, encoding: .utf8) ?? "Longhouse status snapshot failed"
+            if shouldSynthesizeSetupRequiredSnapshot(message: message, terminationStatus: result.status) {
                 return HealthSnapshot.setupRequiredSnapshot(detail: message)
             }
             throw SnapshotSourceError.commandFailed(message)
         }
-        return try HealthSnapshotDecoder.decode(data: output)
+        return try HealthSnapshotDecoder.decode(data: result.output)
     }
 
-    private static func temporaryOutputURL(suffix: String) -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("longhouse-health-\(UUID().uuidString)-\(suffix)")
-    }
 
     private func shouldSynthesizeSetupRequiredSnapshot(message: String, terminationStatus: Int32) -> Bool {
         guard terminationStatus == 127 else {

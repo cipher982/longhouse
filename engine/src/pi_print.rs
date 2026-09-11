@@ -333,11 +333,22 @@ pub async fn recover_pi_print_turns(
     Ok(recovered)
 }
 
-pub fn interrupt_pi_print_turn(run_id: &str, session_id: &str) -> Result<()> {
+pub fn interrupt_pi_print_turn(
+    run_id: &str,
+    session_id: &str,
+    thread_id: &str,
+    turn_id: &str,
+) -> Result<()> {
     let registry = crate::turn_claims::default_registry()?;
     let claim = registry.read(run_id)?;
-    if claim.session_id != session_id || claim.provider != "pi" {
-        anyhow::bail!("Pi Console turn claim does not match the requested session");
+    if claim.session_id != session_id
+        || claim.thread_id != thread_id
+        || claim.turn_id.as_deref() != Some(turn_id)
+        || claim.provider != "pi"
+    {
+        anyhow::bail!(
+            "Pi Console turn claim does not match the requested session, thread, or turn"
+        );
     }
     if claim.adapter.as_deref() != Some(PI_PRINT_ADAPTER) || claim.state != "spawned" {
         anyhow::bail!("Pi Console turn is not active");
@@ -1658,6 +1669,7 @@ if "-p" in args:
         let session_id = Uuid::new_v4().to_string();
         let thread_id = Uuid::new_v4().to_string();
         let run_id = Uuid::new_v4().to_string();
+        let turn_id = Uuid::new_v4().to_string();
         assert!(matches!(
             crate::turn_claims::default_registry()
                 .unwrap()
@@ -1665,24 +1677,24 @@ if "-p" in args:
                     &run_id,
                     &session_id,
                     &thread_id,
-                    None,
+                    Some(&turn_id),
                     Some(&format!("canary-{run_id}")),
                     "pi",
                 )
                 .unwrap(),
             crate::turn_claims::ClaimOutcome::Acquired
         ));
-        let summary = start_pi_print_turn(run_config(
+        let mut config = run_config(
             fake_pi.to_str().unwrap(),
             &session_id,
             &thread_id,
             &run_id,
             temp.path(),
             "Run long",
-        ))
-        .await
-        .unwrap();
-        interrupt_pi_print_turn(&run_id, &session_id).unwrap();
+        );
+        config.turn_id = Some(turn_id.clone());
+        let summary = start_pi_print_turn(config).await.unwrap();
+        interrupt_pi_print_turn(&run_id, &session_id, &thread_id, &turn_id).unwrap();
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
         loop {

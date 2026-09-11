@@ -6617,27 +6617,34 @@ class CatalogStore:
             if values:
                 values["updated_at"] = observed_at
                 connection.execute(update(table).where(table.c.session_id == session_id).values(**values))
-                storage_values = {
-                    key: value
-                    for key, value in values.items()
-                    if key in {"user_hidden_from_timeline", "user_hidden_at", "last_read_at", "updated_at"}
-                }
-                if storage_values:
-                    connection.execute(
-                        update(StorageSession.__table__).where(StorageSession.__table__.c.session_id == session_id).values(**storage_values)
-                    )
-                    # LiveTimelineCard has no last_read_at column; only mirror
-                    # the hidden-state fields it actually carries.
-                    card_values = {key: value for key, value in storage_values.items() if key != "last_read_at"}
-                    if set(card_values) != {"updated_at"}:
-                        connection.execute(
-                            update(LiveTimelineCard.__table__)
-                            .where(LiveTimelineCard.__table__.c.session_id == session_id)
-                            .values(**card_values)
-                        )
-                commit_seq = _advance_commit_seq(connection, observed_at)
-            else:
-                commit_seq = _current_commit_seq(connection)
+            # Reconcile the durable preferences even when the live value is
+            # already correct: a repeated action must repair an older divergent
+            # storage projection rather than remain a false no-op.
+            storage_values = {
+                key: values.get(key, current[key])
+                for key in ("user_state", "notification_muted", "user_hidden_from_timeline", "user_hidden_at", "last_read_at")
+            }
+            storage_table = StorageSession.__table__
+            storage_changed = connection.execute(
+                update(storage_table)
+                .where(
+                    storage_table.c.session_id == session_id,
+                    or_(*(storage_table.c[key].is_distinct_from(value) for key, value in storage_values.items())),
+                )
+                .values(**storage_values, updated_at=observed_at)
+            ).rowcount
+            card_table = LiveTimelineCard.__table__
+            card_values = {key: storage_values[key] for key in ("user_hidden_from_timeline", "user_hidden_at")}
+            card_changed = connection.execute(
+                update(card_table)
+                .where(
+                    card_table.c.session_id == session_id,
+                    or_(*(card_table.c[key].is_distinct_from(value) for key, value in card_values.items())),
+                )
+                .values(**card_values, updated_at=observed_at)
+            ).rowcount
+            changed = bool(values) or bool(storage_changed) or bool(card_changed)
+            commit_seq = _advance_commit_seq(connection, observed_at) if changed else _current_commit_seq(connection)
             return {
                 "found": True,
                 "preferences": {
@@ -6649,7 +6656,7 @@ class CatalogStore:
                     ),
                     "last_read_at": _encode_datetime(values.get("last_read_at") or current_read_at),
                 },
-                "updated": bool(values),
+                "updated": changed,
                 "commit_seq": str(commit_seq),
             }
 

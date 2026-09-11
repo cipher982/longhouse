@@ -43,6 +43,12 @@
           "created_at": "2026-04-08T01:43:00Z"
         }
       ],
+      "shipping_progress": {
+        "pending_work": true,
+        "stalled": true,
+        "seconds_without_progress": 480,
+        "observed_at": "2026-04-08T01:44:00Z"
+      },
       "last_updated": "2026-04-08T01:44:00Z"
     },
     "error": null

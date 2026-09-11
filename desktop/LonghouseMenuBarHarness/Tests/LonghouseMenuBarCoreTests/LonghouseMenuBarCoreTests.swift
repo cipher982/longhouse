@@ -473,6 +473,23 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func spoolDeadLettersPromoteScopedShippingInspection() {
+        let snapshot = presentationSnapshot(
+            reasons: ["spool_dead_letters"],
+            sessions: [],
+            suggestedActionIds: ["inspect_shipping"]
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+        let durable = presentation.facts.first(where: { $0.id == "durable-upload" })
+
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.headline == "Durable upload needs inspection for 1 dead letter")
+        #expect(durable?.value == "1 dead letter")
+        #expect(durable?.promotion == .inspect)
+    }
+
+    @Test
     func archivePauseIsInspectableNotNormal() {
         let snapshot = presentationSnapshot(
             reasons: ["archive_repair_paused"], sessions: [],
@@ -1172,31 +1189,6 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
-    func repairDryRunReturnsVisibleFeedback() throws {
-        let snapshot = HealthSnapshot(
-            schemaVersion: 1,
-            collectedAt: "2026-04-08T01:52:00Z",
-            healthState: "broken",
-            severity: "red",
-            headline: "Longhouse engine service is stopped",
-            reasons: ["service_stopped"],
-            suggestedActions: ["Run: longhouse machine repair"],
-            service: nil,
-            engineStatus: nil,
-            outbox: nil,
-            activitySummary: nil,
-            launchReadiness: nil
-        )
-
-        let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
-        let feedback = sink.handle(.repairInstall, snapshot: snapshot)
-
-        #expect(feedback?.style == .warning)
-        #expect(feedback?.title == "Repair dry run recorded")
-        #expect(feedback?.detail.contains("longhouse machine repair") == true)
-    }
-
-    @Test
     func sourceInspectionDryRunUsesScopedShippingCommand() throws {
         let sourceEpoch = "01234567-89ab-cdef-0123-456789abcdef"
         let snapshot = HealthSnapshot(
@@ -1740,6 +1732,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(invocation?.arguments == [
             "machine",
             "repair",
+            "--json",
         ])
     }
 
@@ -1781,6 +1774,56 @@ struct LonghouseMenuBarCoreTests {
         #expect(invocation?.arguments == [
             "machine",
             "repair",
+            "--json",
+        ])
+    }
+
+    @Test
+    func configuredMachineWithoutServiceUsesServiceArtifactRepair() throws {
+        let homeDirectory = try makeFakeHomeDirectory()
+        let executableURL = try installFakeLonghouseBinary(homeDirectory: homeDirectory)
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "broken",
+            severity: "red",
+            headline: "Longhouse Machine Agent service is not installed",
+            reasons: ["service_not_installed"],
+            suggestedActions: ["Run: longhouse machine repair --repair-service"],
+            service: ServiceSnapshot(
+                platform: "macos",
+                status: "not-installed",
+                serviceName: "com.longhouse.shipper",
+                serviceFile: nil,
+                logPath: nil
+            ),
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: LaunchReadinessSnapshot(
+                state: "ready",
+                headline: nil,
+                reasons: nil,
+                suggestedActions: nil,
+                storedURL: "https://demo.longhouse.test",
+                machineName: "cinder",
+                serviceMachineName: nil,
+                runner: nil
+            )
+        )
+
+        let invocation = LonghouseCLI.repairInstallInvocation(
+            snapshot: snapshot,
+            homeDirectory: homeDirectory,
+            pathEnvironment: "/usr/bin:/bin"
+        )
+
+        #expect(invocation?.launchPath == executableURL.path)
+        #expect(invocation?.arguments == [
+            "machine",
+            "repair",
+            "--json",
+            "--repair-service",
         ])
     }
 
@@ -3592,6 +3635,7 @@ private func presentationSnapshot(
     storageUnresolved: Int? = nil,
     storagePending: Int = 0,
     shippingProgress: ShippingProgressSnapshot? = nil,
+    suggestedActionIds: [String] = [],
     isOffline: Bool = false,
     engineFresh: Bool = true,
     serviceStatus: String? = "running"
@@ -3605,7 +3649,7 @@ private func presentationSnapshot(
     return HealthSnapshot(
         schemaVersion: 1, collectedAt: "1970-01-01T00:00:00Z",
         healthState: "healthy", severity: "green", headline: "Healthy",
-        reasons: reasons, suggestedActions: [],
+        reasons: reasons, suggestedActions: [], suggestedActionIds: suggestedActionIds,
         service: serviceStatus.map { status in ServiceSnapshot(
             platform: "macos", status: status, serviceName: "com.longhouse.shipper",
             serviceFile: nil, logPath: nil

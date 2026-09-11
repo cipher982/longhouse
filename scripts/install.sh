@@ -364,6 +364,16 @@ install_native_pair() {
         mv "$tmp_dir/longhouse-engine" "$release_dir/longhouse-engine"
         [[ ! -e "$tmp_dir/longhouse-sqlite3" ]] || mv "$tmp_dir/longhouse-sqlite3" "$release_dir/longhouse-sqlite3"
         "$release_dir/longhouse" verify-pair >/dev/null
+
+        # Publish a complete target before exposing either public executable to
+        # it. During conversion from standalone binaries, the old public pair
+        # remains runnable until the facade is switched; its canonical path then
+        # resolves the engine beside this same release. Keep facade-first order:
+        # switching the engine first would make a legacy facade resolve a mixed
+        # pair through the public directory.
+        ln -s "releases/$release_id" "$next_current"
+        replace_native_link "$next_current" "$current_link"
+
         for component in longhouse longhouse-engine; do
             component_path="$native_bin_dir/$component"
             # Existing versioned installs need only the single current rename.
@@ -377,8 +387,6 @@ install_native_pair() {
             ln -s "../share/longhouse/current/$component" "$component_path"
             replace_native_link "$component_path" "$native_bin_dir/$component"
         done
-        ln -s "releases/$release_id" "$next_current"
-        replace_native_link "$next_current" "$current_link"
         "$native_bin_dir/longhouse" verify-pair >/dev/null
     )
     export PATH="$native_bin_dir:$PATH"

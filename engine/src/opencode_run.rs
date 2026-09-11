@@ -294,11 +294,22 @@ pub async fn recover_opencode_run_turns(
     Ok(recovered)
 }
 
-pub fn interrupt_opencode_run_turn(run_id: &str, session_id: &str) -> Result<()> {
+pub fn interrupt_opencode_run_turn(
+    run_id: &str,
+    session_id: &str,
+    thread_id: &str,
+    turn_id: &str,
+) -> Result<()> {
     let registry = crate::turn_claims::default_registry()?;
     let claim = registry.read(run_id)?;
-    if claim.session_id != session_id || claim.provider != "opencode" {
-        anyhow::bail!("OpenCode Console turn claim does not match the requested session");
+    if claim.session_id != session_id
+        || claim.thread_id != thread_id
+        || claim.turn_id.as_deref() != Some(turn_id)
+        || claim.provider != "opencode"
+    {
+        anyhow::bail!(
+            "OpenCode Console turn claim does not match the requested session, thread, or turn"
+        );
     }
     if claim.adapter.as_deref() != Some(OPENCODE_RUN_ADAPTER) || claim.state != "spawned" {
         anyhow::bail!("OpenCode Console turn is not active");
@@ -1320,7 +1331,7 @@ mod tests {
         let interrupted = start_opencode_run_turn(OpenCodeRunConfig {
             session_id: session_id.clone(),
             thread_id: thread_id.clone(),
-            turn_id: Some(interrupt_turn_id),
+            turn_id: Some(interrupt_turn_id.clone()),
             run_id: interrupt_run_id.clone(),
             client_request_id: Some("canary-interrupt".to_string()),
             cwd: temp.path().to_path_buf(),
@@ -1348,7 +1359,13 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
-        interrupt_opencode_run_turn(&interrupt_run_id, &session_id).unwrap();
+        interrupt_opencode_run_turn(
+            &interrupt_run_id,
+            &session_id,
+            &thread_id,
+            &interrupt_turn_id,
+        )
+        .unwrap();
         let cancel_deadline = tokio::time::Instant::now() + Duration::from_secs(15);
         loop {
             let claim = crate::turn_claims::default_registry()
