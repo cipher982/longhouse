@@ -832,7 +832,6 @@ pub fn recover_state_database(db_path: &Path, dry_run: bool) -> Result<RecoveryR
         );
     }
     drop(rebuilt);
-    drop(salvaged);
 
     // Prove the replacement opens with today's schema before touching the
     // canonical path; migration failure must leave the original in place.

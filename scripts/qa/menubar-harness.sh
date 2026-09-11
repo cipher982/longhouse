@@ -97,22 +97,22 @@ build_app_binary() {
 }
 
 wait_for_window_id() {
-  local owner_name="$1"
+  local owner_pid="$1"
   local window_title="$2"
   local window_id=""
   local attempt
   for attempt in $(seq 1 80); do
-    window_id="$(swift - "$owner_name" "$window_title" <<'SWIFT'
+    window_id="$(swift - "$owner_pid" "$window_title" <<'SWIFT'
 import Foundation
 import CoreGraphics
 
-let ownerName = CommandLine.arguments[1]
+let ownerPID = Int(CommandLine.arguments[1]) ?? -1
 let windowTitle = CommandLine.arguments[2]
 let infos = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
 for row in infos {
-    let owner = row[kCGWindowOwnerName as String] as? String ?? ""
+    let owner = row[kCGWindowOwnerPID as String] as? Int ?? -1
     let name = row[kCGWindowName as String] as? String ?? ""
-    if owner == ownerName && name == windowTitle {
+    if owner == ownerPID && name == windowTitle {
         print(row[kCGWindowNumber as String] ?? 0)
         break
     }
@@ -126,7 +126,7 @@ SWIFT
     sleep 0.1
   done
 
-  echo "Timed out waiting for window '$window_title' owned by '$owner_name'" >&2
+  echo "Timed out waiting for window '$window_title' owned by PID '$owner_pid'" >&2
   return 1
 }
 
@@ -209,7 +209,9 @@ capture_window_render_args() {
   "$app_bin" "$@" --quit-after 30 >/dev/null 2>&1 &
   pid=$!
 
-  if ! window_id="$(wait_for_window_id "LonghouseMenuBarHarnessApp" "Longhouse Desktop")"; then
+  if window_id="$(wait_for_window_id "$pid" "Longhouse Desktop")"; then
+    :
+  else
     capture_status=$?
   fi
 
@@ -220,13 +222,17 @@ capture_window_render_args() {
   fi
 
   if [[ $capture_status -eq 0 ]]; then
-    if ! screencapture -x -l "$window_id" "$output_png"; then
+    if screencapture -x -l "$window_id" "$output_png"; then
+      :
+    else
       capture_status=$?
     fi
   fi
 
   if [[ $capture_status -eq 0 ]]; then
-    if ! verify_png_has_visible_content "$output_png"; then
+    if verify_png_has_visible_content "$output_png"; then
+      :
+    else
       capture_status=$?
     fi
   fi
