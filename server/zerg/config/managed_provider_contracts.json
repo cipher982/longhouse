@@ -3503,9 +3503,9 @@
         },
         "fork_thread": {
           "level": "none",
-          "source": "OMP Phase 1 Shadow-only contract",
+          "source": "OMP native child acquisition is not exposed by Longhouse",
           "disposition": "not_implemented",
-          "owner_action": "Add OMP native child acquisition in Phase 2",
+          "owner_action": "Add an OMP native child acquisition canary before exposing fork_thread",
           "blocker": "none"
         }
       },
