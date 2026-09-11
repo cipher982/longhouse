@@ -283,6 +283,16 @@ def test_omp_native_model_evidence_binds_provider_event_to_retained_source(tmp_p
     assert artifact["native_event_sha256"].startswith("sha256:") and len(artifact["native_event_sha256"]) == 71
     assert evidence["result_event"]["model_source"] == "provider_event"
 
+    full_evidence = omp_native_model_evidence(
+        tmp_path,
+        source_canary="omp_console_lifecycle",
+        qualification_model="openrouter/fixture-model",
+        api_key_configured=True,
+    )
+    assert full_evidence is not None
+    assert full_evidence["result_event"]["usage"]["output"] == 9
+    assert "event_window" not in full_evidence["source_artifacts"][0]
+
 
 def test_omp_native_model_evidence_rejects_stream_stdout_without_native_usage(tmp_path) -> None:
     _write_omp_console_settlement_fixture(

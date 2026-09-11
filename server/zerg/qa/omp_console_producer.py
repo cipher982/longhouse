@@ -158,6 +158,7 @@ def omp_native_model_evidence(
     selected_source_relative: str | None = None
     selected_events: list[Mapping[str, Any]] = []
     selected_event: Mapping[str, Any] | None = None
+    selected_event_window: tuple[int, int] | None = None
     if first_turn_only:
         dispatch = _read_json(evidence_root / "adapter-dispatch-receipt.json") or {}
         binding = _read_json(evidence_root / "provider-response-binding-receipt.json") or {}
