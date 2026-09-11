@@ -17,6 +17,7 @@ import urllib.request
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa import provider_release_identity as identity
@@ -275,6 +276,9 @@ def _wait(
 
 _RUNTIME_HOST_RETRY_STATUSES = frozenset({404, 429, 500, 502, 503, 504})
 
+_RUNTIME_EVENTS_PAGE_LIMIT = 500
+_RUNTIME_EVENTS_MAX_PAGES = 32
+
 
 def _runtime_get(api_url: str, token: str, path: str) -> dict[str, Any]:
     request = urllib.request.Request(
@@ -297,15 +301,65 @@ def _runtime_get(api_url: str, token: str, path: str) -> dict[str, Any]:
     return payload
 
 
+def _runtime_events_snapshot(api_url: str, token: str, session_id: str) -> dict[str, Any]:
+    events: list[dict[str, Any]] = []
+    first_page: dict[str, Any] | None = None
+    generation_id: str | None = None
+    branch_mode: str | None = None
+    cursor: str | None = None
+
+    for pages_read in range(1, _RUNTIME_EVENTS_MAX_PAGES + 1):
+        query = f"/api/agents/sessions/{session_id}/events?anchor=start&branch_mode=head&limit={_RUNTIME_EVENTS_PAGE_LIMIT}"
+        if cursor is not None:
+            query += f"&cursor={quote(cursor, safe='')}"
+        page = _runtime_get(api_url, token, query)
+        if first_page is None:
+            first_page = dict(page)
+        page_session_id = page.get("session_id")
+        if page_session_id is not None and page_session_id != session_id:
+            raise RuntimeError("Runtime Host returned events for the wrong session")
+        page_generation = page.get("generation_id")
+        if not isinstance(page_generation, str) or not page_generation:
+            raise RuntimeError("Runtime Host returned events without a generation identity")
+        if generation_id is None:
+            generation_id = page_generation
+            branch_mode = page.get("branch_mode")
+        elif page_generation != generation_id or page.get("branch_mode") != branch_mode:
+            raise RuntimeError("Runtime Host changed the events generation during pagination")
+        raw_events = page.get("events")
+        if not isinstance(raw_events, list) or any(not isinstance(event, Mapping) for event in raw_events):
+            raise RuntimeError("Runtime Host returned an invalid events page")
+        events.extend(dict(event) for event in raw_events)
+        has_more = page.get("has_more")
+        next_cursor = page.get("next_cursor")
+        if has_more is False and next_cursor is None:
+            result = dict(first_page or {})
+            result.update(
+                {
+                    "events": events,
+                    "generation_id": generation_id,
+                    "branch_mode": branch_mode,
+                    "has_more": False,
+                    "next_cursor": None,
+                    "pagination": {
+                        "pages_read": pages_read,
+                        "exhausted": True,
+                        "generation_id": generation_id,
+                    },
+                }
+            )
+            return result
+        if has_more is not True or not isinstance(next_cursor, str) or not next_cursor:
+            raise RuntimeError("Runtime Host returned a non-exhaustible events page")
+        cursor = next_cursor
+    raise RuntimeError(f"Runtime Host events pagination exceeded {_RUNTIME_EVENTS_MAX_PAGES} pages")
+
+
 def _runtime_snapshot(api_url: str, token: str, session_id: str) -> dict[str, Any]:
     return {
         "detail": _runtime_get(api_url, token, f"/api/agents/sessions/{session_id}"),
         "thread": _runtime_get(api_url, token, f"/api/agents/sessions/{session_id}/thread"),
-        "events": _runtime_get(
-            api_url,
-            token,
-            f"/api/agents/sessions/{session_id}/events?anchor=start&branch_mode=head&limit=1000",
-        ),
+        "events": _runtime_events_snapshot(api_url, token, session_id),
         "diagnostic": _runtime_get(api_url, token, f"/api/agents/sessions/{session_id}/state-diagnostics"),
     }
 
@@ -323,12 +377,16 @@ def _flush_receipt_complete(receipt: Mapping[str, Any]) -> bool:
     )
 
 
-def _events_page_metadata(payload: Mapping[str, Any], *, requested_limit: int = 1000) -> dict[str, Any]:
+def _events_page_metadata(payload: Mapping[str, Any], *, requested_limit: int = _RUNTIME_EVENTS_PAGE_LIMIT) -> dict[str, Any]:
     events = payload.get("events") if isinstance(payload.get("events"), list) else []
     has_more = payload.get("has_more")
     next_cursor = payload.get("next_cursor")
     total = payload.get("total")
     generation_id = payload.get("generation_id")
+    pagination = payload.get("pagination") if isinstance(payload.get("pagination"), Mapping) else {}
+    pages_read = pagination.get("pages_read", 1)
+    exhausted = pagination.get("exhausted") is True or (has_more is False and next_cursor is None)
+    total_valid = isinstance(total, int) and not isinstance(total, bool) and total >= len(events)
     return {
         "requested_anchor": "start",
         "requested_branch_mode": "head",
@@ -341,15 +399,10 @@ def _events_page_metadata(payload: Mapping[str, Any], *, requested_limit: int = 
         "abandoned_events": payload.get("abandoned_events"),
         "next_cursor": next_cursor,
         "has_more": has_more,
+        "pages_read": pages_read,
+        "pagination_exhausted": exhausted,
         "complete": (
-            payload.get("branch_mode") == "head"
-            and isinstance(total, int)
-            and not isinstance(total, bool)
-            and total == len(events)
-            and isinstance(generation_id, str)
-            and bool(generation_id)
-            and has_more is False
-            and next_cursor is None
+            payload.get("branch_mode") == "head" and total_valid and isinstance(generation_id, str) and bool(generation_id) and exhausted
         ),
     }
 
@@ -835,7 +888,7 @@ def _wait_native_marker(
             message = row.get("message")
             if not isinstance(message, Mapping) or message.get("role") != role:
                 continue
-            if marker in json.dumps(message, sort_keys=True):
+            if marker in _native_message_text(message):
                 return row
         return None
 
@@ -1006,6 +1059,26 @@ def _exact_session_retirement(receipt: Mapping[str, Any] | None, session_id: str
         and receipt.get("archived") is True
         and receipt.get("present_in_served_inventory") is False
     )
+
+
+def _wait_served_run_retirement(
+    api_url: str,
+    token: str,
+    session_id: str,
+    claims: list[dict[str, Any]],
+    *,
+    timeout: float = 30,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    last: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        last = dict(lifecycle._served_run_inventory_evidence(api_url, token, session_id, claims))
+        if last.get("retired") is True:
+            last["retirement_wait_status"] = "pass"
+            return last
+        time.sleep(0.2)
+    last["retirement_wait_status"] = "timeout"
+    return last
 
 
 def _turn_sequence(state: Mapping[str, Any]) -> int:
@@ -1592,10 +1665,13 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
     }
     initial_flush: dict[str, Any] = {}
     final_flush: dict[str, Any] = {}
+    terminal_flush: dict[str, Any] = {}
+    served_run_inventory: dict[str, Any] = {}
     runtime_convergence: dict[str, Any] = {}
     current_session_id: str | None = None
     current_session_file: Path | None = None
     current_state: dict[str, Any] = {}
+    retirement_claims: list[dict[str, Any]] = []
     source_generations: list[dict[str, Any]] = []
 
     try:
@@ -2208,9 +2284,10 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "context_phrase": context_phrase,
             "resume_prompt": resume_prompt,
             "pre_resume_source_path": pre_resume_source.name,
-            "pre_resume_source_offset": resume_offset,
             "context_recalled": context_recalled,
             "context_marker_count": resume_context_evidence["marker_count"],
+            "context_marker_present": resume_context_evidence["marker_count"] >= 1,
+            "context_marker_exactly_once": resume_context_evidence["marker_count"] == 1,
             "context_seed": context_seed_evidence,
             "context_resume": resume_context_evidence,
             "resume_input": resume_input_evidence,
@@ -2307,6 +2384,24 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         final_terminate = _run_engine(args.engine, "terminate", current_session_id, env)
         final_stopped = _wait_stopped(longhouse_home, current_session_id)
         resumed.process.wait(timeout=15)
+        retirement_claims = [
+            {
+                "session_id": str(current_session_id or ""),
+                "run_id": str(current_state.get("run_id") or ""),
+                "state": "terminal",
+            }
+        ]
+        if shipper is not None:
+            try:
+                terminal_flush = shipper.flush("omp-helm-terminal-retirement")
+            except Exception as exc:  # noqa: BLE001 - preserve terminal-delivery evidence
+                terminal_flush = {"status": "fail", "error": f"{type(exc).__name__}: {exc}"}
+        served_run_inventory = _wait_served_run_retirement(
+            str(args.api_url),
+            str(args.agents_token),
+            str(current_session_id or ""),
+            retirement_claims,
+        )
         controls["final_terminate"] = {
             "action_label": "final_terminate",
             "state": dict(final_control_state),
@@ -2346,6 +2441,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         flush_receipt: dict[str, Any] = {
             "initial": dict(initial_flush),
             "final": dict(final_flush),
+            "terminal": dict(terminal_flush),
             "cleanup": cleanup_flush,
         }
         lifecycle.write_json(root / "transcript-flush-receipt.json", flush_receipt)
@@ -2361,18 +2457,20 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         )
         dispatch_session_id = str(current_session_id or "")
         dispatch_run_id = str(current_state.get("run_id") or "")
-        served_run_inventory = lifecycle._served_run_inventory_evidence(
-            args.api_url,
-            args.agents_token,
-            dispatch_session_id,
-            [
+        if not served_run_inventory:
+            retirement_claims = retirement_claims or [
                 {
                     "session_id": dispatch_session_id,
                     "run_id": dispatch_run_id,
                     "state": "terminal",
                 }
-            ],
-        )
+            ]
+            served_run_inventory = lifecycle._served_run_inventory_evidence(
+                args.api_url,
+                args.agents_token,
+                dispatch_session_id,
+                retirement_claims,
+            )
         session_retirement = retire_qualification_session(
             args.api_url,
             args.agents_token,

@@ -1968,6 +1968,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                     "native_message_id": resume_native_response.get("native_message_id") if resume_native_response else None,
                     "marker_count": event_text(resume_events[0]).count(resume_marker) if resume_events else 0,
                     "context_marker_count": resume_context_marker_count,
+                    "context_marker_exactly_once": resume_context_marker_count == 1,
                     "event_count": len(resume_events),
                     "linkage": continuation_linkage,
                     "native_source_end_offset_before_interrupt": second_native_source_size,

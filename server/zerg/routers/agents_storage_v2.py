@@ -2151,6 +2151,7 @@ async def _read_storage_v2_session_events_page_admitted(
         "v": 2,
         "session_id": str(session_id),
         "generation_id": str(generation_id),
+        "branch_mode": branch_mode,
         "events": [event for _, event in page],
         "next_cursor": (page[-1][1]["cursor"] if anchor == "start" else page[0][1]["cursor"]) if page and has_more else None,
         "has_more": has_more,

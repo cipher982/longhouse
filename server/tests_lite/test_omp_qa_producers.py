@@ -26,7 +26,6 @@ from zerg.qa.omp_helm_lifecycle import REGISTRATION as HELM_REGISTRATION
 from zerg.qa.omp_helm_lifecycle import _assertion_result_status
 from zerg.qa.omp_helm_lifecycle import _channel_command_evidence
 from zerg.qa.omp_helm_lifecycle import _cleanup_receipt
-from zerg.qa.omp_helm_lifecycle import _wait_cleanup_receipt
 from zerg.qa.omp_helm_lifecycle import _events_page_metadata
 from zerg.qa.omp_helm_lifecycle import _exact_session_retirement
 from zerg.qa.omp_helm_lifecycle import _flush_receipt_complete
@@ -37,11 +36,15 @@ from zerg.qa.omp_helm_lifecycle import _native_settlement
 from zerg.qa.omp_helm_lifecycle import _redacted_state_snapshot
 from zerg.qa.omp_helm_lifecycle import _register_native_source
 from zerg.qa.omp_helm_lifecycle import _remove_isolation_after_source_retention
-from zerg.qa.omp_helm_lifecycle import _runtime_convergence
-from zerg.qa.omp_helm_lifecycle import _served_control_identity
 from zerg.qa.omp_helm_lifecycle import _runtime_control_identity_is_complete
+from zerg.qa.omp_helm_lifecycle import _runtime_convergence
+from zerg.qa.omp_helm_lifecycle import _runtime_events_snapshot
+from zerg.qa.omp_helm_lifecycle import _served_control_identity
 from zerg.qa.omp_helm_lifecycle import _served_projection_evidence
+from zerg.qa.omp_helm_lifecycle import _wait_cleanup_receipt
+from zerg.qa.omp_helm_lifecycle import _wait_native_marker
 from zerg.qa.omp_helm_lifecycle import _wait_runtime_control_identity
+from zerg.qa.omp_helm_lifecycle import _wait_served_run_retirement
 from zerg.qa.omp_helm_lifecycle import omp_helm_lifecycle_assertions
 from zerg.qa.provider_console_lifecycle import _omp_continuation_prompt
 from zerg.qa.provider_qualification import _PROFILES
@@ -1146,6 +1149,150 @@ def test_omp_runtime_convergence_does_not_prove_an_incomplete_events_page() -> N
         )["complete"]
         is True
     )
+    assert (
+        _events_page_metadata(
+            {
+                "events": [{"id": "event-1"}, {"id": "event-2"}],
+                "total": 6,
+                "generation_id": "generation-1",
+                "branch_mode": "head",
+                "has_more": False,
+                "next_cursor": None,
+            }
+        )["complete"]
+        is True
+    )
+
+
+def test_omp_runtime_events_snapshot_exhausts_pages_under_one_generation(monkeypatch) -> None:
+    pages = iter(
+        [
+            {
+                "session_id": "session-1",
+                "events": [{"id": "event-1"}],
+                "total": 2,
+                "generation_id": "generation-1",
+                "branch_mode": "head",
+                "has_more": True,
+                "next_cursor": "cursor/2",
+            },
+            {
+                "session_id": "session-1",
+                "events": [{"id": "event-2"}],
+                "total": 2,
+                "generation_id": "generation-1",
+                "branch_mode": "head",
+                "has_more": False,
+                "next_cursor": None,
+            },
+        ]
+    )
+    requests: list[str] = []
+
+    def runtime_get(_api_url: str, _token: str, path: str) -> dict[str, object]:
+        requests.append(path)
+        return next(pages)
+
+    monkeypatch.setattr(omp_helm_lifecycle, "_runtime_get", runtime_get)
+
+    snapshot = _runtime_events_snapshot("https://runtime.example", "token", "session-1")
+
+    assert [event["id"] for event in snapshot["events"]] == ["event-1", "event-2"]
+    assert snapshot["pagination"] == {
+        "pages_read": 2,
+        "exhausted": True,
+        "generation_id": "generation-1",
+    }
+    assert "cursor=cursor%2F2" in requests[1]
+
+
+def test_omp_runtime_events_snapshot_rejects_generation_change(monkeypatch) -> None:
+    pages = iter(
+        [
+            {
+                "session_id": "session-1",
+                "events": [],
+                "total": 0,
+                "generation_id": "generation-1",
+                "branch_mode": "head",
+                "has_more": True,
+                "next_cursor": "cursor-2",
+            },
+            {
+                "session_id": "session-1",
+                "events": [],
+                "total": 0,
+                "generation_id": "generation-2",
+                "branch_mode": "head",
+                "has_more": False,
+                "next_cursor": None,
+            },
+        ]
+    )
+    monkeypatch.setattr(omp_helm_lifecycle, "_runtime_get", lambda *_args: next(pages))
+
+    with pytest.raises(RuntimeError, match="changed the events generation"):
+        _runtime_events_snapshot("https://runtime.example", "token", "session-1")
+
+
+def test_omp_wait_native_marker_ignores_tool_arguments(monkeypatch, tmp_path) -> None:
+    marker = "OMP_MARKER"
+    session_file = tmp_path / "session.jsonl"
+    session_file.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "message",
+                        "id": "tool-argument",
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"type": "toolCall", "arguments": {"command": f"echo {marker}"}}],
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "message",
+                        "id": "assistant-text",
+                        "message": {"role": "assistant", "content": [{"type": "text", "text": marker}]},
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(omp_helm_lifecycle, "_wait", lambda observe, **_kwargs: observe())
+
+    row = _wait_native_marker(session_file, marker)
+
+    assert row["id"] == "assistant-text"
+
+
+def test_omp_wait_served_run_retirement_waits_for_terminal_fact(monkeypatch) -> None:
+    observations = iter(
+        [
+            {"retired": False, "active_run_count": None},
+            {"retired": True, "session_id": "session-1", "active_run_count": 0},
+        ]
+    )
+    monkeypatch.setattr(
+        omp_helm_lifecycle.lifecycle,
+        "_served_run_inventory_evidence",
+        lambda *_args: next(observations),
+    )
+
+    result = _wait_served_run_retirement(
+        "https://runtime.example",
+        "token",
+        "session-1",
+        [{"session_id": "session-1", "run_id": "run-1", "state": "terminal"}],
+        timeout=1,
+    )
+
+    assert result["retired"] is True
+    assert result["retirement_wait_status"] == "pass"
 
 
 def test_omp_runtime_convergence_retains_unproven_page_metadata(monkeypatch) -> None:
@@ -1243,7 +1390,6 @@ def test_omp_cleanup_retains_generation_owner_birth_and_dead_evidence(monkeypatc
     )
 
 
-
 def test_omp_cleanup_waits_for_async_owner_exit(monkeypatch) -> None:
     records = [{"label": "provider", "pid": 101, "process_group_id": 201, "birth_matches": True}]
     receipts = iter(
@@ -1256,6 +1402,7 @@ def test_omp_cleanup_waits_for_async_owner_exit(monkeypatch) -> None:
     monkeypatch.setattr(omp_helm_lifecycle.time, "sleep", lambda _seconds: None)
 
     assert _wait_cleanup_receipt(records, timeout=1) == {"status": "pass", "birth_identities_verified": True}
+
 
 def test_omp_keeps_isolation_when_complete_source_retention_fails(tmp_path) -> None:
     isolation = tmp_path / "isolation"
@@ -1414,6 +1561,9 @@ def test_omp_helm_assertions_do_not_use_agent_settled_as_completion() -> None:
 
     assert set(omp_helm_lifecycle_assertions(observation)) == set(HELM_ASSERTIONS)
     assert all(omp_helm_lifecycle_assertions(observation).values())
+    observation["cold_resume_evidence"]["context_marker_count"] = 2
+    assert omp_helm_lifecycle_assertions(observation)["omp_helm_cold_resume_exact_file"] is False
+    observation["cold_resume_evidence"]["context_marker_count"] = 1
     cold_owner = list(observation["runtime_control_identity"]["cold_resume"]["owner_identity"])
     observation["runtime_control_identity"]["final"] = _identity_receipt(
         "connection:resume:lease-4",

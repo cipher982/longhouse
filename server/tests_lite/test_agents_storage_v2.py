@@ -537,6 +537,7 @@ async def test_storage_v2_claude_tail_stops_after_requested_head_window_without_
 
     assert render_pool.reads == 10
     assert [event["event_id"] for event in page["events"]] == [f"event-{position}" for position in range(111, 121)]
+    assert page["branch_mode"] == "head"
     assert page["has_more"] is True
     assert "read_admission" in (timing.header_value() or "")
     assert "semantic_recover" in (timing.header_value() or "")
