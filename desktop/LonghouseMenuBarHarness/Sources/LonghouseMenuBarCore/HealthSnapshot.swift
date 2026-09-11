@@ -161,7 +161,15 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         let pulseAge = pulse
             .flatMap(Self.parseISO8601)
             .map { max(0, Int(Date().timeIntervalSince($0))) }
-        let projectedTransport = projectingLocalTransport(from: payload?.shippingProgress)
+        let progressIsCurrent = pulseAge.map { $0 <= 120 } ?? true
+        let projectedTransport = progressIsCurrent
+            ? projectingLocalTransport(
+                from: payload?.shippingProgress,
+                offline: payload?.isOffline == true
+                    || reasons.contains("reported_offline")
+                    || reasons.contains("engine_offline")
+            )
+            : (reasons, suggestedActions, suggestedActionIds, transport)
         let updatedEngine = EngineStatusSnapshot(
             path: engineStatus?.path,
             exists: true,
@@ -170,16 +178,77 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             payload: payload,
             error: nil
         )
+        let hasDefinitiveAction = suggestedActionIds?.contains("free_disk_space") == true
+            || suggestedActionIds?.contains("repair_machine") == true
+        let projectedOnlyStall = projectedTransport.transport?.statusReason == "ship_stalled"
+            && projectedTransport.reasons == ["ship_stalled"]
+            && !hasDefinitiveAction
+        let projectedRecovery = progressIsCurrent
+            && !projectedTransport.reasons.contains("ship_stalled")
+            && reasons.contains("ship_stalled")
+            && projectedTransport.reasons.isEmpty
+            && !hasDefinitiveAction
+        let projectedHealthState: String
+        let projectedSeverity: String
+        let projectedHeadline: String
+        let projectedAttention: AttentionSnapshot?
+        if projectedOnlyStall && parsedSeverity != .red {
+            let projectedSnapshot = HealthSnapshot(
+                schemaVersion: schemaVersion,
+                collectedAt: collectedAt,
+                healthState: "degraded",
+                severity: "yellow",
+                headline: headline,
+                reasons: projectedTransport.reasons,
+                suggestedActions: projectedTransport.suggestedActions,
+                suggestedActionIds: projectedTransport.suggestedActionIds,
+                attention: attention,
+                service: service,
+                engineStatus: updatedEngine,
+                outbox: outbox,
+                activitySummary: activitySummary,
+                managedSummary: managedSummary,
+                managedSessions: managedSessions,
+                realtime: realtime,
+                transport: projectedTransport.transport,
+                unmanagedProcesses: unmanagedProcesses,
+                orphanBridges: orphanBridges,
+                launchReadiness: launchReadiness,
+                build: build,
+                updateInfo: updateInfo
+            )
+            let presentation = projectedSnapshot.menuBarPresentation(relativeTo: Date())
+            projectedHealthState = "degraded"
+            projectedSeverity = "yellow"
+            projectedHeadline = presentation.headline
+            projectedAttention = AttentionSnapshot(
+                state: "needs_attention",
+                headline: presentation.headline,
+                summary: projectedTransport.transport?.statusSummary,
+                reasons: projectedTransport.reasons,
+                suggestedActions: projectedTransport.suggestedActions
+            )
+        } else if projectedRecovery {
+            projectedHealthState = "healthy"
+            projectedSeverity = "green"
+            projectedHeadline = "Longhouse native health is healthy"
+            projectedAttention = nil
+        } else {
+            projectedHealthState = healthState
+            projectedSeverity = severity
+            projectedHeadline = headline
+            projectedAttention = attention
+        }
         return HealthSnapshot(
             schemaVersion: schemaVersion,
             collectedAt: collectedAt,
-            healthState: healthState,
-            severity: severity,
-            headline: headline,
+            healthState: projectedHealthState,
+            severity: projectedSeverity,
+            headline: projectedHeadline,
             reasons: projectedTransport.reasons,
             suggestedActions: projectedTransport.suggestedActions,
             suggestedActionIds: projectedTransport.suggestedActionIds,
-            attention: attention,
+            attention: projectedAttention,
             service: service,
             engineStatus: updatedEngine,
             outbox: outbox,
@@ -202,7 +271,8 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     /// must nevertheless update the reason/action/transport fields together so
     /// a local file change cannot show a stalled row beside a healthy headline.
     private func projectingLocalTransport(
-        from progress: ShippingProgressSnapshot?
+        from progress: ShippingProgressSnapshot?,
+        offline: Bool
     ) -> (
         reasons: [String],
         suggestedActions: [String],
@@ -231,6 +301,11 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             || transport?.statusReason == "healthy"
             || transport?.statusReason == "ship_stalled"
             || transport?.statusReason == "transport_unavailable"
+
+        if offline {
+            projectedActions.removeAll { $0 == localAction }
+            return (projectedReasons, projectedActions, projectedActionIds, projectedTransport)
+        }
 
         if pendingWork && stalled {
             projectedReasons.append("ship_stalled")

@@ -479,6 +479,12 @@ public struct MenuBarPanelView: View {
         if snapshot.isInstallLocationBlocked {
             return "Move Longhouse.app to /Applications, then reopen it."
         }
+        if snapshot.suggestedActionIds?.contains("free_disk_space") == true {
+            return "Free local disk space before continuing to rely on durable shipping."
+        }
+        if snapshot.suggestedActionIds?.contains("repair_machine") == true {
+            return "Repair the configured Longhouse machine without opening Terminal."
+        }
         if snapshot.suggestedActionIds?.contains("inspect_transport") == true {
             return "Local upload progress needs inspection. Open Logs to review the transport evidence; local source data remains retained."
         }
@@ -910,7 +916,9 @@ public struct MenuBarPanelView: View {
                         Label("Inspect local health", systemImage: "stethoscope")
                             .frame(maxWidth: .infinity)
                     }
-                } else if snapshot.suggestedActionIds?.contains("inspect_transport") == true {
+                } else if snapshot.suggestedActionIds?.contains("inspect_transport") == true,
+                          snapshot.suggestedActionIds?.contains("free_disk_space") != true,
+                          snapshot.suggestedActionIds?.contains("repair_machine") != true {
                     Button {
                         perform(.openLogs)
                     } label: {

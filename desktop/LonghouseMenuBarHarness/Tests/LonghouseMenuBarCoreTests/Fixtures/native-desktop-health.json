@@ -9,6 +9,8 @@
     "payload": {
       "daemon_pid": 4242,
       "last_updated": "2026-08-03T16:00:00Z",
+      "spool_dead_count": 0,
+      "spool_pending_count": 0,
       "local_projection": {
         "generated_at": "2026-08-03T16:00:00Z",
         "engine_pulse_at": "2026-08-03T16:00:00Z"

@@ -133,8 +133,8 @@ struct NativeTransportStatus {
 
 #[derive(Debug, Clone, Serialize)]
 struct NativeSpoolStatus {
-    pending_count: u64,
-    dead_count: u64,
+    pending_count: Option<u64>,
+    dead_count: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1314,12 +1314,10 @@ fn native_health_from_parts(
         .and_then(Value::as_bool);
     let pending_count = object
         .and_then(|value| value.get("spool_pending_count"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
+        .and_then(Value::as_u64);
     let dead_count = object
         .and_then(|value| value.get("spool_dead_count"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
+        .and_then(Value::as_u64);
     let storage_outbox_value = object.and_then(|value| value.get("storage_v2_outbox"));
     let storage_outbox = storage_outbox_value.and_then(Value::as_object);
     let storage_counter_is_invalid = |key: &str| {
@@ -1477,7 +1475,7 @@ fn native_health_from_parts(
     if is_offline == Some(true) {
         reasons.push("engine_offline".to_string());
     }
-    if dead_count > 0 {
+    if dead_count.is_some_and(|count| count > 0) {
         reasons.push("spool_dead_letters".to_string());
     }
     if archive_dead_lettered {
@@ -1507,7 +1505,9 @@ fn native_health_from_parts(
     if managed_launch_recovery.scan_error {
         reasons.push("managed_launch_recovery_unreadable".to_string());
     }
-    if transport.status_reason != "healthy" && !reasons.contains(&transport.status_reason) {
+    if reasons.is_empty() && transport.status_reason != "healthy" {
+        // Specific local prerequisites and retained-evidence faults own the
+        // primary action; transport uncertainty is the fallback explanation.
         reasons.push(transport.status_reason.clone());
     }
 
@@ -4237,7 +4237,9 @@ fn native_transport_status(
         .get("is_offline")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let spool_dead = get_u64(object, "spool_dead_count");
+    let spool_pending = get_required_u64(object, "spool_pending_count");
+    let spool_dead = get_required_u64(object, "spool_dead_count");
+    let spool_counters_unknown = spool_pending.is_none() || spool_dead.is_none();
     let parse_errors = get_u64(object, "parse_error_count_1h");
     let payload_rejections = get_u64(object, "ship_payload_rejections_1h");
     let payload_too_large = get_u64(object, "ship_payload_too_large_1h");
@@ -4287,11 +4289,14 @@ fn native_transport_status(
         )
     } else if is_offline {
         transport_status("offline", "reported_offline", "Engine reported offline.")
-    } else if spool_dead > 0 {
+    } else if spool_dead.is_some_and(|count| count > 0) {
         transport_status(
             "degraded",
             "spool_dead",
-            &format!("{spool_dead} dead-letter archive range(s) need attention."),
+            &format!(
+                "{} dead-letter archive range(s) need attention.",
+                spool_dead.unwrap_or(0)
+            ),
         )
     } else if parse_errors > 0 {
         transport_status(
@@ -4355,11 +4360,17 @@ fn native_transport_status(
             .and_then(rfc3339_age_seconds)
             .is_none_or(|age| age >= ENGINE_STALE_SECONDS)
     }) || (object.get("shipping_progress").is_none()
-        && get_u64(object, "spool_pending_count") > 0)
+        && spool_pending.is_some_and(|count| count > 0))
     {
         transport_status(
             "unknown", "transport_unavailable",
             "Pending upload progress is unavailable; historical receipts cannot prove current health.",
+        )
+    } else if spool_counters_unknown {
+        transport_status(
+            "unknown",
+            "transport_unavailable",
+            "Required spool counters are unavailable; current shipping health cannot be proven.",
         )
     } else {
         transport_status("healthy", "healthy", "Shipping healthy.")
@@ -4497,6 +4508,10 @@ fn get_u64(object: &serde_json::Map<String, Value>, key: &str) -> u64 {
     object.get(key).and_then(Value::as_u64).unwrap_or(0)
 }
 
+fn get_required_u64(object: &serde_json::Map<String, Value>, key: &str) -> Option<u64> {
+    object.get(key).and_then(Value::as_u64)
+}
+
 fn age_seconds_since(modified: SystemTime) -> u64 {
     SystemTime::now()
         .duration_since(modified)
@@ -4531,8 +4546,22 @@ fn print_native_local_health(health: &NativeLocalHealth) {
         println!("  database bytes: {bytes}");
     }
     println!("Spool");
-    println!("  pending: {}", health.spool.pending_count);
-    println!("  dead: {}", health.spool.dead_count);
+    println!(
+        "  pending: {}",
+        health
+            .spool
+            .pending_count
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    );
+    println!(
+        "  dead: {}",
+        health
+            .spool
+            .dead_count
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    );
     println!("Transport");
     println!("  status: {}", health.transport.status);
     println!("  summary: {}", health.transport.status_summary);
@@ -5095,6 +5124,8 @@ mod tests {
             "version": "0.1.33",
             "daemon_pid": 4242,
             "last_updated": "2026-08-03T16:00:00Z",
+            "spool_pending_count": 0,
+            "spool_dead_count": 0,
             "ship_attempts_10m": 0,
             "sessions": [{
                 "session_id": "00000000-0000-4000-8000-000000000001",
@@ -5287,6 +5318,7 @@ mod tests {
                 "last_updated": "2026-06-29T00:00:00Z",
                 "daemon_pid": 1234,
                 "spool_pending_count": 0,
+                "spool_dead_count": 0,
                 "ship_attempts_10m": 0,
                 "is_offline": false,
                 "managed_sessions": [{"session_id": "s1"}],
@@ -5302,7 +5334,7 @@ mod tests {
         assert_eq!(health.transport.status, "healthy");
         assert!(health.engine_status.fresh);
         assert_eq!(health.managed_sessions.count, 1);
-        assert_eq!(health.spool.pending_count, 0);
+        assert_eq!(health.spool.pending_count, Some(0));
         assert_eq!(
             health
                 .control_channel
@@ -5648,6 +5680,38 @@ mod tests {
         assert_eq!(
             native_transport_status(payload.as_object()).status,
             "healthy"
+        );
+    }
+
+    #[test]
+    fn native_transport_keeps_missing_or_malformed_spool_counters_unknown() {
+        let observed_at = chrono::Utc::now().to_rfc3339();
+        let mut payload = json!({
+            "ship_attempts_10m": 0,
+            "shipping_progress": {
+                "pending_work": false,
+                "stalled": false,
+                "seconds_without_progress": 0,
+                "observed_at": observed_at
+            },
+            "spool_pending_count": 0
+        });
+
+        assert_eq!(
+            native_transport_status(payload.as_object()).status_reason,
+            "transport_unavailable"
+        );
+
+        payload["spool_dead_count"] = json!(0);
+        assert_eq!(
+            native_transport_status(payload.as_object()).status_reason,
+            "healthy"
+        );
+
+        payload["spool_dead_count"] = json!("not-a-counter");
+        assert_eq!(
+            native_transport_status(payload.as_object()).status_reason,
+            "transport_unavailable"
         );
     }
 

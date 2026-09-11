@@ -37,6 +37,13 @@ def _normalize_int(value: Any) -> int:
         return 0
 
 
+def _normalize_required_int(value: Any) -> tuple[int, bool]:
+    """Keep required counters distinguishable from an observed zero."""
+    if value is None or isinstance(value, bool) or not isinstance(value, int):
+        return 0, False
+    return (value, True) if value >= 0 else (0, False)
+
+
 def _normalize_optional_datetime(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         return value
@@ -126,9 +133,11 @@ def transport_health_sample_from_heartbeat(row: AgentHeartbeat) -> TransportHeal
     raw = _heartbeat_raw_json(row)
     last_ship_http_status = getattr(row, "last_ship_http_status", None) or raw.get("last_ship_http_status")
     progress = _shipping_progress_from_payload(raw)
+    spool_pending, pending_valid = _normalize_required_int(getattr(row, "spool_pending", None))
+    spool_dead, dead_valid = _normalize_required_int(getattr(row, "spool_dead", None))
     return TransportHealthSample(
-        spool_pending=_normalize_int(getattr(row, "spool_pending", 0)),
-        spool_dead=_normalize_int(getattr(row, "spool_dead", 0)),
+        spool_pending=spool_pending,
+        spool_dead=spool_dead,
         parse_errors_1h=_normalize_int(getattr(row, "parse_errors_1h", 0)),
         ship_attempts_1h=_normalize_int(getattr(row, "ship_attempts_1h", 0)),
         ship_successes_1h=_normalize_int(getattr(row, "ship_successes_1h", 0)),
@@ -156,18 +165,21 @@ def transport_health_sample_from_heartbeat(row: AgentHeartbeat) -> TransportHeal
         shipping_progress_seconds_without_progress=progress[2],
         shipping_progress_observed_at=progress[3],
         shipping_progress_valid=progress[4],
+        evidence_available=pending_valid and dead_valid,
     )
 
 
 def transport_health_sample_from_engine_status_payload(payload: Mapping[str, Any] | None) -> TransportHealthSample:
     raw_payload = payload if isinstance(payload, Mapping) else {}
     progress = _shipping_progress_from_payload(raw_payload)
+    spool_pending, pending_valid = _normalize_required_int(raw_payload.get("spool_pending_count"))
+    spool_dead, dead_valid = _normalize_required_int(raw_payload.get("spool_dead_count"))
     evidence_available = any(
         key in raw_payload for key in ("ship_attempts_1h", "ship_attempts_10m", "last_ship_result", "shipping_progress")
     )
     return TransportHealthSample(
-        spool_pending=_normalize_int(raw_payload.get("spool_pending_count")),
-        spool_dead=_normalize_int(raw_payload.get("spool_dead_count")),
+        spool_pending=spool_pending,
+        spool_dead=spool_dead,
         parse_errors_1h=_normalize_int(raw_payload.get("parse_error_count_1h")),
         last_ship_at=_normalize_optional_datetime(raw_payload.get("last_ship_at")),
         ship_attempts_1h=_normalize_int(raw_payload.get("ship_attempts_1h")),
@@ -189,7 +201,7 @@ def transport_health_sample_from_engine_status_payload(payload: Mapping[str, Any
         last_ship_error_kind=_normalize_optional_str(raw_payload.get("last_ship_error_kind")),
         last_ship_error_message=_normalize_optional_str(raw_payload.get("last_ship_error_message")),
         is_offline=bool(raw_payload.get("is_offline", False)),
-        evidence_available=evidence_available,
+        evidence_available=evidence_available and pending_valid and dead_valid,
         shipping_progress_pending=progress[0],
         shipping_progress_stalled=progress[1],
         shipping_progress_seconds_without_progress=progress[2],
@@ -234,13 +246,6 @@ def _humanize_age(seconds: float) -> str:
 
 
 def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAssessment:
-    if not sample.evidence_available:
-        return TransportHealthAssessment(
-            status="unknown",
-            status_reason="transport_unavailable",
-            status_summary="Shipping transport evidence unavailable.",
-            reasons=("transport_unavailable",),
-        )
     shipping_progress_unknown = (not sample.shipping_progress_valid or _shipping_progress_is_stale(sample)) and not sample.is_offline
     # The daemon owns the monotonic pending-work observation. A retained wall
     # clock is historical evidence only and must never turn an idle machine red.
@@ -279,8 +284,6 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
     reasons: list[str] = []
     if sample.is_offline:
         reasons.append("reported_offline")
-    if shipping_progress_unknown:
-        reasons.append("transport_unavailable")
     if sample.spool_dead > 0:
         reasons.append("spool_dead")
     if sample.ship_payload_rejections_1h > 0:
@@ -299,6 +302,11 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
         reasons.append("rate_limited")
     if retryable_client_error_burst:
         reasons.append("retryable_client_errors")
+    evidence_unavailable = not sample.is_offline and (shipping_progress_unknown or not sample.evidence_available)
+    if evidence_unavailable and not reasons:
+        # A definitive current fault already supplies the supported action;
+        # expose generic uncertainty only when no stronger reason exists.
+        reasons.append("transport_unavailable")
     if sample.ship_payload_rejections_1h > 0:
         status = "broken"
         status_reason = "payload_rejected"
@@ -353,7 +361,7 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
             retryable_summary,
             sample,
         )
-    elif shipping_progress_unknown:
+    elif evidence_unavailable:
         status = "unknown"
         status_reason = "transport_unavailable"
         status_summary = "Shipping progress evidence unavailable."

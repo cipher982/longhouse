@@ -2014,6 +2014,9 @@ struct LonghouseMenuBarCoreTests {
         #expect(stalled.reasons.contains("ship_stalled"))
         #expect(stalled.suggestedActionIds == ["inspect_transport"])
         #expect(stalled.transport?.status == "degraded")
+        #expect(stalled.healthState == "degraded")
+        #expect(stalled.severity == "yellow")
+        #expect(stalled.attention?.state == "needs_attention")
         #expect(stalled.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0)).headline == "Local upload needs attention")
         #expect(stalled.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0)).facts.first(where: { $0.id == "durable-upload" })?.value == "Stalled")
 
@@ -2036,7 +2039,74 @@ struct LonghouseMenuBarCoreTests {
         #expect(recovered.reasons.contains("ship_stalled") == false)
         #expect(recovered.suggestedActionIds == [])
         #expect(recovered.transport?.status == "healthy")
+        #expect(recovered.healthState == "healthy")
+        #expect(recovered.severity == "green")
+        #expect(recovered.headline == "Longhouse native health is healthy")
+        #expect(recovered.attention == nil)
         #expect(recovered.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0)).promotion == .normal)
+    }
+
+    @Test
+    func localProjectionDoesNotInferStallFromOfflineOrStaleFacts() {
+        let offline = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-08-03T16:00:00Z",
+            healthState: "degraded",
+            severity: "yellow",
+            headline: "Longhouse is retrying while offline",
+            reasons: ["reported_offline"],
+            suggestedActions: ["Verify network reachability"],
+            suggestedActionIds: ["inspect_transport"],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+        let offlineProjection = offline.applyingLocalProjection(
+            LocalStatusMonitor.Projection(
+                sessions: [],
+                engine: EngineStatusPayload(
+                    version: "test", daemonPid: 1, lastShipAt: nil,
+                    spoolPendingCount: 1, spoolDeadCount: 0,
+                    parseErrorCount1H: 0, diskFreeBytes: nil, isOffline: true,
+                    shippingProgress: ShippingProgressSnapshot(
+                        pendingWork: true, stalled: true,
+                        secondsWithoutProgress: 90, observedAt: "2026-08-03T16:00:00Z"
+                    ),
+                    recentDeadLetters: [], lastUpdated: nil
+                )
+            )
+        )
+        #expect(offlineProjection.reasons.contains("ship_stalled") == false)
+        #expect(offlineProjection.suggestedActionIds == ["inspect_transport"])
+        #expect(offlineProjection.healthState == "degraded")
+
+        let healthy = presentationSnapshot(sessions: [])
+        let stale = healthy.applyingLocalProjection(
+            LocalStatusMonitor.Projection(
+                sessions: [],
+                engine: EngineStatusPayload(
+                    version: "test", daemonPid: 1, lastShipAt: nil,
+                    spoolPendingCount: 1, spoolDeadCount: 0,
+                    parseErrorCount1H: 0, diskFreeBytes: nil, isOffline: false,
+                    localProjection: LocalProjectionStatus(
+                        version: 1,
+                        generatedAt: "2026-01-01T00:00:00Z",
+                        enginePulseAt: "2026-01-01T00:00:00Z",
+                        lastReconciledAt: nil,
+                        reconciliation: nil
+                    ),
+                    shippingProgress: ShippingProgressSnapshot(
+                        pendingWork: true, stalled: true,
+                        secondsWithoutProgress: 90, observedAt: "2026-01-01T00:00:00Z"
+                    ),
+                    recentDeadLetters: [], lastUpdated: nil
+                )
+            )
+        )
+        #expect(stale.reasons.contains("ship_stalled") == false)
+        #expect(stale.healthState == "healthy")
     }
 
 

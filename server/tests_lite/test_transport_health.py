@@ -88,6 +88,30 @@ def test_transport_health_marks_missing_engine_transport_evidence_unknown():
     assert assessment.reasons == ("transport_unavailable",)
 
 
+def test_transport_health_does_not_treat_missing_or_malformed_spool_counts_as_zero():
+    payload = {
+        "ship_attempts_10m": 0,
+        "spool_pending_count": 0,
+        "shipping_progress": _healthy_shipping_progress(),
+    }
+
+    missing = assess_transport_health(transport_health_sample_from_engine_status_payload(payload))
+    assert missing.status == "unknown"
+    assert missing.status_reason == "transport_unavailable"
+    assert missing.reasons == ("transport_unavailable",)
+
+    payload["spool_dead_count"] = 0
+    explicit_zero = assess_transport_health(transport_health_sample_from_engine_status_payload(payload))
+    assert explicit_zero.status == "healthy"
+    assert explicit_zero.status_reason == "healthy"
+    assert explicit_zero.reasons == ()
+
+    payload["spool_pending_count"] = "not-a-counter"
+    malformed = assess_transport_health(transport_health_sample_from_engine_status_payload(payload))
+    assert malformed.status == "unknown"
+    assert malformed.status_reason == "transport_unavailable"
+
+
 def test_transport_health_fails_unknown_shipping_progress_closed():
     sample = transport_health_sample_from_engine_status_payload(
         {
@@ -354,6 +378,22 @@ def test_transport_health_treats_dead_archive_ranges_as_degraded_attention():
     assert assessment.reasons == ("spool_dead",)
 
 
+def test_transport_health_keeps_unknown_transport_after_definitive_dead_letters():
+    sample = transport_health_sample_from_engine_status_payload(
+        {
+            "ship_attempts_10m": 0,
+            "spool_pending_count": 0,
+            "spool_dead_count": 2,
+        }
+    )
+
+    assessment = assess_transport_health(sample)
+
+    assert assessment.status == "degraded"
+    assert assessment.status_reason == "spool_dead"
+    assert assessment.reasons == ("spool_dead",)
+
+
 def test_transport_health_keeps_payload_rejection_broken_above_dead_ranges():
     sample = transport_health_sample_from_engine_status_payload(
         {
@@ -385,6 +425,8 @@ def test_transport_health_surfaces_last_transport_error_detail():
         "last_ship_error_kind": "timeout",
         "last_ship_error_message": "request timed out after 60s",
         "shipping_progress": _healthy_shipping_progress(),
+        "spool_pending_count": 0,
+        "spool_dead_count": 0,
     }
     row = AgentHeartbeat(
         device_id="cinder",
@@ -392,6 +434,8 @@ def test_transport_health_surfaces_last_transport_error_detail():
         ship_successes_1h=18,
         ship_connect_errors_1h=2,
         last_ship_result="connect_error",
+        spool_pending=0,
+        spool_dead=0,
         raw_json=json.dumps(payload),
     )
 
@@ -425,6 +469,8 @@ def test_pending_stalled_progress_is_degraded_not_healthy():
             "last_ship_result": "ok",
             "ship_attempts_1h": 41,
             "ship_successes_1h": 41,
+            "spool_pending_count": 1,
+            "spool_dead_count": 0,
             "shipping_progress": {
                 "pending_work": True,
                 "stalled": True,
@@ -456,6 +502,8 @@ def test_a_recent_ship_and_an_unknown_ship_time_both_stay_healthy():
     base = transport_health_sample_from_engine_status_payload(
         {
             "last_ship_result": "ok",
+            "spool_pending_count": 0,
+            "spool_dead_count": 0,
             "shipping_progress": {
                 "pending_work": False,
                 "stalled": False,
@@ -481,7 +529,9 @@ def test_an_offline_machine_is_described_by_being_offline():
     from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc)
-    sample = transport_health_sample_from_engine_status_payload({"is_offline": True})
+    sample = transport_health_sample_from_engine_status_payload(
+        {"is_offline": True, "spool_pending_count": 0, "spool_dead_count": 0}
+    )
     offline = replace(sample, is_offline=True, last_ship_at=now - timedelta(hours=33), observed_at=now)
 
     assert "ship_stalled" not in assess_transport_health(offline).reasons
