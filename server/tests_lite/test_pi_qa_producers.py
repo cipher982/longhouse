@@ -277,7 +277,6 @@ def test_pi_native_tool_receipt_rejects_missing_or_mismatched_native_pair(tmp_pa
     assert "native_tool_call_result_pair_missing" in receipt["failure_reasons"]
 
 
-
 def test_pi_native_tool_receipt_rejects_native_projected_id_collision(tmp_path) -> None:
     native_source = tmp_path / "native.jsonl"
     _write_native_tool_session(native_source, assistant_final_id="event-1")
@@ -287,6 +286,7 @@ def test_pi_native_tool_receipt_rejects_native_projected_id_collision(tmp_path) 
     assert receipt["status"] == "fail"
     assert "native_projected_assistant_id_collision" in receipt["failure_reasons"]
     assert receipt["linkage"]["native_projected_assistant_linkage"] is False
+
 
 def test_pi_console_contract_revision_advances_with_native_receipt() -> None:
     registration = PI_CONSOLE_REGISTRATION.to_dict()
