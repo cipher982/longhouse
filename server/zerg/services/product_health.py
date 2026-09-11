@@ -438,23 +438,31 @@ def _build_machine_connected_summary(
 
     healthy = sum(1 for machine in machines if machine.status == "healthy")
     broken = sum(1 for machine in machines if machine.status == "broken")
+    unknown = sum(1 for machine in machines if machine.status == "unknown")
     unhealthy = total - healthy
-    if healthy == total:
+    if unknown == total:
+        verdict = "unknown"
+        headline = f"Transport health is unknown for all {total} recent machine{'' if total == 1 else 's'}."
+        coverage = "partial"
+    elif healthy == total:
         verdict = "ok"
         headline = _machine_connected_headline(total=total, healthy=healthy, unhealthy=0)
+        coverage = "full"
     elif healthy == 0 and broken == total:
         verdict = "failing"
         headline = f"All {total} recent machine connection{'' if total == 1 else 's'} are broken."
+        coverage = "full"
     else:
         # Product-level health should flag partial machine impact without
         # declaring the whole runtime unusable while at least one machine is healthy.
         verdict = "degraded"
         headline = _machine_connected_headline(total=total, healthy=healthy, unhealthy=unhealthy)
+        coverage = "partial" if unknown else "full"
 
     return ProductHealthCheckSummaryResponse(
         check=MACHINE_CONNECTED_CHECK_ID,
         verdict=verdict,
-        coverage="full",
+        coverage=coverage,
         window=window.label,
         generated_at=generated_at,
         headline=headline,

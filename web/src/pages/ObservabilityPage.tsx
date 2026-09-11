@@ -337,6 +337,7 @@ function buildDiagnosisCards(
   const cards: DiagnosisCardData[] = [];
   const blockedMachines = data.machine_counts.broken + data.machine_counts.offline;
   const degradedMachines = data.machine_counts.degraded;
+  const unknownMachines = data.machine_counts.unknown;
   const unhealthyMachine = data.machines.find((machine) => machine.status !== "healthy");
   const slowProviders = [...data.providers]
     .filter((provider) => provider.completed_turns > 0)
@@ -350,12 +351,14 @@ function buildDiagnosisCards(
   const totalP95 = data.summary.total_turn_time_ms.p95 ?? null;
   const submitToSendP95 = data.summary.submit_to_send_ms.p95 ?? null;
 
-  if (blockedMachines > 0 || degradedMachines > 0) {
-    const machineCount = blockedMachines > 0 ? blockedMachines : degradedMachines;
+  if (blockedMachines > 0 || degradedMachines > 0 || unknownMachines > 0) {
+    const machineCount = blockedMachines > 0 ? blockedMachines : degradedMachines > 0 ? degradedMachines : unknownMachines;
     const machineLabel =
       blockedMachines > 0
         ? `${machineCount} machine${machineCount === 1 ? "" : "s"} blocked or offline`
-        : `${machineCount} machine${machineCount === 1 ? "" : "s"} degraded`;
+        : degradedMachines > 0
+          ? `${machineCount} machine${machineCount === 1 ? "" : "s"} degraded`
+          : `${machineCount} machine${machineCount === 1 ? "" : "s"} have unknown transport health`;
 
     cards.push({
       key: "machine",
@@ -830,7 +833,8 @@ export default function ObservabilityPage() {
     );
   }
 
-  const unhealthyMachines = data.machine_counts.broken + data.machine_counts.offline + data.machine_counts.degraded;
+  const unhealthyMachines =
+    data.machine_counts.broken + data.machine_counts.offline + data.machine_counts.degraded + data.machine_counts.unknown;
   const blockedMachines = data.machine_counts.broken + data.machine_counts.offline;
   const visibleSlowTurnRows = data.slow_turns.length;
 

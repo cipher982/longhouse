@@ -273,6 +273,7 @@ _MACHINE_HEALTH_RAW_FIELDS = frozenset(
         "ship_server_errors_10m",
         "ship_retryable_client_errors_10m",
         "ship_connect_errors_10m",
+        "shipping_progress",
     }
 )
 # This JSON string is encoded again inside the RPC response. A 32 KiB inner

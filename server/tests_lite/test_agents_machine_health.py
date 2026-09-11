@@ -245,7 +245,13 @@ def test_machine_health_surfaces_explicit_archive_pause_without_backlog():
                     "pending_bytes": 0,
                     "dead_ranges": 0,
                     "dead_bytes": 0,
-                }
+                },
+                "shipping_progress": {
+                    "pending_work": False,
+                    "stalled": False,
+                    "seconds_without_progress": 0,
+                    "observed_at": pinned_now.isoformat(),
+                },
             }
         ),
     )
@@ -297,7 +303,13 @@ def test_machine_health_prioritizes_dead_letters_over_archive_pause():
                     "pending_bytes": 0,
                     "dead_ranges": 2,
                     "dead_bytes": 4096,
-                }
+                },
+                "shipping_progress": {
+                    "pending_work": False,
+                    "stalled": False,
+                    "seconds_without_progress": 0,
+                    "observed_at": pinned_now.isoformat(),
+                },
             }
         ),
     )
@@ -443,6 +455,17 @@ def _apply_heartbeat(live_catalog, *, owner_id: int, device_id: str, received_at
     heartbeat.update(fields)
     heartbeat["device_id"] = device_id
     heartbeat["received_at"] = received_at.isoformat()
+    raw_payload = json.loads(heartbeat["raw_json"]) if heartbeat["raw_json"] is not None else {}
+    raw_payload.setdefault(
+        "shipping_progress",
+        {
+            "pending_work": False,
+            "stalled": False,
+            "seconds_without_progress": 0,
+            "observed_at": received_at.isoformat(),
+        },
+    )
+    heartbeat["raw_json"] = json.dumps(raw_payload)
     live_catalog.rpc(
         "machine.heartbeat.apply.v2",
         {
@@ -785,6 +808,12 @@ def test_machine_health_route_uses_active_transport_window_from_raw_json(live_ca
                 "ship_successes_10m": 4,
                 "ship_connect_errors_10m": 0,
                 "last_ship_result": "ok",
+                "shipping_progress": {
+                    "pending_work": False,
+                    "stalled": False,
+                    "seconds_without_progress": 0,
+                    "observed_at": (pinned_now - timedelta(minutes=1)).isoformat(),
+                },
             }
         ),
     )

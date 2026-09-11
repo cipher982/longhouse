@@ -12,7 +12,7 @@ from zerg.schemas.history_import import HistoryImportSnapshot
 from zerg.services.session_views import SessionTurnTimingResponse
 from zerg.utils.time import UTCBaseModel
 
-MachineHealthStatus = Literal["healthy", "degraded", "offline", "broken"]
+MachineHealthStatus = Literal["healthy", "degraded", "offline", "broken", "unknown"]
 ProductHealthCheckVerdict = Literal["ok", "degraded", "failing", "unknown"]
 ProductHealthCheckCoverage = Literal["full", "partial", "none"]
 
@@ -143,6 +143,7 @@ class MachineHealthStatusCountsResponse(UTCBaseModel):
     degraded: int = 0
     offline: int = 0
     broken: int = 0
+    unknown: int = 0
 
 
 class ObservabilityOverviewResponse(UTCBaseModel):
