@@ -391,7 +391,8 @@ async def _dispatch_engine_channel(
     }
     live_operation_id = prepared_operation_id
 
-    response = await get_machine_control_channel_registry().send_command(
+    control = get_machine_control_channel_registry()
+    response = await control.send_command(
         owner_id=owner_id,
         device_id=device_id,
         session_id=str(getattr(session, "id")),
@@ -400,17 +401,39 @@ async def _dispatch_engine_channel(
         timeout_secs=timeout_secs,
         command_id=command_id,
     )
+    if not response.transport_ok and response.delivery_certainty == "not_sent":
+        # A send exception is proven to have happened before delivery. Retry
+        # once with the catalog's existing identity; never mint a second
+        # command id for the same user operation. A persistent not-sent result
+        # is terminally recorded instead of waiting for the lease reaper.
+        response = await control.send_command(
+            owner_id=owner_id,
+            device_id=device_id,
+            session_id=str(getattr(session, "id")),
+            command_type=command_type,
+            payload=payload_with_provider,
+            timeout_secs=timeout_secs,
+            command_id=command_id,
+        )
     if not response.transport_ok:
-        # Keep the catalog operation running until the same command identity
-        # is reconciled. The engine may have accepted the frame before the
-        # response was lost; finishing it as failed would discard the durable
-        # reconciliation boundary and make a later retry indistinguishable
-        # from a new provider side effect.
         delivery_certainty = response.delivery_certainty or "ambiguous"
         if delivery_certainty == "not_sent":
             message = response.error or "Machine Agent control command was not sent"
             failure_reason = "not_sent"
+            await _finish_live_managed_control_operation(
+                operation_id=live_operation_id,
+                status="failed",
+                error={
+                    "code": "machine_control_not_sent",
+                    "message": message,
+                },
+            )
         else:
+            # Keep the catalog operation running until the same command
+            # identity is reconciled. The engine may have accepted the frame
+            # before the response was lost; finishing it as failed would
+            # discard the durable reconciliation boundary and make a later
+            # retry indistinguishable from a new provider side effect.
             message = (
                 "Machine Agent control command outcome is indeterminate; it was not replayed: "
                 f"{response.error or 'the control response was lost'}"

@@ -451,7 +451,9 @@ public struct MenuBarPanelView: View {
                 }
             }
 
-            if presentation.promotion == .repair || shouldOfferNativeRepair {
+            if presentation.promotion == .repair
+                || shouldOfferNativeRepair
+                || snapshot.suggestedActionIds?.contains("inspect_transport") == true {
                 sectionDivider.padding(.horizontal, 4)
                 PanelSection(title: "Action required") {
                     Text(repairGuidance)
@@ -476,6 +478,9 @@ public struct MenuBarPanelView: View {
         }
         if snapshot.isInstallLocationBlocked {
             return "Move Longhouse.app to /Applications, then reopen it."
+        }
+        if snapshot.suggestedActionIds?.contains("inspect_transport") == true {
+            return "Local upload progress needs inspection. Open Logs to review the transport evidence; local source data remains retained."
         }
         return "Current local evidence shows a broken product promise. Open Logs for the exact failing fact."
     }
@@ -903,6 +908,13 @@ public struct MenuBarPanelView: View {
                         perform(.runDoctor)
                     } label: {
                         Label("Inspect local health", systemImage: "stethoscope")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if snapshot.suggestedActionIds?.contains("inspect_transport") == true {
+                    Button {
+                        perform(.openLogs)
+                    } label: {
+                        Label("Inspect transport", systemImage: "arrow.triangle.2.circlepath")
                             .frame(maxWidth: .infinity)
                     }
                 } else if snapshot.suggestedActionIds?.contains("free_disk_space") == true {

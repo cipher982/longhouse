@@ -1992,6 +1992,53 @@ struct LonghouseMenuBarCoreTests {
         #expect(drained.collectedAt == "2026-04-08T01:52:00Z")
     }
 
+    @Test
+    func localShippingPulseProjectsStallReasonTransportAndActionTogether() throws {
+        let snapshot = presentationSnapshot(sessions: [])
+        let stalled = snapshot.applyingLocalProjection(
+            LocalStatusMonitor.Projection(
+                sessions: [],
+                engine: EngineStatusPayload(
+                    version: "test", daemonPid: 1, lastShipAt: nil,
+                    spoolPendingCount: 1, spoolDeadCount: 0,
+                    parseErrorCount1H: 0, diskFreeBytes: nil, isOffline: false,
+                    shippingProgress: ShippingProgressSnapshot(
+                        pendingWork: true, stalled: true,
+                        secondsWithoutProgress: 90, observedAt: "2026-08-03T16:00:00Z"
+                    ),
+                    recentDeadLetters: [], lastUpdated: nil
+                )
+            )
+        )
+
+        #expect(stalled.reasons.contains("ship_stalled"))
+        #expect(stalled.suggestedActionIds == ["inspect_transport"])
+        #expect(stalled.transport?.status == "degraded")
+        #expect(stalled.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0)).headline == "Local upload needs attention")
+        #expect(stalled.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0)).facts.first(where: { $0.id == "durable-upload" })?.value == "Stalled")
+
+        let recovered = stalled.applyingLocalProjection(
+            LocalStatusMonitor.Projection(
+                sessions: [],
+                engine: EngineStatusPayload(
+                    version: "test", daemonPid: 1, lastShipAt: nil,
+                    spoolPendingCount: 0, spoolDeadCount: 0,
+                    parseErrorCount1H: 0, diskFreeBytes: nil, isOffline: false,
+                    shippingProgress: ShippingProgressSnapshot(
+                        pendingWork: false, stalled: false,
+                        secondsWithoutProgress: 0, observedAt: "2026-08-03T16:01:00Z"
+                    ),
+                    recentDeadLetters: [], lastUpdated: nil
+                )
+            )
+        )
+
+        #expect(recovered.reasons.contains("ship_stalled") == false)
+        #expect(recovered.suggestedActionIds == [])
+        #expect(recovered.transport?.status == "healthy")
+        #expect(recovered.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0)).promotion == .normal)
+    }
+
 
     @Test
     func managedAttentionOverridesDisplaySeverity() throws {

@@ -161,6 +161,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         let pulseAge = pulse
             .flatMap(Self.parseISO8601)
             .map { max(0, Int(Date().timeIntervalSince($0))) }
+        let projectedTransport = projectingLocalTransport(from: payload?.shippingProgress)
         let updatedEngine = EngineStatusSnapshot(
             path: engineStatus?.path,
             exists: true,
@@ -169,11 +170,103 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             payload: payload,
             error: nil
         )
-        return replacingManagedSessions(
-            managedSessions,
-            replacementEngineStatus: updatedEngine,
-            replacementCollectedAt: nil
+        return HealthSnapshot(
+            schemaVersion: schemaVersion,
+            collectedAt: collectedAt,
+            healthState: healthState,
+            severity: severity,
+            headline: headline,
+            reasons: projectedTransport.reasons,
+            suggestedActions: projectedTransport.suggestedActions,
+            suggestedActionIds: projectedTransport.suggestedActionIds,
+            attention: attention,
+            service: service,
+            engineStatus: updatedEngine,
+            outbox: outbox,
+            activitySummary: activitySummary,
+            managedSummary: managedSummary,
+            managedSessions: managedSessions,
+            realtime: realtime,
+            transport: projectedTransport.transport,
+            unmanagedProcesses: unmanagedProcesses,
+            orphanBridges: orphanBridges,
+            launchReadiness: launchReadiness,
+            build: build,
+            updateInfo: updateInfo
         )
+    }
+
+    /// Project the explicit engine progress fact into the existing local-health
+    /// presentation contract. This is not a second health classifier: the
+    /// producer already decided whether the pending lane is stalled. The pulse
+    /// must nevertheless update the reason/action/transport fields together so
+    /// a local file change cannot show a stalled row beside a healthy headline.
+    private func projectingLocalTransport(
+        from progress: ShippingProgressSnapshot?
+    ) -> (
+        reasons: [String],
+        suggestedActions: [String],
+        suggestedActionIds: [String]?,
+        transport: NativeTransportSnapshot?
+    ) {
+        guard let progress,
+              let pendingWork = progress.pendingWork,
+              let stalled = progress.stalled else {
+            return (reasons, suggestedActions, suggestedActionIds, transport)
+        }
+
+        let transportReasons: Set<String> = [
+            "transport_unavailable", "connect_errors", "server_errors", "rate_limited",
+            "retryable_client_errors", "reported_offline", "ship_stalled",
+        ]
+        let transportActionID = "inspect_transport"
+        let localAction = "Inspect local transport health."
+        let wasStalled = reasons.contains("ship_stalled") || transport?.statusReason == "ship_stalled"
+        var projectedReasons = reasons.filter { $0 != "ship_stalled" }
+        var projectedActions = suggestedActions
+        var projectedActionIds = suggestedActionIds
+        var projectedTransport = transport
+        let hasOtherTransportReason = projectedReasons.contains { transportReasons.contains($0) }
+        let canReplaceTransport = transport?.statusReason == nil
+            || transport?.statusReason == "healthy"
+            || transport?.statusReason == "ship_stalled"
+            || transport?.statusReason == "transport_unavailable"
+
+        if pendingWork && stalled {
+            projectedReasons.append("ship_stalled")
+            var actionIds = projectedActionIds ?? []
+            if !actionIds.contains(transportActionID) {
+                actionIds.append(transportActionID)
+            }
+            projectedActionIds = actionIds
+            if !projectedActions.contains(localAction) {
+                projectedActions.append(localAction)
+            }
+            if canReplaceTransport && !hasOtherTransportReason {
+                let detail: String
+                if let seconds = progress.secondsWithoutProgress, seconds > 0 {
+                    let age = Self.ageLabel(seconds: Int(min(seconds, UInt64(Int.max))))
+                    detail = "Pending shipping has made no useful progress for \(age)."
+                } else {
+                    detail = "Pending shipping has made no useful progress."
+                }
+                projectedTransport = NativeTransportSnapshot(
+                    status: "degraded",
+                    statusReason: "ship_stalled",
+                    statusSummary: detail
+                )
+            }
+        } else if wasStalled && !hasOtherTransportReason && canReplaceTransport {
+            projectedActionIds = projectedActionIds?.filter { $0 != transportActionID }
+            projectedActions.removeAll { $0 == localAction }
+            projectedTransport = NativeTransportSnapshot(
+                status: "healthy",
+                statusReason: "healthy",
+                statusSummary: "Shipping healthy."
+            )
+        }
+
+        return (projectedReasons, projectedActions, projectedActionIds, projectedTransport)
     }
 
     func preservingSessionTitles(from previous: HealthSnapshot?) -> HealthSnapshot {

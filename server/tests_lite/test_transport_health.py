@@ -15,6 +15,15 @@ from zerg.services.transport_health import transport_health_sample_from_engine_s
 from zerg.services.transport_health import transport_health_sample_from_heartbeat
 
 
+def _healthy_shipping_progress() -> dict[str, object]:
+    return {
+        "pending_work": False,
+        "stalled": False,
+        "seconds_without_progress": 0,
+        "observed_at": "2026-01-01T00:00:00Z",
+    }
+
+
 def test_transport_health_builders_keep_heartbeat_and_local_payload_in_sync():
     row = AgentHeartbeat(
         device_id="cinder",
@@ -30,6 +39,7 @@ def test_transport_health_builders_keep_heartbeat_and_local_payload_in_sync():
                 "ship_attempts_10m": 5,
                 "ship_connect_errors_10m": 5,
                 "last_ship_result": "connect_error",
+                "shipping_progress": _healthy_shipping_progress(),
             }
         ),
     )
@@ -43,6 +53,7 @@ def test_transport_health_builders_keep_heartbeat_and_local_payload_in_sync():
         "ship_attempts_10m": 5,
         "ship_connect_errors_10m": 5,
         "last_ship_result": "connect_error",
+        "shipping_progress": _healthy_shipping_progress(),
         "is_offline": False,
     }
 
@@ -93,6 +104,23 @@ def test_transport_health_fails_unknown_shipping_progress_closed():
     assert assessment.reasons == ("transport_unavailable",)
 
 
+def test_transport_health_fails_unknown_when_progress_is_omitted_with_pending_work():
+    sample = transport_health_sample_from_engine_status_payload(
+        {
+            "ship_attempts_1h": 12,
+            "ship_successes_1h": 12,
+            "spool_pending_count": 1,
+            "last_ship_result": "ok",
+        }
+    )
+
+    assessment = assess_transport_health(sample)
+
+    assert assessment.status == "unknown"
+    assert assessment.status_reason == "transport_unavailable"
+    assert assessment.reasons == ("transport_unavailable",)
+
+
 def test_transport_health_fails_unknown_when_heartbeat_carries_old_progress():
     from datetime import datetime, timedelta, timezone
 
@@ -127,6 +155,7 @@ def test_transport_health_uses_active_window_to_clear_recovered_hourly_burst():
             "ship_successes_10m": 4,
             "ship_connect_errors_10m": 0,
             "last_ship_result": "ok",
+            "shipping_progress": _healthy_shipping_progress(),
             "spool_pending_count": 0,
             "spool_dead_count": 0,
         }
@@ -147,6 +176,7 @@ def test_transport_health_keeps_recovered_server_error_burst_healthy():
             "ship_successes_10m": 473,
             "ship_server_errors_10m": 201,
             "last_ship_result": "ok",
+            "shipping_progress": _healthy_shipping_progress(),
             "spool_pending_count": 2760,
             "spool_dead_count": 0,
         }
@@ -170,6 +200,7 @@ def test_transport_health_degrades_for_active_connect_burst():
             "ship_successes_10m": 5,
             "ship_connect_errors_10m": 3,
             "last_ship_result": "ok",
+            "shipping_progress": _healthy_shipping_progress(),
             "spool_pending_count": 0,
             "spool_dead_count": 0,
         }
@@ -189,6 +220,7 @@ def test_transport_health_keeps_single_transient_connect_error_healthy():
             "ship_attempts_1h": 65,
             "ship_successes_1h": 64,
             "ship_connect_errors_1h": 1,
+            "shipping_progress": _healthy_shipping_progress(),
         }
     )
 
@@ -207,6 +239,7 @@ def test_transport_health_keeps_single_current_connect_error_healthy():
             "ship_successes_1h": 11,
             "ship_connect_errors_1h": 1,
             "last_ship_result": "connect_error",
+            "shipping_progress": _healthy_shipping_progress(),
             "spool_pending_count": 1,
             "spool_dead_count": 0,
         }
@@ -229,6 +262,7 @@ def test_transport_health_degrades_for_repeated_current_connect_errors():
             "ship_attempts_10m": 2,
             "ship_connect_errors_10m": 2,
             "last_ship_result": "connect_error",
+            "shipping_progress": _healthy_shipping_progress(),
             "spool_pending_count": 1,
             "spool_dead_count": 0,
         }
@@ -248,6 +282,7 @@ def test_transport_health_keeps_recovered_transient_connect_errors_healthy():
             "ship_successes_1h": 12,
             "ship_connect_errors_1h": 2,
             "last_ship_result": "ok",
+            "shipping_progress": _healthy_shipping_progress(),
             "spool_pending_count": 0,
             "spool_dead_count": 0,
         }
@@ -269,6 +304,7 @@ def test_transport_health_keeps_small_spool_retry_healthy():
             "spool_pending_count": 1,
             "spool_dead_count": 0,
             "last_ship_result": "ok",
+            "shipping_progress": _healthy_shipping_progress(),
         }
     )
 
@@ -286,6 +322,7 @@ def test_transport_health_keeps_spool_backlog_out_of_live_transport_status():
             "spool_pending_count": 5,
             "spool_dead_count": 0,
             "last_ship_result": "ok",
+            "shipping_progress": _healthy_shipping_progress(),
         }
     )
 
@@ -305,6 +342,7 @@ def test_transport_health_treats_dead_archive_ranges_as_degraded_attention():
             "spool_pending_count": 0,
             "spool_dead_count": 7,
             "last_ship_result": "ok",
+            "shipping_progress": _healthy_shipping_progress(),
         }
     )
 
@@ -325,6 +363,7 @@ def test_transport_health_keeps_payload_rejection_broken_above_dead_ranges():
             "spool_pending_count": 0,
             "spool_dead_count": 7,
             "last_ship_result": "payload_rejected",
+            "shipping_progress": _healthy_shipping_progress(),
         }
     )
 
@@ -345,6 +384,7 @@ def test_transport_health_surfaces_last_transport_error_detail():
         "last_ship_result": "connect_error",
         "last_ship_error_kind": "timeout",
         "last_ship_error_message": "request timed out after 60s",
+        "shipping_progress": _healthy_shipping_progress(),
     }
     row = AgentHeartbeat(
         device_id="cinder",

@@ -83,7 +83,7 @@ class TransportHealthSample:
     shipping_progress_stalled: bool | None = None
     shipping_progress_seconds_without_progress: int | None = None
     shipping_progress_observed_at: datetime | None = None
-    shipping_progress_valid: bool = True
+    shipping_progress_valid: bool = False
 
     @property
     def seconds_since_last_ship(self) -> float | None:
@@ -399,7 +399,7 @@ def _shipping_progress_from_payload(
     payload: Mapping[str, Any],
 ) -> tuple[bool | None, bool | None, int | None, datetime | None, bool]:
     if "shipping_progress" not in payload:
-        return None, None, None, None, True
+        return None, None, None, None, False
     raw = payload.get("shipping_progress")
     if not isinstance(raw, Mapping):
         return None, None, None, None, False

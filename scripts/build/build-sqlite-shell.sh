@@ -39,6 +39,8 @@ command -v make >/dev/null 2>&1 || { echo "make is required" >&2; exit 1; }
 
 build_root="$(mktemp -d "${TMPDIR:-/tmp}/longhouse-sqlite3.XXXXXX")"
 trap 'rm -rf "$build_root"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 archive_path="$build_root/sqlite-autoconf-${SQLITE_ARCHIVE_VERSION}.tar.gz"
 curl -fsSL "$SQLITE_SOURCE_URL" -o "$archive_path"
@@ -56,10 +58,17 @@ fi
 tar -xzf "$archive_path" -C "$build_root"
 source_dir="$build_root/sqlite-autoconf-${SQLITE_ARCHIVE_VERSION}"
 
+# Linux needs a self-contained runtime. Darwin links its system libraries;
+# Apple's linker does not support a fully static executable.
+static_ldflags=""
+if [[ "$(uname -s)" == "Linux" ]]; then
+    static_ldflags=" -static"
+fi
+
 (
     cd "$source_dir"
     CFLAGS="${CFLAGS:-} -DSQLITE_ENABLE_DBPAGE_VTAB -DSQLITE_ENABLE_RECOVER" \
-    LDFLAGS="${LDFLAGS:-} -static" \
+    LDFLAGS="${LDFLAGS:-}${static_ldflags}" \
     ./configure \
         --disable-readline \
         --disable-shared \
@@ -69,3 +78,4 @@ source_dir="$build_root/sqlite-autoconf-${SQLITE_ARCHIVE_VERSION}"
 
 mkdir -p "$(dirname "$output_path")"
 install -m 0755 "$source_dir/sqlite3" "$output_path"
+"$output_path" :memory: ".recover" >/dev/null

@@ -259,12 +259,35 @@ verify_release_checksum() {
     [[ -n "$expected" && "$expected" == "$actual" ]]
 }
 
+# Replace the link itself, not the directory it points at. Both supported
+# platforms provide an atomic same-filesystem rename with different flags.
+replace_native_link() {
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        mv -h "$1" "$2"
+    else
+        mv -T "$1" "$2"
+    fi
+}
+
 install_native_pair() {
     step "Installing Longhouse"
     CURRENT_INSTALL_STAGE="native_binary_install"
-    local target source_dir="${LONGHOUSE_NATIVE_BIN_DIR:-}" version base_url tmp_dir checksums facade_asset engine_asset sqlite_asset
+    local target source_dir="${LONGHOUSE_NATIVE_BIN_DIR:-}" version base_url tmp_dir checksums facade_asset engine_asset sqlite_asset sqlite_required
     local native_bin_dir="$HOME/.local/bin" native_root="$HOME/.local/share/longhouse" release_id release_dir
-    local current_link="$native_root/current" next_current existing_facade
+    local current_link="$native_root/current" next_current existing_facade component component_path facade_link engine_link core_version
+    existing_facade="$native_bin_dir/longhouse"
+    [[ ! -e "$current_link" || -L "$current_link" ]] || { error "Refusing to replace non-link native current path: $current_link"; return 1; }
+    # Recognize our own links even when their previous target needs repair.
+    # Other existing files require a working native pair before any mutation.
+    for component in longhouse longhouse-engine; do
+        component_path="$native_bin_dir/$component"
+        if [[ ! -e "$component_path" && ! -L "$component_path" ]]; then continue; fi
+        if [[ -L "$component_path" && "$(readlink "$component_path")" == "../share/longhouse/current/$component" ]]; then continue; fi
+        if [[ -L "$existing_facade" || ! -x "$existing_facade" ]] || ! LONGHOUSE_ENGINE_BIN="$native_bin_dir/longhouse-engine" "$existing_facade" verify-pair >/dev/null 2>&1; then
+            error "Refusing to overwrite unrecognized native path: $component_path"
+            return 1
+        fi
+    done
     target="$(native_target)"; facade_asset="longhouse-${target}"; engine_asset="longhouse-engine-${target}"; tmp_dir="$(mktemp -d)"
     if [[ -n "$source_dir" ]]; then
         INSTALL_TELEMETRY_SOURCE="local"; INSTALL_TELEMETRY_PACKAGE_REF="$source_dir"; INSTALL_RELEASE_VERSION=""
@@ -275,11 +298,19 @@ install_native_pair() {
         fi
     else
         INSTALL_TELEMETRY_SOURCE="release"; version="$(resolve_release_version)"; INSTALL_RELEASE_VERSION="$version"; INSTALL_TELEMETRY_PACKAGE_REF="v$version"; base_url="https://github.com/cipher982/longhouse/releases/download/v${version}"; checksums="$tmp_dir/local-runtime-checksums.txt"; sqlite_asset="longhouse-sqlite3-${target}"
+        # v0.1.48 introduced this required asset. Historical releases remain
+        # installable for upgrade/rollback; never waive it for newer releases.
+        core_version="${version%%[-+]*}"
+        [[ "$core_version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || { error "Invalid release version: $version"; rm -rf "$tmp_dir"; return 1; }
+        sqlite_required=$((10#${BASH_REMATCH[1]} > 0 || 10#${BASH_REMATCH[2]} > 1 || (10#${BASH_REMATCH[2]} == 1 && 10#${BASH_REMATCH[3]} >= 48)))
         info "Downloading Longhouse v$version for $target"
-        curl -fsSL "$base_url/local-runtime-checksums.txt" -o "$checksums" && curl -fsSL "$base_url/$facade_asset" -o "$tmp_dir/longhouse" && curl -fsSL "$base_url/$engine_asset" -o "$tmp_dir/longhouse-engine" && curl -fsSL "$base_url/$sqlite_asset" -o "$tmp_dir/longhouse-sqlite3" || { rm -rf "$tmp_dir"; return 1; }
+        curl -fsSL "$base_url/local-runtime-checksums.txt" -o "$checksums" && curl -fsSL "$base_url/$facade_asset" -o "$tmp_dir/longhouse" && curl -fsSL "$base_url/$engine_asset" -o "$tmp_dir/longhouse-engine" || { rm -rf "$tmp_dir"; return 1; }
+        if [[ "$sqlite_required" == "1" ]]; then
+            curl -fsSL "$base_url/$sqlite_asset" -o "$tmp_dir/longhouse-sqlite3" || { rm -rf "$tmp_dir"; return 1; }
+            verify_release_checksum "$checksums" "$sqlite_asset" "$tmp_dir/longhouse-sqlite3" || { error "Checksum mismatch for $sqlite_asset"; rm -rf "$tmp_dir"; return 1; }
+        fi
         verify_release_checksum "$checksums" "$facade_asset" "$tmp_dir/longhouse" || { error "Checksum mismatch for $facade_asset"; rm -rf "$tmp_dir"; return 1; }
         verify_release_checksum "$checksums" "$engine_asset" "$tmp_dir/longhouse-engine" || { error "Checksum mismatch for $engine_asset"; rm -rf "$tmp_dir"; return 1; }
-        verify_release_checksum "$checksums" "$sqlite_asset" "$tmp_dir/longhouse-sqlite3" || { error "Checksum mismatch for $sqlite_asset"; rm -rf "$tmp_dir"; return 1; }
     fi
     chmod 755 "$tmp_dir/longhouse" "$tmp_dir/longhouse-engine"
     [[ ! -e "$tmp_dir/longhouse-sqlite3" ]] || chmod 755 "$tmp_dir/longhouse-sqlite3"
@@ -291,24 +322,18 @@ install_native_pair() {
     mv "$tmp_dir/longhouse-engine" "$release_dir/longhouse-engine"
     [[ ! -e "$tmp_dir/longhouse-sqlite3" ]] || mv "$tmp_dir/longhouse-sqlite3" "$release_dir/longhouse-sqlite3"
     "$release_dir/longhouse" verify-pair >/dev/null || { rm -rf "$tmp_dir"; return 1; }
-    existing_facade="$native_bin_dir/longhouse"
     next_current="$native_root/.current-${tmp_dir##*/}"
+    facade_link="$native_bin_dir/.longhouse-native-${tmp_dir##*/}"
+    engine_link="$native_bin_dir/.longhouse-engine-native-${tmp_dir##*/}"
     ln -s "releases/$release_id" "$next_current"
-    ln -s "../share/longhouse/current/longhouse" "$native_bin_dir/.longhouse-native"
-    ln -s "../share/longhouse/current/longhouse-engine" "$native_bin_dir/.longhouse-engine-native"
-    # `mv next current` follows `current` when it is an existing directory
-    # symlink. Remove only that link first so upgrades cannot nest a new
-    # release inside the previous release directory.
-    [[ ! -e "$current_link" || -L "$current_link" ]] || { error "Refusing to replace non-link native current path: $current_link"; rm -rf "$tmp_dir"; return 1; }
-    rm -f "$current_link"
-    mv "$next_current" "$current_link"
-    if [[ -e "$existing_facade" || -L "$existing_facade" ]] && ! "$existing_facade" verify-pair >/dev/null 2>&1; then
-        error "Refusing to overwrite a non-native $existing_facade; remove it before installing Longhouse"
-        rm -rf "$tmp_dir"
-        return 1
-    fi
-    mv "$native_bin_dir/.longhouse-native" "$existing_facade"
-    mv "$native_bin_dir/.longhouse-engine-native" "$native_bin_dir/longhouse-engine"
+    ln -s "../share/longhouse/current/longhouse" "$facade_link"
+    ln -s "../share/longhouse/current/longhouse-engine" "$engine_link"
+    # Existing versioned installs continue using the old pair until the one
+    # current-link rename commits the upgrade. Never unlink that authority.
+    if [[ ! -L "$current_link" ]]; then replace_native_link "$next_current" "$current_link"; fi
+    replace_native_link "$facade_link" "$existing_facade"
+    replace_native_link "$engine_link" "$native_bin_dir/longhouse-engine"
+    if [[ -L "$next_current" ]]; then replace_native_link "$next_current" "$current_link"; fi
     rm -rf "$tmp_dir"; "$native_bin_dir/longhouse" verify-pair >/dev/null
     export PATH="$native_bin_dir:$PATH"
     emit_installer_telemetry "native_binary_install" "$CURRENT_INSTALL_STAGE" "$INSTALL_TELEMETRY_SOURCE" "$INSTALL_TELEMETRY_PACKAGE_REF" "0"
@@ -327,7 +352,13 @@ download_and_install_macos_app_release_asset() {
     local app_path="$app_install_dir/Longhouse.app"
 
     [[ "$app_install_dir" == /* ]] || { error "LONGHOUSE_MACOS_APP_INSTALL_DIR must be absolute"; return 1; }
-    local extracted_app=""
+    local extracted_app="" stage_dir="" backup_name=""
+    if [[ -e "$app_path" || -L "$app_path" ]]; then
+        if [[ -L "$app_path" ]] || [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_path/Contents/Info.plist" 2>/dev/null)" != "ai.longhouse.app" ]]; then
+            error "Refusing to replace an unrecognized application: $app_path"
+            return 1
+        fi
+    fi
 
     case "$(uname -m)" in
         arm64|aarch64)
@@ -378,19 +409,47 @@ download_and_install_macos_app_release_asset() {
         return 1
     fi
 
-    if [[ ! -d "$extracted_app" ]]; then
+    if [[ ! -x "$extracted_app/Contents/MacOS/Longhouse" ]] || [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$extracted_app/Contents/Info.plist" 2>/dev/null)" != "ai.longhouse.app" ]]; then
         rm -rf "$tmp_dir"
-        error "Release asset did not contain Longhouse.app"
+        error "Release asset did not contain a valid Longhouse.app"
         return 1
     fi
 
     mkdir -p "$app_install_dir"
-    rm -rf "$app_path"
-    if ! ditto "$extracted_app" "$app_path"; then
-        rm -rf "$tmp_dir"
-        error "Could not copy Longhouse.app into $app_install_dir"
+    stage_dir="$(mktemp -d "$app_install_dir/.longhouse-install.XXXXXX")"
+    if ! ditto "$extracted_app" "$stage_dir/Longhouse.app"; then
+        rm -rf "$stage_dir" "$tmp_dir"
+        error "Could not stage Longhouse.app in $app_install_dir; existing app is unchanged"
         return 1
     fi
+    if [[ -d "$app_path" ]]; then
+        # Foundation's same-volume replacement preserves the original on
+        # failure. A stock macOS interpreter avoids requiring developer tools.
+        backup_name=".Longhouse-previous-${stage_dir##*/}.app"
+        if ! /usr/bin/osascript -l JavaScript - "$stage_dir/Longhouse.app" "$app_path" "$backup_name" <<'APP_REPLACE'
+ObjC.import("Foundation");
+function run(argv) {
+    const fm = $.NSFileManager.defaultManager;
+    const error = Ref(), result = Ref();
+    const source = $.NSURL.fileURLWithPath(argv[0]);
+    const target = $.NSURL.fileURLWithPath(argv[1]);
+    if (!fm.replaceItemAtURLWithItemAtURLBackupItemNameOptionsResultingItemURLError(
+        target, source, argv[2], $.NSFileManagerItemReplacementUsingNewMetadataOnly, result, error)) {
+        throw new Error(ObjC.unwrap(error[0].description));
+    }
+}
+APP_REPLACE
+        then
+            if [[ ! -e "$app_path" && -d "$app_install_dir/$backup_name" ]]; then
+                mv "$app_install_dir/$backup_name" "$app_path"
+            fi
+            error "Could not replace Longhouse.app; recovery files retained at $stage_dir and $tmp_dir"
+            return 1
+        fi
+    else
+        mv "$stage_dir/Longhouse.app" "$app_path"
+    fi
+    rm -rf "$stage_dir"
 
     rm -rf "$tmp_dir"
     success "Longhouse.app installed in $app_install_dir"

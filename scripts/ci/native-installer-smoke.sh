@@ -45,6 +45,8 @@ SMOKE_ENV=(
   "TMPDIR=$TEST_ROOT/tmp" "SHELL=/bin/bash" "TERM=xterm-256color"
   "XDG_CONFIG_HOME=$HOME_DIR/.config" "XDG_DATA_HOME=$HOME_DIR/.local/share"
   "LONGHOUSE_TELEMETRY=0" "LONGHOUSE_SMOKE_NODE=$NODE_BIN"
+  "LONGHOUSE_ORIGIN_KIND=test_or_canary" "LONGHOUSE_LAUNCH_ACTOR=automation"
+  "LONGHOUSE_LAUNCH_SURFACE=test"
 )
 
 cleanup() {
@@ -73,6 +75,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+echo "owned native installer proof root: $TEST_ROOT"
 trap 'echo "native installer smoke failed at line $LINENO" >&2' ERR
 
 mkdir -p "$PAIR_DIR" "$HOME_DIR/traps" "$TEST_ROOT/tmp"
@@ -102,6 +105,7 @@ else
     "$PAIR_DIR/longhouse"
   cp "$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile ci --bin longhouse-engine)" \
     "$PAIR_DIR/longhouse-engine"
+  bash "$ROOT_DIR/scripts/build/build-sqlite-shell.sh" --output "$PAIR_DIR/longhouse-sqlite3"
 fi
 
 for command in python python3 uv pip; do
@@ -180,9 +184,13 @@ install_pair() {
 }
 
 check_identity() {
-  local stage="$1" version="$2" commit="$3"
+  local stage="$1" version="$2" commit="$3" recovery_required
+  recovery_required="$("$NODE_BIN" -e '
+const [major, minor, patch] = process.argv[1].split(".").map(Number);
+console.log(major > 0 || minor > 1 || (minor === 1 && patch >= 48) ? "1" : "0");
+' "$version")"
   smoke_command 60 "$installed" verify-pair > "$EVIDENCE_DIR/$stage-verify-pair.log"
-  if [[ "$REMOTE_RELEASE" == "1" ]]; then
+  if [[ "$REMOTE_RELEASE" == "1" && "$recovery_required" == "1" ]]; then
     local recovery_tool="$HOME_DIR/.local/share/longhouse/current/longhouse-sqlite3"
     [[ -x "$recovery_tool" ]] || {
       echo "release install is missing its private SQLite recovery shell: $recovery_tool" >&2
@@ -368,6 +376,21 @@ if [[ -n "$PREVIOUS_TAG" ]]; then
     exit 1
   }
   echo "native upgrade passed: $PREVIOUS_TAG -> v$EXPECTED_VERSION (enrollment and native hooks preserved)"
+  install_pair "$PREVIOUS_TAG" rollback
+  check_identity rollback "${PREVIOUS_TAG#v}" "$previous_commit"
+  snapshot_upgrade_state rollback
+  cmp "$EVIDENCE_DIR/previous-state.json" "$EVIDENCE_DIR/rollback-state.json" || {
+    echo "Rollback changed or lost durable enrollment, credential, or native hooks" >&2
+    exit 1
+  }
+  install_pair "$EXPECTED_VERSION" restored
+  check_identity restored "$EXPECTED_VERSION" "$EXPECTED_COMMIT"
+  snapshot_upgrade_state restored
+  cmp "$EVIDENCE_DIR/previous-state.json" "$EVIDENCE_DIR/restored-state.json" || {
+    echo "Restoring the candidate changed or lost durable enrollment, credential, or native hooks" >&2
+    exit 1
+  }
+  echo "native rollback passed: v$EXPECTED_VERSION -> $PREVIOUS_TAG -> v$EXPECTED_VERSION"
 fi
 
 cat > "$HOME_DIR/traps/open" <<'EOF'

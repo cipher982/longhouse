@@ -1109,6 +1109,55 @@ def test_ambiguous_engine_transport_keeps_durable_operation_open_for_reconciliat
     assert operation["status"] == "running"
 
 
+def test_not_sent_engine_transport_retries_same_command_identity(monkeypatch, live_catalog):  # noqa: F811
+    session_id, _lease = _seed_lease_for_new_session()
+    database_path, _socket_path = catalogd_supervisor.catalogd_paths()
+    calls = []
+
+    class _RetryRegistry:
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return MachineControlCommandResponse(
+                    transport_ok=False,
+                    error="channel closed before send",
+                    delivery_certainty="not_sent",
+                )
+            return MachineControlCommandResponse(
+                transport_ok=True,
+                message={
+                    "ok": True,
+                    "result": {"exit_code": 0, "stdout": "accepted", "stderr": ""},
+                },
+            )
+
+    monkeypatch.setattr(dispatcher_module, "get_machine_control_channel_registry", lambda: _RetryRegistry())
+
+    result = asyncio.run(
+        dispatch_managed_control_command(
+            db=object(),
+            owner_id=42,
+            session=_session(id=session_id, source_runner_id=None),
+            timeout_secs=1,
+            command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+            payload={"text": "continue"},
+            request_id="req-not-sent-retry",
+        )
+    )
+
+    command_id = f"managed-control:{session_id}:session.send_text:req-not-sent-retry"
+    operation = _read_control_operation(database_path, command_id=command_id)
+    assert result.ok is True
+    assert result.data == {"exit_code": 0, "stdout": "accepted", "stderr": ""}
+    assert len(calls) == 2
+    assert calls[0]["command_id"] == command_id
+    assert calls[1]["command_id"] == command_id
+    assert operation["status"] == "succeeded"
+
+
 def test_live_text_dispatch_metadata_accepts_engine_channel_without_runner_metadata():
     async def _run():
         await _connect_fake_engine(owner_id=42, supports=["codex.send"])

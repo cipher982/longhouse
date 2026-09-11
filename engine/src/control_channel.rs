@@ -2966,6 +2966,7 @@ fn command_requires_restart_fence(frame: &Value) -> bool {
                 | COMMAND_STEER_TEXT
                 | COMMAND_ANSWER_PAUSE
                 | COMMAND_TERMINATE
+                | COMMAND_TURN_INTERRUPT
         )
     )
 }
@@ -4900,6 +4901,41 @@ exit 1
 
         // Reopening the store models an engine restart. The accepted boundary
         // is durable even though no provider side effect is run by this test.
+        let restarted_store = Arc::new(DurableCommandReceiptStore::for_db_path(&db_path));
+        let mut cache = command_cache().with_durable_receipts(Some(restarted_store));
+        let result = handle_command_frame(frame, &mut cache, &test_config()).await;
+
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"]["code"], "command_indeterminate");
+    }
+
+    #[tokio::test]
+    async fn restart_fence_covers_accepted_console_turn_interrupt() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("longhouse-shipper.db");
+        let command_id = "run-1:interrupt";
+        let frame = json!({
+            "type": "command",
+            "command_id": command_id,
+            "session_id": "session-1",
+            "command_type": COMMAND_TURN_INTERRUPT,
+            "payload": {
+                "provider": "claude",
+                "run_id": "run-1",
+                "turn_id": "turn-1",
+                "thread_id": "thread-1"
+            }
+        });
+        let identity = command_receipt_identity(&frame, command_id);
+        let store = Arc::new(DurableCommandReceiptStore::for_db_path(&db_path));
+        assert!(matches!(
+            store.claim(&identity).unwrap(),
+            DurableCommandReceiptOutcome::Claimed
+        ));
+        drop(store);
+
+        // Console turn interrupts reuse run_id:interrupt after a reconnect. The
+        // durable acceptance boundary must win over a replay after restart.
         let restarted_store = Arc::new(DurableCommandReceiptStore::for_db_path(&db_path));
         let mut cache = command_cache().with_durable_receipts(Some(restarted_store));
         let result = handle_command_frame(frame, &mut cache, &test_config()).await;

@@ -16,7 +16,9 @@
 # auth, real request validation, and real token policy -- the four things a
 # hand-written fake reimplements badly, and exactly where the outage lived.
 #
-# Provider binaries stay scripted. The gap that mattered was the server.
+# Provider binaries stay scripted. The gap that mattered was the server. The
+# fake Cursor below proves only Longhouse lifecycle/control plumbing: it does
+# not produce a provider transcript or qualify real Cursor hook behavior.
 set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
@@ -36,6 +38,32 @@ PORT="${LONGHOUSE_LIFECYCLE_SMOKE_PORT:-0}"
 
 FAULT_PROXY_PID=""
 FAULT_URL=""
+CLEANUP_FAILURE=0
+FAILURE_ARTIFACT_DIR=""
+
+descendant_pids() {
+  local parent="$1" child
+  for child in $(pgrep -P "$parent" 2>/dev/null || true); do
+    printf '%s\n' "$child"
+    descendant_pids "$child"
+  done
+}
+
+retain_failure_diagnostics() {
+  local reason="$1" file name
+  mkdir -p "$ROOT_DIR/artifacts/reliability-kernel" || return 0
+  FAILURE_ARTIFACT_DIR="$(mktemp -d "$ROOT_DIR/artifacts/reliability-kernel/managed-launch-lifecycle-failure.XXXXXX" 2>/dev/null || true)"
+  [[ -n "$FAILURE_ARTIFACT_DIR" ]] || return 0
+  printf '%s\n' "$reason" >"$FAILURE_ARTIFACT_DIR/reason.txt"
+  printf 'scratch_root=%s\n' "$TEST_ROOT" >"$FAILURE_ARTIFACT_DIR/ownership.txt"
+  for file in "$SERVER_LOG" "$ENGINE_LOG" "$TEST_ROOT"/*.out "$TEST_ROOT"/*.log; do
+    [[ -f "$file" ]] || continue
+    name="$(basename "$file")"
+    tail -100 "$file" >"$FAILURE_ARTIFACT_DIR/$name.tail" 2>/dev/null || true
+  done
+  ps -axo pid=,ppid=,command= >"$FAILURE_ARTIFACT_DIR/processes.txt" 2>/dev/null || true
+  echo "retained failure diagnostics: $FAILURE_ARTIFACT_DIR" >&2
+}
 
 # Terminate one child and reap it, but never wait on it forever.
 #
@@ -46,8 +74,12 @@ FAULT_URL=""
 # exit trap. The watchdog bounds that without hiding a slow shutdown, because
 # a child that needed the SIGKILL still took the full grace period.
 stop_child() {
-  local pid="$1" label="${2:-child}" watchdog
+  local pid="$1" label="${2:-child}" watchdog descendants child
   [[ -n "$pid" ]] || return 0
+  descendants="$(descendant_pids "$pid")"
+  for child in $descendants; do
+    kill "$child" 2>/dev/null || true
+  done
   kill "$pid" 2>/dev/null || true
   (
     sleep 10
@@ -62,9 +94,21 @@ stop_child() {
   wait "$pid" 2>/dev/null || true
   kill "$watchdog" 2>/dev/null || true
   wait "$watchdog" 2>/dev/null || true
+  for child in $descendants; do
+    if kill -0 "$child" 2>/dev/null; then
+      kill -9 "$child" 2>/dev/null || true
+    fi
+  done
+  for child in $descendants; do
+    if kill -0 "$child" 2>/dev/null; then
+      echo "warning: $label left owned descendant $child running" >&2
+      CLEANUP_FAILURE=1
+    fi
+  done
 }
 
 cleanup() {
+  local exit_status=$?
   stop_child "$FAULT_PROXY_PID" "fault proxy"
   stop_child "$CURSOR_CONTROL_PID" "cursor control"
   stop_child "$CLAUDE_CONTROL_PID" "claude control"
@@ -75,6 +119,10 @@ cleanup() {
   else
     rm -rf "$TEST_ROOT"
   fi
+  if [[ "$CLEANUP_FAILURE" == "1" ]]; then
+    exit_status=1
+  fi
+  return "$exit_status"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -84,6 +132,7 @@ fail() {
   echo "FAIL: $*" >&2
   echo "--- server log tail ---" >&2
   tail -40 "$SERVER_LOG" >&2 || true
+  retain_failure_diagnostics "$*"
   exit 1
 }
 
@@ -215,6 +264,22 @@ json_field() {
   python3 -c 'import sys, json; d=json.load(sys.stdin); v=d.get(sys.argv[1]); print("" if v is None else v)' "$1"
 }
 
+served_session_facts() {
+  curl -fsS "$BASE_URL/api/agents/sessions/$1/workspace?limit=1" \
+    -H "X-Agents-Token: $DEVICE_TOKEN"
+}
+
+served_session_terminal_state() {
+  served_session_facts "$1" | python3 -c '
+import json, sys
+session = json.load(sys.stdin)["session"]
+state = session["session_state"]
+run = state.get("run") or {}
+if run.get("lifecycle") == "ended" or state.get("disposition", {}).get("state") == "closed":
+    print("session_ended")
+'
+}
+
 launch_attempt_state() {
   sqlite3 "$TEST_ROOT/longhouse-live.db" \
     "SELECT state FROM live_session_launch_attempts WHERE session_id = '$1' ORDER BY id DESC LIMIT 1;"
@@ -223,11 +288,6 @@ launch_attempt_state() {
 latest_launch_session_id() {
   sqlite3 "$TEST_ROOT/longhouse-live.db" \
     "SELECT session_id FROM live_session_launch_attempts ORDER BY id DESC LIMIT 1;"
-}
-
-runtime_terminal_state() {
-  sqlite3 "$TEST_ROOT/longhouse-live.db" \
-    "SELECT terminal_state FROM live_runtime_state WHERE session_id = '$1' ORDER BY updated_at DESC LIMIT 1;"
 }
 
 wait_for_value() {
@@ -328,13 +388,14 @@ for provider in cursor claude codex opencode; do
 done
 
 # ---------------------------------------------------------------------------
-# 2. The server can REFUSE. A counterpart that only ever says yes cannot prove
-#    a gate exists.
+# 2. The server can refuse coordination authority without implying that the
+#    provider has no managed launch path. Antigravity's current contract keeps
+#    launch/control support separate from this coordination policy.
 # ---------------------------------------------------------------------------
 agy_response="$(register antigravity)" || fail "antigravity registration failed outright"
 agy_token="$(printf '%s' "$agy_response" | json_field coordination_token)"
-[[ -z "$agy_token" ]] || fail "antigravity is Shadow-only and must not receive coordination authority"
-echo "ok: Shadow-only provider is refused coordination authority"
+[[ -z "$agy_token" ]] || fail "antigravity coordination policy unexpectedly issued coordination authority"
+echo "ok: Antigravity coordination policy refuses authority (managed launch remains a separate capability)"
 
 # ---------------------------------------------------------------------------
 # 3. A real `longhouse cursor` launch against the real server, under a real
@@ -472,8 +533,8 @@ code="$(curl -s -o /dev/null -w '%{http_code}' -X POST \
   "$BASE_URL/api/agents/sessions/$agy_resume/coordination-token" \
   -H "X-Agents-Token: $DEVICE_TOKEN")"
 [[ "$code" == "409" ]] \
-  || fail "Shadow-only provider resume returned $code, expected 409 from the provider gate"
-echo "ok: resume path refuses a provider with no coordination tools (409 from the provider gate)"
+  || fail "Antigravity coordination-disabled resume returned $code, expected 409 from the policy gate"
+echo "ok: resume path refuses Antigravity coordination authority by policy (409)"
 
 # ---------------------------------------------------------------------------
 # 3b. Claude launches for real too. Its prerequisite (`claude auth status
@@ -916,9 +977,9 @@ codex_interrupt="$(post_live_action "$codex_control_session_id" interrupt)" \
   || fail "Runtime Host did not dispatch the Codex interrupt: $codex_interrupt"
 "$BIN_DIR/longhouse" codex stop --session-id "$codex_control_session_id" \
   || fail "Codex control-cycle cleanup failed"
-wait_for_value "Codex terminal state" session_ended 20 \
-  runtime_terminal_state "$codex_control_session_id"
-echo "ok: Codex send, interrupt, and terminal state crossed the real Runtime Host"
+wait_for_value "Codex served terminal state" session_ended 20 \
+  served_session_terminal_state "$codex_control_session_id"
+echo "ok: Codex send, interrupt, and served session state reached terminal"
 
 opencode_send="$(send_live "$opencode_control_session_id" 'OPENCODE_LIFECYCLE_CONTROL')" \
   || fail "Runtime Host failed to send through the OpenCode bridge"
@@ -932,9 +993,9 @@ opencode_terminate="$(post_live_action "$opencode_control_session_id" terminate)
   || fail "Runtime Host failed to terminate the OpenCode bridge"
 [[ "$(printf '%s' "$opencode_terminate" | json_field terminate_dispatched)" == "True" ]] \
   || fail "Runtime Host did not dispatch OpenCode termination: $opencode_terminate"
-wait_for_value "OpenCode terminal state" session_ended 20 \
-  runtime_terminal_state "$opencode_control_session_id"
-echo "ok: OpenCode send, interrupt, terminate, and terminal state crossed the real Runtime Host"
+wait_for_value "OpenCode served terminal state" session_ended 20 \
+  served_session_terminal_state "$opencode_control_session_id"
+echo "ok: OpenCode send, interrupt, terminate, and served session state reached terminal"
 
 claude_send="$(send_live "$claude_control_session_id" 'CLAUDE_LIFECYCLE_CONTROL')" \
   || fail "Runtime Host failed to send through the Claude channel"
@@ -948,9 +1009,9 @@ claude_provider_pid="$(python3 -c 'import json,sys; print(json.load(open(sys.arg
 kill -TERM "$claude_provider_pid" || fail "could not stop the Claude control-cycle provider"
 wait "$CLAUDE_CONTROL_PID" || fail "Claude control-cycle facade did not exit cleanly"
 CLAUDE_CONTROL_PID=""
-wait_for_value "Claude terminal state" session_ended 20 \
-  runtime_terminal_state "$claude_control_session_id"
-echo "ok: Claude send, interrupt, and terminal state crossed the real Runtime Host"
+wait_for_value "Claude served terminal state" session_ended 20 \
+  served_session_terminal_state "$claude_control_session_id"
+echo "ok: Claude send, interrupt, and served session state reached terminal"
 
 cursor_send="$(send_live "$cursor_control_session_id" 'CURSOR_LIFECYCLE_CONTROL')" \
   || fail "Runtime Host failed to send through Cursor Helm"
@@ -971,9 +1032,9 @@ set -e
 CURSOR_CONTROL_PID=""
 [[ "$cursor_control_status" == "137" ]] \
   || fail "Cursor terminate returned unexpected facade status $cursor_control_status"
-wait_for_value "Cursor terminal state" session_ended 20 \
-  runtime_terminal_state "$cursor_control_session_id"
-echo "ok: Cursor send, interrupt, terminate, and terminal state crossed the real Runtime Host"
+wait_for_value "Cursor served terminal state" session_ended 20 \
+  served_session_terminal_state "$cursor_control_session_id"
+echo "ok: Cursor send, interrupt, terminate, and served session state reached terminal"
 
 # ---------------------------------------------------------------------------
 # 4. A non-zero provider exit propagates rather than being swallowed.

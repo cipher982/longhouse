@@ -78,16 +78,6 @@ const REQUIRED_RECOVERY_TABLES: &[&str] = &[
     "pending_source_envelope",
 ];
 
-const STRICT_RECOVERY_TABLES: &[&str] = &[
-    "source_epoch_registry",
-    "source_epoch_lane_state",
-    "pending_source_envelope",
-    "pending_source_envelope_supersession",
-    "cursor_store_raw_record",
-    "cursor_store_capture_cursor",
-    "cursor_store_root_state",
-];
-
 #[derive(Debug, Clone, Serialize)]
 pub struct RecoveredTable {
     pub table: String,
@@ -576,6 +566,73 @@ fn row_is_plausible(table: &str, values: &[rusqlite::types::Value]) -> bool {
     }
 }
 
+fn full_integrity_check(path: &Path) -> Result<bool> {
+    let conn = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("opening repaired recovery copy {}", path.display()))?;
+    conn.busy_timeout(Duration::from_secs(1))?;
+    let integrity: String = conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    Ok(integrity == "ok")
+}
+
+fn ensure_recovery_tool_available() -> Result<()> {
+    let binary = sqlite_recovery_binary();
+    let status = std::process::Command::new(&binary)
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .with_context(|| {
+            format!(
+                "required sqlite3 recovery tool is unavailable at {}; preserve the original state",
+                binary.display()
+            )
+        })?;
+    if !status.success() {
+        bail!(
+            "required sqlite3 recovery tool at {} did not start successfully; preserve the original state",
+            binary.display()
+        );
+    }
+    Ok(())
+}
+
+fn complete_recovery_tables(conn: &Connection) -> Result<Vec<RecoveredTable>> {
+    RECOVERED_TABLES
+        .iter()
+        .map(|table_name| {
+            let exists: bool = conn.query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1
+                 )",
+                [*table_name],
+                |row| row.get(0),
+            )?;
+            if !exists {
+                return Ok(RecoveredTable {
+                    table: (*table_name).to_string(),
+                    attributed: 0,
+                    recovered: 0,
+                    rejected: 0,
+                });
+            }
+            let count: i64 =
+                conn.query_row(&format!("SELECT COUNT(*) FROM {table_name}"), [], |row| {
+                    row.get(0)
+                })?;
+            let count = usize::try_from(count).context("recovered row count exceeds usize")?;
+            Ok(RecoveredTable {
+                table: (*table_name).to_string(),
+                attributed: count,
+                recovered: count,
+                rejected: 0,
+            })
+        })
+        .collect()
+}
+
 /// Salvage `db_path` into a readable database.
 ///
 /// The original is never modified: work happens on a copy, and the corrupt file
@@ -616,6 +673,7 @@ pub fn recover_state_database(db_path: &Path, dry_run: bool) -> Result<RecoveryR
             );
         }
     }
+    ensure_recovery_tool_available()?;
 
     // Beside the database, not in the system temp dir: the final install is a
     // rename, which fails across filesystems, and a 204 MB copy has no business
@@ -626,11 +684,77 @@ pub fn recover_state_database(db_path: &Path, dry_run: bool) -> Result<RecoveryR
         .with_context(|| format!("copying {} for recovery", db_path.display()))?;
     restore_magic(&copy_path)?;
 
-    let salvage_path = workspace.path().join("salvaged.db");
-    run_recovery_walk(&copy_path, &salvage_path)?;
+    let rebuilt_path = workspace.path().join("rebuilt.db");
+    let mut tables: Vec<RecoveredTable> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    let repaired_copy_integrity = full_integrity_check(&copy_path);
+    let repaired_copy_is_complete = matches!(&repaired_copy_integrity, Ok(true));
+    if !repaired_copy_is_complete {
+        if !dry_run {
+            match repaired_copy_integrity {
+                Ok(false) => bail!(
+                    "recovery could not prove the repaired database complete: its full SQLite integrity_check did not pass; original state is unchanged. Preserve the original and investigate the damaged source instead of installing partial salvage"
+                ),
+                Err(error) => bail!(
+                    "recovery could not prove the repaired database complete: integrity_check failed ({error:#}); original state is unchanged. Preserve the original and resolve the underlying storage fault"
+                ),
+            }
+        }
+        notes.push(
+            "replacement is not proven: the repaired copy did not pass full SQLite integrity_check; salvage below is diagnostic only".to_string(),
+        );
+        if let Err(error) = &repaired_copy_integrity {
+            notes.push(format!("repaired-copy integrity_check error: {error:#}"));
+        }
 
-    let salvaged = Connection::open(&salvage_path).context("opening the salvage database")?;
-    let schemas = recovered_schemas(&salvaged)?;
+        let salvage_path = workspace.path().join("salvaged.db");
+        run_recovery_walk(&copy_path, &salvage_path)?;
+        let salvaged = Connection::open(&salvage_path).context("opening the salvage database")?;
+        let schemas = recovered_schemas(&salvaged)?;
+        for table_name in REQUIRED_RECOVERY_TABLES {
+            if !schemas.contains_key(*table_name) {
+                bail!(
+                    "recovery did not recover the indispensable {table_name} schema; retained intent cannot be proven"
+                );
+            }
+        }
+
+        let mut rebuilt =
+            Connection::open(&rebuilt_path).context("creating the rebuilt database")?;
+        // Registry rows must land before the lanes that reference them, and the
+        // recovered set is partial by design, so constraints stay off during load.
+        rebuilt.execute_batch("PRAGMA foreign_keys=OFF;")?;
+        for table_name in RECOVERED_TABLES {
+            let Some(schema) = schemas.get(*table_name) else {
+                notes.push(format!(
+                    "{table_name}: no schema record recovered; table would be recreated empty"
+                ));
+                tables.push(RecoveredTable {
+                    table: (*table_name).to_string(),
+                    attributed: 0,
+                    recovered: 0,
+                    rejected: 0,
+                });
+                continue;
+            };
+            tables.push(recover_table(&salvaged, &mut rebuilt, schema, true)?);
+        }
+        return Ok(RecoveryReport {
+            dry_run: true,
+            source_db: db_path.to_path_buf(),
+            quarantined_to: None,
+            tables,
+            notes,
+        });
+    }
+
+    // A repaired copy that passes a full integrity check is the only complete
+    // source proof accepted here. Install that exact copy into the workspace;
+    // do not run `.recover` and then mistake its row counts for completeness.
+    std::fs::copy(&copy_path, &rebuilt_path)
+        .context("copying the integrity-checked recovery source")?;
+    let complete = Connection::open(&rebuilt_path).context("opening the complete recovery copy")?;
+    let schemas = recovered_schemas(&complete)?;
     for table_name in REQUIRED_RECOVERY_TABLES {
         if !schemas.contains_key(*table_name) {
             bail!(
@@ -638,49 +762,22 @@ pub fn recover_state_database(db_path: &Path, dry_run: bool) -> Result<RecoveryR
             );
         }
     }
+    tables = complete_recovery_tables(&complete)?;
+    notes.push(
+        "repaired database passed full SQLite integrity_check; replacement uses the complete repaired copy".to_string(),
+    );
+    drop(complete);
 
-    let rebuilt_path = workspace.path().join("rebuilt.db");
-    let mut rebuilt = Connection::open(&rebuilt_path).context("creating the rebuilt database")?;
-    // Registry rows must land before the lanes that reference them, and the
-    // recovered set is partial by design, so constraints stay off during load.
-    rebuilt.execute_batch("PRAGMA foreign_keys=OFF;")?;
-
-    let mut tables: Vec<RecoveredTable> = Vec::new();
-    let mut notes: Vec<String> = Vec::new();
-    for table_name in RECOVERED_TABLES {
-        let Some(schema) = schemas.get(*table_name) else {
-            notes.push(format!(
-                "{table_name}: no schema record recovered; table will be recreated empty"
-            ));
-            tables.push(RecoveredTable {
-                table: (*table_name).to_string(),
-                attributed: 0,
-                recovered: 0,
-                rejected: 0,
-            });
-            continue;
-        };
-        let summary = recover_table(&salvaged, &mut rebuilt, schema, dry_run)?;
-        if !dry_run && STRICT_RECOVERY_TABLES.contains(table_name) && summary.rejected > 0 {
-            bail!(
-                "recovery rejected {} row(s) from indispensable table {table_name}; refusing replacement",
-                summary.rejected
-            );
-        }
-        tables.push(summary);
-    }
-
-    if !dry_run {
-        let cursor_epochs: i64 = rebuilt.query_row(
-            "SELECT COUNT(*) FROM source_epoch_registry WHERE lower(provider) = 'cursor'",
-            [],
-            |row| row.get(0),
-        )?;
-        if cursor_epochs > 0 && !schemas.contains_key("cursor_store_raw_record") {
-            bail!(
-                "recovery found Cursor source epochs without the cursor_store_raw_record schema; refusing replacement because retained Cursor intent cannot be proven"
-            );
-        }
+    let mut rebuilt = Connection::open(&rebuilt_path).context("opening the rebuilt database")?;
+    let cursor_epochs: i64 = rebuilt.query_row(
+        "SELECT COUNT(*) FROM source_epoch_registry WHERE lower(provider) = 'cursor'",
+        [],
+        |row| row.get(0),
+    )?;
+    if cursor_epochs > 0 && !schemas.contains_key("cursor_store_raw_record") {
+        bail!(
+            "recovery found Cursor source epochs without the cursor_store_raw_record schema; refusing replacement because retained Cursor intent cannot be proven"
+        );
     }
 
     if dry_run {
@@ -1588,6 +1685,47 @@ mod tests {
         file.flush().unwrap();
 
         assert!(needs_recovery(&path));
+    }
+
+    #[test]
+    fn only_a_full_integrity_checked_copy_proves_recovery_completeness() {
+        use std::io::{Seek, SeekFrom, Write};
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.db");
+        seed_legacy_shape(&source);
+
+        let repaired_header = dir.path().join("repaired-header.db");
+        std::fs::copy(&source, &repaired_header).unwrap();
+        let mut header = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&repaired_header)
+            .unwrap();
+        header.write_all(&[0u8; 16]).unwrap();
+        drop(header);
+        restore_magic(&repaired_header).unwrap();
+        assert!(full_integrity_check(&repaired_header).unwrap());
+
+        let damaged_page = dir.path().join("damaged-page.db");
+        std::fs::copy(&source, &damaged_page).unwrap();
+        let root_page: i64 = Connection::open(&damaged_page)
+            .unwrap()
+            .query_row(
+                "SELECT rootpage FROM sqlite_master WHERE name = 'file_state'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let mut damaged = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&damaged_page)
+            .unwrap();
+        damaged
+            .seek(SeekFrom::Start((root_page as u64 - 1) * 4096))
+            .unwrap();
+        damaged.write_all(&[0xff]).unwrap();
+        drop(damaged);
+        assert!(!full_integrity_check(&damaged_page).unwrap());
     }
 
     #[test]

@@ -7,13 +7,17 @@ public enum SnapshotRenderer {
         snapshot: HealthSnapshot,
         actionSink: any HealthActionSink,
         outputURL: URL,
-        presentationDate: Date = Date(),
+        presentationDate: Date? = nil,
         headerSummaryVariant: HeaderSummaryVariant = .default
     ) throws {
+        // Fixture renders have no SnapshotStore/producer trust context. Anchor
+        // their relative labels to the captured snapshot instead of making a
+        // fixed historical fixture look like a live, current machine.
+        let renderDate = presentationDate ?? snapshot.collectedAtDate ?? Date()
         let rootView = MenuBarPanelView(
             snapshot: snapshot,
             history: [],
-            presentationDate: presentationDate,
+            presentationDate: renderDate,
             feedback: nil,
             setFeedback: { _ in },
             actionSink: actionSink,

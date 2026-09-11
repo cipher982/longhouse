@@ -1,7 +1,7 @@
 //! Parser-independent raw + parser-versioned render shipping for storage-v2.
 
 use std::collections::{HashMap, HashSet};
-use std::io::Cursor;
+use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -2068,6 +2068,45 @@ fn resync_behind_host(
         return Ok(None);
     }
 
+    let boundary_fingerprint_before =
+        cursor_fingerprint(Path::new(source_path), prepared.range_start);
+    let pending_range_matches = match pending_source_range_matches(source_path, prepared) {
+        Ok(matches) => matches,
+        Err(error) => {
+            return block_source(
+                conn,
+                prepared.source_epoch,
+                "source_epoch_conflict_unresolved",
+                &format!(
+                    "Runtime Host is behind, but the retained pending byte range could not be proven ({error:#}); preserved the immutable envelope and refused to rewind the epoch"
+                ),
+            );
+        }
+    };
+    if !pending_range_matches {
+        return block_source(
+            conn,
+            prepared.source_epoch,
+            "source_epoch_conflict_unresolved",
+            "Runtime Host is behind, but the retained pending byte range no longer matches the source; preserved the immutable envelope and refused to rewind the epoch",
+        );
+    }
+    // The byte comparison proves the retained envelope itself. Keep the
+    // existing cursor-boundary authority as a second race check around that
+    // read, so an in-place mutation during validation cannot be mistaken for a
+    // stable source merely because inode and birth-time stayed the same.
+    if boundary_fingerprint_before.is_none()
+        || boundary_fingerprint_before
+            != cursor_fingerprint(Path::new(source_path), prepared.range_start)
+    {
+        return block_source(
+            conn,
+            prepared.source_epoch,
+            "source_epoch_conflict_unresolved",
+            "Runtime Host is behind, but the source cursor boundary changed while proving the retained range; preserved the immutable envelope and refused to rewind the epoch",
+        );
+    }
+
     // Both mutations commit together or neither does.
     //
     // Splitting them leaves a window where a crash produces a rewound cursor
@@ -2118,6 +2157,57 @@ fn resync_behind_host(
         events_shipped: 0,
         has_more: true,
     }))
+}
+
+fn pending_source_range_matches(
+    source_path: &str,
+    prepared: &PreparedStorageV2Envelope,
+) -> Result<bool> {
+    if prepared.envelope.range_kind != "byte_offset"
+        || prepared.envelope.range_start != prepared.range_start
+        || prepared.envelope.range_end != prepared.range_end
+        || envelope_id_for_subrange(&prepared.envelope, prepared.range_start, prepared.range_end)?
+            != prepared.envelope.expected_envelope_id
+    {
+        return Ok(false);
+    }
+
+    let records = decode_envelope_record_bytes(&prepared.envelope.records)?;
+    let expected_len = prepared
+        .range_end
+        .checked_sub(prepared.range_start)
+        .context("storage-v2 pending byte range underflow")?;
+    let expected_len = usize::try_from(expected_len)
+        .context("storage-v2 pending byte range exceeds addressable memory")?;
+    let mut expected = Vec::with_capacity(expected_len);
+    for bytes in records {
+        expected.extend_from_slice(&bytes);
+    }
+    if expected.len() != expected_len {
+        return Ok(false);
+    }
+
+    let path = Path::new(source_path);
+    let mut file = std::fs::File::open(path)
+        .with_context(|| format!("opening source for pending range proof: {}", path.display()))?;
+    let before = identity_from_metadata(
+        &file
+            .metadata()
+            .with_context(|| format!("reading source metadata: {}", path.display()))?,
+    );
+    if file.metadata()?.len() < prepared.range_end {
+        return Ok(false);
+    }
+    file.seek(SeekFrom::Start(prepared.range_start))?;
+    let mut actual = vec![0u8; expected_len];
+    file.read_exact(&mut actual)
+        .with_context(|| format!("reading pending source range: {}", path.display()))?;
+    let after = identity_from_metadata(
+        &file
+            .metadata()
+            .with_context(|| format!("rereading source metadata: {}", path.display()))?,
+    );
+    Ok(file_identities_match(before.as_deref(), after.as_deref()) && actual == expected)
 }
 
 async fn reconcile_blocked_lineage(
@@ -10404,6 +10494,33 @@ mod tests {
             pending_source_envelope::load_for_epoch(&conn, prepared.source_epoch)
                 .unwrap()
                 .is_none()
+        );
+
+        let (_dir, mut conn, path, prepared) = fixture();
+        let stale = manifest_for(&prepared, 0, None);
+        let pending_before = pending_source_envelope::load_for_epoch(&conn, prepared.source_epoch)
+            .unwrap()
+            .expect("prepared range remains retained until acknowledgement");
+        let local_before =
+            source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap();
+        let mut source = fs::read(&path).unwrap();
+        source[prepared.range_start as usize] ^= 1;
+        fs::write(&path, source).unwrap();
+
+        let error = resync_behind_host(&mut conn, &path.to_string_lossy(), &prepared, &stale)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("retained pending byte range"), "{error}");
+        assert_eq!(
+            source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
+            local_before
+        );
+        let pending_after = pending_source_envelope::load_for_epoch(&conn, prepared.source_epoch)
+            .unwrap()
+            .expect("source block must retain the pending body");
+        assert_eq!(
+            pending_after.request_body_zstd, pending_before.request_body_zstd,
+            "source conflict must not replace or discard retained evidence"
         );
     }
 }
