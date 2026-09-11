@@ -971,17 +971,36 @@ def _pi_native_tool_receipt(
     if not inspection_ok:
         failures.append("live_pi_tool_inspection_incomplete")
     provider_response_marker_count = binding.get("provider_response_marker_count")
+    native_message_id = provider_response.get("native_message_id") if isinstance(provider_response, dict) else None
+    projected_assistant_event_id = provider_response.get("projected_assistant_event_id") if isinstance(provider_response, dict) else None
+    native_projected_ids_distinct = (
+        isinstance(native_message_id, str)
+        and bool(native_message_id)
+        and isinstance(projected_assistant_event_id, (str, int))
+        and not isinstance(projected_assistant_event_id, bool)
+        and bool(projected_assistant_event_id)
+        and native_message_id != projected_assistant_event_id
+    )
     native_projected_linkage = (
         isinstance(provider_response, dict)
-        and isinstance(provider_response.get("native_message_id"), str)
-        and bool(provider_response.get("native_message_id"))
-        and provider_response.get("projected_assistant_event_id") == binding.get("bound_assistant_event_id")
+        and isinstance(native_message_id, str)
+        and bool(native_message_id)
+        and projected_assistant_event_id == binding.get("bound_assistant_event_id")
+        and native_projected_ids_distinct
         and isinstance(pair, tuple)
         and len(pair) == 3
         and pair[2].get("marker_count") == 1
     )
     if not native_projected_linkage:
         failures.append("native_projected_assistant_linkage_missing")
+        if (
+            isinstance(native_message_id, str)
+            and bool(native_message_id)
+            and isinstance(projected_assistant_event_id, (str, int))
+            and not isinstance(projected_assistant_event_id, bool)
+            and native_message_id == projected_assistant_event_id
+        ):
+            failures.append("native_projected_assistant_id_collision")
     provider_response_ok = (
         binding.get("status") == "pass"
         and binding.get("marker") == marker

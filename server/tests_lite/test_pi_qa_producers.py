@@ -141,7 +141,13 @@ def test_pi_console_tool_oracle_rejects_unpaired_native_tool_evidence() -> None:
     assert pi_console_tool_assertions(observation)["pi_console_tool_enabled"] is False
 
 
-def _write_native_tool_session(path, *, result_call_id: str | None = "call-1", include_result: bool = True) -> None:
+def _write_native_tool_session(
+    path,
+    *,
+    result_call_id: str | None = "call-1",
+    include_result: bool = True,
+    assistant_final_id: str = "assistant-final-1",
+) -> None:
     events = [
         {"type": "session", "id": "native-session-1"},
         {
@@ -172,7 +178,7 @@ def _write_native_tool_session(path, *, result_call_id: str | None = "call-1", i
     events.append(
         {
             "type": "message",
-            "id": "assistant-final-1",
+            "id": assistant_final_id,
             "message": {"role": "assistant", "content": [{"type": "text", "text": "LH_MARKER"}], "stopReason": "stop"},
         }
     )
@@ -270,6 +276,17 @@ def test_pi_native_tool_receipt_rejects_missing_or_mismatched_native_pair(tmp_pa
     assert receipt["status"] == "fail"
     assert "native_tool_call_result_pair_missing" in receipt["failure_reasons"]
 
+
+
+def test_pi_native_tool_receipt_rejects_native_projected_id_collision(tmp_path) -> None:
+    native_source = tmp_path / "native.jsonl"
+    _write_native_tool_session(native_source, assistant_final_id="event-1")
+
+    receipt = lifecycle._pi_native_tool_receipt(**_native_tool_receipt_inputs(native_source))
+
+    assert receipt["status"] == "fail"
+    assert "native_projected_assistant_id_collision" in receipt["failure_reasons"]
+    assert receipt["linkage"]["native_projected_assistant_linkage"] is False
 
 def test_pi_console_contract_revision_advances_with_native_receipt() -> None:
     registration = PI_CONSOLE_REGISTRATION.to_dict()
