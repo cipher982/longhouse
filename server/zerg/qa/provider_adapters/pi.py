@@ -26,12 +26,16 @@ session-safe projection or reports an honest gap.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
+import pty
+import select
 import signal
 import subprocess
 import time
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +56,94 @@ PI_LIVE_ENV = "LONGHOUSE_PI_LIVE"
 PI_RUN_TIMEOUT_SECS = 120
 PI_INTERRUPT_WAIT_SECS = 20
 PI_EVIDENCE_TEXT_LIMIT = 2000
+
+
+def _run_pi_with_pty(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: Mapping[str, str],
+    timeout: float,
+) -> tuple[subprocess.CompletedProcess[str], bool]:
+    """Run Pi's print mode on a TTY while retaining bounded evidence.
+
+    Pi 0.85.1 can complete ``-p`` interactively but waits indefinitely when
+    both output streams are ordinary pipes.  A PTY is part of the stock CLI
+    contract, not a test-only workaround; the provider still writes its native
+    session file, while this helper captures terminal output and owns timeout
+    teardown.
+    """
+
+    master_fd, slave_fd = pty.openpty()
+    process: subprocess.Popen[bytes] | None = None
+    chunks: list[bytes] = []
+    timed_out = False
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(cwd),
+            env=dict(env),
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            close_fds=True,
+            start_new_session=True,
+        )
+        os.close(slave_fd)
+        slave_fd = -1
+        deadline = time.monotonic() + timeout
+        while process.poll() is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                break
+            readable, _, _ = select.select([master_fd], [], [], min(remaining, 0.25))
+            if readable:
+                try:
+                    chunks.append(os.read(master_fd, 65536))
+                except OSError as exc:
+                    if exc.errno != errno.EIO:
+                        raise
+                    break
+        if timed_out and process.poll() is None:
+            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=5)
+        elif process.poll() is None:
+            process.wait(timeout=5)
+        os.set_blocking(master_fd, False)
+        while True:
+            try:
+                chunk = os.read(master_fd, 65536)
+            except BlockingIOError:
+                break
+            except OSError as exc:
+                if exc.errno == errno.EIO:
+                    break
+                raise
+            if not chunk:
+                break
+            chunks.append(chunk)
+        output = b"".join(chunks).decode("utf-8", "replace")
+        return (
+            subprocess.CompletedProcess(
+                command,
+                124 if timed_out else process.returncode,
+                output,
+                "",
+            ),
+            timed_out,
+        )
+    finally:
+        if slave_fd >= 0:
+            os.close(slave_fd)
+        if process is not None and process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+        os.close(master_fd)
 
 
 def pi_qualification_model() -> str:
@@ -187,25 +279,12 @@ class PiHarnessAdapter(UniversalProviderAdapter):
                 }
             command.extend(("--session", str(resume_file)))
         started = time.monotonic()
-        try:
-            result = subprocess.run(
-                command,
-                cwd=str(workdir),
-                env=self._pi_environment(package),
-                text=True,
-                capture_output=True,
-                check=False,
-                timeout=PI_RUN_TIMEOUT_SECS,
-            )
-            timed_out = False
-        except subprocess.TimeoutExpired as exc:
-            result = subprocess.CompletedProcess(
-                command,
-                returncode=124,
-                stdout=(exc.stdout or "") if isinstance(exc.stdout, str) else "",
-                stderr=(exc.stderr or "") if isinstance(exc.stderr, str) else "",
-            )
-            timed_out = True
+        result, timed_out = _run_pi_with_pty(
+            command,
+            cwd=workdir,
+            env=self._pi_environment(package),
+            timeout=PI_RUN_TIMEOUT_SECS,
+        )
         elapsed = round(time.monotonic() - started, 3)
         secret = os.environ.get("OPENROUTER_API_KEY")
         stdout = _scrub(result.stdout or "", secret)
