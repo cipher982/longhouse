@@ -93,12 +93,29 @@ class PiHarnessAdapter(UniversalProviderAdapter):
         binary = self.provider_bin or Path(probe.get("path") or probe.get("declared_binary_name") or "pi")
         return binary, None
 
-    def _pi_environment(self) -> dict[str, str]:
-        """Minimal allowlisted env. Never forward the full os.environ: a provider
-        auth failure can dump headers/config that carry secrets into stderr."""
+    def _pi_environment(self, package: EvidencePackage) -> dict[str, str]:
+        """Run stock Pi with only disposable provider configuration.
+
+        A qualification must not inherit the worker's Pi extensions, model
+        settings, or session history.  The session directory is already
+        evidence-owned; keep the provider's HOME and XDG roots there too.
+        """
+        home = package.path("provider-home")
+        agent_dir = home / ".pi-agent"
+        xdg_config = home / ".config"
+        xdg_data = home / ".local" / "share"
+        xdg_cache = home / ".cache"
+        tmp = home / "tmp"
+        for path in (home, agent_dir, xdg_config, xdg_data, xdg_cache, tmp):
+            path.mkdir(mode=0o700, parents=True, exist_ok=True)
         env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"),
-            "HOME": os.environ.get("HOME", "/tmp"),
+            "HOME": str(home),
+            "PI_CODING_AGENT_DIR": str(agent_dir),
+            "XDG_CONFIG_HOME": str(xdg_config),
+            "XDG_DATA_HOME": str(xdg_data),
+            "XDG_CACHE_HOME": str(xdg_cache),
+            "TMPDIR": str(tmp),
             "PI_OFFLINE": os.environ.get("PI_OFFLINE", ""),
         }
         key = os.environ.get("OPENROUTER_API_KEY")
@@ -174,7 +191,7 @@ class PiHarnessAdapter(UniversalProviderAdapter):
             result = subprocess.run(
                 command,
                 cwd=str(workdir),
-                env=self._pi_environment(),
+                env=self._pi_environment(package),
                 text=True,
                 capture_output=True,
                 check=False,
