@@ -83,7 +83,7 @@ def test_omp_helm_contract_declares_the_native_managed_transport():
     assert omp is not None
     assert omp.support_tier == "launch"
     assert omp.requires_longhouse_cli is False
-    assert omp.release_channel.coordinate.endswith("3b3a6dc9bbd85102ce19d0b1c11bf6870915f6ec")
+    assert omp.release_channel.coordinate.endswith("00085d4e7dfdcfbf302c122fa2682b410a0f43d1")
     assert omp.release_channel.platform_artifacts["darwin-aarch64"] == "omp-darwin-arm64"
     assert omp.operation_evidence_for("answer_pause")["disposition"] == "not_implemented"
     assert omp.managed_transport == ManagedSessionTransport.OMP_HELM_CHANNEL

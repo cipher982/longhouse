@@ -164,7 +164,7 @@ fn legacy_profile_session_roots(config_root: &Path, profile: Option<&str>) -> Ve
     roots
 }
 
-/// Resolve OMP's version-18.1.17 archive roots. Named profiles are enumerated
+/// Resolve OMP's version-18.1.18 archive roots. Named profiles are enumerated
 /// from disk and never inferred from Pi's environment contract.
 pub fn configured_session_roots(cwd: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
