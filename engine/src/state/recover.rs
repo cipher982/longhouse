@@ -196,9 +196,23 @@ impl RecoverySource {
             .mode(0o600)
             .open(destination)
             .with_context(|| format!("creating recovery copy {}", destination.display()))?;
-        copy.set_permissions(self.file.metadata()?.permissions())?;
-        std::io::copy(&mut self.file, &mut copy)
-            .with_context(|| format!("copying the retained source to {}", destination.display()))?;
+        let result: Result<()> = (|| {
+            copy.set_permissions(self.file.metadata()?.permissions())?;
+            std::io::copy(&mut self.file, &mut copy).with_context(|| {
+                format!("copying the retained source to {}", destination.display())
+            })?;
+            Ok(())
+        })();
+        drop(copy);
+        if let Err(error) = result {
+            if let Err(cleanup) = std::fs::remove_file(destination) {
+                return Err(error).context(format!(
+                    "partial recovery copy remains at {}: {cleanup}",
+                    destination.display()
+                ));
+            }
+            return Err(error);
+        }
         Ok(())
     }
 }
@@ -903,17 +917,16 @@ pub fn recover_state_database(db_path: &Path, dry_run: bool) -> Result<RecoveryR
     validated.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;")?;
     drop(validated);
 
-    // Stage the replacement beside its destination and flush it, so the final
-    // step is a rename rather than a copy. A crash mid-copy would otherwise
-    // leave a truncated database at the canonical path with the original
-    // already moved away.
-    let staged = staged_path(db_path);
-    std::fs::copy(&rebuilt_path, &staged)
-        .with_context(|| format!("staging the recovered database at {}", staged.display()))?;
+    // The validated workspace is on the destination filesystem. Publish its
+    // complete file directly rather than making another unowned staging copy.
+    // Lock both inodes: rename does not transfer the original inode's lock to
+    // the replacement, which must stay fenced through the directory sync.
+    let replacement = RecoverySource::acquire(&rebuilt_path)?;
+    replacement
+        .file
+        .sync_all()
+        .context("syncing the validated recovered database")?;
     let quarantine = quarantine_path(db_path);
-    std::fs::File::open(&staged)
-        .and_then(|file| file.sync_all())
-        .with_context(|| format!("syncing staged recovered database {}", staged.display()))?;
     source.copy_to(&quarantine).with_context(|| {
         format!(
             "retaining a quarantine copy of the corrupt database at {}",
@@ -933,7 +946,7 @@ pub fn recover_state_database(db_path: &Path, dry_run: bool) -> Result<RecoveryR
     // The original remains at the canonical path until this single atomic
     // replacement. A crash before rename therefore exposes either the intact
     // original or the complete staged replacement, never an empty path.
-    if let Err(error) = std::fs::rename(&staged, db_path) {
+    if let Err(error) = std::fs::rename(&rebuilt_path, db_path) {
         return Err(error).with_context(|| {
             format!(
                 "installing the recovered database at {}; the original remains at the canonical path",
@@ -1000,11 +1013,6 @@ impl Drop for RecoveryWorkspace {
     }
 }
 
-fn staged_path(db_path: &Path) -> PathBuf {
-    let mut name = db_path.as_os_str().to_os_string();
-    name.push(format!(".recovered-{}", std::process::id()));
-    PathBuf::from(name)
-}
 
 fn surviving_sidecar(db_path: &Path) -> Option<PathBuf> {
     for suffix in ["-wal", "-shm", "-journal"] {
