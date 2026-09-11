@@ -1584,15 +1584,23 @@ async def fetch_session_object(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The session catalog is temporarily unavailable",
         ) from exc
-    if neighborhood.get("deleted") is True:
-        raise HTTPException(status_code=status.HTTP_410_GONE, detail=f"Session {session_id} was deleted")
+    if neighborhood.get("found") is not True:
+        # The tombstone lookup behind this is not owner-scoped, so a distinct
+        # "deleted" response would let any authenticated caller tell a real
+        # deleted session from one they may not see. Object fetch answers 404
+        # uniformly, matching the deletion API's indistinguishable-not-found
+        # behaviour; replication learns about deletion from the manifest.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {session_id} not found",
+        )
     rows = neighborhood.get("objects")
     item = (
         next((row for row in rows if isinstance(row, dict) and row.get("envelope_id") == envelope_id), None)
         if isinstance(rows, list)
         else None
     )
-    if neighborhood.get("found") is not True or item is None:
+    if item is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Object {envelope_id} is not part of session {session_id}",
