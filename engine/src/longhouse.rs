@@ -19,6 +19,8 @@ use managed_launch_lifecycle::DeferredNotices;
 mod managed_launch_payload;
 #[path = "managed_terminal.rs"]
 mod managed_terminal;
+#[path = "warp_cli_agent.rs"]
+mod warp_cli_agent;
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
@@ -1338,7 +1340,7 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
         url.trim_end_matches('/'),
         session_id.split('-').next().unwrap_or(&session_id)
     );
-    crate::warp_cli_agent::emit_session_event(
+    warp_cli_agent::emit_session_event(
         "antigravity",
         "session_start",
         &session_id,
@@ -1359,7 +1361,7 @@ fn launch_managed_antigravity(args: AntigravityLaunchArgs) -> anyhow::Result<()>
     // while the terminal is already restored.
     drop(launch_transaction);
     let exit = run_result?;
-    crate::warp_cli_agent::emit_session_event(
+    warp_cli_agent::emit_session_event(
         "antigravity",
         "stop",
         &session_id,
@@ -1853,7 +1855,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
         if let Some(transaction) = launch_transaction.as_mut() {
             transaction.confirm_or_degrade("Claude", &confirm_agent_dir, &confirm_notices);
         }
-        crate::warp_cli_agent::emit_session_event(
+        warp_cli_agent::emit_session_event(
             "claude",
             "session_start",
             &session_id,
@@ -1874,7 +1876,7 @@ fn launch_managed_claude(args: ClaudeLaunchArgs) -> anyhow::Result<()> {
             return Err(error);
         }
     };
-    crate::warp_cli_agent::emit_session_event(
+    warp_cli_agent::emit_session_event(
         "claude",
         "stop",
         &session_id,
@@ -2144,7 +2146,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         && std::io::stdin().is_terminal()
         && std::io::stdout().is_terminal();
     if attached {
-        crate::warp_cli_agent::emit_session_event(
+        warp_cli_agent::emit_session_event(
             "opencode",
             "session_start",
             &session_id,
@@ -2199,7 +2201,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     }
     let exit = run_result?;
     stop_result?;
-    crate::warp_cli_agent::emit_session_event(
+    warp_cli_agent::emit_session_event(
         "opencode",
         "stop",
         &session_id,
@@ -2295,7 +2297,7 @@ fn attach_managed_opencode(args: OpencodeAttachArgs) -> anyhow::Result<()> {
         command.arg("--model").arg(model);
     }
     let cwd = std::env::current_dir()?;
-    crate::warp_cli_agent::emit_session_event(
+    warp_cli_agent::emit_session_event(
         "opencode",
         "session_start",
         &args.session_id,
@@ -2306,7 +2308,7 @@ fn attach_managed_opencode(args: OpencodeAttachArgs) -> anyhow::Result<()> {
     let stop_result = stop_opencode_bridge(&args.session_id, None);
     let exit = run_result?;
     stop_result?;
-    crate::warp_cli_agent::emit_session_event("opencode", "stop", &args.session_id, &cwd, None);
+    warp_cli_agent::emit_session_event("opencode", "stop", &args.session_id, &cwd, None);
     if exit != 0 {
         std::process::exit(exit);
     }
