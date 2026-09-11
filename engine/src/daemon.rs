@@ -116,7 +116,7 @@ const ARCHIVE_STARTUP_REPLAY_WARMUP_MIN: Duration = Duration::from_secs(5);
 const ARCHIVE_STARTUP_REPLAY_WARMUP_MAX: Duration = Duration::from_secs(20);
 const LOCAL_RETRY_DELAY_SECS: u64 = 5;
 const LIVE_LOCAL_RETRY_DELAY: Duration = Duration::from_millis(500);
-const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(120);
+const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(30);
 const LOCAL_STATUS_INTERVAL_SECS: u64 = 1;
 /// How long the local status projection may take before it is worth reporting.
 ///
