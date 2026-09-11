@@ -105,6 +105,47 @@ def test_explicit_archive_pause_is_visible_without_backlog():
     assert headline == "Longhouse archive repair is paused"
 
 
+def test_fresh_engine_pulse_does_not_hide_stale_projection():
+    context = _health_classification_context(
+        service={"status": "running"},
+        engine_status={
+            "exists": True,
+            "age_seconds": 1,
+            "projection_stale": True,
+            "payload": {},
+        },
+        transport_sample=None,
+        outbox={"file_count": 0},
+        launch_readiness={"state": "ready", "reasons": [], "suggested_actions": []},
+        archive_repair={},
+        managed_summary={},
+        managed_sessions=[],
+    )
+
+    reasons, _actions = _collect_health_reasons(context, transport_assessment=None)
+
+    assert reasons == ["engine_projection_stale"]
+    assert _suggested_action_ids(reasons) == ["repair_machine"]
+
+    classification = _classify_health(
+        service={"status": "running"},
+        engine_status={
+            "exists": True,
+            "age_seconds": 1,
+            "projection_stale": True,
+            "payload": {},
+        },
+        transport_sample=None,
+        transport_assessment=None,
+        outbox={"file_count": 0},
+        launch_readiness={"state": "ready", "reasons": [], "suggested_actions": []},
+        archive_repair={},
+        managed_summary={},
+        managed_sessions=[],
+    )
+    assert classification[:2] == ("degraded", "yellow")
+
+
 def test_dead_letters_remain_the_primary_headline_when_archive_is_paused():
     state, severity, headline, reasons, _actions = _classify_health(
         service={"status": "running"},

@@ -33,12 +33,20 @@ from .phase import _managed_phase_is_unknown
 
 _ACTION_IDS_BY_REASON: dict[str, str] = {
     "service_stopped": "repair_machine",
-    "engine_status_missing": "inspect_local_health",
-    "engine_status_unreadable": "inspect_local_health",
-    "engine_status_stale": "inspect_local_health",
-    "engine_reconciliation_failed": "inspect_local_health",
+    "engine_status_missing": "repair_machine",
+    "engine_status_unreadable": "repair_machine",
+    "engine_status_stale": "repair_machine",
+    "engine_reconciliation_failed": "repair_machine",
     "engine_status_age_unknown": "inspect_local_health",
     "engine_status_aging": "inspect_local_health",
+    "engine_projection_stale": "repair_machine",
+    "state_database_corrupt": "repair_machine",
+    "state_database_locked": "inspect_local_health",
+    "state_database_readonly": "inspect_local_health",
+    "state_database_unavailable": "inspect_local_health",
+    "runtime_unavailable": "inspect_transport",
+    "runtime_protocol_unsupported": "inspect_transport",
+    "disk_full": "free_disk_space",
     "engine_status_sessions_invalid": "inspect_local_health",
     "engine_status_sessions_missing": "inspect_local_health",
     "engine_offline": "inspect_transport",
@@ -134,6 +142,7 @@ class _HealthClassificationContext:
     engine_error: Any
     engine_age: Any
     engine_reconciliation_state: str | None
+    engine_projection_stale: bool
     spool_pending: int
     archive_state: str
     archive_mode: str
@@ -240,6 +249,7 @@ def _add_engine_status_reasons(
     engine_error: Any,
     engine_exists: bool,
     engine_age: Any,
+    engine_projection_stale: bool,
     engine_status_path: str,
     engine_log_path: str,
     service_status: str,
@@ -260,6 +270,8 @@ def _add_engine_status_reasons(
         _with_action(actions, f"Inspect logs: {engine_log_path}")
     elif engine_age is not None and engine_age > ENGINE_FRESH_SECONDS:
         reasons.append("engine_status_aging")
+    if engine_projection_stale:
+        reasons.append("engine_projection_stale")
 
 
 def _add_canonical_session_reasons(
@@ -531,9 +543,12 @@ def _health_flags(
     managed_recovery_exhausted_count: int = 0,
     managed_recovery_active_count: int = 0,
     managed_recovery_scan_error: bool = False,
+    engine_projection_stale: bool = False,
 ) -> tuple[bool, bool]:
     broken, degraded = _launch_health_flags(launch_state)
     if canonical_sessions_missing or canonical_sessions_invalid:
+        degraded = True
+    if engine_projection_stale:
         degraded = True
     if archive_mode == "paused" or archive_state == "paused":
         # An explicit pause is a current operator/configuration state even
@@ -662,6 +677,8 @@ def _degraded_health_headline(
         headline = "Longhouse is waiting for its first local status update"
     elif "engine_status_stale" in reasons:
         headline = "Longhouse local status is aging"
+    elif "engine_projection_stale" in reasons:
+        headline = "Longhouse local projection is stale"
     elif "engine_status_aging" in reasons:
         headline = "Longhouse local status is aging"
     elif "engine_status_sessions_missing" in reasons:
@@ -774,6 +791,7 @@ def _health_classification_context(
         engine_error=engine_status.get("error"),
         engine_age=engine_status.get("age_seconds"),
         engine_reconciliation_state=str((engine_status.get("reconciliation") or {}).get("state") or "").strip() or None,
+        engine_projection_stale=bool(engine_status.get("projection_stale")),
         spool_pending=spool_pending,
         archive_state=archive_state,
         archive_mode=archive_mode,
@@ -846,6 +864,7 @@ def _collect_health_reasons(
         engine_error=context.engine_error,
         engine_exists=context.engine_exists,
         engine_age=context.engine_age,
+        engine_projection_stale=context.engine_projection_stale,
         engine_status_path=context.engine_status_path,
         engine_log_path=context.engine_log_path,
         service_status=context.service_status,
@@ -1132,6 +1151,7 @@ def _classify_health(
         engine_error=context.engine_error,
         engine_exists=context.engine_exists,
         engine_age=context.engine_age,
+        engine_projection_stale=context.engine_projection_stale,
         transport_assessment=transport_assessment,
         disk_free_bytes=context.disk_free_bytes,
         outbox_count=context.outbox_count,

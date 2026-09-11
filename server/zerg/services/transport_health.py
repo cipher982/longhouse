@@ -19,9 +19,7 @@ if TYPE_CHECKING:
 TRANSPORT_ERROR_DEGRADED_MIN_COUNT = 3
 TRANSPORT_ERROR_DEGRADED_MIN_RATE = 0.25
 CURRENT_TRANSPORT_ERROR_DEGRADED_MIN_COUNT = 2
-# Long enough that an idle laptop between sessions is not called unhealthy, short
-# enough that a real outage surfaces the same day. cinder's went 33 hours.
-SHIP_STALLED_DEGRADED_MIN_SECONDS = 6 * 60 * 60
+SHIPPING_PROGRESS_STALE_AFTER_SECONDS = 2 * 60
 ACTIVE_TRANSPORT_WINDOW_LABEL = "last 10 minutes"
 
 
@@ -81,6 +79,11 @@ class TransportHealthSample:
     last_ship_at: datetime | None = None
     observed_at: datetime | None = None
     evidence_available: bool = True
+    shipping_progress_pending: bool | None = None
+    shipping_progress_stalled: bool | None = None
+    shipping_progress_seconds_without_progress: int | None = None
+    shipping_progress_observed_at: datetime | None = None
+    shipping_progress_valid: bool = True
 
     @property
     def seconds_since_last_ship(self) -> float | None:
@@ -122,6 +125,7 @@ class TransportHealthAssessment:
 def transport_health_sample_from_heartbeat(row: AgentHeartbeat) -> TransportHealthSample:
     raw = _heartbeat_raw_json(row)
     last_ship_http_status = getattr(row, "last_ship_http_status", None) or raw.get("last_ship_http_status")
+    progress = _shipping_progress_from_payload(raw)
     return TransportHealthSample(
         spool_pending=_normalize_int(getattr(row, "spool_pending", 0)),
         spool_dead=_normalize_int(getattr(row, "spool_dead", 0)),
@@ -146,12 +150,21 @@ def transport_health_sample_from_heartbeat(row: AgentHeartbeat) -> TransportHeal
         last_ship_error_message=_normalize_optional_str(raw.get("last_ship_error_message")),
         is_offline=bool(getattr(row, "is_offline", False)),
         last_ship_at=_normalize_optional_datetime(getattr(row, "last_ship_at", None) or raw.get("last_ship_at")),
+        observed_at=_normalize_optional_datetime(getattr(row, "received_at", None)),
+        shipping_progress_pending=progress[0],
+        shipping_progress_stalled=progress[1],
+        shipping_progress_seconds_without_progress=progress[2],
+        shipping_progress_observed_at=progress[3],
+        shipping_progress_valid=progress[4],
     )
 
 
 def transport_health_sample_from_engine_status_payload(payload: Mapping[str, Any] | None) -> TransportHealthSample:
     raw_payload = payload if isinstance(payload, Mapping) else {}
-    evidence_available = any(key in raw_payload for key in ("ship_attempts_1h", "ship_attempts_10m", "last_ship_result"))
+    progress = _shipping_progress_from_payload(raw_payload)
+    evidence_available = any(
+        key in raw_payload for key in ("ship_attempts_1h", "ship_attempts_10m", "last_ship_result", "shipping_progress")
+    )
     return TransportHealthSample(
         spool_pending=_normalize_int(raw_payload.get("spool_pending_count")),
         spool_dead=_normalize_int(raw_payload.get("spool_dead_count")),
@@ -177,6 +190,11 @@ def transport_health_sample_from_engine_status_payload(payload: Mapping[str, Any
         last_ship_error_message=_normalize_optional_str(raw_payload.get("last_ship_error_message")),
         is_offline=bool(raw_payload.get("is_offline", False)),
         evidence_available=evidence_available,
+        shipping_progress_pending=progress[0],
+        shipping_progress_stalled=progress[1],
+        shipping_progress_seconds_without_progress=progress[2],
+        shipping_progress_observed_at=progress[3],
+        shipping_progress_valid=progress[4],
     )
 
 
@@ -223,13 +241,16 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
             status_summary="Shipping transport evidence unavailable.",
             reasons=("transport_unavailable",),
         )
-    # A live machine that has stopped shipping is the failure this assessment
-    # could not previously express: every other input asks whether ship attempts
-    # are erroring, and a machine whose attempts stopped happening entirely has
-    # no errors to report. Only counted when the agent is demonstrably present —
-    # an offline machine is already described by being offline.
-    stalled_age = sample.seconds_since_last_ship
-    ship_stalled = not sample.is_offline and stalled_age is not None and stalled_age >= SHIP_STALLED_DEGRADED_MIN_SECONDS
+    shipping_progress_unknown = (not sample.shipping_progress_valid or _shipping_progress_is_stale(sample)) and not sample.is_offline
+    # The daemon owns the monotonic pending-work observation. A retained wall
+    # clock is historical evidence only and must never turn an idle machine red.
+    stalled_age = sample.shipping_progress_seconds_without_progress
+    ship_stalled = (
+        not sample.is_offline
+        and not shipping_progress_unknown
+        and sample.shipping_progress_pending is True
+        and sample.shipping_progress_stalled is True
+    )
     connect_error_burst = is_transport_error_burst(
         error_count=sample.ship_connect_errors_10m,
         ship_attempts=sample.ship_attempts_10m,
@@ -258,6 +279,8 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
     reasons: list[str] = []
     if sample.is_offline:
         reasons.append("reported_offline")
+    if shipping_progress_unknown:
+        reasons.append("transport_unavailable")
     if sample.spool_dead > 0:
         reasons.append("spool_dead")
     if sample.ship_payload_rejections_1h > 0:
@@ -299,7 +322,7 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
     elif ship_stalled:
         status = "degraded"
         status_reason = "ship_stalled"
-        status_summary = f"Heartbeats are current but nothing has shipped for {_humanize_age(stalled_age)}."
+        status_summary = f"Pending shipping has made no useful progress for {_humanize_age(float(stalled_age or 0))}."
     elif connect_error_burst:
         status = "degraded"
         status_reason = "connect_errors"
@@ -330,6 +353,10 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
             retryable_summary,
             sample,
         )
+    elif shipping_progress_unknown:
+        status = "unknown"
+        status_reason = "transport_unavailable"
+        status_summary = "Shipping progress evidence unavailable."
     else:
         status = "healthy"
         status_reason = "healthy"
@@ -366,6 +393,42 @@ def _heartbeat_raw_json(row: AgentHeartbeat) -> Mapping[str, Any]:
     except (TypeError, json.JSONDecodeError):
         return {}
     return parsed if isinstance(parsed, Mapping) else {}
+
+
+def _shipping_progress_from_payload(
+    payload: Mapping[str, Any],
+) -> tuple[bool | None, bool | None, int | None, datetime | None, bool]:
+    if "shipping_progress" not in payload:
+        return None, None, None, None, True
+    raw = payload.get("shipping_progress")
+    if not isinstance(raw, Mapping):
+        return None, None, None, None, False
+    pending_work = raw.get("pending_work")
+    stalled = raw.get("stalled")
+    seconds_without_progress = raw.get("seconds_without_progress")
+    observed_at = _normalize_optional_datetime(raw.get("observed_at"))
+    if (
+        not isinstance(pending_work, bool)
+        or not isinstance(stalled, bool)
+        or isinstance(seconds_without_progress, bool)
+        or not isinstance(seconds_without_progress, int)
+        or seconds_without_progress < 0
+        or observed_at is None
+    ):
+        return None, None, None, None, False
+    return pending_work, stalled, seconds_without_progress, observed_at, True
+
+
+def _shipping_progress_is_stale(sample: TransportHealthSample) -> bool:
+    if sample.shipping_progress_observed_at is None or sample.observed_at is None:
+        return False
+    observed_at = sample.observed_at
+    progress_observed_at = sample.shipping_progress_observed_at
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=timezone.utc)
+    if progress_observed_at.tzinfo is None:
+        progress_observed_at = progress_observed_at.replace(tzinfo=timezone.utc)
+    return (observed_at - progress_observed_at).total_seconds() > SHIPPING_PROGRESS_STALE_AFTER_SECONDS
 
 
 def _append_last_ship_error_detail(summary: str, sample: TransportHealthSample) -> str:

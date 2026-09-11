@@ -7,8 +7,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use futures_util::{Sink, SinkExt, StreamExt};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::process::Stdio;
 use tokio::process::Command;
 use tokio::sync::mpsc;
@@ -83,6 +86,11 @@ const MANAGED_PROVIDER_CONTRACTS_JSON: &str =
 const LAUNCH_START_TIMEOUT_SECS: u64 = 45;
 const COMPLETED_COMMAND_CACHE_CAPACITY: usize = 256;
 const COMPLETED_COMMAND_CACHE_TTL_SECS: u64 = 5 * 60;
+// This receipt fence covers only provider-affecting managed controls. It is
+// deliberately separate from turn_claims: a lost control response must not
+// make a later engine process inject the same command a second time.
+const COMMAND_RECEIPT_RESULT_MAX_BYTES: usize = 64 * 1024;
+const COMMAND_RECEIPT_DIR: &str = "control-command-receipts";
 // Keep this below uvicorn/websockets' default ping timeout. Tungstenite may
 // queue protocol pongs internally and flush them on the next write, so the
 // app-level heartbeat also keeps server keepalive pongs moving through proxies.
@@ -727,10 +735,22 @@ async fn run_reconnect_loop(config: ShipperConfig, status: ControlChannelStatus)
     let mut backoff = Duration::from_secs(1);
     let mut last_error: Option<String> = None;
     let mut outage_started: Option<Instant> = None;
+    let Some(receipt_db_path) = config
+        .db_path
+        .clone()
+        .or_else(|| crate::config::get_agent_db_path().ok())
+    else {
+        tracing::error!("Managed control cannot start without a durable command receipt path");
+        return;
+    };
+    let receipt_store = Some(Arc::new(DurableCommandReceiptStore::for_db_path(
+        &receipt_db_path,
+    )));
     let mut completed_commands = CompletedCommandCache::new(
         COMPLETED_COMMAND_CACHE_CAPACITY,
         Duration::from_secs(COMPLETED_COMMAND_CACHE_TTL_SECS),
-    );
+    )
+    .with_durable_receipts(receipt_store);
     loop {
         let connected_before = status.snapshot().last_connected_at;
         let result = run_once(&config, &mut completed_commands, &status).await;
@@ -927,15 +947,17 @@ async fn run_once(
                     .await?;
                     continue;
                 }
-                if let Some(result) = completed_commands.get(&command_id) {
-                    send_control_message(
-                        &mut stream,
-                        Message::Text(result.to_string()),
-                        "machine control command result",
-                        status,
-                    )
-                    .await?;
-                    continue;
+                if !command_requires_restart_fence(&frame) {
+                    if let Some(result) = completed_commands.get(&command_id) {
+                        send_control_message(
+                            &mut stream,
+                            Message::Text(result.to_string()),
+                            "machine control command result",
+                            status,
+                        )
+                        .await?;
+                        continue;
+                    }
                 }
                 if in_flight_commands.contains(&command_id) {
                     tracing::debug!(command_id, "Ignoring duplicate in-flight machine control command");
@@ -945,9 +967,11 @@ async fn run_once(
                 in_flight_commands.insert(command_id.clone());
                 let tx = command_result_tx.clone();
                 let config = config.clone();
+                let durable_receipts = completed_commands.durable_receipts.clone();
                 tokio::spawn(async move {
-                    let mut no_cache = CompletedCommandCache::new(0, Duration::ZERO);
-                    let result = handle_command_frame(frame, &mut no_cache, &config).await;
+                    let mut task_cache = CompletedCommandCache::new(0, Duration::ZERO)
+                        .with_durable_receipts(durable_receipts);
+                    let result = handle_command_frame(frame, &mut task_cache, &config).await;
                     let _ = tx.send((command_id, result));
                 });
             }
@@ -1004,6 +1028,38 @@ async fn handle_command_frame(
         return command_error("", "invalid_command", "command_id is required");
     }
 
+    let restart_fenced = command_requires_restart_fence(&frame);
+    let receipt_identity = restart_fenced.then(|| command_receipt_identity(&frame, &command_id));
+    if let (Some(store), Some(identity)) = (&completed_commands.durable_receipts, &receipt_identity)
+    {
+        match store.claim(identity) {
+            Ok(DurableCommandReceiptOutcome::Terminal(result)) => return result,
+            Ok(DurableCommandReceiptOutcome::Accepted) => {
+                return command_error(
+                    &command_id,
+                    "command_indeterminate",
+                    "Machine Agent accepted this command before its outcome was recorded; it was not replayed",
+                )
+            }
+            Ok(DurableCommandReceiptOutcome::IdentityConflict) => {
+                return command_error(
+                    &command_id,
+                    "command_identity_conflict",
+                    "command_id was reused with a different provider, session, or lease generation",
+                )
+            }
+            Ok(DurableCommandReceiptOutcome::Claimed) => {}
+            Err(error) => {
+                tracing::error!(command_id = %command_id, error = %error, "Cannot fence managed control command");
+                return command_error(
+                    &command_id,
+                    "command_receipt_unavailable",
+                    "Machine Agent could not durably record the managed control command before execution",
+                );
+            }
+        }
+    }
+
     if let Some(result) = completed_commands.get(&command_id) {
         return result;
     }
@@ -1026,6 +1082,21 @@ async fn handle_command_frame(
             command_error(&command_id, &code, &message)
         }
     };
+    if let (Some(store), Some(identity)) = (&completed_commands.durable_receipts, &receipt_identity)
+    {
+        match store.complete(identity, &response) {
+            Ok(Some(recorded)) => return recorded,
+            Ok(None) => {}
+            Err(error) => {
+                tracing::error!(command_id = %command_id, error = %error, "Cannot record managed control result");
+                return command_error(
+                    &command_id,
+                    "command_indeterminate",
+                    "Managed control ran, but its result could not be durably recorded; it was not replayed",
+                );
+            }
+        }
+    }
     completed_commands.insert(command_id, response.clone());
     response
 }
@@ -2711,6 +2782,235 @@ fn nonempty_cli_error(output: &CliCommandOutput) -> String {
     format!("longhouse command exited {}", output.exit_code)
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct CommandReceiptIdentity {
+    command_id: String,
+    provider: String,
+    session_id: String,
+    generation: Option<String>,
+    run_id: Option<String>,
+    connection_id: Option<String>,
+    request_hash: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct DurableCommandReceipt {
+    identity: CommandReceiptIdentity,
+    state: String,
+    result: Option<Value>,
+    terminal_at_ms: Option<i64>,
+}
+
+enum DurableCommandReceiptOutcome {
+    Claimed,
+    Accepted,
+    Terminal(Value),
+    IdentityConflict,
+}
+
+struct DurableCommandReceiptStore {
+    root: PathBuf,
+    lock: Mutex<()>,
+}
+
+impl DurableCommandReceiptStore {
+    fn for_db_path(db_path: &Path) -> Self {
+        let root = db_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(COMMAND_RECEIPT_DIR);
+        Self {
+            root,
+            lock: Mutex::new(()),
+        }
+    }
+
+    fn unavailable(&self) -> Result<()> {
+        // A transient filesystem failure is rechecked on the next request,
+        // rather than poisoning control until the whole engine is restarted.
+        std::fs::create_dir_all(&self.root).with_context(|| {
+            format!(
+                "creating durable command receipt directory {}",
+                self.root.display()
+            )
+        })
+    }
+
+    fn path_for(&self, command_id: &str) -> PathBuf {
+        self.root
+            .join(format!("{:x}.json", Sha256::digest(command_id.as_bytes())))
+    }
+
+    fn read_unlocked(&self, command_id: &str) -> Result<Option<DurableCommandReceipt>> {
+        let path = self.path_for(command_id);
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+        };
+        let receipt = serde_json::from_str(&contents)
+            .with_context(|| format!("parsing managed-control receipt {}", path.display()))?;
+        Ok(Some(receipt))
+    }
+
+    fn outcome_for(
+        &self,
+        receipt: DurableCommandReceipt,
+        identity: &CommandReceiptIdentity,
+    ) -> DurableCommandReceiptOutcome {
+        if receipt.identity != *identity {
+            return DurableCommandReceiptOutcome::IdentityConflict;
+        }
+        match receipt.state.as_str() {
+            "accepted" => DurableCommandReceiptOutcome::Accepted,
+            "terminal" => receipt
+                .result
+                .map(DurableCommandReceiptOutcome::Terminal)
+                .unwrap_or(DurableCommandReceiptOutcome::Accepted),
+            _ => DurableCommandReceiptOutcome::Accepted,
+        }
+    }
+
+    fn claim(&self, identity: &CommandReceiptIdentity) -> Result<DurableCommandReceiptOutcome> {
+        self.unavailable()?;
+        let _guard = self.lock.lock().expect("command receipt lock poisoned");
+        if let Some(receipt) = self.read_unlocked(&identity.command_id)? {
+            return Ok(self.outcome_for(receipt, identity));
+        }
+
+        let receipt = DurableCommandReceipt {
+            identity: identity.clone(),
+            state: "accepted".to_string(),
+            result: None,
+            terminal_at_ms: None,
+        };
+        let bytes = serde_json::to_vec(&receipt).context("serializing managed-control receipt")?;
+        let path = self.path_for(&identity.command_id);
+        let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Ok(match self.read_unlocked(&identity.command_id)? {
+                    Some(existing) => self.outcome_for(existing, identity),
+                    None => bail!("managed-control receipt disappeared while claiming it"),
+                })
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("creating {}", path.display()))
+            }
+        };
+        if let Err(error) = file.write_all(&bytes).and_then(|_| file.sync_all()) {
+            let _ = std::fs::remove_file(&path);
+            return Err(error).with_context(|| format!("writing {}", path.display()));
+        }
+        // The filename itself must survive a crash before any provider action.
+        std::fs::File::open(&self.root)?.sync_all()?;
+        Ok(DurableCommandReceiptOutcome::Claimed)
+    }
+
+    fn complete(&self, identity: &CommandReceiptIdentity, result: &Value) -> Result<Option<Value>> {
+        self.unavailable()?;
+        let bytes = serde_json::to_vec(result).context("serializing managed-control result")?;
+        if bytes.len() > COMMAND_RECEIPT_RESULT_MAX_BYTES {
+            bail!(
+                "managed-control result is {} bytes; receipt limit is {} bytes",
+                bytes.len(),
+                COMMAND_RECEIPT_RESULT_MAX_BYTES
+            );
+        }
+        let _guard = self.lock.lock().expect("command receipt lock poisoned");
+        let Some(existing) = self.read_unlocked(&identity.command_id)? else {
+            bail!("managed-control receipt disappeared before result recording");
+        };
+        if existing.identity != *identity {
+            bail!("managed-control receipt identity changed before result recording");
+        }
+        if existing.state == "terminal" {
+            return Ok(existing.result);
+        }
+
+        let path = self.path_for(&identity.command_id);
+        let temp_path = path.with_extension(format!("json.tmp-{}", std::process::id()));
+        let receipt = DurableCommandReceipt {
+            identity: identity.clone(),
+            state: "terminal".to_string(),
+            result: Some(result.clone()),
+            terminal_at_ms: Some(timestamp_now_ms()),
+        };
+        let encoded = serde_json::to_vec(&receipt).context("serializing terminal receipt")?;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .with_context(|| format!("creating {}", temp_path.display()))?;
+        if let Err(error) = file.write_all(&encoded).and_then(|_| file.sync_all()) {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(error).with_context(|| format!("writing {}", temp_path.display()));
+        }
+        std::fs::rename(&temp_path, &path)
+            .with_context(|| format!("installing {}", path.display()))?;
+        std::fs::File::open(&self.root)?.sync_all()?;
+        Ok(None)
+    }
+}
+
+fn timestamp_now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
+fn command_requires_restart_fence(frame: &Value) -> bool {
+    matches!(
+        frame.get("command_type").and_then(Value::as_str),
+        Some(
+            COMMAND_SEND_TEXT
+                | COMMAND_INTERRUPT
+                | COMMAND_STEER_TEXT
+                | COMMAND_ANSWER_PAUSE
+                | COMMAND_TERMINATE
+        )
+    )
+}
+
+fn command_receipt_identity(frame: &Value, command_id: &str) -> CommandReceiptIdentity {
+    let mut payload = frame.get("payload").cloned().unwrap_or_else(|| json!({}));
+    let provider = payload
+        .get("provider")
+        .and_then(Value::as_str)
+        .unwrap_or(DEFAULT_COMMAND_PROVIDER)
+        .trim()
+        .to_string();
+    let grant = payload
+        .as_object_mut()
+        .and_then(|object| object.remove("longhouse_control_grant"));
+    let scope = |key: &str| {
+        grant
+            .as_ref()
+            .and_then(|grant| grant.get(key))
+            .filter(|value| !value.is_null())
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| value.to_string())
+            })
+    };
+    let request =
+        serde_json::to_vec(&(frame.get("command_type"), &payload)).expect("JSON values serialize");
+    CommandReceiptIdentity {
+        command_id: command_id.to_string(),
+        provider,
+        session_id: frame
+            .get("session_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        generation: scope("lease_generation"),
+        run_id: scope("run_id"),
+        connection_id: scope("connection_id"),
+        request_hash: format!("{:x}", Sha256::digest(&request)),
+    }
+}
+
 struct CachedCommandResult {
     completed_at: Instant,
     result: Value,
@@ -2721,6 +3021,7 @@ struct CompletedCommandCache {
     ttl: Duration,
     entries: HashMap<String, CachedCommandResult>,
     order: VecDeque<String>,
+    durable_receipts: Option<Arc<DurableCommandReceiptStore>>,
 }
 
 impl CompletedCommandCache {
@@ -2730,7 +3031,13 @@ impl CompletedCommandCache {
             ttl,
             entries: HashMap::new(),
             order: VecDeque::new(),
+            durable_receipts: None,
         }
+    }
+
+    fn with_durable_receipts(mut self, store: Option<Arc<DurableCommandReceiptStore>>) -> Self {
+        self.durable_receipts = store;
+        self
     }
 
     fn get(&mut self, command_id: &str) -> Option<Value> {
@@ -4561,6 +4868,44 @@ exit 1
 
         assert_eq!(cache.get("cmd-1"), None);
         assert_eq!(cache.get("cmd-2").unwrap()["command_id"], "cmd-2");
+    }
+
+    #[tokio::test]
+    async fn restart_fence_returns_indeterminate_instead_of_replaying_accepted_control() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("longhouse-shipper.db");
+        let command_id = "managed-control:session-1:session.send_text:req-1";
+        let frame = json!({
+            "type": "command",
+            "command_id": command_id,
+            "session_id": "session-1",
+            "command_type": COMMAND_SEND_TEXT,
+            "payload": {
+                "provider": "codex",
+                "text": "continue",
+                "longhouse_control_grant": {
+                    "lease_generation": "lease-generation-1",
+                    "run_id": "run-1",
+                    "connection_id": "connection-1"
+                }
+            }
+        });
+        let identity = command_receipt_identity(&frame, command_id);
+        let store = Arc::new(DurableCommandReceiptStore::for_db_path(&db_path));
+        assert!(matches!(
+            store.claim(&identity).unwrap(),
+            DurableCommandReceiptOutcome::Claimed
+        ));
+        drop(store);
+
+        // Reopening the store models an engine restart. The accepted boundary
+        // is durable even though no provider side effect is run by this test.
+        let restarted_store = Arc::new(DurableCommandReceiptStore::for_db_path(&db_path));
+        let mut cache = command_cache().with_durable_receipts(Some(restarted_store));
+        let result = handle_command_frame(frame, &mut cache, &test_config()).await;
+
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"]["code"], "command_indeterminate");
     }
 
     #[tokio::test]

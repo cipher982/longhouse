@@ -251,6 +251,13 @@ jobs:
       - name: Wait for control plane
         run: ./scripts/ci/wait-for-http.sh "$CONTROL_PLANE_URL/health" "Control plane"
 
+      - name: Reject personal dogfood as automated canary
+        run: |
+          if [[ "${INSTANCE_SUBDOMAIN,,}" == "david010" ]]; then
+            echo "Refusing automated canary reprovision of the personal dogfood tenant; configure HOSTED_CANARY_SUBDOMAIN (demo is the dedicated default)." >&2
+            exit 1
+          fi
+
       - name: Resolve hosted canary instance
         id: instance
         run: |

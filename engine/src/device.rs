@@ -16,7 +16,8 @@ use std::time::SystemTime;
 const NATIVE_DEVICE_ENTRYPOINTS_JSON: &str =
     include_str!("../../config/native_device_entrypoints.json");
 const ENGINE_FRESH_SECONDS: u64 = 30;
-const ENGINE_STALE_SECONDS: u64 = 120;
+const ENGINE_STALE_SECONDS: u64 = 60;
+const PROJECTION_STALE_SECONDS: u64 = 60;
 const CURRENT_TRANSPORT_ERROR_DEGRADED_MIN_COUNT: u64 = 2;
 const TRANSPORT_ERROR_DEGRADED_MIN_COUNT: u64 = 3;
 const TRANSPORT_ERROR_DEGRADED_MIN_RATE: f64 = 0.25;
@@ -555,16 +556,17 @@ fn load_shipping_sources(
                     "mtime": mtime,
                 })
             })
-            .unwrap_or_else(|| serde_json::json!({
-                "present": false,
-                "size": Value::Null,
-                "mtime": Value::Null,
-            }));
+            .unwrap_or_else(|| {
+                serde_json::json!({
+                    "present": false,
+                    "size": Value::Null,
+                    "mtime": Value::Null,
+                })
+            });
         let capture_updated_at: Option<String> = row.get(21)?;
         let shipping_updated_at: Option<String> = row.get(16)?;
-        let root_order_relation = recorded_root_order_relation(
-            row.get::<_, Option<String>>(18)?.as_deref(),
-        );
+        let root_order_relation =
+            recorded_root_order_relation(row.get::<_, Option<String>>(18)?.as_deref());
         let pending = pending_path.as_ref().map(|path| {
             serde_json::json!({
                 "source_epoch": row.get::<_, String>(0).unwrap_or_default(),
@@ -701,7 +703,10 @@ fn shipping_age_seconds(updated_at: Option<&str>) -> Option<u64> {
 fn print_shipping_source_evidence(source: &Value) {
     let epoch = source["source_epoch"].as_str().unwrap_or("?");
     println!("Source epoch {epoch}");
-    println!("  provider     {}", source["provider"].as_str().unwrap_or("?"));
+    println!(
+        "  provider     {}",
+        source["provider"].as_str().unwrap_or("?")
+    );
     println!(
         "  source id    {}",
         source["opaque_source_id"]
@@ -719,7 +724,10 @@ fn print_shipping_source_evidence(source: &Value) {
             source["end_reason"].as_str().unwrap_or("unknown reason")
         );
     }
-    println!("  file         {}", source["source_path"].as_str().unwrap_or("?"));
+    println!(
+        "  file         {}",
+        source["source_path"].as_str().unwrap_or("?")
+    );
     println!(
         "  file present {}",
         if source["source_file_present"].as_bool() == Some(true) {
@@ -761,16 +769,16 @@ fn print_shipping_source_evidence(source: &Value) {
             .map(|age| age.to_string())
             .unwrap_or_else(|| "unknown".to_string())
     );
-    println!("  superseded   {} envelope(s)", source["supersession_count"]);
+    println!(
+        "  superseded   {} envelope(s)",
+        source["supersession_count"]
+    );
     if source["pending"].is_null() {
         println!("  pending      none");
     } else {
         println!(
             "  retained     {} events, {} bytes, range {}..{}",
-            source["event_count"],
-            source["raw_bytes"],
-            source["range_start"],
-            source["range_end"]
+            source["event_count"], source["raw_bytes"], source["range_start"], source["range_end"]
         );
         match source["blocked_at"].as_str() {
             Some(blocked_at) => {
@@ -932,13 +940,74 @@ pub fn cmd_device_repair(
     repair_service: bool,
     state_root: Option<&Path>,
 ) -> anyhow::Result<()> {
-    let execution = collect_native_repair_execution(state_root, dry_run, repair_service)?;
+    eprintln!("Longhouse repair: checking the local service and retained state.");
+    let started = std::time::Instant::now();
+    let mut execution = collect_native_repair_execution(state_root, dry_run, repair_service)?;
+    if !dry_run && execution.state == "completed" {
+        let status_path = engine_status_path(state_root)?;
+        eprintln!("Longhouse repair: waiting for new Machine Agent evidence; archive catch-up is separate.");
+        settle_native_repair(&mut execution, started + Duration::from_secs(120), || {
+            collect_native_local_health(&status_path)
+        });
+    }
     if json {
         println!("{}", serde_json::to_string_pretty(&execution)?);
     } else {
         print_native_repair_execution(&execution);
     }
     Ok(())
+}
+
+/// Service-manager success is not evidence that the restarted agent can work.
+/// Require a new producer sample; an old cached green sample cannot settle repair.
+fn settle_native_repair(
+    execution: &mut NativeRepairExecution,
+    deadline: std::time::Instant,
+    mut sample: impl FnMut() -> NativeLocalHealth,
+) {
+    loop {
+        let after = sample();
+        let new_sample = after.engine_status.last_updated.is_some()
+            && after.engine_status.last_updated
+                != execution.before_health.engine_status.last_updated;
+        let new_owner = after.engine_status.daemon_pid.is_some()
+            && after.engine_status.daemon_pid != execution.before_health.engine_status.daemon_pid;
+        let useful_service = new_sample
+            && new_owner
+            && after.engine_status.fresh
+            && !after.reasons.iter().any(|reason| {
+                matches!(
+                    reason.as_str(),
+                    "engine_projection_stale"
+                        | "engine_reconciliation_failed"
+                        | "storage_v2_outbox_unreadable"
+                        | "transport_unavailable"
+                )
+            });
+        let terminal = after.health_state == "broken" && new_sample && new_owner;
+        execution.after_health = Some(after);
+        if useful_service || terminal || std::time::Instant::now() >= deadline {
+            let after = execution.after_health.as_ref().expect("sampled above");
+            if useful_service && !terminal {
+                execution.state = "service_recovered".to_string();
+                execution.headline = "The local Machine Agent is running again".to_string();
+                execution.notes.push(
+                    "New local service evidence is verified. Remote connectivity and archive catch-up remain separate health facts.".to_string(),
+                );
+            } else {
+                execution.state = "recovery_pending".to_string();
+                execution.headline =
+                    "Repair ran, but useful Machine Agent service is not yet verified".to_string();
+                execution.notes.push(if after.reasons.is_empty() {
+                    "No new producer identity and status were observed. The previous cached snapshot is not recovery proof.".to_string()
+                } else {
+                    format!("Remaining local health reasons: {}", after.reasons.join(", "))
+                });
+            }
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
 }
 
 pub fn embedded_contract() -> anyhow::Result<NativeDeviceContract> {
@@ -1225,6 +1294,13 @@ fn native_health_from_parts(
     error: Option<String>,
 ) -> NativeLocalHealth {
     let object = payload.as_ref().and_then(Value::as_object);
+    let startup_refused = object
+        .and_then(|value| value.get("startup_refused"))
+        .and_then(Value::as_bool)
+        == Some(true);
+    let startup_reason = object
+        .and_then(|value| value.get("startup_refusal_kind"))
+        .and_then(Value::as_str);
     let local_projection = object
         .and_then(|value| value.get("local_projection"))
         .and_then(Value::as_object);
@@ -1317,7 +1393,7 @@ fn native_health_from_parts(
             > 0
             || value.get("dead_bytes").and_then(Value::as_u64).unwrap_or(0) > 0
     });
-    let transport = native_transport_status(object);
+    let mut transport = native_transport_status(object);
     let managed_session_count = object
         .and_then(|value| value.get("managed_sessions"))
         .and_then(Value::as_array)
@@ -1352,7 +1428,7 @@ fn native_health_from_parts(
     } else if !exists {
         reasons.push("engine_status_missing".to_string());
     } else if effective_age_seconds
-        .map(|age| age > ENGINE_STALE_SECONDS)
+        .map(|age| age >= ENGINE_STALE_SECONDS)
         .unwrap_or(false)
     {
         reasons.push("engine_status_stale".to_string());
@@ -1371,6 +1447,32 @@ fn native_health_from_parts(
         .and_then(Value::as_str);
     if reconciliation_state == Some("failed") {
         reasons.push("engine_reconciliation_failed".to_string());
+    }
+    let projection_age = local_projection
+        .and_then(|value| value.get("generated_at"))
+        .and_then(Value::as_str)
+        .and_then(rfc3339_age_seconds);
+    let projection_stale = projection_age.is_some_and(|age| age >= PROJECTION_STALE_SECONDS);
+    if projection_stale {
+        reasons.push("engine_projection_stale".to_string());
+    }
+    if startup_refused {
+        reasons.push("engine_startup_refused".to_string());
+        if let Some(reason) = startup_reason {
+            reasons.push(reason.to_string());
+        }
+    }
+    if startup_refused
+        || !exists
+        || error.is_some()
+        || effective_age_seconds.is_none_or(|age| age >= ENGINE_STALE_SECONDS)
+        || projection_stale
+    {
+        transport = transport_status(
+            "unknown",
+            "transport_unavailable",
+            "Current shipping evidence is unavailable; last-known transport is not current health.",
+        );
     }
     if is_offline == Some(true) {
         reasons.push("engine_offline".to_string());
@@ -1414,6 +1516,7 @@ fn native_health_from_parts(
             reason.as_str(),
             "engine_status_unreadable"
                 | "engine_status_missing"
+                | "engine_startup_refused"
                 | "payload_rejected"
                 | "payload_too_large"
                 | "storage_v2_outbox_unreadable"
@@ -1428,7 +1531,21 @@ fn native_health_from_parts(
     }
     .to_string();
 
-    let headline = if reasons
+    let headline = if startup_refused {
+        match startup_reason {
+            Some("state_database_corrupt") => {
+                "Local state is damaged; retained data needs safe recovery"
+            }
+            Some("state_database_locked") => "Local state is locked by another writer",
+            Some("state_database_readonly") => "The Machine Agent cannot write its local state",
+            Some("disk_full") => "The Machine Agent needs free disk space",
+            Some("runtime_unavailable") => "The Machine Agent cannot reach the Runtime Host",
+            Some("runtime_protocol_unsupported") => {
+                "The Runtime Host cannot accept this Machine Agent"
+            }
+            _ => "The local Machine Agent could not start",
+        }
+    } else if reasons
         .iter()
         .any(|reason| reason == "storage_v2_sources_unresolved")
     {
@@ -1448,6 +1565,15 @@ fn native_health_from_parts(
         .any(|reason| reason == "managed_launch_recovery_exhausted")
     {
         "Managed session recovery needs attention"
+    } else if reasons
+        .iter()
+        .any(|reason| reason == "engine_projection_stale")
+    {
+        "Local status collection stopped making progress"
+    } else if reasons.iter().any(|reason| reason == "engine_status_stale") {
+        "The local Machine Agent stopped reporting"
+    } else if reasons.iter().any(|reason| reason == "ship_stalled") {
+        "Pending uploads are not making progress"
     } else {
         match health_state.as_str() {
             "healthy" => "Longhouse native health is healthy",
@@ -1468,12 +1594,18 @@ fn native_health_from_parts(
             exists,
             fresh: exists
                 && error.is_none()
+                && !startup_refused
                 && effective_age_seconds
                     .map(|age| age <= ENGINE_FRESH_SECONDS)
                     .unwrap_or(false),
             age_seconds: effective_age_seconds,
             file_age_seconds: age_seconds,
-            error,
+            error: error.or_else(|| {
+                object
+                    .and_then(|value| value.get("startup_refusal"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
             last_updated: object
                 .and_then(|value| value.get("last_updated"))
                 .and_then(Value::as_str)
@@ -1613,6 +1745,10 @@ fn native_desktop_engine_payload(payload: Option<&Value>) -> Option<Value> {
         "disk_free_bytes",
         "is_offline",
         "local_projection",
+        "shipping_progress",
+        "startup_refused",
+        "startup_refusal_kind",
+        "startup_refusal",
         "recent_dead_letters",
         "sessions",
         "build",
@@ -1765,15 +1901,20 @@ fn native_desktop_suggested_action_ids(reasons: &[String]) -> Vec<String> {
     let mut action_ids = Vec::new();
     for reason in reasons {
         let action_id = match reason.as_str() {
-            "service_stopped" => "repair_machine",
-            "engine_status_missing"
+            "service_stopped"
+            | "engine_status_missing"
             | "engine_status_unreadable"
             | "engine_status_stale"
-            | "engine_status_age_unknown"
+            | "engine_projection_stale"
+            | "state_database_corrupt"
+            | "engine_reconciliation_failed" => "repair_machine",
+            "engine_status_age_unknown"
             | "engine_status_aging"
             | "engine_status_sessions_invalid"
             | "engine_status_sessions_missing"
-            | "engine_reconciliation_failed" => "inspect_local_health",
+            | "state_database_locked"
+            | "state_database_readonly"
+            | "state_database_unavailable" => "inspect_local_health",
             "storage_v2_sources_blocked"
             | "storage_v2_sources_unresolved"
             | "storage_v2_sources_proof_unknown" => "inspect_storage_source",
@@ -1782,6 +1923,8 @@ fn native_desktop_suggested_action_ids(reasons: &[String]) -> Vec<String> {
             | "heartbeat_stale"
             | "engine_offline"
             | "transport_unavailable"
+            | "runtime_unavailable"
+            | "runtime_protocol_unsupported"
             | "server_errors"
             | "connect_errors"
             | "ship_stalled"
@@ -1790,7 +1933,7 @@ fn native_desktop_suggested_action_ids(reasons: &[String]) -> Vec<String> {
             "payload_rejected" | "payload_too_large" | "parse_errors" | "spool_dead"
             | "spool_dead_letters" | "outbox_stuck" => "inspect_shipping",
             "archive_dead_lettered" | "archive_repair_paused" => "inspect_archive",
-            "disk_critically_low" | "disk_low" => "free_disk_space",
+            "disk_critically_low" | "disk_low" | "disk_full" => "free_disk_space",
             "managed_session_control_degraded"
             | "managed_session_detached"
             | "managed_unknown_phase"
@@ -2947,7 +3090,12 @@ fn engine_health_needs_repair(health: &NativeLocalHealth) -> bool {
     health.reasons.iter().any(|reason| {
         matches!(
             reason.as_str(),
-            "engine_status_missing" | "engine_status_unreadable" | "engine_status_stale"
+            "engine_status_missing"
+                | "engine_status_unreadable"
+                | "engine_status_stale"
+                | "engine_projection_stale"
+                | "engine_reconciliation_failed"
+                | "state_database_corrupt"
         )
     })
 }
@@ -3843,18 +3991,7 @@ fn write_text_atomic(path: &Path, content: &str) -> Result<(), String> {
 }
 
 fn run_service_manager_command(command: &NativeServiceManagerCommand) -> Result<(), String> {
-    let output = Command::new(command.program)
-        .args(&command.args)
-        .output()
-        .map_err(|err| format!("starting {}: {err}", command.program))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    Err(format_process_failure(
-        output.status.code(),
-        &output.stdout,
-        &output.stderr,
-    ))
+    run_bounded_service_command(command.program, &command.args, Duration::from_secs(10))
 }
 
 fn redact_service_error(error: &str, redactions: &[String]) -> String {
@@ -3967,18 +4104,89 @@ fn current_uid() -> u32 {
 }
 
 fn run_restart_command(command: &NativeRestartCommand) -> Result<(), String> {
-    let output = Command::new(command.program)
-        .args(&command.args)
-        .output()
-        .map_err(|err| format!("starting {}: {err}", command.program))?;
-    if output.status.success() {
-        return Ok(());
+    run_bounded_service_command(command.program, &command.args, Duration::from_secs(10))
+}
+
+/// Bound the service-manager client, never signal the service's provider children.
+fn run_bounded_service_command(
+    program: &str,
+    args: &[String],
+    timeout: Duration,
+) -> Result<(), String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
     }
-    Err(format_process_failure(
-        output.status.code(),
-        &output.stdout,
-        &output.stderr,
-    ))
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("starting {program}: {error}"))?;
+    let mut stderr = child.stderr.take().expect("stderr was piped");
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let reader = std::thread::spawn(move || {
+        let mut retained = Vec::new();
+        let mut chunk = [0u8; 1024];
+        while let Ok(count) = stderr.read(&mut chunk) {
+            if count == 0 {
+                break;
+            }
+            let keep = count.min(2048usize.saturating_sub(retained.len()));
+            retained.extend_from_slice(&chunk[..keep]);
+        }
+        let _ = sender.send(retained);
+    });
+    let deadline = std::time::Instant::now() + timeout;
+    let result = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                match receiver
+                    .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                {
+                    Ok(stderr) => {
+                        break if status.success() {
+                            Ok(())
+                        } else {
+                            Err(format_process_failure(status.code(), &[], &stderr))
+                        }
+                    }
+                    Err(_) => {
+                        break Err(format!(
+                            "{program} output did not close within {}s",
+                            timeout.as_secs()
+                        ))
+                    }
+                }
+            }
+            Err(error) => break Err(format!("waiting for {program}: {error}")),
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                break Err(format!(
+                    "{program} did not finish within {}s; service state remains unverified",
+                    timeout.as_secs()
+                ));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+        }
+    };
+    if result.is_err() {
+        #[cfg(unix)]
+        if let Ok(pgid) = i32::try_from(child.id()) {
+            unsafe {
+                libc::killpg(pgid, libc::SIGKILL);
+            }
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    // Killing the owned client group closes its pipes, including forked clients.
+    let _ = reader.join();
+    result
 }
 
 fn format_process_failure(status_code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> String {
@@ -4120,6 +4328,38 @@ fn native_transport_status(
             "degraded",
             "retryable_client_errors",
             &format!("{retryable_client_errors} retryable client error(s) in the active window."),
+        )
+    } else if object.get("shipping_progress").is_some_and(|progress| {
+        progress.get("pending_work").and_then(Value::as_bool) == Some(true)
+            && (progress.get("stalled").and_then(Value::as_bool) == Some(true)
+                || progress
+                    .get("seconds_without_progress")
+                    .and_then(Value::as_u64)
+                    .zip(
+                        progress
+                            .get("observed_at")
+                            .and_then(Value::as_str)
+                            .and_then(rfc3339_age_seconds),
+                    )
+                    .is_some_and(|(elapsed, age)| elapsed.saturating_add(age) >= 60))
+    }) {
+        transport_status(
+            "degraded",
+            "ship_stalled",
+            "Pending uploads have made no useful progress for at least 60 awake seconds.",
+        )
+    } else if object.get("shipping_progress").is_some_and(|progress| {
+        progress
+            .get("observed_at")
+            .and_then(Value::as_str)
+            .and_then(rfc3339_age_seconds)
+            .is_none_or(|age| age >= ENGINE_STALE_SECONDS)
+    }) || (object.get("shipping_progress").is_none()
+        && get_u64(object, "spool_pending_count") > 0)
+    {
+        transport_status(
+            "unknown", "transport_unavailable",
+            "Pending upload progress is unavailable; historical receipts cannot prove current health.",
         )
     } else {
         transport_status("healthy", "healthy", "Shipping healthy.")
@@ -4744,7 +4984,11 @@ mod tests {
         .unwrap();
 
         let sources = load_shipping_sources(&conn, None).unwrap();
-        assert_eq!(sources.len(), 3, "ended epochs are not part of the live view");
+        assert_eq!(
+            sources.len(),
+            3,
+            "ended epochs are not part of the live view"
+        );
         let frozen = sources
             .iter()
             .find(|source| source["capture_position"] == "frozen-blob")
@@ -4762,15 +5006,11 @@ mod tests {
             "a no-pending source resolves its path through the provider session binding"
         );
         assert!(
-            frozen["capture_position_age_seconds"]
-                .as_u64()
-                .unwrap()
+            frozen["capture_position_age_seconds"].as_u64().unwrap()
                 > healthy["capture_position_age_seconds"].as_u64().unwrap()
         );
         assert!(
-            frozen["shipping_position_age_seconds"]
-                .as_u64()
-                .unwrap()
+            frozen["shipping_position_age_seconds"].as_u64().unwrap()
                 > healthy["shipping_position_age_seconds"].as_u64().unwrap()
         );
 
@@ -4809,7 +5049,13 @@ mod tests {
             "an opaque id that is genuinely a path is still usable"
         );
         assert_eq!(
-            shipping_source_path("claude", "path-sha256:deadbeef", None, None, Some("/tmp/bound.jsonl")),
+            shipping_source_path(
+                "claude",
+                "path-sha256:deadbeef",
+                None,
+                None,
+                Some("/tmp/bound.jsonl")
+            ),
             Some("/tmp/bound.jsonl".to_string()),
             "a session binding outranks the opaque id"
         );
@@ -5342,38 +5588,80 @@ mod tests {
     }
 
     #[test]
-    fn native_local_health_uses_projection_pulse_for_freshness() {
+    fn native_local_health_expires_cached_evidence_despite_live_pulse() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = chrono::Utc::now();
         let health = native_health_from_parts(
             &path,
             true,
-            Some(ENGINE_STALE_SECONDS + 1),
+            Some(0),
             Some(json!({
+                "ship_attempts_10m": 0,
+                "is_offline": false,
                 "local_projection": {
-                    "generated_at": "2026-01-01T00:00:00Z",
-                    "engine_pulse_at": now,
+                    "generated_at": (now - chrono::Duration::seconds(65)).to_rfc3339(),
+                    "engine_pulse_at": now.to_rfc3339(),
                     "reconciliation": {"state": "reconciling", "reason": "local_status"}
                 }
             })),
             None,
         );
-
-        assert!(health.engine_status.fresh);
-        assert!(!health
+        assert_ne!(health.health_state, "healthy");
+        assert!(health
             .reasons
-            .contains(&"engine_evidence_stale".to_string()));
-        assert!(health.engine_status.age_seconds.unwrap_or_default() <= 1);
-        assert_eq!(
-            health
-                .engine_status
-                .reconciliation
-                .as_ref()
-                .and_then(|value| value.get("state"))
-                .and_then(Value::as_str),
-            Some("reconciling")
+            .contains(&"engine_projection_stale".to_string()));
+        assert_eq!(health.transport.status, "unknown");
+        let desktop = native_desktop_health_from_parts(
+            health.clone(),
+            None,
+            None,
+            None,
+            chrono::Utc::now().to_rfc3339(),
         );
+        assert!(desktop
+            .suggested_action_ids
+            .contains(&"repair_machine".to_string()));
+        assert!(engine_health_needs_repair(&health));
+    }
+
+    #[test]
+    fn native_transport_only_expires_receipt_progress_when_work_is_pending() {
+        let observed_at = chrono::Utc::now().to_rfc3339();
+        let mut payload = json!({
+            "ship_attempts_10m": 0,
+            "is_offline": false,
+            "spool_pending_count": 1,
+            "shipping_progress": {
+                "pending_work": true,
+                "stalled": false,
+                "seconds_without_progress": 61,
+                "observed_at": observed_at
+            }
+        });
+        assert_eq!(
+            native_transport_status(payload.as_object()).status_reason,
+            "ship_stalled"
+        );
+        payload["spool_pending_count"] = json!(0);
+        payload["shipping_progress"]["pending_work"] = json!(false);
+        assert_eq!(
+            native_transport_status(payload.as_object()).status,
+            "healthy"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_service_manager_hang_has_bounded_completion() {
+        let started = std::time::Instant::now();
+        let result = run_bounded_service_command(
+            "/bin/sh",
+            &["-c".to_string(), "sleep 30".to_string()],
+            Duration::from_millis(100),
+        );
+        assert!(result.is_err());
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 
     #[test]

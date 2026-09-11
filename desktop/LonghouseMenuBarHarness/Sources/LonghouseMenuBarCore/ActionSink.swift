@@ -775,16 +775,7 @@ public struct SpyHealthActionSink: HealthActionSink {
                 for: .repairInstall,
                 style: .info,
                 title: "Repair running",
-                detail: "Longhouse is reconciling the runtime, replaying queued shipping, then collecting health. Open Logs for live progress."
-            )
-        }
-
-        if startBundledSetup() != nil {
-            return feedback(
-                for: .repairInstall,
-                style: .warning,
-                title: "Repair fell back to setup",
-                detail: "Longhouse could not find the local CLI, so it started its built-in setup in the background. Open Logs for progress or errors."
+                detail: "Longhouse is reconciling the local runtime and collecting health in the background. Open Logs for progress or a remaining action."
             )
         }
 
@@ -792,7 +783,7 @@ public struct SpyHealthActionSink: HealthActionSink {
             for: .repairInstall,
             style: .failure,
             title: "Repair could not start",
-            detail: "Longhouse could not start `longhouse machine repair` or its built-in setup on this Mac."
+            detail: "Longhouse could not start `longhouse machine repair` on this Mac. Open setup from the explicit setup-required state or inspect Logs for the missing prerequisite."
         )
     }
 

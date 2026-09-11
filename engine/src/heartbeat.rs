@@ -13,14 +13,14 @@ use std::path::Path;
 #[cfg(target_os = "macos")]
 use std::process::Command;
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use chrono::DateTime;
 use chrono::Datelike;
 use chrono::SecondsFormat;
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::build_identity::BuildIdentity;
@@ -75,6 +75,7 @@ pub struct HeartbeatPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_ship_error_message: Option<String>,
     pub spool_pending_count: usize,
+    pub shipping_progress: ShippingProgress,
     pub spool_dead_count: usize,
     #[serde(default)]
     pub archive_backlog: ArchiveBacklogSnapshot,
@@ -161,6 +162,95 @@ pub struct HeartbeatPayload {
     /// unknown rather than current; see `update.rs`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update: Option<crate::update::UpdateStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShippingProgress {
+    pub pending_work: bool,
+    pub stalled: bool,
+    pub seconds_without_progress: u64,
+    pub observed_at: String,
+}
+
+impl Default for ShippingProgress {
+    fn default() -> Self {
+        Self {
+            pending_work: false,
+            stalled: false,
+            seconds_without_progress: 0,
+            observed_at: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ShippingProgressObservation {
+    last_progress_at: Instant,
+    pending_work: bool,
+}
+
+impl ShippingProgressObservation {
+    pub fn new(now: Instant) -> Self {
+        Self {
+            last_progress_at: now,
+            pending_work: false,
+        }
+    }
+
+    pub fn record_progress(&mut self, now: Instant) {
+        self.last_progress_at = now;
+    }
+
+    pub fn reset_after_sleep(&mut self, now: Instant) {
+        self.last_progress_at = now;
+    }
+
+    pub fn observe_pending_work(&mut self, pending_work: bool, now: Instant) {
+        if pending_work && !self.pending_work {
+            self.last_progress_at = now;
+        }
+        self.pending_work = pending_work;
+    }
+
+    pub fn snapshot(&self, pending_work: bool, is_offline: bool, now: Instant) -> ShippingProgress {
+        let seconds_without_progress = if pending_work && !is_offline {
+            now.saturating_duration_since(self.last_progress_at)
+                .as_secs()
+        } else {
+            0
+        };
+        ShippingProgress {
+            pending_work,
+            stalled: pending_work && !is_offline && seconds_without_progress >= 60,
+            seconds_without_progress,
+            observed_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+}
+
+pub fn payload_has_pending_work(payload: &HeartbeatPayload) -> bool {
+    let archive_paused =
+        payload.archive_backlog.mode == "paused" || payload.archive_backlog.state == "paused";
+    let scheduler_pending = payload.ship_scheduler.as_ref().is_some_and(|scheduler| {
+        scheduler.ready_live > 0
+            || scheduler.in_flight_live > 0
+            || (!archive_paused
+                && (scheduler.ready_retry > 0
+                    || scheduler.ready_scan > 0
+                    || scheduler.in_flight_retry > 0
+                    || scheduler.in_flight_scan > 0
+                    || scheduler.ready_backlog > 0
+                    || scheduler.in_flight_backlog > 0))
+    });
+    let archive_pending = !archive_paused
+        && (payload.archive_backlog.pending_ranges > 0
+            || payload.archive_backlog.pending_bytes > 0);
+    let spool_pending = !archive_paused && payload.spool_pending_count > 0;
+
+    spool_pending
+        || payload.storage_v2_outbox.pending_count > 0
+        || archive_pending
+        || scheduler_pending
 }
 
 /// One machine-observed binding of an unmanaged provider CLI process to
@@ -694,6 +784,7 @@ impl HeartbeatPayload {
             last_ship_error_kind: ship_stats.last_ship_error_kind,
             last_ship_error_message: ship_stats.last_ship_error_message,
             spool_pending_count,
+            shipping_progress: ShippingProgress::default(),
             spool_dead_count,
             archive_backlog,
             storage_v2_outbox,
@@ -3709,9 +3800,11 @@ impl Serialize for PhaseLedgerStatus {
 /// can surface the distinction. Compute both with
 /// `SessionPhaseStore::new(conn).fresh_rows(now)` at the call site.
 pub fn write_status_file(
-    projection: &StatusFileProjection,
+    projection: &mut StatusFileProjection,
     control_channel: Option<serde_json::Value>,
     reconciliation: &ProjectionReconciliation,
+    progress_observation: &mut ShippingProgressObservation,
+    is_offline: bool,
     status_path: &std::path::Path,
 ) {
     #[derive(Serialize)]
@@ -3765,6 +3858,12 @@ pub fn write_status_file(
         last_updated: String,
     }
 
+    let monotonic_now = Instant::now();
+    let pending_work = payload_has_pending_work(&projection.payload);
+    progress_observation.observe_pending_work(pending_work, monotonic_now);
+    projection.payload.shipping_progress =
+        progress_observation.snapshot(pending_work, is_offline, monotonic_now);
+
     let now_utc = chrono::Utc::now();
     let now = now_utc.to_rfc3339();
     let daemon_started_at = DAEMON_STARTED_AT.get_or_init(|| now.clone()).clone();
@@ -3809,6 +3908,8 @@ pub fn write_status_file(
 /// `generated_at` remain the last accepted snapshot.
 pub fn refresh_existing_status_pulse(
     reconciliation: &ProjectionReconciliation,
+    progress_observation: &mut ShippingProgressObservation,
+    is_offline: bool,
     status_path: &std::path::Path,
 ) {
     let Ok(bytes) = std::fs::read(status_path) else {
@@ -3818,11 +3919,24 @@ pub fn refresh_existing_status_pulse(
         return;
     };
     let now = chrono::Utc::now().to_rfc3339();
+    let monotonic_now = Instant::now();
+    let pending_work = status
+        .get("shipping_progress")
+        .and_then(|value| value.get("pending_work"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    progress_observation.observe_pending_work(pending_work, monotonic_now);
     status["daemon_pid"] = serde_json::json!(std::process::id());
     status["last_updated"] = serde_json::json!(now);
     status["local_projection"]["engine_pulse_at"] = serde_json::json!(now);
     status["local_projection"]["reconciliation"] =
         serde_json::to_value(reconciliation).unwrap_or(serde_json::Value::Null);
+    status["shipping_progress"] = serde_json::to_value(progress_observation.snapshot(
+        pending_work,
+        is_offline,
+        monotonic_now,
+    ))
+    .unwrap_or(serde_json::Value::Null);
 
     if let Ok(json) = serde_json::to_string_pretty(&status) {
         let tmp_path = status_path.with_extension("json.tmp");
@@ -3919,6 +4033,7 @@ mod tests {
             last_ship_error_kind: None,
             last_ship_error_message: None,
             spool_pending_count: 5,
+            shipping_progress: ShippingProgress::default(),
             spool_dead_count: 1,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
@@ -3979,6 +4094,40 @@ mod tests {
     }
 
     #[test]
+    fn shipping_progress_is_idle_aware_and_resets_on_progress_sleep_or_offline() {
+        let start = Instant::now();
+        let mut observation = ShippingProgressObservation::new(start);
+        observation.observe_pending_work(true, start);
+
+        let within_budget = observation.snapshot(true, false, start + Duration::from_secs(59));
+        assert!(within_budget.pending_work);
+        assert!(!within_budget.stalled);
+
+        let stalled = observation.snapshot(true, false, start + Duration::from_secs(60));
+        assert!(stalled.stalled);
+        assert_eq!(stalled.seconds_without_progress, 60);
+
+        observation.record_progress(start + Duration::from_secs(61));
+        let recovered = observation.snapshot(true, false, start + Duration::from_secs(62));
+        assert!(!recovered.stalled);
+        assert_eq!(recovered.seconds_without_progress, 1);
+
+        observation.reset_after_sleep(start + Duration::from_secs(100));
+        let after_sleep = observation.snapshot(true, false, start + Duration::from_secs(101));
+        assert!(!after_sleep.stalled);
+        assert_eq!(after_sleep.seconds_without_progress, 1);
+
+        let offline = observation.snapshot(true, true, start + Duration::from_secs(1_000));
+        assert!(!offline.stalled);
+        assert_eq!(offline.seconds_without_progress, 0);
+
+        let idle_again = observation.snapshot(false, false, start + Duration::from_secs(1_000));
+        assert!(!idle_again.pending_work);
+        assert!(!idle_again.stalled);
+        assert_eq!(idle_again.seconds_without_progress, 0);
+    }
+
+    #[test]
     fn allocated_database_size_uses_sqlite_pages() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(tmp.path())).unwrap();
@@ -4008,6 +4157,7 @@ mod tests {
             last_ship_error_kind: None,
             last_ship_error_message: None,
             spool_pending_count: 0,
+            shipping_progress: ShippingProgress::default(),
             spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
@@ -5242,6 +5392,7 @@ mod tests {
             last_ship_error_kind: None,
             last_ship_error_message: None,
             spool_pending_count: 0,
+            shipping_progress: ShippingProgress::default(),
             spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
@@ -5306,6 +5457,7 @@ mod tests {
             last_ship_error_kind: None,
             last_ship_error_message: None,
             spool_pending_count: 2,
+            shipping_progress: ShippingProgress::default(),
             spool_dead_count: 3,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
@@ -5364,16 +5516,19 @@ mod tests {
         };
 
         let status_path = dir.path().join("agent").join("engine-status.json");
-        let projection =
+        let mut projection =
             build_status_file_projection(payload, &stats, Vec::new(), PhaseLedgerStatus::Ok);
+        let mut progress_observation = ShippingProgressObservation::new(Instant::now());
         write_status_file(
-            &projection,
+            &mut projection,
             Some(serde_json::json!({
                 "enabled": true,
                 "status": "connected",
                 "supports": ["codex.turn_start"],
             })),
             &ProjectionReconciliation::idle(),
+            &mut progress_observation,
+            false,
             &status_path,
         );
 
@@ -5411,9 +5566,11 @@ mod tests {
         let generated_at = parsed["local_projection"]["generated_at"].clone();
         let stable_dead_letters = parsed["recent_dead_letters"].clone();
         write_status_file(
-            &projection,
+            &mut projection,
             None,
             &ProjectionReconciliation::running("local_status", "2026-07-16T12:00:00Z"),
+            &mut progress_observation,
+            false,
             &status_path,
         );
         let refreshed: serde_json::Value =
@@ -5431,6 +5588,8 @@ mod tests {
 
         refresh_existing_status_pulse(
             &ProjectionReconciliation::running("wake", "2026-07-16T12:01:00Z"),
+            &mut progress_observation,
+            false,
             &status_path,
         );
         let pulsed: serde_json::Value =
@@ -5478,6 +5637,7 @@ mod tests {
             last_ship_error_kind: None,
             last_ship_error_message: None,
             spool_pending_count: 0,
+            shipping_progress: ShippingProgress::default(),
             spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
@@ -5529,12 +5689,15 @@ mod tests {
             .expect("fresh_rows should succeed on a live DB");
 
         let status_path = dir.path().join("agent").join("engine-status.json");
-        let projection =
+        let mut projection =
             build_status_file_projection(payload, &stats, phase_ledger, PhaseLedgerStatus::Ok);
+        let mut progress_observation = ShippingProgressObservation::new(Instant::now());
         write_status_file(
-            &projection,
+            &mut projection,
             None,
             &ProjectionReconciliation::idle(),
+            &mut progress_observation,
+            false,
             &status_path,
         );
 
@@ -5566,6 +5729,7 @@ mod tests {
             last_ship_error_kind: None,
             last_ship_error_message: None,
             spool_pending_count: 0,
+            shipping_progress: ShippingProgress::default(),
             spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),
@@ -5613,16 +5777,19 @@ mod tests {
         };
 
         let status_path = dir.path().join("agent").join("engine-status.json");
-        let projection = build_status_file_projection(
+        let mut projection = build_status_file_projection(
             payload,
             &stats,
             Vec::new(),
             PhaseLedgerStatus::ReadFailed("db locked".to_string()),
         );
+        let mut progress_observation = ShippingProgressObservation::new(Instant::now());
         write_status_file(
-            &projection,
+            &mut projection,
             None,
             &ProjectionReconciliation::idle(),
+            &mut progress_observation,
+            false,
             &status_path,
         );
 
@@ -6716,6 +6883,7 @@ mod tests {
             last_ship_error_kind: None,
             last_ship_error_message: None,
             spool_pending_count: 0,
+            shipping_progress: ShippingProgress::default(),
             spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
             storage_v2_outbox: StorageV2OutboxSnapshot::default(),

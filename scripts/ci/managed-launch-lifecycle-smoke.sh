@@ -77,6 +77,8 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 fail() {
   echo "FAIL: $*" >&2
@@ -98,6 +100,21 @@ cp "$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile ci --bin lon
   "$BIN_DIR/longhouse"
 cp "$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile ci --bin longhouse-engine)" \
   "$BIN_DIR/longhouse-engine"
+
+# Both Runtime Host and providers must use the disposable identity, even when
+# this proof is launched from a managed session with inherited machine config.
+export HOME="$HOME_DIR"
+export LONGHOUSE_HOME="$HOME_DIR/.longhouse"
+export XDG_CONFIG_HOME="$HOME_DIR/.config"
+export XDG_DATA_HOME="$HOME_DIR/.local/share"
+export XDG_STATE_HOME="$HOME_DIR/.local/state"
+export XDG_CACHE_HOME="$HOME_DIR/.cache"
+export LONGHOUSE_ORIGIN_KIND=test_or_canary
+export LONGHOUSE_LAUNCH_ACTOR=automation
+export LONGHOUSE_LAUNCH_SURFACE=test
+unset CODEX_HOME CLAUDE_CONFIG_DIR LONGHOUSE_IS_SIDECHAIN
+unset LONGHOUSE_API_URL LONGHOUSE_SERVER_URL LONGHOUSE_URL LONGHOUSE_DEVICE_TOKEN
+echo "owned lifecycle proof root: $TEST_ROOT"
 
 # ---------------------------------------------------------------------------
 # Start a real Runtime Host
@@ -129,7 +146,7 @@ start_runtime_host() {
       JWT_SECRET="lifecycle-smoke-jwt-secret" \
       FERNET_SECRET="$FERNET" \
       INTERNAL_API_SECRET="lifecycle-smoke-internal-secret" \
-      uv run python -m zerg.cli.main serve --host 127.0.0.1 --port "$PORT" >"$SERVER_LOG" 2>&1
+      exec "$ROOT_DIR/server/.venv/bin/python" -m zerg.cli.main serve --host 127.0.0.1 --port "$PORT" >"$SERVER_LOG" 2>&1
     ) &
     SERVER_PID=$!
 
@@ -145,8 +162,7 @@ start_runtime_host() {
       sleep 0.5
     done
 
-    kill "$SERVER_PID" 2>/dev/null || true
-    wait "$SERVER_PID" 2>/dev/null || true
+    stop_child "$SERVER_PID" "runtime host startup"
     SERVER_PID=""
     if [[ "${LONGHOUSE_LIFECYCLE_SMOKE_PORT:-0}" != "0" ]]; then
       break
@@ -178,6 +194,8 @@ payload = {
     "provider": provider,
     "machine_name": "lifecycle-smoke-host",
     "permission_mode": "bypass",
+    "launch_actor": "automation",
+    "launch_surface": "test",
 }
 if session_id:
     payload["session_id"] = session_id
@@ -386,7 +404,6 @@ while True:
 PY
 chmod 755 "$BIN_DIR/cursor-agent"
 
-export HOME="$HOME_DIR"
 export PATH="$BIN_DIR:/usr/bin:/bin:/usr/sbin:/sbin"
 # The Codex protocol fake uses the same pinned Python environment as the real
 # Runtime Host. Keep the provider executable self-contained on PATH while

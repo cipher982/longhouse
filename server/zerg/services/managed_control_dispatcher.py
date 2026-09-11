@@ -401,24 +401,27 @@ async def _dispatch_engine_channel(
         command_id=command_id,
     )
     if not response.transport_ok:
-        # Always terminal. A dispatch that reached the channel may have been
-        # accepted before failing, and the operation is already created, so
-        # replaying it would need both durable engine dedupe and a grant that
-        # survived the reconnect. Neither holds today. Retry is confined to
-        # precondition failures, which occur before any operation exists.
-        await _finish_live_managed_control_operation(
-            operation_id=live_operation_id,
-            status="failed",
-            error={
-                "code": "machine_control_transport_failed",
-                "message": response.error or "Machine Agent control channel dispatch failed",
-            },
-        )
+        # Keep the catalog operation running until the same command identity
+        # is reconciled. The engine may have accepted the frame before the
+        # response was lost; finishing it as failed would discard the durable
+        # reconciliation boundary and make a later retry indistinguishable
+        # from a new provider side effect.
+        delivery_certainty = response.delivery_certainty or "ambiguous"
+        if delivery_certainty == "not_sent":
+            message = response.error or "Machine Agent control command was not sent"
+            failure_reason = "not_sent"
+        else:
+            message = (
+                "Machine Agent control command outcome is indeterminate; it was not replayed: "
+                f"{response.error or 'the control response was lost'}"
+            )
+            failure_reason = "indeterminate"
         return ManagedControlDispatchResult(
             ok=False,
             transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
-            error=response.error or "Machine Agent control channel dispatch failed",
+            error=message,
             failure_kind=DISPATCH_FAILURE_TRANSPORT,
+            failure_reason=failure_reason,
         )
 
     message = response.message or {}

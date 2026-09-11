@@ -262,7 +262,7 @@ verify_release_checksum() {
 install_native_pair() {
     step "Installing Longhouse"
     CURRENT_INSTALL_STAGE="native_binary_install"
-    local target source_dir="${LONGHOUSE_NATIVE_BIN_DIR:-}" version base_url tmp_dir checksums facade_asset engine_asset
+    local target source_dir="${LONGHOUSE_NATIVE_BIN_DIR:-}" version base_url tmp_dir checksums facade_asset engine_asset sqlite_asset
     local native_bin_dir="$HOME/.local/bin" native_root="$HOME/.local/share/longhouse" release_id release_dir
     local current_link="$native_root/current" next_current existing_facade
     target="$(native_target)"; facade_asset="longhouse-${target}"; engine_asset="longhouse-engine-${target}"; tmp_dir="$(mktemp -d)"
@@ -270,20 +270,26 @@ install_native_pair() {
         INSTALL_TELEMETRY_SOURCE="local"; INSTALL_TELEMETRY_PACKAGE_REF="$source_dir"; INSTALL_RELEASE_VERSION=""
         [[ -x "$source_dir/longhouse" && -x "$source_dir/longhouse-engine" ]] || { error "LONGHOUSE_NATIVE_BIN_DIR must contain executable longhouse and longhouse-engine binaries"; rm -rf "$tmp_dir"; return 1; }
         cp "$source_dir/longhouse" "$tmp_dir/longhouse"; cp "$source_dir/longhouse-engine" "$tmp_dir/longhouse-engine"
+        if [[ -x "$source_dir/longhouse-sqlite3" ]]; then
+            cp "$source_dir/longhouse-sqlite3" "$tmp_dir/longhouse-sqlite3"
+        fi
     else
-        INSTALL_TELEMETRY_SOURCE="release"; version="$(resolve_release_version)"; INSTALL_RELEASE_VERSION="$version"; INSTALL_TELEMETRY_PACKAGE_REF="v$version"; base_url="https://github.com/cipher982/longhouse/releases/download/v${version}"; checksums="$tmp_dir/local-runtime-checksums.txt"
+        INSTALL_TELEMETRY_SOURCE="release"; version="$(resolve_release_version)"; INSTALL_RELEASE_VERSION="$version"; INSTALL_TELEMETRY_PACKAGE_REF="v$version"; base_url="https://github.com/cipher982/longhouse/releases/download/v${version}"; checksums="$tmp_dir/local-runtime-checksums.txt"; sqlite_asset="longhouse-sqlite3-${target}"
         info "Downloading Longhouse v$version for $target"
-        curl -fsSL "$base_url/local-runtime-checksums.txt" -o "$checksums" && curl -fsSL "$base_url/$facade_asset" -o "$tmp_dir/longhouse" && curl -fsSL "$base_url/$engine_asset" -o "$tmp_dir/longhouse-engine" || { rm -rf "$tmp_dir"; return 1; }
+        curl -fsSL "$base_url/local-runtime-checksums.txt" -o "$checksums" && curl -fsSL "$base_url/$facade_asset" -o "$tmp_dir/longhouse" && curl -fsSL "$base_url/$engine_asset" -o "$tmp_dir/longhouse-engine" && curl -fsSL "$base_url/$sqlite_asset" -o "$tmp_dir/longhouse-sqlite3" || { rm -rf "$tmp_dir"; return 1; }
         verify_release_checksum "$checksums" "$facade_asset" "$tmp_dir/longhouse" || { error "Checksum mismatch for $facade_asset"; rm -rf "$tmp_dir"; return 1; }
         verify_release_checksum "$checksums" "$engine_asset" "$tmp_dir/longhouse-engine" || { error "Checksum mismatch for $engine_asset"; rm -rf "$tmp_dir"; return 1; }
+        verify_release_checksum "$checksums" "$sqlite_asset" "$tmp_dir/longhouse-sqlite3" || { error "Checksum mismatch for $sqlite_asset"; rm -rf "$tmp_dir"; return 1; }
     fi
     chmod 755 "$tmp_dir/longhouse" "$tmp_dir/longhouse-engine"
+    [[ ! -e "$tmp_dir/longhouse-sqlite3" ]] || chmod 755 "$tmp_dir/longhouse-sqlite3"
     "$tmp_dir/longhouse" verify-pair >/dev/null || { rm -rf "$tmp_dir"; return 1; }
     release_id="${version:-local}-${tmp_dir##*/}"
     release_dir="$native_root/releases/$release_id"
     mkdir -p "$native_bin_dir" "$release_dir"
     mv "$tmp_dir/longhouse" "$release_dir/longhouse"
     mv "$tmp_dir/longhouse-engine" "$release_dir/longhouse-engine"
+    [[ ! -e "$tmp_dir/longhouse-sqlite3" ]] || mv "$tmp_dir/longhouse-sqlite3" "$release_dir/longhouse-sqlite3"
     "$release_dir/longhouse" verify-pair >/dev/null || { rm -rf "$tmp_dir"; return 1; }
     existing_facade="$native_bin_dir/longhouse"
     next_current="$native_root/.current-${tmp_dir##*/}"

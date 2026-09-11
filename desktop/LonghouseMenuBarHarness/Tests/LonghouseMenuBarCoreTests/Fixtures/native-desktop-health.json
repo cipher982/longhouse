@@ -9,6 +9,16 @@
     "payload": {
       "daemon_pid": 4242,
       "last_updated": "2026-08-03T16:00:00Z",
+      "local_projection": {
+        "generated_at": "2026-08-03T16:00:00Z",
+        "engine_pulse_at": "2026-08-03T16:00:00Z"
+      },
+      "shipping_progress": {
+        "pending_work": false,
+        "stalled": false,
+        "seconds_without_progress": 0,
+        "observed_at": "2026-08-03T16:00:00Z"
+      },
       "sessions": [
         {
           "bridge": {

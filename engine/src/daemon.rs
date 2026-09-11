@@ -139,7 +139,7 @@ const MANAGED_OBSERVATION_INTERVAL_SECS: u64 = 5;
 const MANAGED_FULL_RECONCILIATION_INTERVAL_SECS: u64 = 60;
 const WAKE_GAP_THRESHOLD_SECS: u64 = 5;
 const MACHINE_PRESENCE_INTERVAL_SECS: u64 = 60;
-const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
+const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 60;
 const FLIGHT_SAMPLE_INTERVAL_SECS: u64 = 5;
 
 const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
@@ -275,6 +275,7 @@ impl Drop for PathWorkersShutdown {
 struct PathTaskResult {
     job: PathJob,
     events_shipped: usize,
+    bytes_shipped: u64,
     resolved_spool: usize,
     failed_spool: usize,
     had_connect_error: bool,
@@ -740,7 +741,7 @@ fn archive_startup_replay_warmup_delay(
 ///
 /// Best-effort by construction: the process is already exiting on a real error,
 /// and failing to write the explanation must not replace it with an I/O error.
-fn record_startup_refusal(message: &str) {
+fn record_startup_refusal(reason: &str, message: &str) {
     let Ok(status_path) = config::get_agent_status_path() else {
         return;
     };
@@ -752,10 +753,32 @@ fn record_startup_refusal(message: &str) {
     // only to carry the reason; liveness still reads as down, which is true.
     let payload = serde_json::json!({
         "startup_refused": true,
+        "startup_refusal_kind": reason,
         "startup_refusal": message,
     });
     if let Ok(serialized) = serde_json::to_vec_pretty(&payload) {
         let _ = std::fs::write(&status_path, serialized);
+    }
+}
+
+fn startup_storage_reason(error: &anyhow::Error) -> &'static str {
+    let code = error.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<rusqlite::Error>()
+            .and_then(rusqlite::Error::sqlite_error_code)
+    });
+    match code {
+        Some(rusqlite::ErrorCode::NotADatabase | rusqlite::ErrorCode::DatabaseCorrupt) => {
+            "state_database_corrupt"
+        }
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
+            "state_database_locked"
+        }
+        Some(rusqlite::ErrorCode::ReadOnly | rusqlite::ErrorCode::PermissionDenied) => {
+            "state_database_readonly"
+        }
+        Some(rusqlite::ErrorCode::DiskFull) => "disk_full",
+        _ => "state_database_unavailable",
     }
 }
 
@@ -764,8 +787,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // 1. Open state DB
     let projection_db_path =
         crate::state::db::resolve_db_path(config.shipper_config.db_path.as_deref())?;
-    let mut conn = open_db(Some(&projection_db_path))?;
-    crate::state::source_inventory::abandon_open_reconciliation(&conn)?;
+    let mut conn = open_db(Some(&projection_db_path)).inspect_err(|error| {
+        record_startup_refusal(startup_storage_reason(error), &format!("{error:#}"));
+    })?;
+    crate::state::source_inventory::abandon_open_reconciliation(&conn).inspect_err(|error| {
+        record_startup_refusal(startup_storage_reason(error), &format!("{error:#}"));
+    })?;
 
     // 2. Prune stale file_state entries (files deleted from disk, >30 days old)
     {
@@ -789,7 +816,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             &config.shipper_config.machine_name,
             Some(Duration::from_secs(5)),
         )
-        .await?;
+        .await
+        .inspect_err(|error| {
+            record_startup_refusal("runtime_unavailable", &format!("{error:#}"));
+        })?;
     let storage_v2 = match require_storage_v2_cutover(negotiated, &config.shipper_config.api_url) {
         Ok(capabilities) => {
             tracing::info!(
@@ -804,7 +834,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // before it ever writes engine-status.json, so without this the
             // only record is a launchd log and every local-health surface just
             // says the engine is missing -- which is true and useless.
-            record_startup_refusal(&error.to_string());
+            record_startup_refusal("runtime_protocol_unsupported", &format!("{error:#}"));
             return Err(error);
         }
     };
@@ -1030,6 +1060,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut managed_reconciliation =
         heartbeat::ProjectionReconciliation::running("startup", chrono::Utc::now().to_rfc3339());
     let mut wake_gap_detector = WakeGapDetector::new();
+    let mut shipping_progress = heartbeat::ShippingProgressObservation::new(Instant::now());
     let mut pending_wake_reconciliation = false;
     let mut pending_full_reconciliation = false;
     let mut pending_periodic_observation = false;
@@ -1182,6 +1213,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                         if result.had_connect_error {
                             if offline.record_connect_error() {
+                                shipping_progress.reset_after_sleep(Instant::now());
                                 tracing::warn!(
                                     threshold = OFFLINE_CONNECT_FAILURE_THRESHOLD,
                                     "Connection error threshold reached while processing {} — entering offline mode",
@@ -1195,7 +1227,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     result.job.path.display()
                                 );
                             }
-                        } else if result.events_shipped > 0 || result.resolved_spool > 0 {
+                        } else if result.events_shipped > 0 || result.bytes_shipped > 0 || result.resolved_spool > 0 {
+                            shipping_progress.record_progress(Instant::now());
                             last_ship_at = Some(chrono::Utc::now().to_rfc3339());
                             if let Some(duration) = offline.mark_online() {
                                 last_runtime_truth_signature = None;
@@ -1951,7 +1984,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     Some(Ok(result)) => {
                         let is_current = result.generation == projection_generation;
                         match result.result {
-                        Ok((projection, next_snapshot_state)) => {
+                        Ok((mut projection, next_snapshot_state)) => {
                             if result.elapsed_ms > LOCAL_STATUS_BUDGET_MS {
                                 projection_over_budget_ticks =
                                     projection_over_budget_ticks.saturating_add(1);
@@ -1991,9 +2024,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 managed_reconciliation = heartbeat::ProjectionReconciliation::idle();
                             }
                             heartbeat::write_status_file(
-                                &projection,
+                                &mut projection,
                                 serde_json::to_value(control_channel_status.snapshot()).ok(),
                                 &managed_reconciliation,
+                                &mut shipping_progress,
+                                offline.is_offline,
                                 &status_path,
                             );
                             let payload = projection.payload.clone();
@@ -2149,6 +2184,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 match client.health_check().await {
                     Ok(true) => {
                         if let Some(duration) = offline.mark_online() {
+                            shipping_progress.reset_after_sleep(Instant::now());
                             last_runtime_truth_signature = None;
                             tracing::info!(
                                 "Back online after {:.0}s — resuming shipping",
@@ -2420,6 +2456,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // Frequent local status file refresh for ambient UX and debugging
             _ = local_status_timer.tick() => {
                 if let Some(gap) = wake_gap_detector.observe(SystemTime::now(), Instant::now()) {
+                    shipping_progress.reset_after_sleep(Instant::now());
                     tracing::info!(wake_gap_ms = gap.as_millis() as u64, "Detected system wake gap");
                     if maybe_start_managed_observation_scan(
                         &mut managed_observation_scan_tasks,
@@ -2439,16 +2476,20 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         );
                     }
                 }
-                if let Some(projection) = last_status_projection.as_ref() {
+                if let Some(projection) = last_status_projection.as_mut() {
                     heartbeat::write_status_file(
                         projection,
                         serde_json::to_value(control_channel_status.snapshot()).ok(),
                         &managed_reconciliation,
+                        &mut shipping_progress,
+                        offline.is_offline,
                         &status_path,
                     );
                 } else {
                     heartbeat::refresh_existing_status_pulse(
                         &managed_reconciliation,
+                        &mut shipping_progress,
+                        offline.is_offline,
                         &status_path,
                     );
                 }
@@ -2502,11 +2543,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             // Periodic server heartbeat
             _ = heartbeat_timer.tick() => {
-                if let Some(projection) = last_status_projection.as_ref() {
+                if let Some(projection) = last_status_projection.as_mut() {
                     heartbeat::write_status_file(
                         projection,
                         serde_json::to_value(control_channel_status.snapshot()).ok(),
                         &managed_reconciliation,
+                        &mut shipping_progress,
+                        offline.is_offline,
                         &status_path,
                     );
                     if !offline.is_offline {
@@ -4592,6 +4635,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
     let mut result = PathTaskResult {
         job,
         events_shipped: 0,
+        bytes_shipped: 0,
         resolved_spool: 0,
         failed_spool: 0,
         had_connect_error: false,
@@ -4755,6 +4799,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 );
             }
             result.events_shipped = outcome.events_shipped;
+            result.bytes_shipped = outcome.bytes_shipped;
             if outcome.has_more {
                 result.rerun_priority = Some(result.job.priority);
             } else {
@@ -5402,6 +5447,7 @@ mod tests {
             last_ship_error_kind: None,
             last_ship_error_message: None,
             spool_pending_count: 0,
+            shipping_progress: heartbeat::ShippingProgress::default(),
             spool_dead_count: 0,
             archive_backlog: crate::state::spool::ArchiveBacklogSnapshot::default(),
             storage_v2_outbox:

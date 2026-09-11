@@ -5,6 +5,9 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 
 import pytest
 from cryptography.fernet import Fernet
@@ -15,6 +18,7 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg import build_info
 from zerg.services import local_health as local_health_service
+from zerg.services.local_health import engine_status as engine_status_service
 
 
 CLI_PAYLOAD = {
@@ -133,3 +137,28 @@ def test_cli_identity_missing_surfaces_error(monkeypatch: pytest.MonkeyPatch) ->
     assert result["engine_restart_pending"] is False
     names = [c["name"] for c in result["components"]]
     assert names == ["engine"]
+
+
+def test_fresh_pulse_does_not_make_old_projection_fresh(tmp_path, monkeypatch) -> None:
+    status_path = tmp_path / "engine-status.json"
+    now = datetime(2026, 9, 11, 12, 0, tzinfo=timezone.utc)
+    status_path.write_text(
+        json.dumps(
+            {
+                "local_projection": {
+                    "generated_at": (now - timedelta(seconds=120)).isoformat(),
+                    "engine_pulse_at": (now - timedelta(seconds=5)).isoformat(),
+                    "last_reconciled_at": (now - timedelta(seconds=120)).isoformat(),
+                    "reconciliation": {"state": "idle"},
+                }
+            }
+        )
+    )
+    monkeypatch.setattr(engine_status_service, "get_agent_status_path", lambda _base_dir: status_path)
+
+    result = engine_status_service._collect_engine_status(tmp_path, now=now)
+
+    assert result["fresh"] is True
+    assert result["age_seconds"] == 5
+    assert result["projection_age_seconds"] == 120
+    assert result["projection_stale"] is True

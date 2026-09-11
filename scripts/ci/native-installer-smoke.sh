@@ -182,6 +182,14 @@ install_pair() {
 check_identity() {
   local stage="$1" version="$2" commit="$3"
   smoke_command 60 "$installed" verify-pair > "$EVIDENCE_DIR/$stage-verify-pair.log"
+  if [[ "$REMOTE_RELEASE" == "1" ]]; then
+    local recovery_tool="$HOME_DIR/.local/share/longhouse/current/longhouse-sqlite3"
+    [[ -x "$recovery_tool" ]] || {
+      echo "release install is missing its private SQLite recovery shell: $recovery_tool" >&2
+      return 1
+    }
+    smoke_command 60 "$recovery_tool" -batch :memory: ".help recover" | grep -qF ".recover"
+  fi
   smoke_command 60 "$installed" build-identity --json > "$EVIDENCE_DIR/$stage-identity.json"
   "$NODE_BIN" - "$EVIDENCE_DIR/$stage-identity.json" "$version" "$commit" "$HOME_DIR" <<'IDENTITY_EOF'
 const fs = require("fs");

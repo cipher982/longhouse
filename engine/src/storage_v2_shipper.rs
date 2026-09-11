@@ -2008,6 +2008,9 @@ fn resync_behind_host(
         || epoch.opaque_source_id != envelope.opaque_source_id
         || epoch.range_kind != envelope.range_kind
         || epoch.range_kind != "byte_offset"
+        || epoch.predecessor_source_epoch.as_deref() != envelope.predecessor_source_epoch.as_deref()
+        || epoch.state != "open"
+        || epoch.replaced_by_source_epoch.is_some()
     {
         return Ok(None);
     }
@@ -10280,5 +10283,127 @@ mod tests {
             acknowledge_prepared(&mut conn, &prepared);
         }
         assert_eq!(shipped_sources.len(), 65);
+    }
+
+    #[test]
+    fn byte_offset_resync_accepts_only_exact_open_lineage_and_stale_watermark() {
+        fn fixture() -> (
+            tempfile::TempDir,
+            Connection,
+            std::path::PathBuf,
+            PreparedStorageV2Envelope,
+        ) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir
+                .path()
+                .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+            let first = b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n";
+            let second = b"{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":\"2026-07-12T12:00:01Z\",\"message\":{\"content\":\"world\"}}\n";
+            fs::write(&path, [first.as_slice(), second.as_slice()].concat()).unwrap();
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+            let first_prepared = prepare_next_envelope_with_limit(
+                &mut conn,
+                &capabilities(),
+                &path,
+                "claude",
+                None,
+                first.len(),
+            )
+            .unwrap()
+            .unwrap();
+            acknowledge_prepared(&mut conn, &first_prepared);
+            let second_prepared =
+                prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(second_prepared.range_start, first.len() as u64);
+            (dir, conn, path, second_prepared)
+        }
+
+        fn manifest_for(
+            prepared: &PreparedStorageV2Envelope,
+            accepted_through: u64,
+            predecessor: Option<String>,
+        ) -> StorageV2SourceManifest {
+            StorageV2SourceManifest {
+                v: 2,
+                source_epoch: crate::shipping::storage_v2::StorageV2SourceEpoch {
+                    source_epoch: prepared.envelope.source_epoch.clone(),
+                    tenant_id: prepared.envelope.tenant_id.clone(),
+                    machine_id: prepared.envelope.machine_id.clone(),
+                    provider: prepared.envelope.provider.clone(),
+                    opaque_source_id: prepared.envelope.opaque_source_id.clone(),
+                    range_kind: prepared.envelope.range_kind.clone(),
+                    state: "open".to_string(),
+                    predecessor_source_epoch: predecessor,
+                    replaced_by_source_epoch: None,
+                    accepted_through: accepted_through.to_string(),
+                    opened_at: prepared.envelope.epoch_opened_at.clone(),
+                },
+                objects: Vec::new(),
+                commit_seq: "1".to_string(),
+                observed_at: "2026-09-11T00:00:00Z".to_string(),
+            }
+        }
+
+        let (_dir, mut conn, path, prepared) = fixture();
+        let local_before =
+            source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap();
+        let mut foreign = manifest_for(&prepared, 0, None);
+        foreign.source_epoch.tenant_id = "foreign-tenant".to_string();
+        assert!(
+            resync_behind_host(&mut conn, &path.to_string_lossy(), &prepared, &foreign)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
+            local_before
+        );
+
+        let (_dir, mut conn, path, prepared) = fixture();
+        let future = manifest_for(&prepared, prepared.range_start + 1, None);
+        assert!(
+            resync_behind_host(&mut conn, &path.to_string_lossy(), &prepared, &future)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
+            prepared.range_start
+        );
+
+        let (_dir, mut conn, path, prepared) = fixture();
+        let predecessor = Uuid::new_v4().to_string();
+        let mismatched_predecessor = manifest_for(&prepared, 0, Some(predecessor));
+        assert!(resync_behind_host(
+            &mut conn,
+            &path.to_string_lossy(),
+            &prepared,
+            &mismatched_predecessor
+        )
+        .unwrap()
+        .is_none());
+        assert_eq!(
+            source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
+            prepared.range_start
+        );
+
+        let (_dir, mut conn, path, prepared) = fixture();
+        let stale = manifest_for(&prepared, 0, None);
+        assert!(
+            resync_behind_host(&mut conn, &path.to_string_lossy(), &prepared, &stale)
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
+            0
+        );
+        assert!(
+            pending_source_envelope::load_for_epoch(&conn, prepared.source_epoch)
+                .unwrap()
+                .is_none()
+        );
     }
 }

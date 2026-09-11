@@ -168,8 +168,11 @@ for workflow in runtime-image.yml deploy-and-verify.yml launch-gate.yml; do
 done
 
 echo "Waiting for pre-release exact-SHA gates before creating $VERSION..."
+CANARY_SUBDOMAIN="${LONGHOUSE_DEFAULT_SUBDOMAIN:-demo}"
+CANARY_HEALTH_URL="https://${CANARY_SUBDOMAIN}.longhouse.ai/api/health"
 "$ROOT/scripts/ops/launch-readiness.py" \
   --sha "$BUMP_SHA" \
+  --canary-url "$CANARY_HEALTH_URL" \
   --required-workflow "CI" \
   --required-workflow "Deploy and Verify" \
   --required-workflow "Launch Gate" \
@@ -294,7 +297,10 @@ echo "  [OK] app and DMG are notarized"
 
 echo ""
 echo "Verifying launch readiness for $BUMP_SHA..."
-"$ROOT/scripts/ops/launch-readiness.py" --sha "$BUMP_SHA" --wait --timeout 1800 --poll 30
+"$ROOT/scripts/ops/launch-readiness.py" \
+  --sha "$BUMP_SHA" \
+  --canary-url "$CANARY_HEALTH_URL" \
+  --wait --timeout 1800 --poll 30
 
 echo ""
 echo "Release $VERSION shipped and verified."

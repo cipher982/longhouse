@@ -77,6 +77,46 @@ def test_transport_health_marks_missing_engine_transport_evidence_unknown():
     assert assessment.reasons == ("transport_unavailable",)
 
 
+def test_transport_health_fails_unknown_shipping_progress_closed():
+    sample = transport_health_sample_from_engine_status_payload(
+        {
+            "ship_attempts_1h": 1,
+            "ship_successes_1h": 1,
+            "shipping_progress": {"pending_work": True},
+        }
+    )
+
+    assessment = assess_transport_health(sample)
+
+    assert assessment.status == "unknown"
+    assert assessment.status_reason == "transport_unavailable"
+    assert assessment.reasons == ("transport_unavailable",)
+
+
+def test_transport_health_fails_unknown_when_heartbeat_carries_old_progress():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    sample = transport_health_sample_from_engine_status_payload(
+        {
+            "ship_attempts_1h": 1,
+            "ship_successes_1h": 1,
+            "shipping_progress": {
+                "pending_work": False,
+                "stalled": False,
+                "seconds_without_progress": 0,
+                "observed_at": (now - timedelta(seconds=121)).isoformat(),
+            },
+        }
+    )
+    stale = replace(sample, observed_at=now)
+
+    assessment = assess_transport_health(stale)
+
+    assert assessment.status == "unknown"
+    assert assessment.status_reason == "transport_unavailable"
+
+
 def test_transport_health_uses_active_window_to_clear_recovered_hourly_burst():
     sample = transport_health_sample_from_engine_status_payload(
         {
@@ -329,21 +369,30 @@ def test_transport_health_surfaces_last_transport_error_detail():
     assert assessment.status_summary == "2 ship connect error(s) in the last 10 minutes. Last error: timeout."
 
 
-def test_current_heartbeats_with_a_stale_last_ship_are_degraded_not_healthy():
-    """The exact shape that hid a 33-hour outage.
+def test_pending_stalled_progress_is_degraded_not_healthy():
+    """The owning daemon, not a consumer wall clock, reports a stalled queue.
 
-    Every counter this assessment used to read said things were fine — the last
-    recorded result was ``ok``, the 1h window showed 41 of 41 attempts
-    succeeding, no parse errors — because ship attempts had stopped happening
-    rather than started failing. Nothing in the sample expressed elapsed time,
-    so a machine that had shipped nothing since the previous day classified
-    healthy.
+    The last recorded result remains ``ok`` and the 1h window can still show
+    successful attempts. The daemon's monotonic observation is the only stall
+    authority.
     """
 
     from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc)
-    sample = transport_health_sample_from_engine_status_payload({"last_ship_result": "ok", "ship_attempts_1h": 41, "ship_successes_1h": 41})
+    sample = transport_health_sample_from_engine_status_payload(
+        {
+            "last_ship_result": "ok",
+            "ship_attempts_1h": 41,
+            "ship_successes_1h": 41,
+            "shipping_progress": {
+                "pending_work": True,
+                "stalled": True,
+                "seconds_without_progress": 60,
+                "observed_at": now.isoformat(),
+            },
+        }
+    )
     stalled = replace(sample, last_ship_at=now - timedelta(hours=33), observed_at=now)
 
     assessment = assess_transport_health(stalled)
@@ -364,10 +413,23 @@ def test_a_recent_ship_and_an_unknown_ship_time_both_stay_healthy():
     from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc)
-    base = transport_health_sample_from_engine_status_payload({"last_ship_result": "ok"})
+    base = transport_health_sample_from_engine_status_payload(
+        {
+            "last_ship_result": "ok",
+            "shipping_progress": {
+                "pending_work": False,
+                "stalled": False,
+                "seconds_without_progress": 0,
+                "observed_at": now.isoformat(),
+            },
+        }
+    )
 
     recent = replace(base, last_ship_at=now - timedelta(minutes=5), observed_at=now)
     assert assess_transport_health(recent).status == "healthy"
+
+    idle_with_old_ship = replace(base, last_ship_at=now - timedelta(hours=33), observed_at=now)
+    assert assess_transport_health(idle_with_old_ship).status == "healthy"
 
     assert base.seconds_since_last_ship is None
     assert assess_transport_health(base).status == "healthy"

@@ -44,6 +44,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libssl-dev libcap-dev
 
+      - name: Build pinned SQLite recovery shell
+        run: bash scripts/build/build-sqlite-shell.sh --output binaries/longhouse-sqlite3-linux-x64
+
       - name: Build native device binaries
         run: python3 scripts/build/cargo.py exec -- build --manifest-path engine/Cargo.toml --release --bin longhouse --bin longhouse-engine
 
@@ -52,8 +55,7 @@ jobs:
           mkdir -p binaries
           cp "$(python3 scripts/build/cargo.py artifact --profile release --bin longhouse)" binaries/longhouse-linux-x64
           cp "$(python3 scripts/build/cargo.py artifact --profile release --bin longhouse-engine)" binaries/longhouse-engine-linux-x64
-          chmod +x binaries/longhouse-linux-x64
-          chmod +x binaries/longhouse-engine-linux-x64
+          chmod +x binaries/longhouse-linux-x64 binaries/longhouse-engine-linux-x64 binaries/longhouse-sqlite3-linux-x64
 
       - name: Upload runtime artifacts
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -62,6 +64,7 @@ jobs:
           path: |
             binaries/longhouse-linux-x64
             binaries/longhouse-engine-linux-x64
+            binaries/longhouse-sqlite3-linux-x64
           retention-days: 7
 
   build-engine-linux-arm64:
@@ -87,6 +90,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libssl-dev libcap-dev
 
+      - name: Build pinned SQLite recovery shell
+        run: bash scripts/build/build-sqlite-shell.sh --output binaries/longhouse-sqlite3-linux-arm64
+
       - name: Build native device binaries
         run: python3 scripts/build/cargo.py exec -- build --manifest-path engine/Cargo.toml --release --bin longhouse --bin longhouse-engine
 
@@ -95,8 +101,7 @@ jobs:
           mkdir -p binaries
           cp "$(python3 scripts/build/cargo.py artifact --profile release --bin longhouse)" binaries/longhouse-linux-arm64
           cp "$(python3 scripts/build/cargo.py artifact --profile release --bin longhouse-engine)" binaries/longhouse-engine-linux-arm64
-          chmod +x binaries/longhouse-linux-arm64
-          chmod +x binaries/longhouse-engine-linux-arm64
+          chmod +x binaries/longhouse-linux-arm64 binaries/longhouse-engine-linux-arm64 binaries/longhouse-sqlite3-linux-arm64
 
       - name: Upload runtime artifacts
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -105,6 +110,7 @@ jobs:
           path: |
             binaries/longhouse-linux-arm64
             binaries/longhouse-engine-linux-arm64
+            binaries/longhouse-sqlite3-linux-arm64
           retention-days: 7
 
   build-macos:
@@ -654,6 +660,7 @@ jobs:
             binaries/longhouse-darwin-arm64
             binaries/longhouse-engine-linux-x64
             binaries/longhouse-linux-x64
+            binaries/longhouse-sqlite3-linux-x64
             binaries/Longhouse-macos-arm64.dmg
             binaries/Longhouse-macos-arm64.zip
             binaries/local-runtime-macos-packaging.json
@@ -687,10 +694,10 @@ jobs:
             --dir binaries \
             --repo "${{ github.repository }}"
           cd binaries
-          sha256sum longhouse-linux-arm64 longhouse-engine-linux-arm64 >> local-runtime-checksums.txt
+          sha256sum longhouse-linux-arm64 longhouse-engine-linux-arm64 longhouse-sqlite3-linux-arm64 >> local-runtime-checksums.txt
 
       - name: Upload arm64 assets to release
-        run: gh release upload "$RELEASE_TAG" binaries/longhouse-linux-arm64 binaries/longhouse-engine-linux-arm64 binaries/local-runtime-checksums.txt --clobber --repo "${{ github.repository }}"
+        run: gh release upload "$RELEASE_TAG" binaries/longhouse-linux-arm64 binaries/longhouse-engine-linux-arm64 binaries/longhouse-sqlite3-linux-arm64 binaries/local-runtime-checksums.txt --clobber --repo "${{ github.repository }}"
 
       - name: Attest arm64 release artifacts
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
@@ -698,6 +705,7 @@ jobs:
           subject-path: |
             binaries/longhouse-engine-linux-arm64
             binaries/longhouse-linux-arm64
+            binaries/longhouse-sqlite3-linux-arm64
             binaries/local-runtime-checksums.txt
 
   verify-install-from-release:

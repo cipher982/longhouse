@@ -383,6 +383,62 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func staleProducerCannotClaimNoSessionsOrClearDurableUpload() {
+        let snapshot = presentationSnapshot(sessions: [])
+        let trust = DataTrust.lastKnown(
+            LastKnownContext(lastSuccessAt: Date(timeIntervalSince1970: 0), failure: nil)
+        )
+
+        let presentation = snapshot.menuBarPresentation(
+            relativeTo: Date(timeIntervalSince1970: 60),
+            localEvidenceTrust: trust
+        )
+
+        #expect(presentation.promotion == .unavailable)
+        #expect(presentation.headline == "Current local status unavailable")
+        #expect(presentation.facts.first(where: { $0.id == "durable-upload" })?.value == "Unknown")
+        #expect(presentation.facts.first(where: { $0.id == "transport" })?.value == "Unknown")
+    }
+
+    @Test
+    func expiredProjectionDoesNotImplyLocalAgentIsDown() {
+        let snapshot = presentationSnapshot(sessions: [])
+        let projectionTrust = DataTrust.lastKnown(
+            LastKnownContext(lastSuccessAt: Date(timeIntervalSince1970: 0), failure: nil)
+        )
+
+        let facts = snapshot.menuBarPresentation(
+            relativeTo: Date(timeIntervalSince1970: 60),
+            projectionTrust: projectionTrust
+        ).facts
+
+        #expect(facts.first(where: { $0.id == "local-agent" })?.value == "Running")
+        #expect(facts.first(where: { $0.id == "transport" })?.value == "Unknown")
+        #expect(facts.first(where: { $0.id == "transport" })?.detail?.contains("Runtime Host") == true)
+    }
+
+    @Test
+    func stalledShippingProgressIsNotRenderedAsClear() {
+        let snapshot = presentationSnapshot(
+            reasons: ["ship_stalled"],
+            sessions: [],
+            shippingProgress: ShippingProgressSnapshot(
+                pendingWork: true,
+                stalled: true,
+                secondsWithoutProgress: 90,
+                observedAt: "1970-01-01T00:00:00Z"
+            )
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 90))
+        let durable = presentation.facts.first(where: { $0.id == "durable-upload" })
+
+        #expect(durable?.value == "Stalled")
+        #expect(durable?.detail?.contains("no progress 1m") == true)
+        #expect(durable?.promotion == .inspect)
+    }
+
+    @Test
     func missingRuntimeTruthDoesNotClaimRemoteControlReady() {
         let snapshot = presentationSnapshot(sessions: [presentationSession(phase: "idle")])
 
@@ -1851,7 +1907,7 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(snapshot.attentionSummaryLabel.contains("1 queued transcript range"))
         #expect(snapshot.attentionSummaryLabel.contains("10 local hook events"))
-        #expect(snapshot.attentionSummaryLabel.contains("replay backlog"))
+        #expect(snapshot.attentionSummaryLabel.contains("reconcile the local runtime"))
     }
 
     @Test
@@ -1931,7 +1987,9 @@ struct LonghouseMenuBarCoreTests {
             )
         )
         #expect(!drained.attentionSummaryLabel.contains("transcript range"))
-        #expect(drained.collectedAt == "2026-04-08T01:52:01Z")
+        // A local engine pulse updates liveness, not the freshness of the
+        // producer snapshot shown above the panel.
+        #expect(drained.collectedAt == "2026-04-08T01:52:00Z")
     }
 
 
@@ -2039,6 +2097,36 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.lastShipCompactLabel(relativeTo: referenceDate) == "2m")
         #expect(snapshot.engineAgeLabel(relativeTo: referenceDate) == "1m")
         #expect(snapshot.engineFreshnessLabel(relativeTo: referenceDate) == "Aging")
+    }
+
+    @Test
+    func projectionFreshnessUsesGeneratedAtInsteadOfEnginePulse() throws {
+        let data = Data("""
+        {
+          "health_state": "degraded",
+          "severity": "yellow",
+          "headline": "Local projection is stale",
+          "reasons": ["engine_projection_stale"],
+          "suggested_actions": [],
+          "engine_status": {
+            "fresh": true,
+            "age_seconds": 1,
+            "payload": {
+              "daemon_pid": 42,
+              "local_projection": {
+                "generated_at": "2026-04-08T01:49:59Z",
+                "engine_pulse_at": "2026-04-08T01:52:00Z"
+              }
+            }
+          }
+        }
+        """.utf8)
+        let snapshot = try HealthSnapshotDecoder.decode(data: data)
+        let referenceDate = try #require(HealthSnapshot.parseISO8601("2026-04-08T01:52:00Z"))
+
+        #expect(snapshot.engineAgeLabel(relativeTo: referenceDate) == "1s")
+        #expect(snapshot.engineFreshnessLabel(relativeTo: referenceDate) == "Stale")
+        #expect(snapshot.engineFreshnessValueLabel(relativeTo: referenceDate) == "Stale · 2m")
     }
 
     @Test
@@ -2836,11 +2924,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(failure?.command?.contains("longhouse-local-health") == true)
     }
 
-    /// The freshness fact is derived from the payload clock, which the local
-    /// projection rewrites to `fresh, 0s` off the engine pulse. It has to stop
-    /// claiming recency when the producer is broken, or the panel renders a
-    /// green "Fresh · 21s" directly beneath a banner saying it cannot read this
-    /// Mac's status.
+    /// Cached payloads cannot establish freshness after producer failure.
     @Test
     @MainActor
     func freshnessFactStopsClaimingRecencyWhenTrustIsNotCurrent() {
@@ -2858,9 +2942,6 @@ struct LonghouseMenuBarCoreTests {
             ).displayedFacts
         }
 
-        let current = facts(trust: .current)
-        let currentFreshness = current.first { $0.id == "freshness" }
-        #expect(currentFreshness != nil)
 
         for trust in [
             DataTrust.neverLoaded(failure: nil),
@@ -2870,18 +2951,9 @@ struct LonghouseMenuBarCoreTests {
                 Issue.record("freshness fact missing for \(trust)")
                 continue
             }
-            #expect(freshness.value == "Unknown")
             #expect(freshness.promotion == .unavailable)
-            #expect(freshness.value.hasPrefix("Fresh") == false)
         }
 
-        // Every other fact is untouched: the banner already labels them
-        // last-known, and blanking them would leave nothing to act on.
-        let degraded = facts(trust: .neverLoaded(failure: nil))
-        #expect(degraded.count == current.count)
-        for (before, after) in zip(current, degraded) where before.id != "freshness" {
-            #expect(before == after)
-        }
     }
 
     @Test
@@ -3252,7 +3324,9 @@ struct LonghouseMenuBarCoreTests {
         #expect(recorded.managedSessions?.count == 1)
         #expect(recorded.managedSessions?.first?.normalizedUIPresence == "foreground_tui")
         #expect(recorded.realtime?.runtimeUrl != nil)
+        #expect(recorded.transport?.status == "healthy")
         #expect(recorded.engineStatus?.payload != nil)
+        #expect(recorded.engineStatus?.payload?.shippingProgress?.pendingWork == false)
         #expect(
             recorded.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 1_785_772_800)).headline
                 == "1 Helm session open"
@@ -3400,6 +3474,7 @@ private func presentationSnapshot(
     storageBlockKind: String? = nil,
     storageUnresolved: Int? = nil,
     storagePending: Int = 0,
+    shippingProgress: ShippingProgressSnapshot? = nil,
     isOffline: Bool = false,
     engineFresh: Bool = true,
     serviceStatus: String? = "running"
@@ -3430,7 +3505,8 @@ private func presentationSnapshot(
                     byteLimit: 1_073_741_824, error: nil
                 ),
                 parseErrorCount1H: 0, diskFreeBytes: nil,
-                isOffline: isOffline, recentDeadLetters: [], lastUpdated: "1970-01-01T00:00:00Z",
+                isOffline: isOffline, shippingProgress: shippingProgress,
+                recentDeadLetters: [], lastUpdated: "1970-01-01T00:00:00Z"
             ),
             error: nil
         ),

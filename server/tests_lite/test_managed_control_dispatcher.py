@@ -33,6 +33,7 @@ from zerg.models.live_store import LiveSessionThread
 from zerg.services import catalogd_supervisor
 from zerg.services.live_session_dispatch import supports_live_text_dispatch_metadata
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.machine_control_channel import MachineControlCommandResponse
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_ANSWER_PAUSE
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_INTERRUPT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
@@ -1069,6 +1070,43 @@ def test_dispatch_managed_control_command_rejects_malformed_engine_success(live_
             await _clear_machine_registry()
 
     asyncio.run(_run())
+
+
+def test_ambiguous_engine_transport_keeps_durable_operation_open_for_reconciliation(monkeypatch, live_catalog):  # noqa: F811
+    session_id, _lease = _seed_lease_for_new_session()
+    database_path, _socket_path = catalogd_supervisor.catalogd_paths()
+
+    class _AmbiguousRegistry:
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **_kwargs):
+            return MachineControlCommandResponse(
+                transport_ok=False,
+                error="control response was lost",
+                delivery_certainty="ambiguous",
+            )
+
+    monkeypatch.setattr(dispatcher_module, "get_machine_control_channel_registry", lambda: _AmbiguousRegistry())
+
+    result = asyncio.run(
+        dispatch_managed_control_command(
+            db=object(),
+            owner_id=42,
+            session=_session(id=session_id, source_runner_id=None),
+            timeout_secs=1,
+            command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+            payload={"text": "continue"},
+            request_id="req-ambiguous-restart",
+        )
+    )
+
+    command_id = f"managed-control:{session_id}:session.send_text:req-ambiguous-restart"
+    operation = _read_control_operation(database_path, command_id=command_id)
+    assert result.ok is False
+    assert result.failure_kind == dispatcher_module.DISPATCH_FAILURE_TRANSPORT
+    assert result.failure_reason == "indeterminate"
+    assert operation["status"] == "running"
 
 
 def test_live_text_dispatch_metadata_accepts_engine_channel_without_runner_metadata():
