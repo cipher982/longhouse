@@ -26,6 +26,7 @@ from zerg.qa.omp_helm_lifecycle import REGISTRATION as HELM_REGISTRATION
 from zerg.qa.omp_helm_lifecycle import _assertion_result_status
 from zerg.qa.omp_helm_lifecycle import _channel_command_evidence
 from zerg.qa.omp_helm_lifecycle import _cleanup_receipt
+from zerg.qa.omp_helm_lifecycle import _wait_cleanup_receipt
 from zerg.qa.omp_helm_lifecycle import _events_page_metadata
 from zerg.qa.omp_helm_lifecycle import _exact_session_retirement
 from zerg.qa.omp_helm_lifecycle import _flush_receipt_complete
@@ -1241,6 +1242,20 @@ def test_omp_cleanup_retains_generation_owner_birth_and_dead_evidence(monkeypatc
         for item in cleanup["owned_processes"]
     )
 
+
+
+def test_omp_cleanup_waits_for_async_owner_exit(monkeypatch) -> None:
+    records = [{"label": "provider", "pid": 101, "process_group_id": 201, "birth_matches": True}]
+    receipts = iter(
+        [
+            {"status": "fail", "birth_identities_verified": True},
+            {"status": "pass", "birth_identities_verified": True},
+        ]
+    )
+    monkeypatch.setattr(omp_helm_lifecycle, "_cleanup_receipt", lambda _records: next(receipts))
+    monkeypatch.setattr(omp_helm_lifecycle.time, "sleep", lambda _seconds: None)
+
+    assert _wait_cleanup_receipt(records, timeout=1) == {"status": "pass", "birth_identities_verified": True}
 
 def test_omp_keeps_isolation_when_complete_source_retention_fails(tmp_path) -> None:
     isolation = tmp_path / "isolation"

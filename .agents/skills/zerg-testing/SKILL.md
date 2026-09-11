@@ -35,7 +35,7 @@ description: Zerg testing workflow (unit + E2E). Use when running or debugging t
   Report any intentionally retained artifact, owner, and cleanup command.
 - A failed or superseded proof may be deleted only after its required authoritative source retention is verified; then delete its exact evidence root, request file, scratch `HOME`, native session/archive, and owned processes. Retain only the required receipt under ignored `artifacts/`, with its owner and cleanup command.
 - If authoritative retention fails, preserve the disposable isolation as evidence, mark cleanup failed, and report its exact owner and removal condition; never delete the only source and call cleanup complete.
-- Rendered frames and verification transcripts are evidence, not durable user-facing artifacts: keep only the required receipt under ignored artifacts and remove named QA windows/sessions before handoff.
+- Rendered frames and verification transcripts are evidence, not durable user-facing artifacts: keep only the required receipt under ignored artifacts and remove named QA windows/sessions before handoff. A screenshot is never a cleanup substitute; any visible simulator, provider TUI, browser tab, or verification conversation opened by the run must be closed in that run's `finally` path, or the run remains incomplete.
 - Cleanup is a release gate, not a follow-up: re-read `git status --short`, the exact owned PID/process-group inventory, hosted session inventory, and `xcrun simctl list devices` before declaring the run complete.
 ## Core Commands
 ```bash

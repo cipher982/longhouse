@@ -1496,6 +1496,23 @@ def _cleanup_receipt(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _wait_cleanup_receipt(records: list[dict[str, Any]], timeout: float = 10.0) -> dict[str, Any]:
+    """Allow asynchronously exiting provider children to reach a settled receipt."""
+
+    cleanup = _cleanup_receipt(records)
+    deadline = time.monotonic() + timeout
+    while cleanup.get("birth_identities_verified") is True and cleanup.get("status") != "pass" and time.monotonic() < deadline:
+        time.sleep(0.1)
+        cleanup = _cleanup_receipt(records)
+    return cleanup
+
+
+def _manifest_is_stable(root: Path, manifest: list[dict[str, Any]]) -> bool:
+    """Require the final evidence tree to remain unchanged before publishing."""
+
+    return bool(manifest) and manifest == artifact_manifest(root)
+
+
 def _helm_cleanup_ready(cleanup: Mapping[str, Any]) -> bool:
     return (
         cleanup.get("status") == "pass"
@@ -1508,12 +1525,6 @@ def _helm_cleanup_ready(cleanup: Mapping[str, Any]) -> bool:
         and cleanup.get("source_retention_verified") is True
         and cleanup.get("isolation_removed") is True
     )
-
-
-def _manifest_is_stable(root: Path, manifest: list[dict[str, Any]]) -> bool:
-    """Require the final evidence tree to remain unchanged before publishing."""
-
-    return bool(manifest) and manifest == artifact_manifest(root)
 
 
 def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
@@ -2339,7 +2350,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         }
         lifecycle.write_json(root / "transcript-flush-receipt.json", flush_receipt)
         cleanup = (
-            _cleanup_receipt(owner_records)
+            _wait_cleanup_receipt(owner_records)
             if owner_records
             else {
                 "status": "fail",
