@@ -611,7 +611,10 @@ def test_served_run_inventory_rejects_wrong_session_or_run_identity(monkeypatch,
     assert evidence["active_run_count"] is None
 
 
-@pytest.mark.parametrize("projected_id", ["longhouse-event-9", "pi-message-42"])
+@pytest.mark.parametrize(
+    "projected_id",
+    ["longhouse-event-9", pytest.param("pi-message-42", id="equal-native-and-projected")],
+)
 def test_pi_continuation_linkage_accepts_native_projection_identity_relationships(tmp_path, projected_id):
     marker = "PI_RESUME_MARKER"
     native = tmp_path / "pi-session.jsonl"
@@ -668,9 +671,63 @@ def test_pi_native_marker_evidence_stops_at_the_pre_interrupt_boundary(tmp_path)
     boundary = len(lines[0]) + len(lines[1])
 
     evidence = lifecycle._pi_native_marker_evidence(native, marker, maximum_source_offset=boundary)
-
     assert evidence is not None
     assert evidence["native_message_id"] == "resume-before-interrupt"
+
+
+def test_omp_native_marker_evidence_respects_turn_boundaries(tmp_path):
+    marker = "OMP_RESUME_MARKER"
+    native = tmp_path / "omp-session.jsonl"
+    rows = [
+        {"type": "session", "id": "omp-session"},
+        {
+            "type": "message",
+            "id": "omp-first",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": marker}]},
+        },
+        {
+            "type": "message",
+            "id": "omp-second",
+            "message": {"role": "assistant", "content": [{"type": "text", "text": marker}]},
+        },
+    ]
+    native.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    lines = native.read_bytes().splitlines(keepends=True)
+    first_boundary = sum(len(line) for line in lines[:2])
+
+    first = lifecycle._omp_native_marker_evidence(native, marker, maximum_source_offset=first_boundary)
+    second = lifecycle._omp_native_marker_evidence(
+        native,
+        marker,
+        minimum_source_offset=first_boundary,
+        maximum_source_offset=native.stat().st_size,
+    )
+
+    assert first is not None
+    assert first["native_message_id"] == "omp-first"
+    assert first["provider_session_id"] == "omp-session"
+    assert second is not None
+    assert second["native_message_id"] == "omp-second"
+
+
+def test_pi_claim_output_evidence_ignores_non_assistant_message_end(tmp_path):
+    marker = "PI_OUTPUT_MARKER"
+    source = tmp_path / "pi-output.jsonl"
+    source.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "message_end", "message": {"role": "user", "content": marker}}),
+                json.dumps({"type": "message_end", "message": {"role": "assistant", "content": marker}}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    evidence = lifecycle._claim_output_evidence("pi", {"source_path": str(source)}, marker)
+
+    assert evidence is not None
+    assert evidence["provider_response_marker_count"] == 1
 
 
 def test_console_cleanup_cannot_pass_on_a_failure_path(monkeypatch):

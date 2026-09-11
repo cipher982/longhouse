@@ -473,7 +473,9 @@ def _assistant_output_texts(provider: str, content: str) -> list[str]:
                 texts.append(str(payload["text"]))
         elif provider == "pi" and event.get("type") == "message_end":
             message = event.get("message")
-            blocks = message.get("content") if isinstance(message, Mapping) else None
+            if not isinstance(message, Mapping) or message.get("role") != "assistant":
+                continue
+            blocks = message.get("content")
             if isinstance(blocks, list):
                 texts.extend(
                     str(block["text"])
@@ -618,6 +620,96 @@ def _pi_native_marker_evidence(
         "source_offset": row.get("source_offset"),
         "marker_count": str(row.get("text") or "").count(marker),
     }
+
+
+def _omp_native_marker_evidence(
+    path: Path,
+    marker: str,
+    *,
+    minimum_source_offset: int = 0,
+    maximum_source_offset: int | None = None,
+) -> dict[str, object] | None:
+    """Return OMP's native assistant message id for one bounded marker."""
+    try:
+        payload = path.read_bytes()
+    except OSError:
+        return None
+
+    headers: list[str] = []
+    matches: list[dict[str, object]] = []
+    source_offset = 0
+
+    def message_text(message: Mapping[str, object]) -> str:
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return ""
+        return "".join(
+            str(block["text"])
+            for block in content
+            if isinstance(block, Mapping) and block.get("type") == "text" and isinstance(block.get("text"), str)
+        )
+
+    for raw_line in payload.splitlines(keepends=True):
+        line_end = source_offset + len(raw_line)
+        if raw_line.strip():
+            try:
+                event = json.loads(raw_line)
+            except json.JSONDecodeError:
+                event = None
+            if isinstance(event, Mapping):
+                if event.get("type") == "session" and isinstance(event.get("id"), str) and event["id"]:
+                    headers.append(event["id"])
+                if (
+                    event.get("type") in {"message", "message_end"}
+                    and isinstance(event.get("id"), str)
+                    and event["id"]
+                    and isinstance(event.get("message"), Mapping)
+                    and event["message"].get("role") == "assistant"
+                    and source_offset >= minimum_source_offset
+                    and (maximum_source_offset is None or line_end <= maximum_source_offset)
+                ):
+                    text = message_text(event["message"])
+                    if text.count(marker) == 1:
+                        matches.append(
+                            {
+                                "native_message_id": event["id"],
+                                "provider_session_id": headers[0] if len(headers) == 1 else None,
+                                "source_offset": source_offset,
+                                "marker_count": 1,
+                            }
+                        )
+        source_offset = line_end
+
+    if len(headers) != 1 or len(matches) != 1:
+        return None
+    return matches[0]
+
+
+def _native_marker_evidence(
+    provider: str,
+    path: Path,
+    marker: str,
+    *,
+    minimum_source_offset: int = 0,
+    maximum_source_offset: int | None = None,
+) -> dict[str, object] | None:
+    if provider == "pi":
+        return _pi_native_marker_evidence(
+            path,
+            marker,
+            minimum_source_offset=minimum_source_offset,
+            maximum_source_offset=maximum_source_offset,
+        )
+    if provider == "omp":
+        return _omp_native_marker_evidence(
+            path,
+            marker,
+            minimum_source_offset=minimum_source_offset,
+            maximum_source_offset=maximum_source_offset,
+        )
+    return None
 
 
 def _pi_continuation_linkage(
@@ -799,7 +891,6 @@ def _pi_native_tool_receipt(
     provider_response_retained_path: str | None = None,
 ) -> dict[str, object]:
     """Bind retained native call/result evidence to the live Console turn."""
-
     receipt: dict[str, object] = {
         "schema_version": 1,
         "artifact_kind": "pi_native_tool_receipt",
@@ -885,7 +976,6 @@ def _pi_native_tool_receipt(
         and isinstance(provider_response.get("native_message_id"), str)
         and bool(provider_response.get("native_message_id"))
         and provider_response.get("projected_assistant_event_id") == binding.get("bound_assistant_event_id")
-        and provider_response.get("native_message_id") != provider_response.get("projected_assistant_event_id")
         and isinstance(pair, tuple)
         and len(pair) == 3
         and pair[2].get("marker_count") == 1
@@ -1673,9 +1763,13 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                 raise RuntimeError(f"first Console {provider} turn has no retained native source boundary")
             first_native_source_path = Path(raw_first_native_source)
             first_native_source_size = len(first_native_source_path.read_bytes())
-        first_native_response = _pi_native_marker_evidence(first_native_source_path, marker) if provider == "pi" else None
-        if provider == "pi" and first_native_response is None:
-            raise RuntimeError("first Console Pi turn has no unique native assistant marker message")
+        first_native_response = (
+            _native_marker_evidence(provider, first_native_source_path, marker)
+            if provider in {"pi", "omp"} and first_native_source_path is not None
+            else None
+        )
+        if provider in {"pi", "omp"} and first_native_response is None:
+            raise RuntimeError(f"first Console {provider} turn has no unique native assistant marker message")
         dispatch = {
             "status": "pass",
             "provider": provider,
@@ -1790,24 +1884,18 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                 raw_resume_source = resume_claim.get("source_path") or resume_claim.get("stdout_path")
                 if not isinstance(raw_resume_source, str) or not first_native_source_size:
                     raise RuntimeError(f"second Console {provider} turn has no native source boundary")
-                if provider == "pi":
-                    resume_native_response = _pi_native_marker_evidence(
-                        Path(raw_resume_source),
-                        resume_marker,
-                        minimum_source_offset=first_native_source_size,
-                    )
                 second_native_source_size = len(Path(raw_resume_source).read_bytes())
                 if second_native_source_size <= first_native_source_size:
                     raise RuntimeError(f"second Console {provider} turn has no complete native source boundary")
-                if provider == "pi":
-                    resume_native_response = _pi_native_marker_evidence(
-                        Path(raw_resume_source),
-                        resume_marker,
-                        minimum_source_offset=first_native_source_size,
-                        maximum_source_offset=second_native_source_size,
-                    )
-                    if resume_native_response is None:
-                        raise RuntimeError("second Console Pi marker escaped its pre-interrupt native boundary")
+                resume_native_response = _native_marker_evidence(
+                    provider,
+                    Path(raw_resume_source),
+                    resume_marker,
+                    minimum_source_offset=first_native_source_size,
+                    maximum_source_offset=second_native_source_size,
+                )
+                if resume_native_response is None:
+                    raise RuntimeError(f"second Console {provider} marker escaped its pre-interrupt native boundary")
             resume_context_marker_count = (
                 event_text(resume_events[0]).count(context_marker) if provider in {"pi", "omp"} and resume_events else None
             )
@@ -1826,11 +1914,11 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                     native_provider_thread_id=resume_claim.get("provider_thread_id"),
                     projected_provider_thread_id=first_claim.get("provider_thread_id"),
                 )
-                if provider == "pi"
+                if provider in {"pi", "omp"}
                 else None
             )
-            if provider == "pi" and continuation_linkage is not None and continuation_linkage.get("proven") is not True:
-                raise RuntimeError("Console Pi continuation did not prove native/projected assistant linkage")
+            if provider in {"pi", "omp"} and continuation_linkage is not None and continuation_linkage.get("proven") is not True:
+                raise RuntimeError(f"Console {provider} continuation did not prove native/projected assistant linkage")
             dispatch["resume_run_id"] = resume.get("run_id")
             dispatch["native_thread_resumed"] = True
             write_json(root / "adapter-dispatch-receipt.json", dispatch)
