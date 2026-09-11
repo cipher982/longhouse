@@ -2298,7 +2298,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         resumed.process.wait(timeout=15)
         controls["final_terminate"] = {
             "action_label": "final_terminate",
-            "state": dict(resume_state),
+            "state": dict(final_control_state),
             "command": final_terminate,
             "stopped_state": final_stopped,
             "control_identity": final_control_receipt,

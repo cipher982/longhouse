@@ -62,7 +62,7 @@ def _fake_bins(tmp_path: Path) -> dict[str, Path]:
         # pi --version is bare semver.
         "pi": _write_exe(tmp_path / "bin" / "pi", "9.9.9"),
         # omp --version is bare semver.
-        "omp": _write_exe(tmp_path / "bin" / "omp", "18.1.14"),
+        "omp": _write_exe(tmp_path / "bin" / "omp", "18.1.17"),
     }
 
 

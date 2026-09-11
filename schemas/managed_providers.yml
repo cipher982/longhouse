@@ -2156,7 +2156,7 @@ providers:
     canary: engine/src/omp_print.rs
   release_channel:
     channel: github_releases
-    coordinate: "can1357/oh-my-pi@daf07999c2fee9b22edc7bf8fea1fb6272e0df5e"
+    coordinate: "can1357/oh-my-pi@3b3a6dc9bbd85102ce19d0b1c11bf6870915f6ec"
     version_discovery: stable_github_releases
     verification: sha256_asset_digest_and_version
     platform_artifacts:
@@ -2190,7 +2190,7 @@ providers:
   live_proof: false
   machine_control_supports: [omp.send, omp.interrupt, omp.steer, omp.terminate, omp.turn_start, omp.turn_interrupt]
   operation_evidence:
-    launch_local: {level: live_no_token, source: "OMP 18.1.14 native Helm launcher and PTY fixture", disposition: implemented, owner_action: "Run bounded OMP native lifecycle canary", blocker: budget}
+    launch_local: {level: live_no_token, source: "OMP 18.1.17 native Helm launcher and PTY fixture", disposition: implemented, owner_action: "Run bounded OMP native lifecycle canary", blocker: budget}
     run_once: {level: none, source: "Console routes through session.turn.start, not the legacy run_once command", disposition: policy_disabled, reason: "OMP Console has one turn-scoped path through session.turn.start.", routed_to: turn_start}
     reattach: {level: hermetic, source: "OMP exact-file resume validation and owner lock tests", disposition: implemented, owner_action: "Run bounded OMP native lifecycle canary", blocker: budget}
     send_input: {level: hermetic, source: "OMP extension command routing tests", disposition: implemented, owner_action: "Run bounded OMP native lifecycle canary", blocker: budget}
@@ -2266,6 +2266,6 @@ providers:
     session.title: {disposition: implemented, raw_source: title/title_change, fixture: engine/tests/fixtures/golden/omp/native.jsonl, canary: omp_transcript_signals, trigger: none_reliable}
     turn.usage: {disposition: implemented, raw_source: message/message.usage, fixture: engine/tests/fixtures/golden/omp/native.jsonl, canary: omp_transcript_signals, trigger: turn_end}
     turn.api_error: {disposition: implemented, raw_source: message/message.errorMessage+message.stopReason, fixture: engine/tests/fixtures/golden/omp/native.jsonl, canary: omp_transcript_signals, trigger: none_reliable}
-    context.compaction: {disposition: implemented, raw_source: reset_boundary, fixture: engine/tests/fixtures/golden/omp/native.jsonl, canary: omp_transcript_signals, trigger: slash_compact}
+    context.compaction: {disposition: implemented, raw_source: compaction/tokensBefore, fixture: engine/tests/fixtures/golden/omp/native.jsonl, canary: omp_transcript_signals, trigger: slash_compact}
     input.queue: {disposition: not_implemented, raw_source: none, canary: omp_transcript_signals, trigger: send_while_working, owner_action: "Add OMP managed queue authority in Phase 2"}
     turn.thinking: {disposition: implemented, raw_source: message/message.content.thinking, fixture: engine/tests/fixtures/golden/omp/native.jsonl, canary: omp_transcript_signals, trigger: turn_end}

@@ -3376,7 +3376,7 @@
       ],
       "release_channel": {
         "channel": "github_releases",
-        "coordinate": "can1357/oh-my-pi@daf07999c2fee9b22edc7bf8fea1fb6272e0df5e",
+        "coordinate": "can1357/oh-my-pi@3b3a6dc9bbd85102ce19d0b1c11bf6870915f6ec",
         "version_discovery": "stable_github_releases",
         "verification": "sha256_asset_digest_and_version",
         "platform_artifacts": {
@@ -3421,7 +3421,7 @@
       "operation_evidence": {
         "launch_local": {
           "level": "live_no_token",
-          "source": "OMP 18.1.14 native Helm launcher and PTY fixture",
+          "source": "OMP 18.1.17 native Helm launcher and PTY fixture",
           "disposition": "implemented",
           "owner_action": "Run bounded OMP native lifecycle canary",
           "blocker": "budget"
@@ -3531,7 +3531,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "be29209e6764800a71645e99fa587187725bd635f03b883001241085a738c6be"
+              "oracle_digest": "50a34494109436f1740ce2e3abfe0f8535a4056070ffb4e785b5bf00f1691adf"
             },
             {
               "id": "omp_helm_send_idle",
@@ -3542,7 +3542,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "be29209e6764800a71645e99fa587187725bd635f03b883001241085a738c6be"
+              "oracle_digest": "50a34494109436f1740ce2e3abfe0f8535a4056070ffb4e785b5bf00f1691adf"
             },
             {
               "id": "omp_helm_follow_up_native",
@@ -3553,7 +3553,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "be29209e6764800a71645e99fa587187725bd635f03b883001241085a738c6be"
+              "oracle_digest": "50a34494109436f1740ce2e3abfe0f8535a4056070ffb4e785b5bf00f1691adf"
             },
             {
               "id": "omp_helm_steer_active",
@@ -3564,7 +3564,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "be29209e6764800a71645e99fa587187725bd635f03b883001241085a738c6be"
+              "oracle_digest": "50a34494109436f1740ce2e3abfe0f8535a4056070ffb4e785b5bf00f1691adf"
             },
             {
               "id": "omp_helm_abort_native",
@@ -3575,7 +3575,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "be29209e6764800a71645e99fa587187725bd635f03b883001241085a738c6be"
+              "oracle_digest": "50a34494109436f1740ce2e3abfe0f8535a4056070ffb4e785b5bf00f1691adf"
             },
             {
               "id": "omp_helm_terminate_owned",
@@ -3586,7 +3586,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "be29209e6764800a71645e99fa587187725bd635f03b883001241085a738c6be"
+              "oracle_digest": "50a34494109436f1740ce2e3abfe0f8535a4056070ffb4e785b5bf00f1691adf"
             },
             {
               "id": "omp_helm_native_replacement_bound",
@@ -3597,7 +3597,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "be29209e6764800a71645e99fa587187725bd635f03b883001241085a738c6be"
+              "oracle_digest": "50a34494109436f1740ce2e3abfe0f8535a4056070ffb4e785b5bf00f1691adf"
             }
           ]
         },
@@ -3624,7 +3624,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "be29209e6764800a71645e99fa587187725bd635f03b883001241085a738c6be"
+              "oracle_digest": "50a34494109436f1740ce2e3abfe0f8535a4056070ffb4e785b5bf00f1691adf"
             },
             {
               "id": "omp_helm_stale_owner_refused",
@@ -3635,7 +3635,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "be29209e6764800a71645e99fa587187725bd635f03b883001241085a738c6be"
+              "oracle_digest": "50a34494109436f1740ce2e3abfe0f8535a4056070ffb4e785b5bf00f1691adf"
             }
           ]
         },
@@ -3705,7 +3705,7 @@
         },
         "context.compaction": {
           "disposition": "implemented",
-          "raw_source": "reset_boundary",
+          "raw_source": "compaction/tokensBefore",
           "fixture": "engine/tests/fixtures/golden/omp/native.jsonl",
           "canary": "omp_transcript_signals",
           "trigger": "slash_compact"
@@ -3725,7 +3725,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "25fe12ffd860a084fe42a2f4c324cc7f1722e3701ad186cac48887dd60439da1"
+      "adapter_digest": "826e7ea68f8bf532def2ed80f47e9c0734dc425148947acee20b638112448358"
     }
   ]
 }
