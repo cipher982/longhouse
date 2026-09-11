@@ -68,8 +68,8 @@ def test_same_version_resumes_a_pushed_candidate() -> None:
     assert 'VERSION_MARKERS=(' in SOURCE
 
 
-def test_release_fetches_tags_before_building_changelog() -> None:
-    fetch = SOURCE.index('fetch --quiet --tags origin main')
+def test_release_fetches_remote_branch_before_building_changelog() -> None:
+    fetch = SOURCE.index('fetch --quiet origin main')
     previous_tag = SOURCE.index("PREV_TAG=")
 
     assert fetch < previous_tag
@@ -81,5 +81,5 @@ if __name__ == "__main__":
     test_release_dispatches_only_path_filtered_gates_missing_for_exact_sha()
     test_deploy_waits_for_exact_sha_hosted_live_qa()
     test_same_version_resumes_a_pushed_candidate()
-    test_release_fetches_tags_before_building_changelog()
+    test_release_fetches_remote_branch_before_building_changelog()
     print("release tests passed")
