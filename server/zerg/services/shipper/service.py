@@ -459,11 +459,14 @@ def _generate_systemd_unit(config: ServiceConfig) -> str:
 Description=Longhouse Engine - Session Sync
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 Type=simple
 ExecStart={exec_start}
-Restart=on-failure
+# Native updates exit cleanly; the replacement engine must still restart.
+Restart=always
 RestartSec=10
 {environment_block}
 
