@@ -428,8 +428,14 @@ test("scheduled dogfood cohort journey", async ({ apiBaseUrl, context }, testInf
         // Use the browser's performance clock so buffered entries painted just
         // before the append cannot satisfy the post-append evidence boundary.
         const paintAfterEpochMs = await page!.evaluate(() => performance.timeOrigin + performance.now());
+        const list = page!.getByTestId("session-timeline-list");
+        // Cross the sentinel out of view before returning to the top. This
+        // models the real reader path and gives IntersectionObserver an
+        // actual boundary transition instead of re-requesting the initial
+        // already-intersecting state.
+        await list.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
         await runAndWaitForSuccessfulResponse(page!, "session_projection", 25_000, () => (
-          page!.getByTestId("session-timeline-list").evaluate((element) => element.scrollTo({ top: 0 }))
+          list.evaluate((element) => element.scrollTo({ top: 0 }))
         ));
         await expect.poll(async () => loadedEntryCount(summary), { timeout: 20_000 }).toBeGreaterThan(before);
         const after = await loadedEntryCount(summary);
