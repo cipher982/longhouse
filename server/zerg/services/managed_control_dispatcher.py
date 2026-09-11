@@ -451,18 +451,12 @@ async def _dispatch_engine_channel(
     if message.get("ok") is True:
         data = _engine_command_result_data(message)
         if data is None:
-            await _finish_live_managed_control_operation(
-                operation_id=live_operation_id,
-                status="failed",
-                error={
-                    "code": "machine_control_malformed_result",
-                    "message": "Machine Agent control command returned malformed result",
-                },
-            )
             return ManagedControlDispatchResult(
                 ok=False,
                 transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
-                error="Machine Agent control command returned malformed result",
+                error=("Machine Agent control command was accepted but returned a malformed result; outcome is indeterminate"),
+                failure_kind=DISPATCH_FAILURE_TRANSPORT,
+                failure_reason="indeterminate",
             )
         await _finish_live_managed_control_operation(
             operation_id=live_operation_id,
@@ -476,6 +470,18 @@ async def _dispatch_engine_channel(
         )
 
     code, error = _engine_error_message(message.get("error"), "Machine Agent control command failed")
+    if code == "command_indeterminate":
+        # The durable receipt fence accepted the command, but the provider
+        # outcome was not recorded. Keep the operation open for reconciliation;
+        # treating this as a provider failure would make a same-ID retry look
+        # like a new side effect.
+        return ManagedControlDispatchResult(
+            ok=False,
+            transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
+            error=error,
+            failure_kind=DISPATCH_FAILURE_TRANSPORT,
+            failure_reason="indeterminate",
+        )
     await _finish_live_managed_control_operation(
         operation_id=live_operation_id,
         status="failed",

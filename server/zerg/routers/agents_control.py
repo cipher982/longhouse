@@ -31,6 +31,18 @@ CONTROL_HEARTBEAT_TIMEOUT_SECS = 90
 CONTROL_HELLO_TIMEOUT_SECS = 10
 
 
+def _command_result_outcome_is_indeterminate(message: Mapping[str, Any]) -> bool:
+    if not str(message.get("command_id") or "").startswith("managed-control:"):
+        return False
+    if message.get("ok") is False:
+        error = message.get("error")
+        return isinstance(error, Mapping) and str(error.get("code") or "").strip() == "command_indeterminate"
+    if message.get("ok") is True:
+        result = message.get("result")
+        return not isinstance(result, Mapping) or "exit_code" not in result
+    return False
+
+
 def _auth_disabled_identity(hello: Mapping[str, Any]) -> tuple[int, str]:
     device_id = str(hello.get("device_id") or hello.get("machine_name") or "test-machine").strip()
     return 0, device_id or "test-machine"
@@ -69,6 +81,12 @@ async def _reconcile_machine_control_operation_result(
     owner_id: int,
     device_id: str,
 ) -> bool:
+    if _command_result_outcome_is_indeterminate(message):
+        logger.warning(
+            "Leaving indeterminate machine control operation open for command_id=%s",
+            message.get("command_id"),
+        )
+        return False
     catalogd = get_catalogd_client()
     if catalogd is None:
         raise CatalogUnavailable("catalogd is not supervised")

@@ -135,7 +135,12 @@ async def test_machine_control_result_finishes_the_operation_in_the_live_catalog
         other_operation_id = _seed_running_control_operation(owner_id=8, device_id="cinder", command_id=other_command_id)
 
         matched = await _reconcile_machine_control_operation_result(
-            {"type": "command_result", "command_id": command_id, "ok": True, "result": {"stdout": "accepted"}},
+            {
+                "type": "command_result",
+                "command_id": command_id,
+                "ok": True,
+                "result": {"exit_code": 0, "stdout": "accepted"},
+            },
             owner_id=7,
             device_id="cinder",
         )
@@ -147,7 +152,12 @@ async def test_machine_control_result_finishes_the_operation_in_the_live_catalog
         # A control channel authenticates as exactly one owner, so a result
         # naming another owner's command must not finish that owner's operation.
         cross_owner = await _reconcile_machine_control_operation_result(
-            {"type": "command_result", "command_id": other_command_id, "ok": True, "result": {"stdout": "stolen"}},
+            {
+                "type": "command_result",
+                "command_id": other_command_id,
+                "ok": True,
+                "result": {"exit_code": 0, "stdout": "stolen"},
+            },
             owner_id=7,
             device_id="cinder",
         )
@@ -178,7 +188,7 @@ async def test_machine_control_result_reconcile_uses_catalogd_without_db(monkeyp
 
     monkeypatch.setattr("zerg.routers.agents_control.get_catalogd_client", lambda: CatalogClient())
 
-    message = {"type": "command_result", "command_id": "machine-op:test", "ok": True, "result": {}}
+    message = {"type": "command_result", "command_id": "machine-op:test", "ok": True, "result": {"exit_code": 0}}
     matched = await _reconcile_machine_control_operation_result(
         message,
         owner_id=7,
@@ -193,3 +203,47 @@ async def test_machine_control_result_reconcile_uses_catalogd_without_db(monkeyp
             2.0,
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_indeterminate_machine_control_result_does_not_finish_operation():
+    with provision_live_catalog():
+        command_id = f"managed-control:{uuid4()}:session.send_text"
+        operation_id = _seed_running_control_operation(owner_id=7, device_id="cinder", command_id=command_id)
+
+        matched = await _reconcile_machine_control_operation_result(
+            {
+                "type": "command_result",
+                "command_id": command_id,
+                "ok": False,
+                "error": {
+                    "code": "command_indeterminate",
+                    "message": "accepted before the outcome was recorded",
+                },
+            },
+            owner_id=7,
+            device_id="cinder",
+        )
+        operation = _read_control_operation(operation_id)
+
+    assert matched is False
+    assert operation["status"] == "running"
+    assert operation["finished_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_malformed_success_result_does_not_finish_operation():
+    with provision_live_catalog():
+        command_id = f"managed-control:{uuid4()}:session.send_text"
+        operation_id = _seed_running_control_operation(owner_id=7, device_id="cinder", command_id=command_id)
+
+        matched = await _reconcile_machine_control_operation_result(
+            {"type": "command_result", "command_id": command_id, "ok": True, "result": {"stdout": "accepted"}},
+            owner_id=7,
+            device_id="cinder",
+        )
+        operation = _read_control_operation(operation_id)
+
+    assert matched is False
+    assert operation["status"] == "running"
+    assert operation["finished_at"] is None
