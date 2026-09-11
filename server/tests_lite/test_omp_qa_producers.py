@@ -38,6 +38,7 @@ from zerg.qa.omp_helm_lifecycle import _register_native_source
 from zerg.qa.omp_helm_lifecycle import _remove_isolation_after_source_retention
 from zerg.qa.omp_helm_lifecycle import _runtime_convergence
 from zerg.qa.omp_helm_lifecycle import _served_control_identity
+from zerg.qa.omp_helm_lifecycle import _runtime_control_identity_is_complete
 from zerg.qa.omp_helm_lifecycle import _served_projection_evidence
 from zerg.qa.omp_helm_lifecycle import _wait_runtime_control_identity
 from zerg.qa.omp_helm_lifecycle import omp_helm_lifecycle_assertions
@@ -1412,6 +1413,28 @@ def test_omp_helm_assertions_do_not_use_agent_settled_as_completion() -> None:
     assert omp_helm_lifecycle_assertions(observation)["omp_helm_launch_registration"] is False
     observation["abort_evidence"]["terminal"] = False
     assert omp_helm_lifecycle_assertions(observation)["omp_helm_abort_native"] is False
+
+
+def test_omp_runtime_control_identity_rejects_missing_owner_fields() -> None:
+    labels = ("initial", "replacement", "cold_resume", "final")
+    cold_owner = _identity_receipt("connection:cold_resume:lease-1")["owner_identity"]
+    valid = {
+        label: _identity_receipt(
+            f"connection:{label}:lease-1",
+            owner_identity=list(cold_owner) if label == "final" else None,
+        )
+        for label in labels
+    }
+    assert _runtime_control_identity_is_complete(valid)
+
+    invalid = {
+        label: _identity_receipt(
+            f"connection:{label}:lease-1",
+            owner_identity=[None] * 7,
+        )
+        for label in labels
+    }
+    assert not _runtime_control_identity_is_complete(invalid)
 
 
 def test_omp_cleanup_gate_is_required_for_every_selected_assertion() -> None:

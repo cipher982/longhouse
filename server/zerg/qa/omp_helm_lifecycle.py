@@ -540,6 +540,17 @@ def _control_identity_receipt(identity: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _owner_identity_is_complete(owner_identity: Any) -> bool:
+    if not isinstance(owner_identity, list) or len(owner_identity) != len(_OWNER_IDENTITY_FIELDS):
+        return False
+    session_id, native_session_id, session_file, launcher_pid, launcher_start, provider_pid, provider_start = owner_identity
+    return (
+        all(isinstance(value, str) and value.strip() for value in (session_id, native_session_id, session_file))
+        and all(isinstance(value, int) and not isinstance(value, bool) and value > 0 for value in (launcher_pid, provider_pid))
+        and all(isinstance(value, str) and value.strip() for value in (launcher_start, provider_start))
+    )
+
+
 def _control_identity_receipt_is_bound(receipt: Any) -> bool:
     if not isinstance(receipt, Mapping):
         return False
@@ -551,8 +562,7 @@ def _control_identity_receipt_is_bound(receipt: Any) -> bool:
     if (
         receipt.get("session_id") is None
         or receipt.get("control_subject_key") != expected_subject_key
-        or not isinstance(owner_identity, list)
-        or len(owner_identity) != len(_OWNER_IDENTITY_FIELDS)
+        or not _owner_identity_is_complete(owner_identity)
     ):
         return False
     if receipt.get("served_path") != "canonical_session_detail" or not isinstance(actions, Mapping):
