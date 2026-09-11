@@ -1600,6 +1600,22 @@ def _helm_cleanup_ready(cleanup: Mapping[str, Any]) -> bool:
     )
 
 
+def _exact_marker_prompt(marker: str) -> str:
+    """Make sequential marker probes distinguish a fresh request."""
+
+    return (
+        "This is the newest verification request. Do not repeat an earlier "
+        "verification or assistant marker; reply with exactly "
+        f"{marker} and nothing else."
+    )
+
+
+def _setup_marker_prompt(marker: str, *, setup: str) -> str:
+    """Preserve setup instructions while requiring one exact marker reply."""
+
+    return f"{setup.rstrip()} reply with exactly {marker} and nothing else."
+
+
 def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
     root = args.evidence_root.resolve()
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -1690,7 +1706,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             argv=_launch_argv(
                 args,
                 workspace=workspace,
-                prompt=f"Reply with exactly {initial_marker}.",
+                prompt=_exact_marker_prompt(initial_marker),
             ),
             cwd=workspace,
             env=env,
@@ -1818,7 +1834,8 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
 
         send_marker = f"OMP_HELM_SEND_{os.urandom(8).hex()}"
         send_offset = _read_source_size(current_session_file)
-        send = _run_engine(args.engine, "send", current_session_id, env, text=f"Reply with exactly {send_marker}.")
+        send_prompt = _exact_marker_prompt(send_marker)
+        send = _run_engine(args.engine, "send", current_session_id, env, text=send_prompt)
         send_row = _wait_native_marker(current_session_file, send_marker, minimum_offset=send_offset)
         send_evidence = _native_marker_evidence(
             send_row,
@@ -1831,7 +1848,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         send_evidence.update({"observation_scope": "initial", "source_generation": "initial"})
         controls["send"] = {
             "action_label": "send",
-            "prompt": f"Reply with exactly {send_marker}.",
+            "prompt": send_prompt,
             "state": dict(current_state),
             "command": send,
             "marker_row": send_row,
@@ -1851,7 +1868,10 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "send",
             current_session_id,
             env,
-            text=f"Use the bash tool to run `sleep 8`, then reply with exactly {active_marker}.",
+            text=_setup_marker_prompt(
+                active_marker,
+                setup="Use the bash tool to run `sleep 8`, then",
+            ),
         )
         active_state = _wait_state(
             longhouse_home,
@@ -1859,12 +1879,13 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             predicate=lambda value: value.get("phase") in {"running", "thinking"},
             timeout=30,
         )
+        follow_up_prompt = _exact_marker_prompt(follow_up_marker)
         follow_up = _run_engine(
             args.engine,
             "send",
             current_session_id,
             env,
-            text=f"Reply with exactly {follow_up_marker}.",
+            text=follow_up_prompt,
         )
         follow_up_row = _wait_native_marker(current_session_file, follow_up_marker, minimum_offset=active_offset)
         follow_up_evidence = _native_marker_evidence(
@@ -1885,7 +1906,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         follow_up_evidence.update({"observation_scope": "initial", "source_generation": "initial"})
         controls["follow_up"] = {
             "action_label": "follow_up",
-            "prompt": f"Reply with exactly {follow_up_marker}.",
+            "prompt": follow_up_prompt,
             "state": dict(current_state),
             "active_action_label": "active_turn_setup",
             "active_command": follow_up_active,
@@ -1916,7 +1937,10 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "send",
             current_session_id,
             env,
-            text=f"Use the bash tool to run `sleep 8`, then reply with exactly {steer_active_marker}.",
+            text=_setup_marker_prompt(
+                steer_active_marker,
+                setup="Use the bash tool to run `sleep 8`, then",
+            ),
         )
         steer_active_state = _wait_state(
             longhouse_home,
@@ -1924,7 +1948,8 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             predicate=lambda value: value.get("phase") in {"running", "thinking"},
             timeout=30,
         )
-        steer = _run_engine(args.engine, "steer", current_session_id, env, text=f"Reply with exactly {steer_marker}.")
+        steer_prompt = _exact_marker_prompt(steer_marker)
+        steer = _run_engine(args.engine, "steer", current_session_id, env, text=steer_prompt)
         steer_row = _wait_native_marker(current_session_file, steer_marker, minimum_offset=steer_active_offset)
         steer_evidence = _native_marker_evidence(
             steer_row,
@@ -1942,7 +1967,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         steer_evidence.update({"observation_scope": "initial", "source_generation": "initial"})
         controls["steer"] = {
             "action_label": "steer",
-            "prompt": f"Reply with exactly {steer_marker}.",
+            "prompt": steer_prompt,
             "state": dict(steer_active_state),
             "active_action_label": "active_turn_setup",
             "active_command": steer_active,
@@ -1971,7 +1996,10 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "send",
             current_session_id,
             env,
-            text=f"Use the bash tool to run `sleep 15`, then reply with exactly {abort_marker}.",
+            text=_setup_marker_prompt(
+                abort_marker,
+                setup="Use the bash tool to run `sleep 15`, then",
+            ),
         )
         abort_active_state = _wait_state(
             longhouse_home,
@@ -2075,7 +2103,10 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "send",
             current_session_id,
             env,
-            text=(f"Remember this context phrase: {context_phrase}. Then reply with exactly {replacement_marker}."),
+            text=_setup_marker_prompt(
+                replacement_marker,
+                setup=f"Remember this context phrase: {context_phrase}. Then",
+            ),
         )
         replacement_row = _wait_native_marker(
             current_session_file,
@@ -2107,7 +2138,10 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         replacement_evidence.update({"observation_scope": "replacement", "source_generation": "replacement"})
         controls["replacement"] = {
             "action_label": "replacement_send",
-            "prompt": f"Remember this context phrase: {context_phrase}. Then reply with exactly {replacement_marker}.",
+            "prompt": _setup_marker_prompt(
+                replacement_marker,
+                setup=f"Remember this context phrase: {context_phrase}. Then",
+            ),
             "state": dict(replaced_state),
             "command": replacement,
             "marker_row": replacement_row,
