@@ -80,6 +80,7 @@ _ACTION_IDS_BY_REASON: dict[str, str] = {
     "provider_support_needs_attention": "inspect_provider",
     "provider_cli_version_unknown": "inspect_provider",
     "provider_live_route_e2e_warning": "inspect_provider",
+    "service_artifact_mismatch": "repair_machine",
     "service_generation_mismatch": "repair_machine",
     "service_machine_name_mismatch": "repair_machine",
     "service_not_installed": "repair_machine",

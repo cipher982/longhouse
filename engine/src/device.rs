@@ -895,7 +895,7 @@ fn machine_token_path(state_root: Option<&Path>) -> anyhow::Result<PathBuf> {
 
 fn collect_native_desktop_health(
     state_root: Option<&Path>,
-    health: NativeLocalHealth,
+    mut health: NativeLocalHealth,
 ) -> anyhow::Result<NativeDesktopHealth> {
     let status_path = engine_status_path(state_root)?;
     let engine_payload = std::fs::read_to_string(&status_path)
@@ -915,6 +915,17 @@ fn collect_native_desktop_health(
         .filter(|path| path.is_file())
         .map(|path| path.display().to_string());
 
+    if let Ok(home) = home_dir() {
+        let service = collect_native_repair_service_status(
+            NativeServicePlatform::current(),
+            &home,
+            state_root,
+        );
+        if let Some(reason) = native_service_repair_reason(machine_state.as_ref(), &service) {
+            health.reasons.push(reason.to_string());
+        }
+    }
+
     Ok(native_desktop_health_from_parts(
         health,
         engine_payload,
@@ -922,6 +933,34 @@ fn collect_native_desktop_health(
         token_path,
         chrono::Utc::now().to_rfc3339(),
     ))
+}
+
+fn native_service_repair_reason(
+    machine_state: Option<&Value>,
+    service: &NativeRepairServiceStatus,
+) -> Option<&'static str> {
+    let state = machine_state?;
+    if !state
+        .get("runtime_url")
+        .and_then(Value::as_str)
+        .is_some_and(runtime_url_looks_configured)
+        || !state
+            .get("machine_name")
+            .and_then(Value::as_str)
+            .is_some_and(machine_name_looks_configured)
+        || service.error.is_some()
+    {
+        return None;
+    }
+    if !service.exists {
+        Some("service_not_installed")
+    } else if service.longhouse_home_matches == Some(false)
+        || service.native_engine_matches == Some(false)
+    {
+        Some("service_artifact_mismatch")
+    } else {
+        None
+    }
 }
 
 pub fn cmd_device_repair_plan(json: bool, state_root: Option<&Path>) -> anyhow::Result<()> {
@@ -1989,6 +2028,7 @@ fn native_desktop_suggested_action_ids(reasons: &[String]) -> Vec<String> {
             | "provider_release_blocked"
             | "provider_support_needs_attention" => "inspect_provider",
             "service_generation_mismatch"
+            | "service_artifact_mismatch"
             | "service_machine_name_mismatch"
             | "service_not_installed"
             | "service_runner_name_mismatch"
@@ -3369,10 +3409,10 @@ fn collect_native_repair_service_status(
                 (None, _) => None,
             };
             let native_engine_matches =
-                extract_service_engine_executable(platform, &raw).map(|actual| {
+                extract_service_engine_executable(platform, &raw).and_then(|actual| {
                     resolve_native_service_engine_executable(home, None)
+                        .ok()
                         .map(|expected| paths_match(Path::new(&actual), &expected.path))
-                        .unwrap_or(false)
                 });
             NativeRepairServiceStatus {
                 path: path.display().to_string(),
@@ -4978,6 +5018,60 @@ mod tests {
     use std::collections::BTreeSet;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn service_repair_requires_configured_machine_and_positive_artifact_evidence() {
+        let configured = json!({
+            "runtime_url": "https://example.longhouse.ai",
+            "machine_name": "cinder",
+        });
+        let mut service = NativeRepairServiceStatus {
+            path: "/example/service".to_string(),
+            exists: false,
+            platform: "macos",
+            longhouse_home_present: false,
+            longhouse_home_matches: None,
+            native_engine_matches: None,
+            error: None,
+        };
+        assert_eq!(
+            native_service_repair_reason(Some(&configured), &service),
+            Some("service_not_installed")
+        );
+        assert_eq!(native_service_repair_reason(None, &service), None);
+        assert_eq!(
+            native_service_repair_reason(Some(&json!({})), &service),
+            None
+        );
+        service.error = Some("permission denied".to_string());
+        assert_eq!(
+            native_service_repair_reason(Some(&configured), &service),
+            None
+        );
+        service.error = None;
+        service.exists = true;
+        assert_eq!(
+            native_service_repair_reason(Some(&configured), &service),
+            None
+        );
+        service.longhouse_home_matches = Some(true);
+        service.native_engine_matches = Some(true);
+        assert_eq!(
+            native_service_repair_reason(Some(&configured), &service),
+            None
+        );
+        service.native_engine_matches = Some(false);
+        assert_eq!(
+            native_service_repair_reason(Some(&configured), &service),
+            Some("service_artifact_mismatch")
+        );
+        service.native_engine_matches = Some(true);
+        service.longhouse_home_matches = Some(false);
+        assert_eq!(
+            native_service_repair_reason(Some(&configured), &service),
+            Some("service_artifact_mismatch")
+        );
+    }
 
     #[test]
     fn embedded_contract_describes_available_native_commands() {

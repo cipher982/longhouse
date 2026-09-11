@@ -118,44 +118,18 @@ enum LonghouseCLI {
     }
 
     private static func shouldRepairServiceArtifact(_ snapshot: HealthSnapshot) -> Bool {
-        guard let readiness = snapshot.launchReadiness,
-              let machineName = readiness.machineName, !machineName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              let storedURL = readiness.storedURL, !storedURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              readiness.state?.lowercased() != "unconfigured" else {
-            return false
-        }
-        let invalidMachineState: (String) -> Bool = {
+        // These are native observations, not inferred from a stale engine or
+        // parsed from the human-readable repair command.
+        snapshot.reasons.contains {
             switch $0 {
-            case "machine_state_invalid", "machine_state_missing",
-                 "machine_state_missing_runtime_url", "machine_state_missing_machine_name":
-                return true
-            default:
-                return false
-            }
-        }
-        if snapshot.reasons.contains(where: invalidMachineState)
-            || readiness.reasons?.contains(where: invalidMachineState) == true {
-            return false
-        }
-
-        let serviceStatus = snapshot.service?.status?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        if serviceStatus == "not-installed" || serviceStatus == "not installed" {
-            return true
-        }
-
-        let serviceMismatch: (String) -> Bool = {
-            switch $0 {
-            case "service_generation_mismatch", "service_machine_name_mismatch",
+            case "service_not_installed", "service_artifact_mismatch",
+                 "service_generation_mismatch", "service_machine_name_mismatch",
                  "service_state_hash_mismatch", "service_runner_name_mismatch":
                 return true
             default:
                 return false
             }
         }
-        return snapshot.reasons.contains(where: serviceMismatch)
-            || readiness.reasons?.contains(where: serviceMismatch) == true
     }
 
     static func setupInvocation() -> (launchPath: String, arguments: [String])? {
