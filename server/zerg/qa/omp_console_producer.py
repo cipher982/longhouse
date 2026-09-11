@@ -772,6 +772,7 @@ def main(argv: list[str] | None = None) -> int:
             "error": f"{type(exc).__name__}: {exc}",
         }
         args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        result["artifact_manifest"] = artifact_manifest(args.evidence_root)
         lifecycle.write_json(args.evidence_root / "result.json", result)
     print(json.dumps(result, sort_keys=True, default=str))
     return 0 if result.get("status") == "pass" else 1

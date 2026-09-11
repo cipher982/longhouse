@@ -12,6 +12,7 @@ from zerg.qa import omp_helm_lifecycle
 from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.omp_console_producer import _PROFILE as CONSOLE_PROFILE
+from zerg.qa.omp_console_producer import _VARIANT as CONSOLE_VARIANT
 from zerg.qa.omp_console_producer import ASSERTION_ID as CONSOLE_ASSERTION
 from zerg.qa.omp_console_producer import REGISTRATION as CONSOLE_REGISTRATION
 from zerg.qa.omp_console_producer import _is_terminal_agent_end
@@ -1356,6 +1357,35 @@ def test_omp_manifest_stability_detects_post_manifest_mutation(tmp_path) -> None
     assert _manifest_is_stable(tmp_path, manifest)
     evidence.write_text('{"status":"fail"}\n', encoding="utf-8")
     assert not _manifest_is_stable(tmp_path, manifest)
+
+
+@pytest.mark.parametrize(
+    ("module_name", "runner_name", "variant"),
+    (
+        ("zerg.qa.omp_console_producer", "run_omp_console", CONSOLE_VARIANT),
+        ("zerg.qa.omp_helm_lifecycle", "run_omp_helm", _VARIANTS[0]),
+    ),
+)
+def test_omp_main_failure_retains_partial_artifact_manifest(monkeypatch, tmp_path, module_name, runner_name, variant, capsys) -> None:
+    module = __import__(module_name, fromlist=["main"])
+
+    def fail(args):
+        args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        (args.evidence_root / "partial-receipt.json").write_text("{}\n", encoding="utf-8")
+        raise RuntimeError("synthetic qualification failure")
+
+    monkeypatch.setattr(module, runner_name, fail)
+
+    arguments = ["--variant", variant, "--evidence-root", str(tmp_path / "evidence")]
+    if module_name == "zerg.qa.omp_console_producer":
+        arguments.extend(["--model", "fixture-model"])
+    result = module.main(arguments)
+
+    assert result == 1
+    payload = json.loads((tmp_path / "evidence" / "result.json").read_text(encoding="utf-8"))
+    assert payload["failure_code"].endswith("_lifecycle_failed")
+    assert [entry["path"] for entry in payload["artifact_manifest"]] == ["partial-receipt.json"]
+    assert "synthetic qualification failure" in capsys.readouterr().out
 
 
 def test_omp_semantic_entrypoint_uses_validated_request_and_runtime_token(tmp_path, monkeypatch) -> None:
