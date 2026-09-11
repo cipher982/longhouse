@@ -562,6 +562,51 @@ def test_omp_native_model_evidence_rejects_successful_model_event_outside_first_
     )
 
 
+def test_omp_native_model_evidence_publishes_the_first_turn_event_window(tmp_path) -> None:
+    first_turn = [
+        {"type": "session", "id": "native-1"},
+        {
+            "type": "message",
+            "model": "openrouter/fixture-model",
+            "message": {
+                "role": "assistant",
+                "model": "openrouter/fixture-model",
+                "stopReason": "stop",
+                "content": [{"type": "text", "text": "OMP_WINDOW_MARKER"}],
+                "usage": {"input": 3, "output": 2, "cost": {"total": 0.0001}},
+            },
+        },
+    ]
+    later = [
+        {
+            "type": "message",
+            "model": "openrouter/fixture-model",
+            "message": {
+                "role": "assistant",
+                "model": "openrouter/fixture-model",
+                "stopReason": "stop",
+                "usage": {"input": 9, "output": 8, "cost": {"total": 0.0002}},
+            },
+        }
+    ]
+    _write_omp_console_settlement_fixture(tmp_path, first_turn_events=first_turn, later_events=later)
+
+    evidence = omp_native_model_evidence(
+        tmp_path,
+        source_canary="omp_console_lifecycle",
+        qualification_model="openrouter/fixture-model",
+        api_key_configured=True,
+        first_turn_only=True,
+    )
+
+    assert evidence is not None
+    assert evidence["result_event"]["usage"]["output"] == 2
+    assert evidence["source_artifacts"][0]["event_window"] == {
+        "start_offset": 0,
+        "end_offset": len(("\n".join(json.dumps(event) for event in first_turn) + "\n").encode()),
+    }
+
+
 def test_omp_continuation_prompt_names_the_earlier_context_label_without_tool_or_marker_replay() -> None:
     prompt = _omp_continuation_prompt("OMP_RESUME_MARKER")
 

@@ -156,8 +156,8 @@ def omp_native_model_evidence(
     sources = retention.get("sources") if isinstance(retention.get("sources"), list) else []
     selected_source: Path | None = None
     selected_source_relative: str | None = None
-    selected_event: Mapping[str, Any] | None = None
     selected_events: list[Mapping[str, Any]] = []
+    selected_event: Mapping[str, Any] | None = None
     if first_turn_only:
         dispatch = _read_json(evidence_root / "adapter-dispatch-receipt.json") or {}
         binding = _read_json(evidence_root / "provider-response-binding-receipt.json") or {}
@@ -172,7 +172,8 @@ def omp_native_model_evidence(
             )
         if first_turn is None:
             return None
-        selected_source, selected_source_relative, _, first_turn_events = first_turn
+        selected_source, selected_source_relative, _, first_turn_events, window_end = first_turn
+        selected_event_window = (0, window_end)
         assistant_messages = [
             event
             for event in first_turn_events
@@ -253,6 +254,19 @@ def omp_native_model_evidence(
     model = native_model
     event_digest = f"sha256:{raw_event_digest(selected_event)}"
     source_digest = f"sha256:{hashlib.sha256(selected_source.read_bytes()).hexdigest()}"
+    source_artifact: dict[str, Any] = {
+        "path": selected_source_relative,
+        "sha256": source_digest,
+        "kind": "provider_jsonl_stream",
+        "event_type": "message",
+        "event_sha256": event_digest,
+        "native_event_sha256": event_digest,
+    }
+    if selected_event_window is not None:
+        source_artifact["event_window"] = {
+            "start_offset": selected_event_window[0],
+            "end_offset": selected_event_window[1],
+        }
     return {
         "source_canary": source_canary,
         "operation_evidence": {"model_call": {"status": "pass", "level": "live_token"}},
@@ -271,16 +285,7 @@ def omp_native_model_evidence(
             "total_cost_usd": usage.get("cost.total"),
             "native_event_sha256": event_digest,
         },
-        "source_artifacts": [
-            {
-                "path": selected_source_relative,
-                "sha256": source_digest,
-                "kind": "provider_jsonl_stream",
-                "event_type": "message",
-                "event_sha256": event_digest,
-                "native_event_sha256": event_digest,
-            }
-        ],
+        "source_artifacts": [source_artifact],
     }
 
 
@@ -337,7 +342,7 @@ def _first_turn_source_window(
     sources: list[object],
     *,
     expected_native_id: str = "",
-) -> tuple[Path, str, bytes, list[Mapping[str, Any]]] | None:
+) -> tuple[Path, str, bytes, list[Mapping[str, Any]], int] | None:
     continuation = _read_json(root / "console-continuation-receipt.json") or {}
     first_turn = continuation.get("first_turn_evidence")
     if not isinstance(first_turn, Mapping):
@@ -394,7 +399,7 @@ def _first_turn_source_window(
     if first_turn_malformed:
         return None
     relative_path = source_path.relative_to(root.resolve()).as_posix()
-    return source_path, relative_path, source_bytes, first_turn_events
+    return source_path, relative_path, source_bytes, first_turn_events, source_end_offset
 
 
 def _first_turn_source_window_from_response_binding(
@@ -403,7 +408,7 @@ def _first_turn_source_window_from_response_binding(
     *,
     binding: Mapping[str, Any],
     expected_native_id: str = "",
-) -> tuple[Path, str, bytes, list[Mapping[str, Any]]] | None:
+) -> tuple[Path, str, bytes, list[Mapping[str, Any]], int] | None:
     """Use the bound first provider response when continuation evidence is absent.
 
     A semantic canary can fail after the provider has already completed its
@@ -446,7 +451,7 @@ def _first_turn_source_window_from_response_binding(
         return None
     if sum(event.get("type") == "session" and event.get("id") == expected_native_id for event in events) != 1:
         return None
-    return source_path, source_path.relative_to(root.resolve()).as_posix(), source_bytes, events
+    return source_path, source_path.relative_to(root.resolve()).as_posix(), source_bytes, events, len(source_bytes)
 
 
 def _native_settlement(root: Path) -> dict[str, object]:
