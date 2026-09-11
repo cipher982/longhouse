@@ -19,7 +19,11 @@ from zerg.storage_v2.media_objects import SealedMediaObject
 from zerg.storage_v2.media_objects import read_media_object
 from zerg.storage_v2.media_objects import seal_media_object
 from zerg.storage_v2.object_store import FilesystemImmutableObjectStore
+from zerg.storage_v2.object_store import ObjectStoreCorruptError
+from zerg.storage_v2.object_store import ObjectStoreValidationError
+from zerg.storage_v2.raw_objects import MAX_COMPRESSED_BYTES
 from zerg.storage_v2.raw_objects import DecodedRawObject
+from zerg.storage_v2.raw_objects import RawObjectCorruptError
 from zerg.storage_v2.raw_objects import RawObjectSpec
 from zerg.storage_v2.raw_objects import SealedRawObject
 from zerg.storage_v2.raw_objects import read_raw_object_from_store
@@ -61,6 +65,28 @@ def _read_in_worker(root: str, object_path: str, expected_object_hash: str, tena
         expected_object_hash=expected_object_hash,
         expected_tenant_id=tenant_id,
     )
+
+
+def _read_compressed_in_worker(root: str, object_path: str, expected_object_hash: str, tenant_id: str) -> bytes:
+    """Return the verified stored bytes of one raw object without decoding it.
+
+    Replication moves objects verbatim. Decoding them into records here would
+    cross the process boundary with the whole payload and allocate it a second
+    time in the app process, which is what the fetch path exists to avoid.
+    """
+
+    store = FilesystemImmutableObjectStore(Path(root), tenant_id=tenant_id)
+    try:
+        return store.read_verified(
+            tenant_id=tenant_id,
+            key=object_path,
+            sha256=expected_object_hash,
+            max_bytes=MAX_COMPRESSED_BYTES,
+        )
+    except ObjectStoreValidationError as exc:
+        raise RawObjectCorruptError(str(exc)) from exc
+    except ObjectStoreCorruptError as exc:
+        raise RawObjectCorruptError(str(exc)) from exc
 
 
 def _seal_media_in_worker(root: str, spec: MediaObjectSpec) -> SealedMediaObject:
@@ -396,6 +422,67 @@ class RawObjectWorkerPool:
         finally:
             if release_slot:
                 self._user_read_slots.release()
+
+    async def read_verified_compressed(
+        self,
+        object_path: str,
+        expected_object_hash: str,
+        tenant_id: str,
+        *,
+        lane: str = "background",
+        queue_timeout_seconds: float = 0.25,
+        operation_timeout_seconds: float = 10.0,
+    ) -> bytes:
+        """Read and hash-verify one stored object without decoding it.
+
+        Defaults to the background lane so replication cannot fill the
+        user-read queue: that lane is one worker wide and serves session
+        detail and export, so a replica sweep must never turn an ordinary raw
+        read into a 503.
+        """
+
+        if self._closed:
+            raise RawObjectWorkerError("raw worker pool is closed")
+        if lane not in {"background", "user"}:
+            raise ValueError("compressed read lane must be background or user")
+        background = lane == "background"
+        slots = self._repair_slots if background else self._user_read_slots
+        try:
+            async with asyncio.timeout(queue_timeout_seconds):
+                await slots.acquire()
+        except TimeoutError as exc:
+            raise RawObjectWorkerBusy("raw object read queue is full") from exc
+        release_slot = True
+        try:
+            for attempt in range(2):
+                executor = self._repair_executor if background else self._user_read_executor
+                try:
+                    future = asyncio.get_running_loop().run_in_executor(
+                        executor,
+                        _read_compressed_in_worker,
+                        str(self.root),
+                        object_path,
+                        expected_object_hash,
+                        tenant_id,
+                    )
+                    async with asyncio.timeout(operation_timeout_seconds):
+                        return await asyncio.shield(future)
+                except BrokenProcessPool:
+                    if attempt:
+                        raise RawObjectWorkerError("raw object reader pool crashed twice")
+                    await self._replace_executor("repair" if background else "user", executor)
+                except TimeoutError as exc:
+                    release_slot = False
+                    self._drain_slot_when_done(future, slots)
+                    raise RawObjectWorkerError("raw object read exceeded its deadline") from exc
+                except asyncio.CancelledError:
+                    release_slot = False
+                    self._drain_slot_when_done(future, slots)
+                    raise
+            raise AssertionError("unreachable")
+        finally:
+            if release_slot:
+                slots.release()
 
     def _drain_slot_when_done(self, future: asyncio.Future[Any], slots: asyncio.Semaphore) -> None:
         async def drain() -> None:

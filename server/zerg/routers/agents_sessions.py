@@ -1,6 +1,7 @@
 """Agents API — session CRUD, listing, and export endpoints."""
 
 import asyncio
+import json
 import logging
 from datetime import date as date_type
 from datetime import datetime
@@ -54,6 +55,7 @@ from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.live_catalog_timeline import stream_live_catalog_machine_sessions
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.raw_object_workers import RawObjectWorkerError
+from zerg.services.raw_object_workers import get_raw_object_worker_pool
 from zerg.services.searchd_supervisor import get_searchd_client
 from zerg.services.session_archive import SessionArchiveBundleResponse
 from zerg.services.session_archive import SessionArchiveManifestResponse
@@ -101,6 +103,9 @@ from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.worklog_day_export import WorklogDayExportResponse
 from zerg.services.worklog_day_export import WorklogV2Error
 from zerg.services.worklog_day_export import build_worklog_day_export_v2
+from zerg.storage_v2.contracts import RawExportCursor
+from zerg.storage_v2.contracts import decode_raw_export_cursor_token
+from zerg.storage_v2.contracts import raw_export_cursor_token
 from zerg.storage_v2.raw_objects import RawObjectCorruptError
 from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import UTCBaseModel
@@ -1397,6 +1402,221 @@ async def export_session(
             owner_id=int(owner_id),
             branch_mode=branch_mode,
         )
+
+
+def _is_hex_digest(value: str) -> bool:
+    return len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+
+
+def _object_source_key(item: dict[str, object]) -> str:
+    """The source-order key a replica uses to reassemble one session in order."""
+
+    return json.dumps(
+        [
+            str(item["machine_id"]),
+            str(item["provider"]),
+            str(item["opaque_source_id"]),
+            str(item["source_epoch"]),
+            f"{int(str(item['range_start'])):020d}",
+            str(item["envelope_id"]),
+        ],
+        separators=(",", ":"),
+    )
+
+
+def _project_archive_object(item: dict[str, object]) -> dict[str, object]:
+    return {
+        "envelope_id": str(item["envelope_id"]),
+        "object_hash": str(item["object_hash"]),
+        "machine_id": str(item["machine_id"]),
+        "provider": str(item["provider"]),
+        "opaque_source_id": str(item["opaque_source_id"]),
+        "source_epoch": str(item["source_epoch"]),
+        "range_kind": str(item["range_kind"]),
+        "range_start": str(item["range_start"]),
+        "range_end": str(item["range_end"]),
+        "record_count": int(item["record_count"]),
+        "uncompressed_size": int(item["uncompressed_size"]),
+        "compressed_size": int(item["compressed_size"]),
+        "provenance_kind": str(item["provenance_kind"]),
+        "commit_seq": str(item["commit_seq"]),
+    }
+
+
+@router.get("/sessions/{session_id}/objects/manifest")
+async def read_session_object_manifest(
+    session_id: UUID,
+    limit: int = Query(256, ge=1, le=512, description="Objects per page"),
+    cursor: Optional[str] = Query(None, description="Exclusive cursor from a previous page's next_cursor"),
+    _auth: object = Depends(verify_agents_caller),
+    _single: None = Depends(require_single_tenant),
+) -> dict[str, object]:
+    """List the immutable raw objects that make up one session's transcript.
+
+    This is the replication inventory: metadata only, paged, and bounded by the
+    page limit rather than by session size. Bytes move through the per-object
+    fetch route, never through here. ``deleted`` is surfaced instead of being
+    turned into a 404 so a replica can tell "this session is gone" from "this
+    session was never here", which is what lets deletion propagate.
+
+    The cursor is source-ordered, so it is only a resume point inside one
+    inventory. A new source epoch can insert rows *before* a saved cursor; a
+    consumer that must not miss appends re-lists the session when the transcript
+    revision changes and diffs against what it already holds.
+    """
+
+    owner_id = int(owner_id_from_caller(_auth))
+    after_source_key: str | None = None
+    if cursor is not None:
+        try:
+            after = decode_raw_export_cursor_token(cursor)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        if after.session_id != session_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Cursor belongs to a different session",
+            )
+        after_source_key = json.dumps(
+            [
+                after.machine_id,
+                after.provider,
+                after.opaque_source_id,
+                str(after.source_epoch),
+                f"{after.range_start:020d}",
+                after.envelope_id,
+            ],
+            separators=(",", ":"),
+        )
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The session catalog is temporarily unavailable",
+        )
+    try:
+        manifest = await catalogd.call(
+            "storage.session.raw_manifest.v2",
+            {
+                "session_id": str(session_id),
+                "owner_id": str(owner_id),
+                "after_source_key": after_source_key,
+                "limit": limit,
+            },
+        )
+    except (CatalogUnavailable, CatalogRemoteError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The session catalog is temporarily unavailable",
+        ) from exc
+    raw_objects = manifest.get("objects")
+    if not isinstance(raw_objects, list):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The catalog returned an invalid raw manifest",
+        )
+    objects = [item for item in raw_objects if isinstance(item, dict)]
+    has_more = manifest.get("objects_truncated") is True
+    session = manifest.get("session") if isinstance(manifest.get("session"), dict) else {}
+    next_cursor = None
+    if has_more and objects:
+        last = objects[-1]
+        next_cursor = raw_export_cursor_token(
+            RawExportCursor(
+                session_id=session_id,
+                machine_id=str(last["machine_id"]),
+                provider=str(last["provider"]),
+                opaque_source_id=str(last["opaque_source_id"]),
+                source_epoch=UUID(str(last["source_epoch"])),
+                range_start=int(str(last["range_start"])),
+                envelope_id=str(last["envelope_id"]),
+            )
+        )
+    return {
+        "v": 1,
+        "session_id": str(session_id),
+        "found": manifest.get("found") is True,
+        "deleted": manifest.get("deleted") is True,
+        "deletion_revision": manifest.get("deletion_revision"),
+        "transcript_revision": session.get("transcript_revision"),
+        "objects": [_project_archive_object(item) for item in objects],
+        "next_cursor": next_cursor,
+        "has_more": has_more,
+    }
+
+
+@router.get("/sessions/{session_id}/objects/{envelope_id}")
+async def fetch_session_object(
+    session_id: UUID,
+    envelope_id: str,
+    _auth: object = Depends(verify_agents_caller),
+    _single: None = Depends(require_single_tenant),
+) -> Response:
+    """Serve one immutable raw object exactly as it is stored.
+
+    The body is the stored zstd bytes of a single content-addressed object,
+    bounded by the storage layer's own 40 MiB cap. The bytes are hash-verified
+    in a background worker lane before any header is sent, so corruption is a
+    503 rather than a truncated body. Replication reads on that lane on purpose:
+    the user-read lane is one worker wide, and a replica sweep must never turn an
+    ordinary session read into a 503.
+    """
+
+    if not _is_hex_digest(envelope_id):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="envelope_id must be a lowercase SHA-256 digest",
+        )
+    owner_id = int(owner_id_from_caller(_auth))
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The session catalog is temporarily unavailable",
+        )
+    try:
+        neighborhood = await catalogd.call(
+            "storage.session.raw_neighborhood.v2",
+            {"session_id": str(session_id), "owner_id": str(owner_id), "envelope_id": envelope_id},
+        )
+    except (CatalogUnavailable, CatalogRemoteError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The session catalog is temporarily unavailable",
+        ) from exc
+    if neighborhood.get("deleted") is True:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail=f"Session {session_id} was deleted")
+    rows = neighborhood.get("objects")
+    item = (
+        next((row for row in rows if isinstance(row, dict) and row.get("envelope_id") == envelope_id), None)
+        if isinstance(rows, list)
+        else None
+    )
+    if neighborhood.get("found") is not True or item is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Object {envelope_id} is not part of session {session_id}",
+        )
+    workers = get_raw_object_worker_pool()
+    try:
+        data = await workers.read_verified_compressed(
+            str(item["object_path"]),
+            str(item["object_hash"]),
+            str(item["tenant_id"]),
+        )
+    except (KeyError, RawObjectCorruptError, RawObjectWorkerError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The immutable raw object could not be verified",
+        ) from exc
+    return Response(
+        content=data,
+        media_type="application/zstd",
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @router.get("/sessions/{session_id}/archive-bundle", response_model=SessionArchiveBundleResponse)

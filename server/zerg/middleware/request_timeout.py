@@ -90,6 +90,11 @@ def _product_read_route_class(api_path: str, method: str) -> str | None:
 
 def _session_read_route_class(remainder: str, *, storage_v2: bool) -> str | None:
     parts = remainder.strip("/").split("/")
+    if parts and parts[0] == "objects":
+        # Replication inventory and per-object fetch. Labelled as one class so a
+        # replica sweep is visible in product-read metrics without turning a
+        # hash into a label.
+        return "object_read" if len(parts) == 2 else None
     try:
         UUID(parts[0])
     except (ValueError, IndexError):

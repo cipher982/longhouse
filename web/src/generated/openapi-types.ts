@@ -2884,6 +2884,64 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/sessions/{session_id}/objects/manifest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Session Object Manifest
+         * @description List the immutable raw objects that make up one session's transcript.
+         *
+         *     This is the replication inventory: metadata only, paged, and bounded by the
+         *     page limit rather than by session size. Bytes move through the per-object
+         *     fetch route, never through here. ``deleted`` is surfaced instead of being
+         *     turned into a 404 so a replica can tell "this session is gone" from "this
+         *     session was never here", which is what lets deletion propagate.
+         *
+         *     The cursor is source-ordered, so it is only a resume point inside one
+         *     inventory. A new source epoch can insert rows *before* a saved cursor; a
+         *     consumer that must not miss appends re-lists the session when the transcript
+         *     revision changes and diffs against what it already holds.
+         */
+        get: operations["read_session_object_manifest_agents_sessions__session_id__objects_manifest_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/objects/{envelope_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fetch Session Object
+         * @description Serve one immutable raw object exactly as it is stored.
+         *
+         *     The body is the stored zstd bytes of a single content-addressed object,
+         *     bounded by the storage layer's own 40 MiB cap. The bytes are hash-verified
+         *     in a background worker lane before any header is sent, so corruption is a
+         *     503 rather than a truncated body. Replication reads on that lane on purpose:
+         *     the user-read lane is one worker wide, and a replica sweep must never turn an
+         *     ordinary session read into a 503.
+         */
+        get: operations["fetch_session_object_agents_sessions__session_id__objects__envelope_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/sessions/{session_id}/archive-bundle": {
         parameters: {
             query?: never;
@@ -15668,6 +15726,76 @@ export interface operations {
             header?: never;
             path: {
                 session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_session_object_manifest_agents_sessions__session_id__objects_manifest_get: {
+        parameters: {
+            query?: {
+                /** @description Objects per page */
+                limit?: number;
+                /** @description Exclusive cursor from a previous page's next_cursor */
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fetch_session_object_agents_sessions__session_id__objects__envelope_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+                envelope_id: string;
             };
             cookie?: never;
         };
