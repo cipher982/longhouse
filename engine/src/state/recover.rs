@@ -692,7 +692,7 @@ pub fn recover_state_database(db_path: &Path, dry_run: bool) -> Result<RecoveryR
     if !repaired_copy_is_complete {
         if !dry_run {
             match repaired_copy_integrity {
-                Ok(false) => bail!(
+                Ok(_) => bail!(
                     "recovery could not prove the repaired database complete: its full SQLite integrity_check did not pass; original state is unchanged. Preserve the original and investigate the damaged source instead of installing partial salvage"
                 ),
                 Err(error) => bail!(
