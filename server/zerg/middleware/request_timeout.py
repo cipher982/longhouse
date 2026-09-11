@@ -193,6 +193,16 @@ class RequestTimeoutMiddleware:
             await self.app(scope, receive, send)
             return
 
+        # A transcript download is a stream the client asked for, and it
+        # legitimately outlives a request deadline. Once the response has
+        # started, a deadline cannot produce an error response — it only
+        # truncates a 200 mid-file, which reads as a complete download and is
+        # worse than failing. The bound has to live on the unit instead: every
+        # object read inside the stream carries its own deadline.
+        if api_path.endswith("/export"):
+            await self.app(scope, receive, send)
+            return
+
         timeout = self.timeout
         method = str(scope.get("method") or "GET").upper()
         route_class = _product_read_route_class(api_path, method)

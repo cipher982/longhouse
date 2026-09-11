@@ -5,6 +5,7 @@ import asyncio
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.responses import StreamingResponse
 
 from zerg.metrics import product_read_requests_total
 from zerg.middleware import request_timeout as request_timeout_module
@@ -162,6 +163,36 @@ def test_agents_archive_bundle_route_uses_longer_timeout_budget():
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+def test_session_export_stream_delivers_its_whole_body_past_the_deadline(monkeypatch):
+    """A download that outlives its deadline must not be cut in half.
+
+    Once a streaming response has started, a deadline cannot produce an error
+    response — it truncates a 200 mid-file, which reads as a complete download.
+    The archive-read budget is driven down here so the stream outlives it.
+    """
+
+    monkeypatch.setattr(request_timeout_module, "ARCHIVE_READ_TIMEOUT_SECONDS", 0.01)
+
+    app = FastAPI()
+    app.add_middleware(RequestTimeoutMiddleware, timeout=0.01)
+
+    @app.get("/api/agents/sessions/test-session/export")
+    async def export():
+        async def body():
+            await asyncio.sleep(0.05)
+            yield b'{"a":1}\n'
+            await asyncio.sleep(0.05)
+            yield b'{"a":2}\n'
+
+        return StreamingResponse(body(), media_type="application/x-ndjson")
+
+    with TestClient(app) as client:
+        response = client.get("/api/agents/sessions/test-session/export")
+
+    assert response.status_code == 200
+    assert response.content == b'{"a":1}\n{"a":2}\n'
 
 
 def test_archive_backed_user_read_uses_longer_timeout_budget():
