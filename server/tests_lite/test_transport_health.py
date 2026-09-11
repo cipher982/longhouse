@@ -3,11 +3,7 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import replace
-
-os.environ.setdefault("DATABASE_URL", "sqlite://")
-os.environ.setdefault("TESTING", "1")
 
 from zerg.models.agents import AgentHeartbeat
 from zerg.services.transport_health import assess_transport_health
@@ -245,6 +241,8 @@ def test_transport_health_keeps_single_transient_connect_error_healthy():
             "ship_successes_1h": 64,
             "ship_connect_errors_1h": 1,
             "shipping_progress": _healthy_shipping_progress(),
+            "spool_pending_count": 0,
+            "spool_dead_count": 0,
         }
     )
 
@@ -529,9 +527,7 @@ def test_an_offline_machine_is_described_by_being_offline():
     from datetime import datetime, timedelta, timezone
 
     now = datetime.now(timezone.utc)
-    sample = transport_health_sample_from_engine_status_payload(
-        {"is_offline": True, "spool_pending_count": 0, "spool_dead_count": 0}
-    )
+    sample = transport_health_sample_from_engine_status_payload({"is_offline": True, "spool_pending_count": 0, "spool_dead_count": 0})
     offline = replace(sample, is_offline=True, last_ship_at=now - timedelta(hours=33), observed_at=now)
 
     assert "ship_stalled" not in assess_transport_health(offline).reasons

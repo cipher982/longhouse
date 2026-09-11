@@ -169,7 +169,12 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
                     || reasons.contains("reported_offline")
                     || reasons.contains("engine_offline")
             )
-            : (reasons, suggestedActions, suggestedActionIds, transport)
+            : (
+                reasons: reasons,
+                suggestedActions: suggestedActions,
+                suggestedActionIds: suggestedActionIds,
+                transport: transport
+            )
         let updatedEngine = EngineStatusSnapshot(
             path: engineStatus?.path,
             exists: true,
