@@ -3,6 +3,41 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { vi, beforeAll, afterAll, afterEach } from "vitest";
 
+function createMemoryStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() {
+      return values.size;
+    },
+    clear() {
+      values.clear();
+    },
+    getItem(key: string) {
+      return values.get(String(key)) ?? null;
+    },
+    key(index: number) {
+      return Array.from(values.keys())[index] ?? null;
+    },
+    removeItem(key: string) {
+      values.delete(String(key));
+    },
+    setItem(key: string, value: string) {
+      values.set(String(key), String(value));
+    },
+  };
+}
+
+// Node's built-in storage globals are disabled without --localstorage-file;
+// keep the jsdom tests isolated and file-free with an in-memory fallback.
+for (const name of ["localStorage", "sessionStorage"] as const) {
+  if (typeof window[name] === "undefined") {
+    Object.defineProperty(window, name, {
+      configurable: true,
+      value: createMemoryStorage(),
+    });
+  }
+}
+
 // Suppress expected test output
 // These are warnings/errors that are deliberately triggered by tests verifying edge case handling
 const originalWarn = console.warn;
