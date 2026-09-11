@@ -206,6 +206,10 @@ impl ShippingProgressObservation {
         self.last_progress_at = now;
     }
 
+    pub fn has_pending_work(&self) -> bool {
+        self.pending_work
+    }
+
     pub fn reset_after_sleep(&mut self, now: Instant) {
         self.last_progress_at = now;
     }
@@ -3866,8 +3870,7 @@ pub fn write_status_file(
     }
 
     let monotonic_now = Instant::now();
-    let pending_work = payload_has_pending_work(&projection.payload);
-    progress_observation.observe_pending_work(pending_work, monotonic_now);
+    let pending_work = progress_observation.has_pending_work();
     projection.payload.shipping_progress =
         progress_observation.snapshot(pending_work, is_offline, monotonic_now);
 
@@ -3927,12 +3930,7 @@ pub fn refresh_existing_status_pulse(
     };
     let now = chrono::Utc::now().to_rfc3339();
     let monotonic_now = Instant::now();
-    let pending_work = status
-        .get("shipping_progress")
-        .and_then(|value| value.get("pending_work"))
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    progress_observation.observe_pending_work(pending_work, monotonic_now);
+    let pending_work = progress_observation.has_pending_work();
     status["daemon_pid"] = serde_json::json!(std::process::id());
     status["last_updated"] = serde_json::json!(now);
     status["local_projection"]["engine_pulse_at"] = serde_json::json!(now);
@@ -4132,6 +4130,57 @@ mod tests {
         assert!(!idle_again.pending_work);
         assert!(!idle_again.stalled);
         assert_eq!(idle_again.seconds_without_progress, 0);
+    }
+
+    #[test]
+    fn status_pulse_preserves_hot_progress_without_reaging_cached_work() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("status.json");
+        std::fs::write(
+            &path,
+            r#"{"shipping_progress":{"pending_work":false},"local_projection":{}}"#,
+        )
+        .unwrap();
+        let start = Instant::now() - Duration::from_secs(70);
+        let mut observation = ShippingProgressObservation::new(start);
+        observation.observe_pending_work(true, start);
+
+        refresh_existing_status_pulse(
+            &ProjectionReconciliation::idle(),
+            &mut observation,
+            false,
+            &path,
+        );
+        let status: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(status["shipping_progress"]["stalled"], true);
+        assert!(
+            status["shipping_progress"]["seconds_without_progress"]
+                .as_u64()
+                .unwrap()
+                >= 70
+        );
+
+        // Fresh completion can clear the interval; the old persisted true
+        // value must not re-arm it on the next pulse.
+        observation.observe_pending_work(false, Instant::now());
+        refresh_existing_status_pulse(
+            &ProjectionReconciliation::idle(),
+            &mut observation,
+            false,
+            &path,
+        );
+        let status: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(status["shipping_progress"]["pending_work"], false);
+
+        // A later fresh projection may discover work outside the path queue.
+        let later = Instant::now();
+        observation.observe_pending_work(true, later);
+        let pending = observation.snapshot(observation.has_pending_work(), false, later);
+        assert!(pending.pending_work);
+        assert!(!pending.stalled);
+        assert_eq!(pending.seconds_without_progress, 0);
     }
 
     #[test]

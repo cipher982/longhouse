@@ -940,6 +940,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut opencode_title_refresh_tasks: JoinSet<Result<()>> = JoinSet::new();
     let mut projection_build_tasks: JoinSet<ProjectionBuildResult> = JoinSet::new();
     let mut deferred_retries = HashMap::new();
+    let mut shipping_progress = heartbeat::ShippingProgressObservation::new(Instant::now());
     let startup_archive_mode =
         read_archive_repair_control().normalized_mode(config.archive_repair_mode);
     match queue_storage_v2_pending_retry_paths(
@@ -1065,7 +1066,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut managed_reconciliation =
         heartbeat::ProjectionReconciliation::running("startup", chrono::Utc::now().to_rfc3339());
     let mut wake_gap_detector = WakeGapDetector::new();
-    let mut shipping_progress = heartbeat::ShippingProgressObservation::new(Instant::now());
     let mut pending_wake_reconciliation = false;
     let mut pending_full_reconciliation = false;
     let mut pending_periodic_observation = false;
@@ -1151,6 +1151,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             &mut in_flight,
             &task_context,
             &mut deferred_retries,
+            &mut shipping_progress,
             offline.is_offline,
             archive_repair_is_paused(config.archive_repair_mode),
         );
@@ -1185,6 +1186,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         &mut in_flight,
                         &task_context,
                         &mut deferred_retries,
+                        &mut shipping_progress,
                         offline.is_offline,
                         archive_repair_is_paused(config.archive_repair_mode),
                     );
@@ -1884,6 +1886,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &mut in_flight,
                             &task_context,
                             &mut deferred_retries,
+                            &mut shipping_progress,
                             offline.is_offline,
                             archive_repair_is_paused(config.archive_repair_mode),
                         );
@@ -2034,6 +2037,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             {
                                 managed_reconciliation = heartbeat::ProjectionReconciliation::idle();
                             }
+                            shipping_progress.observe_pending_work(
+                                heartbeat::payload_has_pending_work(&projection.payload)
+                                    || known_pending_local_work(
+                                        &scheduler,
+                                        &deferred_retries,
+                                        archive_repair_is_paused(config.archive_repair_mode),
+                                    ),
+                                Instant::now(),
+                            );
                             heartbeat::write_status_file(
                                 &mut projection,
                                 serde_json::to_value(control_channel_status.snapshot()).ok(),
@@ -2226,6 +2238,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &mut deferred_retries,
                     &mut in_flight,
                     &task_context,
+                    &mut shipping_progress,
                     offline.is_offline,
                     archive_repair_is_paused(config.archive_repair_mode),
                 ).await;
@@ -3414,6 +3427,7 @@ async fn handle_live_transcript_file_events(
     deferred_retries: &mut HashMap<PathBuf, DeferredRetry>,
     in_flight: &mut JoinSet<Option<PathTaskResult>>,
     task_context: &PathTaskContext,
+    shipping_progress: &mut heartbeat::ShippingProgressObservation,
     offline: bool,
     background_paused: bool,
 ) -> Vec<PathBuf> {
@@ -3438,6 +3452,7 @@ async fn handle_live_transcript_file_events(
                         in_flight,
                         task_context,
                         deferred_retries,
+                        shipping_progress,
                         offline,
                         background_paused,
                     );
@@ -4356,9 +4371,13 @@ fn pump_ready_local_work(
     in_flight: &mut JoinSet<Option<PathTaskResult>>,
     task_context: &PathTaskContext,
     deferred_retries: &mut HashMap<PathBuf, DeferredRetry>,
+    shipping_progress: &mut heartbeat::ShippingProgressObservation,
     offline: bool,
     background_paused: bool,
 ) {
+    if known_pending_local_work(scheduler, deferred_retries, background_paused) {
+        shipping_progress.observe_pending_work(true, Instant::now());
+    }
     drain_due_local_retries(scheduler, deferred_retries);
     start_ready_jobs(
         scheduler,
@@ -4366,6 +4385,21 @@ fn pump_ready_local_work(
         task_context,
         local_work_is_live_only(offline, background_paused),
     );
+}
+
+fn known_pending_local_work(
+    scheduler: &PathScheduler,
+    deferred_retries: &HashMap<PathBuf, DeferredRetry>,
+    background_paused: bool,
+) -> bool {
+    if background_paused {
+        scheduler.has_pending_priority(WorkPriority::Live)
+            || deferred_retries
+                .values()
+                .any(|retry| retry.priority == WorkPriority::Live)
+    } else {
+        scheduler.has_pending_work() || !deferred_retries.is_empty()
+    }
 }
 
 fn local_work_is_live_only(offline: bool, background_paused: bool) -> bool {
