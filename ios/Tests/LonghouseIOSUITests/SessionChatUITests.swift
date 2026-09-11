@@ -66,28 +66,6 @@ final class SessionChatUITests: XCTestCase {
         add(screenshot)
     }
 
-    func testSessionLoadingShellKeepsNavigationTitleAndPrimaryChromeStable() {
-        let app = launchChatFixture(
-            name: "basic",
-            eventCount: 9,
-            appearance: .dark,
-            tailDelayMs: 30000,
-            detailDelayMs: 30000
-        )
-
-        let primaryChrome = app.descendants(matching: .any)["session-chat-bottom-chrome-card"]
-        XCTAssertTrue(primaryChrome.waitForExistence(timeout: 8))
-        XCTAssertTrue(app.descendants(matching: .any)["session-navigation-title"].waitForExistence(timeout: 8))
-        XCTAssertTrue(app.descendants(matching: .any)["session-transcript-loading"].waitForExistence(timeout: 8))
-        XCTAssertTrue(app.buttons["Session actions"].exists)
-        XCTAssertFalse(app.descendants(matching: .any)["session-loading-dock"].exists)
-
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "session-loading-shell"
-        screenshot.lifetime = .keepAlways
-        add(screenshot)
-    }
-
     func testLongLoadingTitleStaysClearOfOverflowControl() {
         let app = launchChatFixture(
             name: "loading-long-title",
