@@ -5,7 +5,7 @@ use chrono::Utc;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -216,6 +216,7 @@ pub fn lifecycle(event: &str) {
         &event_path,
         &json!({"event":event,"observed_at":now,"session_id":session_id,"conversation_id":conversation,"launch_id":launch_id,"payload":payload}),
     );
+    let emit_warp_event = should_emit_warp_event(&root, &session_id, event, &payload);
     if let Some(phase) = phase {
         let _ = write(
             root.join(format!("{session_id}.phase.json")),
@@ -240,8 +241,34 @@ pub fn lifecycle(event: &str) {
         );
     }
     let cwd_hint = payload.get("cwd").and_then(Value::as_str);
-    emit_warp_lifecycle_notification(event, &session_id, cwd_hint, &payload);
+    if emit_warp_event {
+        emit_warp_lifecycle_notification(event, &session_id, cwd_hint, &payload);
+    }
     println!("{{}}");
+}
+
+fn should_emit_warp_event(root: &Path, session_id: &str, event: &str, payload: &Value) -> bool {
+    if !matches!(event, "afterAgentResponse" | "stop") {
+        return true;
+    }
+    let Some(generation_id) = payload
+        .get("generation_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    else {
+        // Without a generation id we cannot prove that two idle observations
+        // belong to the same turn. Preserve visibility rather than guessing.
+        return true;
+    };
+    let phase_path = root.join(format!("{session_id}.phase.json"));
+    let previous: Value = std::fs::read(&phase_path)
+        .ok()
+        .and_then(|raw| serde_json::from_slice(&raw).ok())
+        .unwrap_or_default();
+    let same_generation =
+        previous.get("generation_id").and_then(Value::as_str) == Some(generation_id);
+    let already_idle = previous.get("phase").and_then(Value::as_str) == Some("idle");
+    !(same_generation && already_idle)
 }
 
 fn warp_lifecycle_payload(
@@ -657,8 +684,9 @@ mod tests {
 
     #[test]
     fn warp_lifecycle_payload_formats_expected_sequences() {
-        let (osc9, osc777) = warp_lifecycle_payload("stop", "test-session", Some("/tmp"), &json!({}))
-            .expect("payload for stop");
+        let (osc9, osc777) =
+            warp_lifecycle_payload("stop", "test-session", Some("/tmp"), &json!({}))
+                .expect("payload for stop");
         assert_eq!(osc9.as_deref(), Some("Cursor: Task completed"));
         assert!(osc777.starts_with("\x1b]777;notify;warp://cli-agent;"));
         assert!(osc777.ends_with('\x07'));
@@ -686,6 +714,54 @@ mod tests {
         assert!(osc9.is_none());
         assert!(osc777.contains(r#""event":"prompt_submit""#));
 
-        assert!(warp_lifecycle_payload("unhandledEvent", "test-session", None, &json!({})).is_none());
+        assert!(
+            warp_lifecycle_payload("unhandledEvent", "test-session", None, &json!({})).is_none()
+        );
+    }
+
+    #[test]
+    fn warp_stop_is_emitted_once_per_generation() {
+        let temp = tempfile::tempdir().unwrap();
+        let phase_path = temp.path().join("session.phase.json");
+        let active_generation = json!({
+            "phase": "active",
+            "generation_id": "generation-1"
+        });
+        write(phase_path.clone(), &active_generation);
+
+        assert!(should_emit_warp_event(
+            temp.path(),
+            "session",
+            "afterAgentResponse",
+            &json!({"generation_id": "generation-1"})
+        ));
+
+        write(
+            phase_path.clone(),
+            &json!({
+                "phase": "idle",
+                "generation_id": "generation-1"
+            }),
+        );
+        assert!(!should_emit_warp_event(
+            temp.path(),
+            "session",
+            "stop",
+            &json!({"generation_id": "generation-1"})
+        ));
+
+        write(
+            phase_path,
+            &json!({
+                "phase": "active",
+                "generation_id": "generation-2"
+            }),
+        );
+        assert!(should_emit_warp_event(
+            temp.path(),
+            "session",
+            "afterAgentResponse",
+            &json!({"generation_id": "generation-2"})
+        ));
     }
 }
