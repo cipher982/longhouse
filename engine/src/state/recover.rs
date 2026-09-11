@@ -134,6 +134,75 @@ fn inspect_database_corruption(db_path: &Path) -> Result<bool> {
     }
 }
 
+/// Exclude SQLite readers and writers in either journal mode until publication.
+/// Keep one source fd: closing any other fd for this inode would release this
+/// process's traditional POSIX lock.
+
+struct RecoverySource {
+    file: std::fs::File,
+}
+
+impl RecoverySource {
+    fn acquire(path: &Path) -> Result<Self> {
+        use std::os::fd::AsRawFd;
+
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .with_context(|| {
+                format!(
+                    "opening recovery source for writer exclusion: {}",
+                    path.display()
+                )
+            })?;
+        let lock = libc::flock {
+            l_type: libc::F_WRLCK as _,
+            l_whence: libc::SEEK_SET as _,
+            l_start: 0,
+            l_len: 0,
+            l_pid: 0,
+        };
+        let result = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETLK, &lock) };
+        if result == -1 {
+            let error = std::io::Error::last_os_error();
+            if error
+                .raw_os_error()
+                .is_some_and(|code| code == libc::EACCES || code == libc::EAGAIN)
+            {
+                bail!(
+                    "cannot exclude a SQLite writer on {}; recovery is non-mutating and refuses active database contention",
+                    path.display()
+                );
+            }
+            return Err(error).with_context(|| {
+                format!(
+                    "acquiring the SQLite writer exclusion on {}",
+                    path.display()
+                )
+            });
+        }
+        Ok(Self { file })
+    }
+
+    fn copy_to(&mut self, destination: &Path) -> Result<()> {
+        use std::io::{Seek, SeekFrom};
+        use std::os::unix::fs::OpenOptionsExt;
+
+        self.file.seek(SeekFrom::Start(0))?;
+        let mut copy = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(destination)
+            .with_context(|| format!("creating recovery copy {}", destination.display()))?;
+        copy.set_permissions(self.file.metadata()?.permissions())?;
+        std::io::copy(&mut self.file, &mut copy)
+            .with_context(|| format!("copying the retained source to {}", destination.display()))?;
+        Ok(())
+    }
+}
+
 /// Restore the file magic on a copy so SQLite will parse pages again.
 ///
 /// Only the sixteen magic bytes are rewritten when the rest of the header still
@@ -662,18 +731,11 @@ pub fn recover_state_database(db_path: &Path, dry_run: bool) -> Result<RecoveryR
     // take a writer's fd or transaction away. Recovery copies the main database
     // only, so proceeding past any of them would silently drop committed work or
     // race a writer. All are the agent's to clear by stopping.
-    for sidecar in ["-wal", "-shm", "-journal"] {
-        let mut path = db_path.as_os_str().to_os_string();
-        path.push(sidecar);
-        let path = PathBuf::from(path);
-        if path.exists() {
-            bail!(
-                "{} exists: stop the Machine Agent before recovering, so no connection holds \
-                 the database and no committed frames are left behind",
-                path.display()
-            );
-        }
-    }
+    refuse_surviving_sidecars(db_path)?;
+    let mut source = RecoverySource::acquire(db_path)?;
+    // Recheck while the writer exclusion is held. Sidecars remain an
+    // independent refusal even when no SQLite lock is currently contended.
+    refuse_surviving_sidecars(db_path)?;
     ensure_recovery_tool_available()?;
 
     // Beside the database, not in the system temp dir: the final install is a
@@ -681,8 +743,7 @@ pub fn recover_state_database(db_path: &Path, dry_run: bool) -> Result<RecoveryR
     // crossing one.
     let workspace = RecoveryWorkspace::beside(db_path)?;
     let copy_path = workspace.path().join("source.db");
-    std::fs::copy(db_path, &copy_path)
-        .with_context(|| format!("copying {} for recovery", db_path.display()))?;
+    source.copy_to(&copy_path)?;
     restore_magic(&copy_path)?;
 
     let rebuilt_path = workspace.path().join("rebuilt.db");
@@ -853,7 +914,7 @@ pub fn recover_state_database(db_path: &Path, dry_run: bool) -> Result<RecoveryR
     std::fs::File::open(&staged)
         .and_then(|file| file.sync_all())
         .with_context(|| format!("syncing staged recovered database {}", staged.display()))?;
-    std::fs::copy(db_path, &quarantine).with_context(|| {
+    source.copy_to(&quarantine).with_context(|| {
         format!(
             "retaining a quarantine copy of the corrupt database at {}",
             quarantine.display()
@@ -867,6 +928,7 @@ pub fn recover_state_database(db_path: &Path, dry_run: bool) -> Result<RecoveryR
             .parent()
             .context("state database has no parent directory")?,
     )?;
+    refuse_surviving_sidecars(db_path)?;
 
     // The original remains at the canonical path until this single atomic
     // replacement. A crash before rename therefore exposes either the intact
@@ -954,6 +1016,17 @@ fn surviving_sidecar(db_path: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn refuse_surviving_sidecars(db_path: &Path) -> Result<()> {
+    if let Some(path) = surviving_sidecar(db_path) {
+        bail!(
+            "{} exists: stop the Machine Agent before recovering, so no connection holds \
+             the database and no committed frames are left behind",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 fn sync_directory(path: &Path) -> Result<()> {

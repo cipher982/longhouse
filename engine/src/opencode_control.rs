@@ -782,7 +782,11 @@ mod tests {
 
         assert_eq!(result.pid, Some(pid));
         assert!(!result.stopped);
-        assert!(pid_is_running(pid));
+        assert!(
+            child.child.try_wait().unwrap().is_none(),
+            "refused fixture exited unexpectedly: pid={pid}, status={:?}",
+            child.child.try_wait().unwrap()
+        );
         terminate_pid(pid).unwrap();
         wait_until_pid_stops(pid).await;
         let _ = child.wait();
@@ -997,19 +1001,23 @@ mod tests {
         let path = script_dir.join("opencode");
         fs::write(
             &path,
-            "#!/bin/sh\ntrap 'exit 0' TERM\nwhile :; do sleep 1; done\n",
+            "#!/bin/sh\ntrap 'exit 0' TERM\n: > \"$0.ready\"\nwhile :; do sleep 1; done\n",
         )
         .unwrap();
         let mut perms = fs::metadata(&path).unwrap().permissions();
         perms.set_mode(0o755);
         fs::set_permissions(&path, perms).unwrap();
+        let ready = path.with_extension("ready");
+        let stderr = script_dir.join("stderr");
 
         let mut command = std::process::Command::new(&path);
         command
             .arg("serve")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
+            .stderr(std::process::Stdio::from(
+                fs::File::create(&stderr).unwrap(),
+            ));
         if new_process_group {
             use std::os::unix::process::CommandExt;
             unsafe {
@@ -1021,7 +1029,25 @@ mod tests {
                 });
             }
         }
-        TestChild::new(command.spawn().unwrap())
+        let mut child = TestChild::new(command.spawn().unwrap());
+        for _ in 0..30 {
+            let status = child.child.try_wait().unwrap();
+            assert!(
+                status.is_none(),
+                "fixture exited before readiness: pid={}, status={status:?}, stderr={}",
+                child.id(),
+                fs::read_to_string(&stderr).unwrap_or_default()
+            );
+            if ready.is_file() {
+                return child;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        panic!(
+            "fixture did not reach readiness: pid={}, stderr={}",
+            child.id(),
+            fs::read_to_string(&stderr).unwrap_or_default()
+        );
     }
 
     #[cfg(unix)]
