@@ -54,8 +54,10 @@ fi
 
 # Shared-worktree guard: another agent may have committed to local main without
 # pushing. Refuse to release until local main == origin/main so we only release
-# commits that exist on origin and that the user can see in GitHub.
-git -C "$ROOT" fetch --quiet --tags origin main
+# commits that exist on origin and that the user can see in GitHub. Fetch only
+# the branch here: local historical tags may intentionally differ from origin,
+# and tag existence is checked against the remote below without clobbering them.
+git -C "$ROOT" fetch --quiet origin main
 LOCAL_HEAD="$(git -C "$ROOT" rev-parse HEAD)"
 REMOTE_HEAD="$(git -C "$ROOT" rev-parse origin/main)"
 if [[ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]]; then
