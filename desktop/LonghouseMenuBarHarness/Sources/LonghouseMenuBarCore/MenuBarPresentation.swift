@@ -97,6 +97,7 @@ extension HealthSnapshot {
             "engine_status_unreadable", "orphaned_managed_bridge",
             "managed_launch_recovery_unreadable",
             "service_stopped", "service_not_installed", "service_generation_mismatch",
+            "service_artifact_mismatch",
             "service_machine_name_mismatch", "service_state_hash_mismatch",
             "service_runner_name_mismatch", "desktop_app_setup_required",
             "desktop_app_wrong_install_location",

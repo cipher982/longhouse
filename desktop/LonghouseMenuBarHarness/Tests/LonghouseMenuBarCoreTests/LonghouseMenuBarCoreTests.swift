@@ -463,6 +463,18 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func mismatchedServicePromotesRepairWhileAgentStillRuns() {
+        let snapshot = presentationSnapshot(
+            reasons: ["service_artifact_mismatch"], sessions: [],
+            serviceStatus: "running"
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .repair)
+    }
+
+    @Test
     func archiveDeadLettersAreInspectableNotRepair() {
         let snapshot = presentationSnapshot(reasons: ["archive_dead_lettered"], sessions: [])
 

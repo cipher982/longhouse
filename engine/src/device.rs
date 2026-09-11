@@ -1076,7 +1076,7 @@ fn native_repair_blocking_reasons(health: &NativeLocalHealth) -> Vec<String> {
 fn native_repair_remaining_action_note(reasons: &[String]) -> String {
     let actions = native_desktop_suggested_action_ids(reasons)
         .into_iter()
-        .map(|action_id| native_desktop_action_text(&action_id))
+        .map(|action_id| native_desktop_action_text(&action_id, reasons))
         .collect::<Vec<_>>();
     if actions.is_empty() {
         format!(
@@ -1842,7 +1842,7 @@ fn native_desktop_engine_payload(payload: Option<&Value>) -> Option<Value> {
     Some(Value::Object(pruned))
 }
 
-fn native_desktop_action_text(action_id: &str) -> String {
+fn native_desktop_action_text(action_id: &str, reasons: &[String]) -> String {
     match action_id {
         "inspect_local_health" => "Run: longhouse local-health --json".to_string(),
         "inspect_storage_source" => {
@@ -1861,7 +1861,17 @@ fn native_desktop_action_text(action_id: &str) -> String {
         "inspect_managed_session" => {
             "Inspect the affected managed session and local recovery files.".to_string()
         }
-        "repair_machine" => "Run: longhouse machine repair --repair-service --json".to_string(),
+        "repair_machine"
+            if reasons.iter().any(|reason| {
+                matches!(
+                    reason.as_str(),
+                    "service_not_installed" | "service_artifact_mismatch"
+                )
+            }) =>
+        {
+            "Run: longhouse machine repair --repair-service --json".to_string()
+        }
+        "repair_machine" => "Run: longhouse machine repair --json".to_string(),
         "free_disk_space" => {
             "Free local disk space, then rerun: longhouse local-health --json".to_string()
         }
@@ -1968,14 +1978,14 @@ fn native_desktop_suggested_actions(
                 _ => false,
             };
             if !already_explained {
-                actions.push(native_desktop_action_text(&action_id));
+                actions.push(native_desktop_action_text(&action_id, reasons));
             }
         }
         return actions;
     }
     native_desktop_suggested_action_ids(reasons)
         .into_iter()
-        .map(|action_id| native_desktop_action_text(&action_id))
+        .map(|action_id| native_desktop_action_text(&action_id, reasons))
         .collect()
 }
 
