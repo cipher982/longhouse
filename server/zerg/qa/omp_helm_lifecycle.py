@@ -522,12 +522,15 @@ def _control_identity_receipt(identity: Mapping[str, Any]) -> dict[str, Any]:
     control_source = fact_sources.get("control") if isinstance(fact_sources.get("control"), Mapping) else {}
     control = shadow.get("control") if isinstance(shadow.get("control"), Mapping) else {}
     actions = control.get("actions") if isinstance(control.get("actions"), Mapping) else {}
+    local_state = identity.get("local_state")
+    owner_identity = list(_state_owner_identity(local_state)) if isinstance(local_state, Mapping) else None
     return {
         "session_id": identity.get("session_id"),
         "expected_subject_key": identity.get("expected_subject_key"),
         "served_path": diagnostic.get("served_path"),
         "shadow_mode": shadow.get("mode"),
         "control_subject_key": control_source.get("subject_key"),
+        "owner_identity": owner_identity,
         "actions": {
             name: (value.get("state") if isinstance(value, Mapping) else None)
             for name, value in actions.items()
@@ -542,9 +545,15 @@ def _control_identity_receipt_is_bound(receipt: Any) -> bool:
         return False
     expected_subject_key = receipt.get("expected_subject_key")
     actions = receipt.get("actions")
+    owner_identity = receipt.get("owner_identity")
     if not isinstance(expected_subject_key, str) or not expected_subject_key:
         return False
-    if receipt.get("session_id") is None or receipt.get("control_subject_key") != expected_subject_key:
+    if (
+        receipt.get("session_id") is None
+        or receipt.get("control_subject_key") != expected_subject_key
+        or not isinstance(owner_identity, list)
+        or len(owner_identity) != len(_OWNER_IDENTITY_FIELDS)
+    ):
         return False
     if receipt.get("served_path") != "canonical_session_detail" or not isinstance(actions, Mapping):
         return False
@@ -560,12 +569,35 @@ def _runtime_control_identity_is_complete(identity: Any) -> bool:
         return False
     session_ids = {str(receipt["session_id"]) for receipt in receipts if isinstance(receipt, Mapping)}
     subject_keys = [str(receipt["expected_subject_key"]) for receipt in receipts if isinstance(receipt, Mapping)]
+    owner_identities = [
+        tuple(receipt["owner_identity"])
+        for receipt in receipts
+        if isinstance(receipt, Mapping) and isinstance(receipt.get("owner_identity"), list)
+    ]
     return (
         len(session_ids) == 1
         and len(subject_keys) == len(labels)
         and len(set(subject_keys[:3])) == 3
-        and subject_keys[3] == subject_keys[2]
+        and len(owner_identities) == len(labels)
+        and owner_identities[2] == owner_identities[3]
     )
+
+
+_OWNER_IDENTITY_FIELDS = (
+    "session_id",
+    "native_session_id",
+    "session_file",
+    "launcher_pid",
+    "launcher_process_start_time",
+    "provider_pid",
+    "provider_process_start_time",
+)
+
+
+def _state_owner_identity(state: Mapping[str, Any]) -> tuple[Any, ...]:
+    """Return the execution-owner fields that must not change during a wait."""
+
+    return tuple(state.get(field) for field in _OWNER_IDENTITY_FIELDS)
 
 
 def _is_transient_runtime_read_error(error: BaseException) -> bool:
@@ -575,20 +607,75 @@ def _is_transient_runtime_read_error(error: BaseException) -> bool:
     )
 
 
+def _current_ready_state(home: Path, session_id: str) -> dict[str, Any] | None:
+    state_dir = home / "managed-local" / "omp-helm"
+    candidates: list[dict[str, Any]] = []
+    for path in state_dir.glob("*.json"):
+        value = _read_state(path)
+        if (
+            value
+            and value.get("ready") is True
+            and value.get("session_id") == session_id
+            and value.get("connection_id")
+            and value.get("lease_generation")
+        ):
+            candidates.append(value)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda value: str(value.get("updated_at") or ""))
+
+
+def _control_observation_diagnostic(diagnostic: Mapping[str, Any]) -> dict[str, Any]:
+    shadow = diagnostic.get("shadow") if isinstance(diagnostic.get("shadow"), Mapping) else {}
+    sources = shadow.get("fact_sources") if isinstance(shadow.get("fact_sources"), Mapping) else {}
+    control_source = sources.get("control") if isinstance(sources.get("control"), Mapping) else {}
+    control = shadow.get("control") if isinstance(shadow.get("control"), Mapping) else {}
+    actions = control.get("actions") if isinstance(control.get("actions"), Mapping) else {}
+    return {
+        "served_path": diagnostic.get("served_path"),
+        "control_subject_key": control_source.get("subject_key"),
+        "connection": control.get("connection"),
+        "ownership": control.get("ownership"),
+        "actions": {
+            name: value.get("state") if isinstance(value, Mapping) else None
+            for name, value in actions.items()
+            if name in {"send_input", "interrupt", "terminate"}
+        },
+    }
+
+
 def _wait_runtime_control_identity(
     url: str,
     token: str,
     *,
+    home: Path | None = None,
     session_id: str,
     state: dict[str, Any],
     timeout: float = 90.0,
 ) -> dict[str, Any]:
-    connection_id = str(state.get("connection_id") or "").strip()
-    lease_generation = str(state.get("lease_generation") or "").strip()
-    expected_subject_key = f"connection:{connection_id}:{lease_generation}"
+    baseline_owner = _state_owner_identity(state)
     transient_errors: list[str] = []
+    last_observation: dict[str, Any] = {}
 
     def observe() -> dict[str, Any] | None:
+        local_before = _current_ready_state(home, session_id) if home is not None else state
+        if local_before is None:
+            last_observation.clear()
+            last_observation.update({"reason": "local_state_unavailable"})
+            return None
+        if _state_owner_identity(local_before) != baseline_owner:
+            last_observation.clear()
+            last_observation.update(
+                {
+                    "reason": "execution_owner_changed",
+                    "local_state": _redacted_state_snapshot(local_before),
+                    "baseline_state": _redacted_state_snapshot(state),
+                }
+            )
+            raise RuntimeError("OMP Helm execution owner changed while waiting for runtime control identity")
+        connection_id = str(local_before.get("connection_id") or "").strip()
+        lease_generation = str(local_before.get("lease_generation") or "").strip()
+        expected_subject_key = f"connection:{connection_id}:{lease_generation}"
         try:
             diagnostic = _runtime_get(
                 url,
@@ -600,21 +687,78 @@ def _wait_runtime_control_identity(
                 raise
             transient_errors.append(str(exc))
             del transient_errors[:-8]
+            last_observation.clear()
+            last_observation.update(
+                {
+                    "reason": "transient_runtime_read",
+                    "expected_subject_key": expected_subject_key,
+                    "error": str(exc),
+                }
+            )
             return None
+        local_after = _current_ready_state(home, session_id) if home is not None else local_before
+        if local_after is None:
+            last_observation.clear()
+            last_observation.update(
+                {
+                    "reason": "local_state_unavailable_during_read",
+                    "expected_subject_key": expected_subject_key,
+                    "local_before": _redacted_state_snapshot(local_before),
+                }
+            )
+            return None
+        if _state_owner_identity(local_after) != baseline_owner:
+            last_observation.clear()
+            last_observation.update(
+                {
+                    "reason": "execution_owner_changed_during_read",
+                    "expected_subject_key": expected_subject_key,
+                    "local_before": _redacted_state_snapshot(local_before),
+                    "local_after": _redacted_state_snapshot(local_after),
+                }
+            )
+            raise RuntimeError("OMP Helm execution owner changed during runtime control identity read")
+        after_connection_id = str(local_after.get("connection_id") or "").strip()
+        after_lease_generation = str(local_after.get("lease_generation") or "").strip()
+        after_subject_key = f"connection:{after_connection_id}:{after_lease_generation}"
+        if after_subject_key != expected_subject_key:
+            last_observation.clear()
+            last_observation.update(
+                {
+                    "reason": "lease_rotated_during_read",
+                    "expected_subject_key": expected_subject_key,
+                    "current_subject_key": after_subject_key,
+                }
+            )
+            return None
+        last_observation.clear()
+        last_observation.update(
+            {
+                "reason": "projection_not_bound",
+                "expected_subject_key": expected_subject_key,
+                "local_state": _redacted_state_snapshot(local_after),
+                "runtime": _control_observation_diagnostic(diagnostic),
+            }
+        )
         if not _served_control_identity(diagnostic, expected_subject_key=expected_subject_key):
             return None
         return {
             "session_id": session_id,
             "expected_subject_key": expected_subject_key,
             "diagnostic": diagnostic,
+            "local_state": _redacted_state_snapshot(local_after),
             "transient_errors": list(transient_errors),
         }
 
-    return _wait(
-        observe,
-        timeout=timeout,
-        description=f"Runtime Host managed control identity {expected_subject_key}",
-    )
+    try:
+        return _wait(
+            observe,
+            timeout=timeout,
+            description=f"Runtime Host managed control identity for {session_id}",
+        )
+    except RuntimeError as exc:
+        evidence = json.dumps(last_observation, sort_keys=True, separators=(",", ":"))
+        raise RuntimeError(f"{exc}; last_observation={evidence}") from exc
 
 
 def _wait_state(
@@ -1513,6 +1657,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         initial_control_identity = _wait_runtime_control_identity(
             str(args.api_url),
             str(args.agents_token),
+            home=longhouse_home,
             session_id=current_session_id,
             state=current_state,
         )
@@ -1809,6 +1954,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         replacement_control_identity = _wait_runtime_control_identity(
             str(args.api_url),
             str(args.agents_token),
+            home=longhouse_home,
             session_id=current_session_id,
             state=replaced_state,
         )
@@ -1930,6 +2076,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         resume_control_identity = _wait_runtime_control_identity(
             str(args.api_url),
             str(args.agents_token),
+            home=longhouse_home,
             session_id=current_session_id,
             state=resume_state,
         )
@@ -2103,6 +2250,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         final_control_identity = _wait_runtime_control_identity(
             str(args.api_url),
             str(args.agents_token),
+            home=longhouse_home,
             session_id=current_session_id,
             state=final_control_state,
         )

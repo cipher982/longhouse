@@ -45,17 +45,48 @@ from zerg.qa.provider_console_lifecycle import _omp_continuation_prompt
 from zerg.qa.provider_qualification import _PROFILES
 
 
-def _identity_receipt(subject_key: str, *, session_id: str = "session-1") -> dict[str, object]:
+def _identity_receipt(
+    subject_key: str,
+    *,
+    session_id: str = "session-1",
+    owner_identity: list[object] | None = None,
+) -> dict[str, object]:
+    if owner_identity is None:
+        owner_identity = [session_id, f"native-{subject_key}", f"/tmp/{subject_key}.jsonl", 1, "launcher", 2, "provider"]
     return {
         "session_id": session_id,
         "expected_subject_key": subject_key,
         "served_path": "canonical_session_detail",
         "control_subject_key": subject_key,
+        "owner_identity": owner_identity,
         "actions": {
             "send_input": "available",
             "interrupt": "available",
             "terminate": "available",
         },
+    }
+
+
+def _omp_state(
+    connection_id: str,
+    lease_generation: str,
+    updated_at: str,
+    *,
+    ready: bool = True,
+    provider_pid: int = 12,
+) -> dict[str, object]:
+    return {
+        "ready": ready,
+        "session_id": "session-1",
+        "native_session_id": "native-1",
+        "session_file": "/tmp/session-1.jsonl",
+        "launcher_pid": 11,
+        "launcher_process_start_time": "launcher-start",
+        "provider_pid": provider_pid,
+        "provider_process_start_time": "provider-start",
+        "connection_id": connection_id,
+        "lease_generation": lease_generation,
+        "updated_at": updated_at,
     }
 
 
@@ -959,6 +990,145 @@ def test_omp_wait_runtime_control_identity_retries_transient_reads(monkeypatch) 
     assert result["transient_errors"] == ["Runtime Host HTTP 503"]
 
 
+def test_omp_wait_runtime_control_identity_waits_through_reconnect_lease_rotation(monkeypatch, tmp_path) -> None:
+    state_dir = tmp_path / "managed-local" / "omp-helm"
+    state_dir.mkdir(parents=True)
+    state_path = state_dir / "session-1.json"
+    baseline = _omp_state("conn-old", "lease-old", "2026-01-01T00:00:00Z")
+    rotated = _omp_state("conn-new", "lease-new", "2026-01-01T00:00:01Z")
+    state_path.write_text(json.dumps(baseline), encoding="utf-8")
+    diagnostic = {
+        "served_path": "canonical_session_detail",
+        "shadow": {
+            "fact_sources": {"control": {"subject_key": "connection:conn-new:lease-new"}},
+            "control": {
+                "actions": {
+                    "send_input": {"state": "available"},
+                    "interrupt": {"state": "available"},
+                    "terminate": {"state": "available"},
+                }
+            },
+        },
+    }
+    calls = 0
+
+    def runtime_get(*_args):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            state_path.write_text(json.dumps({**rotated, "ready": False}), encoding="utf-8")
+        return diagnostic
+
+    def advance_reconnect(_seconds):
+        state_path.write_text(json.dumps(rotated), encoding="utf-8")
+
+    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._runtime_get", runtime_get)
+    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle.time.sleep", advance_reconnect)
+
+    result = _wait_runtime_control_identity(
+        "https://runtime.example",
+        "token",
+        home=tmp_path,
+        session_id="session-1",
+        state=baseline,
+        timeout=1,
+    )
+
+    assert calls == 2
+    assert result["expected_subject_key"] == "connection:conn-new:lease-new"
+    assert result["local_state"]["connection_id"] == "conn-new"
+
+
+def test_omp_wait_runtime_control_identity_rejects_owner_rotation(monkeypatch, tmp_path) -> None:
+    state_dir = tmp_path / "managed-local" / "omp-helm"
+    state_dir.mkdir(parents=True)
+    state_path = state_dir / "session-1.json"
+    baseline = _omp_state("conn-old", "lease-old", "2026-01-01T00:00:00Z")
+    state_path.write_text(json.dumps(baseline), encoding="utf-8")
+    diagnostic = {
+        "served_path": "canonical_session_detail",
+        "shadow": {
+            "fact_sources": {"control": {"subject_key": "connection:conn-new:lease-new"}},
+            "control": {
+                "actions": {
+                    "send_input": {"state": "available"},
+                    "interrupt": {"state": "available"},
+                    "terminate": {"state": "available"},
+                }
+            },
+        },
+    }
+
+    def runtime_get(*_args):
+        state_path.write_text(
+            json.dumps(
+                {
+                    **baseline,
+                    "connection_id": "conn-new",
+                    "lease_generation": "lease-new",
+                    "provider_pid": 99,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return diagnostic
+
+    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._runtime_get", runtime_get)
+
+    with pytest.raises(RuntimeError) as error:
+        _wait_runtime_control_identity(
+            "https://runtime.example",
+            "token",
+            home=tmp_path,
+            session_id="session-1",
+            state=baseline,
+            timeout=1,
+        )
+
+    message = str(error.value)
+    assert "execution_owner_changed_during_read" in message
+    assert "provider_pid" in message
+
+
+def test_omp_wait_runtime_control_identity_retains_timeout_observation(monkeypatch, tmp_path) -> None:
+    state_dir = tmp_path / "managed-local" / "omp-helm"
+    state_dir.mkdir(parents=True)
+    baseline = _omp_state("conn-1", "lease-1", "2026-01-01T00:00:00Z")
+    (state_dir / "session-1.json").write_text(json.dumps(baseline), encoding="utf-8")
+    diagnostic = {
+        "served_path": "canonical_session_detail",
+        "shadow": {
+            "fact_sources": {"control": {"subject_key": "connection:wrong:lease"}},
+            "control": {
+                "actions": {
+                    "send_input": {"state": "available"},
+                    "interrupt": {"state": "available"},
+                    "terminate": {"state": "available"},
+                }
+            },
+        },
+    }
+    monotonic_values = iter((0.0, 0.0, 1.0))
+    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle._runtime_get", lambda *_args: diagnostic)
+    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle.time.monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr("zerg.qa.omp_helm_lifecycle.time.sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError) as error:
+        _wait_runtime_control_identity(
+            "https://runtime.example",
+            "token",
+            home=tmp_path,
+            session_id="session-1",
+            state=baseline,
+            timeout=1,
+        )
+
+    message = str(error.value)
+    assert "last_observation=" in message
+    assert "projection_not_bound" in message
+    assert "connection:wrong:lease" in message
+
+
 def test_omp_runtime_convergence_does_not_prove_an_incomplete_events_page() -> None:
     assert _events_page_metadata({"events": [], "total": 1, "has_more": True, "next_cursor": "cursor-1"})["complete"] is False
     assert (
@@ -1228,6 +1398,14 @@ def test_omp_helm_assertions_do_not_use_agent_settled_as_completion() -> None:
 
     assert set(omp_helm_lifecycle_assertions(observation)) == set(HELM_ASSERTIONS)
     assert all(omp_helm_lifecycle_assertions(observation).values())
+    cold_owner = list(observation["runtime_control_identity"]["cold_resume"]["owner_identity"])
+    observation["runtime_control_identity"]["final"] = _identity_receipt(
+        "connection:resume:lease-4",
+        owner_identity=cold_owner,
+    )
+    assert all(omp_helm_lifecycle_assertions(observation).values())
+    observation["runtime_control_identity"]["final"]["owner_identity"][1] = "native-other"
+    assert omp_helm_lifecycle_assertions(observation)["omp_helm_launch_registration"] is False
     observation["runtime_control_identity"]["replacement"]["control_subject_key"] = "connection:wrong:lease-2"
     assert omp_helm_lifecycle_assertions(observation)["omp_helm_launch_registration"] is False
     observation["runtime_control_identity"] = {}
