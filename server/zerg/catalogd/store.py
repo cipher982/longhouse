@@ -6564,8 +6564,12 @@ class CatalogStore:
                     .mappings()
                     .first()
                 )
-                if storage_current is not None and (user_hidden_from_timeline is not None or last_read_at is not None):
+                if storage_current is not None:
                     storage_values: dict[str, Any] = {"updated_at": observed_at}
+                    if user_state is not None:
+                        storage_values["user_state"] = user_state
+                    if notification_muted is not None:
+                        storage_values["notification_muted"] = int(notification_muted)
                     if user_hidden_from_timeline is not None:
                         storage_values["user_hidden_from_timeline"] = int(user_hidden_from_timeline)
                         storage_values["user_hidden_at"] = observed_at if user_hidden_from_timeline else None
@@ -6579,8 +6583,8 @@ class CatalogStore:
                     return {
                         "found": True,
                         "preferences": {
-                            "user_state": str(storage_current["user_state"] or "active"),
-                            "notification_muted": bool(storage_current["notification_muted"]),
+                            "user_state": str(storage_values.get("user_state", storage_current["user_state"]) or "active"),
+                            "notification_muted": bool(storage_values.get("notification_muted", storage_current["notification_muted"])),
                             "user_hidden_from_timeline": (
                                 user_hidden_from_timeline
                                 if user_hidden_from_timeline is not None
