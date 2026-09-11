@@ -259,7 +259,7 @@ pub fn payload_has_pending_work(payload: &HeartbeatPayload) -> bool {
     let spool_pending = !archive_paused && payload.spool_pending_count > 0;
 
     spool_pending
-        || payload.storage_v2_outbox.pending_count > 0
+        || (!archive_paused && payload.storage_v2_outbox.pending_count > 0)
         || archive_pending
         || scheduler_pending
 }

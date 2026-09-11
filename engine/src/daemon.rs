@@ -1223,6 +1223,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 result.failed_spool
                             );
                         }
+                        if result.events_shipped > 0 || result.bytes_shipped > 0 || result.resolved_spool > 0 {
+                            shipping_progress.record_progress(Instant::now());
+                        }
                         if result.had_connect_error {
                             if offline.record_connect_error() {
                                 shipping_progress.reset_after_sleep(Instant::now());
@@ -1239,8 +1242,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     result.job.path.display()
                                 );
                             }
-                        } else if result.events_shipped > 0 || result.bytes_shipped > 0 || result.resolved_spool > 0 {
-                            shipping_progress.record_progress(Instant::now());
+                        } else if result.events_shipped > 0 || result.bytes_shipped > 0 {
                             last_ship_at = Some(chrono::Utc::now().to_rfc3339());
                             if let Some(duration) = offline.mark_online() {
                                 last_runtime_truth_signature = None;
@@ -4891,7 +4893,10 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 result.rerun_priority = Some(result.job.priority);
             } else {
                 match retire_legacy_spool_after_storage_v2(&conn, &result.job.path) {
-                    Ok(_) => result.reconciled_to_head = true,
+                    Ok(retired) => {
+                        result.resolved_spool += retired;
+                        result.reconciled_to_head = true;
+                    }
                     Err(error) => {
                         tracing::warn!(
                             path = %result.job.path.display(),
@@ -4913,7 +4918,10 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         }
         Ok(PathStorageV2ShipResult::Current) => {
             match retire_legacy_spool_after_storage_v2(&conn, &result.job.path) {
-                Ok(_) => result.reconciled_to_head = true,
+                Ok(retired) => {
+                    result.resolved_spool += retired;
+                    result.reconciled_to_head = true;
+                }
                 Err(error) => {
                     tracing::warn!(
                         path = %result.job.path.display(),
@@ -7179,6 +7187,7 @@ mod tests {
         let mut payload = empty_heartbeat_payload();
         payload.archive_backlog.pending_ranges = 2;
         payload.archive_backlog.state = "ready".to_string();
+        payload.storage_v2_outbox.pending_count = 1;
         let control = ArchiveRepairControl {
             mode: Some("paused".to_string()),
             actor: Some("menu_bar".to_string()),
@@ -7200,6 +7209,7 @@ mod tests {
             Some("user paused while travelling")
         );
         assert!(!payload.is_offline);
+        assert!(!heartbeat::payload_has_pending_work(&payload));
     }
 
     #[test]
@@ -7212,7 +7222,9 @@ mod tests {
         let history = PathBuf::from("/tmp/history.jsonl");
         let live = PathBuf::from("/tmp/live.jsonl");
         scheduler.enqueue(history.clone(), "codex", WorkPriority::Scan);
+        assert!(!known_pending_local_work(&scheduler, &HashMap::new(), true));
         scheduler.enqueue(live.clone(), "codex", WorkPriority::Live);
+        assert!(known_pending_local_work(&scheduler, &HashMap::new(), true));
 
         let launched = scheduler.pop_launchable_live().unwrap();
         assert_eq!(launched.path, live);

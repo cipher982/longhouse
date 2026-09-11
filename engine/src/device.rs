@@ -4579,7 +4579,13 @@ fn native_transport_status(
     let progress_is_unavailable =
         progress.is_none() || progress_age.is_none_or(|age| age >= ENGINE_STALE_SECONDS);
     let progress_claims_pending = progress.as_ref().is_some_and(|value| value.pending_work);
-    let effective_pending_work = pending_work.or(progress.as_ref().map(|value| value.pending_work));
+    let effective_pending_work = match (
+        pending_work,
+        progress.as_ref().map(|value| value.pending_work),
+    ) {
+        (Some(projected), Some(current)) => Some(projected || current),
+        (projected, current) => projected.or(current),
+    };
 
     let connect_error_burst = is_transport_error_burst(
         connect_errors,
@@ -4635,6 +4641,29 @@ fn native_transport_status(
             "parse_errors",
             &format!("{parse_errors} parse error(s) in the last hour."),
         )
+    } else if effective_pending_work == Some(true)
+        && !progress_is_unavailable
+        && progress.as_ref().is_some_and(|progress| {
+            progress.pending_work
+                && (progress.stalled
+                    || progress
+                        .seconds_without_progress
+                        .saturating_add(progress_age.unwrap_or(0))
+                        >= 60)
+        })
+    {
+        transport_status(
+            "degraded",
+            "ship_stalled",
+            "Pending uploads are not making useful progress.",
+        )
+    } else if effective_pending_work != Some(false)
+        && (progress_is_unavailable || (pending_work != Some(false) && !progress_claims_pending))
+    {
+        transport_status(
+            "unknown", "transport_unavailable",
+            "Pending upload progress is unavailable; historical receipts cannot prove current health.",
+        )
     } else if attempts_active.is_none() {
         transport_status(
             "unknown",
@@ -4664,28 +4693,6 @@ fn native_transport_status(
             "degraded",
             "retryable_client_errors",
             &format!("{retryable_client_errors} retryable client error(s) in the active window."),
-        )
-    } else if effective_pending_work == Some(true)
-        && progress.as_ref().is_some_and(|progress| {
-            progress.pending_work
-                && (progress.stalled
-                    || progress
-                        .seconds_without_progress
-                        .saturating_add(progress_age.unwrap_or(0))
-                        >= 60)
-        })
-    {
-        transport_status(
-            "degraded",
-            "ship_stalled",
-            "Pending uploads have made no useful progress for at least 60 awake seconds.",
-        )
-    } else if effective_pending_work != Some(false)
-        && (progress_is_unavailable || (pending_work != Some(false) && !progress_claims_pending))
-    {
-        transport_status(
-            "unknown", "transport_unavailable",
-            "Pending upload progress is unavailable; historical receipts cannot prove current health.",
         )
     } else if spool_counters_unknown {
         transport_status(
@@ -4721,7 +4728,7 @@ fn native_payload_has_pending_work(object: &serde_json::Map<String, Value>) -> O
         let outbox = value.as_object()?;
         let count = outbox.get("pending_count").and_then(Value::as_u64)?;
         observed_lane = true;
-        pending |= count > 0;
+        pending |= count > 0 && !archive_paused;
     }
 
     if let Some(value) = object.get("archive_backlog") {
@@ -6048,6 +6055,7 @@ mod tests {
         let mut payload = json!({
             "ship_attempts_10m": 0,
             "is_offline": false,
+            "spool_dead_count": 0,
             "spool_pending_count": 1,
             "shipping_progress": {
                 "pending_work": true,
@@ -6065,6 +6073,41 @@ mod tests {
         assert_eq!(
             native_transport_status(payload.as_object()).status,
             "healthy"
+        );
+    }
+
+    #[test]
+    fn native_transport_prioritizes_current_stall_over_cached_counts_and_retry_bursts() {
+        let mut payload = json!({
+            "ship_attempts_10m": 0,
+            "spool_pending_count": 0,
+            "spool_dead_count": 0,
+            "storage_v2_outbox": {"pending_count": 0},
+            "shipping_progress": {
+                "pending_work": true,
+                "stalled": true,
+                "seconds_without_progress": 56,
+                "observed_at": chrono::Utc::now().to_rfc3339()
+            }
+        });
+        assert_eq!(
+            native_transport_status(payload.as_object()).status_reason,
+            "ship_stalled"
+        );
+
+        payload["ship_attempts_10m"] = json!(4);
+        payload["ship_retryable_client_errors_10m"] = json!(4);
+        payload["last_ship_result"] = json!("retryable_client_error");
+        assert_eq!(
+            native_transport_status(payload.as_object()).status_reason,
+            "ship_stalled"
+        );
+
+        payload["shipping_progress"]["observed_at"] =
+            json!((chrono::Utc::now() - chrono::Duration::minutes(2)).to_rfc3339());
+        assert_eq!(
+            native_transport_status(payload.as_object()).status_reason,
+            "transport_unavailable"
         );
     }
 
