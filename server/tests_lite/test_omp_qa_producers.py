@@ -1584,7 +1584,9 @@ def test_omp_main_failure_retains_partial_artifact_manifest(monkeypatch, tmp_pat
 
     assert result == 1
     payload = json.loads((tmp_path / "evidence" / "result.json").read_text(encoding="utf-8"))
+    assert payload["observation_scope"] == "scenario"
     assert payload["failure_code"].endswith("_lifecycle_failed")
+    assert payload["error"] == "RuntimeError: synthetic qualification failure"
     assert [entry["path"] for entry in payload["artifact_manifest"]] == ["partial-receipt.json"]
     assert "synthetic qualification failure" in capsys.readouterr().out
 

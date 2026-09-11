@@ -764,6 +764,7 @@ def main(argv: list[str] | None = None) -> int:
             "producer": REGISTRATION.to_dict(),
             "provider": "omp",
             "variant": SUPPORTED_VARIANT,
+            "observation_scope": "scenario",
             "scenario_id": SCENARIO_ID,
             "scenario_revision": REGISTRATION.scenario_revision,
             "evidence_class": "live_token",
