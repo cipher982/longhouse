@@ -1611,6 +1611,49 @@ async def test_storage_v2_late_session_deleted_rejection_disposes_only_unreferen
 
 
 @pytest.mark.asyncio
+async def test_storage_v2_unknown_purge_kind_preserves_sealed_objects(monkeypatch):
+    async with _storage_v2_stack(
+        monkeypatch,
+        render_pool_factory=_InlineRenderPool,
+        prefix="lh2-rejected-unknown-kind-",
+    ) as stack:
+        stack.client.headers["X-Longhouse-Storage-Lane"] = "live"
+        tenant_id = get_settings().archive_primary_tenant_id
+        first = _payload(tenant_id=tenant_id, machine_id="cinder", epoch=uuid4())
+        committed = await stack.client.post("/agents/storage/v2/envelopes", json=first)
+        assert committed.status_code == 200, committed.text
+        await stack.catalog.call(
+            "storage.session.delete.v2",
+            {
+                "session_id": first["session_id"],
+                "deletion_id": str(uuid4()),
+                "reason": "test",
+                "deleted_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        catalog_call = stack.catalog.call
+        before_purge = None
+
+        def stored_bytes():
+            return {path: path.read_bytes() for path in stack.object_root.rglob("*.zst")}
+
+        async def unknown_purge_kind(method, *args, **kwargs):
+            nonlocal before_purge
+            page = await catalog_call(method, *args, **kwargs)
+            if method == "storage.session.purge_manifest.v2":
+                before_purge = stored_bytes()
+                page["objects"].append({"kind": "unknown", "key": "unrecognized-reference"})
+            return page
+
+        monkeypatch.setattr(stack.catalog, "call", unknown_purge_kind)
+        late = _payload(tenant_id=tenant_id, machine_id="cinder", epoch=uuid4(), data=b"late\n")
+        rejected = await stack.client.post("/agents/storage/v2/envelopes", json=late)
+
+        assert rejected.status_code == 410, rejected.text
+        assert stored_bytes() == before_purge
+
+
+@pytest.mark.asyncio
 async def test_storage_v2_ambiguous_catalog_commit_preserves_sealed_objects(monkeypatch):
     async with _storage_v2_stack(
         monkeypatch,

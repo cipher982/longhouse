@@ -847,8 +847,11 @@ async def _dispose_rejected_sealed_objects(
                     logger.warning("not disposing rejected storage objects: catalog purge row is malformed")
                     return
                 kind = row.get("kind")
-                if kind not in {"raw", "render"}:
+                if kind == "media":
                     continue
+                if kind not in {"raw", "render"}:
+                    logger.warning("not disposing rejected storage objects: catalog object kind is unknown")
+                    return
                 path = row.get("object_path")
                 object_hash = row.get("object_hash")
                 if not isinstance(path, str) or not isinstance(object_hash, str):
