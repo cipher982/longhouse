@@ -57,7 +57,9 @@ test.describe('Hosted Session Authentication - Live', () => {
     test.skip(!frontendUrl || !apiUrl, 'FRONTEND_URL and API_URL required');
 
     const cookies = await context.cookies();
-    const sessionCookie = cookies.find((cookie) => cookie.name === 'longhouse_session');
+    const sessionCookie = cookies.find(
+      (cookie) => cookie.name === '__Host-lh_session' || cookie.name === 'longhouse_session',
+    );
     expect(sessionCookie).toBeDefined();
 
     await page.goto(frontendUrl);

@@ -132,7 +132,8 @@ export function buildRuntimeTokenStorageState(
   return {
     cookies: [
       {
-        name: "longhouse_session",
+        name:
+          parsed.protocol === "https:" ? "__Host-lh_session" : "longhouse_session",
         value: runtimeToken,
         domain: parsed.hostname,
         path: "/",
