@@ -551,8 +551,58 @@ async def test_accept_handoff_binds_web_code_to_tenant_cookie(monkeypatch, db_se
     assert calls["tenant"] == "david010"
     assert calls["tenant_state"] == tenant_state
     assert calls["client"] == "web"
-    assert len(calls["transaction_id"]) == 32
+    assert calls["transaction_id"] == auth_sso._handoff_transaction_id(tenant_state)
     assert any(f"{cookie_name}=" in value and "Max-Age=0" in value for value in redirect.headers.getlist("set-cookie"))
+
+
+@pytest.mark.asyncio
+async def test_accept_handoff_revokes_web_orphan_on_invalid_refresh_contract(monkeypatch):
+    settings = SimpleNamespace(
+        control_plane_url="https://control.longhouse.ai",
+        public_site_url="https://david010.longhouse.ai",
+        internal_api_secret="secret",
+        auth_disabled=False,
+        testing=False,
+    )
+    monkeypatch.setattr("zerg.routers.auth_sso.get_settings", lambda: settings)
+    monkeypatch.setattr("zerg.auth.hosted.get_settings", lambda: settings)
+    monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
+
+    tenant_state, cookie_name, cookie_secret = new_tenant_login_state(secure=True)
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso._exchange_handoff_code",
+        lambda **kwargs: {
+            "runtime_token": "cp.runtime.jwt",
+            "expires_in": 3600,
+            "refresh_token": "lhr_orphan",
+            "refresh_token_expires_at": "2027-01-01T00:00:00+00:00",
+        },
+    )
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso._hosted_refresh_cookie_max_age",
+        lambda payload: (_ for _ in ()).throw(HTTPException(status_code=502, detail={"code": "cp_contract_invalid"})),
+    )
+    revoked = []
+
+    async def revoke(settings, refresh_token, *, orphan_cleanup=False):
+        revoked.append((refresh_token, orphan_cleanup))
+
+    monkeypatch.setattr("zerg.routers.auth_sso._best_effort_revoke_native_session", revoke)
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/auth/accept-handoff",
+            "headers": [(b"cookie", f"{cookie_name}={cookie_secret}".encode())],
+            "query_string": f"code=one-use-code&tenant_state={tenant_state}".encode(),
+        }
+    )
+
+    redirect = await accept_handoff_request(request, "one-use-code", tenant_state=tenant_state)
+
+    assert redirect.status_code == 303
+    assert redirect.headers["location"].endswith("auth_error=auth_misconfigured")
+    assert revoked == [("lhr_orphan", True)]
 
 
 @pytest.mark.asyncio
@@ -715,7 +765,7 @@ async def test_accept_native_handoff_exchanges_one_use_code(monkeypatch, db_sess
     assert calls["tenant_state"] == "verifier"
     assert calls["code_verifier"] == "v" * 43
     assert calls["client"] == "ios"
-    assert len(calls["transaction_id"]) == 32
+    assert calls["transaction_id"] == auth_sso._handoff_transaction_id("verifier")
 
 
 @pytest.mark.asyncio
@@ -872,6 +922,42 @@ def test_start_handoff_sets_state_and_attempt_cookies(monkeypatch):
     assert any("__Host-lh_login_attempt=" in value and f"Max-Age={TENANT_LOGIN_ATTEMPT_MAX_AGE}" in value for value in cookies)
     assert redirect.headers["cache-control"] == "no-store"
     assert redirect.headers["referrer-policy"] == "no-referrer"
+
+
+def test_start_handoff_returns_recoverable_redirect_on_binding_failure(monkeypatch):
+    monkeypatch.setenv("INSTANCE_ID", "david010")
+    monkeypatch.setattr(
+        "zerg.routers.auth_browser.get_settings",
+        lambda: SimpleNamespace(
+            control_plane_url="https://control.longhouse.ai",
+            public_site_url="https://david010.longhouse.ai",
+            auth_disabled=False,
+            testing=False,
+        ),
+    )
+
+    def fail_login_state(**kwargs):
+        raise RuntimeError("missing internal secret")
+
+    monkeypatch.setattr("zerg.routers.auth_browser.new_tenant_login_state", fail_login_state)
+    request = Request(
+        {
+            "type": "http",
+            "scheme": "https",
+            "server": ("david010.longhouse.ai", 443),
+            "client": ("127.0.0.1", 1234),
+            "method": "GET",
+            "path": "/api/auth/start-handoff",
+            "headers": [(b"host", b"david010.longhouse.ai")],
+            "query_string": b"",
+        }
+    )
+
+    redirect = start_handoff(request, return_to="/timeline")
+
+    assert redirect.status_code == 303
+    assert redirect.headers["location"].endswith("auth_error=auth_misconfigured")
+    assert redirect.headers["cache-control"] == "no-store"
 
 
 def test_start_handoff_uses_trusted_proxy_client_ip(monkeypatch):

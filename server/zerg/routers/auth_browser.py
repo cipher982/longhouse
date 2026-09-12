@@ -905,8 +905,18 @@ def start_handoff(
             redirect.headers["retry-after"] = retry_after
         return redirect
     resolved_tenant = canonical_tenant
-    tenant_state, login_cookie_name, login_cookie_secret = new_tenant_login_state(secure=cookie_secure)
     existing_login_cookies = sorted(name for name in request.cookies if is_tenant_login_cookie_name(name, secure=cookie_secure))
+    try:
+        tenant_state, login_cookie_name, login_cookie_secret = new_tenant_login_state(secure=cookie_secure)
+    except RuntimeError:
+        logger.error("hosted_auth_login_state_unavailable", exc_info=True)
+        query = urllib.parse.urlencode(
+            {"return_to": safe_return_to, "auth_error": "auth_misconfigured"},
+        )
+        redirect = RedirectResponse(f"/login?{query}", status_code=303)
+        redirect.headers["cache-control"] = "no-store"
+        redirect.headers["referrer-policy"] = "no-referrer"
+        return redirect
 
     cp_base = control_plane_url.rstrip("/")
     target = f"{cp_base}/auth/start"

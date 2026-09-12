@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 _HANDOFF_RATE_WINDOW_SECONDS = 60
 _HANDOFF_RATE_MAX_ATTEMPTS = 20
 _WEB_HANDOFF_IP_MAX_ATTEMPTS = 60
+_WEB_HANDOFF_TENANT_MAX_ATTEMPTS = 300
 _NATIVE_HANDOFF_IP_MAX_ATTEMPTS = 60
 _NATIVE_HANDOFF_TENANT_MAX_ATTEMPTS = 300
 _NATIVE_REFRESH_IP_MAX_ATTEMPTS = 120
@@ -70,6 +71,18 @@ def _rate_limit_digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:32]
 
 
+def _handoff_transaction_id(tenant_state: str | None) -> str | None:
+    """Make callback retries for one login attempt idempotent.
+
+    The handoff code is still the bearer credential. This digest is only a
+    stable transaction key derived from the authenticated OAuth state, so a
+    lost browser response can be retried without inventing a new transaction.
+    """
+    if not tenant_state:
+        return None
+    return hashlib.sha256(tenant_state.encode("utf-8")).hexdigest()
+
+
 def _enforce_handoff_rate_limit(
     *,
     tenant: str,
@@ -86,6 +99,7 @@ def _enforce_handoff_rate_limit(
         checks.extend(
             [
                 (f"web-ip:{tenant}:{_rate_limit_digest(ip_key)}", _WEB_HANDOFF_IP_MAX_ATTEMPTS),
+                (f"web-tenant:{tenant}", _WEB_HANDOFF_TENANT_MAX_ATTEMPTS),
             ]
         )
     elif surface == "native":
@@ -475,17 +489,24 @@ def _revoke_native_session_payload(
     return True
 
 
-async def _best_effort_revoke_native_session(settings, refresh_token: object) -> None:
+async def _best_effort_revoke_native_session(
+    settings,
+    refresh_token: object,
+    *,
+    orphan_cleanup: bool = False,
+) -> None:
     """Revoke an exchanged native session before returning a validation error."""
     if not isinstance(refresh_token, str) or not refresh_token:
         return
     try:
-        await asyncio.to_thread(
-            _revoke_native_session_payload,
-            settings=settings,
-            refresh_token=refresh_token,
-            strict=False,
-        )
+        revoke_kwargs = {
+            "settings": settings,
+            "refresh_token": refresh_token,
+            "strict": False,
+        }
+        if orphan_cleanup:
+            revoke_kwargs["orphan_cleanup"] = True
+        await asyncio.to_thread(_revoke_native_session_payload, **revoke_kwargs)
     except Exception:
         logger.warning("tenant_handoff_orphan_revoke_failed", exc_info=True)
 
@@ -543,7 +564,7 @@ async def accept_handoff_request(
     control_plane_url = getattr(settings, "control_plane_url", None)
     if not control_plane_url:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Hosted handoff is not configured")
-    transaction_id = uuid.uuid4().hex
+    transaction_id = _handoff_transaction_id(tenant_state) or uuid.uuid4().hex
     logger.info(
         "tenant_auth_handoff_started",
         extra={"auth_transaction_id": transaction_id, "surface": "web"},
@@ -573,9 +594,12 @@ async def accept_handoff_request(
         return _handoff_failure_redirect(settings=settings, return_to=return_to, error="login_state_not_returned")
     if len(tenant_state) > MAX_TENANT_LOGIN_STATE_LENGTH:
         logger.warning("tenant_login_state_oversized", extra={"state_length": len(tenant_state)})
-        return _handoff_failure_redirect(settings=settings, return_to=return_to, error="login_state_malformed")
     login_cookie_name = tenant_login_cookie_name(tenant_state, secure=cookie_secure)
-    expected_secret = tenant_login_cookie_secret(tenant_state)
+    try:
+        expected_secret = tenant_login_cookie_secret(tenant_state)
+    except RuntimeError:
+        logger.error("tenant_login_state_binding_unavailable", exc_info=True)
+        return _handoff_failure_redirect(settings=settings, return_to=return_to, error="auth_misconfigured")
     if login_cookie_name is None or expected_secret is None:
         logger.warning(
             "tenant_login_state_invalid",
@@ -673,6 +697,7 @@ async def accept_handoff_request(
     refresh_token = payload.get("refresh_token")
     if not isinstance(refresh_token, str) or not refresh_token:
         logger.error("tenant_handoff_exchange_missing_refresh")
+        await _best_effort_revoke_native_session(settings, refresh_token, orphan_cleanup=True)
         return _handoff_failure_redirect(
             settings=settings,
             return_to=return_to,
@@ -686,6 +711,7 @@ async def accept_handoff_request(
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {}
         logger.error("tenant_handoff_exchange_invalid_refresh_expiry")
+        await _best_effort_revoke_native_session(settings, refresh_token, orphan_cleanup=True)
         return _handoff_failure_redirect(
             settings=settings,
             return_to=return_to,
@@ -707,6 +733,8 @@ async def accept_handoff_request(
     if user is None:
         logger.warning("tenant_handoff_runtime_validation_failed")
         preserve_state = validation_error == "catalog_unavailable"
+        if not preserve_state:
+            await _best_effort_revoke_native_session(settings, refresh_token, orphan_cleanup=True)
         return _handoff_failure_redirect(
             settings=settings,
             return_to=return_to,
@@ -759,7 +787,7 @@ async def accept_native_handoff(request: Request, response: Response, body: Nati
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Hosted handoff is not configured")
 
     tenant = hosted_instance_id()
-    transaction_id = uuid.uuid4().hex
+    transaction_id = _handoff_transaction_id(body.tenant_state) or uuid.uuid4().hex
     logger.info(
         "tenant_auth_handoff_started",
         extra={"auth_transaction_id": transaction_id, "tenant": tenant, "surface": "native"},
