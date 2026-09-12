@@ -6,13 +6,21 @@ on:
   workflow_call:
     inputs:
       source_sha:
-        description: "Exact deployed commit to verify"
+        description: "Exact QA checkout commit"
+        required: true
+        type: string
+      runtime_image_tag:
+        description: "Runtime image tag selected by the deployment"
         required: true
         type: string
   workflow_dispatch:
     inputs:
       source_sha:
         description: "Commit SHA that triggered this async QA run"
+        required: false
+        type: string
+      runtime_image_tag:
+        description: "Image tag; defaults to source_sha or the observed clean build"
         required: false
         type: string
 
@@ -120,12 +128,19 @@ jobs:
         run: mkdir -p "$QA_HOME" "$PLAYWRIGHT_BROWSERS_PATH"
 
       - name: Verify deployed source before QA
+        id: runtime_before
+        env:
+          EXPECTED_RUNTIME_TAG: ${{ inputs.runtime_image_tag || inputs.source_sha || 'latest' }}
         run: |
           set -euo pipefail
-          expected_sha="$(git rev-parse HEAD)"
           health="$(curl --fail --silent --show-error --max-time 15 "https://${QA_INSTANCE_SUBDOMAIN}.longhouse.ai/api/health")"
           printf '%s\n' "$health" | jq '{build}'
-          printf '%s\n' "$health" | jq --exit-status --arg expected "$expected_sha" '.build.commit == $expected and .build.dirty == false'
+          actual_sha="$(printf '%s\n' "$health" | jq --exit-status --raw-output '.build | select(.dirty == false) | .commit | select(type == "string" and test("^[0-9a-f]{40}$"))')"
+          if [[ "$EXPECTED_RUNTIME_TAG" =~ ^[0-9a-f]{40}$ && "$actual_sha" != "$EXPECTED_RUNTIME_TAG" ]]; then
+            echo "Deployed runtime $actual_sha does not match requested image $EXPECTED_RUNTIME_TAG" >&2
+            exit 1
+          fi
+          printf 'runtime_sha=%s\n' "$actual_sha" >> "$GITHUB_OUTPUT"
 
       - name: Run hosted live QA
         id: qa_live
@@ -170,13 +185,14 @@ jobs:
         run: make cohort-journey
 
       - name: Verify deployed source after QA
-        if: always() && steps.qa_live.outcome != 'skipped'
+        if: always() && steps.runtime_before.outcome == 'success'
+        env:
+          EXPECTED_RUNTIME_SHA: ${{ steps.runtime_before.outputs.runtime_sha }}
         run: |
           set -euo pipefail
-          expected_sha="$(git rev-parse HEAD)"
           health="$(curl --fail --silent --show-error --max-time 15 "https://${QA_INSTANCE_SUBDOMAIN}.longhouse.ai/api/health")"
           printf '%s\n' "$health" | jq '{build}'
-          printf '%s\n' "$health" | jq --exit-status --arg expected "$expected_sha" '.build.commit == $expected and .build.dirty == false'
+          printf '%s\n' "$health" | jq --exit-status --arg expected "$EXPECTED_RUNTIME_SHA" '.build.commit == $expected and .build.dirty == false'
 
       - name: Write summary
         if: always()
@@ -187,7 +203,9 @@ jobs:
             echo "- Instance: \`$QA_INSTANCE_SUBDOMAIN\`"
             echo "- Trigger: \`${{ github.event_name }}\`"
             echo "- Commit: \`${{ github.sha }}\`"
-            echo "- Source SHA: \`${{ inputs.source_sha || github.sha }}\`"
+            echo "- QA source SHA: \`${{ inputs.source_sha || github.sha }}\`"
+            echo "- Requested runtime image: \`${{ inputs.runtime_image_tag || inputs.source_sha || 'latest' }}\`"
+            echo "- Observed runtime SHA: \`${{ steps.runtime_before.outputs.runtime_sha || 'unavailable' }}\`"
             echo "- qa-live: \`${{ steps.qa_live.outcome || 'skipped' }}\`"
             echo "- hosted shipper mixed bench: \`${{ steps.hosted_shipper_bench.outcome || 'skipped' }}\`"
             echo "- render-canary: \`${{ steps.render_canary.outcome || 'skipped' }}\`"

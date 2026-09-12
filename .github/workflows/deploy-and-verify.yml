@@ -373,6 +373,7 @@ jobs:
     uses: ./.github/workflows/hosted-live-qa.yml
     with:
       source_sha: ${{ needs.gate.outputs.head_sha }}
+      runtime_image_tag: ${{ needs.gate.outputs.runtime_image_tag }}
     secrets: inherit
 
   profile-deploy:
