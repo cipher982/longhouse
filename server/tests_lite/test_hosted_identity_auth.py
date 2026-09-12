@@ -669,7 +669,7 @@ async def test_accept_native_handoff_exchanges_one_use_code(monkeypatch, db_sess
     result = await accept_native_handoff(
         Request({"type": "http", "method": "POST", "path": "/api/auth/accept-native-handoff", "headers": []}),
         Response(),
-        NativeHandoffRequest(code="one-use-code", tenant_state="verifier", code_verifier="v" * 43)
+        NativeHandoffRequest(code="one-use-code", tenant_state="verifier", code_verifier="v" * 43),
     )
 
     assert result == {
@@ -775,6 +775,7 @@ def test_runtime_payload_rejects_missing_or_nonpositive_credentials():
         _runtime_payload({"runtime_token": "runtime", "expires_in": 0})
     assert invalid_expiry.value.status_code == 502
     assert "invalid expiry" in str(invalid_expiry.value.detail).lower()
+
 
 def test_runtime_payload_clamps_transport_stale_expiry(monkeypatch):
     monkeypatch.setattr(
@@ -1544,7 +1545,6 @@ async def test_revoke_native_session_rejects_non_success_cp_responses(monkeypatc
         )
 
     assert exc.value.status_code == 503
-
 
 
 @pytest.mark.asyncio
