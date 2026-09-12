@@ -1382,6 +1382,55 @@ def test_heartbeat_old_device_cannot_change_current_session_control(live_catalog
     assert run["ended_at"] is None
 
 
+def test_old_device_omission_preserves_index_before_new_owner_heartbeat(live_catalog, live_catalog_client):
+    session_id = uuid4()
+    thread_id, old_run_id = _seed_open_run(session_id)
+    tokens = _enroll(live_catalog, DEVICE_ID, "new-device")
+    attached = live_catalog_client.post(
+        "/agents/heartbeat",
+        headers=tokens[DEVICE_ID],
+        json={"version": "0.7.0", "daemon_pid": 42, "sessions": [_resolved_managed_session(session_id)]},
+    )
+    assert attached.status_code == 204, attached.text
+    prior_index = _catalog_rows(LiveSession.__table__)
+
+    # Explicit resume established a new owner; its first heartbeat has not
+    # arrived, so the singleton observation still belongs to the old device.
+    new_run_id = str(uuid4())
+    now = datetime.now(UTC)
+    engine = create_catalog_engine(catalogd_paths()[0])
+    try:
+        with engine.begin() as connection:
+            connection.execute(LiveSessionRun.__table__.update().where(LiveSessionRun.id == old_run_id).values(ended_at=now))
+            connection.execute(
+                LiveSessionRun.__table__.insert().values(
+                    id=new_run_id,
+                    thread_id=thread_id,
+                    provider="codex",
+                    host_id="new-device",
+                    launch_origin="longhouse_spawned",
+                    started_at=now,
+                )
+            )
+    finally:
+        engine.dispose()
+    current_runs = _catalog_rows(LiveSessionRun.__table__)
+    response = live_catalog_client.post(
+        "/agents/heartbeat",
+        headers=tokens[DEVICE_ID],
+        json={
+            "version": "0.7.0",
+            "daemon_pid": 42,
+            "sessions": [],
+            "machine_evidence": _managed_snapshot_evidence(complete=True),
+        },
+    )
+    assert response.status_code == 204, response.text
+    assert _leases()[0]["state"] == "missing"
+    assert _catalog_rows(LiveSession.__table__) == prior_index
+    assert _catalog_rows(LiveSessionRun.__table__) == current_runs
+
+
 def test_heartbeat_missing_managed_detach_can_be_disabled(live_catalog, live_catalog_client, monkeypatch):
     session_id = uuid4()
     headers = _headers(live_catalog)

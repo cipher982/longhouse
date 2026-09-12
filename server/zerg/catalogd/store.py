@@ -2323,18 +2323,17 @@ class CatalogStore:
                         )
                     )
                 if managed_leases_present:
-                    touched.update(
-                        mark_missing_live_control_leases(
-                            orm,
-                            lease_objects,
-                            device_id=device_id,
-                            received_at=received_at,
-                        )
+                    missing_session_ids = mark_missing_live_control_leases(
+                        orm,
+                        lease_objects,
+                        device_id=device_id,
+                        received_at=received_at,
                     )
+                    touched.update(missing_session_ids)
                     touched.update(
                         mark_missing_live_sessions(
                             orm,
-                            {UUID(str(lease.session_id)) for lease in lease_objects},
+                            missing_session_ids,
                             device_id=device_id,
                             received_at=received_at,
                         )

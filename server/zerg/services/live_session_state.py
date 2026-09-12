@@ -150,24 +150,23 @@ def list_active_live_session_ids(
 
 def mark_missing_live_sessions(
     db: Session,
-    seen_session_ids: set[UUID],
+    missing_session_ids: set[UUID],
     *,
     device_id: str,
     received_at: datetime | None = None,
 ) -> set[UUID]:
-    """Mark previously live sessions from this device missing when omitted."""
+    """Mark only omissions accepted by canonical device ownership."""
 
     normalized_device_id = _normalized(device_id)
-    if not normalized_device_id:
+    if not normalized_device_id or not missing_session_ids:
         return set()
     seen_at = normalize_utc(received_at) or _utc_now()
-    seen_strings = {str(session_id) for session_id in seen_session_ids}
+    missing_strings = {str(session_id) for session_id in missing_session_ids}
     query = db.query(LiveSession).filter(
         LiveSession.device_id == normalized_device_id,
+        LiveSession.session_id.in_(missing_strings),
         LiveSession.state.notin_(("missing", "ended")),
     )
-    if seen_strings:
-        query = query.filter(LiveSession.session_id.notin_(seen_strings))
 
     touched: set[UUID] = set()
     for row in query.all():

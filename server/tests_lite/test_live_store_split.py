@@ -117,8 +117,9 @@ def _runtime_event(
 
 
 def _machine_heartbeat(*, managed_sessions: list[dict]) -> dict:
-    """One wire heartbeat. Sending ``managed_sessions`` makes the snapshot authoritative."""
+    """One wire heartbeat with a complete managed-provider observation."""
 
+    captured_at = datetime.now(timezone.utc).isoformat()
     return {
         "version": "0.5.0",
         "daemon_pid": 12345,
@@ -127,6 +128,18 @@ def _machine_heartbeat(*, managed_sessions: list[dict]) -> dict:
         "disk_free_bytes": 50_000_000_000,
         "is_offline": False,
         "managed_sessions": managed_sessions,
+        "machine_evidence": {
+            "schema_version": 1,
+            "observed_at": captured_at,
+            "process_snapshot_scopes": [
+                {
+                    "scope": "managed_state_files",
+                    "complete": True,
+                    "captured_at": captured_at,
+                    "source": "managed_provider_scan",
+                }
+            ],
+        },
     }
 
 
@@ -273,7 +286,7 @@ def test_live_session_state_upserts_and_marks_missing(tmp_path):
             live_db.commit()
             assert touched == {first_session_id, second_session_id}
 
-            touched = upsert_live_sessions_from_managed_leases(
+            upsert_live_sessions_from_managed_leases(
                 live_db,
                 [
                     SimpleNamespace(
@@ -290,7 +303,7 @@ def test_live_session_state_upserts_and_marks_missing(tmp_path):
             )
             missing = mark_missing_live_sessions(
                 live_db,
-                touched,
+                {second_session_id},
                 device_id="cinder",
                 received_at=missing_seen_at,
             )
@@ -993,7 +1006,7 @@ def test_live_control_lease_only_adopts_nonterminal_launch_readiness(tmp_path, i
                 live_db,
                 session_id=session_id,
                 thread_id=uuid4(),
-                run_id=None,
+                run_id=uuid4(),
                 owner_id=1,
                 provider="cursor",
                 permission_mode="provider_local",
