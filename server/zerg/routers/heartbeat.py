@@ -889,7 +889,11 @@ async def ingest_heartbeat(
                 if _resolved_sessions_present
                 else payload.managed_sessions
             )
-            _managed_leases_present = _resolved_sessions_present or "managed_sessions" in payload.model_fields_set
+            # A partial scan can refresh observed owners, but omission is not
+            # evidence that an unobserved owner has lost control.
+            _managed_leases_present = (
+                _resolved_sessions_present or "managed_sessions" in payload.model_fields_set
+            ) and _machine_process_snapshot_complete(payload, "managed_state_files")
             _unmanaged_bindings = (
                 _unmanaged_bindings_from_resolved_sessions(
                     _resolved_sessions,

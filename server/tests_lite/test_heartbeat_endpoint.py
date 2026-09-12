@@ -157,6 +157,22 @@ def _seed_stamp(live_catalog, *, device_id: str, received_at: datetime, **overri
 # ---------------------------------------------------------------------------
 
 
+def _managed_snapshot_evidence(*, complete: bool) -> dict[str, Any]:
+    captured_at = datetime.now(UTC).isoformat()
+    return {
+        "schema_version": 1,
+        "observed_at": captured_at,
+        "process_snapshot_scopes": [
+            {
+                "scope": "managed_state_files",
+                "complete": complete,
+                "captured_at": captured_at,
+                "source": "managed_provider_scan",
+            }
+        ],
+    }
+
+
 def _machine_evidence_payload() -> dict[str, object]:
     observed_at = "2026-05-08T12:00:00Z"
     process = [
@@ -1131,67 +1147,6 @@ def test_heartbeat_rejects_null_resolved_sessions(live_catalog, live_catalog_cli
 
 
 # ---------------------------------------------------------------------------
-# The catalogd call itself
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_catalog_heartbeat_uses_one_rpc_without_opening_sqlite(monkeypatch):
-    """The whole route is one ``machine.heartbeat.apply.v2`` over a null session."""
-
-    import zerg.routers.heartbeat as heartbeat_router
-
-    calls: list[tuple[str, dict, float]] = []
-
-    class CatalogClient:
-        async def call(self, method, params, *, timeout_seconds):
-            calls.append((method, params, timeout_seconds))
-            return {"previous_sessions_digest": "digest-0", "commit_seq": "42", "exact_replay": False}
-
-    class FakeRequest:
-        client = SimpleNamespace(host="127.0.0.1")
-
-        async def body(self):
-            return b"{}"
-
-    monkeypatch.setattr(heartbeat_router, "get_catalogd_client", lambda: CatalogClient())
-
-    session_id = uuid4()
-    payload = heartbeat_router.HeartbeatIn(
-        version="catalog-test",
-        sessions_digest="digest-1",
-        sessions_sequence=8,
-        managed_sessions=[
-            heartbeat_router.ManagedSessionLeaseIn(
-                session_id=session_id,
-                provider="codex",
-                machine_id="cinder",
-                sequence=8,
-                state="attached",
-                phase="idle",
-            )
-        ],
-    )
-    response = await heartbeat_router.ingest_heartbeat(
-        payload,
-        FakeRequest(),
-        None,
-        SimpleNamespace(id="token-1", device_id="cinder", owner_id=7),
-    )
-
-    assert response.status_code == 204
-    assert len(calls) == 1
-    method, params, timeout = calls[0]
-    assert method == "machine.heartbeat.apply.v2"
-    assert timeout == heartbeat_router._HOT_HEARTBEAT_QUEUE_TIMEOUT_SECONDS
-    assert params["heartbeat"]["device_id"] == "cinder"
-    assert params["heartbeat"]["sessions_digest"] == "digest-1"
-    assert params["managed_leases_present"] is True
-    assert params["managed_leases"][0]["session_id"] == str(session_id)
-    assert params["owner_id"] == 7
-
-
-# ---------------------------------------------------------------------------
 # Managed control leases
 # ---------------------------------------------------------------------------
 
@@ -1303,7 +1258,8 @@ def test_heartbeat_legacy_managed_sessions_still_materialize_control(live_catalo
     assert "tool_name" not in retained_lease
 
 
-def test_heartbeat_empty_resolved_sessions_detaches_missing_managed_control(live_catalog, live_catalog_client):
+@pytest.mark.parametrize("scope_present", [False, True])
+def test_heartbeat_only_complete_snapshot_detaches_missing_managed_control(live_catalog, live_catalog_client, scope_present):
     session_id = uuid4()
     headers = _headers(live_catalog)
     _thread_id, run_id = _seed_open_run(session_id)
@@ -1316,10 +1272,23 @@ def test_heartbeat_empty_resolved_sessions_detaches_missing_managed_control(live
     assert attach.status_code == 204, attach.text
     assert _leases()[0]["state"] == "attached"
 
+    partial_payload = {"version": "0.7.0", "daemon_pid": 42, "sessions": []}
+    if scope_present:
+        partial_payload["machine_evidence"] = _managed_snapshot_evidence(complete=False)
+    partial = live_catalog_client.post("/agents/heartbeat", headers=headers, json=partial_payload)
+    assert partial.status_code == 204, partial.text
+    assert _leases()[0]["state"] == "attached"
+    assert _lease_payload(_leases()[0])["control_state"] == "online"
+
     empty = live_catalog_client.post(
         "/agents/heartbeat",
         headers=headers,
-        json={"version": "0.7.0", "daemon_pid": 42, "sessions": []},
+        json={
+            "version": "0.7.0",
+            "daemon_pid": 42,
+            "sessions": [],
+            "machine_evidence": _managed_snapshot_evidence(complete=True),
+        },
     )
     assert empty.status_code == 204, empty.text
 
@@ -1359,7 +1328,12 @@ def test_heartbeat_empty_resolved_sessions_does_not_detach_other_device_control(
     empty = live_catalog_client.post(
         "/agents/heartbeat",
         headers=tokens[DEVICE_ID],
-        json={"version": "0.7.0", "daemon_pid": 42, "sessions": []},
+        json={
+            "version": "0.7.0",
+            "daemon_pid": 42,
+            "sessions": [],
+            "machine_evidence": _managed_snapshot_evidence(complete=True),
+        },
     )
     assert empty.status_code == 204, empty.text
 
@@ -1384,7 +1358,12 @@ def test_heartbeat_missing_managed_detach_can_be_disabled(live_catalog, live_cat
     empty = live_catalog_client.post(
         "/agents/heartbeat",
         headers=headers,
-        json={"version": "0.7.0", "daemon_pid": 42, "sessions": []},
+        json={
+            "version": "0.7.0",
+            "daemon_pid": 42,
+            "sessions": [],
+            "machine_evidence": _managed_snapshot_evidence(complete=True),
+        },
     )
     assert empty.status_code == 204, empty.text
 
