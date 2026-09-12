@@ -232,6 +232,7 @@ jobs:
           import sys
 
           keys = (
+              "CONTROL_PLANE_ADMIN_TOKEN",
               "SMOKE_RUNTIME_TOKEN",
           )
           with open(sys.argv[1], "w", encoding="utf-8") as stream:
@@ -245,6 +246,7 @@ jobs:
             --image "${{ steps.prepare.outputs.image }}" \
             --credentials "$credentials" \
             --target cohort-journey \
+            --set "CONTROL_PLANE_URL=$CONTROL_PLANE_URL" \
             --set "QA_INSTANCE_SUBDOMAIN=$QA_INSTANCE_SUBDOMAIN" \
             --set "LONGHOUSE_API_URL=https://${QA_INSTANCE_SUBDOMAIN}.longhouse.ai" \
             --set "PLAYWRIGHT_BASE_URL=https://${QA_INSTANCE_SUBDOMAIN}.longhouse.ai" \
@@ -297,11 +299,3 @@ jobs:
           path: artifacts/test-isolation/**
           if-no-files-found: ignore
           retention-days: 14
-
-      - name: Remove owned QA home
-        if: always()
-        run: |
-          set -euo pipefail
-          test "$QA_HOME" = "/tmp/hosted-live-qa-${{ github.run_id }}-${{ github.run_attempt }}"
-          rm -rf -- "$QA_HOME"
-          test ! -e "$QA_HOME"
