@@ -26,6 +26,7 @@ from typing import Any
 from typing import Mapping
 
 from zerg.qa import live_session_toolkit
+from zerg.qa.provider_console_lifecycle import _served_run_terminal_evidence
 from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.provider_release_identity import now
 from zerg.qa.provider_release_identity import sha256_file
@@ -34,6 +35,7 @@ from zerg.qa.resume_assurance import ProducerRegistration
 
 _DEFAULT_RESUME_INTENT_TIMEOUT_SECS = 45.0
 _PROCESS_LOSS_RESUME_INTENT_TIMEOUT_SECS = 180.0
+_CURSOR_SHUTDOWN_BARRIER_TIMEOUT_SECS = 30.0
 # A daemon shutdown can expose repair-lane backpressure immediately before a
 # quarantined Cursor epoch becomes eligible for lineage reconciliation. Keep
 # one bounded retry for each typed state, with no retry for arbitrary failures.
@@ -950,6 +952,116 @@ def _terminate_cursor_owner(
     return receipt
 
 
+def _cursor_shutdown_barrier(
+    args: argparse.Namespace,
+    state: Mapping[str, Any],
+    process: live_session_toolkit.PtyProcess | None,
+    environment: Mapping[str, str],
+) -> dict[str, Any]:
+    """Separate Cursor's stop acknowledgement from completed teardown.
+
+    ``cursor-helm stop`` acknowledges the control request before the launcher
+    finishes its own socket/state cleanup and publishes the terminal event.
+    Wait for those exact facts while the transcript producer is still alive;
+    generic process cleanup remains a bounded fallback when the barrier fails.
+    """
+
+    receipt = _terminate_cursor_owner(args, state, environment)
+    barrier: dict[str, Any] = {
+        "status": "fail",
+        "verified": False,
+        "timeout_seconds": _CURSOR_SHUTDOWN_BARRIER_TIMEOUT_SECS,
+    }
+    receipt["shutdown_barrier"] = barrier
+    if receipt.get("status") != "pass":
+        barrier["failure_code"] = "cursor_stop_ack_failed"
+        return receipt
+    if process is None:
+        barrier["failure_code"] = "cursor_launcher_process_missing"
+        return receipt
+
+    state_path_value = state.get("state_path")
+    socket_path_value = state.get("socket_path")
+    state_path = Path(state_path_value) if isinstance(state_path_value, str) and state_path_value else None
+    socket_path = Path(socket_path_value) if isinstance(socket_path_value, str) and socket_path_value else None
+    session_id = str(state.get("session_id") or "")
+    run_id = str(state.get("run_id") or "")
+    deadline = time.monotonic() + _CURSOR_SHUTDOWN_BARRIER_TIMEOUT_SECS
+    terminal_evidence: dict[str, Any] = {
+        "retired": False,
+        "session_id": session_id,
+        "expected_run_id": run_id,
+        "error": "terminal evidence not observed",
+    }
+    launcher_exit_code: int | None = None
+    launcher_wait_error: str | None = None
+    process_group_dead = False
+    while time.monotonic() < deadline:
+        try:
+            remaining = max(0.0, deadline - time.monotonic())
+            if process.process.poll() is None and remaining > 0:
+                launcher_exit_code = process.wait(min(0.25, remaining))
+            else:
+                launcher_exit_code = process.process.poll()
+        except Exception as exc:  # noqa: BLE001 - retain an honest barrier failure
+            launcher_wait_error = f"{type(exc).__name__}: {exc}"
+        try:
+            process_group_dead = live_session_toolkit.wait_process_group_dead(process.pid, timeout=0)
+        except Exception as exc:  # noqa: BLE001 - retain an honest barrier failure
+            process_group_dead = False
+            launcher_wait_error = launcher_wait_error or f"{type(exc).__name__}: {exc}"
+        try:
+            terminal_evidence = _served_run_terminal_evidence(
+                args.api_url,
+                args.agents_token,
+                session_id,
+                run_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - a missing served fact is not proof
+            terminal_evidence = {
+                "retired": False,
+                "session_id": session_id,
+                "expected_run_id": run_id,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        launcher_exited = process.process.poll() is not None
+        state_absent = state_path is not None and not state_path.exists()
+        socket_absent = socket_path is not None and not socket_path.exists()
+        terminal_observed = terminal_evidence.get("retired") is True
+        if launcher_exited and process_group_dead and state_absent and socket_absent and terminal_observed:
+            barrier.update(
+                {
+                    "status": "pass",
+                    "verified": True,
+                    "launcher_exited": True,
+                    "launcher_exit_code": launcher_exit_code,
+                    "process_group_dead": True,
+                    "state_absent": True,
+                    "socket_absent": True,
+                    "served_terminal": terminal_evidence,
+                }
+            )
+            receipt["status"] = "pass"
+            return receipt
+        time.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
+
+    barrier.update(
+        {
+            "failure_code": "cursor_shutdown_barrier_timeout",
+            "launcher_exited": process.process.poll() is not None,
+            "launcher_exit_code": launcher_exit_code,
+            "process_group_dead": process_group_dead,
+            "state_absent": state_path is not None and not state_path.exists(),
+            "socket_absent": socket_path is not None and not socket_path.exists(),
+            "served_terminal": terminal_evidence,
+        }
+    )
+    if launcher_wait_error:
+        barrier["launcher_wait_error"] = launcher_wait_error
+    receipt["status"] = "fail"
+    return receipt
+
+
 def _isolated_qualification_environment(source: Mapping[str, str] | None = None) -> dict[str, str]:
     environment = dict(os.environ if source is None else source)
     for key in tuple(environment):
@@ -998,6 +1110,7 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
     final_cleanup: dict[str, Any] = {"verified": False}
     result_payload: dict[str, Any] | None = None
     initial_state: dict[str, Any] = {}
+    resumed_state: dict[str, Any] = {}
     failure_termination: dict[str, Any] | None = None
     provider_cwd = args.repo_root
     try:
@@ -1266,6 +1379,10 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             prior_run_id=str(initial_state["run_id"]),
             process=resumed,
         )
+        # Enroll the new provider owner before any resumed bootstrap or
+        # projection step can fail. Cleanup must use this run identity.
+        states.append(resumed_state)
+        live_session_toolkit.write_json(root / "resumed-bridge-state.json", live_session_toolkit.redact_state_for_evidence(resumed_state))
         if spec.provider == "cursor":
             live_session_toolkit.wait_cursor_tui_ready(resumed, root / "native-resume.tty")
         elif spec.provider == "claude":
@@ -1361,8 +1478,6 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 expected_generation_id=bootstrap_hook_sequence.get("generation_id"),
                 diagnostic_path=root / "cursor-idle-timeout-resumed.json",
             )
-        states.append(resumed_state)
-        live_session_toolkit.write_json(root / "resumed-bridge-state.json", live_session_toolkit.redact_state_for_evidence(resumed_state))
         resumed_provider_pid = live_session_toolkit.provider_process_pid(spec, resumed_state)
         post_marker = _resume_marker(provider, "POST")
         prior_tail = live_session_toolkit.wait_session_tail(
@@ -1582,9 +1697,40 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             pass
         failure_identity = states[-1] if states else initial_state
         if spec.provider == "cursor" and failure_identity:
-            # Terminate while the exact launcher owner can still run its normal
-            # socket/state cleanup; forced process cleanup is the fallback.
-            failure_termination = _terminate_cursor_owner(args, failure_identity, environment)
+            failure_process = None
+            if resumed is not None and resumed_state.get("run_id") == failure_identity.get("run_id"):
+                failure_process = resumed
+            elif initial is not None and initial_state.get("run_id") == failure_identity.get("run_id"):
+                failure_process = initial
+            # Stop acknowledgement is not completion. Wait for the exact
+            # launcher, state/socket teardown, and served terminal fact before
+            # allowing generic forced cleanup to run.
+            failure_termination = _cursor_shutdown_barrier(
+                args,
+                failure_identity,
+                failure_process,
+                environment,
+            )
+            if shipper is not None:
+                try:
+                    terminal_ship_receipt = shipper.flush("cursor-failure-terminal")
+                    failure_termination["terminal_transcript_ship"] = terminal_ship_receipt
+                    if terminal_ship_receipt.get("status") != "pass":
+                        failure_termination["status"] = "fail"
+                except Exception as ship_exc:  # noqa: BLE001 - preserve the original provider failure
+                    failure_termination["status"] = "fail"
+                    failure_termination["terminal_transcript_ship"] = {
+                        "status": "fail",
+                        "error": f"{type(ship_exc).__name__}: {ship_exc}",
+                    }
+                try:
+                    live_session_toolkit.write_json(
+                        root / "cursor-failure-terminal-transcript-ship-receipt.json",
+                        failure_termination["terminal_transcript_ship"],
+                    )
+                except OSError as ship_receipt_exc:
+                    failure_termination["status"] = "fail"
+                    failure_termination["terminal_transcript_ship_receipt_error"] = f"{type(ship_receipt_exc).__name__}: {ship_receipt_exc}"
         try:
             final_cleanup = live_session_toolkit.cleanup_processes(spec, (initial, resumed, concurrent), states)
         except Exception as cleanup_exc:  # noqa: BLE001 - preserve the provider failure
