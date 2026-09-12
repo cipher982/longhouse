@@ -9,6 +9,7 @@ import datetime
 import http.server
 import json
 import os
+import shutil
 import signal
 import sqlite3
 import subprocess
@@ -71,12 +72,18 @@ def exercise(engine):
         ps = shim / "ps"
         ps.write_text('#!/bin/sh\nif [ -e "$PROJECTION_TEST_FAILURE" ]; then exit 1; fi\nexec /bin/ps "$@"\n')
         ps.chmod(0o700)
+        # No ambient provider executable or credential authority: the daemon
+        # otherwise prewarms an installed Codex worker in a separate group.
+        for name in ("lsof", "sysctl", "uname"):
+            executable = shutil.which(name, path="/usr/bin:/bin:/usr/sbin:/sbin")
+            if executable is not None:
+                (shim / name).symlink_to(executable)
         env = {
-            **os.environ,
             "HOME": str(home),
             "LONGHOUSE_HOME": str(longhouse),
-            "PATH": str(shim) + os.pathsep + os.environ["PATH"],
+            "PATH": str(shim),
             "PROJECTION_TEST_FAILURE": str(fail_inventory),
+            "TMPDIR": str(root),
         }
         for name in (
             "CODEX_HOME",
@@ -119,6 +126,7 @@ def exercise(engine):
                     stdin=subprocess.DEVNULL,
                     stdout=log,
                     stderr=subprocess.STDOUT,
+                    start_new_session=True,
                 )
             receipt["daemon_pid"] = child.pid
             print(json.dumps({"owned_pid": child.pid, "owned_root": str(root)}), flush=True)
@@ -142,7 +150,10 @@ def exercise(engine):
             healthy = wait_for(lambda projection: projection.get("reconciliation", {}).get("state") == "idle")
             receipt["build"] = healthy.get("build")
             fail_inventory.touch()
-            failed = wait_for(lambda projection: projection.get("reconciliation", {}).get("state") == "failed")
+            failed = wait_for(
+                lambda projection: projection.get("reconciliation", {}).get("state") == "failed"
+                and projection.get("reconciliation", {}).get("reason") in {"periodic", "wake", "full_reconciliation", "startup"}
+            )
             frozen = failed["local_projection"]["generated_at"]
             with sqlite3.connect(db, timeout=5) as connection:
                 connection.execute(
@@ -165,22 +176,30 @@ def exercise(engine):
             receipt["failure_preserved_during_phase_rebuild"] = True
             receipt["recovered_without_restart"] = True
         finally:
-            if child is not None:
-                if child.poll() is None:
-                    child.terminate()
+            try:
+                if child is not None:
+                    if child.poll() is None:
+                        os.killpg(child.pid, signal.SIGTERM)
+                        try:
+                            child.wait(timeout=10)
+                        except subprocess.TimeoutExpired:
+                            os.killpg(child.pid, signal.SIGKILL)
+                            child.wait(timeout=5)
+                    assert child.poll() is not None
+                    receipt["daemon_reaped"] = True
                     try:
-                        child.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        child.kill()
-                        child.wait(timeout=5)
-                assert child.poll() is not None
-                receipt["daemon_reaped"] = True
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=5)
-            assert not thread.is_alive()
-            receipt["fixture_server_stopped"] = True
-            print(json.dumps({"daemon_reaped": receipt.get("daemon_reaped"), "fixture_server_stopped": True}), flush=True)
+                        os.killpg(child.pid, 0)
+                    except ProcessLookupError:
+                        receipt["daemon_group_gone"] = True
+                    else:
+                        raise AssertionError(f"owned daemon group remains: {child.pid}")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+                assert not thread.is_alive()
+                receipt["fixture_server_stopped"] = True
+                print(json.dumps({"daemon_reaped": receipt.get("daemon_reaped"), "fixture_server_stopped": True}), flush=True)
     assert not root.exists()
     receipt["scratch_removed"] = True
     print(json.dumps(receipt, indent=2))
