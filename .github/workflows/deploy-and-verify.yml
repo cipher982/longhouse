@@ -241,8 +241,8 @@ jobs:
         run: |
           . scripts/lib/hosted-instance.sh
           lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN INSTANCE_SUBDOMAIN
-          if [[ "${INSTANCE_SUBDOMAIN,,}" == "david010" ]]; then
-            echo "Refusing automated reprovision of personal dogfood; configure a dedicated hosted canary." >&2
+          if [[ "${INSTANCE_SUBDOMAIN,,}" == "david010" || "${INSTANCE_SUBDOMAIN,,}" == "demo" ]]; then
+            echo "Refusing automated reprovision of personal dogfood or public demo; configure a dedicated hosted canary." >&2
             exit 1
           fi
 

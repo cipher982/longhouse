@@ -5,7 +5,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-if [[ -f "$ROOT_DIR/.env" ]]; then
+# Local convenience only; CI authority comes exclusively from workflow env.
+if [[ -z "${CI:-}" && -f "$ROOT_DIR/.env" ]]; then
   set -a
   # shellcheck disable=SC1090
   . "$ROOT_DIR/.env"

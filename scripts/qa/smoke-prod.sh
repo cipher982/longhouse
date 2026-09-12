@@ -18,9 +18,9 @@
 
 set -e
 
-# Load repo .env if present (local only; no auto-creation)
+# Local convenience only; CI authority comes exclusively from workflow env.
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-if [[ -f "$ROOT_DIR/.env" ]]; then
+if [[ -z "${CI:-}" && -f "$ROOT_DIR/.env" ]]; then
     set -a
     # shellcheck disable=SC1090
     . "$ROOT_DIR/.env"
