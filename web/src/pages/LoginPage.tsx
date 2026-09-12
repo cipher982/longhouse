@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Navigate, useSearchParams } from 'react-router-dom';
 import { sanitizeReturnTo } from '../lib/loginRedirect';
 import { useAuth, useAuthMethods } from '../lib/auth';
@@ -15,7 +15,7 @@ export default function LoginPage() {
       return false;
     }
   });
-  const [navigated, setNavigated] = useState(false);
+  const navigationStarted = useRef(false);
   const {
     data: authMethods,
     isLoading: methodsLoading,
@@ -49,28 +49,28 @@ export default function LoginPage() {
       methodsLoading ||
       !authMethods ||
       authLoading ||
-      authUnavailable
+      authUnavailable ||
+      authenticatedUser ||
+      !authMethods.sso ||
+      navigationStarted.current
     ) {
       return;
     }
 
-    if (authMethods.sso) {
-      // Hosted tenant: server route sets nothing and 302s to CP /auth/start.
-      setNavigated(true);
-      window.location.replace(
-        `/api/auth/start-handoff?return_to=${encodeURIComponent(returnTo)}`,
-      );
-    }
-    // For self-host, the React shell renders the legacy login form
-    // (Google + password). Don't navigate anywhere; the user
-    // authenticates locally. This avoids a self-host redirect loop.
+    // Hosted tenant: the tenant route owns the state cookie and redirects to
+    // the CP. Keep this effect single-owner so a React rerender cannot issue a
+    // second handoff while the browser is still following the first one.
+    navigationStarted.current = true;
+    window.location.replace(
+      `/api/auth/start-handoff?return_to=${encodeURIComponent(returnTo)}`,
+    );
   }, [
     authError,
     authLoading,
     authMethods,
     authUnavailable,
+    authenticatedUser,
     methodsLoading,
-    navigated,
     returnTo,
     logoutSuppressed,
   ]);

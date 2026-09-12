@@ -23,6 +23,8 @@ from starlette.responses import Response
 from zerg.auth import cp_jwks
 from zerg.auth.cp_jwks import CPTokenClaims
 from zerg.auth.hosted import new_tenant_login_state
+from zerg.auth.hosted import tenant_login_cookie_name
+from zerg.auth.hosted import tenant_login_cookie_secret
 from zerg.auth.session_tokens import _encode_jwt
 from zerg.auth.strategy import HostedCPAuthStrategy
 from zerg.database import Base
@@ -42,6 +44,18 @@ from zerg.routers.auth_sso import accept_native_handoff
 from zerg.routers.auth_sso import refresh_native_session
 from zerg.routers.auth_sso import refresh_runtime_token
 from zerg.routers.auth_sso import revoke_native_session
+
+
+def test_tenant_login_state_matches_control_plane_opaque_grammar():
+    state, cookie_name, secret = new_tenant_login_state(secure=True)
+
+    assert len(state) <= 128
+    assert state.count("-") >= 1
+    assert "." not in state
+    assert all(character.isalnum() or character in "_-" for character in state)
+    assert tenant_login_cookie_name(state, secure=True) == cookie_name
+    assert tenant_login_cookie_secret(state) == secret
+    assert tenant_login_cookie_name(f"{state}.legacy", secure=True) is None
 
 
 @pytest.fixture()

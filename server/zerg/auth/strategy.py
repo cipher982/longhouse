@@ -32,6 +32,7 @@ from zerg.auth.cp_jwks import CPAuthorityUnavailable
 from zerg.auth.cp_jwks import CPTokenClaims
 from zerg.auth.cp_jwks import CPTokenError
 from zerg.auth.cp_jwks import verify_runtime_token
+from zerg.auth.hosted import tenant_cookie_secure
 from zerg.config import get_settings
 from zerg.crud import count_users
 from zerg.crud import create_user
@@ -42,7 +43,7 @@ from zerg.utils.time import utc_now_naive
 # Host-only cookies cannot be injected by a sibling subdomain. Keep the
 # unprefixed names only for insecure local/test surfaces where __Host- cookies
 # would be rejected by the browser.
-_COOKIE_SECURE = not (get_settings().auth_disabled or get_settings().testing)
+_COOKIE_SECURE = tenant_cookie_secure(get_settings())
 SESSION_COOKIE_NAME = "__Host-lh_session" if _COOKIE_SECURE else "longhouse_session"
 # ``typ`` stamped on browser session JWTs. Managed-session (``zst_``) tokens are
 # signed with the same ``JWT_SECRET``, so browser auth must require this claim

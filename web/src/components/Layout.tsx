@@ -87,7 +87,19 @@ function WelcomeHeader() {
   const userInitials = getUserInitials(user);
 
   const controlPlaneBase = authMethods?.sso_url ? authMethods.sso_url.replace(/\/+$/, "") : null;
-  const controlPlaneLoginUrl = authMethods?.sso_login_url ?? null;
+
+  const controlPlaneLogoutUrl = (returnTo: string): string | null => {
+    if (!controlPlaneBase) return null;
+    const target = new URL('/auth/logout', `${controlPlaneBase}/`);
+    target.searchParams.set('return_to', returnTo);
+    return target.toString();
+  };
+
+  const tenantHandoffUrl = (returnTo: string): string => {
+    const target = new URL('/api/auth/start-handoff', window.location.origin);
+    target.searchParams.set('return_to', returnTo);
+    return target.toString();
+  };
 
   const handleLogout = async () => {
     const confirmed = await confirm({
@@ -119,9 +131,12 @@ function WelcomeHeader() {
     closeUserMenu();
     const completed = await logout(true);
     if (!completed) return;
-    if (controlPlaneBase) {
-      const returnTo = window.location.origin;
-      window.location.href = `${controlPlaneBase}/?return_to=${encodeURIComponent(returnTo)}`;
+    const cpLogoutUrl = controlPlaneLogoutUrl(tenantHandoffUrl('/timeline'));
+    if (cpLogoutUrl) {
+      // The CP owns its same-origin logout confirmation and then returns to
+      // the tenant-owned handoff route. Never enter CP /auth/start directly:
+      // it cannot mint the tenant's CSRF cookie.
+      window.location.assign(cpLogoutUrl);
     }
   };
 
@@ -137,9 +152,11 @@ function WelcomeHeader() {
     closeUserMenu();
     const completed = await logout(true);
     if (!completed) return;
-    if (controlPlaneBase) {
-      const returnTo = controlPlaneLoginUrl ?? `${controlPlaneBase}/?switch=1`;
-      window.location.href = returnTo;
+    const cpLogoutUrl = controlPlaneLogoutUrl(tenantHandoffUrl('/timeline'));
+    if (cpLogoutUrl) {
+      // CP logout is a deliberate same-origin POST confirmation. Once its
+      // cookie is cleared, the tenant starts a fresh, state-bound login.
+      window.location.assign(cpLogoutUrl);
     }
   };
 

@@ -50,6 +50,14 @@ export const AUTH_METHODS_QUERY_KEY = ['auth-methods'] as const;
 const AUTH_CHANNEL_NAME = 'longhouse-auth-events';
 const LOGGED_OUT_SESSION_KEY = 'longhouse:logged-out';
 
+function hasLogoutIntent(): boolean {
+  try {
+    return window.sessionStorage.getItem(LOGGED_OUT_SESSION_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 // Custom error class that includes HTTP status for retry logic
 class HttpError extends Error {
   status: number;
@@ -85,6 +93,13 @@ type AuthStatusResponse = {
 };
 
 async function getCurrentUser(): Promise<User | null> {
+  // A deliberate local sign-out is authoritative until the user explicitly
+  // starts a new login. This prevents a failed remote revocation or a stale
+  // cookie from silently signing the browser back in.
+  if (typeof window !== 'undefined' && hasLogoutIntent()) {
+    return null;
+  }
+
   const response = await fetch(`${config.apiBaseUrl}/auth/status`, {
     credentials: 'include',
   });
@@ -205,12 +220,17 @@ function AuthProviderInner({ children }: AuthProviderProps) {
   const notifyLogout = useCallback(() => {
     if (typeof window === 'undefined') return;
     window.dispatchEvent(new Event('longhouse-auth-logout'));
+    try {
+      // Always publish a storage event as a fallback for tabs where
+      // BroadcastChannel is unavailable (private windows can differ).
+      window.localStorage.setItem(LOGGED_OUT_SESSION_KEY, String(Date.now()));
+    } catch {
+      // BroadcastChannel and the current tab still provide local protection.
+    }
     if (typeof window.BroadcastChannel === 'function') {
       const channel = new BroadcastChannel(AUTH_CHANNEL_NAME);
       channel.postMessage({ type: 'logout' });
       channel.close();
-    } else {
-      window.localStorage.setItem(LOGGED_OUT_SESSION_KEY, String(Date.now()));
     }
   }, []);
 
@@ -233,9 +253,8 @@ function AuthProviderInner({ children }: AuthProviderProps) {
       channel.onmessage = (event) => {
         if (event.data?.type === 'logout') clearFromAnotherTab();
       };
-    } else {
-      window.addEventListener('storage', clearFromAnotherTab);
     }
+    window.addEventListener('storage', clearFromAnotherTab);
     return () => {
       channel?.close();
       window.removeEventListener('storage', clearFromAnotherTab);
@@ -248,6 +267,19 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     failureCount: authRetryCount,
     refetch,
   } = useCurrentUserQuery();
+
+  useEffect(() => {
+    if (!userData) return;
+    // A successful hosted handoff is a login too; it does not pass through
+    // loginMutation, so clear the prior signed-out intent here.
+    clearLogoutBarrier();
+    try {
+      window.sessionStorage.removeItem(LOGGED_OUT_SESSION_KEY);
+    } catch {
+      // Storage can be disabled; authenticated server state still wins.
+    }
+  }, [userData]);
+
 
   const loginMutation = useMutation({
     mutationFn: loginWithGoogle,
@@ -272,11 +304,6 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     // response can install a fresh cookie after the logout response clears it.
     beginLogoutBarrier();
     const completed = await logoutFromServer(everywhere);
-    if (!completed) {
-      clearLogoutBarrier();
-      await refetch();
-      return false;
-    }
     try {
       window.sessionStorage.setItem(LOGGED_OUT_SESSION_KEY, '1');
     } catch {
@@ -284,7 +311,10 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     }
     await clearLocalAuth();
     notifyLogout();
-    return true;
+    // Local sign-out is complete even when remote revocation is unavailable.
+    // Keep the logout barrier and explicit intent active so a stale cookie
+    // cannot silently re-authenticate this browser.
+    return completed;
   };
 
   const refreshAuth = async () => {

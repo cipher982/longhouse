@@ -51,6 +51,28 @@ describe("fetchWithRefresh", () => {
     expect(replaceSpy).toHaveBeenCalledWith("/timeline/abc?view=compact#notes");
   });
 
+  it("replays a one-shot request body after a successful refresh", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    const response = await fetchWithRefresh("/api/users/me", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "text/plain" },
+      body: "one-shot-body",
+    });
+
+    expect(response.status).toBe(204);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const replay = fetchMock.mock.calls[2]?.[0];
+    expect(replay).toBeInstanceOf(Request);
+    expect((replay as Request).credentials).toBe("include");
+    expect(await (replay as Request).text()).toBe("one-shot-body");
+  });
+
   it("does not turn a control-plane outage into a logout", async () => {
     const fetchMock = vi.mocked(fetch);
     fetchMock

@@ -10,6 +10,7 @@ from typing import Optional
 
 import jwt
 from fastapi import Response
+from zerg.auth.hosted import tenant_cookie_secure
 from zerg.auth.strategy import SESSION_COOKIE_NAME
 from zerg.auth.strategy import SESSION_TOKEN_KIND
 from zerg.config import get_settings
@@ -18,7 +19,7 @@ _settings = get_settings()
 
 JWT_SECRET = _settings.jwt_secret
 SESSION_COOKIE_PATH = "/"
-SESSION_COOKIE_SECURE = not _settings.auth_disabled and not _settings.testing
+SESSION_COOKIE_SECURE = tenant_cookie_secure(_settings)
 
 # Refresh token cookie — host-only in secure deployments. In local/test
 # surfaces the legacy name/path remain valid because __Host- cookies require

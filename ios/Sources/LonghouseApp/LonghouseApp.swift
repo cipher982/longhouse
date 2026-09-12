@@ -680,8 +680,12 @@ final class AppState: ObservableObject {
                 HTTPCookieStorage.shared.setCookie(cookie)
             }
             return LocalCredentialSnapshot(
-                hasRefreshCookie: cookies.contains { $0.name == SharedAuthStore.refreshCookieName },
-                hasSessionCookie: cookies.contains { $0.name == SharedAuthStore.sessionCookieName },
+                hasRefreshCookie: cookies.contains {
+                    $0.name == SharedAuthStore.activeRefreshCookieName(for: serverURL)
+                },
+                hasSessionCookie: cookies.contains {
+                    $0.name == SharedAuthStore.activeSessionCookieName(for: serverURL)
+                },
                 hasRuntimeToken: runtimeToken != nil,
                 hasNativeRefreshToken: nativeRefreshToken != nil
             )

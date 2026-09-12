@@ -23,7 +23,35 @@ enum SharedAuthStore {
     static let appGroupIdentifier = "group.ai.longhouse.shared"
     static let sessionCookieName = "__Host-lh_session"
     static let refreshCookieName = "__Host-lh_refresh"
-    static let managedCookieNames: Set<String> = [sessionCookieName, refreshCookieName]
+    static let legacySessionCookieName = "longhouse_session"
+    static let legacyRefreshCookieName = "longhouse_refresh"
+    // Includes both generations so callers can accept a server response while
+    // the URL-aware persistence boundary chooses the correct active pair.
+    static let managedCookieNames: Set<String> = [
+        sessionCookieName,
+        refreshCookieName,
+        legacySessionCookieName,
+        legacyRefreshCookieName,
+    ]
+
+    static func cookieNames(for serverURL: String) -> Set<String> {
+        let secure = URL(string: serverURL)?.scheme?.lowercased() == "https"
+        return secure
+            ? [sessionCookieName, refreshCookieName]
+            : [legacySessionCookieName, legacyRefreshCookieName]
+    }
+
+    static func activeSessionCookieName(for serverURL: String) -> String {
+        cookieNames(for: serverURL).contains(sessionCookieName)
+            ? sessionCookieName
+            : legacySessionCookieName
+    }
+
+    static func activeRefreshCookieName(for serverURL: String) -> String {
+        cookieNames(for: serverURL).contains(refreshCookieName)
+            ? refreshCookieName
+            : legacyRefreshCookieName
+    }
 
     private static let serverURLKey = "longhouse_server_url"
     private static let cookieStoragePrefix = "managed_cookies."
@@ -84,7 +112,7 @@ enum SharedAuthStore {
             )
             return HTTPCookie(properties: properties)
         }.filter { cookie in
-            managedCookieNames.contains(cookie.name)
+            cookieNames(for: serverURL).contains(cookie.name)
                 && domainMatches(cookie.domain, host: host)
                 && !isExpired(cookie)
         }
@@ -214,7 +242,7 @@ enum SharedAuthStore {
 
     static func setManagedCookies(_ cookies: [HTTPCookie], for serverURL: String) {
         let validCookies = cookies.filter { cookie in
-            managedCookieNames.contains(cookie.name)
+            cookieNames(for: serverURL).contains(cookie.name)
                 && domainMatches(cookie.domain, host: normalizedHost(for: serverURL))
                 && !isExpired(cookie)
         }
@@ -246,11 +274,13 @@ enum SharedAuthStore {
     /// that mutates auth cookies (`/api/auth/refresh`, `/api/auth/google`, etc.).
     static func captureCookiesFromSharedStorage(for serverURL: String) {
         guard let host = normalizedHost(for: serverURL) else { return }
+        let activeNames = cookieNames(for: serverURL)
         let cookies = (HTTPCookieStorage.shared.cookies ?? []).filter {
-            managedCookieNames.contains($0.name) && domainMatches($0.domain, host: host)
+            activeNames.contains($0.name) && domainMatches($0.domain, host: host)
         }
         setManagedCookies(cookies, for: serverURL)
-        if let session = cookies.first(where: { $0.name == sessionCookieName }) {
+        let sessionName = activeSessionCookieName(for: serverURL)
+        if let session = cookies.first(where: { $0.name == sessionName }) {
             KeychainHelper.saveAuthToken("\(session.name)=\(session.value)")
         } else {
             KeychainHelper.deleteAuthToken()
@@ -263,7 +293,7 @@ enum SharedAuthStore {
     static func removeSharedCookieStorage(for serverURL: String) {
         guard let host = normalizedHost(for: serverURL) else { return }
         for cookie in HTTPCookieStorage.shared.cookies ?? [] {
-            if managedCookieNames.contains(cookie.name) && domainMatches(cookie.domain, host: host) {
+            if cookieNames(for: serverURL).contains(cookie.name) && domainMatches(cookie.domain, host: host) {
                 HTTPCookieStorage.shared.deleteCookie(cookie)
             }
         }
