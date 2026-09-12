@@ -327,14 +327,17 @@ mod tests {
         let mut providers = Vec::new();
         let mut watcher = SessionWatcher::new(&providers, &[]).unwrap();
         std::fs::create_dir_all(&root).unwrap();
-        watcher.refresh_provider_roots(
+        assert!(watcher.refresh_provider_roots(
             &mut providers,
             &mut vec![ProviderConfig {
                 name: "codex",
                 root: root.clone(),
                 extension: "jsonl",
             }],
-        );
+        ));
+        // Allow the asynchronous FSEvents loop to start before the first write.
+        #[cfg(target_os = "macos")]
+        std::thread::sleep(std::time::Duration::from_millis(250));
         let path = root.join("new-session.jsonl");
         // Native backends can coalesce initial creation until a later write.
         // Exercise a live source; the oracle is still a real OS notification.
