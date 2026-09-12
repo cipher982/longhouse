@@ -44,6 +44,7 @@ from zerg.qa.live_session_toolkit import retire_qualification_session
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.provider_console_lifecycle import _force_cleanup
 from zerg.qa.provider_console_lifecycle import _terminate_live_qualification_session
+from zerg.qa.provider_console_lifecycle import _turn_identity_ok
 from zerg.qa.provider_console_lifecycle import _wait_served_run_retirement
 from zerg.qa.provider_release_identity import now
 from zerg.qa.resume_assurance import ProducerRegistration
@@ -209,6 +210,7 @@ def _vehicle_dispatch_receipt(
     provider_bin: Path,
     model: str,
     session_id: str,
+    thread_id: str,
     run_id: str,
 ) -> dict[str, object]:
     result = claim.get("result") if isinstance(claim.get("result"), dict) else {}
@@ -223,8 +225,8 @@ def _vehicle_dispatch_receipt(
         encoded_model = model.replace("\\", "\\\\").replace('"', '\\"')
         model_bound = f'model="{encoded_model}"' in argv
     identity_bound = (
-        claim.get("session_id") == session_id
-        and claim.get("run_id") == run_id
+        bool(thread_id)
+        and _turn_identity_ok(claim, provider="codex", session_id=session_id, thread_id=thread_id, run_id=run_id)
         and claim.get("state") == "terminal"
         and isinstance(result, dict)
         and result.get("terminal_state") == "run_completed"
@@ -233,6 +235,7 @@ def _vehicle_dispatch_receipt(
         "status": "pass" if binary_bound and model_bound and identity_bound else "fail",
         "provider": "codex",
         "session_id": session_id,
+        "thread_id": thread_id,
         "run_id": run_id,
         "provider_binary_sha256": _sha256_file(provider_bin),
         "qualification_model": model,
@@ -462,6 +465,7 @@ def main(argv: list[str] | None = None) -> int:
             provider_bin=args.provider_bin,
             model=str(args.model),
             session_id=str(session_id or ""),
+            thread_id=str(report.get("thread_id") or ""),
             run_id=run_id,
         )
         _write_json(root / "vehicle-dispatch-receipt.json", dispatch)

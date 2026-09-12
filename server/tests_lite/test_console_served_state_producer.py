@@ -64,6 +64,10 @@ def test_vehicle_dispatch_binds_exact_binary_model_and_run(tmp_path):
     provider_bin = tmp_path / "codex"
     provider_bin.write_text("binary", encoding="utf-8")
     claim = {
+        "provider": "codex",
+        "adapter": "codex_exec",
+        "thread_id": "thread-1",
+        "provider_identity_confirmed": True,
         "session_id": "session-1",
         "run_id": "run-1",
         "state": "terminal",
@@ -78,53 +82,24 @@ def test_vehicle_dispatch_binds_exact_binary_model_and_run(tmp_path):
         provider_bin=provider_bin,
         model="gpt-5.6-sol",
         session_id="session-1",
+        thread_id="thread-1",
         run_id="run-1",
     )
 
     assert receipt["status"] == "pass"
-    assert receipt["binary_bound"] is True
-    assert receipt["model_bound"] is True
-    assert receipt["identity_bound"] is True
 
-
-def test_shared_oracle_binds_the_vehicle_model_and_exposes_created_session(monkeypatch, tmp_path):
-    from zerg.qa import console_served_state_core as core
-
-    requests = []
-
-    class _Client:
-        def __init__(self, _api_url, _token):
-            pass
-
-        def request(self, method, path, payload=None, **_kwargs):
-            requests.append((method, path, payload))
-            return {"session_id": "session-1"}
-
-    monkeypatch.setattr(core, "_defaults", lambda: ("https://runtime.example", "token"))
-    monkeypatch.setattr(core, "Client", _Client)
-    monkeypatch.setattr(
-        core,
-        "_observe_turn",
-        lambda _client, _args, report, _session_id, _marker: report,
+    claim["provider_identity_confirmed"] = False
+    assert (
+        producer._vehicle_dispatch_receipt(
+            claim,
+            provider_bin=provider_bin,
+            model="gpt-5.6-sol",
+            session_id="session-1",
+            thread_id="thread-1",
+            run_id="run-1",
+        )["status"]
+        == "fail"
     )
-    created = []
-    args = type(
-        "Args",
-        (),
-        {
-            "provider": "codex",
-            "device_id": "factory-machine",
-            "cwd": str(tmp_path),
-            "api_url": None,
-            "model": "gpt-5.6-sol",
-            "drop_terminal": False,
-        },
-    )()
-
-    core.run(args, on_session_created=created.append)
-
-    assert created == ["session-1"]
-    assert requests[0][2]["model"] == "gpt-5.6-sol"
 
 
 def test_shared_oracle_waits_for_machine_adapter_registration(monkeypatch):

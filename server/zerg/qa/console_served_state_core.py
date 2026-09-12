@@ -467,6 +467,7 @@ def run(
     report["session_id"] = session_id
     if on_session_created is not None:
         on_session_created(session_id)
+    report["thread_id"] = str(created.get("thread_id") or "")
 
     if args.drop_terminal:
         report["terminal_dropped"] = True
