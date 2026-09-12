@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
+#[cfg(not(unix))]
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -124,7 +125,7 @@ pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
 #[cfg(unix)]
 pub(crate) fn output_with_timeout(mut command: Command, timeout: Duration) -> Option<Output> {
     use std::io::ErrorKind;
-    use std::os::fd::OwnedFd;
+    use std::os::fd::{AsRawFd, OwnedFd};
     use std::os::unix::net::UnixStream;
     use std::os::unix::process::CommandExt;
 
@@ -182,7 +183,36 @@ pub(crate) fn output_with_timeout(mut command: Command, timeout: Duration) -> Op
             if remaining.is_zero() {
                 return Err(ErrorKind::TimedOut.into());
             }
-            thread::sleep(remaining.min(Duration::from_millis(5)));
+            // Background macOS services coalesce sleep timers. Wait on output
+            // readiness instead of turning a fast child into a timed-out scan.
+            let mut poll_fds: [libc::pollfd; 2] = std::array::from_fn(|index| libc::pollfd {
+                fd: if ended[index] {
+                    -1
+                } else {
+                    streams[index].as_raw_fd()
+                },
+                events: libc::POLLIN,
+                revents: 0,
+            });
+            let wait = if ended == [true, true] {
+                remaining.min(Duration::from_millis(5))
+            } else {
+                remaining
+            };
+            let wait_ms = wait.as_millis().clamp(1, libc::c_int::MAX as u128) as libc::c_int;
+            let polled = unsafe {
+                libc::poll(
+                    poll_fds.as_mut_ptr(),
+                    poll_fds.len() as libc::nfds_t,
+                    wait_ms,
+                )
+            };
+            if polled < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() != ErrorKind::Interrupted {
+                    return Err(error);
+                }
+            }
         }
     })();
     if result.is_err() {
@@ -488,12 +518,35 @@ mod tests {
     #[test]
     fn bounded_command_output_returns_successful_output() {
         let mut command = Command::new("sh");
-        command.args(["-c", "printf ready; printf diagnostic >&2"]);
+        command.args(["-c", "printf '%262144s' ready; printf diagnostic >&2"]);
         let output = output_with_timeout(command, Duration::from_secs(1)).unwrap();
         assert!(output.status.success());
-        assert_eq!(output.stdout, b"ready");
+        assert!(
+            output.stdout == format!("{:>width$}", "ready", width = 262144).as_bytes(),
+            "stdout must survive output backpressure"
+        );
         #[cfg(unix)]
         assert_eq!(output.stderr, b"diagnostic");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bounded_command_output_works_in_a_background_process() {
+        let mut command = Command::new("/usr/sbin/taskpolicy");
+        command
+            .arg("-b")
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "process_identity::tests::bounded_command_output_returns_successful_output",
+            ]);
+        let output = output_with_timeout(command, Duration::from_secs(5)).unwrap();
+        assert!(
+            output.status.success(),
+            "background output capture failed: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
     }
 
     #[test]

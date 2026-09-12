@@ -3935,8 +3935,8 @@ pub fn refresh_existing_status_pulse(
     let (binary_path, binary_mtime) = inspect_current_exe();
     status["daemon_pid"] = serde_json::json!(std::process::id());
     status["last_updated"] = serde_json::json!(now);
-    status["build"] = serde_json::to_value(BuildIdentity::current())
-        .unwrap_or(serde_json::Value::Null);
+    status["build"] =
+        serde_json::to_value(BuildIdentity::current()).unwrap_or(serde_json::Value::Null);
     status["daemon_started_at"] = serde_json::json!(daemon_started_at);
     if let Some(binary_path) = binary_path {
         status["binary_path"] = serde_json::json!(binary_path);
