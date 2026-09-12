@@ -332,14 +332,20 @@ test("removed route auth fallback resolves to timeline", async ({
     });
     await navigation;
   };
+  const waitForExpectedUrl = async (predicate: (url: URL) => boolean) => {
+    // An expected redirect can complete while page.goto is unwinding its
+    // ERR_ABORTED promise. In that case waitForURL only observes future
+    // navigations and would time out despite already being at the right URL.
+    if (predicate(new URL(page.url()))) return;
+    await page.waitForURL(predicate, { timeout: 20_000 });
+  };
 
   try {
     // /loop is a removed route. It must fall through to the supported auth
     // surface rather than starting the retired control-plane handoff.
     await gotoAllowingExpectedAuthRedirect(`${baseOrigin}/loop`);
-    await page.waitForURL(
+    await waitForExpectedUrl(
       (url) => url.pathname === "/login" || url.pathname === "/auth/start",
-      { timeout: 20_000 },
     );
     expect(new URL(page.url()).pathname).not.toBe("/loop");
 
@@ -347,9 +353,7 @@ test("removed route auth fallback resolves to timeline", async ({
     const state = buildRuntimeTokenStorageState(baseOrigin, runtimeToken);
     await context.addCookies(state.cookies);
     await gotoAllowingExpectedAuthRedirect(`${baseOrigin}/loop`);
-    await page.waitForURL((url) => url.pathname === "/timeline", {
-      timeout: 20_000,
-    });
+    await waitForExpectedUrl((url) => url.pathname === "/timeline");
 
     const finalPath = new URL(page.url()).pathname;
     expect(
