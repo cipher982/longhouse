@@ -899,6 +899,57 @@ def _reconcile_opencode_process_loss(
     return receipt
 
 
+def _terminate_cursor_owner(
+    args: argparse.Namespace,
+    state: Mapping[str, Any],
+    environment: Mapping[str, str],
+) -> dict[str, Any]:
+    """Use Cursor's supported terminate path before forced process cleanup.
+
+    Killing the PTY group first leaves the launcher's Unix socket behind because
+    the launcher's normal drop cleanup cannot run after SIGKILL.  Keep this
+    operation best-effort so the original provider failure remains authoritative;
+    ``cleanup_processes`` still proves the final process and endpoint state.
+    """
+
+    session_id = str(state.get("session_id") or "").strip()
+    receipt: dict[str, Any] = {
+        "method": "cursor_helm_supported_terminate",
+        "session_id": session_id or None,
+        "provider_session_id": state.get("provider_session_id"),
+        "run_id": state.get("run_id"),
+        "status": "fail",
+    }
+    if not session_id:
+        receipt["failure_code"] = "cursor_session_identity_missing"
+        return receipt
+
+    command = [str(args.engine), "cursor-helm", "stop", "--session-id", session_id]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=args.repo_root,
+            env=dict(environment),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - preserve the original provider failure
+        receipt["error"] = f"{type(exc).__name__}: {exc}"
+        return receipt
+
+    receipt.update(
+        {
+            "returncode": completed.returncode,
+            "stdout": completed.stdout[-2000:],
+            "stderr": completed.stderr[-2000:],
+            "status": "pass" if completed.returncode == 0 else "fail",
+        }
+    )
+    return receipt
+
+
 def _isolated_qualification_environment(source: Mapping[str, str] | None = None) -> dict[str, str]:
     environment = dict(os.environ if source is None else source)
     for key in tuple(environment):
@@ -946,6 +997,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
     states: list[dict[str, Any]] = []
     final_cleanup: dict[str, Any] = {"verified": False}
     result_payload: dict[str, Any] | None = None
+    initial_state: dict[str, Any] = {}
+    failure_termination: dict[str, Any] | None = None
     provider_cwd = args.repo_root
     try:
         home = live_session_toolkit.isolated_provider_home()
@@ -1527,6 +1580,11 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 )
         except (OSError, TypeError):
             pass
+        failure_identity = states[-1] if states else initial_state
+        if spec.provider == "cursor" and failure_identity:
+            # Terminate while the exact launcher owner can still run its normal
+            # socket/state cleanup; forced process cleanup is the fallback.
+            failure_termination = _terminate_cursor_owner(args, failure_identity, environment)
         try:
             final_cleanup = live_session_toolkit.cleanup_processes(spec, (initial, resumed, concurrent), states)
         except Exception as cleanup_exc:  # noqa: BLE001 - preserve the provider failure
@@ -1534,6 +1592,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 "verified": False,
                 "teardown_error": f"{type(cleanup_exc).__name__}: {cleanup_exc}",
             }
+        if failure_termination is not None:
+            final_cleanup["cursor_termination"] = failure_termination
         try:
             live_session_toolkit.write_json(root / "cleanup-receipt.json", final_cleanup)
         except OSError:
@@ -1574,6 +1634,15 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
             "redacted_secret_files": redacted,
             "artifact_manifest": artifact_manifest(root),
         }
+        if failure_identity:
+            failure.update(
+                {
+                    "session_id": failure_identity.get("session_id"),
+                    "provider_thread_id": failure_identity.get("provider_session_id"),
+                    "run_id": failure_identity.get("run_id"),
+                    "initial_run_id": states[0].get("run_id") if states else failure_identity.get("run_id"),
+                }
+            )
         result_payload = failure
         live_session_toolkit.write_json(root / "result.json", failure)
         return failure
@@ -1594,6 +1663,8 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                     "teardown_error": f"{type(cleanup_exc).__name__}: {cleanup_exc}",
                 }
                 finalization_errors.append(f"final cleanup: {type(cleanup_exc).__name__}: {cleanup_exc}")
+            if failure_termination is not None:
+                final_cleanup["cursor_termination"] = failure_termination
             try:
                 live_session_toolkit.write_json(root / "cleanup-receipt.json", final_cleanup)
             except OSError as exc:
