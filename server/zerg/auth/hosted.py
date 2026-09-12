@@ -17,11 +17,14 @@ from zerg.config import normalize_instance_id
 
 logger = logging.getLogger(__name__)
 
-# A login attempt is an independent host-only cookie. Shared mutable cookie
-# lists lose transactions when two tabs start or finish out of order.
+# The per-attempt secret is a CSRF binding and must expire with the OAuth
+# transaction. The generation marker is non-sensitive and survives longer so
+# a dashboard-originated handoff can still be associated with the latest
+# explicit login/logout action.
+TENANT_LOGIN_STATE_MAX_AGE = 10 * 60
+TENANT_LOGIN_ATTEMPT_MAX_AGE = 30 * 24 * 60 * 60
 TENANT_LOGIN_COOKIE_PREFIX = "__Host-lh_login_"
 TENANT_HANDOFF_ATTEMPT_COOKIE = "__Host-lh_handoff_attempt"
-TENANT_LOGIN_ATTEMPT_MAX_AGE = 600
 MAX_TENANT_LOGIN_ATTEMPTS = 4
 # Current control-plane state is URL-safe ``[A-Za-z0-9_-]``. Legacy releases
 # used ``.`` between the fixed-width attempt id and secret; retain that

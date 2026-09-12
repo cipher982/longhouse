@@ -16,7 +16,10 @@ from jwt.algorithms import RSAAlgorithm
 from zerg.config import get_settings
 
 JWKS_CACHE_TTL_SECONDS = 300
-JWKS_STALE_IF_ERROR_SECONDS = 24 * 60 * 60
+# Runtime access tokens live for ten minutes. Stale JWKS beyond one token
+# lifetime plus skew makes key rotation fail closed while still tolerating a
+# short control-plane outage.
+JWKS_STALE_IF_ERROR_SECONDS = 15 * 60
 JWKS_CACHE_MAX_ENTRIES = 8
 JWKS_UNKNOWN_KID_BACKOFF_SECONDS = 5
 JWKS_UNKNOWN_KID_MAX_ENTRIES = 256

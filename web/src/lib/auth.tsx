@@ -34,11 +34,11 @@ interface User {
   prefs?: Record<string, unknown> | null;
   role?: string; // ADMIN or USER
 }
-
 interface TokenData {
   access_token: string;
   expires_in: number;
 }
+
 
 interface AuthContextType {
   user: User | null;
@@ -47,6 +47,7 @@ interface AuthContextType {
   authUnavailable: boolean;
   authRetryCount: number;
   login: (idToken: string) => Promise<TokenData>;
+  loginPassword: (password: string) => Promise<TokenData>;
   logout: (everywhere?: boolean) => Promise<boolean>;
   refreshAuth: () => Promise<void>;
 }
@@ -93,10 +94,58 @@ class HttpError extends Error {
     this.status = status;
   }
 }
+const AUTH_REQUEST_TIMEOUT_MS = 15_000;
+
+async function fetchAuth(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), AUTH_REQUEST_TIMEOUT_MS);
+  let onAbort: (() => void) | undefined;
+  if (init.signal) {
+    onAbort = () => controller.abort();
+    if (init.signal.aborted) controller.abort();
+    else init.signal.addEventListener('abort', onAbort, { once: true });
+  }
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new HttpError('Authentication service temporarily unavailable', 503);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    if (onAbort && init.signal) init.signal.removeEventListener('abort', onAbort);
+  }
+}
+async function withAuthBodyDeadline<T>(operation: () => Promise<T>): Promise<T> {
+  let timeout: number | undefined;
+  try {
+    return await Promise.race([
+      operation(),
+      new Promise<T>((_, reject) => {
+        timeout = window.setTimeout(
+          () => reject(new HttpError('Authentication service temporarily unavailable', 503)),
+          AUTH_REQUEST_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function readAuthJson<T>(response: Response): Promise<T> {
+  return withAuthBodyDeadline(() => response.json() as Promise<T>);
+}
+
+function readAuthText(response: Response): Promise<string> {
+  return withAuthBodyDeadline(() => response.text());
+}
+
 
 // API functions - all use credentials: 'include' for cookie auth
 async function loginWithGoogle(idToken: string): Promise<{ access_token: string; expires_in: number }> {
-  const response = await fetch(`${config.apiBaseUrl}/auth/google`, {
+  const response = await fetchAuth(`${config.apiBaseUrl}/auth/google`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -107,11 +156,28 @@ async function loginWithGoogle(idToken: string): Promise<{ access_token: string;
   });
 
   if (!response.ok) {
-    const error = await response.text();
+    const error = await readAuthText(response);
     throw new HttpError(error || 'Login failed', response.status);
   }
 
-  return response.json();
+  return readAuthJson<{ access_token: string; expires_in: number }>(response);
+}
+
+async function loginWithPassword(password: string): Promise<{ access_token: string; expires_in: number }> {
+  const response = await fetchAuth(`${config.apiBaseUrl}/auth/password`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Longhouse-Auth': '1',
+    },
+    credentials: 'include',
+    body: JSON.stringify({ password }),
+  });
+  if (!response.ok) {
+    const error = await readAuthText(response);
+    throw new HttpError(error || 'Login failed', response.status);
+  }
+  return readAuthJson<{ access_token: string; expires_in: number }>(response);
 }
 
 type AuthStatusResponse = {
@@ -144,7 +210,7 @@ async function getCurrentUser(): Promise<User | null> {
     return null;
   }
 
-  const response = await fetch(`${config.apiBaseUrl}/auth/status`, {
+  const response = await fetchAuth(`${config.apiBaseUrl}/auth/status`, {
     credentials: 'include',
   });
 
@@ -157,7 +223,7 @@ async function getCurrentUser(): Promise<User | null> {
     throw new HttpError(`Failed to get auth status (${response.status})`, response.status);
   }
 
-  const data = (await response.json()) as AuthStatusResponse;
+  const data = await readAuthJson<AuthStatusResponse>(response);
   if (isLogoutBarrierActive() || (typeof window !== 'undefined' && hasLogoutIntent())) {
     return null;
   }
@@ -180,7 +246,7 @@ async function getCurrentUser(): Promise<User | null> {
     return null;
   }
 
-  const retryResponse = await fetch(`${config.apiBaseUrl}/auth/status`, {
+  const retryResponse = await fetchAuth(`${config.apiBaseUrl}/auth/status`, {
     credentials: 'include',
   });
   if (isLogoutBarrierActive() || (typeof window !== 'undefined' && hasLogoutIntent())) {
@@ -189,17 +255,16 @@ async function getCurrentUser(): Promise<User | null> {
   if (!retryResponse.ok) {
     throw new HttpError(`Failed to get auth status (${retryResponse.status})`, retryResponse.status);
   }
-  const retryData = (await retryResponse.json()) as AuthStatusResponse;
+  const retryData = await readAuthJson<AuthStatusResponse>(retryResponse);
   if (isLogoutBarrierActive() || (typeof window !== 'undefined' && hasLogoutIntent())) {
     return null;
   }
   return retryData.authenticated ? retryData.user : null;
 }
-
 async function logoutFromServer(everywhere = false): Promise<boolean> {
   try {
     const suffix = everywhere ? '?everywhere=1' : '';
-    const response = await fetch(`${config.apiBaseUrl}/auth/logout${suffix}`, {
+    const response = await fetchAuth(`${config.apiBaseUrl}/auth/logout${suffix}`, {
       method: 'POST',
       credentials: 'include', // Required to clear the cookie
       headers: { 'X-Longhouse-Auth': '1' },
@@ -229,6 +294,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       authUnavailable: false,
       authRetryCount: 0,
       login: async () => ({ access_token: '', expires_in: 0 }),
+      loginPassword: async () => ({ access_token: '', expires_in: 0 }),
       logout: async () => true,
       refreshAuth: async () => {},
     };
@@ -254,6 +320,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       authUnavailable: false,
       authRetryCount: 0,
       login: async () => ({ access_token: '', expires_in: 0 }),
+      loginPassword: async () => ({ access_token: '', expires_in: 0 }),
       logout: async () => true,
       refreshAuth: async () => {},
     };
@@ -348,8 +415,22 @@ function AuthProviderInner({ children }: AuthProviderProps) {
       toast.error(`Login failed: ${error.message}`);
     },
   });
+  const passwordLoginMutation = useMutation({
+    mutationFn: loginWithPassword,
+    onSuccess: async () => {
+      clearLogoutBarrier();
+      clearLogoutIntent();
+      await refetch();
+    },
+    onError: (error: Error) => {
+      toast.error(`Login failed: ${error.message}`);
+    },
+  });
   const login = async (idToken: string): Promise<TokenData> => {
     return loginMutation.mutateAsync(idToken);
+  };
+  const loginPassword = async (password: string): Promise<TokenData> => {
+    return passwordLoginMutation.mutateAsync(password);
   };
   const logout = async (everywhere = false): Promise<boolean> => {
     // Fence every tab before contacting the authority. Otherwise a refresh
@@ -386,6 +467,7 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     authUnavailable: isServiceUnavailable(authError),
     authRetryCount,
     login,
+    loginPassword,
     logout,
     refreshAuth,
   };
@@ -484,13 +566,13 @@ export function useAuthMethods() {
 // falling back to local methods can strand hosted users on a login spinner or
 // send them down a disabled path.
 async function getAuthMethods(): Promise<AuthMethods> {
-  const response = await fetch(`${config.apiBaseUrl}/auth/methods`, {
+  const response = await fetchAuth(`${config.apiBaseUrl}/auth/methods`, {
     credentials: 'include',
   });
   if (!response.ok) {
     throw new HttpError(`Failed to discover authentication methods (${response.status})`, response.status);
   }
-  return response.json();
+  return readAuthJson<AuthMethods>(response);
 }
 
 // Auth guard component — redirects unauthenticated users to /login

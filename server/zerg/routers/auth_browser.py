@@ -35,6 +35,7 @@ from zerg.auth.catalog_gateway import rotate_refresh
 from zerg.auth.client_ip import get_client_ip
 from zerg.auth.hosted import MAX_TENANT_LOGIN_ATTEMPTS
 from zerg.auth.hosted import TENANT_LOGIN_ATTEMPT_MAX_AGE
+from zerg.auth.hosted import TENANT_LOGIN_STATE_MAX_AGE
 from zerg.auth.hosted import hosted_cookie_origin_is_secure
 from zerg.auth.hosted import hosted_instance_id
 from zerg.auth.hosted import is_tenant_login_cookie_name
@@ -56,6 +57,7 @@ from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.dependencies.browser_auth import get_optional_browser_user
 from zerg.dependencies.form_post_origin import reject_cross_origin_form_post
 from zerg.dependencies.form_post_origin import require_browser_auth_header
+from zerg.routers.auth_sso import _enforce_handoff_rate_limit
 from zerg.routers.auth_sso import _hosted_refresh_cookie_max_age
 from zerg.routers.auth_sso import _refresh_native_session_payload
 from zerg.routers.auth_sso import _revoke_native_session_payload
@@ -569,10 +571,15 @@ async def refresh_session(request: Request, response: Response) -> RefreshOut | 
             )
         except HTTPException as exc:
             detail = exc.detail if isinstance(exc.detail, dict) else {}
-            if exc.status_code in {
-                status.HTTP_502_BAD_GATEWAY,
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-            } or detail.get("code") in {"cp_unavailable", "tenant_internal_auth_failed"}:
+            if detail.get("code") == "cp_contract_invalid":
+                # A malformed CP response is an authority/contract incident,
+                # not proof that the browser refresh family expired. Preserve
+                # cookies so the user can retry after the control plane recovers.
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail={"code": "cp_contract_invalid"},
+                ) from exc
+            if detail.get("code") in {"cp_unavailable", "tenant_internal_auth_failed"} or exc.status_code >= 500:
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail={"code": "cp_unavailable"},
@@ -878,10 +885,28 @@ def start_handoff(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Tenant does not match this runtime",
         )
+    safe_return_to = normalize_local_return_to(return_to) or "/timeline"
+    try:
+        _enforce_handoff_rate_limit(
+            tenant=canonical_tenant,
+            surface="web",
+            attempt_id=None,
+            client_ip=get_client_ip(request),
+        )
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_429_TOO_MANY_REQUESTS:
+            raise
+        retry_after = (exc.headers or {}).get("Retry-After")
+        query = urllib.parse.urlencode({"return_to": safe_return_to, "auth_error": "rate_limited"})
+        redirect = RedirectResponse(f"/login?{query}", status_code=303)
+        redirect.headers["cache-control"] = "no-store"
+        redirect.headers["referrer-policy"] = "no-referrer"
+        if retry_after:
+            redirect.headers["retry-after"] = retry_after
+        return redirect
     resolved_tenant = canonical_tenant
     tenant_state, login_cookie_name, login_cookie_secret = new_tenant_login_state(secure=cookie_secure)
     existing_login_cookies = sorted(name for name in request.cookies if is_tenant_login_cookie_name(name, secure=cookie_secure))
-    safe_return_to = normalize_local_return_to(return_to) or "/timeline"
 
     cp_base = control_plane_url.rstrip("/")
     target = f"{cp_base}/auth/start"
@@ -905,7 +930,7 @@ def start_handoff(
     redirect.set_cookie(
         login_cookie_name,
         login_cookie_secret,
-        max_age=TENANT_LOGIN_ATTEMPT_MAX_AGE,
+        max_age=TENANT_LOGIN_STATE_MAX_AGE,
         path="/",
         httponly=True,
         secure=cookie_secure,

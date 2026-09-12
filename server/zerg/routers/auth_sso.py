@@ -6,6 +6,7 @@ import hmac
 import logging
 import time
 import urllib.parse
+import uuid
 from collections import OrderedDict
 from collections import deque
 from datetime import datetime
@@ -47,6 +48,8 @@ logger = logging.getLogger(__name__)
 
 _HANDOFF_RATE_WINDOW_SECONDS = 60
 _HANDOFF_RATE_MAX_ATTEMPTS = 20
+_WEB_HANDOFF_IP_MAX_ATTEMPTS = 60
+_WEB_HANDOFF_TENANT_MAX_ATTEMPTS = 600
 _NATIVE_HANDOFF_IP_MAX_ATTEMPTS = 60
 _NATIVE_HANDOFF_TENANT_MAX_ATTEMPTS = 300
 _NATIVE_REFRESH_IP_MAX_ATTEMPTS = 120
@@ -79,7 +82,15 @@ def _enforce_handoff_rate_limit(
     checks: list[tuple[str, int]] = []
     if attempt_id:
         checks.append((f"{surface}:{tenant}:{_rate_limit_digest(attempt_id)}", _HANDOFF_RATE_MAX_ATTEMPTS))
-    if surface == "native":
+    if surface == "web":
+        ip_key = (client_ip or "unknown").strip() or "unknown"
+        checks.extend(
+            [
+                (f"web-ip:{tenant}:{_rate_limit_digest(ip_key)}", _WEB_HANDOFF_IP_MAX_ATTEMPTS),
+                (f"web-tenant:{tenant}", _WEB_HANDOFF_TENANT_MAX_ATTEMPTS),
+            ]
+        )
+    elif surface == "native":
         ip_key = (client_ip or "unknown").strip() or "unknown"
         checks.extend(
             [
@@ -124,10 +135,9 @@ def _enforce_handoff_rate_limit(
 def _hosted_refresh_cookie_max_age(payload: dict) -> int:
     raw_expiry = payload.get("refresh_token_expires_at")
     if not isinstance(raw_expiry, str) or not raw_expiry:
-        logger.error("control_plane_refresh_expiry_missing")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"code": "cp_unavailable", "message": "Control plane returned no refresh expiry"},
+            detail={"code": "cp_contract_invalid", "message": "Control plane returned no refresh expiry."},
         )
     try:
         expires_at = datetime.fromisoformat(raw_expiry)
@@ -135,7 +145,7 @@ def _hosted_refresh_cookie_max_age(payload: dict) -> int:
         logger.error("control_plane_refresh_expiry_invalid")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"code": "cp_unavailable", "message": "Control plane returned an invalid refresh expiry"},
+            detail={"code": "cp_contract_invalid", "message": "Control plane returned an invalid refresh expiry."},
         ) from exc
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
@@ -144,7 +154,7 @@ def _hosted_refresh_cookie_max_age(payload: dict) -> int:
         logger.error("control_plane_refresh_expiry_elapsed")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"code": "cp_unavailable", "message": "Control plane returned an elapsed refresh expiry"},
+            detail={"code": "cp_contract_invalid", "message": "Control plane returned an elapsed refresh expiry."},
         )
     if remaining > _HOSTED_REFRESH_COOKIE_MAX_AGE:
         logger.warning("control_plane_refresh_expiry_clamped")
@@ -170,67 +180,43 @@ class NativeRevokeRequest(BaseModel):
 
 
 def _runtime_payload(data: dict) -> dict:
-    if not isinstance(data, dict):
-        raise HTTPException(
+    def contract_error(message: str) -> HTTPException:
+        return HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Control plane response was not a JSON object",
+            detail={"code": "cp_contract_invalid", "message": message},
         )
+
+    if not isinstance(data, dict):
+        raise contract_error("Control plane response was not a JSON object")
     raw_expires_in = data.get("expires_in")
     if isinstance(raw_expires_in, bool) or raw_expires_in is None:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Control plane response missing expiry",
-        )
+        raise contract_error("Control plane response missing expiry")
     try:
         expires_in = int(raw_expires_in)
     except (TypeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Control plane response has an invalid expiry",
-        ) from exc
+        raise contract_error("Control plane response has an invalid expiry") from exc
     if expires_in <= 0:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Control plane response has an invalid expiry",
-        )
+        raise contract_error("Control plane response has an invalid expiry")
     runtime_token = data.get("runtime_token")
     if not isinstance(runtime_token, str) or not runtime_token or len(runtime_token) > 16_384:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Control plane response missing token",
-        )
+        raise contract_error("Control plane response missing token")
     refresh_token = data.get("refresh_token")
     if not isinstance(refresh_token, str) or not refresh_token or len(refresh_token) > _MAX_NATIVE_REFRESH_TOKEN_LENGTH:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Control plane response missing refresh token",
-        )
+        raise contract_error("Control plane response missing refresh token")
     refresh_expires_at = data.get("refresh_token_expires_at")
     if not isinstance(refresh_expires_at, str) or not refresh_expires_at or len(refresh_expires_at) > 128:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Control plane response missing refresh expiry",
-        )
+        raise contract_error("Control plane response missing refresh expiry")
     try:
         parsed_refresh_expiry = datetime.fromisoformat(refresh_expires_at)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Control plane response has an invalid refresh expiry",
-        ) from exc
+        raise contract_error("Control plane response has an invalid refresh expiry") from exc
     if parsed_refresh_expiry.tzinfo is None:
         parsed_refresh_expiry = parsed_refresh_expiry.replace(tzinfo=timezone.utc)
     if parsed_refresh_expiry <= datetime.now(timezone.utc):
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Control plane response has an elapsed refresh expiry",
-        )
+        raise contract_error("Control plane response has an elapsed refresh expiry")
     token_type = data.get("token_type", "bearer")
     if not isinstance(token_type, str) or token_type.lower() != "bearer":
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Control plane response has an invalid token type",
-        )
+        raise contract_error("Control plane response has an invalid token type")
     payload = {
         "runtime_token": runtime_token,
         "expires_in": expires_in,
@@ -256,20 +242,20 @@ def _validate_runtime_payload(payload: dict, *, audience: str) -> dict:
     except CPTokenError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Control plane returned an invalid runtime token",
+            detail={"code": "cp_contract_invalid", "message": "Control plane returned an invalid runtime token."},
         ) from exc
 
     expected_session_id = payload.get("device_session_id")
     if expected_session_id is not None and expected_session_id != claims.device_session_id:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Control plane runtime session binding changed",
+            detail={"code": "cp_contract_invalid", "message": "Control plane runtime session binding changed."},
         )
     remaining = claims.expires_at - int(time.time())
     if remaining <= 0 or payload["expires_in"] <= 0:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Control plane returned an expired runtime token",
+            detail={"code": "cp_contract_invalid", "message": "Control plane returned an expired runtime token."},
         )
     # ``expires_in`` was calculated before the CP response crossed the
     # network. Transport and JWKS verification can consume seconds, so the
@@ -281,18 +267,18 @@ def _validate_runtime_payload(payload: dict, *, audience: str) -> dict:
 
 
 def _json_object(response: httpx.Response) -> dict:
+    def contract_error(message: str) -> HTTPException:
+        return HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"code": "cp_contract_invalid", "message": message},
+        )
+
     try:
         data = response.json()
     except (TypeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Control plane response was not valid JSON",
-        ) from exc
+        raise contract_error("Control plane response was not valid JSON") from exc
     if not isinstance(data, dict):
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Control plane response was not a JSON object",
-        )
+        raise contract_error("Control plane response was not a JSON object")
     return data
 
 
@@ -322,6 +308,7 @@ def _exchange_handoff_code(
     tenant_state: str | None = None,
     code_verifier: str | None = None,
     client: str | None = None,
+    transaction_id: str | None = None,
 ) -> dict:
     if not code or len(code) > 256 or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for char in code):
         raise HTTPException(status_code=400, detail="Invalid handoff code")
@@ -333,9 +320,12 @@ def _exchange_handoff_code(
     if client:
         payload["client"] = client
     try:
+        headers = {"X-Internal-Token": internal_api_secret}
+        if transaction_id:
+            headers["X-Longhouse-Auth-Transaction"] = transaction_id
         exchange = httpx.post(
             f"{control_plane_url.rstrip('/')}/api/identity/exchange-handoff",
-            headers={"X-Internal-Token": internal_api_secret},
+            headers=headers,
             json=payload,
             timeout=10.0,
         )
@@ -357,24 +347,51 @@ def _exchange_handoff_code(
     return _validate_runtime_payload(payload, audience=tenant)
 
 
-def _refresh_native_session_payload(*, settings, refresh_token: str) -> dict:
+def _is_transient_handoff_error(exc: HTTPException) -> bool:
+    detail = exc.detail if isinstance(exc.detail, dict) else {}
+    return exc.status_code in {502, 503} or detail.get("code") in {
+        "cp_unavailable",
+        "cp_contract_invalid",
+        "tenant_internal_auth_failed",
+    }
+
+
+async def _exchange_handoff_with_retry(**kwargs) -> dict:
+    """Retry one replay-safe exchange when the CP response was unavailable."""
+    for attempt in range(2):
+        try:
+            return await asyncio.to_thread(_exchange_handoff_code, **kwargs)
+        except HTTPException as exc:
+            if attempt == 0 and _is_transient_handoff_error(exc):
+                await asyncio.sleep(0.05)
+                continue
+            raise
+    raise RuntimeError("handoff exchange retry loop exhausted")
+
+
+def _refresh_native_session_payload(*, settings, refresh_token: str, transaction_id: str | None = None) -> dict:
     control_plane_url = getattr(settings, "control_plane_url", None)
     if not control_plane_url:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Hosted native session refresh is not configured",
         )
+    transaction_id = transaction_id or uuid.uuid4().hex
     try:
+        headers = {
+            "X-Internal-Token": settings.internal_api_secret,
+            "X-Longhouse-Auth-Transaction": transaction_id,
+        }
         exchange = httpx.post(
             f"{control_plane_url.rstrip('/')}/api/identity/refresh-native-session",
-            headers={"X-Internal-Token": settings.internal_api_secret},
+            headers=headers,
             json={"refresh_token": refresh_token, "tenant": hosted_instance_id()},
             timeout=10.0,
         )
     except httpx.HTTPError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Control plane native session refresh failed",
+            detail={"code": "cp_unavailable", "message": "Control plane native session refresh failed."},
         ) from exc
     if exchange.status_code >= 400:
         _raise_control_plane_error(exchange, default="Control plane rejected native refresh")
@@ -390,6 +407,7 @@ def _revoke_native_session_payload(
     revoke_authority: bool = False,
     orphan_cleanup: bool = False,
     strict: bool = True,
+    transaction_id: str | None = None,
 ) -> bool:
     control_plane_url = getattr(settings, "control_plane_url", None)
     if not control_plane_url or not refresh_token:
@@ -399,6 +417,7 @@ def _revoke_native_session_payload(
                 detail={"code": "cp_unavailable"},
             )
         return False
+    transaction_id = transaction_id or uuid.uuid4().hex
     payload = {"tenant": hosted_instance_id(), "refresh_token": refresh_token}
     if orphan_cleanup:
         payload["orphan_cleanup"] = True
@@ -407,7 +426,10 @@ def _revoke_native_session_payload(
     try:
         response = httpx.post(
             f"{control_plane_url.rstrip('/')}/api/identity/revoke-native-session",
-            headers={"X-Internal-Token": settings.internal_api_secret},
+            headers={
+                "X-Internal-Token": settings.internal_api_secret,
+                "X-Longhouse-Auth-Transaction": transaction_id,
+            },
             json=payload,
             timeout=5.0,
         )
@@ -423,7 +445,7 @@ def _revoke_native_session_payload(
     if response.status_code != status.HTTP_200_OK:
         logger.warning(
             "control_plane_native_session_revoke_rejected",
-            extra={"status_code": response.status_code},
+            extra={"status_code": response.status_code, "auth_transaction_id": transaction_id},
         )
         if strict and response.status_code == status.HTTP_409_CONFLICT:
             try:
@@ -477,6 +499,7 @@ def _handoff_failure_redirect(
     error: str,
     clear_login_state: bool = False,
     tenant_state: str | None = None,
+    retry_after: str | None = None,
 ) -> RedirectResponse:
     safe_return_to = normalize_local_return_to(return_to) or "/timeline"
     redirect = RedirectResponse(
@@ -486,6 +509,8 @@ def _handoff_failure_redirect(
     redirect.headers["cache-control"] = "no-store"
     redirect.headers["content-security-policy"] = "default-src 'none'; frame-ancestors 'none'"
     redirect.headers["referrer-policy"] = "no-referrer"
+    if retry_after:
+        redirect.headers["retry-after"] = retry_after
     cookie_secure = tenant_cookie_secure(settings)
     if clear_login_state:
         cookie_name = tenant_login_cookie_name(tenant_state, secure=cookie_secure)
@@ -520,6 +545,11 @@ async def accept_handoff_request(
     control_plane_url = getattr(settings, "control_plane_url", None)
     if not control_plane_url:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Hosted handoff is not configured")
+    transaction_id = uuid.uuid4().hex
+    logger.info(
+        "tenant_auth_handoff_started",
+        extra={"auth_transaction_id": transaction_id, "surface": "web"},
+    )
     if not code:
         logger.warning("tenant_handoff_code_missing")
         return _handoff_failure_redirect(settings=settings, return_to=return_to, error="handoff_missing")
@@ -579,35 +609,67 @@ async def accept_handoff_request(
         )
 
     tenant = hosted_instance_id()
-    _enforce_handoff_rate_limit(tenant=tenant, surface="web", attempt_id=tenant_state)
     try:
-        payload = await asyncio.to_thread(
-            _exchange_handoff_code,
+        _enforce_handoff_rate_limit(
+            tenant=tenant,
+            surface="web",
+            attempt_id=tenant_state,
+            client_ip=get_client_ip(request),
+        )
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_429_TOO_MANY_REQUESTS:
+            raise
+        return _handoff_failure_redirect(
+            settings=settings,
+            return_to=return_to,
+            error="rate_limited",
+            retry_after=(exc.headers or {}).get("Retry-After"),
+        )
+    payload: dict | None = None
+    exchange_error: HTTPException | None = None
+    try:
+        payload = await _exchange_handoff_with_retry(
             control_plane_url=control_plane_url,
             internal_api_secret=settings.internal_api_secret,
             code=code,
             tenant=tenant,
             tenant_state=tenant_state,
             client="web",
+            transaction_id=transaction_id,
         )
     except HTTPException as exc:
+        exchange_error = exc
+
+    if exchange_error is not None or payload is None:
+        exc = exchange_error or HTTPException(status_code=502, detail={"code": "cp_unavailable"})
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
         if exc.status_code in {404, 410}:
             error = "handoff_expired"
         elif exc.status_code == 403:
             error = "login_state_mismatch"
+        elif detail.get("code") == "cp_contract_invalid":
+            error = "auth_misconfigured"
         elif exc.status_code >= 500:
             error = "cp_unavailable"
         else:
             error = "handoff_failed"
-        logger.warning("tenant_handoff_exchange_failed error=%s status=%s", error, exc.status_code)
+        logger.warning(
+            "tenant_handoff_exchange_failed error=%s status=%s transaction=%s",
+            error,
+            exc.status_code,
+            transaction_id,
+        )
+        preserve_state = error in {"cp_unavailable", "auth_misconfigured"}
         return _handoff_failure_redirect(
             settings=settings,
             return_to=return_to,
             error=error,
-            clear_login_state=True,
+            clear_login_state=not preserve_state,
             tenant_state=tenant_state,
+            retry_after=(exc.headers or {}).get("Retry-After"),
         )
 
+    assert payload is not None
     runtime_token = payload["runtime_token"]
     expires_in = payload["expires_in"]
     refresh_token = payload.get("refresh_token")
@@ -616,20 +678,21 @@ async def accept_handoff_request(
         return _handoff_failure_redirect(
             settings=settings,
             return_to=return_to,
-            error="cp_unavailable",
-            clear_login_state=True,
+            error="auth_misconfigured",
+            clear_login_state=False,
             tenant_state=tenant_state,
         )
 
     try:
         refresh_cookie_max_age = _hosted_refresh_cookie_max_age(payload)
-    except HTTPException:
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
         logger.error("tenant_handoff_exchange_invalid_refresh_expiry")
         return _handoff_failure_redirect(
             settings=settings,
             return_to=return_to,
-            error="cp_unavailable",
-            clear_login_state=True,
+            error="auth_misconfigured" if detail.get("code") == "cp_contract_invalid" else "cp_unavailable",
+            clear_login_state=False,
             tenant_state=tenant_state,
         )
 
@@ -645,11 +708,12 @@ async def accept_handoff_request(
         logger.warning("tenant_handoff_runtime_validation_failed error=%s", validation_error)
     if user is None:
         logger.warning("tenant_handoff_runtime_validation_failed")
+        preserve_state = validation_error == "catalog_unavailable"
         return _handoff_failure_redirect(
             settings=settings,
             return_to=return_to,
             error=validation_error,
-            clear_login_state=True,
+            clear_login_state=not preserve_state,
             tenant_state=tenant_state,
         )
     redirect = RedirectResponse(normalize_local_return_to(return_to) or "/timeline", status_code=303)
@@ -681,6 +745,10 @@ async def accept_handoff_request(
         secure=cookie_secure,
         samesite="lax",
     )
+    logger.info(
+        "tenant_auth_handoff_completed",
+        extra={"auth_transaction_id": transaction_id, "tenant": tenant, "surface": "web"},
+    )
     return redirect
 
 
@@ -693,14 +761,18 @@ async def accept_native_handoff(request: Request, response: Response, body: Nati
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Hosted handoff is not configured")
 
     tenant = hosted_instance_id()
+    transaction_id = uuid.uuid4().hex
+    logger.info(
+        "tenant_auth_handoff_started",
+        extra={"auth_transaction_id": transaction_id, "tenant": tenant, "surface": "native"},
+    )
     _enforce_handoff_rate_limit(
         tenant=tenant,
         surface="native",
         attempt_id=body.tenant_state,
         client_ip=get_client_ip(request),
     )
-    payload = await asyncio.to_thread(
-        _exchange_handoff_code,
+    payload = await _exchange_handoff_with_retry(
         control_plane_url=control_plane_url,
         internal_api_secret=settings.internal_api_secret,
         code=body.code,
@@ -708,21 +780,19 @@ async def accept_native_handoff(request: Request, response: Response, body: Nati
         tenant_state=body.tenant_state,
         code_verifier=body.code_verifier,
         client="ios",
+        transaction_id=transaction_id,
     )
-    try:
-        normalized_payload = _runtime_payload(payload)
-    except HTTPException:
-        refresh_token = payload.get("refresh_token") if isinstance(payload, dict) else None
-        await _best_effort_revoke_native_session(settings, refresh_token)
-        raise
-
+    # `_exchange_handoff_code` verifies this contract in production. Keep the
+    # structural check at the route boundary for defense-in-depth and tests,
+    # but never revoke a newly committed family here: the CP exchange is
+    # idempotently retryable after a response/validation failure.
+    normalized_payload = _runtime_payload(payload)
     runtime_token = normalized_payload["runtime_token"]
     refresh_token = normalized_payload.get("refresh_token")
     if not isinstance(refresh_token, str) or not refresh_token:
-        await _best_effort_revoke_native_session(settings, refresh_token)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Control plane response missing native refresh token",
+            detail={"code": "cp_contract_invalid", "message": "Control plane response missing native refresh token."},
         )
 
     from zerg.dependencies.auth import _get_strategy
@@ -738,6 +808,10 @@ async def accept_native_handoff(request: Request, response: Response, body: Nati
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid runtime token")
 
     _set_no_store(response)
+    logger.info(
+        "tenant_auth_handoff_completed",
+        extra={"auth_transaction_id": transaction_id, "tenant": tenant, "surface": "native"},
+    )
     return normalized_payload
 
 
