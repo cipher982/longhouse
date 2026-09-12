@@ -531,7 +531,7 @@ def test_served_run_inventory_accepts_canonical_ended_terminal_state(monkeypatch
     monkeypatch.setattr(
         lifecycle,
         "_request",
-        lambda *_args: {
+        lambda *_args, **_kwargs: {
             "session_id": "session-1",
             "served_path": "canonical_session_detail",
             "shadow": {
@@ -611,7 +611,7 @@ def test_served_run_inventory_uses_terminal_facts_when_activity_head_is_unknown(
     monkeypatch.setattr(
         lifecycle,
         "_request",
-        lambda *_args: {
+        lambda *_args, **_kwargs: {
             "session_id": "session-1",
             "served_path": "canonical_session_detail",
             "shadow": {
