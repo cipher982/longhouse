@@ -1313,11 +1313,13 @@ def _served_run_terminal_evidence(
     token: str,
     session_id: str,
     run_id: str,
+    *,
+    timeout: float = 30,
 ) -> dict[str, object]:
     """Read canonical terminal facts for one exact served run."""
 
     try:
-        diagnostic = _request(api_url, token, "GET", f"/api/agents/sessions/{session_id}/state-diagnostics")
+        diagnostic = _request(api_url, token, "GET", f"/api/agents/sessions/{session_id}/state-diagnostics", timeout=timeout)
     except Exception as exc:  # noqa: BLE001 - cleanup evidence must fail closed
         return {
             "retired": False,

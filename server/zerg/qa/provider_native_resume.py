@@ -1010,12 +1010,16 @@ def _cursor_shutdown_barrier(
         except Exception as exc:  # noqa: BLE001 - retain an honest barrier failure
             process_group_dead = False
             launcher_wait_error = launcher_wait_error or f"{type(exc).__name__}: {exc}"
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         try:
             terminal_evidence = _served_run_terminal_evidence(
                 args.api_url,
                 args.agents_token,
                 session_id,
                 run_id,
+                timeout=remaining,
             )
         except Exception as exc:  # noqa: BLE001 - a missing served fact is not proof
             terminal_evidence = {
