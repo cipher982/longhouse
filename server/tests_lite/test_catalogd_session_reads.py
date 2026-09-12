@@ -1909,7 +1909,7 @@ def test_maximum_timeline_page_fits_one_protocol_frame(daemon_paths):
                         }
                         for _ in range(4)
                     ],
-                }
+                },
             )
         )
         connection.execute(
