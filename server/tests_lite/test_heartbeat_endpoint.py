@@ -1312,7 +1312,8 @@ def test_heartbeat_only_complete_snapshot_detaches_missing_managed_control(live_
     assert runs[0]["exit_status"] is None
 
 
-def test_repeated_complete_omission_reconciles_late_runtime_observation(live_catalog, live_catalog_client):
+@pytest.mark.parametrize("event_before_omission", [False, True])
+def test_repeated_complete_omission_reconciles_late_runtime_observation(live_catalog, live_catalog_client, event_before_omission):
     session_id = uuid4()
     headers = _headers(live_catalog)
     _seed_open_run(session_id)
@@ -1328,6 +1329,7 @@ def test_repeated_complete_omission_reconciles_late_runtime_observation(live_cat
         "sessions": [],
         "machine_evidence": _managed_snapshot_evidence(complete=True),
     }
+    before_omission = datetime.now(UTC)
     first = live_catalog_client.post("/agents/heartbeat", headers=headers, json=omitted)
     assert first.status_code == 204, first.text
     assert _catalog_rows(LiveSession.__table__)[0]["state"] == "missing"
@@ -1345,7 +1347,7 @@ def test_repeated_complete_omission_reconciles_late_runtime_observation(live_cat
                     "source": "codex_bridge",
                     "kind": "phase_signal",
                     "phase": "running",
-                    "occurred_at": datetime.now(UTC).isoformat(),
+                    "occurred_at": (before_omission if event_before_omission else datetime.now(UTC)).isoformat(),
                     "dedupe_key": "late-runtime-after-omission",
                 }
             ]
@@ -1353,7 +1355,8 @@ def test_repeated_complete_omission_reconciles_late_runtime_observation(live_cat
     )
     assert observed.status_code == 200, observed.text
     assert observed.json()["accepted"] == 1
-    assert _catalog_rows(LiveSession.__table__)[0]["state"] == "observed"
+    expected_state = "missing" if event_before_omission else "observed"
+    assert _catalog_rows(LiveSession.__table__)[0]["state"] == expected_state
 
     omitted["machine_evidence"] = _managed_snapshot_evidence(complete=True)
     second = live_catalog_client.post("/agents/heartbeat", headers=headers, json=omitted)

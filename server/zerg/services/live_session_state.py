@@ -107,6 +107,10 @@ def touch_live_sessions_from_runtime_events(
             )
             db.add(row)
         elif row.state in ("missing", "ended", "unknown"):
+            # Delayed signals cannot overturn a newer lease or omission.
+            state_observed_at = normalize_utc(row.updated_at)
+            if state_observed_at is not None and occurred_at <= state_observed_at:
+                continue
             row.state = "observed"
         if device_id is not None and not row.device_id:
             row.device_id = device_id
