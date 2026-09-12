@@ -2331,21 +2331,31 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         "Immutable storage-v2 retry error"
                     ),
                 }
-                // Copied Cursor bytes are only needed until the host
-                // receipts them; nothing deleted them before, so they grew
-                // to 8.5GB of a 9.7GB local database. Runs after the retry
-                // queueing above so anything still owed a retry is visibly
-                // pending and therefore excluded by the predicate.
-                match crate::state::cursor_store_records::drain_receipted_cursor_records(&conn) {
-                    Ok(0) => {}
-                    Ok(deleted) => tracing::info!(
-                        deleted,
-                        "drained receipted Cursor records from the local store"
-                    ),
-                    Err(error) => tracing::warn!(
-                        error = %error,
-                        "Cursor record drain error"
-                    ),
+                // Copied Cursor bytes are only needed until the host receipts
+                // them; nothing deleted them before, so they grew to 8.5GB of
+                // a 9.7GB local database. Run one bounded batch in the existing
+                // single-flight maintenance worker, after retry queueing above
+                // makes owed envelopes visible to the safety predicate. Never
+                // put this writer on the event-loop connection: even a bounded
+                // batch must not pause live transcript scheduling.
+                if storage_maintenance_tasks.is_empty() {
+                    let db_path = projection_db_path.clone();
+                    storage_maintenance_tasks.spawn_blocking(move || {
+                        let result = crate::state::db::open_connection(&db_path).and_then(|conn| {
+                            crate::state::cursor_store_records::drain_receipted_cursor_records(&conn)
+                        });
+                        match result {
+                            Ok(0) => {}
+                            Ok(drained) => tracing::info!(
+                                drained,
+                                "drained bounded batch of receipted Cursor records"
+                            ),
+                            Err(error) => tracing::warn!(
+                                error = %error,
+                                "Cursor record drain error"
+                            ),
+                        }
+                    });
                 }
                 if queued_retries > 0 {
                     tracing::debug!(
@@ -3585,7 +3595,8 @@ fn maybe_start_unmanaged_binding_refresh(
 
     refresh_tasks.spawn_blocking(move || {
         let started = Instant::now();
-        let result = open_db(db_path.as_deref())
+        let result = crate::state::db::resolve_db_path(db_path.as_deref())
+            .and_then(|path| crate::state::db::open_connection(&path))
             .map_err(|err| err.to_string())
             .and_then(|conn| {
                 unmanaged_bindings::collect_unmanaged_session_bindings_with_process_inventory(

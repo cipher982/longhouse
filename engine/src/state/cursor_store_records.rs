@@ -11,6 +11,12 @@ use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+/// Keep each receipt-backed payload cleanup small enough that it cannot hold
+/// SQLite's writer for the lifetime of the store. The next invocation starts
+/// after rows already cleared, so repeated batches make forward progress.
+pub const CURSOR_DRAIN_BATCH_RECORDS: u64 = 128;
+pub const CURSOR_DRAIN_BATCH_BYTES: u64 = 4 * 1024 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CursorRawRecord {
     pub source_position: u64,
@@ -126,13 +132,21 @@ pub fn oldest_undrained_epoch(
 /// need not be ended: a persistent Cursor source can remain open forever, and
 /// a fully receipted prefix is just as safe to remove while its next position
 /// is preserved by the durable lane cursor.
+///
+/// The cleanup is deliberately a bounded single statement. It selects at most
+/// `CURSOR_DRAIN_BATCH_RECORDS` eligible non-empty rows and at most
+/// `CURSOR_DRAIN_BATCH_BYTES` of payload, while allowing the first row through
+/// when that row alone exceeds the byte bound. The epoch-level safety predicate
+/// is applied before the batch limit, so retained empty rows and ineligible
+/// epochs cannot consume a batch without useful work being done later.
 pub fn drain_receipted_cursor_records(conn: &Connection) -> Result<u64> {
+    let max_records = i64::try_from(CURSOR_DRAIN_BATCH_RECORDS)
+        .context("Cursor drain record limit exceeds SQLite INTEGER")?;
+    let max_bytes = i64::try_from(CURSOR_DRAIN_BATCH_BYTES)
+        .context("Cursor drain byte limit exceeds SQLite INTEGER")?;
     let drained = conn.execute(
-        "UPDATE cursor_store_raw_record
-         SET record_bytes = X''
-         WHERE length(record_bytes) > 0
-           AND source_epoch IN (
-             SELECT epoch.source_epoch
+        "WITH eligible_epochs AS (
+             SELECT epoch.source_epoch, durable.last_position
              FROM source_epoch_registry AS epoch
              JOIN source_epoch_lane_state AS durable
                ON durable.source_epoch = epoch.source_epoch
@@ -146,8 +160,36 @@ pub fn drain_receipted_cursor_records(conn: &Connection) -> Result<u64> {
                    WHERE retained.source_epoch = epoch.source_epoch
                      AND retained.source_position >= durable.last_position
                )
-         )",
-        [],
+         ), eligible AS (
+             SELECT candidate.raw_rowid,
+                    ROW_NUMBER() OVER (
+                        ORDER BY candidate.source_epoch, candidate.source_position
+                    ) AS batch_position,
+                    SUM(candidate.record_bytes_len) OVER (
+                        ORDER BY candidate.source_epoch, candidate.source_position
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                    ) AS cumulative_bytes
+             FROM (
+                 SELECT raw.rowid AS raw_rowid,
+                        raw.source_epoch,
+                        raw.source_position,
+                        length(raw.record_bytes) AS record_bytes_len
+                 FROM cursor_store_raw_record AS raw
+                 JOIN eligible_epochs AS epoch
+                   ON epoch.source_epoch = raw.source_epoch
+                 WHERE length(raw.record_bytes) > 0
+                 ORDER BY raw.source_epoch, raw.source_position
+                 LIMIT ?1
+             ) AS candidate
+         ), batch AS (
+             SELECT raw_rowid
+             FROM eligible
+             WHERE batch_position = 1 OR cumulative_bytes <= ?2
+         )
+         UPDATE cursor_store_raw_record
+            SET record_bytes = X''
+          WHERE rowid IN (SELECT raw_rowid FROM batch)",
+        [max_records, max_bytes],
     )?;
     u64::try_from(drained).context("drained Cursor record count is negative")
 }
@@ -531,6 +573,69 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn drain_batches_make_progress_past_ineligible_epochs_and_empty_rows() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let mut conn = open_db(Some(temp.path())).unwrap();
+
+        // An empty retained row must not consume the bounded candidate batch.
+        // The non-empty tail keeps this epoch ineligible because it is not yet
+        // covered by the durable cursor.
+        let blocked = Uuid::new_v4();
+        seed_epoch(&conn, blocked);
+        append_unseen_cursor_records(
+            &mut conn,
+            blocked,
+            &[b"already-cleared".to_vec(), b"held".to_vec()],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE cursor_store_raw_record
+             SET record_bytes = X''
+             WHERE source_epoch = ?1 AND source_position = 0",
+            [blocked.to_string()],
+        )
+        .unwrap();
+        set_durable_cursor(&conn, blocked, 1);
+
+        let eligible = Uuid::new_v4();
+        seed_epoch(&conn, eligible);
+        let total_records = CURSOR_DRAIN_BATCH_RECORDS as usize + 3;
+        let records = (0..total_records)
+            .map(|index| format!("eligible-{index}").into_bytes())
+            .collect::<Vec<_>>();
+        append_unseen_cursor_records(&mut conn, eligible, &records).unwrap();
+        set_durable_cursor(&conn, eligible, total_records as u64);
+
+        let first = drain_receipted_cursor_records(&conn).unwrap();
+        assert_eq!(first, CURSOR_DRAIN_BATCH_RECORDS);
+
+        let mut drained = first;
+        loop {
+            let next = drain_receipted_cursor_records(&conn).unwrap();
+            if next == 0 {
+                break;
+            }
+            drained += next;
+        }
+        assert_eq!(drained, total_records as u64);
+        assert_eq!(
+            cursor_record_count(&conn, eligible).unwrap(),
+            total_records as u64
+        );
+        assert_eq!(cursor_record_count(&conn, blocked).unwrap(), 2);
+        let blocked_tail: Vec<u8> = conn
+            .query_row(
+                "SELECT record_bytes
+                 FROM cursor_store_raw_record
+                 WHERE source_epoch = ?1 AND source_position = 1",
+                [blocked.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(blocked_tail, b"held");
     }
 
     #[test]

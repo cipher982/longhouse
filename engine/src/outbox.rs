@@ -329,7 +329,9 @@ fn collect_outbox_impl(
 
     let mut result = OutboxLocalDrainResult::default();
     let local_phase_conn = if persist_local_state && !by_session.is_empty() {
-        match crate::state::db::open_db(db_path) {
+        match crate::state::db::resolve_db_path(db_path)
+            .and_then(|path| crate::state::db::open_connection(&path))
+        {
             Ok(conn) => Some(conn),
             Err(err) => {
                 warn!("opening local session phase DB failed: {err}");
@@ -1441,6 +1443,7 @@ mod tests {
     fn test_collect_outbox_persists_managed_transcript_binding_before_post() {
         let dir = tempfile::tempdir().unwrap();
         let db = tempfile::NamedTempFile::new().unwrap();
+        drop(crate::state::db::open_db(Some(db.path())).unwrap());
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let path = dir.path().join("prs.MANAGED.json");
         let payload = serde_json::json!({
@@ -1479,6 +1482,7 @@ mod tests {
     fn test_collect_outbox_persists_antigravity_managed_binding_intent() {
         let dir = tempfile::tempdir().unwrap();
         let db = tempfile::NamedTempFile::new().unwrap();
+        drop(crate::state::db::open_db(Some(db.path())).unwrap());
         let transcript = dir
             .path()
             .join("brain/conversation/.system_generated/logs/transcript_full.jsonl");
@@ -1524,6 +1528,27 @@ mod tests {
         assert!(
             !db_path.exists(),
             "empty outbox ticks should not touch SQLite on the daemon hot loop"
+        );
+    }
+
+    #[test]
+    fn test_collect_outbox_does_not_wait_for_schema_work_behind_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("engine.db");
+        drop(crate::state::db::open_db(Some(&db_path)).unwrap());
+        let writer = crate::state::db::open_connection(&db_path).unwrap();
+        writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+        write_hook_style(dir.path(), "LOCKED", "sess-locked", "thinking");
+
+        let started = std::time::Instant::now();
+        let result = collect_outbox_with_local_state_result(dir.path(), Some(&db_path));
+        let elapsed = started.elapsed();
+
+        writer.execute_batch("ROLLBACK").unwrap();
+        assert_eq!(result.posts.len(), 1);
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "hot outbox collection waited for schema work: {elapsed:?}"
         );
     }
 
