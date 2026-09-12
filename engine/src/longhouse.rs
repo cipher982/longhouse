@@ -2050,23 +2050,42 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         .map(|response| response.require_authority("OpenCode", "opencode_server_bridge"))
         .transpose()?
         .map(str::to_owned);
-    let degraded_registration = match response {
-        Some(_) => None,
-        None => Some(managed_launch_lifecycle::spawn_managed_registration_retry(
+    let mut launch_transaction = response
+        .as_ref()
+        .map(|_| ManagedLaunchTransaction::new(&runtime, &url, &token, &session_id, &run_id));
+    let degraded_launch = response.is_none();
+    // A timed-out registration can still commit after this process has started
+    // the provider. If that provider then fails before readiness, replay the
+    // same client-minted registration synchronously so a late accepted run gets
+    // its exact abort instead of being left pending when this process exits.
+    let abort_degraded_launch = || {
+        if !degraded_launch {
+            return;
+        }
+        match register_managed_launch_with_timeout(
+            &runtime,
             &url,
             &token,
-            "OpenCode",
-            payload.clone(),
-            &session_id,
-            deferred_notices.clone(),
-            longhouse_home()
-                .map(|home| home.join("agent"))
-                .unwrap_or_else(|_| PathBuf::from(".")),
-        )),
+            "OpenCode startup abort",
+            &payload,
+            Some(&session_id),
+            managed_launch_lifecycle::RECOVERY_REGISTRATION_TIMEOUT,
+        ) {
+            Ok(response) => {
+                let transaction = ManagedLaunchTransaction::new(
+                    &runtime,
+                    &url,
+                    &token,
+                    &response.session_id,
+                    &response.run_id,
+                );
+                drop(transaction);
+            }
+            Err(error) => eprintln!(
+                "Longhouse warning: could not settle degraded OpenCode startup failure: {error:#}"
+            ),
+        }
     };
-    let mut launch_transaction = degraded_registration
-        .is_none()
-        .then(|| ManagedLaunchTransaction::new(&runtime, &url, &token, &session_id, &run_id));
     let bridge = paired_engine_path()?;
     let mut start = Command::new(&bridge);
     start
@@ -2112,9 +2131,17 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
     if let Some(model) = &model {
         start.arg("--model").arg(model);
     }
-    let output = start.output().context("start native OpenCode bridge")?;
+    println!("Longhouse OpenCode session: {session_id}");
+    let output = match start.output() {
+        Ok(output) => output,
+        Err(error) => {
+            abort_degraded_launch();
+            return Err(error).context("start native OpenCode bridge");
+        }
+    };
     if !output.status.success() {
         let _ = stop_opencode_bridge(&session_id, args.claude_dir.clone());
+        abort_degraded_launch();
         anyhow::bail!(
             "OpenCode bridge failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
@@ -2126,6 +2153,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         Ok(response) => response,
         Err(error) => {
             let _ = stop_opencode_bridge(&session_id, args.claude_dir.clone());
+            abort_degraded_launch();
             return Err(error);
         }
     };
@@ -2134,8 +2162,23 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         .is_some_and(|target| bridge_response.provider_session_id != target.provider_session_id)
     {
         let _ = stop_opencode_bridge(&session_id, args.claude_dir.clone());
+        abort_degraded_launch();
         anyhow::bail!("OpenCode resumed a different provider session; the new run was stopped");
     }
+    let degraded_registration = match response {
+        Some(_) => None,
+        None => Some(managed_launch_lifecycle::spawn_managed_registration_retry(
+            &url,
+            &token,
+            "OpenCode",
+            payload.clone(),
+            &session_id,
+            deferred_notices.clone(),
+            longhouse_home()
+                .map(|home| home.join("agent"))
+                .unwrap_or_else(|_| PathBuf::from(".")),
+        )),
+    };
     if let Some(transaction) = launch_transaction.as_mut() {
         // The bridge already owns a live provider. Stopping it because the
         // Runtime Host could not record the outcome would destroy a working

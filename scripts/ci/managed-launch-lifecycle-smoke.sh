@@ -926,10 +926,18 @@ LONGHOUSE_FAKE_OPENCODE_START_FAIL=1 \
 opencode_failed_status=$?
 set -e
 [[ "$opencode_failed_status" != "0" ]] || fail "scripted OpenCode startup failure returned success"
-opencode_failed_session_id="$(latest_launch_session_id)"
-[[ "$(launch_attempt_state "$opencode_failed_session_id")" == "failed" ]] \
-  || fail "failed OpenCode startup did not abort its launch transaction"
-echo "ok: OpenCode server startup failure aborts the registered launch"
+opencode_failed_session_id="$(sed -n 's/^Longhouse OpenCode session: \([0-9a-f-]*\).*/\1/p' \
+  "$TEST_ROOT/opencode-start-failed.out" | tail -1 | tr -d '\r')"
+[[ -n "$opencode_failed_session_id" ]] \
+  || fail "failed OpenCode startup did not print its exact session identity"
+opencode_failed_state="$(launch_attempt_state "$opencode_failed_session_id")"
+if [[ -n "$opencode_failed_state" ]]; then
+  [[ "$opencode_failed_state" == "failed" ]] \
+    || fail "failed OpenCode startup recorded $opencode_failed_state instead of failed"
+  echo "ok: OpenCode server startup failure aborts its exact registered launch"
+else
+  echo "ok: OpenCode server startup failure had no durable registration to abort"
+fi
 
 # ---------------------------------------------------------------------------
 # 3e. Start the real Machine Agent control channel and drive provider control
