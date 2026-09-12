@@ -1842,6 +1842,7 @@ mod tests {
         let (addr, _paths, server) = spawn_http_server(204).await;
         let dir = tempfile::tempdir().unwrap();
         let db = tempfile::NamedTempFile::new().unwrap();
+        drop(crate::state::db::open_db(Some(db.path())).unwrap());
 
         write_hook_style(dir.path(), "PHASE1", "sess-phase", "thinking");
         std::thread::sleep(Duration::from_millis(10));
