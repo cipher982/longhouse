@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import multiprocessing
 import os
 from collections.abc import AsyncIterator
@@ -104,8 +105,8 @@ def _worker_ping() -> int:
 
 
 _WORKER_TERMINATION_TIMEOUT_SECONDS = 1.0
-_WORKER_CANCEL_GRACE_SECONDS = 1.0
 _WORKER_CLOSE_TIMEOUT_SECONDS = 3.0
+logger = logging.getLogger(__name__)
 
 
 def _executor_processes(executor: ProcessPoolExecutor) -> tuple[tuple[int, multiprocessing.Process], ...]:
@@ -141,6 +142,16 @@ def _terminate_owned_executor(
     return True
 
 
+def _future_completed_normally(future: asyncio.Future[Any]) -> bool:
+    if not future.done() or future.cancelled():
+        return False
+    try:
+        error = future.exception()
+    except BaseException:
+        return False
+    return not isinstance(error, BrokenProcessPool)
+
+
 class _OwnedProcessPool:
     """Own one executor generation and prove retired children are gone."""
 
@@ -150,6 +161,7 @@ class _OwnedProcessPool:
         self.retired: dict[ProcessPoolExecutor, tuple[tuple[int, multiprocessing.Process], ...]] = {}
         self._replace_lock = asyncio.Lock()
         self._cleanup_tasks: dict[ProcessPoolExecutor, asyncio.Task[bool]] = {}
+        self._deferred_slots: dict[ProcessPoolExecutor, list[asyncio.Semaphore]] = {}
         self._closed = False
 
     def _new_executor(self) -> ProcessPoolExecutor:
@@ -158,31 +170,64 @@ class _OwnedProcessPool:
             mp_context=multiprocessing.get_context("spawn"),
         )
 
+    def defer_slot(self, executor: ProcessPoolExecutor, slots: asyncio.Semaphore) -> None:
+        """Retain child identities and the permit before any cancellable await."""
+
+        if executor not in self.retired:
+            self.retired[executor] = _executor_processes(executor)
+        self._deferred_slots.setdefault(executor, []).append(slots)
+
+    async def _cleanup(
+        self,
+        executor: ProcessPoolExecutor,
+        processes: tuple[tuple[int, multiprocessing.Process], ...],
+    ) -> bool:
+        try:
+            return await asyncio.to_thread(_terminate_owned_executor, executor, processes)
+        except Exception:
+            logger.exception("owned worker cleanup raised; retaining retired generation")
+            return False
+
     async def retire(self, executor: ProcessPoolExecutor) -> bool:
         async with self._replace_lock:
-            if self.executor is executor:
-                if not self._closed:
-                    self.executor = self._new_executor()
-                if executor not in self.retired:
-                    self.retired[executor] = _executor_processes(executor)
-            elif executor not in self.retired:
-                return True
+            if executor not in self.retired:
+                if self.executor is not executor:
+                    return True
+                self.retired[executor] = _executor_processes(executor)
             cleanup = self._cleanup_tasks.get(executor)
-            if cleanup is None:
+            if cleanup is None or cleanup.cancelled() or (cleanup.done() and not cleanup.result()):
                 cleanup = asyncio.create_task(
-                    asyncio.to_thread(_terminate_owned_executor, executor, self.retired[executor]),
+                    self._cleanup(executor, self.retired[executor]),
                     name="terminate-owned-worker-pool",
                 )
                 self._cleanup_tasks[executor] = cleanup
 
-                def forget(completed: asyncio.Task[bool]) -> None:
-                    if self._cleanup_tasks.get(executor) is completed:
-                        self._cleanup_tasks.pop(executor, None)
-                    if not completed.cancelled() and completed.exception() is None and completed.result():
-                        self.retired.pop(executor, None)
+        # Cancellation leaves both the physical work and its permits owned.
+        # The next operation or close finishes this same generation's cleanup.
+        succeeded = await asyncio.shield(cleanup)
+        async with self._replace_lock:
+            if succeeded:
+                if executor in self.retired:
+                    if self.executor is executor and not self._closed:
+                        self.executor = self._new_executor()
+                    self.retired.pop(executor)
+                if self._cleanup_tasks.get(executor) is cleanup:
+                    self._cleanup_tasks.pop(executor)
+                for slots in self._deferred_slots.pop(executor, []):
+                    slots.release()
+            elif self._cleanup_tasks.get(executor) is cleanup:
+                self._cleanup_tasks.pop(executor)
+        if not succeeded:
+            logger.warning("owned worker cleanup did not prove child exit; generation remains unavailable")
+        return succeeded
 
-                cleanup.add_done_callback(forget)
-        return bool(await asyncio.shield(cleanup))
+    async def recover(self) -> bool:
+        async with self._replace_lock:
+            executors = tuple(self.retired)
+        for executor in executors:
+            if not await self.retire(executor):
+                return False
+        return True
 
     async def close(self) -> None:
         self._closed = True
@@ -248,6 +293,24 @@ class RawObjectWorkerPool:
             loop.run_in_executor(self._user_read_pool.executor, _worker_ping),
         )
 
+    async def _retire_broken_executor(
+        self,
+        lane: str,
+        owner: _OwnedProcessPool,
+        executor: ProcessPoolExecutor,
+        slots: asyncio.Semaphore,
+        *,
+        queue_timeout_seconds: float,
+    ) -> None:
+        owner.defer_slot(executor, slots)
+        if not await owner.retire(executor):
+            raise RawObjectWorkerBusy(f"raw {lane} workers are unavailable while child cleanup is pending")
+        try:
+            async with asyncio.timeout(queue_timeout_seconds):
+                await slots.acquire()
+        except TimeoutError as exc:
+            raise RawObjectWorkerBusy(f"raw {lane} worker retry queue is full") from exc
+
     async def seal(
         self,
         spec: RawObjectSpec,
@@ -262,6 +325,9 @@ class RawObjectWorkerPool:
             raise ValueError("raw worker lane must be live or repair")
         if queue_timeout_seconds <= 0 or operation_timeout_seconds <= 0:
             raise ValueError("raw worker deadlines must be positive")
+        owner = self._pool_for_lane(lane)
+        if not await owner.recover():
+            raise RawObjectWorkerBusy(f"raw {lane} workers are unavailable while child cleanup is pending")
         slots = self._live_slots if lane == "live" else self._repair_slots
         try:
             async with asyncio.timeout(queue_timeout_seconds):
@@ -271,6 +337,7 @@ class RawObjectWorkerPool:
         return await self._seal_once_with_recovery(
             spec,
             lane=lane,
+            queue_timeout_seconds=queue_timeout_seconds,
             timeout_seconds=operation_timeout_seconds,
             slots=slots,
         )
@@ -291,6 +358,9 @@ class RawObjectWorkerPool:
             raise ValueError("media worker lane must be live or repair")
         if queue_timeout_seconds <= 0 or operation_timeout_seconds <= 0:
             raise ValueError("media worker deadlines must be positive")
+        owner = self._pool_for_lane(lane)
+        if not await owner.recover():
+            raise RawObjectWorkerBusy(f"media {lane} workers are unavailable while child cleanup is pending")
         slots = self._live_slots if lane == "live" else self._repair_slots
         try:
             async with asyncio.timeout(queue_timeout_seconds):
@@ -312,23 +382,24 @@ class RawObjectWorkerPool:
                     async with asyncio.timeout(operation_timeout_seconds):
                         return await asyncio.shield(future)
                 except BrokenProcessPool:
-                    if attempt:
-                        await self._replace_executor(lane, executor)
-                        raise RawObjectWorkerError(f"media {lane} worker pool crashed twice")
-                    await self._replace_executor(lane, executor)
-                except TimeoutError as exc:
                     release_slot = False
-                    self._schedule_abandoned(future, owner, executor, slots, grace_seconds=0.0)
-                    raise RawObjectWorkerError(f"media {lane} object seal exceeded its deadline") from exc
-                except asyncio.CancelledError:
-                    release_slot = False
-                    self._schedule_abandoned(
-                        future,
+                    await self._retire_broken_executor(
+                        lane,
                         owner,
                         executor,
                         slots,
-                        grace_seconds=_WORKER_CANCEL_GRACE_SECONDS,
+                        queue_timeout_seconds=queue_timeout_seconds,
                     )
+                    release_slot = True
+                    if attempt:
+                        raise RawObjectWorkerError(f"media {lane} worker pool crashed twice")
+                except TimeoutError as exc:
+                    release_slot = False
+                    self._schedule_abandoned(future, owner, executor, slots)
+                    raise RawObjectWorkerError(f"media {lane} object seal exceeded its deadline") from exc
+                except asyncio.CancelledError:
+                    release_slot = False
+                    self._schedule_abandoned(future, owner, executor, slots)
                     raise
             raise AssertionError("unreachable")
         finally:
@@ -350,6 +421,9 @@ class RawObjectWorkerPool:
             raise ValueError("raw worker lane must be live or repair")
         if queue_timeout_seconds <= 0:
             raise ValueError("raw worker queue deadline must be positive")
+        owner = self._pool_for_lane(lane)
+        if not await owner.recover():
+            raise RawObjectWorkerBusy(f"raw {lane} workers are unavailable while child cleanup is pending")
         slots = self._live_admission_slots if lane == "live" else self._repair_admission_slots
         try:
             async with asyncio.timeout(queue_timeout_seconds):
@@ -366,6 +440,7 @@ class RawObjectWorkerPool:
         spec: RawObjectSpec,
         *,
         lane: str,
+        queue_timeout_seconds: float,
         timeout_seconds: float,
         slots: asyncio.Semaphore,
     ) -> SealedRawObject:
@@ -386,23 +461,24 @@ class RawObjectWorkerPool:
                         # capacity while the process is still sealing the file.
                         return await asyncio.shield(future)
                 except BrokenProcessPool:
-                    if attempt:
-                        await self._replace_executor(lane, executor)
-                        raise RawObjectWorkerError(f"raw {lane} worker pool crashed twice")
-                    await self._replace_executor(lane, executor)
-                except TimeoutError as exc:
                     release_slot = False
-                    self._schedule_abandoned(future, owner, executor, slots, grace_seconds=0.0)
-                    raise RawObjectWorkerError(f"raw {lane} object seal exceeded its deadline") from exc
-                except asyncio.CancelledError:
-                    release_slot = False
-                    self._schedule_abandoned(
-                        future,
+                    await self._retire_broken_executor(
+                        lane,
                         owner,
                         executor,
                         slots,
-                        grace_seconds=_WORKER_CANCEL_GRACE_SECONDS,
+                        queue_timeout_seconds=queue_timeout_seconds,
                     )
+                    release_slot = True
+                    if attempt:
+                        raise RawObjectWorkerError(f"raw {lane} worker pool crashed twice")
+                except TimeoutError as exc:
+                    release_slot = False
+                    self._schedule_abandoned(future, owner, executor, slots)
+                    raise RawObjectWorkerError(f"raw {lane} object seal exceeded its deadline") from exc
+                except asyncio.CancelledError:
+                    release_slot = False
+                    self._schedule_abandoned(future, owner, executor, slots)
                     raise
             raise AssertionError("unreachable")
         finally:
@@ -459,6 +535,8 @@ class RawObjectWorkerPool:
         operation_timeout_seconds: float,
     ) -> DecodedRawObject:
         owner = self._pool_for_lane(lane)
+        if not await owner.recover():
+            raise RawObjectWorkerBusy(f"raw {lane} workers are unavailable while child cleanup is pending")
         try:
             async with asyncio.timeout(queue_timeout_seconds):
                 slots = self._user_read_slots if lane == "user" else self._live_slots if lane == "live" else self._repair_slots
@@ -481,23 +559,24 @@ class RawObjectWorkerPool:
                     async with asyncio.timeout(operation_timeout_seconds):
                         return await asyncio.shield(future)
                 except BrokenProcessPool:
-                    if attempt:
-                        await self._replace_executor(lane, executor)
-                        raise RawObjectWorkerError("raw user reader pool crashed twice")
-                    await self._replace_executor(lane, executor)
-                except TimeoutError as exc:
                     release_slot = False
-                    self._schedule_abandoned(future, owner, executor, slots, grace_seconds=0.0)
-                    raise RawObjectWorkerError(f"raw {lane} read exceeded its deadline") from exc
-                except asyncio.CancelledError:
-                    release_slot = False
-                    self._schedule_abandoned(
-                        future,
+                    await self._retire_broken_executor(
+                        lane,
                         owner,
                         executor,
                         slots,
-                        grace_seconds=_WORKER_CANCEL_GRACE_SECONDS,
+                        queue_timeout_seconds=queue_timeout_seconds,
                     )
+                    release_slot = True
+                    if attempt:
+                        raise RawObjectWorkerError("raw user reader pool crashed twice")
+                except TimeoutError as exc:
+                    release_slot = False
+                    self._schedule_abandoned(future, owner, executor, slots)
+                    raise RawObjectWorkerError(f"raw {lane} read exceeded its deadline") from exc
+                except asyncio.CancelledError:
+                    release_slot = False
+                    self._schedule_abandoned(future, owner, executor, slots)
                     raise
             raise AssertionError("unreachable")
         finally:
@@ -520,6 +599,8 @@ class RawObjectWorkerPool:
         if lane not in {"user", "live", "repair"}:
             raise ValueError("media read lane must be user, live, or repair")
         owner = self._pool_for_lane(lane)
+        if not await owner.recover():
+            raise RawObjectWorkerBusy(f"media {lane} workers are unavailable while child cleanup is pending")
         slots = self._user_read_slots if lane == "user" else self._live_slots if lane == "live" else self._repair_slots
         try:
             async with asyncio.timeout(queue_timeout_seconds):
@@ -541,23 +622,24 @@ class RawObjectWorkerPool:
                     async with asyncio.timeout(operation_timeout_seconds):
                         return await asyncio.shield(future)
                 except BrokenProcessPool:
-                    if attempt:
-                        await self._replace_executor(lane, executor)
-                        raise RawObjectWorkerError("media user reader pool crashed twice")
-                    await self._replace_executor(lane, executor)
-                except TimeoutError as exc:
                     release_slot = False
-                    self._schedule_abandoned(future, owner, executor, slots, grace_seconds=0.0)
-                    raise RawObjectWorkerError(f"media {lane} read exceeded its deadline") from exc
-                except asyncio.CancelledError:
-                    release_slot = False
-                    self._schedule_abandoned(
-                        future,
+                    await self._retire_broken_executor(
+                        lane,
                         owner,
                         executor,
                         slots,
-                        grace_seconds=_WORKER_CANCEL_GRACE_SECONDS,
+                        queue_timeout_seconds=queue_timeout_seconds,
                     )
+                    release_slot = True
+                    if attempt:
+                        raise RawObjectWorkerError("media user reader pool crashed twice")
+                except TimeoutError as exc:
+                    release_slot = False
+                    self._schedule_abandoned(future, owner, executor, slots)
+                    raise RawObjectWorkerError(f"media {lane} read exceeded its deadline") from exc
+                except asyncio.CancelledError:
+                    release_slot = False
+                    self._schedule_abandoned(future, owner, executor, slots)
                     raise
             raise AssertionError("unreachable")
         finally:
@@ -588,6 +670,8 @@ class RawObjectWorkerPool:
             raise ValueError("compressed read lane must be background or user")
         background = lane == "background"
         owner = self._repair_pool if background else self._user_read_pool
+        if not await owner.recover():
+            raise RawObjectWorkerBusy("raw object readers are unavailable while child cleanup is pending")
         slots = self._repair_slots if background else self._user_read_slots
         try:
             async with asyncio.timeout(queue_timeout_seconds):
@@ -610,23 +694,24 @@ class RawObjectWorkerPool:
                     async with asyncio.timeout(operation_timeout_seconds):
                         return await asyncio.shield(future)
                 except BrokenProcessPool:
-                    if attempt:
-                        await self._replace_executor("repair" if background else "user", executor)
-                        raise RawObjectWorkerError("raw object reader pool crashed twice")
-                    await self._replace_executor("repair" if background else "user", executor)
-                except TimeoutError as exc:
                     release_slot = False
-                    self._schedule_abandoned(future, owner, executor, slots, grace_seconds=0.0)
-                    raise RawObjectWorkerError("raw object read exceeded its deadline") from exc
-                except asyncio.CancelledError:
-                    release_slot = False
-                    self._schedule_abandoned(
-                        future,
+                    await self._retire_broken_executor(
+                        "repair" if background else "user",
                         owner,
                         executor,
                         slots,
-                        grace_seconds=_WORKER_CANCEL_GRACE_SECONDS,
+                        queue_timeout_seconds=queue_timeout_seconds,
                     )
+                    release_slot = True
+                    if attempt:
+                        raise RawObjectWorkerError("raw object reader pool crashed twice")
+                except TimeoutError as exc:
+                    release_slot = False
+                    self._schedule_abandoned(future, owner, executor, slots)
+                    raise RawObjectWorkerError("raw object read exceeded its deadline") from exc
+                except asyncio.CancelledError:
+                    release_slot = False
+                    self._schedule_abandoned(future, owner, executor, slots)
                     raise
             raise AssertionError("unreachable")
         finally:
@@ -639,42 +724,25 @@ class RawObjectWorkerPool:
         owner: _OwnedProcessPool,
         executor: ProcessPoolExecutor,
         slots: asyncio.Semaphore,
-        *,
-        grace_seconds: float,
     ) -> None:
+        if _future_completed_normally(future):
+            slots.release()
+            return
+        owner.defer_slot(executor, slots)
+        future.add_done_callback(lambda completed: completed.exception() if not completed.cancelled() else None)
+
         async def drain() -> None:
-            release_slot = False
             try:
-                if not future.done():
-                    try:
-                        await asyncio.wait_for(asyncio.shield(future), timeout=grace_seconds)
-                    except TimeoutError:
-                        pass
-                    except BaseException:
-                        release_slot = True
-                if not future.done() and not release_slot:
-                    release_slot = await owner.retire(executor)
-                    if future.done():
-                        try:
-                            future.exception()
-                        except BaseException:
-                            pass
-                elif future.done():
-                    try:
-                        future.exception()
-                    except BaseException:
-                        pass
-                    release_slot = True
-            finally:
-                if release_slot:
-                    slots.release()
+                if not await owner.retire(executor):
+                    logger.warning("raw abandoned worker cleanup remains unavailable")
+            except asyncio.CancelledError:
+                raise
+            except BaseException:
+                logger.exception("raw abandoned worker cleanup failed")
 
         task = asyncio.create_task(drain())
         self._slot_drainers.add(task)
         task.add_done_callback(self._slot_drainers.discard)
-
-    async def _replace_executor(self, lane: str, broken: ProcessPoolExecutor) -> bool:
-        return await self._pool_for_lane(lane).retire(broken)
 
     async def close(self) -> None:
         if self._cleanup_complete:

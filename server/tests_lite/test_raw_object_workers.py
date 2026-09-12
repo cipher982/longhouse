@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import time
 from uuid import uuid4
 
 import pytest
@@ -11,9 +12,13 @@ import zerg.services.raw_object_workers as worker_module
 from zerg.services.raw_object_workers import RawObjectWorkerBusy
 from zerg.services.raw_object_workers import RawObjectWorkerError
 from zerg.services.raw_object_workers import RawObjectWorkerPool
+from zerg.services.render_object_workers import RenderObjectWorkerBusy
+from zerg.services.render_object_workers import RenderObjectWorkerError
 from zerg.services.render_object_workers import RenderObjectWorkerPool
 from zerg.storage_v2.raw_objects import RawObjectSpec
 from zerg.storage_v2.raw_objects import RawRecord
+from zerg.storage_v2.render_objects import RenderObjectSpec
+from zerg.storage_v2.render_objects import RenderRecord
 
 
 def _spec() -> RawObjectSpec:
@@ -28,6 +33,30 @@ def _spec() -> RawObjectSpec:
         range_start=0,
         range_end=6,
         records=(RawRecord(source_position=0, data=b"hello\n"),),
+    )
+
+
+def _render_spec() -> RenderObjectSpec:
+    return RenderObjectSpec(
+        session_id=uuid4(),
+        render_generation=uuid4(),
+        parser_revision="engine-parser-v2",
+        ordering_revision="semantic-order-v2",
+        machine_id="cinder",
+        provider="codex",
+        opaque_source_id="history.jsonl",
+        source_epoch=uuid4(),
+        source_envelope_id="a" * 64,
+        records=(
+            RenderRecord(
+                event_id="user-1",
+                order_time_us=1_700_000_000_000_000,
+                source_position=0,
+                event_subordinal=0,
+                role="user",
+                content_text="hello",
+            ),
+        ),
     )
 
 
@@ -117,6 +146,122 @@ async def test_stopped_repair_read_leaves_user_and_live_work_available(tmp_path)
             if stopped is not None and stopped.is_alive():
                 stopped.kill()
                 stopped.join(3.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pool_type", "worker_error", "worker_busy"),
+    [
+        (RawObjectWorkerPool, RawObjectWorkerError, RawObjectWorkerBusy),
+        (RenderObjectWorkerPool, RenderObjectWorkerError, RenderObjectWorkerBusy),
+    ],
+)
+async def test_failed_operation_cleanup_is_bounded_and_next_operation_recovers(
+    tmp_path,
+    monkeypatch,
+    pool_type,
+    worker_error,
+    worker_busy,
+):
+    pool = pool_type(tmp_path, live_workers=1, repair_workers=1, user_read_workers=1, queue_multiplier=1)
+    original = worker_module._terminate_owned_executor
+    cleanup_started = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    stopped = None
+    try:
+        await pool.start()
+        spec = _spec() if pool_type is RawObjectWorkerPool else _render_spec()
+        sealed = await pool.seal(spec, lane="live")
+        stopped = next(iter(pool._repair_pool.executor._processes.values()))
+        os.kill(stopped.pid, signal.SIGSTOP)
+
+        def fail_cleanup(executor, _processes):
+            loop.call_soon_threadsafe(cleanup_started.set)
+            return False
+
+        monkeypatch.setattr(worker_module, "_terminate_owned_executor", fail_cleanup)
+        with pytest.raises(worker_error, match="deadline"):
+            await pool.seal(spec, lane="repair", operation_timeout_seconds=0.05)
+        await asyncio.wait_for(cleanup_started.wait(), timeout=1.0)
+        await asyncio.sleep(0)
+
+        with pytest.raises(worker_busy, match="queue|unavailable"):
+            await pool.seal(spec, lane="repair", operation_timeout_seconds=0.1, queue_timeout_seconds=0.1)
+        live_replay = await pool.seal(spec, lane="live")
+        assert live_replay.object_hash == sealed.object_hash
+        assert stopped.is_alive()
+
+        monkeypatch.setattr(worker_module, "_terminate_owned_executor", original)
+        if pool_type is RawObjectWorkerPool:
+            recovered = await pool.read(
+                sealed.object_path,
+                sealed.object_hash,
+                spec.tenant_id,
+                lane="repair",
+            )
+        else:
+            recovered = await pool.read(sealed.object_path, sealed.object_hash, lane="background")
+        assert recovered.spec == spec
+        assert not stopped.is_alive()
+    finally:
+        monkeypatch.setattr(worker_module, "_terminate_owned_executor", original)
+        try:
+            await asyncio.wait_for(pool.close(), timeout=5.0)
+        finally:
+            if stopped is not None and stopped.is_alive():
+                stopped.kill()
+                stopped.join(3.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pool_type", [RawObjectWorkerPool, RenderObjectWorkerPool])
+async def test_broken_pool_cleanup_terminates_surviving_owned_child(tmp_path, monkeypatch, pool_type):
+    pool = pool_type(tmp_path, live_workers=1, repair_workers=2, user_read_workers=1, queue_multiplier=1)
+    original = worker_module._terminate_owned_executor
+    children = []
+    try:
+        await pool.start()
+        spec = _spec() if pool_type is RawObjectWorkerPool else _render_spec()
+        sealed = await pool.seal(spec, lane="live")
+
+        async def repair_read():
+            if pool_type is RawObjectWorkerPool:
+                return await pool.read(sealed.object_path, sealed.object_hash, spec.tenant_id, lane="repair")
+            return await pool.read(sealed.object_path, sealed.object_hash, lane="background")
+
+        executor = pool._repair_pool.executor
+        loop = asyncio.get_running_loop()
+        await asyncio.gather(
+            loop.run_in_executor(executor, time.sleep, 0.1),
+            loop.run_in_executor(executor, time.sleep, 0.1),
+        )
+        children = list(pool._repair_pool.executor._processes.values())
+        assert len(children) >= 2
+        broken, survivor = children[:2]
+        assert survivor.is_alive()
+        os.kill(survivor.pid, signal.SIGSTOP)
+        os.kill(broken.pid, signal.SIGKILL)
+        monkeypatch.setattr(worker_module, "_terminate_owned_executor", lambda *_: False)
+        worker_busy = RawObjectWorkerBusy if pool_type is RawObjectWorkerPool else RenderObjectWorkerBusy
+        with pytest.raises(worker_busy, match="unavailable"):
+            await repair_read()
+        assert survivor.is_alive()
+        live_replay = await pool.seal(spec, lane="live")
+        assert live_replay.object_hash == sealed.object_hash
+        monkeypatch.setattr(worker_module, "_terminate_owned_executor", original)
+
+        recovered = await repair_read()
+        assert recovered.spec == spec
+        assert not survivor.is_alive()
+    finally:
+        monkeypatch.setattr(worker_module, "_terminate_owned_executor", original)
+        try:
+            await asyncio.wait_for(pool.close(), timeout=5.0)
+        finally:
+            for child in children:
+                if child.is_alive():
+                    child.kill()
+                    child.join(3.0)
 
 
 @pytest.mark.asyncio
