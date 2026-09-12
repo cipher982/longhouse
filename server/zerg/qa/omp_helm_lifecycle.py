@@ -1604,16 +1604,21 @@ def _exact_marker_prompt(marker: str) -> str:
     """Make sequential marker probes distinguish a fresh request."""
 
     return (
-        "This is the newest verification request. Do not repeat an earlier "
-        "verification or assistant marker; reply with exactly "
-        f"{marker} and nothing else."
+        "Machine check for this new turn. Output exactly "
+        f"{marker} as the entire visible answer. "
+        "Do not quote, mention, or reuse any earlier answer. No explanation."
     )
 
 
 def _setup_marker_prompt(marker: str, *, setup: str) -> str:
     """Preserve setup instructions while requiring one exact marker reply."""
 
-    return f"{setup.rstrip()} reply with exactly {marker} and nothing else."
+    return (
+        f"{setup.rstrip()}\n\n"
+        "This is a machine check for the new turn. After completing that "
+        f"instruction, output exactly {marker} as the entire visible answer. "
+        "Do not quote, mention, or reuse any earlier answer. No explanation."
+    )
 
 
 def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:

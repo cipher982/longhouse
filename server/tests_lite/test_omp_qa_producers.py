@@ -659,27 +659,29 @@ def test_omp_continuation_prompt_names_the_earlier_context_label_without_tool_or
 
     assert '"Remember this context phrase:"' in prompt
     assert "earlier user message" in prompt
-    assert "Do not use tools" in prompt
-    assert "repeat an assistant marker" in prompt
     assert "OMP_RESUME_MARKER" in prompt
+    assert "entire visible answer" in prompt
+    assert "Do not quote, mention, or reuse any earlier assistant answer" in prompt
+    assert "No explanation" in prompt
 
 
 def test_omp_helm_marker_prompts_preserve_setup_instructions() -> None:
     marker = "OMP_HELM_MARKER"
 
     exact = omp_helm_lifecycle._exact_marker_prompt(marker)
-    assert "newest verification request" in exact
-    assert "Do not repeat an earlier verification or assistant marker" in exact
+    assert "new turn" in exact
+    assert "entire visible answer" in exact
+    assert "Do not quote, mention, or reuse any earlier answer" in exact
     assert marker in exact
-    assert "Ignore every earlier instruction" not in exact
 
     setup = omp_helm_lifecycle._setup_marker_prompt(
         marker,
         setup="Use the bash tool to run `sleep 8`, then",
     )
     assert "`sleep 8`" in setup
-    assert setup.endswith(f"reply with exactly {marker} and nothing else.")
-    assert "Ignore every earlier" not in setup
+    assert setup.endswith("No explanation.")
+    assert marker in setup
+    assert "entire visible answer" in setup
 
     context = omp_helm_lifecycle._setup_marker_prompt(
         marker,
@@ -687,7 +689,7 @@ def test_omp_helm_marker_prompts_preserve_setup_instructions() -> None:
     )
     assert "Remember this context phrase: OMP_HELM_CONTEXT." in context
     assert marker in context
-    assert "Ignore every earlier" not in context
+    assert "Do not quote, mention, or reuse any earlier answer" in context
 
 
 def test_omp_helm_controls_use_runtime_agents_api(monkeypatch, tmp_path) -> None:
