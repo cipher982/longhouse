@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -1452,50 +1453,46 @@ async def test_storage_v2_request_admission_does_not_reserve_optional_render_lan
 
 @pytest.mark.asyncio
 async def test_storage_v2_releases_live_admission_before_catalog_wait(monkeypatch):
-    class TrackingPool:
-        active = 0
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_InlineRenderPool, prefix="lh2-live-admission-") as stack:
+        payload = _payload(tenant_id=get_settings().archive_primary_tenant_id, machine_id="cinder", epoch=uuid4())
+        headers = {"X-Longhouse-Storage-Lane": "live"}
+        committed = await stack.client.post("/agents/storage/v2/envelopes", json=payload, headers=headers)
+        assert committed.status_code == 200, committed.text
+        receipt = committed.json()
+        permit = asyncio.Semaphore(1)
 
-        @asynccontextmanager
-        async def admission(self, lane):
-            assert lane == "live"
-            self.active += 1
-            try:
-                yield
-            finally:
-                self.active -= 1
+        class ReplayPool:
+            @asynccontextmanager
+            async def admission(self, _lane):
+                async with permit:
+                    yield
 
-        async def seal(self, *_args, **_kwargs):
-            raise AssertionError("existing envelope reached storage worker")
+            async def seal(self, *_args, **_kwargs):
+                raise AssertionError("durable replay attempted to reseal source bytes")
 
-    workers = TrackingPool()
+        monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", ReplayPool)
+        catalog_waiting = asyncio.Event()
+        release_catalog = asyncio.Event()
+        call = stack.catalog.call
 
-    class Catalog:
-        async def call(self, method, _payload, **_kwargs):
-            assert workers.active == 0, f"catalog call {method} retained live admission"
-            assert method == "storage.raw_object.exists.batch.v2"
-            return {"objects": [{"receipt": {"status": "already_committed"}}]}
+        async def stalled_catalog_call(method, *args, **kwargs):
+            if method == "storage.raw_object.exists.batch.v2" and not catalog_waiting.is_set():
+                catalog_waiting.set()
+                await release_catalog.wait()
+            return await call(method, *args, **kwargs)
 
-    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: Catalog())
-    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: workers)
-    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", _ForbiddenRenderAdmission)
-    monkeypatch.setattr(storage_router, "_validated_receipt", lambda value, **_kwargs: value)
-    app = FastAPI()
-    app.include_router(storage_router.router)
-    app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="cinder", owner_id=1)
-    app.dependency_overrides[require_single_tenant] = lambda: None
-    payload = _payload(
-        tenant_id=get_settings().archive_primary_tenant_id,
-        machine_id="cinder",
-        epoch=UUID("018f0c3a-7b2d-7f10-8a11-323456789abc"),
-    )
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post(
-            "/agents/storage/v2/envelopes",
-            json=payload,
-            headers={"X-Longhouse-Storage-Lane": "live"},
-        )
-    assert response.status_code == 200
-    assert response.json() == {"status": "already_committed"}
+        monkeypatch.setattr(stack.catalog, "call", stalled_catalog_call)
+        first = asyncio.create_task(stack.client.post("/agents/storage/v2/envelopes", json=payload, headers=headers))
+        try:
+            await asyncio.wait_for(catalog_waiting.wait(), timeout=2)
+            second = await asyncio.wait_for(stack.client.post("/agents/storage/v2/envelopes", json=payload, headers=headers), timeout=2)
+            assert second.status_code == 200, second.text
+            assert second.json() == receipt
+        finally:
+            release_catalog.set()
+            first_response = await asyncio.wait_for(first, timeout=2)
+        assert first_response.status_code == 200, first_response.text
+        assert first_response.json() == receipt
 
 
 @pytest.mark.asyncio

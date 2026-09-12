@@ -567,7 +567,7 @@ test("agents sessions API returns list", async ({ agentsRequest }) => {
   ).toBe(true);
 });
 
-test("owned closed-session projection never exposes live composer", async ({
+test("owned imported transcript never exposes live composer", async ({
   context,
   hostedQaCohort,
 }) => {
@@ -585,7 +585,6 @@ test("owned closed-session projection never exposes live composer", async ({
 
   const workspace = await workspaceResponse.json();
   const session = workspace?.session;
-  expect(session?.runtime_display?.lifecycle).toBe("closed");
   expect(session?.capabilities?.live_control_available).toBe(false);
   expect(session?.capabilities?.reply_to_live_session_available).toBe(false);
   expect(session?.capabilities?.can_queue_next_input).toBe(false);

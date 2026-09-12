@@ -5,6 +5,7 @@ import io
 import json
 import urllib.error
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -34,6 +35,7 @@ from zerg.qa.omp_helm_lifecycle import _helm_cleanup_ready
 from zerg.qa.omp_helm_lifecycle import _helm_result_status
 from zerg.qa.omp_helm_lifecycle import _manifest_is_stable
 from zerg.qa.omp_helm_lifecycle import _native_settlement
+from zerg.qa.omp_helm_lifecycle import _record_retirement_claim_terminal
 from zerg.qa.omp_helm_lifecycle import _redacted_state_snapshot
 from zerg.qa.omp_helm_lifecycle import _register_native_source
 from zerg.qa.omp_helm_lifecycle import _remove_isolation_after_source_retention
@@ -262,18 +264,46 @@ def test_omp_resume_settlement_accepts_terminal_channel_state_without_timestamp_
     )
 
 
-def test_omp_retirement_claims_record_each_acquired_run_once() -> None:
+def test_omp_terminal_proof_is_not_reused_after_run_becomes_active(monkeypatch) -> None:
+    diagnostic = {
+        "session_id": "session-1",
+        "served_path": "canonical_session_detail",
+        "shadow": {
+            "run": {"id": "run-1", "lifecycle": "ended"},
+            "activity": {"state": "quiescent"},
+        },
+    }
+    monkeypatch.setattr(lifecycle, "_request", lambda *_args: diagnostic)
     claims: list[dict[str, object]] = []
-    state = {"run_id": "run-1"}
+    _append_retirement_claim(claims, session_id="session-1", state={"run_id": "run-1"})
+    _record_retirement_claim_terminal("https://runtime.example", "token", claims, session_id="session-1", run_id="run-1")
+    assert lifecycle._served_run_inventory_evidence("https://runtime.example", "token", "session-1", claims)["retired"] is True
 
-    _append_retirement_claim(claims, session_id="session-1", state=state)
-    _append_retirement_claim(claims, session_id="session-1", state=state)
-    _append_retirement_claim(claims, session_id="session-1", state={"run_id": "run-2"})
+    diagnostic["shadow"]["run"]["lifecycle"] = "running"
+    diagnostic["shadow"]["activity"]["state"] = "executing"
+    clock = iter((0.0, 0.0, 1.0))
+    monkeypatch.setattr(omp_helm_lifecycle, "time", SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _seconds: None))
+    with pytest.raises(RuntimeError):
+        _record_retirement_claim_terminal("https://runtime.example", "token", claims, session_id="session-1", run_id="run-1", timeout=1)
+    assert lifecycle._served_run_inventory_evidence("https://runtime.example", "token", "session-1", claims)["retired"] is False
 
-    assert claims == [
-        {"session_id": "session-1", "run_id": "run-1", "state": "terminal"},
-        {"session_id": "session-1", "run_id": "run-2", "state": "terminal"},
-    ]
+
+def test_omp_replacement_requires_new_proof_when_run_identity_is_retained(monkeypatch) -> None:
+    monkeypatch.setattr(
+        lifecycle,
+        "_request",
+        lambda *_args: {
+            "session_id": "session-1",
+            "served_path": "canonical_session_detail",
+            "shadow": {"run": {"id": "run-1", "lifecycle": "ended"}, "activity": {"state": "quiescent"}},
+        },
+    )
+    claims: list[dict[str, object]] = []
+    _append_retirement_claim(claims, session_id="session-1", state={"run_id": "run-1", "native_session_id": "native-1"})
+    _record_retirement_claim_terminal("https://runtime.example", "token", claims, session_id="session-1", run_id="run-1")
+    _append_retirement_claim(claims, session_id="session-1", state={"run_id": "run-1", "native_session_id": "native-2"})
+
+    assert lifecycle._served_run_inventory_evidence("https://runtime.example", "token", "session-1", claims)["retired"] is False
 
 
 def test_omp_native_model_evidence_binds_provider_event_to_retained_source(tmp_path) -> None:
@@ -1370,12 +1400,58 @@ def test_omp_wait_served_run_retirement_waits_for_terminal_fact(monkeypatch) -> 
         "https://runtime.example",
         "token",
         "session-1",
-        [{"session_id": "session-1", "run_id": "run-1", "state": "terminal"}],
+        [
+            {
+                "session_id": "session-1",
+                "run_id": "run-1",
+                "state": "terminal",
+                "terminal_evidence": {
+                    "retired": True,
+                    "session_id": "session-1",
+                    "expected_run_id": "run-1",
+                },
+            }
+        ],
         timeout=1,
     )
 
     assert result["retired"] is True
     assert result["retirement_wait_status"] == "pass"
+
+
+def test_omp_wait_served_run_retirement_does_not_trust_only_the_final_run(monkeypatch) -> None:
+    clock = iter((0.0, 0.0, 1.0))
+    monkeypatch.setattr(omp_helm_lifecycle.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(omp_helm_lifecycle.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        omp_helm_lifecycle.lifecycle,
+        "_served_run_inventory_evidence",
+        lambda *_args: {"retired": True, "session_id": "session-1", "active_run_count": 0},
+    )
+
+    result = _wait_served_run_retirement(
+        "https://runtime.example",
+        "token",
+        "session-1",
+        [
+            {"session_id": "session-1", "run_id": "run-1", "state": "acquired"},
+            {
+                "session_id": "session-1",
+                "run_id": "run-2",
+                "state": "terminal",
+                "terminal_evidence": {
+                    "retired": True,
+                    "session_id": "session-1",
+                    "expected_run_id": "run-2",
+                },
+            },
+        ],
+        timeout=1,
+    )
+
+    assert result["retired"] is False
+    assert result["all_acquired_runs_terminal"] is False
+    assert result["retirement_wait_status"] == "timeout"
 
 
 def test_omp_runtime_convergence_retains_unproven_page_metadata(monkeypatch) -> None:

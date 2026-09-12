@@ -1308,6 +1308,55 @@ def _console_cleanup_receipt(
     }
 
 
+def _served_run_terminal_evidence(
+    api_url: str,
+    token: str,
+    session_id: str,
+    run_id: str,
+) -> dict[str, object]:
+    """Read canonical terminal facts for one exact served run."""
+
+    try:
+        diagnostic = _request(api_url, token, "GET", f"/api/agents/sessions/{session_id}/state-diagnostics")
+    except Exception as exc:  # noqa: BLE001 - cleanup evidence must fail closed
+        return {
+            "retired": False,
+            "session_id": session_id,
+            "expected_run_id": run_id,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    shadow = diagnostic.get("shadow") if isinstance(diagnostic.get("shadow"), Mapping) else {}
+    run = shadow.get("run") if isinstance(shadow, Mapping) and isinstance(shadow.get("run"), Mapping) else {}
+    activity = shadow.get("activity") if isinstance(shadow, Mapping) and isinstance(shadow.get("activity"), Mapping) else {}
+    terminal_state = str(run.get("lifecycle") or run.get("state") or "").lower()
+    activity_state = str(activity.get("state") or "").lower()
+    served_session_id = str(diagnostic.get("session_id") or "")
+    served_run_id = str(run.get("id") or "")
+    session_identity_match = served_session_id == session_id
+    run_identity_match = bool(run_id) and served_run_id == run_id
+    activity_compatible = activity_state in {"", "unknown", "quiescent", "idle", "finished"}
+    retired = (
+        diagnostic.get("served_path") == "canonical_session_detail"
+        and session_identity_match
+        and run_identity_match
+        and terminal_state in {"completed", "ended", "failed", "cancelled", "terminal", "stopped"}
+        and activity_compatible
+    )
+    return {
+        "retired": retired,
+        "session_id": session_id,
+        "served_session_id": served_session_id,
+        "expected_run_id": run_id or None,
+        "served_run_id": served_run_id or None,
+        "session_identity_match": session_identity_match,
+        "run_identity_match": run_identity_match,
+        "served_path": diagnostic.get("served_path"),
+        "terminal_state": terminal_state or None,
+        "activity_state": activity_state or None,
+        "activity_state_authority": "diagnostic_head" if activity_state else "terminal_run_facts",
+    }
+
+
 def _served_run_inventory_evidence(
     api_url: str,
     token: str,
@@ -1320,35 +1369,24 @@ def _served_run_inventory_evidence(
     claim_session_ids = [str(claim.get("session_id") or "").strip() for claim in claims]
     claim_run_ids = [str(claim.get("run_id") or "").strip() for claim in claims]
     expected_run_id = claim_run_ids[-1] if claim_run_ids and claim_run_ids[-1] else None
-    try:
-        diagnostic = _request(api_url, token, "GET", f"/api/agents/sessions/{session_id}/state-diagnostics")
-    except Exception as exc:  # noqa: BLE001 - cleanup evidence must fail closed
-        return {
-            "retired": False,
-            "active_run_count": None,
-            "session_id": session_id,
-            "expected_run_id": expected_run_id,
-            "error": f"{type(exc).__name__}: {exc}",
-        }
-    shadow = diagnostic.get("shadow") if isinstance(diagnostic.get("shadow"), Mapping) else {}
-    run = shadow.get("run") if isinstance(shadow, Mapping) and isinstance(shadow.get("run"), Mapping) else {}
-    activity = shadow.get("activity") if isinstance(shadow, Mapping) and isinstance(shadow.get("activity"), Mapping) else {}
-    terminal_state = str(run.get("lifecycle") or run.get("state") or "").lower()
-    activity_state = str(activity.get("state") or "").lower()
-    served_session_id = str(diagnostic.get("session_id") or "")
-    served_run_id = str(run.get("id") or "")
-    session_identity_match = served_session_id == session_id
-    run_identity_match = expected_run_id is not None and served_run_id == expected_run_id
+    terminal_evidence = _served_run_terminal_evidence(api_url, token, session_id, expected_run_id or "")
+    terminal_state = str(terminal_evidence.get("terminal_state") or "")
+    activity_state = str(terminal_evidence.get("activity_state") or "")
+    served_session_id = str(terminal_evidence.get("served_session_id") or "")
+    served_run_id = str(terminal_evidence.get("served_run_id") or "")
+    session_identity_match = terminal_evidence.get("session_identity_match") is True
+    run_identity_match = terminal_evidence.get("run_identity_match") is True
     terminal_run_proven = (
         len(terminal_claims) == len(claims)
         and bool(claims)
         and all(session_id == claim_session_id for claim_session_id in claim_session_ids)
         and len(claim_run_ids) == len(claims)
         and all(claim_run_ids)
-        and diagnostic.get("served_path") == "canonical_session_detail"
+        and terminal_evidence.get("served_path") == "canonical_session_detail"
         and session_identity_match
         and run_identity_match
         and terminal_state in {"completed", "ended", "failed", "cancelled", "terminal", "stopped"}
+        and terminal_evidence.get("retired") is True
     )
     # Activity heads are expiring observations. A missing/unknown head must
     # not be converted into idle; terminal claim/run facts prove retirement
@@ -1364,11 +1402,13 @@ def _served_run_inventory_evidence(
         "served_run_id": served_run_id or None,
         "session_identity_match": session_identity_match,
         "run_identity_match": run_identity_match,
-        "served_path": diagnostic.get("served_path"),
+        "served_path": terminal_evidence.get("served_path"),
         "terminal_state": terminal_state or None,
         "activity_state": activity_state or None,
         "activity_state_authority": "diagnostic_head" if activity_state else "terminal_run_facts",
         "run_ids": claim_run_ids,
+        "terminal_evidence": terminal_evidence,
+        **({"error": terminal_evidence["error"]} if terminal_evidence.get("error") else {}),
     }
 
 

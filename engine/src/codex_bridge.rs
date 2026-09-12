@@ -943,7 +943,7 @@ async fn write_ipc_result(
     Ok(())
 }
 
-pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeStartSummary> {
+pub async fn cmd_codex_bridge_start(mut config: BridgeStartConfig) -> Result<BridgeStartSummary> {
     if config.session_id.trim().is_empty() {
         bail!("session_id must not be empty");
     }
@@ -977,7 +977,10 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         fs::create_dir_all(parent)?;
     }
 
-    let run_id = config.run_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+    let run_id = config
+        .run_id
+        .take()
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
     Uuid::parse_str(&run_id).context("invalid --run-id")?;
     let connection_id = Uuid::new_v4().to_string();
     let lease_generation = Uuid::new_v4().to_string();
@@ -1081,29 +1084,55 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         }
     }
 
-    let daemon = child.spawn().with_context(|| {
+    let mut daemon = Command::from(child).spawn().with_context(|| {
         format!(
             "spawning detached codex bridge from {}",
             current_exe.display()
         )
     })?;
+    let daemon_pid = daemon
+        .id()
+        .context("spawned Codex bridge has no process identity")?;
+    let mut startup_group_evidence = StartupGroupEvidence::default();
 
     let deadline = Instant::now() + Duration::from_secs(config.start_timeout_secs.max(1));
     loop {
+        // Capture the app-server identity while the bridge is still the
+        // process-tree root. Once try_wait reaps the bridge, a later lineage
+        // scan cannot distinguish "no app-server" from "lost the root".
+        if daemon.id().is_some() {
+            retain_startup_app_server_groups(
+                &mut startup_group_evidence,
+                daemon_pid,
+                &config.codex_bin,
+            );
+        }
         if Instant::now() >= deadline {
             let log_tail = read_log_tail(&paths.log_file, 4000);
-            bail!(
+            let error = anyhow!(
                 "timed out waiting for codex bridge to become ready (state_file={} log_tail={})",
                 paths.state_file.display(),
                 log_tail
             );
+            return Err(startup_failure(
+                &mut daemon,
+                daemon_pid,
+                &paths,
+                &config,
+                &run_id,
+                &connection_id,
+                &lease_generation,
+                &startup_group_evidence,
+                error,
+            )
+            .await);
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
         let state = match read_state_file(&paths.state_file) {
             Ok(state) => state,
             Err(_) => continue,
         };
-        if state.pid != daemon.id()
+        if state.pid != daemon_pid
             || state.run_id.as_deref() != Some(run_id.as_str())
             || state.connection_id.as_deref() != Some(connection_id.as_str())
             || state.lease_generation.as_deref() != Some(lease_generation.as_str())
@@ -1111,14 +1140,48 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
             continue;
         }
         if state.status == "ready" {
-            let ws_url = state
+            let ws_url = match state
                 .ws_url
                 .clone()
-                .context("bridge marked ready without ws_url")?;
-            let ws_auth_token = state
+                .context("bridge marked ready without ws_url")
+            {
+                Ok(ws_url) => ws_url,
+                Err(error) => {
+                    return Err(startup_failure(
+                        &mut daemon,
+                        daemon_pid,
+                        &paths,
+                        &config,
+                        &run_id,
+                        &connection_id,
+                        &lease_generation,
+                        &startup_group_evidence,
+                        error,
+                    )
+                    .await);
+                }
+            };
+            let ws_auth_token = match state
                 .ws_auth_token
                 .clone()
-                .context("bridge marked ready without ws_auth_token")?;
+                .context("bridge marked ready without ws_auth_token")
+            {
+                Ok(ws_auth_token) => ws_auth_token,
+                Err(error) => {
+                    return Err(startup_failure(
+                        &mut daemon,
+                        daemon_pid,
+                        &paths,
+                        &config,
+                        &run_id,
+                        &connection_id,
+                        &lease_generation,
+                        &startup_group_evidence,
+                        error,
+                    )
+                    .await);
+                }
+            };
             return Ok(BridgeStartSummary {
                 session_id: state.session_id,
                 state_file: paths.state_file.display().to_string(),
@@ -1132,14 +1195,498 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         }
         if state.status == "error" {
             let log_tail = read_log_tail(&paths.log_file, 4000);
-            bail!(
+            let error = anyhow!(
                 "codex bridge failed to start: {} (log_tail={})",
                 state
                     .last_error
                     .unwrap_or_else(|| "unknown bridge startup error".to_string()),
                 log_tail
             );
+            return Err(startup_failure(
+                &mut daemon,
+                daemon_pid,
+                &paths,
+                &config,
+                &run_id,
+                &connection_id,
+                &lease_generation,
+                &startup_group_evidence,
+                error,
+            )
+            .await);
         }
+        if let Some(status) = daemon.try_wait()? {
+            let log_tail = read_log_tail(&paths.log_file, 4000);
+            let error = anyhow!(
+                "codex bridge exited before becoming ready (status={} state_file={} log_tail={})",
+                status,
+                paths.state_file.display(),
+                log_tail
+            );
+            return Err(startup_failure(
+                &mut daemon,
+                daemon_pid,
+                &paths,
+                &config,
+                &run_id,
+                &connection_id,
+                &lease_generation,
+                &startup_group_evidence,
+                error,
+            )
+            .await);
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct StartupOwnedProcess {
+    pid: u32,
+    process_start_time: String,
+}
+
+#[derive(Debug, Clone)]
+struct StartupOwnedGroup {
+    leader_pid: u32,
+    pgid: i32,
+    process_start_time: String,
+    member_processes: Vec<StartupOwnedProcess>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct StartupGroupEvidence {
+    groups: BTreeMap<i32, StartupOwnedGroup>,
+}
+
+#[derive(Debug)]
+enum StartupAppServerGroupScan {
+    RootPresent(BTreeMap<i32, StartupOwnedGroup>),
+    RootAbsent,
+}
+
+fn codex_app_server_command(command: &str, codex_bin: &str) -> bool {
+    let expected_basename = Path::new(codex_bin)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("codex");
+    crate::process_identity::command_contains_basename(command, expected_basename)
+        && command.split_whitespace().any(|part| part == "app-server")
+}
+
+fn startup_state_matches(
+    state: &BridgeStateFile,
+    config: &BridgeStartConfig,
+    daemon_pid: u32,
+    run_id: &str,
+    connection_id: &str,
+    lease_generation: &str,
+) -> bool {
+    state.session_id == config.session_id
+        && state.pid == daemon_pid
+        && state.run_id.as_deref() == Some(run_id)
+        && state.connection_id.as_deref() == Some(connection_id)
+        && state.lease_generation.as_deref() == Some(lease_generation)
+}
+
+fn app_server_group_from_state(
+    state: &BridgeStateFile,
+    codex_bin: &str,
+) -> Result<Option<StartupOwnedGroup>> {
+    if state.app_server_pid.is_none() && state.app_server_pgid.is_none() {
+        return Ok(None);
+    }
+    let leader_pid = state
+        .app_server_pid
+        .context("startup state recorded an app-server pgid without a pid")?;
+    let pgid = state
+        .app_server_pgid
+        .context("startup state recorded an app-server pid without a pgid")?;
+    let Some(expected_pgid) = i32::try_from(leader_pid).ok() else {
+        bail!("startup state recorded an app-server pid outside process-group range");
+    };
+    if pgid <= 0 || pgid != expected_pgid {
+        bail!(
+            "startup state recorded invalid app-server process group {} for leader {}",
+            pgid,
+            leader_pid
+        );
+    }
+    let process_start_time = state
+        .app_server_process_start_time
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .context("startup state recorded an app-server without process identity")?;
+    let mut group = StartupOwnedGroup {
+        leader_pid,
+        pgid,
+        process_start_time: process_start_time.to_string(),
+        member_processes: vec![StartupOwnedProcess {
+            pid: leader_pid,
+            process_start_time: process_start_time.to_string(),
+        }],
+    };
+    let leader_is_current = match crate::process_identity::inspect_process_fact(leader_pid) {
+        crate::process_identity::ProcessFactLookup::Present(fact) => {
+            crate::process_identity::lstart_matches_recorded(&fact, process_start_time)
+                && codex_app_server_command(&fact.command, codex_bin)
+                && crate::process_group::leader_group_for(leader_pid) == Some(pgid)
+        }
+        crate::process_identity::ProcessFactLookup::Absent => false,
+        crate::process_identity::ProcessFactLookup::Unavailable => {
+            bail!(
+                "process identity inspection for startup app-server leader {} was unavailable",
+                leader_pid
+            );
+        }
+    };
+    if leader_is_current {
+        let entries = crate::process_identity::try_collect_process_lineage()
+            .context("process-lineage inspection was unavailable while reading startup state")?;
+        let members = entries.iter().filter(|entry| entry.pgid == pgid);
+        group.member_processes = collect_startup_group_member_identities(members)?;
+        if !group.member_processes.iter().any(|member| {
+            member.pid == leader_pid && member.process_start_time == process_start_time
+        }) {
+            group.member_processes.push(StartupOwnedProcess {
+                pid: leader_pid,
+                process_start_time: process_start_time.to_string(),
+            });
+        }
+    }
+    Ok(Some(group))
+}
+
+fn collect_startup_group_member_identities<'a, I>(entries: I) -> Result<Vec<StartupOwnedProcess>>
+where
+    I: IntoIterator<Item = &'a crate::process_identity::ProcessLineage>,
+{
+    let mut members = Vec::new();
+    for entry in entries {
+        match crate::process_identity::inspect_process_fact(entry.pid) {
+            crate::process_identity::ProcessFactLookup::Present(fact) => {
+                let process_start_time = fact.lstart.trim();
+                if process_start_time.is_empty() {
+                    bail!(
+                        "process identity for startup app-server member {} was unavailable",
+                        entry.pid
+                    );
+                }
+                members.push(StartupOwnedProcess {
+                    pid: entry.pid,
+                    process_start_time: process_start_time.to_string(),
+                });
+            }
+            crate::process_identity::ProcessFactLookup::Absent => {}
+            crate::process_identity::ProcessFactLookup::Unavailable => {
+                bail!(
+                    "process identity inspection for startup app-server member {} was unavailable",
+                    entry.pid
+                );
+            }
+        }
+    }
+    Ok(members)
+}
+
+fn collect_startup_group_members(
+    entries: &[crate::process_identity::ProcessLineage],
+    daemon_pid: u32,
+    pgid: i32,
+) -> Result<Vec<StartupOwnedProcess>> {
+    let members = crate::process_identity::owned_processes(entries, daemon_pid, Some(pgid))
+        .into_iter()
+        .filter(|(entry, _)| entry.pgid == pgid)
+        .map(|(entry, _)| entry);
+    collect_startup_group_member_identities(members)
+}
+
+/// Find the app-server group while the bridge is still the process-tree root.
+/// This covers the pre-readiness window before the bridge has published the
+/// app-server pid and pgid into its state file.
+fn collect_startup_app_server_groups(
+    daemon_pid: u32,
+    codex_bin: &str,
+) -> Result<StartupAppServerGroupScan> {
+    let entries = crate::process_identity::try_collect_process_lineage()
+        .context("process-lineage inspection was unavailable during Codex startup cleanup")?;
+    if !entries.iter().any(|entry| entry.pid == daemon_pid) {
+        return Ok(StartupAppServerGroupScan::RootAbsent);
+    }
+
+    let owned = crate::process_identity::owned_processes(&entries, daemon_pid, None);
+    let mut groups = BTreeMap::new();
+    for (entry, _) in owned.into_iter().filter(|(entry, _)| {
+        entry.pgid > 0
+            && i32::try_from(entry.pid).ok() == Some(entry.pgid)
+            && codex_app_server_command(&entry.command, codex_bin)
+    }) {
+        if groups.contains_key(&entry.pgid) {
+            continue;
+        }
+        let fact = match crate::process_identity::inspect_process_fact(entry.pid) {
+            crate::process_identity::ProcessFactLookup::Present(fact) => fact,
+            crate::process_identity::ProcessFactLookup::Absent => continue,
+            crate::process_identity::ProcessFactLookup::Unavailable => {
+                bail!(
+                    "process identity inspection for startup app-server leader {} was unavailable",
+                    entry.pid
+                );
+            }
+        };
+        if fact.lstart.trim().is_empty()
+            || !codex_app_server_command(&fact.command, codex_bin)
+            || crate::process_group::leader_group_for(entry.pid) != Some(entry.pgid)
+        {
+            continue;
+        }
+        let member_processes = collect_startup_group_members(&entries, daemon_pid, entry.pgid)?;
+        groups.insert(
+            entry.pgid,
+            StartupOwnedGroup {
+                leader_pid: entry.pid,
+                pgid: entry.pgid,
+                process_start_time: fact.lstart,
+                member_processes,
+            },
+        );
+    }
+    Ok(StartupAppServerGroupScan::RootPresent(groups))
+}
+
+fn retain_startup_app_server_groups(
+    evidence: &mut StartupGroupEvidence,
+    daemon_pid: u32,
+    codex_bin: &str,
+) {
+    let Ok(StartupAppServerGroupScan::RootPresent(groups)) =
+        collect_startup_app_server_groups(daemon_pid, codex_bin)
+    else {
+        return;
+    };
+    for (pgid, group) in groups {
+        match evidence.groups.entry(pgid) {
+            std::collections::btree_map::Entry::Vacant(slot) => {
+                slot.insert(group);
+            }
+            std::collections::btree_map::Entry::Occupied(mut slot) => {
+                let existing = slot.get_mut();
+                for member in group.member_processes {
+                    if !existing.member_processes.iter().any(|known| {
+                        known.pid == member.pid
+                            && known.process_start_time == member.process_start_time
+                    }) {
+                        existing.member_processes.push(member);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn startup_group_is_still_owned(group: &StartupOwnedGroup, codex_bin: &str) -> Result<bool> {
+    match crate::process_identity::inspect_process_fact(group.leader_pid) {
+        crate::process_identity::ProcessFactLookup::Present(fact)
+            if crate::process_identity::lstart_matches_recorded(
+                &fact,
+                &group.process_start_time,
+            ) && codex_app_server_command(&fact.command, codex_bin)
+                && crate::process_group::leader_group_for(group.leader_pid) == Some(group.pgid) =>
+        {
+            return Ok(true);
+        }
+        crate::process_identity::ProcessFactLookup::Unavailable => {
+            bail!(
+                "process identity inspection for startup app-server leader {} was unavailable",
+                group.leader_pid
+            );
+        }
+        _ => {}
+    }
+
+    let entries = crate::process_identity::try_collect_process_lineage().context(
+        "process-lineage inspection was unavailable while checking startup app-server ownership",
+    )?;
+    let live_group_members: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.pgid == group.pgid)
+        .collect();
+    if live_group_members.is_empty() {
+        if crate::process_group::group_is_alive(group.pgid) {
+            bail!(
+                "startup app-server process group {} is live but its lineage was unavailable",
+                group.pgid
+            );
+        }
+        return Ok(false);
+    }
+
+    for member in &group.member_processes {
+        if !live_group_members
+            .iter()
+            .any(|entry| entry.pid == member.pid)
+        {
+            continue;
+        }
+        match crate::process_identity::inspect_process_fact(member.pid) {
+            crate::process_identity::ProcessFactLookup::Present(fact)
+                if crate::process_identity::lstart_matches_recorded(
+                    &fact,
+                    &member.process_start_time,
+                ) =>
+            {
+                return Ok(true);
+            }
+            crate::process_identity::ProcessFactLookup::Unavailable => {
+                bail!(
+                    "process identity inspection for startup app-server member {} was unavailable",
+                    member.pid
+                );
+            }
+            _ => {}
+        }
+    }
+
+    bail!(
+        "startup app-server process group {} has live members but no retained matching process identity",
+        group.pgid
+    )
+}
+
+async fn cleanup_failed_bridge_start(
+    daemon: &mut Child,
+    daemon_pid: u32,
+    paths: &ResolvedBridgePaths,
+    config: &BridgeStartConfig,
+    run_id: &str,
+    connection_id: &str,
+    lease_generation: &str,
+    startup_group_evidence: &StartupGroupEvidence,
+) -> Result<()> {
+    let current_state = read_state_file(&paths.state_file).ok().filter(|state| {
+        startup_state_matches(
+            state,
+            config,
+            daemon_pid,
+            run_id,
+            connection_id,
+            lease_generation,
+        )
+    });
+    let mut app_server_groups = startup_group_evidence.groups.clone();
+    let mut failures = Vec::new();
+    if daemon.id().is_some() {
+        match collect_startup_app_server_groups(daemon_pid, &config.codex_bin) {
+            Ok(StartupAppServerGroupScan::RootPresent(groups)) => {
+                for (pgid, group) in groups {
+                    app_server_groups.insert(pgid, group);
+                }
+            }
+            Ok(StartupAppServerGroupScan::RootAbsent) if app_server_groups.is_empty() => {
+                failures.push(
+                    "bridge root disappeared before startup app-server ownership was captured"
+                        .to_string(),
+                );
+            }
+            Ok(StartupAppServerGroupScan::RootAbsent) => {}
+            Err(error) => failures.push(format!(
+                "startup app-server ownership inspection failed: {error:#}"
+            )),
+        }
+    } else if app_server_groups.is_empty() {
+        failures.push(
+            "bridge root was reaped before startup app-server ownership was captured".to_string(),
+        );
+    }
+    if let Some(state) = current_state.as_ref() {
+        let state_group_pgid = state.app_server_pgid;
+        if state_group_pgid.map_or(true, |pgid| !app_server_groups.contains_key(&pgid)) {
+            match app_server_group_from_state(state, &config.codex_bin) {
+                Ok(Some(group)) => {
+                    app_server_groups.entry(group.pgid).or_insert(group);
+                }
+                Ok(None) => {}
+                Err(error) => failures.push(format!(
+                    "startup state app-server ownership inspection failed: {error:#}"
+                )),
+            }
+        }
+    }
+
+    // If try_wait already reaped the bridge, its old pid is no longer a safe
+    // process-group authority. Passing it here could target an unrelated group
+    // after pid reuse; an absent Child id means "reap only", not "signal pid".
+    let bridge_pgid = daemon.id().and_then(|pid| i32::try_from(pid).ok());
+    let bridge_outcome = crate::process_group::shutdown_owned_child(
+        daemon,
+        bridge_pgid,
+        CHILD_SHUTDOWN_GRACE_PERIOD,
+    )
+    .await;
+    if !bridge_outcome.is_gone() {
+        failures.push(format!(
+            "bridge process group {} survived {}",
+            daemon_pid,
+            bridge_outcome.as_str()
+        ));
+    }
+
+    // The app-server deliberately has a different process group from the
+    // bridge. Retire it after the bridge is gone so startup failure cannot
+    // trigger the bridge's normal child-exit publication path.
+    for group in app_server_groups.values() {
+        match startup_group_is_still_owned(group, &config.codex_bin) {
+            Ok(false) => {}
+            Ok(true) => {
+                let outcome =
+                    crate::process_group::shutdown_group(group.pgid, CHILD_SHUTDOWN_GRACE_PERIOD)
+                        .await;
+                if !outcome.is_gone() {
+                    failures.push(format!(
+                        "app-server process group {} survived {}",
+                        group.pgid,
+                        outcome.as_str()
+                    ));
+                }
+            }
+            Err(error) => failures.push(format!(
+                "could not establish ownership of app-server process group {}: {error:#}",
+                group.pgid
+            )),
+        }
+    }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        bail!("{}", failures.join("; "))
+    }
+}
+
+async fn startup_failure(
+    daemon: &mut Child,
+    daemon_pid: u32,
+    paths: &ResolvedBridgePaths,
+    config: &BridgeStartConfig,
+    run_id: &str,
+    connection_id: &str,
+    lease_generation: &str,
+    startup_group_evidence: &StartupGroupEvidence,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    match cleanup_failed_bridge_start(
+        daemon,
+        daemon_pid,
+        paths,
+        config,
+        run_id,
+        connection_id,
+        lease_generation,
+        startup_group_evidence,
+    )
+    .await
+    {
+        Ok(()) => error,
+        Err(cleanup_error) => anyhow!("{error:#}; startup cleanup failed: {cleanup_error:#}"),
     }
 }
 
@@ -2771,11 +3318,20 @@ fn wake_daemon_for_transcript(
 ) {
 }
 
-fn bridge_lock_path(state_file: &Path) -> PathBuf {
+pub(crate) fn bridge_lock_path(state_file: &Path) -> PathBuf {
     state_file.with_extension("lock")
 }
 
-fn acquire_bridge_lock(lock_path: &Path) -> Result<()> {
+/// A short-lived owner of the bridge sidecar lock.
+///
+/// The bridge itself holds this lock for its whole lifetime. Reconciliation
+/// uses the same inode and lock mode for the smaller reread/publish/mark
+/// transaction, so it cannot write an old snapshot over a new bridge.
+pub(crate) struct BridgeLock {
+    _file: fs::File,
+}
+
+pub(crate) fn try_acquire_bridge_lock(lock_path: &Path) -> Result<Option<BridgeLock>> {
     if let Some(parent) = lock_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -2786,23 +3342,44 @@ fn acquire_bridge_lock(lock_path: &Path) -> Result<()> {
         .truncate(false)
         .open(lock_path)
         .with_context(|| format!("opening bridge lock file {}", lock_path.display()))?;
-    let lock = Box::leak(Box::new(fd_lock::RwLock::new(file)));
-    match lock.try_write() {
-        Ok(guard) => {
-            // Leak the guard so the lock is held for the process lifetime.
-            // The kernel releases it on exit via fd close.
-            Box::leak(Box::new(guard));
+
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+
+        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if result == 0 {
+            return Ok(Some(BridgeLock { _file: file }));
+        }
+        let error = std::io::Error::last_os_error();
+        if matches!(
+            error.raw_os_error(),
+            Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
+        ) {
+            return Ok(None);
+        }
+        return Err(error)
+            .with_context(|| format!("acquiring exclusive lock on {}", lock_path.display()));
+    }
+
+    #[cfg(not(unix))]
+    {
+        Ok(Some(BridgeLock { _file: file }))
+    }
+}
+
+fn acquire_bridge_lock(lock_path: &Path) -> Result<()> {
+    match try_acquire_bridge_lock(lock_path)? {
+        Some(lock) => {
+            // Leak the file so the kernel releases the lock only when this
+            // bridge process exits, including on a crash or SIGKILL.
+            Box::leak(Box::new(lock));
             Ok(())
         }
-        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-            bail!(
-                "another codex bridge already owns lock {}",
-                lock_path.display()
-            )
-        }
-        Err(err) => {
-            Err(err).with_context(|| format!("acquiring exclusive lock on {}", lock_path.display()))
-        }
+        None => bail!(
+            "another codex bridge already owns lock {}",
+            lock_path.display()
+        ),
     }
 }
 
@@ -2893,11 +3470,40 @@ fn load_ready_state(
 ) -> Result<BridgeStateFile> {
     let paths = resolve_bridge_paths(state_root_override, session_id, None)?;
     let state = read_state_file(&paths.state_file)?;
+    if state.session_id != session_id {
+        bail!(
+            "codex bridge state session mismatch: requested {session_id}, found {}",
+            state.session_id
+        );
+    }
     if state.status != "ready" {
         bail!(
             "codex bridge session {session_id} is not ready (status={})",
             state.status
         );
+    }
+
+    // Ready is a persisted projection, not command authority. Reuse the
+    // managed scanner's lock-held plus PID/start-time identity check so a
+    // stopped bridge, a recycled PID, or a startup race cannot expose the old
+    // relay URL to steer/interrupt/attach callers.
+    let process_facts = crate::process_identity::try_collect_process_facts_by_pid()
+        .context("could not inspect the managed Codex bridge process")?;
+    let observation = crate::managed_bridge_scan::collect_observations_from_paths(
+        std::slice::from_ref(&paths.state_file),
+        &process_facts,
+    )
+    .into_iter()
+    .next()
+    .context("managed Codex bridge state disappeared during authority check")?;
+    let same_launch = observation.session_id == state.session_id
+        && observation.run_id == state.run_id
+        && observation.connection_id == state.connection_id
+        && observation.lease_generation == state.lease_generation
+        && observation.bridge_pid == state.pid
+        && observation.bridge_process_start_time == state.bridge_process_start_time;
+    if !observation.bridge_alive || observation.status != "ready" || !same_launch {
+        bail!("codex bridge session {session_id} has no live ready authority");
     }
     Ok(state)
 }
@@ -6740,11 +7346,39 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn bridge_attach_uses_remote_without_resume() {
+    fn bridge_attach_keeps_tokens_private_and_rejects_stale_authority() {
         use std::os::unix::fs::PermissionsExt;
+
+        struct Owner(std::process::Child);
+        impl Drop for Owner {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
 
         let temp = tempfile::tempdir().unwrap();
         let session_id = "session-attach";
+        // A builtin read keeps this identity alive without spawning descendants.
+        let mut owner = Owner(
+            std::process::Command::new("/bin/sh")
+                .env_clear()
+                .args([
+                    "-c",
+                    "read keepalive",
+                    "codex-bridge",
+                    "run",
+                    "--session-id",
+                    session_id,
+                ])
+                .stdin(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        );
+        let state_file = temp.path().join(format!("{session_id}.json"));
+        let _lock = try_acquire_bridge_lock(&bridge_lock_path(&state_file))
+            .unwrap()
+            .unwrap();
         let args_file = temp.path().join("codex-args.txt");
         let session_file = temp.path().join("codex-session.txt");
         let fake_codex = temp.path().join("fake-codex");
@@ -6757,155 +7391,59 @@ mod tests {
             ),
         )
         .unwrap();
-        let mut perms = fs::metadata(&fake_codex).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&fake_codex, perms).unwrap();
-
-        let state = BridgeStateFile {
+        fs::set_permissions(&fake_codex, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut state = BridgeStateFile {
             schema_version: BRIDGE_STATE_SCHEMA_VERSION,
             session_id: session_id.to_string(),
-            run_id: None,
-            connection_id: None,
-            lease_generation: None,
             cwd: temp.path().display().to_string(),
             codex_bin: fake_codex.display().to_string(),
             launch_mode: Some(LAUNCH_MODE_TUI.to_string()),
             ws_url: Some("ws://127.0.0.1:4800".to_string()),
             ws_auth_token: Some("relay-test-token".to_string()),
             thread_id: Some("thread-123".to_string()),
-            thread_path: None,
-            pid: 42,
-            bridge_process_start_time: None,
-            app_server_pid: None,
-            app_server_process_start_time: None,
-            app_server_pgid: None,
-            app_server_ws_url: None,
+            pid: owner.0.id(),
+            bridge_process_start_time: crate::turn_claims::process_start_time_for_pid(Some(
+                owner.0.id(),
+            )),
             status: "ready".to_string(),
-            log_file: temp.path().join("bridge.log").display().to_string(),
-            active_turn_id: None,
-            last_turn_status: None,
-            last_error: None,
-            thread_subscription_status: Some(
-                ThreadSubscriptionStatus::Subscribed.as_str().to_string(),
-            ),
-            thread_subscription_attempts: 1,
-            thread_subscription_last_error: None,
-            updated_at: Utc::now().to_rfc3339(),
             ..Default::default()
         };
-        write_state_file(&temp.path().join(format!("{session_id}.json")), &state).unwrap();
-
-        let (command, _) = build_codex_bridge_attach_command(&BridgeAttachConfig {
+        write_state_file(&state_file, &state).unwrap();
+        let config = BridgeAttachConfig {
             session_id: session_id.to_string(),
             state_root: Some(temp.path().to_path_buf()),
             codex_bin: None,
-        })
-        .unwrap();
-
-        let args = command
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            args,
-            vec![
-                "-c".to_string(),
-                CODEX_DISABLE_UPDATE_CHECK_CONFIG.to_string(),
-                "--enable".to_string(),
-                "tui_app_server".to_string(),
-                "--remote".to_string(),
-                "ws://127.0.0.1:4800".to_string(),
-                "--remote-auth-token-env".to_string(),
-                CODEX_REMOTE_TOKEN_ENV.to_string(),
-            ]
-        );
-        assert!(
-            !args.iter().any(|arg| arg.contains("relay-test-token")),
-            "the relay token must never reach the TUI's argv"
-        );
+        };
+        let (mut command, _) = build_codex_bridge_attach_command(&config).unwrap();
         assert!(command.get_envs().any(|(name, value)| {
             name == CODEX_REMOTE_TOKEN_ENV
-                && value.map(|value| value.to_string_lossy().into_owned())
-                    == Some("relay-test-token".to_string())
+                && value == Some(std::ffi::OsStr::new("relay-test-token"))
         }));
+        assert!(command.status().unwrap().success());
+        let args = fs::read_to_string(&args_file).unwrap();
+        assert!(args.contains("--remote\nws://127.0.0.1:4800\n"));
+        assert!(!args
+            .lines()
+            .any(|arg| arg == "resume" || arg == "relay-test-token"));
         assert_eq!(
-            command.get_current_dir(),
-            Some(temp.path()),
-            "attach must preserve the managed session cwd"
+            fs::read_to_string(&session_file).unwrap().trim(),
+            session_id
         );
-        assert!(command.get_envs().any(|(name, value)| {
-            name == "LONGHOUSE_MANAGED_SESSION_ID"
-                && value == Some(std::ffi::OsStr::new(session_id))
-        }));
+        fs::remove_file(&args_file).unwrap();
+        fs::remove_file(&session_file).unwrap();
+
+        state.thread_id = None;
+        write_state_file(&state_file, &state).unwrap();
+        assert!(build_codex_bridge_attach_command(&config).is_err());
+        assert!(!args_file.exists());
+
+        state.thread_id = Some("thread-123".to_string());
+        write_state_file(&state_file, &state).unwrap();
+        owner.0.kill().unwrap();
+        owner.0.wait().unwrap();
+        assert!(build_codex_bridge_attach_command(&config).is_err());
         assert!(!args_file.exists());
         assert!(!session_file.exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn bridge_attach_refuses_ready_state_without_thread_id() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let temp = tempfile::tempdir().unwrap();
-        let session_id = "session-missing-thread";
-        let marker_file = temp.path().join("codex-ran.txt");
-        let fake_codex = temp.path().join("fake-codex");
-        fs::write(
-            &fake_codex,
-            format!("#!/bin/sh\ntouch '{}'\n", marker_file.display()),
-        )
-        .unwrap();
-        let mut perms = fs::metadata(&fake_codex).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&fake_codex, perms).unwrap();
-
-        let state = BridgeStateFile {
-            schema_version: BRIDGE_STATE_SCHEMA_VERSION,
-            session_id: session_id.to_string(),
-            run_id: None,
-            connection_id: None,
-            lease_generation: None,
-            cwd: temp.path().display().to_string(),
-            codex_bin: fake_codex.display().to_string(),
-            launch_mode: Some(LAUNCH_MODE_TUI.to_string()),
-            ws_url: Some("ws://127.0.0.1:4800".to_string()),
-            ws_auth_token: Some("relay-test-token".to_string()),
-            thread_id: None,
-            thread_path: None,
-            pid: 42,
-            bridge_process_start_time: None,
-            app_server_pid: None,
-            app_server_process_start_time: None,
-            app_server_pgid: None,
-            app_server_ws_url: None,
-            status: "ready".to_string(),
-            log_file: temp.path().join("bridge.log").display().to_string(),
-            active_turn_id: None,
-            last_turn_status: None,
-            last_error: None,
-            thread_subscription_status: Some(
-                ThreadSubscriptionStatus::WaitingForThread
-                    .as_str()
-                    .to_string(),
-            ),
-            thread_subscription_attempts: 0,
-            thread_subscription_last_error: None,
-            updated_at: Utc::now().to_rfc3339(),
-            ..Default::default()
-        };
-        write_state_file(&temp.path().join(format!("{session_id}.json")), &state).unwrap();
-
-        let err = cmd_codex_bridge_attach(BridgeAttachConfig {
-            session_id: session_id.to_string(),
-            state_root: Some(temp.path().to_path_buf()),
-            codex_bin: None,
-        })
-        .unwrap_err();
-
-        assert!(err
-            .to_string()
-            .contains("bridge state is missing thread_id"));
-        assert!(!marker_file.exists());
     }
 
     #[test]
@@ -8700,56 +9238,6 @@ mod tests {
         parse_stop_ipc_response(&response_buf).unwrap();
         task.await.unwrap().unwrap();
         terminal_reason
-    }
-
-    #[tokio::test]
-    async fn bridge_send_refuses_direct_ws_fallback_without_explicit_flag() {
-        let temp = tempfile::tempdir().unwrap();
-        let session_id = "session-123";
-        let state = BridgeStateFile {
-            schema_version: BRIDGE_STATE_SCHEMA_VERSION,
-            session_id: session_id.to_string(),
-            run_id: None,
-            connection_id: None,
-            lease_generation: None,
-            cwd: temp.path().display().to_string(),
-            codex_bin: "codex".to_string(),
-            launch_mode: Some(LAUNCH_MODE_DETACHED_UI.to_string()),
-            ws_url: Some("ws://127.0.0.1:9".to_string()),
-            thread_id: Some("thread-123".to_string()),
-            thread_path: None,
-            pid: 42,
-            bridge_process_start_time: None,
-            app_server_pid: None,
-            app_server_process_start_time: None,
-            app_server_pgid: None,
-            app_server_ws_url: None,
-            status: "ready".to_string(),
-            log_file: temp.path().join("bridge.log").display().to_string(),
-            active_turn_id: None,
-            last_turn_status: None,
-            last_error: None,
-            thread_subscription_status: None,
-            thread_subscription_attempts: 0,
-            thread_subscription_last_error: None,
-            updated_at: Utc::now().to_rfc3339(),
-            ..Default::default()
-        };
-        write_state_file(&temp.path().join(format!("{session_id}.json")), &state).unwrap();
-
-        let err = cmd_codex_bridge_send(BridgeSendConfig {
-            session_id: session_id.to_string(),
-            text: "continue".to_string(),
-            state_root: Some(temp.path().to_path_buf()),
-            allow_direct_ws_fallback: false,
-            attachments: Vec::new(),
-        })
-        .await
-        .unwrap_err()
-        .to_string();
-
-        assert!(err.contains("refusing direct WebSocket fallback"));
-        assert!(err.contains("--allow-direct-ws-fallback"));
     }
 
     #[test]

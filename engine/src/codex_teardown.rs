@@ -202,6 +202,15 @@ pub fn reconcile_terminal_event_paths(paths: &[std::path::PathBuf], outbox_dir: 
     let mut republished = 0usize;
     for path in paths {
         let path = path.as_path();
+        // The daemon's scan can be older than a new launch for this session.
+        // Take the bridge's sidecar lock before rereading, publishing, and
+        // marking so a live bridge excludes this transaction and a new launch
+        // cannot be overwritten by the stopped snapshot we first observed.
+        let Ok(Some(_bridge_lock)) = crate::codex_bridge::try_acquire_bridge_lock(
+            &crate::codex_bridge::bridge_lock_path(path),
+        ) else {
+            continue;
+        };
         let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
             Err(_) => continue,

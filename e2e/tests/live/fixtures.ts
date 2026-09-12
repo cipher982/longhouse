@@ -4,9 +4,14 @@ import {
   expect,
   type APIRequestContext,
   type BrowserContext,
-  type StorageState,
+  type BrowserContextOptions,
 } from "@playwright/test";
 import { ingestStorageV2Session } from "../storage-v2-fixtures";
+
+type StorageState = Exclude<
+  BrowserContextOptions["storageState"],
+  string | undefined
+>;
 
 type RequestFactory = {
   newContext: (options?: {
@@ -184,12 +189,15 @@ export function buildRuntimeTokenStorageState(
   };
 }
 
-type LiveFixtures = {
+type LiveWorkerFixtures = {
   apiBaseUrl: string;
   frontendBaseUrl: string;
   browserStorageState: StorageState;
   authToken: string;
   deviceToken: string;
+};
+
+type LiveFixtures = {
   request: APIRequestContext;
   agentsRequest: APIRequestContext;
   context: BrowserContext;
@@ -209,6 +217,44 @@ async function waitForHostedQaTranscript(
       { timeout: 15_000, intervals: [500, 1_000, 2_000] },
     )
     .toBe(true);
+  await expect
+    .poll(
+      async () => {
+        return hostedQaRecallPresent(request, fixture);
+      },
+      { timeout: 15_000, intervals: [500, 1_000, 2_000] },
+    )
+    .toBe(true);
+}
+
+async function hostedQaRecallPresent(
+  request: APIRequestContext,
+  fixture: HostedQaTranscript,
+): Promise<boolean> {
+  const params = new URLSearchParams({
+    query: fixture.searchText,
+    project: fixture.project,
+    include_test: "true",
+    include_automation: "true",
+    mode: "lexical",
+    max_results: "10",
+  });
+  const response = await request.get(`/api/agents/recall?${params}`);
+  if (!response.ok()) {
+    throw new Error(
+      `Hosted QA recall readiness returned ${response.status()}: ${await response.text()}`,
+    );
+  }
+  const body = await response.json();
+  const results = Array.isArray(body?.results) ? body.results : [];
+  return results.some((result: unknown) => {
+    if (result === null || typeof result !== "object") return false;
+    if (!("session_id" in result) || !("snippet" in result)) return false;
+    return (
+      result.session_id === fixture.sessionId &&
+      result.snippet === fixture.assistantText
+    );
+  });
 }
 
 async function waitForHostedQaTranscripts(
@@ -401,7 +447,7 @@ function buildHostedQaCohortSession(
   };
 }
 
-export const test = base.extend<LiveFixtures>({
+export const test = base.extend<LiveFixtures, LiveWorkerFixtures>({
   apiBaseUrl: [
     async ({}, use) => {
       const apiBaseUrl =

@@ -1085,9 +1085,57 @@ def _append_retirement_claim(
 ) -> None:
     run_id = str(state.get("run_id") or "").strip()
     normalized_session_id = str(session_id or "").strip()
-    if not normalized_session_id or not run_id or any(item.get("run_id") == run_id for item in claims):
+    if not normalized_session_id or not run_id:
         return
-    claims.append({"session_id": normalized_session_id, "run_id": run_id, "state": "terminal"})
+    claim = next(
+        (item for item in claims if item.get("session_id") == normalized_session_id and item.get("run_id") == run_id),
+        None,
+    )
+    if claim is None:
+        claim = {"session_id": normalized_session_id, "run_id": run_id}
+        claims.append(claim)
+    # A replacement may retain its managed run identity. Acquiring that head
+    # invalidates the previous head's proof even when the run ID is unchanged.
+    claim["state"] = "acquired"
+    claim.pop("terminal_evidence", None)
+
+
+def _retirement_claim_is_proven(claim: Mapping[str, Any]) -> bool:
+    evidence = claim.get("terminal_evidence")
+    return (
+        claim.get("state") == "terminal"
+        and isinstance(evidence, Mapping)
+        and evidence.get("retired") is True
+        and evidence.get("session_id") == claim.get("session_id")
+        and evidence.get("expected_run_id") == claim.get("run_id")
+    )
+
+
+def _record_retirement_claim_terminal(
+    api_url: str,
+    token: str,
+    claims: list[dict[str, Any]],
+    *,
+    session_id: str,
+    run_id: str,
+    timeout: float = 30,
+) -> dict[str, Any]:
+    claim = next((item for item in claims if item.get("session_id") == session_id and item.get("run_id") == run_id), None)
+    if claim is None:
+        raise RuntimeError(f"OMP retirement claim was not acquired for run {run_id}")
+    claim["state"] = "acquired"
+    claim.pop("terminal_evidence", None)
+
+    deadline = time.monotonic() + timeout
+    evidence: dict[str, object] = {}
+    while time.monotonic() < deadline:
+        evidence = lifecycle._served_run_terminal_evidence(api_url, token, session_id, run_id)
+        if evidence.get("retired") is True:
+            claim["terminal_evidence"] = dict(evidence)
+            claim["state"] = "terminal"
+            return dict(evidence)
+        time.sleep(0.2)
+    raise RuntimeError(f"OMP run {run_id} did not reach canonical terminal evidence: {evidence}")
 
 
 def _wait_served_run_retirement(
@@ -1102,9 +1150,22 @@ def _wait_served_run_retirement(
     last: dict[str, Any] = {}
     while time.monotonic() < deadline:
         last = dict(lifecycle._served_run_inventory_evidence(api_url, token, session_id, claims))
-        if last.get("retired") is True:
+        all_claims_proven = bool(claims) and all(_retirement_claim_is_proven(claim) for claim in claims)
+        last["all_acquired_runs_terminal"] = all_claims_proven
+        last["terminal_evidence_by_run"] = [
+            {
+                "session_id": claim.get("session_id"),
+                "run_id": claim.get("run_id"),
+                "state": claim.get("state"),
+                "terminal_evidence": dict(claim["terminal_evidence"]) if isinstance(claim.get("terminal_evidence"), Mapping) else None,
+            }
+            for claim in claims
+        ]
+        if last.get("retired") is True and all_claims_proven:
             last["retirement_wait_status"] = "pass"
             return last
+        last["retired"] = False
+        last["active_run_count"] = None
         time.sleep(0.2)
     last["retirement_wait_status"] = "timeout"
     return last
@@ -2095,6 +2156,13 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         observation["abort_native"] = abort_evidence["channel_ack_bound"] and abort_evidence["channel_source_bound"]
         observation["abort_evidence"] = abort_evidence
 
+        _record_retirement_claim_terminal(
+            str(args.api_url),
+            str(args.agents_token),
+            retirement_claims,
+            session_id=current_session_id,
+            run_id=str(current_state.get("run_id") or ""),
+        )
         first.submit_line("/new")
         replaced_state = _wait_state(
             longhouse_home,
@@ -2235,6 +2303,13 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         stopped = _wait_stopped(longhouse_home, current_session_id)
         first.process.wait(timeout=15)
         terminated_run_id = str(current_state.get("run_id") or "")
+        _record_retirement_claim_terminal(
+            str(args.api_url),
+            str(args.agents_token),
+            retirement_claims,
+            session_id=current_session_id,
+            run_id=terminated_run_id,
+        )
         controls["terminate"] = {
             "action_label": "terminate",
             "state": dict(replaced_state),
@@ -2498,6 +2573,13 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         final_terminate = _run_engine(args.engine, "terminate", current_session_id, env)
         final_stopped = _wait_stopped(longhouse_home, current_session_id)
         resumed.process.wait(timeout=15)
+        _record_retirement_claim_terminal(
+            str(args.api_url),
+            str(args.agents_token),
+            retirement_claims,
+            session_id=current_session_id,
+            run_id=str(current_state.get("run_id") or ""),
+        )
         if shipper is not None:
             try:
                 terminal_flush = shipper.flush("omp-helm-terminal-retirement")
@@ -2591,6 +2673,17 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         dispatch_run_id = str(current_state.get("run_id") or "")
         if not retirement_claims:
             _append_retirement_claim(retirement_claims, session_id=current_session_id, state=current_state)
+        if dispatch_session_id and dispatch_run_id:
+            try:
+                _record_retirement_claim_terminal(
+                    args.api_url,
+                    args.agents_token,
+                    retirement_claims,
+                    session_id=dispatch_session_id,
+                    run_id=dispatch_run_id,
+                )
+            except Exception as exc:  # noqa: BLE001 - cleanup evidence must fail closed
+                cleanup["terminal_evidence_error"] = f"{type(exc).__name__}: {exc}"
         if not served_run_inventory:
             served_run_inventory = (
                 _wait_served_run_retirement(
