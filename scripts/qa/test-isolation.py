@@ -811,6 +811,13 @@ def main() -> int:
                 configure_docker(scratch)
                 print(prepare_image(scratch))
                 return 0
+        if args.target == "launch-gate-local":
+            args.target = "test-install"
+            status = run_native(args, options)
+            if status:
+                return status
+            args.target = "onboarding-funnel"
+            return run_container(args, options)
         if args.target in NATIVE or (
             args.target == "test-e2e-onboarding" and sys.platform == "darwin"
         ):

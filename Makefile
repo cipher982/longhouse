@@ -1097,13 +1097,14 @@ qa-visual-compare: ## Compare current app screenshots against baselines; set SKI
 menubar-harness: ## macOS menu bar harness (MODE=test|fixtures|live|smoke|full|window|menubar)
 	@./scripts/qa/menubar-harness.sh $(or $(MODE),test)
 
-qa-oss: ## Full OSS QA (isolated clone + onboarding)
+qa-oss: ## Full OSS QA (prepared isolated workspace + onboarding)
 	@./scripts/qa/qa-oss.sh $(ARGS)
 
 onboarding-funnel: ## @internal Onboarding funnel from README contract
 	@./scripts/ops/run-onboarding-funnel.sh
 
-launch-gate-local: test-install onboarding-funnel ## @internal Local launch gate
+launch-gate-local: ## @internal Native installer and portable onboarding gate
+	$(error launch-gate-local must be dispatched from outside an isolated child)
 
 vibetest: ## LLM-powered browser QA (advisory, needs GOOGLE_API_KEY)
 	@./scripts/qa/run-vibetest.sh --agents $(or $(AGENTS),3)
