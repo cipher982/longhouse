@@ -503,9 +503,7 @@ export interface paths {
         put?: never;
         /**
          * Refresh Session
-         * @description Exchange a valid refresh token for a new access token + rotated refresh token.
-         *
-         *     This is the silent-refresh endpoint called by the frontend on 401.
+         * @description Rotate the hosted CP refresh family or the local catalog family.
          */
         post: operations["refresh_session_auth_refresh_post"];
         delete?: never;
@@ -5701,6 +5699,11 @@ export interface components {
         NativeRevokeRequest: {
             /** Refresh Token */
             refresh_token: string;
+            /**
+             * Revoke Authority
+             * @default false
+             */
+            revoke_authority: boolean;
         };
         /** ObservabilityOverviewResponse */
         ObservabilityOverviewResponse: {
@@ -6670,6 +6673,16 @@ export interface components {
             snippet_unavailable_reason?: string | null;
             /** Matched By */
             matched_by: ("lexical" | "dense")[];
+        };
+        /** RefreshOut */
+        RefreshOut: {
+            /** Expires In */
+            expires_in: number;
+            /**
+             * Token Type
+             * @default bearer
+             */
+            token_type: string;
         };
         /** ResolvedBridgeIn */
         ResolvedBridgeIn: {
@@ -11370,7 +11383,9 @@ export interface operations {
     };
     logout_auth_logout_post: {
         parameters: {
-            query?: never;
+            query?: {
+                everywhere?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -11383,6 +11398,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };
@@ -11401,7 +11425,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TokenOut"];
+                    "application/json": components["schemas"]["RefreshOut"];
                 };
             };
         };
@@ -11499,6 +11523,7 @@ export interface operations {
             query?: {
                 tenant?: string | null;
                 return_to?: string | null;
+                reset_attempt?: number;
             };
             header?: never;
             path?: never;
