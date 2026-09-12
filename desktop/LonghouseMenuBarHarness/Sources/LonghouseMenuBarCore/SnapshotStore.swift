@@ -129,6 +129,15 @@ public final class SnapshotStore: ObservableObject {
         }
     }
 
+    // Freeze fixture labels without changing the wall clock that governs
+    // producer/projection trust in the live window host.
+    var snapshotPresentationDate: Date {
+        if source is FixtureHealthSnapshotSource, let collectedAt = snapshot?.collectedAtDate {
+            return collectedAt
+        }
+        return presentationDate
+    }
+
     /// How much the app may trust what it is currently displaying.
     ///
     /// Derived only from producer refresh outcomes. Callers pass the current
@@ -155,6 +164,18 @@ public final class SnapshotStore: ObservableObject {
     /// means the stream had authority and lost it.
     public func projectionTrust(relativeTo date: Date = Date()) -> DataTrust {
         projectionState.trust(relativeTo: date, deadline: projectionDeadline)
+    }
+
+    /// A machine with no managed session projection has no stream lease to
+    /// expire. Treat that ordinary case as current so local transport health is
+    /// not made unknown merely because the stream was never needed.
+    public func projectionTrustForPresentation(relativeTo date: Date = Date()) -> DataTrust {
+        guard let snapshot,
+              snapshot.realtime != nil,
+              !(snapshot.managedSessions ?? []).isEmpty else {
+            return .current
+        }
+        return projectionTrust(relativeTo: date)
     }
 
     deinit {
@@ -365,6 +386,8 @@ public final class SnapshotStore: ObservableObject {
             || currentArchive?.mode != nextArchive?.mode
             || (currentArchive?.pendingRanges ?? 0 > 0) != (nextArchive?.pendingRanges ?? 0 > 0)
             || (currentArchive?.deadRanges ?? 0 > 0) != (nextArchive?.deadRanges ?? 0 > 0)
+            || current?.shippingProgress?.pendingWork != next.shippingProgress?.pendingWork
+            || current?.shippingProgress?.stalled != next.shippingProgress?.stalled
     }
 
     private func connectRealtimeIfNeeded(

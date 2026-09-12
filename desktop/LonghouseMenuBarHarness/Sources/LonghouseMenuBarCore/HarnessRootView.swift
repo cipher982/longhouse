@@ -31,10 +31,14 @@ public struct HarnessRootView: View {
             } else if store.isBooting && (store.snapshot?.parsedSeverity ?? .gray) != .green {
                 MenuBarBootingView()
             } else if let snapshot = store.snapshot {
+                let projectionTrust = store.projectionTrustForPresentation(relativeTo: store.presentationDate)
+                let displayedSnapshot = projectionTrust.isCurrent
+                    ? snapshot
+                    : snapshot.markingRuntimeHostProjectionUnavailable()
                 MenuBarPanelView(
-                    snapshot: snapshot,
+                    snapshot: displayedSnapshot,
                     history: store.history,
-                    presentationDate: store.presentationDate,
+                    presentationDate: store.snapshotPresentationDate,
                     feedback: store.feedback,
                     setFeedback: store.setFeedback,
                     actionSink: actionSink,
@@ -42,9 +46,8 @@ public struct HarnessRootView: View {
                     headerSummaryVariant: headerSummaryVariant,
                     // Recomputed against presentationDate so the banner appears
                     // and its age advances while the panel stays open.
-                    dataTrust: store.isBrieflyRecovering
-                        ? .current
-                        : store.dataTrust(relativeTo: store.presentationDate)
+                    dataTrust: store.dataTrust(relativeTo: store.presentationDate),
+                    projectionTrust: projectionTrust
                 ) {
                     store.refresh(reason: .manual)
                 }

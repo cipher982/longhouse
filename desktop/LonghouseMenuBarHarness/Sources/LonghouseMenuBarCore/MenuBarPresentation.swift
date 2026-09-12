@@ -1,6 +1,7 @@
 import SwiftUI
 private let menuBarUnavailableReasons: Set<String> = [
     "engine_status_missing", "engine_status_unreadable", "engine_status_stale",
+    "engine_projection_stale", "engine_reconciliation_failed",
     "engine_offline", "transport_unavailable",
 ]
 private let menuBarTransportAttentionReasons: Set<String> = [
@@ -70,7 +71,11 @@ public struct MenuBarPresentation: Equatable, Sendable {
 }
 
 extension HealthSnapshot {
-    public func menuBarPresentation(relativeTo referenceDate: Date) -> MenuBarPresentation {
+    public func menuBarPresentation(
+        relativeTo referenceDate: Date,
+        localEvidenceTrust: DataTrust = .current,
+        projectionTrust: DataTrust = .current
+    ) -> MenuBarPresentation {
         let sessions = currentManagedSessions
         let openHelmCount = foregroundManagedCount
         let needsUser = sessions.filter { $0.explicitlyNeedsUser }.count
@@ -91,7 +96,10 @@ extension HealthSnapshot {
             "storage_v2_sources_unresolved",
             "engine_status_unreadable", "orphaned_managed_bridge",
             "managed_launch_recovery_unreadable",
-            "service_stopped", "spool_dead", "desktop_app_setup_required",
+            "service_stopped", "service_not_installed", "service_generation_mismatch",
+            "service_artifact_mismatch",
+            "service_machine_name_mismatch", "service_state_hash_mismatch",
+            "service_runner_name_mismatch", "desktop_app_setup_required",
             "desktop_app_wrong_install_location",
         ]
         let inspectReasons: Set<String> = Set([
@@ -99,11 +107,13 @@ extension HealthSnapshot {
             "managed_session_control_degraded", "provider_release_blocked",
             "storage_v2_sources_proof_unknown", "managed_launch_recovery_active",
             "managed_launch_recovery_exhausted", "parse_errors",
-            "payload_rejected", "payload_too_large",
+            "payload_rejected", "payload_too_large", "spool_dead", "spool_dead_letters",
         ]).union(menuBarTransportAttentionReasons)
         let transportAttentionReason = reasons.first {
             menuBarTransportAttentionReasons.contains($0)
         }
+        let localEvidenceUnavailable = !localEvidenceTrust.isCurrent
+        let projectionUnavailable = !projectionTrust.isCurrent
         // This producer red state is deliberately row-level: the engine has
         // preserved the session, but the phase contract is newer than this
         // client. Keep it visible in the session row without turning an
@@ -113,6 +123,11 @@ extension HealthSnapshot {
         let rowLevelRedReasons: Set<String> = ["managed_unknown_phase"]
         let storageBlockRequiresRepair = self.storageBlockRequiresRepair
         let storageBlockIsRecovering = self.storageBlockIsRecovering
+        let deadLetterCount = max(
+            engineStatus?.payload?.spoolDeadCount ?? 0,
+            reasons.contains("spool_dead") || reasons.contains("spool_dead_letters") ? 1 : 0
+        )
+        let hasDeadLetters = deadLetterCount > 0
         let nativeRedRequiresRepair = parsedSeverity == .red
             && rowLevelRedReasons.isDisjoint(with: reasons)
 
@@ -125,6 +140,8 @@ extension HealthSnapshot {
             promotion = .repair
         } else if needsUser > 0 {
             promotion = .needsUser
+        } else if localEvidenceUnavailable || projectionUnavailable {
+            promotion = .unavailable
         } else if storageBlockIsRecovering || storageBlockProofUnknown || degraded > 0 || orphanBridgeCount > 0 || transportAttentionReason != nil || !inspectReasons.isDisjoint(with: reasons) {
             promotion = .inspect
         } else if !menuBarUnavailableReasons.isDisjoint(with: reasons)
@@ -152,6 +169,8 @@ extension HealthSnapshot {
             headline = "Source upload reconciliation pending for \(storageBlockedCount) source\(storageBlockedCount == 1 ? "" : "s")"
         case .inspect where storageBlockProofUnknown:
             headline = "Durable upload proof unavailable for \(storageBlockedCount) source\(storageBlockedCount == 1 ? "" : "s")"
+        case .inspect where hasDeadLetters:
+            headline = "Durable upload needs inspection for \(deadLetterCount) dead letter\(deadLetterCount == 1 ? "" : "s")"
         case .inspect where reasons.contains("managed_launch_recovery_exhausted"):
             headline = "Managed session recovery needs attention"
         case .inspect where transportAttentionReason != nil:
@@ -189,34 +208,62 @@ extension HealthSnapshot {
             promotion: promotion,
             headline: headline,
             subheadline: counts.joined(separator: " · "),
-            facts: menuBarSystemFacts(relativeTo: referenceDate),
+            facts: menuBarSystemFacts(
+                relativeTo: referenceDate,
+                localEvidenceTrust: localEvidenceTrust,
+                projectionTrust: projectionTrust
+            ),
             backgroundActivity: archiveBackgroundActivity
         )
     }
 
-    private func menuBarSystemFacts(relativeTo referenceDate: Date) -> [MenuBarSystemFact] {
+    private func menuBarSystemFacts(
+        relativeTo referenceDate: Date,
+        localEvidenceTrust: DataTrust,
+        projectionTrust: DataTrust
+    ) -> [MenuBarSystemFact] {
+        let localEvidenceUnavailable = !localEvidenceTrust.isCurrent
+        let projectionUnavailable = !projectionTrust.isCurrent
+        let deadLetterCount = max(
+            engineStatus?.payload?.spoolDeadCount ?? 0,
+            reasons.contains("spool_dead") || reasons.contains("spool_dead_letters") ? 1 : 0
+        )
+        let hasDeadLetters = deadLetterCount > 0
         // Native health intentionally has no service-manager block. A
         // fresh engine pulse with a daemon pid is sufficient local-process
         // evidence; otherwise the panel reports Unknown instead of inventing
         // a service failure.
         let localAgentRunning: Bool
-        if service != nil {
+        if localEvidenceUnavailable {
+            localAgentRunning = false
+        } else if service != nil {
             localAgentRunning = serviceStatusLabel == "running"
         } else {
             localAgentRunning = engineStatus?.fresh == true && engineStatus?.payload?.daemonPid != nil
         }
-        let localValue = service != nil
-            ? (localAgentRunning ? "Running" : serviceStatusTitle)
-            : (localAgentRunning ? "Running" : "Unknown")
+        let localValue: String
+        if localEvidenceUnavailable || engineStatus?.fresh == false {
+            localValue = "Unknown"
+        } else if service != nil {
+            localValue = localAgentRunning ? "Running" : serviceStatusTitle
+        } else {
+            localValue = localAgentRunning ? "Running" : "Unknown"
+        }
         let freshnessValue = engineFreshnessValueLabel(relativeTo: referenceDate)
-        let freshnessIsCurrent = freshnessValue.hasPrefix("Fresh")
-        let localPromotion: MenuBarPromotion = service != nil && !localAgentRunning
+        let freshnessIsCurrent = !localEvidenceUnavailable && freshnessValue.hasPrefix("Fresh")
+        let localPromotion: MenuBarPromotion = localEvidenceUnavailable || engineStatus?.fresh == false
+            ? .unavailable
+            : service != nil && !localAgentRunning
             ? .repair
             : localAgentRunning && freshnessIsCurrent ? .normal : .unavailable
 
         let controlLimited = hasLimitedCanonicalControl
-        let controlValue = controlLimited ? "Limited" : hasCanonicalControlTruth ? "Connected" : "Unavailable"
-        let controlPromotion: MenuBarPromotion = controlLimited
+        let controlValue = projectionUnavailable
+            ? "Unavailable"
+            : controlLimited ? "Limited" : hasCanonicalControlTruth ? "Connected" : "Unavailable"
+        let controlPromotion: MenuBarPromotion = projectionUnavailable
+            ? .unavailable
+            : controlLimited
             ? .inspect
             : hasCanonicalControlTruth ? .normal : .unavailable
 
@@ -227,9 +274,13 @@ extension HealthSnapshot {
 
         let durableValue: String
         let durablePromotion: MenuBarPromotion
-        if !hasEngineEvidence {
+        let localEngineEvidenceUnavailable = localEvidenceUnavailable
+            || engineStatus?.fresh == false
+            || reasons.contains("engine_projection_stale")
+            || reasons.contains("engine_reconciliation_failed")
+        if !hasEngineEvidence || localEngineEvidenceUnavailable {
             durableValue = "Unknown"
-            durablePromotion = .unavailable
+            durablePromotion = reasons.contains("engine_reconciliation_failed") ? .repair : .unavailable
         } else if reasons.contains("storage_v2_outbox_unreadable")
                     || engineStatus?.payload?.storageV2Outbox?.malformedCounter == true
                     || storageBlockProofUnknown {
@@ -238,6 +289,14 @@ extension HealthSnapshot {
         } else if storageBlockedCount > 0 {
             durableValue = "\(storageBlockedCount) source conflict\(storageBlockedCount == 1 ? "" : "s")"
             durablePromotion = storageBlockRequiresRepair ? .repair : .inspect
+        } else if hasDeadLetters {
+            durableValue = "\(deadLetterCount) dead letter\(deadLetterCount == 1 ? "" : "s")"
+            durablePromotion = .inspect
+        } else if engineStatus?.payload?.shippingProgress?.pendingWork == true {
+            let stalled = engineStatus?.payload?.shippingProgress?.stalled == true
+                || reasons.contains("ship_stalled")
+            durableValue = stalled ? "Stalled" : "Pending"
+            durablePromotion = stalled ? .inspect : .normal
         } else if storagePendingCount > 0 {
             durableValue = "\(storagePendingCount) pending"
             durablePromotion = .normal
@@ -249,16 +308,23 @@ extension HealthSnapshot {
         let transportAttentionReason = reasons.first {
             menuBarTransportAttentionReasons.contains($0)
         }
+        let nativeTransport = transport
         let transportValue: String
         let transportDetail: String?
         let transportPromotion: MenuBarPromotion
-        if !hasEngineEvidence {
+        if !hasEngineEvidence || localEvidenceUnavailable || projectionUnavailable {
             transportValue = "Unknown"
-            transportDetail = "no engine evidence"
+            transportDetail = projectionUnavailable
+                ? "Runtime Host projection is unavailable"
+                : localEvidenceUnavailable ? "local status evidence is unavailable" : "no engine evidence"
             transportPromotion = .unavailable
         } else if engineStatus?.fresh == false {
             transportValue = "Unknown"
             transportDetail = "engine evidence is stale"
+            transportPromotion = .unavailable
+        } else if nativeTransport?.status?.lowercased() == "unknown" {
+            transportValue = "Unknown"
+            transportDetail = nativeTransport?.statusSummary ?? nativeTransport?.statusReason
             transportPromotion = .unavailable
         } else if engineStatus?.payload?.isOffline == true {
             transportValue = "Offline"
@@ -270,12 +336,34 @@ extension HealthSnapshot {
             transportPromotion = .unavailable
         } else if let transportAttentionReason {
             transportValue = "Retrying"
-            transportDetail = transportAttentionReason.replacingOccurrences(of: "_", with: " ")
+            transportDetail = nativeTransport?.statusSummary
+                ?? transportAttentionReason.replacingOccurrences(of: "_", with: " ")
+            transportPromotion = .inspect
+        } else if nativeTransport?.status?.lowercased() == "degraded" {
+            transportValue = "Retrying"
+            transportDetail = nativeTransport?.statusSummary ?? nativeTransport?.statusReason
+            transportPromotion = .inspect
+        } else if nativeTransport?.status?.lowercased() == "broken" {
+            transportValue = "Unknown"
+            transportDetail = nativeTransport?.statusSummary ?? nativeTransport?.statusReason
             transportPromotion = .inspect
         } else {
             transportValue = "Connected"
             transportDetail = nil
             transportPromotion = .normal
+        }
+
+        let durableDetail: String
+        if hasDeadLetters {
+            durableDetail = "\(deadLetterCount) dead letter\(deadLetterCount == 1 ? "" : "s") retained · inspect shipping before retrying"
+        } else if durableValue == "Stalled",
+           let seconds = engineStatus?.payload?.shippingProgress?.secondsWithoutProgress,
+           seconds > 0 {
+            durableDetail = "no progress \(Self.compactSeconds(seconds)) · last receipt \(lastShipValueLabel(relativeTo: referenceDate))"
+        } else if durableValue == "Unknown" {
+            durableDetail = "last known receipt \(lastShipValueLabel(relativeTo: referenceDate))"
+        } else {
+            durableDetail = "last receipt \(lastShipValueLabel(relativeTo: referenceDate))"
         }
 
         return [
@@ -291,7 +379,7 @@ extension HealthSnapshot {
             ),
             MenuBarSystemFact(
                 id: "durable-upload", label: "Durable upload", value: durableValue,
-                detail: "last receipt \(lastShipValueLabel(relativeTo: referenceDate))",
+                detail: durableDetail,
                 promotion: durablePromotion
             ),
             MenuBarSystemFact(
@@ -326,6 +414,17 @@ extension HealthSnapshot {
             index += 1
         }
         return index == 0 ? "\(Int(scaled)) \(units[index])" : String(format: "%.1f %@", scaled, units[index])
+    }
+
+    private static func compactSeconds(_ value: UInt64) -> String {
+        let seconds = min(value, UInt64(Int.max))
+        if seconds < 60 {
+            return "\(seconds)s"
+        }
+        if seconds < 3600 {
+            return "\(seconds / 60)m"
+        }
+        return "\(seconds / 3600)h"
     }
 }
 

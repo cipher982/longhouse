@@ -77,6 +77,7 @@ enum LonghouseCLI {
 
     static func repairInstallInvocation(snapshot: HealthSnapshot) -> (launchPath: String, arguments: [String])? {
         repairInstallInvocation(
+            snapshot: snapshot,
             homeDirectory: FileManager.default.homeDirectoryForCurrentUser,
             pathEnvironment: ProcessInfo.processInfo.environment["PATH"]
         )
@@ -102,14 +103,33 @@ enum LonghouseCLI {
             return nil
         }
 
-        _ = snapshot
+        var arguments = [
+            "machine",
+            "repair",
+            "--json",
+        ]
+        if let snapshot, shouldRepairServiceArtifact(snapshot) {
+            arguments.append("--repair-service")
+        }
         return (
             executable.path,
-            [
-                "machine",
-                "repair",
-            ]
+            arguments
         )
+    }
+
+    private static func shouldRepairServiceArtifact(_ snapshot: HealthSnapshot) -> Bool {
+        // These are native observations, not inferred from a stale engine or
+        // parsed from the human-readable repair command.
+        snapshot.reasons.contains {
+            switch $0 {
+            case "service_not_installed", "service_artifact_mismatch",
+                 "service_generation_mismatch", "service_machine_name_mismatch",
+                 "service_state_hash_mismatch", "service_runner_name_mismatch":
+                return true
+            default:
+                return false
+            }
+        }
     }
 
     static func setupInvocation() -> (launchPath: String, arguments: [String])? {

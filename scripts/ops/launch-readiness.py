@@ -71,7 +71,7 @@ def run(
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    default_canary_subdomain = os.environ.get("LONGHOUSE_DEFAULT_SUBDOMAIN") or "david010"
+    default_canary_subdomain = os.environ.get("LONGHOUSE_DEFAULT_SUBDOMAIN") or "demo"
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sha", help="Target commit SHA. Defaults to git HEAD.")
     parser.add_argument("--repo", default="cipher982/longhouse", help="GitHub repo in OWNER/REPO form.")
@@ -159,11 +159,7 @@ def check_workflows(repo: str, sha: str, required: tuple[str, ...]) -> list[Chec
             "databaseId,workflowName,status,conclusion,headSha,url,event",
         ]
     )
-    runs = [
-        item
-        for item in json.loads(proc.stdout or "[]")
-        if item.get("headSha") == sha
-    ]
+    runs = [item for item in json.loads(proc.stdout or "[]") if item.get("headSha") == sha]
     latest = latest_run_by_workflow(runs)
 
     checks: list[Check] = []
@@ -402,9 +398,7 @@ def run_checks(
                 _cached_immutable_check(
                     cache,
                     ("runtime-artifact", release_tag, sha, component),
-                    lambda component=component: check_runtime_artifact(
-                        repo_root(), release_tag, sha, component
-                    ),
+                    lambda component=component: check_runtime_artifact(repo_root(), release_tag, sha, component),
                 )
             )
     return checks
@@ -454,16 +448,13 @@ def main(argv: list[str] | None = None) -> int:
             break
         if terminal_failures:
             print(
-                "Launch readiness failed terminal checks for "
-                f"{sha[:12]}: {', '.join(check.name for check in terminal_failures)}",
+                f"Launch readiness failed terminal checks for {sha[:12]}: {', '.join(check.name for check in terminal_failures)}",
                 file=sys.stderr,
             )
             break
         pending_signature = _pending_signature(checks)
         if pending_signature != last_pending_signature:
-            failing = ", ".join(
-                f"{check.name}={check.state}" for check in checks if not check.ok
-            ) or "unknown"
+            failing = ", ".join(f"{check.name}={check.state}" for check in checks if not check.ok) or "unknown"
             print(
                 f"Launch readiness pending for {sha[:12]}: {failing}; retrying in {args.poll}s",
                 file=sys.stderr,
@@ -478,10 +469,7 @@ def main(argv: list[str] | None = None) -> int:
                     "target_sha": sha,
                     "ok": ok,
                     "attempts": attempt,
-                    "checks": [
-                        {**check.__dict__, "ok": check.ok, "terminal": check.terminal}
-                        for check in checks
-                    ],
+                    "checks": [{**check.__dict__, "ok": check.ok, "terminal": check.terminal} for check in checks],
                 },
                 indent=2,
             )

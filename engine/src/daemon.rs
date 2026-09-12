@@ -116,7 +116,7 @@ const ARCHIVE_STARTUP_REPLAY_WARMUP_MIN: Duration = Duration::from_secs(5);
 const ARCHIVE_STARTUP_REPLAY_WARMUP_MAX: Duration = Duration::from_secs(20);
 const LOCAL_RETRY_DELAY_SECS: u64 = 5;
 const LIVE_LOCAL_RETRY_DELAY: Duration = Duration::from_millis(500);
-const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(120);
+const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(30);
 const LOCAL_STATUS_INTERVAL_SECS: u64 = 1;
 /// How long the local status projection may take before it is worth reporting.
 ///
@@ -139,7 +139,7 @@ const MANAGED_OBSERVATION_INTERVAL_SECS: u64 = 5;
 const MANAGED_FULL_RECONCILIATION_INTERVAL_SECS: u64 = 60;
 const WAKE_GAP_THRESHOLD_SECS: u64 = 5;
 const MACHINE_PRESENCE_INTERVAL_SECS: u64 = 60;
-const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
+const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 60;
 const FLIGHT_SAMPLE_INTERVAL_SECS: u64 = 5;
 
 const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
@@ -275,6 +275,7 @@ impl Drop for PathWorkersShutdown {
 struct PathTaskResult {
     job: PathJob,
     events_shipped: usize,
+    bytes_shipped: u64,
     resolved_spool: usize,
     failed_spool: usize,
     had_connect_error: bool,
@@ -740,7 +741,7 @@ fn archive_startup_replay_warmup_delay(
 ///
 /// Best-effort by construction: the process is already exiting on a real error,
 /// and failing to write the explanation must not replace it with an I/O error.
-fn record_startup_refusal(message: &str) {
+fn record_startup_refusal(reason: &str, message: &str) {
     let Ok(status_path) = config::get_agent_status_path() else {
         return;
     };
@@ -752,10 +753,32 @@ fn record_startup_refusal(message: &str) {
     // only to carry the reason; liveness still reads as down, which is true.
     let payload = serde_json::json!({
         "startup_refused": true,
+        "startup_refusal_kind": reason,
         "startup_refusal": message,
     });
     if let Ok(serialized) = serde_json::to_vec_pretty(&payload) {
         let _ = std::fs::write(&status_path, serialized);
+    }
+}
+
+fn startup_storage_reason(error: &anyhow::Error) -> &'static str {
+    let code = error.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<rusqlite::Error>()
+            .and_then(rusqlite::Error::sqlite_error_code)
+    });
+    match code {
+        Some(rusqlite::ErrorCode::NotADatabase | rusqlite::ErrorCode::DatabaseCorrupt) => {
+            "state_database_corrupt"
+        }
+        Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
+            "state_database_locked"
+        }
+        Some(rusqlite::ErrorCode::ReadOnly | rusqlite::ErrorCode::PermissionDenied) => {
+            "state_database_readonly"
+        }
+        Some(rusqlite::ErrorCode::DiskFull) => "disk_full",
+        _ => "state_database_unavailable",
     }
 }
 
@@ -764,8 +787,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // 1. Open state DB
     let projection_db_path =
         crate::state::db::resolve_db_path(config.shipper_config.db_path.as_deref())?;
-    let mut conn = open_db(Some(&projection_db_path))?;
-    crate::state::source_inventory::abandon_open_reconciliation(&conn)?;
+    let mut conn = open_db(Some(&projection_db_path)).inspect_err(|error| {
+        record_startup_refusal(startup_storage_reason(error), &format!("{error:#}"));
+    })?;
+    crate::state::source_inventory::abandon_open_reconciliation(&conn).inspect_err(|error| {
+        record_startup_refusal(startup_storage_reason(error), &format!("{error:#}"));
+    })?;
 
     // 2. Prune stale file_state entries (files deleted from disk, >30 days old)
     {
@@ -789,7 +816,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             &config.shipper_config.machine_name,
             Some(Duration::from_secs(5)),
         )
-        .await?;
+        .await
+        .inspect_err(|error| {
+            record_startup_refusal("runtime_unavailable", &format!("{error:#}"));
+        })?;
     let storage_v2 = match require_storage_v2_cutover(negotiated, &config.shipper_config.api_url) {
         Ok(capabilities) => {
             tracing::info!(
@@ -804,7 +834,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // before it ever writes engine-status.json, so without this the
             // only record is a launchd log and every local-health surface just
             // says the engine is missing -- which is true and useless.
-            record_startup_refusal(&error.to_string());
+            record_startup_refusal("runtime_protocol_unsupported", &format!("{error:#}"));
             return Err(error);
         }
     };
@@ -910,9 +940,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut opencode_title_refresh_tasks: JoinSet<Result<()>> = JoinSet::new();
     let mut projection_build_tasks: JoinSet<ProjectionBuildResult> = JoinSet::new();
     let mut deferred_retries = HashMap::new();
+    let mut shipping_progress = heartbeat::ShippingProgressObservation::new(Instant::now());
     let startup_archive_mode =
         read_archive_repair_control().normalized_mode(config.archive_repair_mode);
-    match queue_storage_v2_pending_retry_paths(&mut scheduler, &conn, config.archive_repair_mode) {
+    match queue_storage_v2_pending_retry_paths(
+        &mut scheduler,
+        &conn,
+        config.archive_repair_mode,
+        &mut deferred_retries,
+    ) {
         Ok(queued) if queued > 0 => tracing::info!(
             queued,
             "Queued immutable storage-v2 exact retries at startup"
@@ -1095,6 +1131,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 PERIODIC_SPOOL_PATH_LIMIT,
                 Some(adaptive_limiter.as_ref()),
                 config.archive_repair_mode,
+                &mut deferred_retries,
             ) {
                 Ok(queued) if queued > 0 => {
                     tracing::info!(
@@ -1114,6 +1151,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             &mut in_flight,
             &task_context,
             &mut deferred_retries,
+            &mut shipping_progress,
             offline.is_offline,
             archive_repair_is_paused(config.archive_repair_mode),
         );
@@ -1136,18 +1174,19 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // and SQLite reads, so do not let a ready timer win the select race
             // while a turn-completion wake is already waiting.
             Some(signal) = transcript_wake_rx.recv() => {
-                if let Some(path) = enqueue_transcript_wake_signal(
+                if enqueue_transcript_wake_signal(
                     &conn,
                     &mut scheduler,
                     &mut latest_transcript_wake_observed,
+                    &mut deferred_retries,
                     signal,
-                ) {
-                    deferred_retries.remove(&path);
+                ).is_some() {
                     pump_ready_local_work(
                         &mut scheduler,
                         &mut in_flight,
                         &task_context,
                         &mut deferred_retries,
+                        &mut shipping_progress,
                         offline.is_offline,
                         archive_repair_is_paused(config.archive_repair_mode),
                     );
@@ -1162,7 +1201,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         let reconciled_to_head = result.reconciled_to_head
                             && result.rerun_priority.is_none()
                             && result.local_retry_after.is_none();
-                        scheduler.complete(&retry_path, result.rerun_priority);
+                        if result.local_retry_after.is_some() {
+                            scheduler.complete_without_rerun(&retry_path);
+                        } else {
+                            scheduler.complete(&retry_path, result.rerun_priority);
+                        }
                         if let Some(delay) = result.local_retry_after {
                             let priority = result.local_retry_priority.unwrap_or(result.job.priority);
                             deferred_retries.insert(retry_path.clone(), DeferredRetry {
@@ -1180,8 +1223,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 result.failed_spool
                             );
                         }
+                        if result.events_shipped > 0 || result.bytes_shipped > 0 || result.resolved_spool > 0 {
+                            shipping_progress.record_progress(Instant::now());
+                        }
                         if result.had_connect_error {
                             if offline.record_connect_error() {
+                                shipping_progress.reset_after_sleep(Instant::now());
                                 tracing::warn!(
                                     threshold = OFFLINE_CONNECT_FAILURE_THRESHOLD,
                                     "Connection error threshold reached while processing {} — entering offline mode",
@@ -1195,7 +1242,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     result.job.path.display()
                                 );
                             }
-                        } else if result.events_shipped > 0 || result.resolved_spool > 0 {
+                        } else if result.events_shipped > 0 || result.bytes_shipped > 0 {
                             last_ship_at = Some(chrono::Utc::now().to_rfc3339());
                             if let Some(duration) = offline.mark_online() {
                                 last_runtime_truth_signature = None;
@@ -1249,6 +1296,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 &mut scheduler,
                                 result.files,
                                 result.priority,
+                                &mut deferred_retries,
                             );
                             tracing::debug!("Queued {} paths for {}", queued, result.reason);
                         }
@@ -1840,6 +1888,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &mut in_flight,
                             &task_context,
                             &mut deferred_retries,
+                            &mut shipping_progress,
                             offline.is_offline,
                             archive_repair_is_paused(config.archive_repair_mode),
                         );
@@ -1951,7 +2000,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     Some(Ok(result)) => {
                         let is_current = result.generation == projection_generation;
                         match result.result {
-                        Ok((projection, next_snapshot_state)) => {
+                        Ok((mut projection, next_snapshot_state)) => {
                             if result.elapsed_ms > LOCAL_STATUS_BUDGET_MS {
                                 projection_over_budget_ticks =
                                     projection_over_budget_ticks.saturating_add(1);
@@ -1990,10 +2039,21 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             {
                                 managed_reconciliation = heartbeat::ProjectionReconciliation::idle();
                             }
+                            shipping_progress.observe_pending_work(
+                                heartbeat::payload_has_pending_work(&projection.payload)
+                                    || known_pending_local_work(
+                                        &scheduler,
+                                        &deferred_retries,
+                                        archive_repair_is_paused(config.archive_repair_mode),
+                                    ),
+                                Instant::now(),
+                            );
                             heartbeat::write_status_file(
-                                &projection,
+                                &mut projection,
                                 serde_json::to_value(control_channel_status.snapshot()).ok(),
                                 &managed_reconciliation,
+                                &mut shipping_progress,
+                                offline.is_offline,
                                 &status_path,
                             );
                             let payload = projection.payload.clone();
@@ -2118,6 +2178,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     INITIAL_SPOOL_PATH_LIMIT,
                     Some(adaptive_limiter.as_ref()),
                     config.archive_repair_mode,
+                    &mut deferred_retries,
                 ) {
                     Ok(queued) => {
                         tracing::info!(
@@ -2149,6 +2210,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 match client.health_check().await {
                     Ok(true) => {
                         if let Some(duration) = offline.mark_online() {
+                            shipping_progress.reset_after_sleep(Instant::now());
                             last_runtime_truth_signature = None;
                             tracing::info!(
                                 "Back online after {:.0}s — resuming shipping",
@@ -2178,6 +2240,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &mut deferred_retries,
                     &mut in_flight,
                     &task_context,
+                    &mut shipping_progress,
                     offline.is_offline,
                     archive_repair_is_paused(config.archive_repair_mode),
                 ).await;
@@ -2246,6 +2309,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     PERIODIC_SPOOL_PATH_LIMIT,
                     Some(adaptive_limiter.as_ref()),
                     config.archive_repair_mode,
+                    &mut deferred_retries,
                 ) {
                     Ok(queued) => {
                         queued_retries = queued_retries.saturating_add(queued);
@@ -2259,6 +2323,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &mut scheduler,
                     &conn,
                     config.archive_repair_mode,
+                    &mut deferred_retries,
                 ) {
                     Ok(queued) => queued_retries = queued_retries.saturating_add(queued),
                     Err(error) => tracing::warn!(
@@ -2420,6 +2485,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // Frequent local status file refresh for ambient UX and debugging
             _ = local_status_timer.tick() => {
                 if let Some(gap) = wake_gap_detector.observe(SystemTime::now(), Instant::now()) {
+                    shipping_progress.reset_after_sleep(Instant::now());
                     tracing::info!(wake_gap_ms = gap.as_millis() as u64, "Detected system wake gap");
                     if maybe_start_managed_observation_scan(
                         &mut managed_observation_scan_tasks,
@@ -2439,16 +2505,20 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         );
                     }
                 }
-                if let Some(projection) = last_status_projection.as_ref() {
+                if let Some(projection) = last_status_projection.as_mut() {
                     heartbeat::write_status_file(
                         projection,
                         serde_json::to_value(control_channel_status.snapshot()).ok(),
                         &managed_reconciliation,
+                        &mut shipping_progress,
+                        offline.is_offline,
                         &status_path,
                     );
                 } else {
                     heartbeat::refresh_existing_status_pulse(
                         &managed_reconciliation,
+                        &mut shipping_progress,
+                        offline.is_offline,
                         &status_path,
                     );
                 }
@@ -2502,11 +2572,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             // Periodic server heartbeat
             _ = heartbeat_timer.tick() => {
-                if let Some(projection) = last_status_projection.as_ref() {
+                if let Some(projection) = last_status_projection.as_mut() {
                     heartbeat::write_status_file(
                         projection,
                         serde_json::to_value(control_channel_status.snapshot()).ok(),
                         &managed_reconciliation,
+                        &mut shipping_progress,
+                        offline.is_offline,
                         &status_path,
                     );
                     if !offline.is_offline {
@@ -3188,13 +3260,31 @@ fn enqueue_discovered_files(
     scheduler: &mut PathScheduler,
     all_files: Vec<(PathBuf, &'static str)>,
     priority: WorkPriority,
+    deferred_retries: &mut HashMap<PathBuf, DeferredRetry>,
 ) -> usize {
-    let count = all_files.len();
     let source = discovery_observation_source(priority);
+    let mut count = 0;
     for (path, provider) in all_files {
-        scheduler.enqueue_observed(path, provider, priority, source, now_ms());
+        if retry_admission_open(&path, deferred_retries) {
+            scheduler.enqueue_observed(path, provider, priority, source, now_ms());
+            count += 1;
+        }
     }
     count
+}
+
+fn retry_admission_open(
+    path: &Path,
+    deferred_retries: &mut HashMap<PathBuf, DeferredRetry>,
+) -> bool {
+    let Some(retry) = deferred_retries.get(path) else {
+        return true;
+    };
+    if retry.due_at > Instant::now() {
+        return false;
+    }
+    deferred_retries.remove(path);
+    true
 }
 
 fn maybe_seal_history_reconciliation(
@@ -3339,6 +3429,7 @@ async fn handle_live_transcript_file_events(
     deferred_retries: &mut HashMap<PathBuf, DeferredRetry>,
     in_flight: &mut JoinSet<Option<PathTaskResult>>,
     task_context: &PathTaskContext,
+    shipping_progress: &mut heartbeat::ShippingProgressObservation,
     offline: bool,
     background_paused: bool,
 ) -> Vec<PathBuf> {
@@ -3351,18 +3442,19 @@ async fn handle_live_transcript_file_events(
         tokio::select! {
             biased;
             Some(signal) = transcript_wake_rx.recv() => {
-                if let Some(path) = enqueue_transcript_wake_signal(
+                if enqueue_transcript_wake_signal(
                     conn,
                     scheduler,
                     latest_transcript_wake_observed,
+                    deferred_retries,
                     signal,
-                ) {
-                    deferred_retries.remove(&path);
+                ).is_some() {
                     pump_ready_local_work(
                         scheduler,
                         in_flight,
                         task_context,
                         deferred_retries,
+                        shipping_progress,
                         offline,
                         background_paused,
                     );
@@ -3433,14 +3525,16 @@ async fn handle_live_transcript_file_events(
             continue;
         }
 
-        scheduler.enqueue_observed_window(
-            session_event.path,
-            provider,
-            WorkPriority::Live,
-            "fsevent",
-            session_event.observed_at_ms,
-            session_event.latest_observed_at_ms,
-        );
+        if retry_admission_open(&session_event.path, deferred_retries) {
+            scheduler.enqueue_observed_window(
+                session_event.path,
+                provider,
+                WorkPriority::Live,
+                "fsevent",
+                session_event.observed_at_ms,
+                session_event.latest_observed_at_ms,
+            );
+        }
     }
     managed_state_changes
 }
@@ -4086,6 +4180,7 @@ fn queue_failed_shipment_retry_paths(
     limit: usize,
     limiter: Option<&AdaptiveLimiter>,
     archive_repair_mode: ArchiveRepairMode,
+    deferred_retries: &mut HashMap<PathBuf, DeferredRetry>,
 ) -> Result<usize> {
     let spool = Spool::new(conn);
     let cleaned = spool.cleanup()?;
@@ -4127,15 +4222,18 @@ fn queue_failed_shipment_retry_paths(
             );
             continue;
         };
-        scheduler.enqueue_observed_with_estimated_bytes(
-            PathBuf::from(pending.file_path),
-            provider,
-            WorkPriority::Retry,
-            FAILED_SHIPMENT_RETRY_OBSERVATION_SOURCE,
-            now_ms(),
-            Some(pending.pending_bytes),
-        );
-        queued += 1;
+        let path = PathBuf::from(pending.file_path);
+        if retry_admission_open(&path, deferred_retries) {
+            scheduler.enqueue_observed_with_estimated_bytes(
+                path,
+                provider,
+                WorkPriority::Retry,
+                FAILED_SHIPMENT_RETRY_OBSERVATION_SOURCE,
+                now_ms(),
+                Some(pending.pending_bytes),
+            );
+            queued += 1;
+        }
     }
     Ok(queued)
 }
@@ -4144,6 +4242,7 @@ fn queue_storage_v2_pending_retry_paths(
     scheduler: &mut PathScheduler,
     conn: &rusqlite::Connection,
     archive_repair_mode: ArchiveRepairMode,
+    deferred_retries: &mut HashMap<PathBuf, DeferredRetry>,
 ) -> Result<usize> {
     if read_archive_repair_control().is_paused(archive_repair_mode) {
         tracing::debug!("Immutable storage-v2 retry paused by local control file");
@@ -4159,15 +4258,18 @@ fn queue_storage_v2_pending_retry_paths(
             );
             continue;
         };
-        scheduler.enqueue_observed_with_estimated_bytes(
-            PathBuf::from(pending.source_path),
-            provider,
-            WorkPriority::Retry,
-            STORAGE_V2_PENDING_RETRY_OBSERVATION_SOURCE,
-            now_ms(),
-            Some(pending.raw_bytes),
-        );
-        queued += 1;
+        let path = PathBuf::from(pending.source_path);
+        if retry_admission_open(&path, deferred_retries) {
+            scheduler.enqueue_observed_with_estimated_bytes(
+                path,
+                provider,
+                WorkPriority::Retry,
+                STORAGE_V2_PENDING_RETRY_OBSERVATION_SOURCE,
+                now_ms(),
+                Some(pending.raw_bytes),
+            );
+            queued += 1;
+        }
     }
     Ok(queued)
 }
@@ -4179,6 +4281,7 @@ fn queue_failed_shipment_retries_if_idle(
     limit: usize,
     limiter: Option<&AdaptiveLimiter>,
     archive_repair_mode: ArchiveRepairMode,
+    deferred_retries: &mut HashMap<PathBuf, DeferredRetry>,
 ) -> Result<usize> {
     if offline || scheduler.has_pending_work() {
         return Ok(0);
@@ -4186,12 +4289,19 @@ fn queue_failed_shipment_retries_if_idle(
     // Legacy v1 spool rows still name real source paths. Queueing them lets the
     // storage-v2 lane re-ship those sources from disk and retire the leftover
     // pointer rows; it is the only thing that still drains that table.
-    let queued =
-        queue_failed_shipment_retry_paths(scheduler, conn, limit, limiter, archive_repair_mode)?;
+    let queued = queue_failed_shipment_retry_paths(
+        scheduler,
+        conn,
+        limit,
+        limiter,
+        archive_repair_mode,
+        deferred_retries,
+    )?;
     Ok(queued.saturating_add(queue_storage_v2_pending_retry_paths(
         scheduler,
         conn,
         archive_repair_mode,
+        deferred_retries,
     )?))
 }
 
@@ -4263,9 +4373,13 @@ fn pump_ready_local_work(
     in_flight: &mut JoinSet<Option<PathTaskResult>>,
     task_context: &PathTaskContext,
     deferred_retries: &mut HashMap<PathBuf, DeferredRetry>,
+    shipping_progress: &mut heartbeat::ShippingProgressObservation,
     offline: bool,
     background_paused: bool,
 ) {
+    if known_pending_local_work(scheduler, deferred_retries, background_paused) {
+        shipping_progress.observe_pending_work(true, Instant::now());
+    }
     drain_due_local_retries(scheduler, deferred_retries);
     start_ready_jobs(
         scheduler,
@@ -4273,6 +4387,21 @@ fn pump_ready_local_work(
         task_context,
         local_work_is_live_only(offline, background_paused),
     );
+}
+
+fn known_pending_local_work(
+    scheduler: &PathScheduler,
+    deferred_retries: &HashMap<PathBuf, DeferredRetry>,
+    background_paused: bool,
+) -> bool {
+    if background_paused {
+        scheduler.has_pending_priority(WorkPriority::Live)
+            || deferred_retries
+                .values()
+                .any(|retry| retry.priority == WorkPriority::Live)
+    } else {
+        scheduler.has_pending_work() || !deferred_retries.is_empty()
+    }
 }
 
 fn local_work_is_live_only(offline: bool, background_paused: bool) -> bool {
@@ -4418,6 +4547,7 @@ fn enqueue_transcript_wake_signal(
     conn: &rusqlite::Connection,
     scheduler: &mut PathScheduler,
     latest_transcript_wake_observed: &mut HashMap<PathBuf, i64>,
+    deferred_retries: &mut HashMap<PathBuf, DeferredRetry>,
     signal: TranscriptWakeSignal,
 ) -> Option<PathBuf> {
     if let Some((path, provider, observation)) =
@@ -4425,7 +4555,9 @@ fn enqueue_transcript_wake_signal(
     {
         persist_cursor_agent_transcript_binding(conn, &path, provider, &observation);
         let scheduled_path = path.clone();
-        scheduler.enqueue_observation(path, provider, WorkPriority::Live, observation);
+        if retry_admission_open(&path, deferred_retries) {
+            scheduler.enqueue_observation(path, provider, WorkPriority::Live, observation);
+        }
         Some(scheduled_path)
     } else {
         None
@@ -4592,6 +4724,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
     let mut result = PathTaskResult {
         job,
         events_shipped: 0,
+        bytes_shipped: 0,
         resolved_spool: 0,
         failed_spool: 0,
         had_connect_error: false,
@@ -4755,11 +4888,15 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 );
             }
             result.events_shipped = outcome.events_shipped;
+            result.bytes_shipped = outcome.bytes_shipped;
             if outcome.has_more {
                 result.rerun_priority = Some(result.job.priority);
             } else {
                 match retire_legacy_spool_after_storage_v2(&conn, &result.job.path) {
-                    Ok(_) => result.reconciled_to_head = true,
+                    Ok(retired) => {
+                        result.resolved_spool += retired;
+                        result.reconciled_to_head = true;
+                    }
                     Err(error) => {
                         tracing::warn!(
                             path = %result.job.path.display(),
@@ -4781,7 +4918,10 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         }
         Ok(PathStorageV2ShipResult::Current) => {
             match retire_legacy_spool_after_storage_v2(&conn, &result.job.path) {
-                Ok(_) => result.reconciled_to_head = true,
+                Ok(retired) => {
+                    result.resolved_spool += retired;
+                    result.reconciled_to_head = true;
+                }
                 Err(error) => {
                     tracing::warn!(
                         path = %result.job.path.display(),
@@ -5402,6 +5542,7 @@ mod tests {
             last_ship_error_kind: None,
             last_ship_error_message: None,
             spool_pending_count: 0,
+            shipping_progress: heartbeat::ShippingProgress::default(),
             spool_dead_count: 0,
             archive_backlog: crate::state::spool::ArchiveBacklogSnapshot::default(),
             storage_v2_outbox:
@@ -6241,6 +6382,7 @@ mod tests {
             &conn,
             &mut scheduler,
             &mut latest_wakes,
+            &mut HashMap::new(),
             TranscriptWakeSignal {
                 provider: "codex".to_string(),
                 path: transcript.path().to_path_buf(),
@@ -6585,6 +6727,7 @@ mod tests {
             10,
             None,
             ArchiveRepairMode::Drain,
+            &mut HashMap::new(),
         )
         .unwrap();
 
@@ -6631,8 +6774,13 @@ mod tests {
 
         let mut scheduler = PathScheduler::new(4);
         assert_eq!(
-            queue_storage_v2_pending_retry_paths(&mut scheduler, &conn, ArchiveRepairMode::Drain,)
-                .unwrap(),
+            queue_storage_v2_pending_retry_paths(
+                &mut scheduler,
+                &conn,
+                ArchiveRepairMode::Drain,
+                &mut HashMap::new(),
+            )
+            .unwrap(),
             1
         );
         assert_eq!(scheduler.snapshot().ready_retry_bytes, 10);
@@ -6700,6 +6848,7 @@ mod tests {
                         &mut scheduler,
                         &conn,
                         ArchiveRepairMode::Drain,
+                        &mut HashMap::new(),
                     )
                     .unwrap(),
                     0
@@ -6722,6 +6871,7 @@ mod tests {
                         &mut scheduler,
                         &conn,
                         ArchiveRepairMode::Drain,
+                        &mut HashMap::new(),
                     )
                     .unwrap(),
                     1
@@ -6763,6 +6913,7 @@ mod tests {
             10,
             None,
             ArchiveRepairMode::Drain,
+            &mut HashMap::new(),
         )
         .unwrap();
         assert_eq!(queued, 2);
@@ -6802,6 +6953,7 @@ mod tests {
                     10,
                     None,
                     ArchiveRepairMode::Paused,
+                    &mut HashMap::new(),
                 )
                 .unwrap();
 
@@ -6854,6 +7006,7 @@ mod tests {
                     10,
                     None,
                     ArchiveRepairMode::Paused,
+                    &mut HashMap::new(),
                 )
                 .unwrap();
                 assert_eq!(queued, 0);
@@ -6874,6 +7027,7 @@ mod tests {
                     10,
                     None,
                     ArchiveRepairMode::Paused,
+                    &mut HashMap::new(),
                 )
                 .unwrap();
                 assert_eq!(queued, 1);
@@ -6919,6 +7073,7 @@ mod tests {
             10,
             Some(limiter.as_ref()),
             ArchiveRepairMode::Drain,
+            &mut HashMap::new(),
         )
         .unwrap();
 
@@ -6940,6 +7095,7 @@ mod tests {
             &mut scheduler,
             vec![(path.clone(), "claude")],
             WorkPriority::Scan,
+            &mut HashMap::new(),
         );
 
         assert_eq!(queued, 1);
@@ -7031,6 +7187,7 @@ mod tests {
         let mut payload = empty_heartbeat_payload();
         payload.archive_backlog.pending_ranges = 2;
         payload.archive_backlog.state = "ready".to_string();
+        payload.storage_v2_outbox.pending_count = 1;
         let control = ArchiveRepairControl {
             mode: Some("paused".to_string()),
             actor: Some("menu_bar".to_string()),
@@ -7052,6 +7209,7 @@ mod tests {
             Some("user paused while travelling")
         );
         assert!(!payload.is_offline);
+        assert!(!heartbeat::payload_has_pending_work(&payload));
     }
 
     #[test]
@@ -7064,7 +7222,9 @@ mod tests {
         let history = PathBuf::from("/tmp/history.jsonl");
         let live = PathBuf::from("/tmp/live.jsonl");
         scheduler.enqueue(history.clone(), "codex", WorkPriority::Scan);
+        assert!(!known_pending_local_work(&scheduler, &HashMap::new(), true));
         scheduler.enqueue(live.clone(), "codex", WorkPriority::Live);
+        assert!(known_pending_local_work(&scheduler, &HashMap::new(), true));
 
         let launched = scheduler.pop_launchable_live().unwrap();
         assert_eq!(launched.path, live);
@@ -7234,6 +7394,61 @@ mod tests {
             storage_v2_backpressure_retry_delay(WorkPriority::Scan, Duration::from_secs(5),),
             Duration::from_secs(5)
         );
+    }
+
+    #[test]
+    fn pending_storage_retry_respects_an_existing_local_backoff() {
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let mut conn = open_db(Some(db.path())).unwrap();
+        let epoch = uuid::Uuid::new_v4();
+        conn.execute(
+            "INSERT INTO source_epoch_registry (
+                 source_epoch, provider, opaque_source_id, file_incarnation,
+                 start_reason, max_observed_len, created_at, updated_at
+             ) VALUES (?1, 'codex', 'source-a', 'fixture', 'initial', 10, ?2, ?2)",
+            rusqlite::params![epoch.to_string(), "2026-07-15T00:00:00Z"],
+        )
+        .unwrap();
+        let pending = crate::state::pending_source_envelope::PendingSourceEnvelope::new(
+            epoch,
+            transcript.path().to_string_lossy().to_string(),
+            0,
+            10,
+            "a".repeat(64),
+            vec![1],
+            vec![2],
+            10,
+            1,
+            true,
+            false,
+        );
+        crate::state::pending_source_envelope::persist_or_load(&mut conn, &pending).unwrap();
+
+        let path = transcript.path().to_path_buf();
+        let mut deferred_retries = HashMap::from([(
+            path.clone(),
+            DeferredRetry {
+                due_at: Instant::now() + Duration::from_secs(60),
+                provider: "codex",
+                priority: WorkPriority::Retry,
+                observation: test_observation(),
+            },
+        )]);
+        let mut scheduler = PathScheduler::new(4);
+
+        assert_eq!(
+            queue_storage_v2_pending_retry_paths(
+                &mut scheduler,
+                &conn,
+                ArchiveRepairMode::Drain,
+                &mut deferred_retries,
+            )
+            .unwrap(),
+            0
+        );
+        assert!(scheduler.pop_launchable().is_none());
+        assert!(deferred_retries.contains_key(&path));
     }
 
     // caffeinate is a macOS binary. These have never passed on Linux; they

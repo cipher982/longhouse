@@ -22,7 +22,10 @@ GET /api/agents/sessions/{id}. That header is only present on instances running
 the build that sets it; older hosted builds return none and this audit SKIPs.
 
 Resolution order for the instance:
-  - LONGHOUSE_QA_API_URL / LONGHOUSE_API_URL, else ~/.longhouse/config.toml [shipper] api_url
+  - LONGHOUSE_QA_API_URL / QA_INSTANCE_URL
+  - an explicit QA_INSTANCE_SUBDOMAIN / INSTANCE_SUBDOMAIN / E2E_INSTANCE_SUBDOMAIN
+  - LONGHOUSE_API_URL / PLAYWRIGHT_API_BASE_URL / API_URL
+  - no ambient ~/.longhouse config fallback: QA must name the hosted target
   - X-Agents-Token from LONGHOUSE_MACHINE_TOKEN or ~/.longhouse/machine/device-token
 
 Usage:
@@ -35,9 +38,9 @@ from __future__ import annotations
 import json
 import os
 import sys
+from pathlib import Path
 import urllib.error
 import urllib.request
-from pathlib import Path
 
 EXIT_OK = 0
 EXIT_FAIL = 1
@@ -50,27 +53,23 @@ def _log(msg: str) -> None:
 
 
 def _resolve_api_url() -> str | None:
-    for env_key in ("LONGHOUSE_QA_API_URL", "LONGHOUSE_API_URL"):
+    for env_key in (
+        "LONGHOUSE_QA_API_URL",
+        "QA_INSTANCE_URL",
+    ):
         value = os.environ.get(env_key)
         if value:
             return value.rstrip("/")
 
-    config_path = Path(os.environ.get("LONGHOUSE_CONFIG", Path.home() / ".longhouse" / "config.toml"))
-    if config_path.exists():
-        try:
-            try:
-                import tomllib  # py3.11+
-            except ModuleNotFoundError:  # pragma: no cover
-                import tomli as tomllib  # type: ignore
-            data = tomllib.loads(config_path.read_text())
-            api_url = (data.get("shipper") or {}).get("api_url")
-            if api_url:
-                # Fallback source — env vars are preferred. Log it so a stale
-                # config never silently points the audit at the wrong host.
-                _log(f"resolved api_url from {config_path} [shipper].api_url (set LONGHOUSE_QA_API_URL to override)")
-                return str(api_url).rstrip("/")
-        except Exception as exc:  # noqa: BLE001
-            _log(f"could not parse {config_path}: {exc}")
+    for env_key in ("QA_INSTANCE_SUBDOMAIN", "INSTANCE_SUBDOMAIN", "E2E_INSTANCE_SUBDOMAIN"):
+        subdomain = os.environ.get(env_key)
+        if subdomain and subdomain.strip():
+            return f"https://{subdomain.strip()}.longhouse.ai"
+
+    for env_key in ("LONGHOUSE_API_URL", "PLAYWRIGHT_API_BASE_URL", "API_URL"):
+        value = os.environ.get(env_key)
+        if value:
+            return value.rstrip("/")
     return None
 
 
@@ -155,7 +154,9 @@ def main() -> int:
         _log("SKIP: unexpected sessions payload shape.")
         return EXIT_OK
 
-    session_ids = [str(s.get("id") or s.get("session_id")) for s in sessions if isinstance(s, dict) and (s.get("id") or s.get("session_id"))]
+    session_ids = [
+        str(s.get("id") or s.get("session_id")) for s in sessions if isinstance(s, dict) and (s.get("id") or s.get("session_id"))
+    ]
     if not session_ids:
         _log("SKIP: no opencode sessions in window to inspect.")
         return EXIT_OK

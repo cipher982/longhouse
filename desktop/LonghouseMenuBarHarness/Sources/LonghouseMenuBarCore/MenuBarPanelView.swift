@@ -187,6 +187,7 @@ public struct MenuBarPanelView: View {
     private let refresh: () -> Void
     private let headerSummaryVariant: HeaderSummaryVariant
     private let dataTrust: DataTrust
+    private let projectionTrust: DataTrust
 
     public init(
         snapshot: HealthSnapshot,
@@ -198,6 +199,7 @@ public struct MenuBarPanelView: View {
         isManualRefreshing: Bool,
         headerSummaryVariant: HeaderSummaryVariant = .default,
         dataTrust: DataTrust = .current,
+        projectionTrust: DataTrust = .current,
         refresh: @escaping () -> Void
     ) {
         self.snapshot = snapshot
@@ -209,6 +211,7 @@ public struct MenuBarPanelView: View {
         self.isManualRefreshing = isManualRefreshing
         self.headerSummaryVariant = headerSummaryVariant
         self.dataTrust = dataTrust
+        self.projectionTrust = projectionTrust
         self.refresh = refresh
     }
 
@@ -236,9 +239,9 @@ public struct MenuBarPanelView: View {
     }
 
     /// The subheadline ends with "updated Ns" derived from `collectedAt`, which
-    /// the engine-pulse projection keeps rewriting. Left alone it would claim a
-    /// fresh update directly above a banner saying the data is days old, so the
-    /// freshness clause is dropped whenever trust is not current.
+    /// must remain the producer snapshot clock rather than local engine pulses.
+    /// The freshness clause is still dropped whenever trust is not current so a
+    /// stale snapshot cannot claim a fresh update above its warning banner.
     private var headerSummaryText: String {
         let subheadline = presentation.subheadline
         guard !dataTrust.isCurrent else { return subheadline }
@@ -319,7 +322,22 @@ public struct MenuBarPanelView: View {
     }
 
     private var presentation: MenuBarPresentation {
-        snapshot.menuBarPresentation(relativeTo: presentationDate)
+        snapshot.menuBarPresentation(
+            relativeTo: presentationDate,
+            localEvidenceTrust: dataTrust,
+            projectionTrust: projectionTrust
+        )
+    }
+
+    private var shouldOfferNativeRepair: Bool {
+        guard !snapshot.isSetupRequired, !snapshot.isInstallLocationBlocked else {
+            return false
+        }
+        return !dataTrust.isCurrent
+            || snapshot.suggestedActionIds?.contains("repair_machine") == true
+            || snapshot.reasons.contains("engine_status_stale")
+            || snapshot.reasons.contains("engine_projection_stale")
+            || snapshot.reasons.contains("engine_reconciliation_failed")
     }
 
     private var displayHeadline: String {
@@ -433,7 +451,10 @@ public struct MenuBarPanelView: View {
                 }
             }
 
-            if presentation.promotion == .repair {
+            if presentation.promotion == .repair
+                || shouldOfferNativeRepair
+                || snapshot.suggestedActionIds?.contains("inspect_transport") == true
+                || snapshot.suggestedActionIds?.contains("inspect_shipping") == true {
                 sectionDivider.padding(.horizontal, 4)
                 PanelSection(title: "Action required") {
                     Text(repairGuidance)
@@ -447,6 +468,9 @@ public struct MenuBarPanelView: View {
     }
 
     private var repairGuidance: String {
+        if shouldOfferNativeRepair && !dataTrust.isCurrent {
+            return "Current local status evidence is unavailable. Repair the local agent without opening Terminal; last-known facts remain below."
+        }
         if snapshot.storageBlockRequiresRepair {
             return "Local source evidence is retained. Inspect the exact block proof before retrying or discarding it."
         }
@@ -456,14 +480,25 @@ public struct MenuBarPanelView: View {
         if snapshot.isInstallLocationBlocked {
             return "Move Longhouse.app to /Applications, then reopen it."
         }
+        if snapshot.suggestedActionIds?.contains("free_disk_space") == true {
+            return "Free local disk space before continuing to rely on durable shipping."
+        }
+        if snapshot.suggestedActionIds?.contains("repair_machine") == true {
+            return "Repair the configured Longhouse machine without opening Terminal."
+        }
+        if snapshot.suggestedActionIds?.contains("inspect_shipping") == true {
+            return "Local dead letters are retained. Inspect shipping evidence before retrying; no destructive repair is required."
+        }
+        if snapshot.suggestedActionIds?.contains("inspect_transport") == true {
+            return "Local upload progress needs inspection. Open Logs to review the transport evidence; local source data remains retained."
+        }
         return "Current local evidence shows a broken product promise. Open Logs for the exact failing fact."
     }
 
-    /// The freshness fact is computed from the payload clock, which the local
-    /// projection keeps rewriting to `fresh, 0s` off the engine pulse. Left
-    /// alone it renders a green "Fresh · 21s" directly under a banner saying the
-    /// status cannot be read — the same claim the header drops when trust is not
-    /// current, one section lower.
+    /// The freshness fact is derived from evidence freshness rather than the
+    /// engine liveness pulse. Left alone, an unavailable producer could render a
+    /// green "Fresh · 21s" directly under a banner saying the status cannot be
+    /// read — the same claim the header drops when trust is not current.
     var displayedFacts: [MenuBarSystemFact] {
         guard !dataTrust.isCurrent else { return presentation.facts }
         return presentation.facts.map { fact in
@@ -510,7 +545,14 @@ public struct MenuBarPanelView: View {
 
     private var managedRuntimeSurface: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if snapshot.managedSessions == nil {
+            if !dataTrust.isCurrent && snapshot.currentManagedSessions.isEmpty {
+                // A stale producer cannot prove that the machine has no sessions.
+                PanelSection(title: "Sessions") {
+                    Text("Current session evidence is unavailable on this Mac.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.secondary)
+                }
+            } else if snapshot.managedSessions == nil {
                 // Absent evidence, not an observed absence. "No managed sessions"
                 // here would be a false negative — the producer could not read
                 // session evidence at all.
@@ -531,7 +573,7 @@ public struct MenuBarPanelView: View {
                 }
             }
 
-            if backgroundBridgeEntries.isEmpty && snapshot.orphanBridgeEvidenceMissing {
+            if backgroundBridgeEntries.isEmpty && (snapshot.orphanBridgeEvidenceMissing || !dataTrust.isCurrent) {
                 sectionDivider.padding(.horizontal, 4)
 
                 // Absence of entries here is not evidence of a clean machine
@@ -830,7 +872,14 @@ public struct MenuBarPanelView: View {
     private var watchingActions: some View {
         VStack(spacing: 8) {
             Group {
-                if snapshot.storageBlockRequiresRepair
+                if !dataTrust.isCurrent && shouldOfferNativeRepair {
+                    Button {
+                        perform(.repairInstall)
+                    } label: {
+                        Label("Repair local agent", systemImage: "wrench.and.screwdriver")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if snapshot.storageBlockRequiresRepair
                     || snapshot.storageBlockProofUnknown
                     || snapshot.suggestedActionIds?.contains("inspect_storage_source") == true
                 {
@@ -871,11 +920,34 @@ public struct MenuBarPanelView: View {
                         Label("Inspect local health", systemImage: "stethoscope")
                             .frame(maxWidth: .infinity)
                     }
+                } else if snapshot.suggestedActionIds?.contains("inspect_shipping") == true {
+                    Button {
+                        perform(.openLogs)
+                    } label: {
+                        Label("Inspect shipping", systemImage: "shippingbox")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if snapshot.suggestedActionIds?.contains("inspect_transport") == true,
+                          snapshot.suggestedActionIds?.contains("free_disk_space") != true,
+                          snapshot.suggestedActionIds?.contains("repair_machine") != true {
+                    Button {
+                        perform(.openLogs)
+                    } label: {
+                        Label("Inspect transport", systemImage: "arrow.triangle.2.circlepath")
+                            .frame(maxWidth: .infinity)
+                    }
                 } else if snapshot.suggestedActionIds?.contains("free_disk_space") == true {
                     Button {
                         perform(.freeDiskSpace)
                     } label: {
                         Label("Free disk space", systemImage: "internaldrive")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if shouldOfferNativeRepair {
+                    Button {
+                        perform(.repairInstall)
+                    } label: {
+                        Label("Repair local agent", systemImage: "wrench.and.screwdriver")
                             .frame(maxWidth: .infinity)
                     }
                 } else if snapshot.suggestedActionIds?.contains("repair_machine") == true {
@@ -991,7 +1063,14 @@ public struct MenuBarPanelView: View {
     }
 
     private func perform(_ action: HarnessAction) {
-        setFeedback(actionSink.handle(action, snapshot: snapshot))
+        let immediateFeedback = actionSink.handle(
+            action,
+            snapshot: snapshot,
+            onFeedback: { terminalFeedback in
+                setFeedback(terminalFeedback)
+            }
+        )
+        setFeedback(immediateFeedback)
         if action == .refresh {
             refresh()
         }

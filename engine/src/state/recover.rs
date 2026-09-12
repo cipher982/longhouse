@@ -50,22 +50,32 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use uuid::Uuid;
 
 /// SQLite's file magic, including its terminating NUL.
 const SQLITE_MAGIC: &[u8] = b"SQLite format 3\0";
 
 /// Tables worth salvaging, in load order.
 ///
-/// Deliberately short. `spool_queue` and `pending_source_envelope` hold
-/// in-flight work the host re-accepts on its own, and the Cursor store holds
-/// BLOBs that would turn a 204 MB salvage into a larger and less trustworthy
-/// file. Everything here is either a shipping cursor or the identity a cursor
-/// is meaningless without.
+/// These are the source/outbox authority, not projections. In particular, a
+/// pending request body and Cursor raw record can be the only local copy of
+/// bytes that have not received a host receipt yet.
 const RECOVERED_TABLES: &[&str] = &[
     "source_epoch_registry",
     "source_epoch_lane_state",
+    "pending_source_envelope",
+    "pending_source_envelope_supersession",
+    "cursor_store_raw_record",
+    "cursor_store_capture_cursor",
+    "cursor_store_root_state",
     "file_state",
     "session_binding",
+];
+
+const REQUIRED_RECOVERY_TABLES: &[&str] = &[
+    "source_epoch_registry",
+    "source_epoch_lane_state",
+    "pending_source_envelope",
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -103,25 +113,107 @@ impl RecoveryReport {
 /// than treating a readable schema as proof that the database is healthy.
 /// Recovery still refuses locks, permissions errors, and other transient I/O.
 pub fn needs_recovery(db_path: &Path) -> bool {
-    fn is_corruption(error: &rusqlite::Error) -> bool {
-        // Only SQLite saying "this is not a database" or "this database is
-        // malformed" earns a destructive repair. A lock held by a live agent, a
-        // permission problem, or a transient I/O error must never be answered by
-        // rewriting the file — those are recoverable by doing nothing.
-        matches!(
-            error.sqlite_error_code(),
-            Some(rusqlite::ErrorCode::NotADatabase) | Some(rusqlite::ErrorCode::DatabaseCorrupt)
-        )
+    surviving_sidecar(db_path).is_none() && inspect_database_corruption(db_path).unwrap_or(false)
+}
+
+fn inspect_database_corruption(db_path: &Path) -> Result<bool> {
+    let result = Connection::open_with_flags(
+        db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .and_then(|conn| {
+        conn.busy_timeout(Duration::from_secs(1))?;
+        conn.query_row("PRAGMA quick_check(1)", [], |row| row.get::<_, String>(0))
+    });
+    match result {
+        Ok(result) => Ok(result != "ok"),
+        Err(error) if matches!(error.sqlite_error_code(),
+            Some(rusqlite::ErrorCode::NotADatabase | rusqlite::ErrorCode::DatabaseCorrupt)
+        ) => Ok(true),
+        Err(error) => Err(error).context("cannot inspect state; preserve it and resolve the reported lock, access, or I/O failure"),
+    }
+}
+
+/// Exclude SQLite readers and writers in either journal mode until publication.
+/// Keep one source fd: closing any other fd for this inode would release this
+/// process's traditional POSIX lock.
+
+struct RecoverySource {
+    file: std::fs::File,
+}
+
+impl RecoverySource {
+    fn acquire(path: &Path) -> Result<Self> {
+        use std::os::fd::AsRawFd;
+
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .with_context(|| {
+                format!(
+                    "opening recovery source for writer exclusion: {}",
+                    path.display()
+                )
+            })?;
+        let lock = libc::flock {
+            l_type: libc::F_WRLCK as _,
+            l_whence: libc::SEEK_SET as _,
+            l_start: 0,
+            l_len: 0,
+            l_pid: 0,
+        };
+        let result = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETLK, &lock) };
+        if result == -1 {
+            let error = std::io::Error::last_os_error();
+            if error
+                .raw_os_error()
+                .is_some_and(|code| code == libc::EACCES || code == libc::EAGAIN)
+            {
+                bail!(
+                    "cannot exclude a SQLite writer on {}; recovery is non-mutating and refuses active database contention",
+                    path.display()
+                );
+            }
+            return Err(error).with_context(|| {
+                format!(
+                    "acquiring the SQLite writer exclusion on {}",
+                    path.display()
+                )
+            });
+        }
+        Ok(Self { file })
     }
 
-    match Connection::open(db_path) {
-        Ok(conn) => {
-            match conn.query_row("PRAGMA quick_check(1)", [], |row| row.get::<_, String>(0)) {
-                Ok(result) => result != "ok",
-                Err(error) => is_corruption(&error),
+    fn copy_to(&mut self, destination: &Path) -> Result<()> {
+        use std::io::{Seek, SeekFrom};
+        use std::os::unix::fs::OpenOptionsExt;
+
+        self.file.seek(SeekFrom::Start(0))?;
+        let mut copy = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(destination)
+            .with_context(|| format!("creating recovery copy {}", destination.display()))?;
+        let result: Result<()> = (|| {
+            copy.set_permissions(self.file.metadata()?.permissions())?;
+            std::io::copy(&mut self.file, &mut copy).with_context(|| {
+                format!("copying the retained source to {}", destination.display())
+            })?;
+            Ok(())
+        })();
+        drop(copy);
+        if let Err(error) = result {
+            if let Err(cleanup) = std::fs::remove_file(destination) {
+                return Err(error).context(format!(
+                    "partial recovery copy remains at {}: {cleanup}",
+                    destination.display()
+                ));
             }
+            return Err(error);
         }
-        Err(error) => is_corruption(&error),
+        Ok(())
     }
 }
 
@@ -429,17 +521,29 @@ fn row_is_plausible(table: &str, values: &[rusqlite::types::Value]) -> bool {
     fn non_negative_integer(values: &[Value], index: usize) -> bool {
         matches!(values.get(index), Some(Value::Integer(value)) if *value >= 0)
     }
+    fn uuid(values: &[Value], index: usize) -> bool {
+        text(values, index).is_some_and(|value| Uuid::parse_str(value).is_ok())
+    }
+    fn non_empty_blob(values: &[Value], index: usize) -> bool {
+        matches!(values.get(index), Some(Value::Blob(value)) if !value.is_empty())
+    }
+    fn blob(values: &[Value], index: usize) -> bool {
+        matches!(values.get(index), Some(Value::Blob(_)))
+    }
+    fn boolean_integer(values: &[Value], index: usize) -> bool {
+        matches!(values.get(index), Some(Value::Integer(value)) if *value == 0 || *value == 1)
+    }
+    fn non_empty_optional_text(values: &[Value], index: usize) -> bool {
+        match values.get(index) {
+            None | Some(Value::Null) => true,
+            Some(Value::Text(value)) => !value.is_empty(),
+            _ => false,
+        }
+    }
     fn is_known_provider(provider: &str) -> bool {
         matches!(
             provider,
-            "claude"
-                | "codex"
-                | "cursor"
-                | "opencode"
-                | "antigravity"
-                | "gemini"
-                | "pi"
-                | "omp"
+            "claude" | "codex" | "cursor" | "opencode" | "antigravity" | "gemini" | "pi" | "omp"
         )
     }
     fn file_length(path: &str) -> Option<u64> {
@@ -467,21 +571,150 @@ fn row_is_plausible(table: &str, values: &[rusqlite::types::Value]) -> bool {
                 && file_length(path).is_none_or(|length| *acked as u64 <= length)
         }
         "source_epoch_registry" => {
-            text(values, 0).is_some_and(|epoch| epoch.len() == 36)
+            uuid(values, 0)
                 && text(values, 1).is_some_and(|provider| !provider.is_empty())
                 && text(values, 2).is_some_and(|source| !source.is_empty())
+                && text(values, 3).is_some_and(|incarnation| !incarnation.is_empty())
+                && text(values, 5).is_some_and(|reason| !reason.is_empty())
+                && non_negative_integer(values, 6)
+                && text(values, 10).is_some_and(|created_at| !created_at.is_empty())
         }
         "source_epoch_lane_state" => {
             // `last_position` is the storage-v2 cursor itself. SQLite will store
             // text in an INTEGER column and `integrity_check` will still say ok,
             // so its type is checked here or nowhere.
-            text(values, 0).is_some_and(|epoch| epoch.len() == 36)
+            uuid(values, 0)
                 && text(values, 1).is_some_and(|lane| !lane.is_empty())
                 && non_negative_integer(values, 2)
+        }
+        "pending_source_envelope" => {
+            uuid(values, 0)
+                && text(values, 1).is_some_and(|path| !path.is_empty())
+                && non_negative_integer(values, 2)
+                && non_negative_integer(values, 3)
+                && matches!(
+                    (values.get(2), values.get(3)),
+                    (Some(Value::Integer(start)), Some(Value::Integer(end))) if end > start
+                )
+                && text(values, 4).is_some_and(|envelope_id| !envelope_id.is_empty())
+                && non_empty_blob(values, 5)
+                && blob(values, 6)
+                && non_negative_integer(values, 7)
+                && non_negative_integer(values, 8)
+                && boolean_integer(values, 9)
+                && boolean_integer(values, 10)
+                && text(values, 11).is_some_and(|created_at| !created_at.is_empty())
+                && non_negative_integer(values, 12)
+                && non_empty_optional_text(values, 13)
+                && non_empty_optional_text(values, 14)
+                && non_empty_optional_text(values, 15)
+                && non_empty_optional_text(values, 16)
+        }
+        "pending_source_envelope_supersession" => {
+            uuid(values, 1)
+                && text(values, 2).is_some_and(|envelope_id| !envelope_id.is_empty())
+                && blob(values, 3)
+                && blob(values, 4)
+                && text(values, 5).is_some_and(|reason| !reason.is_empty())
+                && text(values, 6)
+                    .and_then(|proof| serde_json::from_str::<serde_json::Value>(proof).ok())
+                    .is_some_and(|proof| proof.is_object())
+        }
+        "cursor_store_raw_record" => {
+            uuid(values, 0)
+                && text(values, 1).is_some_and(|hash| !hash.is_empty())
+                && non_negative_integer(values, 2)
+                && blob(values, 3)
+                && text(values, 4).is_some_and(|created_at| !created_at.is_empty())
+        }
+        "cursor_store_capture_cursor" => {
+            uuid(values, 0)
+                && non_empty_optional_text(values, 1)
+                && text(values, 2).is_some_and(|updated_at| !updated_at.is_empty())
+        }
+        "cursor_store_root_state" => {
+            text(values, 0).is_some_and(|conversation| !conversation.is_empty())
+                && text(values, 1).is_some_and(|root| !root.is_empty())
+                && match values.get(2) {
+                    None | Some(Value::Null) => true,
+                    Some(Value::Text(ids)) => serde_json::from_str::<serde_json::Value>(ids)
+                        .ok()
+                        .is_some_and(|value| value.is_array()),
+                    _ => false,
+                }
+                && text(values, 3).is_some_and(|updated_at| !updated_at.is_empty())
         }
         "session_binding" => text(values, 0).is_some_and(|key| !key.is_empty()),
         _ => false,
     }
+}
+
+fn full_integrity_check(path: &Path) -> Result<bool> {
+    let conn = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("opening repaired recovery copy {}", path.display()))?;
+    conn.busy_timeout(Duration::from_secs(1))?;
+    let integrity: String = conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    Ok(integrity == "ok")
+}
+
+fn ensure_recovery_tool_available() -> Result<()> {
+    // no managed identity: this only probes the SQLite recovery utility; it is not a provider launch.
+    let binary = sqlite_recovery_binary();
+    let status = std::process::Command::new(&binary)
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .with_context(|| {
+            format!(
+                "required sqlite3 recovery tool is unavailable at {}; preserve the original state",
+                binary.display()
+            )
+        })?;
+    if !status.success() {
+        bail!(
+            "required sqlite3 recovery tool at {} did not start successfully; preserve the original state",
+            binary.display()
+        );
+    }
+    Ok(())
+}
+
+fn complete_recovery_tables(conn: &Connection) -> Result<Vec<RecoveredTable>> {
+    RECOVERED_TABLES
+        .iter()
+        .map(|table_name| {
+            let exists: bool = conn.query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1
+                 )",
+                [*table_name],
+                |row| row.get(0),
+            )?;
+            if !exists {
+                return Ok(RecoveredTable {
+                    table: (*table_name).to_string(),
+                    attributed: 0,
+                    recovered: 0,
+                    rejected: 0,
+                });
+            }
+            let count: i64 =
+                conn.query_row(&format!("SELECT COUNT(*) FROM {table_name}"), [], |row| {
+                    row.get(0)
+                })?;
+            let count = usize::try_from(count).context("recovered row count exceeds usize")?;
+            Ok(RecoveredTable {
+                table: (*table_name).to_string(),
+                attributed: count,
+                recovered: count,
+                rejected: 0,
+            })
+        })
+        .collect()
 }
 
 /// Salvage `db_path` into a readable database.
@@ -490,72 +723,138 @@ fn row_is_plausible(table: &str, values: &[rusqlite::types::Value]) -> bool {
 /// is moved aside — kept, not deleted — only once a validated replacement
 /// exists. `dry_run` reports what each table would yield and writes nothing.
 pub fn recover_state_database(db_path: &Path, dry_run: bool) -> Result<RecoveryReport> {
+    eprintln!("Longhouse recovery: checking retained state without modifying it.");
     if !db_path.exists() {
         bail!("no state database at {}", db_path.display());
     }
-    if !needs_recovery(db_path) {
+    if let Some(sidecar) = surviving_sidecar(db_path) {
+        bail!(
+            "{} exists: recovery is non-mutating and refuses databases with a surviving SQLite sidecar; stop the Machine Agent and clear the writer state first",
+            sidecar.display()
+        );
+    }
+    if !inspect_database_corruption(db_path)? {
         bail!(
             "{} passes SQLite quick_check; recovery is only for a structurally corrupt database",
             db_path.display()
         );
     }
 
-    // A `-wal` holds committed frames that live only there, and a `-shm` is
-    // evidence of a connection that may still hold a writable fd — renaming the
-    // path does not take that fd away. Recovery copies the main database only,
-    // so proceeding past either would silently drop committed work or race a
-    // writer. Both are the agent's to clear by stopping.
-    for sidecar in ["-wal", "-shm"] {
-        let mut path = db_path.as_os_str().to_os_string();
-        path.push(sidecar);
-        let path = PathBuf::from(path);
-        if path.exists() {
-            bail!(
-                "{} exists: stop the Machine Agent before recovering, so no connection holds \
-                 the database and no committed frames are left behind",
-                path.display()
-            );
-        }
-    }
+    // A `-wal` holds committed frames that live only there, a `-shm` is evidence
+    // of a connection that may still hold a writable fd, and a `-journal` is
+    // evidence of an active rollback transaction. Renaming the path does not
+    // take a writer's fd or transaction away. Recovery copies the main database
+    // only, so proceeding past any of them would silently drop committed work or
+    // race a writer. All are the agent's to clear by stopping.
+    refuse_surviving_sidecars(db_path)?;
+    let mut source = RecoverySource::acquire(db_path)?;
+    // Recheck while the writer exclusion is held. Sidecars remain an
+    // independent refusal even when no SQLite lock is currently contended.
+    refuse_surviving_sidecars(db_path)?;
+    ensure_recovery_tool_available()?;
 
     // Beside the database, not in the system temp dir: the final install is a
     // rename, which fails across filesystems, and a 204 MB copy has no business
     // crossing one.
     let workspace = RecoveryWorkspace::beside(db_path)?;
     let copy_path = workspace.path().join("source.db");
-    std::fs::copy(db_path, &copy_path)
-        .with_context(|| format!("copying {} for recovery", db_path.display()))?;
+    source.copy_to(&copy_path)?;
     restore_magic(&copy_path)?;
 
-    let salvage_path = workspace.path().join("salvaged.db");
-    run_recovery_walk(&copy_path, &salvage_path)?;
-
-    let salvaged = Connection::open(&salvage_path).context("opening the salvage database")?;
-    let schemas = recovered_schemas(&salvaged)?;
-
     let rebuilt_path = workspace.path().join("rebuilt.db");
-    let mut rebuilt = Connection::open(&rebuilt_path).context("creating the rebuilt database")?;
-    // Registry rows must land before the lanes that reference them, and the
-    // recovered set is partial by design, so constraints stay off during load.
-    rebuilt.execute_batch("PRAGMA foreign_keys=OFF;")?;
-
     let mut tables: Vec<RecoveredTable> = Vec::new();
     let mut notes: Vec<String> = Vec::new();
-    for table_name in RECOVERED_TABLES {
-        let Some(schema) = schemas.get(*table_name) else {
-            notes.push(format!(
-                "{table_name}: no schema record recovered; table will be recreated empty"
-            ));
-            tables.push(RecoveredTable {
-                table: (*table_name).to_string(),
-                attributed: 0,
-                recovered: 0,
-                rejected: 0,
-            });
-            continue;
-        };
-        let summary = recover_table(&salvaged, &mut rebuilt, schema, dry_run)?;
-        tables.push(summary);
+    let repaired_copy_integrity = full_integrity_check(&copy_path);
+    let repaired_copy_is_complete = matches!(&repaired_copy_integrity, Ok(true));
+    if !repaired_copy_is_complete {
+        if !dry_run {
+            match repaired_copy_integrity {
+                Ok(_) => bail!(
+                    "recovery could not prove the repaired database complete: its full SQLite integrity_check did not pass; original state is unchanged. Preserve the original and investigate the damaged source instead of installing partial salvage"
+                ),
+                Err(error) => bail!(
+                    "recovery could not prove the repaired database complete: integrity_check failed ({error:#}); original state is unchanged. Preserve the original and resolve the underlying storage fault"
+                ),
+            }
+        }
+        notes.push(
+            "replacement is not proven: the repaired copy did not pass full SQLite integrity_check; salvage below is diagnostic only".to_string(),
+        );
+        if let Err(error) = &repaired_copy_integrity {
+            notes.push(format!("repaired-copy integrity_check error: {error:#}"));
+        }
+
+        let salvage_path = workspace.path().join("salvaged.db");
+        run_recovery_walk(&copy_path, &salvage_path)?;
+        let salvaged = Connection::open(&salvage_path).context("opening the salvage database")?;
+        let schemas = recovered_schemas(&salvaged)?;
+        for table_name in REQUIRED_RECOVERY_TABLES {
+            if !schemas.contains_key(*table_name) {
+                bail!(
+                    "recovery did not recover the indispensable {table_name} schema; retained intent cannot be proven"
+                );
+            }
+        }
+
+        let mut rebuilt =
+            Connection::open(&rebuilt_path).context("creating the rebuilt database")?;
+        // Registry rows must land before the lanes that reference them, and the
+        // recovered set is partial by design, so constraints stay off during load.
+        rebuilt.execute_batch("PRAGMA foreign_keys=OFF;")?;
+        for table_name in RECOVERED_TABLES {
+            let Some(schema) = schemas.get(*table_name) else {
+                notes.push(format!(
+                    "{table_name}: no schema record recovered; table would be recreated empty"
+                ));
+                tables.push(RecoveredTable {
+                    table: (*table_name).to_string(),
+                    attributed: 0,
+                    recovered: 0,
+                    rejected: 0,
+                });
+                continue;
+            };
+            tables.push(recover_table(&salvaged, &mut rebuilt, schema, true)?);
+        }
+        return Ok(RecoveryReport {
+            dry_run: true,
+            source_db: db_path.to_path_buf(),
+            quarantined_to: None,
+            tables,
+            notes,
+        });
+    }
+
+    // A repaired copy that passes a full integrity check is the only complete
+    // source proof accepted here. Install that exact copy into the workspace;
+    // do not run `.recover` and then mistake its row counts for completeness.
+    std::fs::copy(&copy_path, &rebuilt_path)
+        .context("copying the integrity-checked recovery source")?;
+    let complete = Connection::open(&rebuilt_path).context("opening the complete recovery copy")?;
+    let schemas = recovered_schemas(&complete)?;
+    for table_name in REQUIRED_RECOVERY_TABLES {
+        if !schemas.contains_key(*table_name) {
+            bail!(
+                "recovery did not recover the indispensable {table_name} schema; refusing replacement because retained intent cannot be proven"
+            );
+        }
+    }
+    tables = complete_recovery_tables(&complete)?;
+    notes.push(
+        "repaired database passed full SQLite integrity_check; replacement uses the complete repaired copy".to_string(),
+    );
+    drop(complete);
+
+    let mut rebuilt = Connection::open(&rebuilt_path).context("opening the rebuilt database")?;
+    let cursor_epochs: i64 = rebuilt.query_row(
+        "SELECT COUNT(*) FROM source_epoch_registry WHERE lower(provider) = 'cursor'",
+        [],
+        |row| row.get(0),
+    )?;
+    if cursor_epochs > 0 && !schemas.contains_key("cursor_store_raw_record") {
+        bail!(
+            "recovery found Cursor source epochs without the cursor_store_raw_record schema; refusing replacement because retained Cursor intent cannot be proven"
+        );
     }
 
     if dry_run {
@@ -576,27 +875,18 @@ pub fn recover_state_database(db_path: &Path, dry_run: bool) -> Result<RecoveryR
     if integrity != "ok" {
         bail!("rebuilt database failed integrity_check: {integrity}");
     }
-    // Recovery is partial by nature: a lane whose registry row failed validation
-    // references an epoch that is not here. Such a lane is unusable — the
-    // shipper cannot interpret a position without the source identity it
-    // belongs to — so drop it rather than refuse the other 27,000 that are
-    // fine. Counted as rejected, because that is what happened to it.
-    let orphaned_lanes = rebuilt.execute(
-        "DELETE FROM source_epoch_lane_state
+    // A lane without its source identity is unusable, and dropping it would
+    // silently lose accepted progress. Refuse the whole replacement instead.
+    let orphaned_lanes: i64 = rebuilt.query_row(
+        "SELECT COUNT(*) FROM source_epoch_lane_state
          WHERE source_epoch NOT IN (SELECT source_epoch FROM source_epoch_registry)",
         [],
+        |row| row.get(0),
     )?;
     if orphaned_lanes > 0 {
-        if let Some(entry) = tables
-            .iter_mut()
-            .find(|table| table.table == "source_epoch_lane_state")
-        {
-            entry.recovered = entry.recovered.saturating_sub(orphaned_lanes);
-            entry.rejected += orphaned_lanes;
-        }
-        notes.push(format!(
-            "{orphaned_lanes} lane cursor(s) dropped: their source epoch did not survive validation"
-        ));
+        bail!(
+            "recovery found {orphaned_lanes} lane cursor(s) without a retained source epoch; refusing replacement"
+        );
     }
 
     rebuilt.execute_batch("PRAGMA foreign_keys=ON;").ok();
@@ -619,40 +909,58 @@ pub fn recover_state_database(db_path: &Path, dry_run: bool) -> Result<RecoveryR
         );
     }
     drop(rebuilt);
-    drop(salvaged);
 
-    // Stage the replacement beside its destination and flush it, so the final
-    // step is a rename rather than a copy. A crash mid-copy would otherwise
-    // leave a truncated database at the canonical path with the original
-    // already moved away.
-    let staged = staged_path(db_path);
-    std::fs::copy(&rebuilt_path, &staged)
-        .with_context(|| format!("staging the recovered database at {}", staged.display()))?;
-    std::fs::File::open(&staged)?.sync_all().ok();
+    // Prove the replacement opens with today's schema before touching the
+    // canonical path; migration failure must leave the original in place.
+    eprintln!("Longhouse recovery: validating recovered state and current schema.");
+    let validated = crate::state::db::open_db(Some(&rebuilt_path))
+        .context("validating the recovered database before installation")?;
+    validated.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;")?;
+    drop(validated);
 
+    // The validated workspace is on the destination filesystem. Publish its
+    // complete file directly rather than making another unowned staging copy.
+    // Lock both inodes: rename does not transfer the original inode's lock to
+    // the replacement, which must stay fenced through the directory sync.
+    let replacement = RecoverySource::acquire(&rebuilt_path)?;
+    replacement
+        .file
+        .sync_all()
+        .context("syncing the validated recovered database")?;
     let quarantine = quarantine_path(db_path);
-    std::fs::rename(db_path, &quarantine).with_context(|| {
+    source.copy_to(&quarantine).with_context(|| {
         format!(
-            "quarantining the corrupt database to {}",
+            "retaining a quarantine copy of the corrupt database at {}",
             quarantine.display()
         )
     })?;
-    // Atomic within the directory: either the old path or the new one is there,
-    // never a half-written file.
-    if let Err(error) = std::fs::rename(&staged, db_path) {
-        // Put the original back rather than leaving no database at all.
-        let _ = std::fs::rename(&quarantine, db_path);
+    std::fs::File::open(&quarantine)
+        .and_then(|file| file.sync_all())
+        .with_context(|| format!("syncing retained quarantine {}", quarantine.display()))?;
+    sync_directory(
+        db_path
+            .parent()
+            .context("state database has no parent directory")?,
+    )?;
+    refuse_surviving_sidecars(db_path)?;
+
+    // The original remains at the canonical path until this single atomic
+    // replacement. A crash before rename therefore exposes either the intact
+    // original or the complete staged replacement, never an empty path.
+    if let Err(error) = std::fs::rename(&rebuilt_path, db_path) {
         return Err(error).with_context(|| {
             format!(
-                "installing the recovered database at {}; the original was restored",
+                "installing the recovered database at {}; the original remains at the canonical path",
                 db_path.display()
             )
         });
     }
-
-    // Hand it to the normal opener so the ALTER-if-missing migrations bring the
-    // recovered on-disk shape up to the current schema.
-    crate::state::db::open_db(Some(db_path)).context("opening the recovered database")?;
+    sync_directory(
+        db_path
+            .parent()
+            .context("state database has no parent directory")?,
+    )
+    .context("syncing the database directory after atomic recovery install")?;
 
     notes.push(format!(
         "corrupt database quarantined to {}",
@@ -706,10 +1014,33 @@ impl Drop for RecoveryWorkspace {
     }
 }
 
-fn staged_path(db_path: &Path) -> PathBuf {
-    let mut name = db_path.as_os_str().to_os_string();
-    name.push(format!(".recovered-{}", std::process::id()));
-    PathBuf::from(name)
+fn surviving_sidecar(db_path: &Path) -> Option<PathBuf> {
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let mut path = db_path.as_os_str().to_os_string();
+        path.push(suffix);
+        let path = PathBuf::from(path);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn refuse_surviving_sidecars(db_path: &Path) -> Result<()> {
+    if let Some(path) = surviving_sidecar(db_path) {
+        bail!(
+            "{} exists: stop the Machine Agent before recovering, so no connection holds \
+             the database and no committed frames are left behind",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+fn sync_directory(path: &Path) -> Result<()> {
+    std::fs::File::open(path)
+        .and_then(|file| file.sync_all())
+        .with_context(|| format!("syncing recovery directory {}", path.display()))
 }
 
 /// A quarantine name that cannot collide with an earlier one.
@@ -784,14 +1115,8 @@ pub fn prune_stale_quarantines(db_path: &Path) -> Result<QuarantinePruneReport> 
         Err(err) => return Err(err).context("scanning directory for stale quarantines"),
     };
 
-    let now = std::time::SystemTime::now();
-    let max_age = Duration::from_secs(MAX_QUARANTINE_AGE_DAYS * 86400);
-
     struct Candidate {
-        path: PathBuf,
         size: u64,
-        mtime: std::time::SystemTime,
-        age_eligible: bool,
     }
 
     let mut candidates = Vec::new();
@@ -814,76 +1139,21 @@ pub fn prune_stale_quarantines(db_path: &Path) -> Result<QuarantinePruneReport> 
             continue;
         };
         let size = meta.len();
-        let mtime = meta.modified().unwrap_or(now);
-        let age_eligible = match now.duration_since(mtime) {
-            Ok(age) => age > max_age,
-            Err(_) => false,
-        };
-
-        candidates.push(Candidate {
-            path: entry.path(),
-            size,
-            mtime,
-            age_eligible,
-        });
+        candidates.push(Candidate { size });
     }
 
-    candidates.sort_by(|a, b| b.mtime.cmp(&a.mtime));
-
-    let mut to_delete = Vec::new();
-    let mut retained = Vec::new();
-    let mut total_retained_bytes = 0u64;
-
-    for (index, candidate) in candidates.into_iter().enumerate() {
-        if index < MIN_PRESERVED_QUARANTINES {
-            total_retained_bytes = total_retained_bytes.saturating_add(candidate.size);
-            retained.push(candidate);
-        } else if candidate.age_eligible {
-            to_delete.push(candidate);
-        } else {
-            total_retained_bytes = total_retained_bytes.saturating_add(candidate.size);
-            retained.push(candidate);
-        }
-    }
-
-    while total_retained_bytes > MAX_QUARANTINE_TOTAL_BYTES
-        && retained.len() > MIN_PRESERVED_QUARANTINES
-    {
-        if let Some(oldest) = retained.pop() {
-            total_retained_bytes = total_retained_bytes.saturating_sub(oldest.size);
-            to_delete.push(oldest);
-        } else {
-            break;
-        }
-    }
-
-    let mut report = QuarantinePruneReport {
+    // A quarantine may be the only copy of unaccepted source bytes. There is
+    // no receipt-backed proof available to this daily maintenance path, so it
+    // must retain every candidate rather than age-delete or size-cap evidence.
+    let retained_bytes = candidates.iter().fold(0u64, |total, candidate| {
+        total.saturating_add(candidate.size)
+    });
+    Ok(QuarantinePruneReport {
         deleted_files: 0,
         reclaimed_bytes: 0,
-        retained_files: retained.len(),
-        retained_bytes: total_retained_bytes,
-    };
-
-    for item in to_delete {
-        match std::fs::remove_file(&item.path) {
-            Ok(()) => {
-                report.deleted_files += 1;
-                report.reclaimed_bytes = report.reclaimed_bytes.saturating_add(item.size);
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => {
-                tracing::warn!(
-                    path = %item.path.display(),
-                    error = %err,
-                    "failed to delete stale quarantine file"
-                );
-                report.retained_files += 1;
-                report.retained_bytes = report.retained_bytes.saturating_add(item.size);
-            }
-        }
-    }
-
-    Ok(report)
+        retained_files: candidates.len(),
+        retained_bytes,
+    })
 }
 
 pub const VACUUM_FREELIST_THRESHOLD_BYTES: u64 = 50 * 1024 * 1024; // 50 MB
@@ -1115,51 +1385,163 @@ fn recover_table(
 ///
 /// Shells the `sqlite3` CLI because `.recover` is a shell command implemented in
 /// the CLI, not a library API rusqlite exposes.
+fn sqlite_recovery_binary() -> PathBuf {
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(directory) = executable.parent() {
+            let bundled = directory.join("longhouse-sqlite3");
+            if bundled.is_file() {
+                return bundled;
+            }
+        }
+    }
+    PathBuf::from("sqlite3")
+}
+
 fn run_recovery_walk(source: &Path, destination: &Path) -> Result<()> {
-    use std::process::Command;
+    use std::io::{self, Read, Write};
+    use std::process::{Child, Command, ExitStatus, Stdio};
+    use std::sync::mpsc;
+    use std::sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    };
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    const RECOVERY_WALK_BUDGET: Duration = Duration::from_secs(15 * 60);
+    let sqlite_binary = sqlite_recovery_binary();
+
+    fn wait_for_child(child: &mut Child, deadline: Instant, label: &str) -> Result<ExitStatus> {
+        loop {
+            if let Some(status) = child.try_wait()? {
+                return Ok(status);
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                bail!("{label} exceeded the bounded recovery work budget");
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
 
     // `--ignore-freelist` keeps deleted rows out of the salvage. Without it a
     // historical `file_state` row — an old, smaller offset for a path that has
     // since advanced — is indistinguishable from the live one and can win the
     // insert, rewinding a cursor to a position the host has already accepted.
-    let output = Command::new("sqlite3")
+    // Stream the walk directly into the loader: `.recover` output contains raw
+    // BLOBs and must not be materialized as one unbounded Vec in this process.
+    let mut walker = Command::new(&sqlite_binary)
         .arg(source)
         .arg(".recover --ignore-freelist")
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .context("running `sqlite3 .recover` (is the sqlite3 CLI installed?)")?;
-    if !output.status.success() {
-        bail!(
-            "sqlite3 .recover failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
-    if output.stdout.is_empty() {
-        bail!("sqlite3 .recover produced no output");
-    }
 
-    // `output()` rather than a hand-managed pipe: an undrained stderr pipe
-    // deadlocks `write_all` once the loader emits enough errors, and the
-    // destroyed schema page guarantees it emits some.
-    let mut child = Command::new("sqlite3")
+    let mut loader = match Command::new(&sqlite_binary)
         .arg(destination)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .context("loading the recovery walk output")?;
     {
-        use std::io::Write;
-        let stdin = child
-            .stdin
-            .as_mut()
-            .context("recovery loader stdin unavailable")?;
-        stdin.write_all(&output.stdout)?;
-    }
-    child.wait().context("waiting for the recovery loader")?;
+        Ok(child) => child,
+        Err(error) => {
+            let _ = walker.kill();
+            let _ = walker.wait();
+            return Err(error).context("loading the recovery walk output");
+        }
+    };
 
-    // The loader can report errors for corrupt pages, so its exit status alone
-    // says nothing. What matters is whether either the raw recovery table or a
-    // directly recreated target table came out the other side.
+    let walker_stdout = walker
+        .stdout
+        .take()
+        .context("recovery walk stdout unavailable")?;
+    let loader_stdin = loader
+        .stdin
+        .take()
+        .context("recovery loader stdin unavailable")?;
+    let (sender, receiver) = mpsc::channel();
+    let streamed_bytes = Arc::new(AtomicU64::new(0));
+    let thread_bytes = Arc::clone(&streamed_bytes);
+    let copy_thread = thread::spawn(move || {
+        let mut input = io::BufReader::new(walker_stdout);
+        let mut writer = io::BufWriter::new(loader_stdin);
+        let result = (|| -> io::Result<u64> {
+            let mut buffer = [0u8; 64 * 1024];
+            let mut total = 0;
+            loop {
+                let count = input.read(&mut buffer)?;
+                if count == 0 {
+                    break;
+                }
+                writer.write_all(&buffer[..count])?;
+                total += count as u64;
+                thread_bytes.store(total, Ordering::Relaxed);
+            }
+            writer.flush()?;
+            Ok(total)
+        })();
+        let _ = sender.send(result);
+    });
+    let deadline = Instant::now() + RECOVERY_WALK_BUDGET;
+    let copy_result = loop {
+        match receiver.recv_timeout(Duration::from_secs(1)) {
+            Ok(result) => break result,
+            Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() < deadline => {
+                eprintln!(
+                    "Longhouse recovery: streamed {} recovery bytes; at most {}s remain.",
+                    streamed_bytes.load(Ordering::Relaxed),
+                    deadline.saturating_duration_since(Instant::now()).as_secs()
+                );
+            }
+            Err(_) => {
+                let _ = walker.kill();
+                let _ = loader.kill();
+                let _ = walker.wait();
+                let _ = loader.wait();
+                let _ = copy_thread.join();
+                bail!("sqlite3 .recover exceeded its 15-minute work budget or its stream failed; original state is unchanged");
+            }
+        }
+    };
+    let copied = match copy_result {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let _ = walker.kill();
+            let _ = loader.kill();
+            let _ = walker.wait();
+            let _ = loader.wait();
+            let _ = copy_thread.join();
+            return Err(error).context("streaming sqlite3 recovery output into the loader");
+        }
+    };
+    let statuses = (|| -> Result<_> {
+        let walker_status = wait_for_child(&mut walker, deadline, "sqlite3 .recover")?;
+        let loader_status = wait_for_child(&mut loader, deadline, "sqlite3 recovery loader")?;
+        Ok((walker_status, loader_status))
+    })();
+    if statuses.is_err() {
+        let _ = walker.kill();
+        let _ = loader.kill();
+        let _ = walker.wait();
+        let _ = loader.wait();
+    }
+    copy_thread
+        .join()
+        .map_err(|_| anyhow::anyhow!("recovery walk streaming thread panicked"))?;
+    let (walker_status, loader_status) = statuses?;
+    if copied == 0 {
+        bail!("sqlite3 .recover produced no output");
+    }
+    if !walker_status.success() {
+        bail!("sqlite3 .recover failed with status {walker_status}");
+    }
+    if !loader_status.success() {
+        bail!("sqlite3 recovery loader failed with status {loader_status}");
+    }
+
     let salvaged = Connection::open(destination).context("opening the salvage database")?;
     let raw_rows = salvaged
         .query_row("SELECT count(*) FROM lost_and_found", [], |row| {
@@ -1170,7 +1552,9 @@ fn run_recovery_walk(source: &Path, destination: &Path) -> Result<()> {
         "SELECT count(*) FROM sqlite_master
          WHERE type = 'table'
            AND name IN ('source_epoch_registry', 'source_epoch_lane_state',
-                        'file_state', 'session_binding')",
+                        'pending_source_envelope', 'pending_source_envelope_supersession',
+                        'cursor_store_raw_record', 'cursor_store_capture_cursor',
+                        'cursor_store_root_state', 'file_state', 'session_binding')",
         [],
         |row| row.get(0),
     )?;
@@ -1183,6 +1567,7 @@ fn run_recovery_walk(source: &Path, destination: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     /// Build a database whose on-disk column order differs from the current
     /// schema, exactly as ALTER-appended columns do on the real file.
@@ -1320,6 +1705,113 @@ mod tests {
     }
 
     #[test]
+    fn surviving_wal_is_refused_before_the_diagnostic_probe_can_mutate_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wal.db");
+        seed_legacy_shape(&path);
+        let sidecar = dir.path().join("wal.db-wal");
+        std::fs::write(&sidecar, b"uncheckpointed evidence").unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let sidecar_before = std::fs::read(&sidecar).unwrap();
+
+        let error = recover_state_database(&path, false)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("surviving SQLite sidecar"), "{error}");
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(std::fs::read(&sidecar).unwrap(), sidecar_before);
+    }
+
+    #[test]
+    fn surviving_rollback_journal_is_refused_before_any_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollback.db");
+        seed_legacy_shape(&path);
+
+        let blocker = Connection::open(&path).unwrap();
+        blocker
+            .execute_batch(
+                "PRAGMA journal_mode=DELETE;
+                 BEGIN EXCLUSIVE;
+                 UPDATE file_state SET last_updated = '2026-08-25T00:01:00Z';",
+            )
+            .unwrap();
+        let sidecar = dir.path().join("rollback.db-journal");
+        assert!(
+            sidecar.is_file(),
+            "the exclusive writer must leave its journal"
+        );
+
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.write_all(&[0u8; 16]).unwrap();
+        file.flush().unwrap();
+        drop(file);
+
+        let original = std::fs::read(&path).unwrap();
+        let journal_before = std::fs::read(&sidecar).unwrap();
+        let mut entries_before: Vec<_> = dir
+            .path()
+            .read_dir()
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        entries_before.sort();
+        let error = recover_state_database(&path, false)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("surviving SQLite sidecar"), "{error}");
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(std::fs::read(&sidecar).unwrap(), journal_before);
+        let mut entries_after: Vec<_> = dir
+            .path()
+            .read_dir()
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        entries_after.sort();
+        assert_eq!(entries_after, entries_before);
+        blocker.execute_batch("ROLLBACK").unwrap();
+    }
+
+    #[test]
+    fn exclusive_writer_without_a_journal_is_refused_without_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("busy.db");
+        seed_legacy_shape(&path);
+
+        let blocker = Connection::open(&path).unwrap();
+        blocker
+            .execute_batch("PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE;")
+            .unwrap();
+        assert!(!dir.path().join("busy.db-journal").exists());
+
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.write_all(&[0u8; 16]).unwrap();
+        file.flush().unwrap();
+        drop(file);
+        let original = std::fs::read(&path).unwrap();
+
+        let error = recover_state_database(&path, false)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("cannot inspect state"), "{error}");
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert!(
+            dir.path()
+                .read_dir()
+                .unwrap()
+                .all(|entry| entry.unwrap().file_name().to_str() == Some("busy.db")),
+            "busy recovery must not create a workspace or replacement"
+        );
+        blocker.execute_batch("ROLLBACK").unwrap();
+    }
+
+    #[test]
     fn detects_a_destroyed_header() {
         use std::io::{Seek, SeekFrom, Write};
         let dir = tempfile::tempdir().unwrap();
@@ -1365,6 +1857,47 @@ mod tests {
     }
 
     #[test]
+    fn only_a_full_integrity_checked_copy_proves_recovery_completeness() {
+        use std::io::{Seek, SeekFrom, Write};
+
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.db");
+        seed_legacy_shape(&source);
+
+        let repaired_header = dir.path().join("repaired-header.db");
+        std::fs::copy(&source, &repaired_header).unwrap();
+        let mut header = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&repaired_header)
+            .unwrap();
+        header.write_all(&[0u8; 16]).unwrap();
+        drop(header);
+        restore_magic(&repaired_header).unwrap();
+        assert!(full_integrity_check(&repaired_header).unwrap());
+
+        let damaged_page = dir.path().join("damaged-page.db");
+        std::fs::copy(&source, &damaged_page).unwrap();
+        let root_page: i64 = Connection::open(&damaged_page)
+            .unwrap()
+            .query_row(
+                "SELECT rootpage FROM sqlite_master WHERE name = 'file_state'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let mut damaged = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&damaged_page)
+            .unwrap();
+        damaged
+            .seek(SeekFrom::Start((root_page as u64 - 1) * 4096))
+            .unwrap();
+        damaged.write_all(&[0xff]).unwrap();
+        drop(damaged);
+        assert!(!full_integrity_check(&damaged_page).unwrap());
+    }
+
+    #[test]
     fn quarantine_artifact_matcher_identifies_matching_files() {
         let db = "longhouse-shipper.db";
         assert!(!is_quarantine_artifact_for(db, "longhouse-shipper.db"));
@@ -1400,7 +1933,7 @@ mod tests {
     }
 
     #[test]
-    fn prune_stale_quarantines_preserves_newest_and_deletes_aged_files() {
+    fn prune_stale_quarantines_never_deletes_without_receipt_proof() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("state.db");
         std::fs::write(&db_path, b"active database").unwrap();
@@ -1451,12 +1984,14 @@ mod tests {
 
         let report = prune_stale_quarantines(&db_path).unwrap();
 
-        // The 2 newest files are preserved (recent and one of the old ones)
-        // The remaining 2 old files (> 7 days) are deleted.
-        assert_eq!(report.deleted_files, 2);
-        assert_eq!(report.retained_files, 2);
+        // Age alone cannot prove that any copy is receipt-backed.
+        assert_eq!(report.deleted_files, 0);
+        assert_eq!(report.retained_files, 4);
         assert!(db_path.is_file(), "active database must never be deleted");
         assert!(recent.is_file(), "recent file must be preserved");
+        assert!(old_1.is_file(), "old quarantine evidence must be preserved");
+        assert!(old_2.is_file(), "old quarantine evidence must be preserved");
+        assert!(old_3.is_file(), "old quarantine evidence must be preserved");
     }
 
     #[test]

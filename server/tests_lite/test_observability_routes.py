@@ -203,6 +203,16 @@ def _seed_heartbeat(
     spool_dead: int = 0,
     raw_json: str | None = None,
 ) -> AgentHeartbeat:
+    raw_payload = json.loads(raw_json) if raw_json is not None else {}
+    raw_payload.setdefault(
+        "shipping_progress",
+        {
+            "pending_work": False,
+            "stalled": False,
+            "seconds_without_progress": 0,
+            "observed_at": received_at.isoformat(),
+        },
+    )
     heartbeat = AgentHeartbeat(
         device_id=device_id,
         received_at=received_at,
@@ -213,7 +223,7 @@ def _seed_heartbeat(
         ship_successes_1h=4 if spool_dead == 0 else 2,
         disk_free_bytes=1_000,
         is_offline=0,
-        raw_json=raw_json,
+        raw_json=json.dumps(raw_payload),
     )
     db.add(heartbeat)
     db.commit()
@@ -259,6 +269,17 @@ def _apply_catalog_heartbeat(
         "sessions_sequence": None,
     }
     heartbeat.update(overrides)
+    raw_payload = json.loads(heartbeat["raw_json"]) if heartbeat["raw_json"] is not None else {}
+    raw_payload.setdefault(
+        "shipping_progress",
+        {
+            "pending_work": False,
+            "stalled": False,
+            "seconds_without_progress": 0,
+            "observed_at": received_at.isoformat(),
+        },
+    )
+    heartbeat["raw_json"] = json.dumps(raw_payload)
     live_catalog.rpc(
         "machine.heartbeat.apply.v2",
         {
@@ -381,6 +402,7 @@ def test_browser_observability_routes_expose_overview_and_raw_slices(tmp_path, m
             "degraded": 1,
             "offline": 0,
             "broken": 0,
+            "unknown": 0,
         }
         assert {machine["device_id"] for machine in payload["machines"]} == {
             "broken-machine",
@@ -555,6 +577,7 @@ def test_observability_overview_counts_archive_backlog_only_machine_as_healthy(t
             "degraded": 1,
             "offline": 0,
             "broken": 0,
+            "unknown": 0,
         }
         archive_machine = next(machine for machine in payload["machines"] if machine["device_id"] == "archive-only-machine")
         assert archive_machine["status"] == "healthy"

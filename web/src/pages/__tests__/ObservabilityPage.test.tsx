@@ -217,6 +217,7 @@ function buildOverview(hoursBack: number) {
       degraded: 0,
       offline: 0,
       broken: 1,
+      unknown: 0,
     },
     slow_turns: [
       {
@@ -458,6 +459,7 @@ describe("ObservabilityPage", () => {
         degraded: 0,
         offline: 0,
         broken: 0,
+        unknown: 0,
       };
       return Promise.resolve({
         ok: true,
@@ -515,6 +517,7 @@ describe("ObservabilityPage", () => {
         degraded: 0,
         offline: 0,
         broken: 0,
+        unknown: 0,
       };
       return Promise.resolve({
         ok: true,

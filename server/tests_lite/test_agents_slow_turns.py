@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime
 from datetime import timedelta
@@ -208,6 +209,16 @@ def _seed_heartbeat(
     is_offline: int = 0,
     raw_json: str | None = None,
 ) -> AgentHeartbeat:
+    raw_payload = json.loads(raw_json) if raw_json is not None else {}
+    raw_payload.setdefault(
+        "shipping_progress",
+        {
+            "pending_work": False,
+            "stalled": False,
+            "seconds_without_progress": 0,
+            "observed_at": received_at.isoformat(),
+        },
+    )
     heartbeat = AgentHeartbeat(
         device_id=device_id,
         received_at=received_at,
@@ -217,7 +228,7 @@ def _seed_heartbeat(
         ship_successes_1h=4 if spool_dead == 0 else 2,
         disk_free_bytes=1_000,
         is_offline=is_offline,
-        raw_json=raw_json,
+        raw_json=json.dumps(raw_payload),
     )
     db.add(heartbeat)
     db.commit()

@@ -177,7 +177,14 @@ def run_hook_inbox_launch(args: argparse.Namespace) -> dict[str, Any]:
         # `agy --help`/`agy plugin ...` subprocess invocations and direct hook
         # script invocations); there is no long-lived provider process this
         # producer could leave behind.
-        cleanup = {"verified": True, "orphan_count": 0}
+        cleanup = {
+            "schema_version": 1,
+            "artifact_kind": "antigravity_hook_inbox_cleanup_receipt",
+            "status": "pass",
+            "orphan_count": 0,
+            "required_cleanup": {"no_orphan_provider_processes": True},
+            "verified": True,
+        }
         _write_json(root / "cleanup-receipt.json", cleanup)
 
         observation = {

@@ -138,7 +138,9 @@ def test_hook_inbox_launch_pass_writes_admissible_result(tmp_path: Path, monkeyp
     assert "hook-inbox-assertions.json" in manifest_paths
     assert "cleanup-receipt.json" in manifest_paths
     cleanup = json.loads((evidence_root / "cleanup-receipt.json").read_text())
-    assert cleanup == {"verified": True, "orphan_count": 0}
+    assert cleanup["status"] == "pass"
+    assert cleanup["orphan_count"] == 0
+    assert cleanup["required_cleanup"] == {"no_orphan_provider_processes": True}
 
 
 def test_hook_inbox_launch_fail_when_oracle_reports_semantic_fail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

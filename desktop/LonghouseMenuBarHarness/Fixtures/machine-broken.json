@@ -34,6 +34,12 @@
       "disk_free_bytes": 1073741824,
       "is_offline": true,
       "recent_dead_letters": [],
+      "shipping_progress": {
+        "pending_work": true,
+        "stalled": false,
+        "seconds_without_progress": 600,
+        "observed_at": "2026-04-17T18:24:00Z"
+      },
       "last_updated": "2026-04-17T18:24:00Z"
     },
     "error": null

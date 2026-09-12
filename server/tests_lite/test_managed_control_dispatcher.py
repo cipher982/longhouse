@@ -33,6 +33,7 @@ from zerg.models.live_store import LiveSessionThread
 from zerg.services import catalogd_supervisor
 from zerg.services.live_session_dispatch import supports_live_text_dispatch_metadata
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.machine_control_channel import MachineControlCommandResponse
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_ANSWER_PAUSE
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_INTERRUPT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
@@ -1038,6 +1039,7 @@ def test_dispatch_managed_control_command_sends_antigravity_to_the_engine(live_c
 
 def test_dispatch_managed_control_command_rejects_malformed_engine_success(live_catalog):  # noqa: F811
     session_id, _lease = _seed_lease_for_new_session()
+    database_path, _socket_path = catalogd_supervisor.catalogd_paths()
 
     async def _run():
         await _clear_machine_registry()
@@ -1059,16 +1061,255 @@ def test_dispatch_managed_control_command_rejects_malformed_engine_success(live_
                 timeout_secs=1,
                 command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
                 payload={"text": "continue"},
+                request_id="req-malformed",
             )
             await completer
 
             assert result.ok is False
             assert result.transport == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
-            assert result.error == "Machine Agent control command returned malformed result"
+            assert result.failure_kind == dispatcher_module.DISPATCH_FAILURE_TRANSPORT
+            assert result.failure_reason == "indeterminate"
+            assert "outcome is indeterminate" in (result.error or "")
         finally:
             await _clear_machine_registry()
 
     asyncio.run(_run())
+
+    operation = _read_control_operation(
+        database_path,
+        command_id=f"managed-control:{session_id}:session.send_text:req-malformed",
+    )
+    assert operation["status"] == "running"
+
+
+def test_engine_result_with_catalog_finish_failure_is_indeterminate_without_resend(live_catalog, monkeypatch):  # noqa: F811
+    session_id, _lease = _seed_lease_for_new_session()
+    database_path, _socket_path = catalogd_supervisor.catalogd_paths()
+    calls = []
+
+    class _SuccessfulRegistry:
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **kwargs):
+            calls.append(kwargs)
+            return MachineControlCommandResponse(
+                transport_ok=True,
+                message={
+                    "type": "command_result",
+                    "command_id": kwargs["command_id"],
+                    "ok": True,
+                    "result": {"exit_code": 0, "stdout": "accepted", "stderr": ""},
+                },
+            )
+
+    async def _finish_without_receipt(**_kwargs):
+        return dispatcher_module.ManagedControlFinishResult(
+            durable=False,
+            error="catalogd unavailable",
+        )
+
+    monkeypatch.setattr(dispatcher_module, "get_machine_control_channel_registry", lambda: _SuccessfulRegistry())
+    monkeypatch.setattr(dispatcher_module, "_finish_live_managed_control_operation", _finish_without_receipt)
+
+    result = asyncio.run(
+        dispatch_managed_control_command(
+            db=object(),
+            owner_id=42,
+            session=_session(id=session_id, source_runner_id=None),
+            timeout_secs=1,
+            command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+            payload={"text": "continue"},
+            request_id="req-finish-failure",
+        )
+    )
+
+    command_id = f"managed-control:{session_id}:session.send_text:req-finish-failure"
+    operation = _read_control_operation(database_path, command_id=command_id)
+    assert result.ok is False
+    assert result.failure_reason == "indeterminate"
+    assert "was not replayed" in (result.error or "")
+    assert [call["command_id"] for call in calls] == [command_id]
+    assert operation["status"] == "running"
+
+
+def test_command_indeterminate_retries_with_the_same_open_operation(live_catalog, monkeypatch):  # noqa: F811
+    session_id, _lease = _seed_lease_for_new_session()
+    database_path, _socket_path = catalogd_supervisor.catalogd_paths()
+    calls = []
+
+    class _DurableFenceRegistry:
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **kwargs):
+            calls.append(kwargs)
+            return MachineControlCommandResponse(
+                transport_ok=True,
+                message={
+                    "type": "command_result",
+                    "command_id": kwargs["command_id"],
+                    "ok": False,
+                    "error": {
+                        "code": "command_indeterminate",
+                        "message": "accepted before the outcome was recorded",
+                    },
+                },
+            )
+
+    monkeypatch.setattr(dispatcher_module, "get_machine_control_channel_registry", lambda: _DurableFenceRegistry())
+
+    async def _dispatch():
+        kwargs = {
+            "db": object(),
+            "owner_id": 42,
+            "session": _session(id=session_id, source_runner_id=None),
+            "timeout_secs": 1,
+            "command_type": MANAGED_CONTROL_COMMAND_SEND_TEXT,
+            "payload": {"text": "continue"},
+            "request_id": "req-accepted-unknown",
+        }
+        first = await dispatch_managed_control_command(**kwargs)
+        second = await dispatch_managed_control_command(**kwargs)
+        return first, second
+
+    first, second = asyncio.run(_dispatch())
+
+    command_id = f"managed-control:{session_id}:session.send_text:req-accepted-unknown"
+    operation = _read_control_operation(database_path, command_id=command_id)
+    assert [call["command_id"] for call in calls] == [command_id, command_id]
+    assert first.ok is False
+    assert first.failure_reason == "indeterminate"
+    assert second.ok is False
+    assert second.failure_reason == "indeterminate"
+    assert operation["status"] == "running"
+    assert operation["error"] is None
+
+
+def test_definitive_engine_failure_still_finishes_the_operation(live_catalog, monkeypatch):  # noqa: F811
+    session_id, _lease = _seed_lease_for_new_session()
+    database_path, _socket_path = catalogd_supervisor.catalogd_paths()
+
+    class _RejectingRegistry:
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **_kwargs):
+            return MachineControlCommandResponse(
+                transport_ok=True,
+                message={
+                    "type": "command_result",
+                    "ok": False,
+                    "error": {"code": "provider_rejected", "message": "provider refused input"},
+                },
+            )
+
+    monkeypatch.setattr(dispatcher_module, "get_machine_control_channel_registry", lambda: _RejectingRegistry())
+    result = asyncio.run(
+        dispatch_managed_control_command(
+            db=object(),
+            owner_id=42,
+            session=_session(id=session_id, source_runner_id=None),
+            timeout_secs=1,
+            command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+            payload={"text": "continue"},
+            request_id="req-provider-rejected",
+        )
+    )
+
+    operation = _read_control_operation(
+        database_path,
+        command_id=f"managed-control:{session_id}:session.send_text:req-provider-rejected",
+    )
+    assert result.ok is True
+    assert result.data == {"exit_code": 1, "stdout": "", "stderr": "provider refused input"}
+    assert operation["status"] == "failed"
+
+
+def test_ambiguous_engine_transport_keeps_durable_operation_open_for_reconciliation(monkeypatch, live_catalog):  # noqa: F811
+    session_id, _lease = _seed_lease_for_new_session()
+    database_path, _socket_path = catalogd_supervisor.catalogd_paths()
+
+    class _AmbiguousRegistry:
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **_kwargs):
+            return MachineControlCommandResponse(
+                transport_ok=False,
+                error="control response was lost",
+                delivery_certainty="ambiguous",
+            )
+
+    monkeypatch.setattr(dispatcher_module, "get_machine_control_channel_registry", lambda: _AmbiguousRegistry())
+
+    result = asyncio.run(
+        dispatch_managed_control_command(
+            db=object(),
+            owner_id=42,
+            session=_session(id=session_id, source_runner_id=None),
+            timeout_secs=1,
+            command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+            payload={"text": "continue"},
+            request_id="req-ambiguous-restart",
+        )
+    )
+
+    command_id = f"managed-control:{session_id}:session.send_text:req-ambiguous-restart"
+    operation = _read_control_operation(database_path, command_id=command_id)
+    assert result.ok is False
+    assert result.failure_kind == dispatcher_module.DISPATCH_FAILURE_TRANSPORT
+    assert result.failure_reason == "indeterminate"
+    assert operation["status"] == "running"
+
+
+def test_not_sent_engine_transport_retries_same_command_identity(monkeypatch, live_catalog):  # noqa: F811
+    session_id, _lease = _seed_lease_for_new_session()
+    database_path, _socket_path = catalogd_supervisor.catalogd_paths()
+    calls = []
+
+    class _RetryRegistry:
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return MachineControlCommandResponse(
+                    transport_ok=False,
+                    error="channel closed before send",
+                    delivery_certainty="not_sent",
+                )
+            return MachineControlCommandResponse(
+                transport_ok=True,
+                message={
+                    "ok": True,
+                    "result": {"exit_code": 0, "stdout": "accepted", "stderr": ""},
+                },
+            )
+
+    monkeypatch.setattr(dispatcher_module, "get_machine_control_channel_registry", lambda: _RetryRegistry())
+
+    result = asyncio.run(
+        dispatch_managed_control_command(
+            db=object(),
+            owner_id=42,
+            session=_session(id=session_id, source_runner_id=None),
+            timeout_secs=1,
+            command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+            payload={"text": "continue"},
+            request_id="req-not-sent-retry",
+        )
+    )
+
+    command_id = f"managed-control:{session_id}:session.send_text:req-not-sent-retry"
+    operation = _read_control_operation(database_path, command_id=command_id)
+    assert result.ok is True
+    assert result.data == {"exit_code": 0, "stdout": "accepted", "stderr": ""}
+    assert len(calls) == 2
+    assert calls[0]["command_id"] == command_id
+    assert calls[1]["command_id"] == command_id
+    assert operation["status"] == "succeeded"
 
 
 def test_live_text_dispatch_metadata_accepts_engine_channel_without_runner_metadata():

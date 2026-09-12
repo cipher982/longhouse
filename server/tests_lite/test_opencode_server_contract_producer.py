@@ -213,6 +213,13 @@ def test_run_server_contract_reports_status_for_the_requested_cell_independently
         "cleanup-receipt.json",
     ):
         assert (args.evidence_root / relative).is_file(), relative
+    cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text())
+    assert cleanup["status"] == "pass"
+    assert cleanup["orphan_count"] == 0
+    assert cleanup["required_cleanup"] == {
+        "opencode_server_process_exited": True,
+        "no_orphan_provider_processes": True,
+    }
 
 
 def test_run_server_contract_rejects_an_unexpected_assertion_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

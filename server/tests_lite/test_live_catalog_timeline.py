@@ -1530,6 +1530,200 @@ def test_storage_v2_untitled_session_uses_first_prompt_as_pending_fallback(tmp_p
     assert card.head.title_source == "prompt"
 
 
+def test_storage_only_session_can_be_archived_and_restored_by_its_owner(tmp_path):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'storage-preferences.db'}")
+    initialize_catalog_schema(engine)
+    LiveSession = make_sessionmaker(engine)
+    now = datetime.now(timezone.utc)
+    session_id = uuid4()
+    with LiveSession() as db:
+        db.add_all(
+            [
+                LiveUser(id=1, email="owner@storage-preferences.test", provider="test", is_active=True),
+                LiveUser(id=2, email="other@storage-preferences.test", provider="test", is_active=True),
+            ]
+        )
+        db.add(
+            StorageSession(
+                session_id=str(session_id),
+                tenant_id="tenant-a",
+                owner_id="1",
+                provider="claude",
+                environment="production",
+                machine_id="cinder",
+                started_at=now,
+                last_activity_at=now,
+                user_messages=1,
+                transcript_revision=1,
+                raw_state="durable",
+                render_state="ready",
+                commit_seq=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.commit()
+
+    store = CatalogStore(engine)
+    refused = store.update_session_preferences(
+        session_id=str(session_id),
+        owner_id=2,
+        user_state="archived",
+        notification_muted=True,
+        user_hidden_from_timeline=None,
+        observed_at=now,
+    )
+    assert refused["found"] is False
+    with LiveSession() as db:
+        visible = project_catalog_timeline_snapshot(_snapshot(db, _params()))
+        assert [card.head.id for card in visible.sessions] == [str(session_id)]
+
+    store.update_session_preferences(
+        session_id=str(session_id),
+        owner_id=1,
+        user_state="archived",
+        notification_muted=True,
+        user_hidden_from_timeline=None,
+        observed_at=now,
+    )
+    with LiveSession() as db:
+        archived = project_catalog_timeline_snapshot(_snapshot(db, _params()))
+        assert archived.sessions == []
+
+    store.update_session_preferences(
+        session_id=str(session_id),
+        owner_id=1,
+        user_state="active",
+        notification_muted=None,
+        user_hidden_from_timeline=None,
+        observed_at=now + timedelta(seconds=1),
+    )
+    with LiveSession() as db:
+        restored = project_catalog_timeline_snapshot(_snapshot(db, _params()))
+        assert [card.head.id for card in restored.sessions] == [str(session_id)]
+    facts = store.read_session(session_id=str(session_id), owner_id=1)
+    assert facts["facts"]["catalog"]["notification_muted"] is True
+
+
+def test_dual_live_and_storage_preferences_are_owner_scoped_and_atomic(tmp_path):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'dual-preferences.db'}")
+    initialize_catalog_schema(engine)
+    LiveSession = make_sessionmaker(engine)
+    now = datetime.now(timezone.utc)
+    session_id = uuid4()
+    with LiveSession() as db:
+        db.add_all(
+            [
+                LiveUser(id=1, email="owner@dual-preferences.test", provider="test", is_active=True),
+                LiveUser(id=2, email="other@dual-preferences.test", provider="test", is_active=True),
+                LiveSessionCatalog(
+                    session_id=str(session_id),
+                    provider="claude",
+                    environment="production",
+                    project="longhouse",
+                    device_id="cinder",
+                    started_at=now,
+                    last_activity_at=now,
+                    user_messages=1,
+                    assistant_messages=1,
+                    primary_thread_id=None,
+                    created_at=now,
+                    updated_at=now,
+                ),
+                LiveTimelineCard(
+                    session_id=str(session_id),
+                    provider="claude",
+                    environment="production",
+                    project="longhouse",
+                    device_id="cinder",
+                    started_at=now,
+                    last_activity_at=now,
+                    user_messages=1,
+                    assistant_messages=1,
+                    transcript_revision=1,
+                    parser_revision="test",
+                    updated_at=now,
+                ),
+                StorageSession(
+                    session_id=str(session_id),
+                    tenant_id="tenant-a",
+                    owner_id="1",
+                    provider="claude",
+                    environment="production",
+                    machine_id="cinder",
+                    project="longhouse",
+                    started_at=now,
+                    last_activity_at=now,
+                    user_messages=1,
+                    assistant_messages=1,
+                    transcript_revision=1,
+                    raw_state="durable",
+                    render_state="ready",
+                    commit_seq=1,
+                    created_at=now,
+                    updated_at=now,
+                ),
+            ]
+        )
+        db.commit()
+
+    store = CatalogStore(engine)
+    refused = store.update_session_preferences(
+        session_id=str(session_id),
+        owner_id=2,
+        user_state="archived",
+        notification_muted=True,
+        user_hidden_from_timeline=None,
+        observed_at=now,
+    )
+    assert refused["found"] is False
+    with LiveSession() as db:
+        live = db.get(LiveSessionCatalog, str(session_id))
+        storage = db.get(StorageSession, str(session_id))
+        assert live.user_state == "active"
+        assert live.notification_muted is False
+        assert storage.user_state == "active"
+        assert storage.notification_muted == 0
+
+    archived = store.update_session_preferences(
+        session_id=str(session_id),
+        owner_id=1,
+        user_state="archived",
+        notification_muted=True,
+        user_hidden_from_timeline=None,
+        observed_at=now,
+    )
+    assert archived["found"] is True
+    with LiveSession() as db:
+        hidden = project_catalog_timeline_snapshot(_snapshot(db, _params()))
+        assert hidden.sessions == []
+        live = db.get(LiveSessionCatalog, str(session_id))
+        storage = db.get(StorageSession, str(session_id))
+        assert live.user_state == "archived"
+        assert storage.user_state == "archived"
+        assert live.notification_muted is True
+        assert storage.notification_muted == 1
+
+    restored = store.update_session_preferences(
+        session_id=str(session_id),
+        owner_id=1,
+        user_state="active",
+        notification_muted=None,
+        user_hidden_from_timeline=None,
+        observed_at=now + timedelta(seconds=1),
+    )
+    assert restored["found"] is True
+    with LiveSession() as db:
+        visible = project_catalog_timeline_snapshot(_snapshot(db, _params()))
+        assert [card.head.id for card in visible.sessions] == [str(session_id)]
+        live = db.get(LiveSessionCatalog, str(session_id))
+        storage = db.get(StorageSession, str(session_id))
+        assert live.user_state == "active"
+        assert storage.user_state == "active"
+        assert live.notification_muted is True
+        assert storage.notification_muted == 1
+
+
 def test_live_catalog_timeline_keeps_runtime_and_control_axes_independent(tmp_path):
     engine = make_live_engine(f"sqlite:///{tmp_path / 'truth-table.db'}")
     initialize_catalog_schema(engine)

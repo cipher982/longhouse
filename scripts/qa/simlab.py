@@ -384,7 +384,7 @@ def cmd_up(args: argparse.Namespace) -> None:
         }
         started = time.monotonic()
         subprocess.run(
-            [str(built_binary("longhouse")), "auth", "--url", base_url],
+            [str(built_binary("longhouse")), "auth", "--url", base_url, "--device", DEVICE_ID],
             env={**agent_env, "LONGHOUSE_DEVICE_TOKEN": token},
             check=True, capture_output=True, text=True,
         )

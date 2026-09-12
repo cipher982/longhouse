@@ -75,7 +75,7 @@ final class LocalStatusMonitor: @unchecked Sendable {
         let keys = [
             "archive_backlog",
             "control_channel",
-            "is_offline", "last_ship_at", "last_ship_error_kind", "last_ship_result",
+            "is_offline", "last_ship_at", "last_ship_error_kind", "last_ship_result", "shipping_progress",
             "managed_sessions", "phase_ledger", "sessions_digest", "sessions_sequence",
             "spool_dead_count", "spool_pending_count", "storage_v2_outbox", "unmanaged_session_bindings",
         ]
@@ -85,6 +85,7 @@ final class LocalStatusMonitor: @unchecked Sendable {
         if let localProjection = payload["local_projection"] as? [String: Any] {
             var projectionSemantic: [String: Any] = [:]
             projectionSemantic["version"] = localProjection["version"]
+            projectionSemantic["generated_at"] = localProjection["generated_at"]
             projectionSemantic["engine_pulse_at"] = localProjection["engine_pulse_at"]
             projectionSemantic["reconciliation"] = localProjection["reconciliation"]
             semantic["local_projection"] = projectionSemantic

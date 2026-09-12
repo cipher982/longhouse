@@ -245,7 +245,13 @@ def test_machine_health_surfaces_explicit_archive_pause_without_backlog():
                     "pending_bytes": 0,
                     "dead_ranges": 0,
                     "dead_bytes": 0,
-                }
+                },
+                "shipping_progress": {
+                    "pending_work": False,
+                    "stalled": False,
+                    "seconds_without_progress": 0,
+                    "observed_at": pinned_now.isoformat(),
+                },
             }
         ),
     )
@@ -297,7 +303,13 @@ def test_machine_health_prioritizes_dead_letters_over_archive_pause():
                     "pending_bytes": 0,
                     "dead_ranges": 2,
                     "dead_bytes": 4096,
-                }
+                },
+                "shipping_progress": {
+                    "pending_work": False,
+                    "stalled": False,
+                    "seconds_without_progress": 0,
+                    "observed_at": pinned_now.isoformat(),
+                },
             }
         ),
     )
@@ -443,6 +455,17 @@ def _apply_heartbeat(live_catalog, *, owner_id: int, device_id: str, received_at
     heartbeat.update(fields)
     heartbeat["device_id"] = device_id
     heartbeat["received_at"] = received_at.isoformat()
+    raw_payload = json.loads(heartbeat["raw_json"]) if heartbeat["raw_json"] is not None else {}
+    raw_payload.setdefault(
+        "shipping_progress",
+        {
+            "pending_work": False,
+            "stalled": False,
+            "seconds_without_progress": 0,
+            "observed_at": received_at.isoformat(),
+        },
+    )
+    heartbeat["raw_json"] = json.dumps(raw_payload)
     live_catalog.rpc(
         "machine.heartbeat.apply.v2",
         {
@@ -785,6 +808,12 @@ def test_machine_health_route_uses_active_transport_window_from_raw_json(live_ca
                 "ship_successes_10m": 4,
                 "ship_connect_errors_10m": 0,
                 "last_ship_result": "ok",
+                "shipping_progress": {
+                    "pending_work": False,
+                    "stalled": False,
+                    "seconds_without_progress": 0,
+                    "observed_at": (pinned_now - timedelta(minutes=1)).isoformat(),
+                },
             }
         ),
     )
@@ -884,3 +913,29 @@ def test_machine_health_route_lets_stale_heartbeat_outrank_dead_archive_ranges(l
     assert machine["status_reason"] == "heartbeat_stale"
     assert machine["is_stale"] is True
     assert machine["reasons"] == ["heartbeat_stale", "spool_dead"]
+
+
+def test_machine_health_prioritizes_unknown_before_healthy_when_limited(live_catalog, live_catalog_client, monkeypatch):
+    pinned_now = datetime(2026, 9, 11, 20, 15, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    owner_id, headers = _enroll(live_catalog, "healthy-machine", "unknown-machine")
+    _apply_heartbeat(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="healthy-machine",
+        received_at=pinned_now,
+    )
+    _apply_heartbeat(
+        live_catalog,
+        owner_id=owner_id,
+        device_id="unknown-machine",
+        received_at=pinned_now - timedelta(seconds=1),
+        raw_json=json.dumps({"shipping_progress": None}),
+    )
+
+    response = live_catalog_client.get("/agents/machines/health", params={"limit": 1}, headers=headers)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["total"] == 2
+    assert [(machine["device_id"], machine["status"]) for machine in payload["machines"]] == [("unknown-machine", "unknown")]

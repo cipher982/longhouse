@@ -91,6 +91,7 @@ def build_machine_health_status_counts_response(
         degraded=int(counts.get("degraded", 0)),
         offline=int(counts.get("offline", 0)),
         broken=int(counts.get("broken", 0)),
+        unknown=int(counts.get("unknown", 0)),
     )
 
 

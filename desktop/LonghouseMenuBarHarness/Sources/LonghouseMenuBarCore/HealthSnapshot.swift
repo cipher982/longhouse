@@ -55,6 +55,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     public let managedSummary: ManagedSummarySnapshot?
     public let managedSessions: [ManagedSessionSnapshot]?
     public let realtime: RealtimeConnectionSnapshot?
+    public let transport: NativeTransportSnapshot?
     public let unmanagedProcesses: [UnmanagedProcessSnapshot]?
     public let orphanBridges: [OrphanBridgeSnapshot]?
     public let launchReadiness: LaunchReadinessSnapshot?
@@ -78,6 +79,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         managedSummary: ManagedSummarySnapshot? = nil,
         managedSessions: [ManagedSessionSnapshot]? = nil,
         realtime: RealtimeConnectionSnapshot? = nil,
+        transport: NativeTransportSnapshot? = nil,
         unmanagedProcesses: [UnmanagedProcessSnapshot]? = nil,
         orphanBridges: [OrphanBridgeSnapshot]? = nil,
         launchReadiness: LaunchReadinessSnapshot?,
@@ -100,6 +102,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         self.managedSummary = managedSummary
         self.managedSessions = managedSessions
         self.realtime = realtime
+        self.transport = transport
         self.unmanagedProcesses = unmanagedProcesses
         self.orphanBridges = orphanBridges
         self.launchReadiness = launchReadiness
@@ -139,6 +142,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             managedSummary: managedSummary,
             managedSessions: sessions,
             realtime: realtime,
+            transport: transport,
             unmanagedProcesses: unmanagedProcesses,
             orphanBridges: orphanBridges,
             launchReadiness: launchReadiness,
@@ -152,22 +156,197 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     func applyingLocalProjection(_ projection: LocalStatusMonitor.Projection) -> HealthSnapshot {
+        let payload = projection.engine ?? engineStatus?.payload
+        let pulse = payload?.localProjection?.enginePulseAt ?? payload?.lastUpdated
+        let pulseAge = pulse
+            .flatMap(Self.parseISO8601)
+            .map { max(0, Int(Date().timeIntervalSince($0))) }
+        let progressIsCurrent = pulseAge.map { $0 <= 120 } ?? true
+        let projectedTransport = progressIsCurrent
+            ? projectingLocalTransport(
+                from: payload?.shippingProgress,
+                offline: payload?.isOffline == true
+                    || reasons.contains("reported_offline")
+                    || reasons.contains("engine_offline")
+            )
+            : (
+                reasons: reasons,
+                suggestedActions: suggestedActions,
+                suggestedActionIds: suggestedActionIds,
+                transport: transport
+            )
         let updatedEngine = EngineStatusSnapshot(
             path: engineStatus?.path,
             exists: true,
-            fresh: true,
-            ageSeconds: 0,
-            payload: projection.engine ?? engineStatus?.payload,
+            fresh: pulseAge.map { $0 <= 30 } ?? engineStatus?.fresh,
+            ageSeconds: pulseAge ?? engineStatus?.ageSeconds,
+            payload: payload,
             error: nil
         )
-        let pulse = projection.engine?.localProjection?.enginePulseAt
-            ?? projection.engine?.lastUpdated
-            ?? collectedAt
-        return replacingManagedSessions(
-            managedSessions,
-            replacementEngineStatus: updatedEngine,
-            replacementCollectedAt: pulse
+        let hasDefinitiveAction = suggestedActionIds?.contains("free_disk_space") == true
+            || suggestedActionIds?.contains("repair_machine") == true
+        let projectedOnlyStall = projectedTransport.transport?.statusReason == "ship_stalled"
+            && projectedTransport.reasons == ["ship_stalled"]
+            && !hasDefinitiveAction
+        let projectedRecovery = progressIsCurrent
+            && !projectedTransport.reasons.contains("ship_stalled")
+            && reasons.contains("ship_stalled")
+            && projectedTransport.reasons.isEmpty
+            && !hasDefinitiveAction
+        let projectedHealthState: String
+        let projectedSeverity: String
+        let projectedHeadline: String
+        let projectedAttention: AttentionSnapshot?
+        if projectedOnlyStall && parsedSeverity != .red {
+            let projectedSnapshot = HealthSnapshot(
+                schemaVersion: schemaVersion,
+                collectedAt: collectedAt,
+                healthState: "degraded",
+                severity: "yellow",
+                headline: headline,
+                reasons: projectedTransport.reasons,
+                suggestedActions: projectedTransport.suggestedActions,
+                suggestedActionIds: projectedTransport.suggestedActionIds,
+                attention: attention,
+                service: service,
+                engineStatus: updatedEngine,
+                outbox: outbox,
+                activitySummary: activitySummary,
+                managedSummary: managedSummary,
+                managedSessions: managedSessions,
+                realtime: realtime,
+                transport: projectedTransport.transport,
+                unmanagedProcesses: unmanagedProcesses,
+                orphanBridges: orphanBridges,
+                launchReadiness: launchReadiness,
+                build: build,
+                updateInfo: updateInfo
+            )
+            let presentation = projectedSnapshot.menuBarPresentation(relativeTo: Date())
+            projectedHealthState = "degraded"
+            projectedSeverity = "yellow"
+            projectedHeadline = presentation.headline
+            projectedAttention = AttentionSnapshot(
+                state: "needs_attention",
+                headline: presentation.headline,
+                summary: projectedTransport.transport?.statusSummary,
+                reasons: projectedTransport.reasons,
+                suggestedActions: projectedTransport.suggestedActions
+            )
+        } else if projectedRecovery {
+            projectedHealthState = "healthy"
+            projectedSeverity = "green"
+            projectedHeadline = "Longhouse native health is healthy"
+            projectedAttention = nil
+        } else {
+            projectedHealthState = healthState
+            projectedSeverity = severity
+            projectedHeadline = headline
+            projectedAttention = attention
+        }
+        return HealthSnapshot(
+            schemaVersion: schemaVersion,
+            collectedAt: collectedAt,
+            healthState: projectedHealthState,
+            severity: projectedSeverity,
+            headline: projectedHeadline,
+            reasons: projectedTransport.reasons,
+            suggestedActions: projectedTransport.suggestedActions,
+            suggestedActionIds: projectedTransport.suggestedActionIds,
+            attention: projectedAttention,
+            service: service,
+            engineStatus: updatedEngine,
+            outbox: outbox,
+            activitySummary: activitySummary,
+            managedSummary: managedSummary,
+            managedSessions: managedSessions,
+            realtime: realtime,
+            transport: projectedTransport.transport,
+            unmanagedProcesses: unmanagedProcesses,
+            orphanBridges: orphanBridges,
+            launchReadiness: launchReadiness,
+            build: build,
+            updateInfo: updateInfo
         )
+    }
+
+    /// Project the explicit engine progress fact into the existing local-health
+    /// presentation contract. This is not a second health classifier: the
+    /// producer already decided whether the pending lane is stalled. The pulse
+    /// must nevertheless update the reason/action/transport fields together so
+    /// a local file change cannot show a stalled row beside a healthy headline.
+    private func projectingLocalTransport(
+        from progress: ShippingProgressSnapshot?,
+        offline: Bool
+    ) -> (
+        reasons: [String],
+        suggestedActions: [String],
+        suggestedActionIds: [String]?,
+        transport: NativeTransportSnapshot?
+    ) {
+        guard let progress,
+              let pendingWork = progress.pendingWork,
+              let stalled = progress.stalled else {
+            return (reasons, suggestedActions, suggestedActionIds, transport)
+        }
+
+        let transportReasons: Set<String> = [
+            "transport_unavailable", "connect_errors", "server_errors", "rate_limited",
+            "retryable_client_errors", "reported_offline", "ship_stalled",
+        ]
+        let transportActionID = "inspect_transport"
+        let localAction = "Inspect local transport health."
+        let wasStalled = reasons.contains("ship_stalled") || transport?.statusReason == "ship_stalled"
+        var projectedReasons = reasons.filter { $0 != "ship_stalled" }
+        var projectedActions = suggestedActions
+        var projectedActionIds = suggestedActionIds
+        var projectedTransport = transport
+        let hasOtherTransportReason = projectedReasons.contains { transportReasons.contains($0) }
+        let canReplaceTransport = transport?.statusReason == nil
+            || transport?.statusReason == "healthy"
+            || transport?.statusReason == "ship_stalled"
+            || transport?.statusReason == "transport_unavailable"
+
+        if offline {
+            projectedActions.removeAll { $0 == localAction }
+            return (projectedReasons, projectedActions, projectedActionIds, projectedTransport)
+        }
+
+        if pendingWork && stalled {
+            projectedReasons.append("ship_stalled")
+            var actionIds = projectedActionIds ?? []
+            if !actionIds.contains(transportActionID) {
+                actionIds.append(transportActionID)
+            }
+            projectedActionIds = actionIds
+            if !projectedActions.contains(localAction) {
+                projectedActions.append(localAction)
+            }
+            if canReplaceTransport && !hasOtherTransportReason {
+                let detail: String
+                if let seconds = progress.secondsWithoutProgress, seconds > 0 {
+                    let age = Self.ageLabel(seconds: Int(min(seconds, UInt64(Int.max))))
+                    detail = "Pending shipping has made no useful progress for \(age)."
+                } else {
+                    detail = "Pending shipping has made no useful progress."
+                }
+                projectedTransport = NativeTransportSnapshot(
+                    status: "degraded",
+                    statusReason: "ship_stalled",
+                    statusSummary: detail
+                )
+            }
+        } else if wasStalled && !hasOtherTransportReason && canReplaceTransport {
+            projectedActionIds = projectedActionIds?.filter { $0 != transportActionID }
+            projectedActions.removeAll { $0 == localAction }
+            projectedTransport = NativeTransportSnapshot(
+                status: "healthy",
+                statusReason: "healthy",
+                statusSummary: "Shipping healthy."
+            )
+        }
+
+        return (projectedReasons, projectedActions, projectedActionIds, projectedTransport)
     }
 
     func preservingSessionTitles(from previous: HealthSnapshot?) -> HealthSnapshot {
@@ -253,7 +432,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             suggestedActionIds: suggestedActionIds,
             attention: attention, service: service, engineStatus: replacementEngineStatus ?? engineStatus, outbox: outbox,
             activitySummary: activitySummary, managedSummary: managedSummary, managedSessions: sessions,
-            realtime: realtime, unmanagedProcesses: unmanagedProcesses, orphanBridges: orphanBridges,
+            realtime: realtime, transport: transport, unmanagedProcesses: unmanagedProcesses, orphanBridges: orphanBridges,
             launchReadiness: launchReadiness, build: build, updateInfo: updateInfo
         )
     }
@@ -344,7 +523,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     public var lastShipLabel: String {
-        engineStatus?.payload?.lastShipAt ?? "No shipments yet"
+        engineStatus?.payload?.lastShipAt ?? "Unknown"
     }
 
     public var collectedAtDate: Date? {
@@ -383,7 +562,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
 
     public func lastShipSummaryLabel(relativeTo referenceDate: Date) -> String {
         guard let raw = engineStatus?.payload?.lastShipAt else {
-            return "No shipments yet"
+            return "Last receipt time unknown"
         }
         guard let parsed = Self.parseISO8601(raw) else {
             return "Last ship \(raw)"
@@ -397,7 +576,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
 
     public func lastShipValueLabel(relativeTo referenceDate: Date) -> String {
         guard let raw = engineStatus?.payload?.lastShipAt else {
-            return "No shipments yet"
+            return "Unknown"
         }
         guard let parsed = Self.parseISO8601(raw) else {
             return raw
@@ -452,14 +631,13 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     public func engineFreshnessLabel(relativeTo referenceDate: Date) -> String {
-        guard let ageSeconds = engineStatus?.ageSeconds else {
+        guard let ageSeconds = engineEvidenceAgeSeconds(relativeTo: referenceDate) else {
             return "Unknown"
         }
-        let dynamicAgeSeconds = dynamicEngineAgeSeconds(relativeTo: referenceDate, fallback: ageSeconds)
-        if dynamicAgeSeconds <= 30 {
+        if ageSeconds <= 30 {
             return "Fresh"
         }
-        if dynamicAgeSeconds <= 120 {
+        if ageSeconds <= 120 {
             return "Aging"
         }
         return "Stale"
@@ -470,11 +648,10 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     public func engineFreshnessValueLabel(relativeTo referenceDate: Date) -> String {
-        guard let ageSeconds = engineStatus?.ageSeconds else {
+        guard let ageSeconds = engineEvidenceAgeSeconds(relativeTo: referenceDate) else {
             return "Unavailable"
         }
-        let dynamicAgeSeconds = dynamicEngineAgeSeconds(relativeTo: referenceDate, fallback: ageSeconds)
-        return "\(engineFreshnessLabel(relativeTo: referenceDate)) · \(Self.ageLabel(seconds: dynamicAgeSeconds))"
+        return "\(engineFreshnessLabel(relativeTo: referenceDate)) · \(Self.ageLabel(seconds: ageSeconds))"
     }
 
     public var spoolPendingLabel: String {
@@ -570,6 +747,14 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         let archivePending = engineStatus?.payload?.archiveBacklog?.pendingRanges ?? 0
         let outboxFiles = outboxCount
         let dead = engineStatus?.payload?.spoolDeadCount ?? 0
+        if let progress = engineStatus?.payload?.shippingProgress,
+           progress.pendingWork == true,
+           progress.stalled == true {
+            if let seconds = progress.secondsWithoutProgress, seconds > 0 {
+                return "Pending uploads have made no useful progress for \(Self.ageLabel(seconds: Int(min(seconds, UInt64(Int.max))))). Longhouse is preserving local evidence."
+            }
+            return "Pending uploads have made no useful progress. Longhouse is preserving local evidence."
+        }
 
         if dead > 0 {
             return "\(dead) dead queued shipping item\(dead == 1 ? "" : "s") need manual attention before Longhouse can drain the backlog."
@@ -609,7 +794,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             parts.append("\(outboxFiles) local hook event\(outboxFiles == 1 ? "" : "s")")
         }
         let backlog = parts.joined(separator: " and ")
-        return "Shipping has \(backlog) waiting. Repair now logs each phase: reconcile runtime, replay backlog, then collect health."
+        return "Shipping has \(backlog) waiting. Repair will reconcile the local runtime and collect health."
     }
 
 
@@ -1169,6 +1354,17 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         max(0, fallback + collectionElapsedSeconds(relativeTo: referenceDate))
     }
 
+    private func engineEvidenceAgeSeconds(relativeTo referenceDate: Date) -> Int? {
+        if let generatedAt = engineStatus?.payload?.localProjection?.generatedAt,
+           let generatedDate = Self.parseISO8601(generatedAt) {
+            return max(0, Int(referenceDate.timeIntervalSince(generatedDate)))
+        }
+        guard let ageSeconds = engineStatus?.ageSeconds else {
+            return nil
+        }
+        return dynamicEngineAgeSeconds(relativeTo: referenceDate, fallback: ageSeconds)
+    }
+
     private static func compactRelativeLabel(for date: Date, relativeTo referenceDate: Date) -> String {
         compactAgeLabel(seconds: max(0, Int(referenceDate.timeIntervalSince(date))))
     }
@@ -1227,6 +1423,12 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             return "The outbox is backing up"
         case "engine_status_stale":
             return "The engine status is stale"
+        case "engine_projection_stale":
+            return "The local status projection is stale"
+        case "engine_reconciliation_failed":
+            return "Local status reconciliation failed"
+        case "ship_stalled":
+            return "Pending uploads have stopped making progress"
         default:
             return raw
                 .replacingOccurrences(of: "_", with: " ")
@@ -1332,6 +1534,12 @@ public struct RealtimeConnectionSnapshot: Codable, Equatable, Sendable {
     public let tokenPath: String?
 }
 
+public struct NativeTransportSnapshot: Codable, Equatable, Sendable {
+    public let status: String?
+    public let statusReason: String?
+    public let statusSummary: String?
+}
+
 public struct ServiceSnapshot: Codable, Equatable, Sendable {
     public let platform: String?
     public let status: String?
@@ -1404,6 +1612,7 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
     public let diskFreeBytes: UInt64?
     public let isOffline: Bool?
     public let localProjection: LocalProjectionStatus?
+    public let shippingProgress: ShippingProgressSnapshot?
     public let recentDeadLetters: [DeadLetterSnapshot]?
     public let lastUpdated: String?
     /// Engine-compiled build identity (from build.rs). Same shape as the
@@ -1422,6 +1631,7 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
         diskFreeBytes: UInt64?,
         isOffline: Bool?,
         localProjection: LocalProjectionStatus? = nil,
+        shippingProgress: ShippingProgressSnapshot? = nil,
         recentDeadLetters: [DeadLetterSnapshot]?,
         lastUpdated: String?,
         build: BuildIdentityRecord? = nil,
@@ -1437,6 +1647,7 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
         self.diskFreeBytes = diskFreeBytes
         self.isOffline = isOffline
         self.localProjection = localProjection
+        self.shippingProgress = shippingProgress
         self.recentDeadLetters = recentDeadLetters
         self.lastUpdated = lastUpdated
         self.build = build
@@ -1454,6 +1665,7 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
         case diskFreeBytes
         case isOffline
         case localProjection
+        case shippingProgress
         case recentDeadLetters
         case lastUpdated
         case build
@@ -1504,6 +1716,7 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
             diskFreeBytes: try container.decodeIfPresent(UInt64.self, forKey: .diskFreeBytes),
             isOffline: try container.decodeIfPresent(Bool.self, forKey: .isOffline),
             localProjection: try container.decodeIfPresent(LocalProjectionStatus.self, forKey: .localProjection),
+            shippingProgress: try container.decodeIfPresent(ShippingProgressSnapshot.self, forKey: .shippingProgress),
             recentDeadLetters: try container.decodeIfPresent([DeadLetterSnapshot].self, forKey: .recentDeadLetters),
             lastUpdated: try container.decodeIfPresent(String.self, forKey: .lastUpdated),
             build: try container.decodeIfPresent(BuildIdentityRecord.self, forKey: .build),
@@ -1517,6 +1730,13 @@ public struct LocalProjectionStatus: Codable, Equatable, Sendable {
     public let enginePulseAt: String?
     public let lastReconciledAt: String?
     public let reconciliation: ProjectionReconciliationStatus?
+}
+
+public struct ShippingProgressSnapshot: Codable, Equatable, Sendable {
+    public let pendingWork: Bool?
+    public let stalled: Bool?
+    public let secondsWithoutProgress: UInt64?
+    public let observedAt: String?
 }
 
 public struct ProjectionReconciliationStatus: Codable, Equatable, Sendable {

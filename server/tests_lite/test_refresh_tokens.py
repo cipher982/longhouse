@@ -300,6 +300,7 @@ def test_refresh_endpoint_issues_new_tokens(tmp_path):
     assert any("longhouse_session=" in value for value in resp.headers.get_list("set-cookie"))
     assert any("longhouse_refresh=" in value for value in resp.headers.get_list("set-cookie"))
 
+
 def test_refresh_endpoint_routes_rotation_through_catalog(tmp_path):
     """POST /auth/refresh sends only hashes through the catalog boundary."""
     import os
@@ -344,6 +345,7 @@ def test_refresh_endpoint_routes_rotation_through_catalog(tmp_path):
     assert retry.status_code == 200
     assert observed[0]["token_hash"] == refresh_tokens._hash_token(raw_rt)
     assert observed[0]["next_token_hash"] == observed[1]["next_token_hash"]
+
 
 def test_refresh_endpoint_rejects_missing_cookie(tmp_path):
     """POST /auth/refresh without a cookie returns 401."""

@@ -246,6 +246,24 @@ def _wait_terminal_quiescence(
     return None
 
 
+def _cleanup_receipt(stop_result: dict[str, Any]) -> dict[str, Any]:
+    required_cleanup = {
+        "managed_opencode_process_exited": stop_result.get("clean") is True,
+        "no_orphan_provider_processes": stop_result.get("dead") is True and stop_result.get("provider_process_dead") is True,
+    }
+    receipt = dict(stop_result)
+    receipt.update(
+        {
+            "schema_version": 1,
+            "artifact_kind": "opencode_turn_boundary_cleanup_receipt",
+            "status": "pass" if all(required_cleanup.values()) else "fail",
+            "orphan_count": 0 if required_cleanup["no_orphan_provider_processes"] else 1,
+            "required_cleanup": required_cleanup,
+        }
+    )
+    return receipt
+
+
 def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
     spec = SPECS["opencode"]
     root = args.evidence_root.resolve()
@@ -359,7 +377,8 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
         stop_result = stop_session(spec, args, initial_state, initial, force=False, environment=environment, stop_phase="initial")
         managed_opencode_process_exited = bool(stop_result.get("clean") is True)
         no_orphan_provider_processes = bool(stop_result.get("dead") is True and stop_result.get("provider_process_dead") is True)
-        write_json(root / "cleanup-receipt.json", stop_result)
+        cleanup_receipt = _cleanup_receipt(stop_result)
+        write_json(root / "cleanup-receipt.json", cleanup_receipt)
 
         if shipper is not None:
             write_json(root / "transcript-shipper-receipt.json", shipper.stop())
@@ -417,7 +436,7 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
         if initial is not None and initial_state is not None and not stop_result.get("dead"):
             try:
                 stop_result = stop_session(spec, args, initial_state, initial, force=True, environment=environment, stop_phase="initial")
-                write_json(root / "cleanup-receipt.json", stop_result)
+                write_json(root / "cleanup-receipt.json", _cleanup_receipt(stop_result))
             except Exception:  # noqa: BLE001 - best-effort teardown during failure handling
                 pass
         redacted_secret_files = _redact_retained_secrets(

@@ -152,6 +152,26 @@ def _send_marker_async(
     return thread
 
 
+def _cleanup_receipt(final_cleanup: dict[str, Any]) -> dict[str, Any]:
+    verification = final_cleanup.get("verification") or {}
+    required_cleanup = {
+        "final_bridge_stopped": verification.get("verified") is True,
+        "final_socket_absent": verification.get("socket_absent") is True,
+        "no_orphan_provider_processes": verification.get("verified") is True,
+    }
+    receipt = dict(final_cleanup)
+    receipt.update(
+        {
+            "schema_version": 1,
+            "artifact_kind": "codex_turn_boundary_cleanup_receipt",
+            "status": "pass" if all(required_cleanup.values()) else "fail",
+            "orphan_count": 0 if required_cleanup["no_orphan_provider_processes"] else 1,
+            "required_cleanup": required_cleanup,
+        }
+    )
+    return receipt
+
+
 def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
     root = args.evidence_root.resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -239,7 +259,7 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
 
         final_cleanup = bridge_canary._stop_bridge(args, session_id, isolation_root)
         verification = final_cleanup.get("verification") or {}
-        write_json(root / "cleanup-receipt.json", final_cleanup)
+        write_json(root / "cleanup-receipt.json", _cleanup_receipt(final_cleanup))
 
         observation = {
             "quiescent_before_turn": quiescent_before_turn,
@@ -304,7 +324,7 @@ def run_turn_boundary_quiescent(args: argparse.Namespace) -> dict[str, Any]:
         if session_id and isolation_root and not (final_cleanup.get("verification") or {}).get("verified"):
             cleanup = bridge_canary._stop_bridge(args, session_id, isolation_root)
             if not (root / "cleanup-receipt.json").exists():
-                write_json(root / "cleanup-receipt.json", cleanup)
+                write_json(root / "cleanup-receipt.json", _cleanup_receipt(cleanup))
         qualification_secrets(os.environ, getattr(args, "agents_token", "") or "")
 
 

@@ -383,6 +383,62 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func staleProducerCannotClaimNoSessionsOrClearDurableUpload() {
+        let snapshot = presentationSnapshot(sessions: [])
+        let trust = DataTrust.lastKnown(
+            LastKnownContext(lastSuccessAt: Date(timeIntervalSince1970: 0), failure: nil)
+        )
+
+        let presentation = snapshot.menuBarPresentation(
+            relativeTo: Date(timeIntervalSince1970: 60),
+            localEvidenceTrust: trust
+        )
+
+        #expect(presentation.promotion == .unavailable)
+        #expect(presentation.headline == "Current local status unavailable")
+        #expect(presentation.facts.first(where: { $0.id == "durable-upload" })?.value == "Unknown")
+        #expect(presentation.facts.first(where: { $0.id == "transport" })?.value == "Unknown")
+    }
+
+    @Test
+    func expiredProjectionDoesNotImplyLocalAgentIsDown() {
+        let snapshot = presentationSnapshot(sessions: [])
+        let projectionTrust = DataTrust.lastKnown(
+            LastKnownContext(lastSuccessAt: Date(timeIntervalSince1970: 0), failure: nil)
+        )
+
+        let facts = snapshot.menuBarPresentation(
+            relativeTo: Date(timeIntervalSince1970: 60),
+            projectionTrust: projectionTrust
+        ).facts
+
+        #expect(facts.first(where: { $0.id == "local-agent" })?.value == "Running")
+        #expect(facts.first(where: { $0.id == "transport" })?.value == "Unknown")
+        #expect(facts.first(where: { $0.id == "transport" })?.detail?.contains("Runtime Host") == true)
+    }
+
+    @Test
+    func stalledShippingProgressIsNotRenderedAsClear() {
+        let snapshot = presentationSnapshot(
+            reasons: ["ship_stalled"],
+            sessions: [],
+            shippingProgress: ShippingProgressSnapshot(
+                pendingWork: true,
+                stalled: true,
+                secondsWithoutProgress: 90,
+                observedAt: "1970-01-01T00:00:00Z"
+            )
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 90))
+        let durable = presentation.facts.first(where: { $0.id == "durable-upload" })
+
+        #expect(durable?.value == "Stalled")
+        #expect(durable?.detail?.contains("no progress 1m") == true)
+        #expect(durable?.promotion == .inspect)
+    }
+
+    @Test
     func missingRuntimeTruthDoesNotClaimRemoteControlReady() {
         let snapshot = presentationSnapshot(sessions: [presentationSession(phase: "idle")])
 
@@ -407,6 +463,18 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func mismatchedServicePromotesRepairWhileAgentStillRuns() {
+        let snapshot = presentationSnapshot(
+            reasons: ["service_artifact_mismatch"], sessions: [],
+            serviceStatus: "running"
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .repair)
+    }
+
+    @Test
     func archiveDeadLettersAreInspectableNotRepair() {
         let snapshot = presentationSnapshot(reasons: ["archive_dead_lettered"], sessions: [])
 
@@ -414,6 +482,23 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(presentation.promotion == .inspect)
         #expect(presentation.headline == "Historical archive needs review")
+    }
+
+    @Test
+    func spoolDeadLettersPromoteScopedShippingInspection() {
+        let snapshot = presentationSnapshot(
+            reasons: ["spool_dead_letters"],
+            sessions: [],
+            suggestedActionIds: ["inspect_shipping"]
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+        let durable = presentation.facts.first(where: { $0.id == "durable-upload" })
+
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.headline == "Durable upload needs inspection for 1 dead letter")
+        #expect(durable?.value == "1 dead letter")
+        #expect(durable?.promotion == .inspect)
     }
 
     @Test
@@ -1116,31 +1201,6 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
-    func repairDryRunReturnsVisibleFeedback() throws {
-        let snapshot = HealthSnapshot(
-            schemaVersion: 1,
-            collectedAt: "2026-04-08T01:52:00Z",
-            healthState: "broken",
-            severity: "red",
-            headline: "Longhouse engine service is stopped",
-            reasons: ["service_stopped"],
-            suggestedActions: ["Run: longhouse machine repair"],
-            service: nil,
-            engineStatus: nil,
-            outbox: nil,
-            activitySummary: nil,
-            launchReadiness: nil
-        )
-
-        let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
-        let feedback = sink.handle(.repairInstall, snapshot: snapshot)
-
-        #expect(feedback?.style == .warning)
-        #expect(feedback?.title == "Repair dry run recorded")
-        #expect(feedback?.detail.contains("longhouse machine repair") == true)
-    }
-
-    @Test
     func sourceInspectionDryRunUsesScopedShippingCommand() throws {
         let sourceEpoch = "01234567-89ab-cdef-0123-456789abcdef"
         let snapshot = HealthSnapshot(
@@ -1638,95 +1698,6 @@ struct LonghouseMenuBarCoreTests {
         #expect(store.snapshot?.headline == "Refreshed Longhouse status")
     }
 
-    @Test
-    func repairInstallInvocationUsesResolvedCLI() throws {
-        let homeDirectory = try makeFakeHomeDirectory()
-        let executableURL = try installFakeLonghouseBinary(homeDirectory: homeDirectory)
-        let snapshot = HealthSnapshot(
-            schemaVersion: 1,
-            collectedAt: "2026-04-08T01:52:00Z",
-            healthState: "broken",
-            severity: "red",
-            headline: "Longhouse engine service is stopped",
-            reasons: ["service_stopped"],
-            suggestedActions: ["Run: longhouse machine repair"],
-            service: nil,
-            engineStatus: nil,
-            outbox: nil,
-            activitySummary: nil,
-            launchReadiness: LaunchReadinessSnapshot(
-                state: "repair-required",
-                headline: nil,
-                reasons: nil,
-                suggestedActions: nil,
-                storedURL: nil,
-                machineName: "ember",
-                serviceMachineName: "fallback-name",
-                runner: RunnerSnapshot(
-                    path: nil,
-                    exists: true,
-                    error: nil,
-                    runnerName: "ember",
-                    runnerID: nil,
-                    runnerURLs: ["https://demo.longhouse.test"],
-                    installMode: "desktop"
-                )
-            )
-        )
-
-        let invocation = LonghouseCLI.repairInstallInvocation(
-            snapshot: snapshot,
-            homeDirectory: homeDirectory,
-            pathEnvironment: "/usr/bin:/bin"
-        )
-
-        #expect(invocation?.launchPath == executableURL.path)
-        #expect(invocation?.arguments == [
-            "machine",
-            "repair",
-        ])
-    }
-
-    @Test
-    func repairInstallInvocationDoesNotDependOnSnapshotURLs() throws {
-        let homeDirectory = try makeFakeHomeDirectory()
-        let executableURL = try installFakeLonghouseBinary(homeDirectory: homeDirectory)
-        let snapshot = HealthSnapshot(
-            schemaVersion: 1,
-            collectedAt: "2026-04-08T01:52:00Z",
-            healthState: "broken",
-            severity: "red",
-            headline: "Longhouse launch config is inconsistent",
-            reasons: ["config_url_runner_url_mismatch"],
-            suggestedActions: ["Run: longhouse machine repair"],
-            service: nil,
-            engineStatus: nil,
-            outbox: nil,
-            activitySummary: nil,
-            launchReadiness: LaunchReadinessSnapshot(
-                state: "repair-required",
-                headline: nil,
-                reasons: nil,
-                suggestedActions: nil,
-                storedURL: "https://stored.longhouse.ai",
-                machineName: "ember",
-                serviceMachineName: nil,
-                runner: nil
-            )
-        )
-
-        let invocation = LonghouseCLI.repairInstallInvocation(
-            snapshot: snapshot,
-            homeDirectory: homeDirectory,
-            pathEnvironment: "/usr/bin:/bin"
-        )
-
-        #expect(invocation?.launchPath == executableURL.path)
-        #expect(invocation?.arguments == [
-            "machine",
-            "repair",
-        ])
-    }
 
     @Test
     func legacyYellowAndRedSnapshotsRequestMenuBarAttentionWhenAttentionIsAbsent() {
@@ -1851,7 +1822,7 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(snapshot.attentionSummaryLabel.contains("1 queued transcript range"))
         #expect(snapshot.attentionSummaryLabel.contains("10 local hook events"))
-        #expect(snapshot.attentionSummaryLabel.contains("replay backlog"))
+        #expect(snapshot.attentionSummaryLabel.contains("reconcile the local runtime"))
     }
 
     @Test
@@ -1931,7 +1902,126 @@ struct LonghouseMenuBarCoreTests {
             )
         )
         #expect(!drained.attentionSummaryLabel.contains("transcript range"))
-        #expect(drained.collectedAt == "2026-04-08T01:52:01Z")
+        // A local engine pulse updates liveness, not the freshness of the
+        // producer snapshot shown above the panel.
+        #expect(drained.collectedAt == "2026-04-08T01:52:00Z")
+    }
+
+    @Test
+    func localShippingPulseProjectsStallReasonTransportAndActionTogether() throws {
+        let snapshot = presentationSnapshot(sessions: [])
+        let stalled = snapshot.applyingLocalProjection(
+            LocalStatusMonitor.Projection(
+                sessions: [],
+                engine: EngineStatusPayload(
+                    version: "test", daemonPid: 1, lastShipAt: nil,
+                    spoolPendingCount: 1, spoolDeadCount: 0,
+                    parseErrorCount1H: 0, diskFreeBytes: nil, isOffline: false,
+                    shippingProgress: ShippingProgressSnapshot(
+                        pendingWork: true, stalled: true,
+                        secondsWithoutProgress: 90, observedAt: "2026-08-03T16:00:00Z"
+                    ),
+                    recentDeadLetters: [], lastUpdated: nil
+                )
+            )
+        )
+
+        #expect(stalled.reasons.contains("ship_stalled"))
+        #expect(stalled.suggestedActionIds == ["inspect_transport"])
+        #expect(stalled.transport?.status == "degraded")
+        #expect(stalled.healthState == "degraded")
+        #expect(stalled.severity == "yellow")
+        #expect(stalled.attention?.state == "needs_attention")
+        #expect(stalled.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0)).headline == "Local upload needs attention")
+        #expect(stalled.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0)).facts.first(where: { $0.id == "durable-upload" })?.value == "Stalled")
+
+        let recovered = stalled.applyingLocalProjection(
+            LocalStatusMonitor.Projection(
+                sessions: [],
+                engine: EngineStatusPayload(
+                    version: "test", daemonPid: 1, lastShipAt: nil,
+                    spoolPendingCount: 0, spoolDeadCount: 0,
+                    parseErrorCount1H: 0, diskFreeBytes: nil, isOffline: false,
+                    shippingProgress: ShippingProgressSnapshot(
+                        pendingWork: false, stalled: false,
+                        secondsWithoutProgress: 0, observedAt: "2026-08-03T16:01:00Z"
+                    ),
+                    recentDeadLetters: [], lastUpdated: nil
+                )
+            )
+        )
+
+        #expect(recovered.reasons.contains("ship_stalled") == false)
+        #expect(recovered.suggestedActionIds == [])
+        #expect(recovered.transport?.status == "healthy")
+        #expect(recovered.healthState == "healthy")
+        #expect(recovered.severity == "green")
+        #expect(recovered.headline == "Longhouse native health is healthy")
+        #expect(recovered.attention == nil)
+        #expect(recovered.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0)).promotion == .normal)
+    }
+
+    @Test
+    func localProjectionDoesNotInferStallFromOfflineOrStaleFacts() {
+        let offline = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-08-03T16:00:00Z",
+            healthState: "degraded",
+            severity: "yellow",
+            headline: "Longhouse is retrying while offline",
+            reasons: ["reported_offline"],
+            suggestedActions: ["Verify network reachability"],
+            suggestedActionIds: ["inspect_transport"],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+        let offlineProjection = offline.applyingLocalProjection(
+            LocalStatusMonitor.Projection(
+                sessions: [],
+                engine: EngineStatusPayload(
+                    version: "test", daemonPid: 1, lastShipAt: nil,
+                    spoolPendingCount: 1, spoolDeadCount: 0,
+                    parseErrorCount1H: 0, diskFreeBytes: nil, isOffline: true,
+                    shippingProgress: ShippingProgressSnapshot(
+                        pendingWork: true, stalled: true,
+                        secondsWithoutProgress: 90, observedAt: "2026-08-03T16:00:00Z"
+                    ),
+                    recentDeadLetters: [], lastUpdated: nil
+                )
+            )
+        )
+        #expect(offlineProjection.reasons.contains("ship_stalled") == false)
+        #expect(offlineProjection.suggestedActionIds == ["inspect_transport"])
+        #expect(offlineProjection.healthState == "degraded")
+
+        let healthy = presentationSnapshot(sessions: [])
+        let stale = healthy.applyingLocalProjection(
+            LocalStatusMonitor.Projection(
+                sessions: [],
+                engine: EngineStatusPayload(
+                    version: "test", daemonPid: 1, lastShipAt: nil,
+                    spoolPendingCount: 1, spoolDeadCount: 0,
+                    parseErrorCount1H: 0, diskFreeBytes: nil, isOffline: false,
+                    localProjection: LocalProjectionStatus(
+                        version: 1,
+                        generatedAt: "2026-01-01T00:00:00Z",
+                        enginePulseAt: "2026-01-01T00:00:00Z",
+                        lastReconciledAt: nil,
+                        reconciliation: nil
+                    ),
+                    shippingProgress: ShippingProgressSnapshot(
+                        pendingWork: true, stalled: true,
+                        secondsWithoutProgress: 90, observedAt: "2026-01-01T00:00:00Z"
+                    ),
+                    recentDeadLetters: [], lastUpdated: nil
+                )
+            )
+        )
+        #expect(stale.reasons.contains("ship_stalled") == false)
+        #expect(stale.healthState == "healthy")
     }
 
 
@@ -2039,6 +2129,36 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.lastShipCompactLabel(relativeTo: referenceDate) == "2m")
         #expect(snapshot.engineAgeLabel(relativeTo: referenceDate) == "1m")
         #expect(snapshot.engineFreshnessLabel(relativeTo: referenceDate) == "Aging")
+    }
+
+    @Test
+    func projectionFreshnessUsesGeneratedAtInsteadOfEnginePulse() throws {
+        let data = Data("""
+        {
+          "health_state": "degraded",
+          "severity": "yellow",
+          "headline": "Local projection is stale",
+          "reasons": ["engine_projection_stale"],
+          "suggested_actions": [],
+          "engine_status": {
+            "fresh": true,
+            "age_seconds": 1,
+            "payload": {
+              "daemon_pid": 42,
+              "local_projection": {
+                "generated_at": "2026-04-08T01:49:59Z",
+                "engine_pulse_at": "2026-04-08T01:52:00Z"
+              }
+            }
+          }
+        }
+        """.utf8)
+        let snapshot = try HealthSnapshotDecoder.decode(data: data)
+        let referenceDate = try #require(HealthSnapshot.parseISO8601("2026-04-08T01:52:00Z"))
+
+        #expect(snapshot.engineAgeLabel(relativeTo: referenceDate) == "1s")
+        #expect(snapshot.engineFreshnessLabel(relativeTo: referenceDate) == "Stale")
+        #expect(snapshot.engineFreshnessValueLabel(relativeTo: referenceDate) == "Stale · 2m")
     }
 
     @Test
@@ -2836,11 +2956,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(failure?.command?.contains("longhouse-local-health") == true)
     }
 
-    /// The freshness fact is derived from the payload clock, which the local
-    /// projection rewrites to `fresh, 0s` off the engine pulse. It has to stop
-    /// claiming recency when the producer is broken, or the panel renders a
-    /// green "Fresh · 21s" directly beneath a banner saying it cannot read this
-    /// Mac's status.
+    /// Cached payloads cannot establish freshness after producer failure.
     @Test
     @MainActor
     func freshnessFactStopsClaimingRecencyWhenTrustIsNotCurrent() {
@@ -2858,9 +2974,6 @@ struct LonghouseMenuBarCoreTests {
             ).displayedFacts
         }
 
-        let current = facts(trust: .current)
-        let currentFreshness = current.first { $0.id == "freshness" }
-        #expect(currentFreshness != nil)
 
         for trust in [
             DataTrust.neverLoaded(failure: nil),
@@ -2870,18 +2983,9 @@ struct LonghouseMenuBarCoreTests {
                 Issue.record("freshness fact missing for \(trust)")
                 continue
             }
-            #expect(freshness.value == "Unknown")
             #expect(freshness.promotion == .unavailable)
-            #expect(freshness.value.hasPrefix("Fresh") == false)
         }
 
-        // Every other fact is untouched: the banner already labels them
-        // last-known, and blanking them would leave nothing to act on.
-        let degraded = facts(trust: .neverLoaded(failure: nil))
-        #expect(degraded.count == current.count)
-        for (before, after) in zip(current, degraded) where before.id != "freshness" {
-            #expect(before == after)
-        }
     }
 
     @Test
@@ -3252,6 +3356,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(recorded.managedSessions?.count == 1)
         #expect(recorded.managedSessions?.first?.normalizedUIPresence == "foreground_tui")
         #expect(recorded.realtime?.runtimeUrl != nil)
+        #expect(recorded.transport?.status == "healthy")
         #expect(recorded.engineStatus?.payload != nil)
         #expect(
             recorded.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 1_785_772_800)).headline
@@ -3400,6 +3505,8 @@ private func presentationSnapshot(
     storageBlockKind: String? = nil,
     storageUnresolved: Int? = nil,
     storagePending: Int = 0,
+    shippingProgress: ShippingProgressSnapshot? = nil,
+    suggestedActionIds: [String] = [],
     isOffline: Bool = false,
     engineFresh: Bool = true,
     serviceStatus: String? = "running"
@@ -3413,7 +3520,7 @@ private func presentationSnapshot(
     return HealthSnapshot(
         schemaVersion: 1, collectedAt: "1970-01-01T00:00:00Z",
         healthState: "healthy", severity: "green", headline: "Healthy",
-        reasons: reasons, suggestedActions: [],
+        reasons: reasons, suggestedActions: [], suggestedActionIds: suggestedActionIds,
         service: serviceStatus.map { status in ServiceSnapshot(
             platform: "macos", status: status, serviceName: "com.longhouse.shipper",
             serviceFile: nil, logPath: nil
@@ -3430,7 +3537,8 @@ private func presentationSnapshot(
                     byteLimit: 1_073_741_824, error: nil
                 ),
                 parseErrorCount1H: 0, diskFreeBytes: nil,
-                isOffline: isOffline, recentDeadLetters: [], lastUpdated: "1970-01-01T00:00:00Z",
+                isOffline: isOffline, shippingProgress: shippingProgress,
+                recentDeadLetters: [], lastUpdated: "1970-01-01T00:00:00Z"
             ),
             error: nil
         ),

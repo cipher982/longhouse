@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime
 from datetime import timedelta
@@ -87,14 +88,25 @@ def _seed_heartbeat(
     received_delta_seconds: int = 60,
     **kwargs,
 ) -> None:
+    received_at = PINNED_NOW - timedelta(seconds=received_delta_seconds)
+    raw_payload = {
+        "ship_attempts_10m": 1,
+        "ship_successes_10m": 1,
+        "shipping_progress": {
+            "pending_work": False,
+            "stalled": False,
+            "seconds_without_progress": 0,
+            "observed_at": received_at.isoformat(),
+        },
+    }
     values = {
         "device_id": device_id,
-        "received_at": PINNED_NOW - timedelta(seconds=received_delta_seconds),
+        "received_at": received_at,
         "version": "0.1.16-test",
         "last_ship_result": "ok",
         "ship_attempts_1h": 1,
         "ship_successes_1h": 1,
-        "raw_json": '{"ship_attempts_10m":1,"ship_successes_10m":1}',
+        "raw_json": json.dumps(raw_payload),
     }
     values.update(kwargs)
     db.add(AgentHeartbeat(**values))

@@ -139,6 +139,14 @@ def test_run_turn_boundary_quiescent_passes_when_activity_transitions_through_a_
 
     on_disk = json.loads((args.evidence_root / "result.json").read_text(encoding="utf-8"))
     assert on_disk == result
+    cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text())
+    assert cleanup["status"] == "pass"
+    assert cleanup["orphan_count"] == 0
+    assert cleanup["required_cleanup"] == {
+        "final_bridge_stopped": True,
+        "final_socket_absent": True,
+        "no_orphan_provider_processes": True,
+    }
 
 
 def test_run_turn_boundary_quiescent_fails_closed_without_an_observed_active_window(

@@ -4952,7 +4952,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "healthy" | "degraded" | "offline" | "broken";
+            status: "healthy" | "degraded" | "offline" | "broken" | "unknown";
             /** Status Reason */
             status_reason: string;
             /** Status Summary */
@@ -5060,6 +5060,11 @@ export interface components {
              * @default 0
              */
             broken: number;
+            /**
+             * Unknown
+             * @default 0
+             */
+            unknown: number;
         };
         /** MachineLaunchProjection */
         MachineLaunchProjection: {
@@ -9765,7 +9770,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "healthy" | "degraded" | "offline" | "broken";
+            status: "healthy" | "degraded" | "offline" | "broken" | "unknown";
             /** Status Reason */
             status_reason: string;
             /** Status Summary */
@@ -12135,7 +12140,7 @@ export interface operations {
                 /** @description Filter to one device */
                 device_id?: string | null;
                 /** @description Filter by derived machine transport state */
-                status?: ("healthy" | "degraded" | "offline" | "broken") | null;
+                status?: ("healthy" | "degraded" | "offline" | "broken" | "unknown") | null;
                 /** @description Max machine rows to return */
                 limit?: number;
                 /** @description Treat heartbeats older than this as offline */
@@ -12181,7 +12186,7 @@ export interface operations {
                 /** @description Filter by completed turn state (for example terminal|durable|failed). Only turns with terminal_at or durable_at are eligible. */
                 state?: string | null;
                 /** @description Filter by current machine transport state */
-                machine_status?: ("healthy" | "degraded" | "offline" | "broken") | null;
+                machine_status?: ("healthy" | "degraded" | "offline" | "broken" | "unknown") | null;
                 /** @description Only return completed turns at or above this total duration */
                 min_total_turn_time_ms?: number;
                 /** @description Only consider turns submitted within this recent window */
@@ -12231,7 +12236,7 @@ export interface operations {
                 /** @description Filter by completed turn state (for example terminal|durable|failed). Only turns with terminal_at or durable_at are eligible. */
                 state?: string | null;
                 /** @description Filter by current machine transport state */
-                machine_status?: ("healthy" | "degraded" | "offline" | "broken") | null;
+                machine_status?: ("healthy" | "degraded" | "offline" | "broken" | "unknown") | null;
                 /** @description Count turns at or above this total duration as slow */
                 slow_threshold_ms?: number;
                 /** @description Only consider completed turns submitted within this recent window */
@@ -12277,7 +12282,7 @@ export interface operations {
                 /** @description Filter completed turns by state (for example terminal|durable|failed). Only turns with terminal_at or durable_at are eligible. */
                 state?: string | null;
                 /** @description Filter both the machine list and turn enrichment by machine transport state */
-                machine_status?: ("healthy" | "degraded" | "offline" | "broken") | null;
+                machine_status?: ("healthy" | "degraded" | "offline" | "broken" | "unknown") | null;
                 /** @description Count turns at or above this total duration as slow */
                 slow_threshold_ms?: number;
                 /** @description Only consider recent completed turns in this lookback window */
@@ -14602,7 +14607,7 @@ export interface operations {
                 /** @description Filter to one device */
                 device_id?: string | null;
                 /** @description Filter by derived machine transport state */
-                status?: ("healthy" | "degraded" | "offline" | "broken") | null;
+                status?: ("healthy" | "degraded" | "offline" | "broken" | "unknown") | null;
                 /** @description Max machine rows to return */
                 limit?: number;
                 /** @description Treat heartbeats older than this as offline */

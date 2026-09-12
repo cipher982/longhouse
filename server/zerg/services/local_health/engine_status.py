@@ -22,6 +22,8 @@ from .phase import _phase_display_label
 from .process import _process_row_by_pid
 from .process import _process_row_is_zombie
 
+ENGINE_PROJECTION_STALE_SECONDS = 60
+
 
 def _collect_build_identity(*, engine_status: dict[str, Any]) -> dict[str, Any]:
     """Compare CLI build identity against engine build identity.
@@ -155,6 +157,22 @@ def _collect_engine_status(base_dir: Path, *, now: datetime) -> dict[str, Any]:
     pulse_at = _parse_rfc3339(_normalize_optional_string(projection.get("engine_pulse_at")))
     pulse_age_seconds = int(max(0.0, (now - pulse_at).total_seconds())) if pulse_at is not None else None
     effective_age_seconds = pulse_age_seconds if pulse_age_seconds is not None else file_age_seconds
+    generated_at = _parse_rfc3339(_normalize_optional_string(projection.get("generated_at")))
+    generated_age_seconds = int(max(0.0, (now - generated_at).total_seconds())) if generated_at is not None else None
+    reconciliation = projection.get("reconciliation") if isinstance(projection.get("reconciliation"), Mapping) else None
+    reconciliation_started_at = _parse_rfc3339(_normalize_optional_string((reconciliation or {}).get("started_at")))
+    reconciliation_age_seconds = (
+        int(max(0.0, (now - reconciliation_started_at).total_seconds())) if reconciliation_started_at is not None else None
+    )
+    projection_stale = (
+        generated_at is None
+        or (generated_age_seconds is not None and generated_age_seconds >= ENGINE_PROJECTION_STALE_SECONDS)
+        or (
+            str((reconciliation or {}).get("state") or "").strip() == "reconciling"
+            and reconciliation_age_seconds is not None
+            and reconciliation_age_seconds >= ENGINE_PROJECTION_STALE_SECONDS
+        )
+    )
 
     return {
         "path": str(status_path),
@@ -162,7 +180,12 @@ def _collect_engine_status(base_dir: Path, *, now: datetime) -> dict[str, Any]:
         "fresh": effective_age_seconds <= ENGINE_FRESH_SECONDS,
         "age_seconds": effective_age_seconds,
         "file_age_seconds": file_age_seconds,
-        "reconciliation": projection.get("reconciliation") if isinstance(projection.get("reconciliation"), Mapping) else None,
+        "projection_generated_at": _normalize_optional_string(projection.get("generated_at")),
+        "projection_age_seconds": generated_age_seconds,
+        "projection_reconciliation_started_at": _normalize_optional_string((reconciliation or {}).get("started_at")),
+        "projection_reconciliation_age_seconds": reconciliation_age_seconds,
+        "projection_stale": projection_stale,
+        "reconciliation": reconciliation,
         "payload": payload,
         "error": None,
     }

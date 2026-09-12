@@ -22,14 +22,17 @@ from zerg.services.transport_health import transport_health_sample_from_heartbea
 from zerg.utils.time import normalize_utc
 from zerg.utils.time import utc_now
 
-DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS = 15 * 60
+# The engine publishes its monotonic shipping-progress observation every 60s;
+# allow one missed heartbeat before hosted health calls the producer stale.
+DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS = 2 * 60
 DEFAULT_MACHINE_HEALTH_RECENT_WITHIN_SECONDS = 72 * 60 * 60
 
 _STATE_SORT_ORDER = {
     "broken": 0,
     "offline": 1,
     "degraded": 2,
-    "healthy": 3,
+    "unknown": 3,
+    "healthy": 4,
 }
 
 _MACHINE_ACTION_IDS_BY_REASON: dict[str, str] = {
@@ -51,14 +54,15 @@ _MACHINE_ACTION_IDS_BY_REASON: dict[str, str] = {
     "archive_repair_paused": "inspect_archive",
     "disk_critically_low": "free_disk_space",
     "disk_low": "free_disk_space",
-    "engine_status_missing": "inspect_local_health",
-    "engine_status_unreadable": "inspect_local_health",
-    "engine_status_stale": "inspect_local_health",
+    "engine_status_missing": "repair_machine",
+    "engine_status_unreadable": "repair_machine",
+    "engine_status_stale": "repair_machine",
+    "engine_projection_stale": "repair_machine",
     "engine_status_age_unknown": "inspect_local_health",
     "engine_status_aging": "inspect_local_health",
     "engine_status_sessions_invalid": "inspect_local_health",
     "engine_status_sessions_missing": "inspect_local_health",
-    "engine_reconciliation_failed": "inspect_local_health",
+    "engine_reconciliation_failed": "repair_machine",
     "storage_v2_sources_blocked": "inspect_storage_source",
     "storage_v2_sources_unresolved": "inspect_storage_source",
     "storage_v2_sources_proof_unknown": "inspect_storage_source",

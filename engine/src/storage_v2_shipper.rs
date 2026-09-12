@@ -1,7 +1,7 @@
 //! Parser-independent raw + parser-versioned render shipping for storage-v2.
 
 use std::collections::{HashMap, HashSet};
-use std::io::Cursor;
+use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -1187,12 +1187,11 @@ async fn reconcile_storage_v2_conflict(
     // I am sending do you already hold" — it has no way to express a gap below
     // that point, and every such conflict fell through to quarantine.
     //
-    // A gap is the more recoverable case, not the less: for a byte-offset
-    // source the missing bytes are still in the file on disk, so the cursor can
-    // be corrected to the host's watermark and the range re-shipped. Attempt
-    // that before anything else, because succeeding here means no source is
-    // blocked at all.
-    if let Some(outcome) = resync_behind_host(conn, &pending.source_path, prepared, &manifest)? {
+    // A lower host watermark conflicts with the retained local evidence. Check
+    // it before the proven-prefix path so the conflict is recorded explicitly
+    // instead of allowing that path to treat stale host state as permission to
+    // discard the pending envelope.
+    if let Some(outcome) = resync_behind_host(conn, prepared, &manifest)? {
         return Ok(Some(outcome));
     }
     let Some(proven_through) = proven_manifest_prefix(prepared, &manifest)? else {
@@ -1238,11 +1237,11 @@ async fn reconcile_storage_v2_conflict(
 ///
 /// Returns true when something changed and the caller should come back around.
 ///
-/// The order matters. Resync is tried first because it is the only branch that
-/// can clear a `range_gap`, which is the most common block and the one whose
-/// bytes are still on disk. The Cursor-specific lineage and replacement repairs
-/// remain for the epoch-identity failures only they understand; they are now
-/// reached through this one door rather than gating whether the door opens.
+/// The order matters. The host-behind check runs first so a stale manifest is
+/// recorded as an authority conflict without mutating retained evidence. The
+/// Cursor-specific lineage and replacement repairs remain for the epoch-identity
+/// failures only they understand; they are reached through this one door rather
+/// than gating whether the door opens.
 #[allow(clippy::too_many_arguments)]
 async fn reexamine_blocked_source(
     conn: &mut Connection,
@@ -1268,7 +1267,7 @@ async fn reexamine_blocked_source(
         Err(error) => return Err(error),
     };
     if let Some(manifest) = manifest.as_ref() {
-        if resync_behind_host(conn, &pending.source_path, prepared, manifest)?.is_some() {
+        if resync_behind_host(conn, prepared, manifest)?.is_some() {
             return Ok(true);
         }
         if reconcile_admitted_epoch_predecessor(
@@ -1974,24 +1973,21 @@ async fn reconcile_replaced_host_predecessor(
     Ok(true)
 }
 
-/// Correct a local cursor that has run ahead of what the Runtime Host holds.
+/// Refuse a Runtime Host watermark that falls behind retained local evidence.
 ///
-/// This is the rescan half of durable shipping. For a source whose bytes are a
-/// re-readable file, nothing about shipping progress needs to be recovered from
-/// local bookkeeping: the host says how far it got, the file still holds the
-/// rest, and the difference is the work. A disagreement becomes a resync rather
-/// than an incident.
+/// A stale or conflicting host watermark is an authority conflict, not proof
+/// that the immutable pending envelope can be discarded. The existing
+/// re-examination path can retry the same envelope after the host catches up.
 ///
 /// Restricted to `range_kind == "byte_offset"` — Claude, Codex, Antigravity.
 /// Cursor and OpenCode ship record ordinals over a mutable SQLite database
 /// where an earlier ordinal may no longer be reconstructable, so their
 /// bookkeeping is load-bearing and must not be re-derived this way.
 ///
-/// Returns `None` when this is not the situation, leaving the existing
-/// proven-prefix path to handle a host that is ahead.
+/// Returns `None` when the host is not behind, leaving the existing
+/// proven-prefix and lineage paths to reconcile authoritative host progress.
 fn resync_behind_host(
     conn: &mut Connection,
-    source_path: &str,
     prepared: &PreparedStorageV2Envelope,
     manifest: &StorageV2SourceManifest,
 ) -> Result<Option<StorageV2ShipOutcome>> {
@@ -2008,6 +2004,9 @@ fn resync_behind_host(
         || epoch.opaque_source_id != envelope.opaque_source_id
         || epoch.range_kind != envelope.range_kind
         || epoch.range_kind != "byte_offset"
+        || epoch.predecessor_source_epoch.as_deref() != envelope.predecessor_source_epoch.as_deref()
+        || epoch.state != "open"
+        || epoch.replaced_by_source_epoch.is_some()
     {
         return Ok(None);
     }
@@ -2019,102 +2018,15 @@ fn resync_behind_host(
     if accepted_through >= prepared.range_start {
         return Ok(None);
     }
-    // The bytes must still exist to be re-sent, and they must be the *same*
-    // bytes. Length alone is not enough: a file replaced at the same path can
-    // be long enough while holding entirely different content, and re-shipping
-    // that under the old epoch would attribute one session's bytes to another.
-    // Compare the file's current incarnation against the one this epoch was
-    // registered with, which is the same identity test epoch rotation uses.
-    let Ok(metadata) = std::fs::metadata(source_path) else {
-        tracing::warn!(
-            source_epoch = %prepared.source_epoch,
-            "host is behind but the source is unreadable; not resyncing"
-        );
-        return Ok(None);
-    };
-    if metadata.len() < prepared.range_start {
-        tracing::warn!(
-            source_epoch = %prepared.source_epoch,
-            accepted_through,
-            range_start = prepared.range_start,
-            source_len = metadata.len(),
-            "host is behind but the source is too short to serve the gap"
-        );
-        return Ok(None);
-    }
-    let current_incarnation = crate::state::file_identity::identity_from_metadata(&metadata);
-    let registered_incarnation = crate::state::source_epoch::active_source_incarnation(
+    block_source(
         conn,
-        &envelope.provider,
-        &envelope.opaque_source_id,
-    )?;
-    if !crate::state::file_identity::file_identities_match(
-        registered_incarnation.as_deref(),
-        current_incarnation.as_deref(),
-    ) {
-        // A different file now occupies this path. The epoch that owns these
-        // ranges no longer describes what is on disk, so rewinding its cursor
-        // would ship the new file's bytes as if they were the old one's.
-        // Epoch rotation is the correct handler for this, not resync.
-        tracing::warn!(
-            source_epoch = %prepared.source_epoch,
-            registered = ?registered_incarnation,
-            current = ?current_incarnation,
-            "host is behind but the source file was replaced; leaving it to epoch rotation"
-        );
-        return Ok(None);
-    }
-
-    // Both mutations commit together or neither does.
-    //
-    // Splitting them leaves a window where a crash produces a rewound cursor
-    // beside the still-blocked envelope. The next attempt then trips
-    // `resync_to_host_watermark`'s own "not behind" precondition — the cursor
-    // already equals the host watermark — the error propagates, and the source
-    // is stuck for good. That is a fresh absorbing state inside the code that
-    // exists to remove absorbing states, so it gets a transaction.
-    let transaction = conn
-        .transaction()
-        .context("open transaction for durable cursor resync")?;
-    let previous = crate::state::source_epoch::resync_to_host_watermark(
-        &transaction,
         prepared.source_epoch,
-        SourceLane::Durable,
-        accepted_through,
-    )?;
-    // The frozen envelope described a range that starts after the gap, so it is
-    // no longer the work to do, and deleting it also clears the block: a source
-    // is blocked by the presence of that row, so removing it is what lets the
-    // next prepare rebuild from the corrected cursor and ship contiguously.
-    let discarded = pending_source_envelope::discard_after_cursor_resync(
-        &transaction,
-        prepared.source_epoch,
-        &prepared.envelope.expected_envelope_id,
-    )?;
-    if !discarded {
-        // The envelope identity moved under us, so the cursor rewind no longer
-        // describes reality. Roll back rather than commit half a repair.
-        anyhow::bail!(
-            "pending envelope for {} changed during resync; rolled back",
-            prepared.source_epoch
-        );
-    }
-    transaction
-        .commit()
-        .context("commit durable cursor resync")?;
-    tracing::warn!(
-        source_epoch = %prepared.source_epoch,
-        provider = %envelope.provider,
-        accepted_through,
-        local_was = previous,
-        recovered_bytes = previous - accepted_through,
-        "resynced durable cursor to Runtime Host watermark"
-    );
-    Ok(Some(StorageV2ShipOutcome {
-        bytes_shipped: 0,
-        events_shipped: 0,
-        has_more: true,
-    }))
+        "source_epoch_conflict_unresolved",
+        &format!(
+            "Runtime Host is behind local durable evidence at {accepted_through}, below retained range start {}; preserved the immutable envelope and refused to rewind the epoch",
+            prepared.range_start
+        ),
+    )
 }
 
 async fn reconcile_blocked_lineage(
@@ -10280,5 +10192,164 @@ mod tests {
             acknowledge_prepared(&mut conn, &prepared);
         }
         assert_eq!(shipped_sources.len(), 65);
+    }
+
+    #[test]
+    fn byte_offset_resync_refuses_stale_watermark_without_discarding_evidence() {
+        fn fixture() -> (
+            tempfile::TempDir,
+            Connection,
+            std::path::PathBuf,
+            PreparedStorageV2Envelope,
+        ) {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir
+                .path()
+                .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+            let first = b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n";
+            let second = b"{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":\"2026-07-12T12:00:01Z\",\"message\":{\"content\":\"world\"}}\n";
+            fs::write(&path, [first.as_slice(), second.as_slice()].concat()).unwrap();
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+            let first_prepared = prepare_next_envelope_with_limit(
+                &mut conn,
+                &capabilities(),
+                &path,
+                "claude",
+                None,
+                first.len(),
+            )
+            .unwrap()
+            .unwrap();
+            acknowledge_prepared(&mut conn, &first_prepared);
+            let second_prepared =
+                prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(second_prepared.range_start, first.len() as u64);
+            (dir, conn, path, second_prepared)
+        }
+
+        fn manifest_for(
+            prepared: &PreparedStorageV2Envelope,
+            accepted_through: u64,
+            predecessor: Option<String>,
+        ) -> StorageV2SourceManifest {
+            StorageV2SourceManifest {
+                v: 2,
+                source_epoch: crate::shipping::storage_v2::StorageV2SourceEpoch {
+                    source_epoch: prepared.envelope.source_epoch.clone(),
+                    tenant_id: prepared.envelope.tenant_id.clone(),
+                    machine_id: prepared.envelope.machine_id.clone(),
+                    provider: prepared.envelope.provider.clone(),
+                    opaque_source_id: prepared.envelope.opaque_source_id.clone(),
+                    range_kind: prepared.envelope.range_kind.clone(),
+                    state: "open".to_string(),
+                    predecessor_source_epoch: predecessor,
+                    replaced_by_source_epoch: None,
+                    accepted_through: accepted_through.to_string(),
+                    opened_at: prepared.envelope.epoch_opened_at.clone(),
+                },
+                objects: Vec::new(),
+                commit_seq: "1".to_string(),
+                observed_at: "2026-09-11T00:00:00Z".to_string(),
+            }
+        }
+
+        let (_dir, mut conn, path, prepared) = fixture();
+        let local_before =
+            source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap();
+        let mut foreign = manifest_for(&prepared, 0, None);
+        foreign.source_epoch.tenant_id = "foreign-tenant".to_string();
+        assert!(resync_behind_host(&mut conn, &prepared, &foreign)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
+            local_before
+        );
+
+        let (_dir, mut conn, path, prepared) = fixture();
+        let future = manifest_for(&prepared, prepared.range_start + 1, None);
+        assert!(resync_behind_host(&mut conn, &prepared, &future)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
+            prepared.range_start
+        );
+
+        let (_dir, mut conn, path, prepared) = fixture();
+        let predecessor = Uuid::new_v4().to_string();
+        let mismatched_predecessor = manifest_for(&prepared, 0, Some(predecessor));
+        assert!(
+            resync_behind_host(&mut conn, &prepared, &mismatched_predecessor)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
+            prepared.range_start
+        );
+
+        let (_dir, mut conn, path, prepared) = fixture();
+        let stale = manifest_for(&prepared, 0, None);
+        let pending_before = pending_source_envelope::load_for_epoch(&conn, prepared.source_epoch)
+            .unwrap()
+            .expect("prepared range remains retained until acknowledgement");
+        let local_before =
+            source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap();
+        let error = resync_behind_host(&mut conn, &prepared, &stale)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("preserved the immutable envelope"),
+            "{error}"
+        );
+        assert_eq!(
+            source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
+            local_before
+        );
+        let pending_after = pending_source_envelope::load_for_epoch(&conn, prepared.source_epoch)
+            .unwrap()
+            .expect("source conflict must retain the pending envelope");
+        assert_eq!(pending_after.envelope_id, pending_before.envelope_id);
+        assert_eq!(
+            pending_after.request_body_zstd,
+            pending_before.request_body_zstd
+        );
+
+        let (_dir, mut conn, path, prepared) = fixture();
+        let stale = manifest_for(&prepared, 0, None);
+        let pending_before = pending_source_envelope::load_for_epoch(&conn, prepared.source_epoch)
+            .unwrap()
+            .expect("prepared range remains retained until acknowledgement");
+        let local_before =
+            source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap();
+        let mut source = fs::read(&path).unwrap();
+        source[prepared.range_start as usize] ^= 1;
+        fs::write(&path, source).unwrap();
+
+        let error = resync_behind_host(&mut conn, &prepared, &stale)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("preserved the immutable envelope"),
+            "{error}"
+        );
+        assert_eq!(
+            source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
+            local_before
+        );
+        let pending_after = pending_source_envelope::load_for_epoch(&conn, prepared.source_epoch)
+            .unwrap()
+            .expect("source block must retain the pending body");
+        assert_eq!(
+            pending_after.request_body_zstd, pending_before.request_body_zstd,
+            "source conflict must not replace or discard retained evidence"
+        );
+        assert_eq!(
+            pending_after.envelope_id, pending_before.envelope_id,
+            "source conflict must retain the original retry identity"
+        );
     }
 }

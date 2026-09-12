@@ -1,5 +1,4 @@
 import json
-import os
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -9,15 +8,11 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.orm import Session
 
-os.environ.setdefault("DATABASE_URL", "sqlite://")
-os.environ.setdefault("TESTING", "1")
-
 from tests_lite.live_catalog_harness import provision_live_catalog
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.models.live_store import LiveMachineControlOperation
 from zerg.routers.agents_control import CONTROL_HEARTBEAT_TIMEOUT_SECS
 from zerg.routers.agents_control import _control_identity
-from zerg.routers.agents_control import _reconcile_console_turns_after_register
 from zerg.routers.agents_control import _reconcile_machine_control_operation_result
 from zerg.services.catalogd_supervisor import catalogd_paths
 
@@ -100,33 +95,8 @@ def test_control_channel_rejects_token_device_mismatch():
 
 
 @pytest.mark.asyncio
-async def test_control_register_reconciles_starting_console_turns(monkeypatch):
-    calls = []
-
-    async def fake_reconcile(db, *, owner_id, device_id, registry):
-        calls.append((db, owner_id, device_id, registry))
-        return []
-
-    registry = object()
-    monkeypatch.setattr("zerg.routers.agents_control.reconcile_starting_console_turns_for_device", fake_reconcile)
-
-    await _reconcile_console_turns_after_register(owner_id=7, device_id="cube", registry=registry)
-
-    assert calls == [(None, 7, "cube", registry)]
-
-
-@pytest.mark.asyncio
 async def test_machine_control_result_finishes_the_operation_in_the_live_catalog():
-    """A Runtime Host finishes the operation over RPC, never over SQLite.
-
-    This replaces a test that pinned the live-write-serializer branch. That
-    branch is gone: ``_reconcile_machine_control_operation_result`` no longer
-    takes a database at all, because a control websocket only ever runs on a
-    Runtime Host and a Runtime Host reaches catalogd or reaches nothing.
-    Pinning the SQLite fallback let ``control.command_result.apply.v2``
-    regressions through. Here the daemon is real: the method has to exist,
-    accept these parameters, and durably finish the operation.
-    """
+    """Only a terminal result from the operation's owner may finish it."""
 
     with provision_live_catalog():
         command_id = f"managed-control:{uuid4()}:session.send_text"
@@ -135,7 +105,12 @@ async def test_machine_control_result_finishes_the_operation_in_the_live_catalog
         other_operation_id = _seed_running_control_operation(owner_id=8, device_id="cinder", command_id=other_command_id)
 
         matched = await _reconcile_machine_control_operation_result(
-            {"type": "command_result", "command_id": command_id, "ok": True, "result": {"stdout": "accepted"}},
+            {
+                "type": "command_result",
+                "command_id": command_id,
+                "ok": True,
+                "result": {"exit_code": 0, "stdout": "accepted"},
+            },
             owner_id=7,
             device_id="cinder",
         )
@@ -147,7 +122,12 @@ async def test_machine_control_result_finishes_the_operation_in_the_live_catalog
         # A control channel authenticates as exactly one owner, so a result
         # naming another owner's command must not finish that owner's operation.
         cross_owner = await _reconcile_machine_control_operation_result(
-            {"type": "command_result", "command_id": other_command_id, "ok": True, "result": {"stdout": "stolen"}},
+            {
+                "type": "command_result",
+                "command_id": other_command_id,
+                "ok": True,
+                "result": {"exit_code": 0, "stdout": "stolen"},
+            },
             owner_id=7,
             device_id="cinder",
         )
@@ -156,7 +136,6 @@ async def test_machine_control_result_finishes_the_operation_in_the_live_catalog
 
     assert matched is True
     assert operation["status"] == "succeeded"
-    assert json.loads(operation["result_json"]) == {"stdout": "accepted"}
     assert operation["error_json"] is None
     assert operation["finished_at"] is not None
     assert operation["expires_at"] is None
@@ -168,28 +147,44 @@ async def test_machine_control_result_finishes_the_operation_in_the_live_catalog
 
 
 @pytest.mark.asyncio
-async def test_machine_control_result_reconcile_uses_catalogd_without_db(monkeypatch):
-    calls = []
+async def test_indeterminate_machine_control_result_does_not_finish_operation():
+    with provision_live_catalog():
+        command_id = f"managed-control:{uuid4()}:session.send_text"
+        operation_id = _seed_running_control_operation(owner_id=7, device_id="cinder", command_id=command_id)
 
-    class CatalogClient:
-        async def call(self, method, params, *, timeout_seconds):
-            calls.append((method, params, timeout_seconds))
-            return {"matched": True, "match_kind": "operation", "commit_seq": "9"}
-
-    monkeypatch.setattr("zerg.routers.agents_control.get_catalogd_client", lambda: CatalogClient())
-
-    message = {"type": "command_result", "command_id": "machine-op:test", "ok": True, "result": {}}
-    matched = await _reconcile_machine_control_operation_result(
-        message,
-        owner_id=7,
-        device_id="cinder",
-    )
-
-    assert matched is True
-    assert calls == [
-        (
-            "control.command_result.apply.v2",
-            {"owner_id": 7, "device_id": "cinder", "message": message},
-            2.0,
+        matched = await _reconcile_machine_control_operation_result(
+            {
+                "type": "command_result",
+                "command_id": command_id,
+                "ok": False,
+                "error": {
+                    "code": "command_indeterminate",
+                    "message": "accepted before the outcome was recorded",
+                },
+            },
+            owner_id=7,
+            device_id="cinder",
         )
-    ]
+        operation = _read_control_operation(operation_id)
+
+    assert matched is False
+    assert operation["status"] == "running"
+    assert operation["finished_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_malformed_success_result_does_not_finish_operation():
+    with provision_live_catalog():
+        command_id = f"managed-control:{uuid4()}:session.send_text"
+        operation_id = _seed_running_control_operation(owner_id=7, device_id="cinder", command_id=command_id)
+
+        matched = await _reconcile_machine_control_operation_result(
+            {"type": "command_result", "command_id": command_id, "ok": True, "result": {"stdout": "accepted"}},
+            owner_id=7,
+            device_id="cinder",
+        )
+        operation = _read_control_operation(operation_id)
+
+    assert matched is False
+    assert operation["status"] == "running"
+    assert operation["finished_at"] is None

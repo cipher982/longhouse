@@ -17,14 +17,15 @@ public struct ProducerRefreshFailure: Equatable, Sendable {
 ///
 /// This is the only clock the app is allowed to use when deciding whether what
 /// it is showing is current. It advances solely on a successful execute-and-decode
-/// of the configured health command.
+/// of the configured health command. Local engine-file pulses may update liveness
+/// facts, but they do not advance this clock.
 ///
 /// It is deliberately independent of payload `collected_at`, engine pulses,
 /// realtime projection deltas, and cache file mtime. Every one of those can keep
-/// advancing while the producer is failing — `applyingLocalProjection` rewrites
-/// `collectedAt` from the engine pulse and stamps `fresh: true, ageSeconds: 0`,
-/// and the engine writes `engine-status.json` continuously. A freshness check
-/// reading any of them would call an unrefreshable snapshot current.
+/// advancing while the producer is failing — the engine writes
+/// `engine-status.json` continuously and its pulse is only liveness evidence. A
+/// freshness check reading either clock would call an unrefreshable snapshot
+/// current.
 public struct ProducerRefreshState: Equatable, Sendable {
     /// When the producer last executed and decoded successfully.
     public let lastSuccessAt: Date?
