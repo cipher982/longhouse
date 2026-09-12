@@ -18,6 +18,8 @@ from zerg.config import get_settings
 JWKS_CACHE_TTL_SECONDS = 300
 JWKS_STALE_IF_ERROR_SECONDS = 24 * 60 * 60
 JWKS_CACHE_MAX_ENTRIES = 8
+JWKS_UNKNOWN_KID_BACKOFF_SECONDS = 5
+JWKS_UNKNOWN_KID_MAX_ENTRIES = 256
 logger = logging.getLogger(__name__)
 
 
@@ -47,6 +49,7 @@ _jwks_cache: OrderedDict[str, tuple[float, dict[str, dict[str, Any]]]] = Ordered
 _jwks_cache_lock = Lock()
 _jwks_fetch_events: dict[str, Event] = {}
 _jwks_retry_after: dict[str, float] = {}
+_jwks_unknown_kid_retry_after: OrderedDict[tuple[str, str], float] = OrderedDict()
 JWKS_FETCH_WAIT_SECONDS = 1.0
 JWKS_RETRY_BACKOFF_SECONDS = 5.0
 
@@ -137,6 +140,7 @@ def clear_jwks_cache() -> None:
     with _jwks_cache_lock:
         _jwks_cache.clear()
         _jwks_retry_after.clear()
+        _jwks_unknown_kid_retry_after.clear()
 
 
 def verify_runtime_token(token: str, *, audience: str) -> CPTokenClaims:
@@ -151,8 +155,22 @@ def verify_runtime_token(token: str, *, audience: str) -> CPTokenClaims:
     keys = _fetch_jwks()
     jwk = keys.get(kid)
     if jwk is None:
+        base = _control_plane_url()
+        unknown_key = (base, kid)
+        with _jwks_cache_lock:
+            retry_after = _jwks_unknown_kid_retry_after.get(unknown_key, 0.0)
+            if retry_after > time.time():
+                raise CPTokenError("Unknown CP token kid")
         keys = _fetch_jwks(force=True)
         jwk = keys.get(kid)
+        with _jwks_cache_lock:
+            if jwk is None:
+                _jwks_unknown_kid_retry_after[unknown_key] = time.time() + JWKS_UNKNOWN_KID_BACKOFF_SECONDS
+                _jwks_unknown_kid_retry_after.move_to_end(unknown_key)
+                while len(_jwks_unknown_kid_retry_after) > JWKS_UNKNOWN_KID_MAX_ENTRIES:
+                    _jwks_unknown_kid_retry_after.popitem(last=False)
+            else:
+                _jwks_unknown_kid_retry_after.pop(unknown_key, None)
     if jwk is None:
         raise CPTokenError("Unknown CP token kid")
 

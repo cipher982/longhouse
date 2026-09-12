@@ -50,6 +50,34 @@ export const AUTH_METHODS_QUERY_KEY = ['auth-methods'] as const;
 const AUTH_CHANNEL_NAME = 'longhouse-auth-events';
 const LOGGED_OUT_SESSION_KEY = 'longhouse:logged-out';
 
+export function hasLogoutIntent(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    if (window.localStorage.getItem(LOGGED_OUT_SESSION_KEY) === '1') return true;
+  } catch {
+    // Fall through to the per-tab fallback.
+  }
+  try {
+    return window.sessionStorage.getItem(LOGGED_OUT_SESSION_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function clearLogoutIntent(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(LOGGED_OUT_SESSION_KEY);
+  } catch {
+    // Storage can be disabled; the session fallback is still cleared.
+  }
+  try {
+    window.sessionStorage.removeItem(LOGGED_OUT_SESSION_KEY);
+  } catch {
+    // Storage can be disabled; authenticated server state still wins.
+  }
+}
+
 // Custom error class that includes HTTP status for retry logic
 class HttpError extends Error {
   status: number;
@@ -66,6 +94,7 @@ async function loginWithGoogle(idToken: string): Promise<{ access_token: string;
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'X-Longhouse-Auth': '1',
     },
     credentials: 'include', // Required for cookie to be set
     body: JSON.stringify({ id_token: idToken }),
@@ -85,6 +114,13 @@ type AuthStatusResponse = {
 };
 
 async function getCurrentUser(): Promise<User | null> {
+  // A deliberate local sign-out is authoritative until the user explicitly
+  // starts a new login. This prevents a failed remote revocation or a stale
+  // cookie from silently signing the browser back in.
+  if (typeof window !== 'undefined' && hasLogoutIntent()) {
+    return null;
+  }
+
   const response = await fetch(`${config.apiBaseUrl}/auth/status`, {
     credentials: 'include',
   });
@@ -205,12 +241,16 @@ function AuthProviderInner({ children }: AuthProviderProps) {
   const notifyLogout = useCallback(() => {
     if (typeof window === 'undefined') return;
     window.dispatchEvent(new Event('longhouse-auth-logout'));
+    try {
+      // Every tab reads this durable intent before trusting a stale cookie.
+      window.localStorage.setItem(LOGGED_OUT_SESSION_KEY, '1');
+    } catch {
+      // BroadcastChannel and the current tab still provide local protection.
+    }
     if (typeof window.BroadcastChannel === 'function') {
       const channel = new BroadcastChannel(AUTH_CHANNEL_NAME);
       channel.postMessage({ type: 'logout' });
       channel.close();
-    } else {
-      window.localStorage.setItem(LOGGED_OUT_SESSION_KEY, String(Date.now()));
     }
   }, []);
 
@@ -218,10 +258,20 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     if (typeof window === 'undefined') return;
     const clearFromAnotherTab = (event?: StorageEvent) => {
       if (event && event.key !== LOGGED_OUT_SESSION_KEY) return;
+      if (event?.newValue === null) {
+        // Another tab explicitly started a new login. Do not turn that
+        // user-initiated clear into another logout in this tab.
+        try {
+          window.sessionStorage.removeItem(LOGGED_OUT_SESSION_KEY);
+        } catch {
+          // Storage can be disabled; the next auth query will decide.
+        }
+        return;
+      }
       try {
         window.sessionStorage.setItem(LOGGED_OUT_SESSION_KEY, '1');
       } catch {
-        // Storage can be disabled; the in-memory query state still clears.
+        // The in-memory query state still clears.
       }
       void clearLocalAuth().then(() => {
         window.dispatchEvent(new Event('longhouse-auth-logout'));
@@ -233,9 +283,8 @@ function AuthProviderInner({ children }: AuthProviderProps) {
       channel.onmessage = (event) => {
         if (event.data?.type === 'logout') clearFromAnotherTab();
       };
-    } else {
-      window.addEventListener('storage', clearFromAnotherTab);
     }
+    window.addEventListener('storage', clearFromAnotherTab);
     return () => {
       channel?.close();
       window.removeEventListener('storage', clearFromAnotherTab);
@@ -249,15 +298,20 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     refetch,
   } = useCurrentUserQuery();
 
+  useEffect(() => {
+    if (!userData) return;
+    // A successful hosted handoff is a login too; it does not pass through
+    // loginMutation, so clear the prior signed-out intent here.
+    clearLogoutBarrier();
+    clearLogoutIntent();
+  }, [userData]);
+
+
   const loginMutation = useMutation({
     mutationFn: loginWithGoogle,
     onSuccess: async () => {
       clearLogoutBarrier();
-      try {
-        window.sessionStorage.removeItem(LOGGED_OUT_SESSION_KEY);
-      } catch {
-        // Storage can be disabled; a successful cookie login still wins.
-      }
+      clearLogoutIntent();
       await refetch();
     },
     onError: (error: Error) => {
@@ -273,8 +327,10 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     beginLogoutBarrier();
     const completed = await logoutFromServer(everywhere);
     if (!completed) {
+      // Keep the authenticated UI and retry path when the authority could not
+      // confirm revocation. The barrier must be cleared so normal requests can
+      // continue while the user retries.
       clearLogoutBarrier();
-      await refetch();
       return false;
     }
     try {
@@ -317,7 +373,6 @@ export function useAuth(): AuthContextType {
   }
   return context;
 }
-
 export function useCurrentUserQuery() {
   return useQuery<User | null>({
     queryKey: CURRENT_USER_QUERY_KEY,
@@ -336,6 +391,7 @@ export function useCurrentUserQuery() {
 
 function NativeAuthHandoff({ returnTo }: { returnTo: string }) {
   useEffect(() => {
+    clearLogoutIntent();
     requestNativeAuth(returnTo);
   }, [returnTo]);
 

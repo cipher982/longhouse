@@ -5,7 +5,6 @@ import base64
 import hashlib
 import hmac
 import logging
-import os
 import secrets
 import time
 import urllib.parse
@@ -15,6 +14,7 @@ from collections import deque
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from threading import Lock
 from typing import Any
 
 from fastapi import APIRouter
@@ -32,6 +32,7 @@ from zerg.auth.catalog_gateway import create_refresh
 from zerg.auth.catalog_gateway import resolve_local_user
 from zerg.auth.catalog_gateway import revoke_refresh_family
 from zerg.auth.catalog_gateway import rotate_refresh
+from zerg.auth.client_ip import get_client_ip
 from zerg.auth.hosted import MAX_TENANT_LOGIN_ATTEMPTS
 from zerg.auth.hosted import TENANT_LOGIN_ATTEMPT_MAX_AGE
 from zerg.auth.hosted import new_tenant_login_state
@@ -150,70 +151,60 @@ _PASSWORD_RATE_LIMIT_WINDOW_SECONDS = 60
 # Hard ceiling on distinct keys we track, so a spoofed key space can't grow the dict.
 _PASSWORD_RATE_LIMIT_MAX_KEYS = 1024
 _PASSWORD_RATE_LIMIT_BUCKETS: OrderedDict[str, deque[float]] = OrderedDict()
-
-
-def _trusted_proxy_hops() -> int:
-    """How many appending reverse proxies sit in front of this instance.
-
-    Read per call rather than at import so process env changes take effect.
-    """
-    try:
-        return max(int(os.getenv("TRUSTED_PROXY_HOPS", "0")), 0)
-    except ValueError:
-        return 0
-
-
-def _get_client_ip(request: Request) -> str:
-    """Rate-limit key for the caller, counted from the RIGHT of X-Forwarded-For.
-
-    Our documented proxies append (`$proxy_add_x_forwarded_for` in nginx, same in
-    Caddy), so with N trusted proxies the client address is the Nth entry from the
-    right and everything left of it is attacker-supplied. With no trusted proxies
-    configured (the default) the direct peer is the only honest source.
-    """
-    hops = _trusted_proxy_hops()
-    if hops:
-        forwarded = request.headers.get("x-forwarded-for")
-        chain = [part.strip() for part in (forwarded or "").split(",") if part.strip()]
-        # A chain shorter than the configured hop count means the proxies aren't
-        # appending the way we expect — fall back to the direct peer.
-        if len(chain) >= hops:
-            return chain[-hops]
-    if request.client and request.client.host:
-        return request.client.host
-    return "unknown"
+_PASSWORD_RATE_LIMIT_LOCK = Lock()
+_PASSWORD_ACTIVE_ATTEMPTS: dict[str, int] = {}
 
 
 def _check_password_rate_limit(key: str) -> int | None:
-    now = time.monotonic()
-    window_start = now - _PASSWORD_RATE_LIMIT_WINDOW_SECONDS
-    bucket = _PASSWORD_RATE_LIMIT_BUCKETS.get(key)
-    if bucket is None:
+    """Atomically admit one password verification for this client key."""
+    with _PASSWORD_RATE_LIMIT_LOCK:
+        now = time.monotonic()
+        window_start = now - _PASSWORD_RATE_LIMIT_WINDOW_SECONDS
+        bucket = _PASSWORD_RATE_LIMIT_BUCKETS.get(key)
+        if bucket is not None:
+            while bucket and bucket[0] < window_start:
+                bucket.popleft()
+            if not bucket:
+                del _PASSWORD_RATE_LIMIT_BUCKETS[key]
+                bucket = None
+
+        active = _PASSWORD_ACTIVE_ATTEMPTS.get(key, 0)
+        if len(_PASSWORD_ACTIVE_ATTEMPTS) >= _PASSWORD_RATE_LIMIT_MAX_KEYS and key not in _PASSWORD_ACTIVE_ATTEMPTS:
+            return _PASSWORD_RATE_LIMIT_WINDOW_SECONDS + 1
+        if bucket is not None and len(bucket) + active >= _PASSWORD_RATE_LIMIT_MAX_ATTEMPTS:
+            retry_after = int(_PASSWORD_RATE_LIMIT_WINDOW_SECONDS - (now - bucket[0])) + 1
+            return max(retry_after, 1)
+        if bucket is None and active >= _PASSWORD_RATE_LIMIT_MAX_ATTEMPTS:
+            return _PASSWORD_RATE_LIMIT_WINDOW_SECONDS + 1
+        _PASSWORD_ACTIVE_ATTEMPTS[key] = active + 1
         return None
-    while bucket and bucket[0] < window_start:
-        bucket.popleft()
-    if not bucket:
-        del _PASSWORD_RATE_LIMIT_BUCKETS[key]
-        return None
-    if len(bucket) >= _PASSWORD_RATE_LIMIT_MAX_ATTEMPTS:
-        retry_after = int(_PASSWORD_RATE_LIMIT_WINDOW_SECONDS - (now - bucket[0])) + 1
-        return max(retry_after, 1)
-    return None
 
 
 def _record_password_failure(key: str) -> None:
-    now = time.monotonic()
-    window_start = now - _PASSWORD_RATE_LIMIT_WINDOW_SECONDS
-    for stale in [k for k, b in _PASSWORD_RATE_LIMIT_BUCKETS.items() if not b or b[-1] < window_start]:
-        del _PASSWORD_RATE_LIMIT_BUCKETS[stale]
-    _PASSWORD_RATE_LIMIT_BUCKETS.setdefault(key, deque()).append(now)
-    _PASSWORD_RATE_LIMIT_BUCKETS.move_to_end(key)
-    while len(_PASSWORD_RATE_LIMIT_BUCKETS) > _PASSWORD_RATE_LIMIT_MAX_KEYS:
-        _PASSWORD_RATE_LIMIT_BUCKETS.popitem(last=False)
+    with _PASSWORD_RATE_LIMIT_LOCK:
+        active = _PASSWORD_ACTIVE_ATTEMPTS.get(key, 0)
+        if active <= 1:
+            _PASSWORD_ACTIVE_ATTEMPTS.pop(key, None)
+        else:
+            _PASSWORD_ACTIVE_ATTEMPTS[key] = active - 1
+        now = time.monotonic()
+        window_start = now - _PASSWORD_RATE_LIMIT_WINDOW_SECONDS
+        for stale in [k for k, b in _PASSWORD_RATE_LIMIT_BUCKETS.items() if not b or b[-1] < window_start]:
+            del _PASSWORD_RATE_LIMIT_BUCKETS[stale]
+        _PASSWORD_RATE_LIMIT_BUCKETS.setdefault(key, deque()).append(now)
+        _PASSWORD_RATE_LIMIT_BUCKETS.move_to_end(key)
+        while len(_PASSWORD_RATE_LIMIT_BUCKETS) > _PASSWORD_RATE_LIMIT_MAX_KEYS:
+            _PASSWORD_RATE_LIMIT_BUCKETS.popitem(last=False)
 
 
-def _clear_password_failures(key: str) -> None:
-    _PASSWORD_RATE_LIMIT_BUCKETS.pop(key, None)
+def _release_password_attempt(key: str) -> None:
+    """Release a successful verification without counting it as a failure."""
+    with _PASSWORD_RATE_LIMIT_LOCK:
+        active = _PASSWORD_ACTIVE_ATTEMPTS.get(key, 0)
+        if active <= 1:
+            _PASSWORD_ACTIVE_ATTEMPTS.pop(key, None)
+        else:
+            _PASSWORD_ACTIVE_ATTEMPTS[key] = active - 1
 
 
 def _verify_pbkdf2_sha256(password: str, stored: str) -> bool:
@@ -282,6 +273,30 @@ def _verify_password_hash(password: str, stored: str) -> bool:
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail="Unsupported LONGHOUSE_PASSWORD_HASH format",
     )
+
+
+async def _verify_password_attempt(
+    *,
+    password: str,
+    plain_password: str,
+    password_hash: str | None,
+) -> bool:
+    """Verify one attempt without leaking an in-flight rate-limit reservation."""
+    if not password_hash:
+        return secrets.compare_digest(password.encode("utf-8"), plain_password.encode("utf-8"))
+
+    verification = asyncio.create_task(asyncio.to_thread(_verify_password_hash, password, password_hash))
+    try:
+        return await asyncio.shield(verification)
+    except BaseException:
+        # Cancellation does not cancel the worker thread. Wait for it before
+        # the caller releases its reservation, otherwise cancellation becomes
+        # a way to queue unlimited expensive verifications.
+        try:
+            await asyncio.shield(verification)
+        except BaseException:
+            pass
+        raise
 
 
 def _verify_google_id_token(id_token_str: str) -> dict[str, Any]:
@@ -472,8 +487,8 @@ async def logout(request: Request, response: Response, everywhere: bool = False)
                     now=datetime.now(timezone.utc),
                 )
         except Exception:
-            # Always clear this browser's cookies, but do not tell the caller
-            # that logout is complete when the revocation authority failed.
+            # Keep both credentials so the browser can retry revocation. A
+            # transient control-plane failure must never become a false logout.
             revocation_failed = True
             logger.warning("session revocation failed during logout", exc_info=True)
 
@@ -482,8 +497,6 @@ async def logout(request: Request, response: Response, everywhere: bool = False)
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={"detail": {"code": "logout_revocation_unavailable"}},
         )
-        _clear_session_cookie(failure)
-        _clear_refresh_cookie(failure)
         _set_no_store(failure)
         return failure
 
@@ -673,7 +686,7 @@ async def password_login(
     if not settings.longhouse_password and not settings.longhouse_password_hash:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password auth not configured")
 
-    client_ip = _get_client_ip(request)
+    client_ip = get_client_ip(request)
     retry_after = _check_password_rate_limit(client_ip)
     if retry_after is not None:
         raise HTTPException(
@@ -681,18 +694,24 @@ async def password_login(
             detail="Too many password attempts. Try again later.",
             headers={"Retry-After": str(retry_after)},
         )
+    # Reserve the attempt before expensive password verification so concurrent
+    # requests cannot all pass the admission check and queue CPU work.
 
-    if settings.longhouse_password_hash:
-        # pbkdf2/argon2/bcrypt verification is CPU-bound; keep it off the event loop.
-        password_ok = await asyncio.to_thread(_verify_password_hash, body.password, settings.longhouse_password_hash)
-    else:
-        password_ok = secrets.compare_digest(body.password, settings.longhouse_password)
+    try:
+        password_ok = await _verify_password_attempt(
+            password=body.password,
+            plain_password=settings.longhouse_password,
+            password_hash=settings.longhouse_password_hash,
+        )
+    except BaseException:
+        _release_password_attempt(client_ip)
+        raise
 
     if not password_ok:
         _record_password_failure(client_ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid password")
+    _release_password_attempt(client_ip)
 
-    _clear_password_failures(client_ip)
     user = await asyncio.to_thread(_resolve_password_user)
 
     return await _issue_session(response, user, display_name=user.display_name or "Local User")
@@ -713,7 +732,7 @@ async def cli_login(
     if not settings.longhouse_password and not settings.longhouse_password_hash:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password auth not configured")
 
-    client_ip = _get_client_ip(request)
+    client_ip = get_client_ip(request)
     retry_after = _check_password_rate_limit(client_ip)
     if retry_after is not None:
         raise HTTPException(
@@ -722,17 +741,21 @@ async def cli_login(
             headers={"Retry-After": str(retry_after)},
         )
 
-    if settings.longhouse_password_hash:
-        # pbkdf2/argon2/bcrypt verification is CPU-bound; keep it off the event loop.
-        password_ok = await asyncio.to_thread(_verify_password_hash, body.password, settings.longhouse_password_hash)
-    else:
-        password_ok = secrets.compare_digest(body.password, settings.longhouse_password)
+    try:
+        password_ok = await _verify_password_attempt(
+            password=body.password,
+            plain_password=settings.longhouse_password,
+            password_hash=settings.longhouse_password_hash,
+        )
+    except BaseException:
+        _release_password_attempt(client_ip)
+        raise
 
     if not password_ok:
         _record_password_failure(client_ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid password")
+    _release_password_attempt(client_ip)
 
-    _clear_password_failures(client_ip)
     user = await asyncio.to_thread(_resolve_password_user)
     access_token = _issue_access_token(
         user.id,

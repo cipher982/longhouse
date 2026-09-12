@@ -1,21 +1,16 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Navigate, useSearchParams } from 'react-router-dom';
+import { clearLogoutIntent, hasLogoutIntent, useAuth, useAuthMethods } from '../lib/auth';
+import { clearLogoutBarrier } from '../lib/auth-refresh';
 import { sanitizeReturnTo } from '../lib/loginRedirect';
-import { useAuth, useAuthMethods } from '../lib/auth';
 import config from '../lib/config';
 
 export default function LoginPage() {
   const [params] = useSearchParams();
   const returnTo = sanitizeReturnTo(params.get('return_to'));
   const authError = params.get('auth_error');
-  const [logoutSuppressed, setLogoutSuppressed] = useState(() => {
-    try {
-      return window.sessionStorage.getItem('longhouse:logged-out') === '1';
-    } catch {
-      return false;
-    }
-  });
-  const [navigated, setNavigated] = useState(false);
+  const [logoutSuppressed, setLogoutSuppressed] = useState(hasLogoutIntent);
+  const navigationStarted = useRef(false);
   const {
     data: authMethods,
     isLoading: methodsLoading,
@@ -49,28 +44,28 @@ export default function LoginPage() {
       methodsLoading ||
       !authMethods ||
       authLoading ||
-      authUnavailable
+      authUnavailable ||
+      authenticatedUser ||
+      !authMethods.sso ||
+      navigationStarted.current
     ) {
       return;
     }
 
-    if (authMethods.sso) {
-      // Hosted tenant: server route sets nothing and 302s to CP /auth/start.
-      setNavigated(true);
-      window.location.replace(
-        `/api/auth/start-handoff?return_to=${encodeURIComponent(returnTo)}`,
-      );
-    }
-    // For self-host, the React shell renders the legacy login form
-    // (Google + password). Don't navigate anywhere; the user
-    // authenticates locally. This avoids a self-host redirect loop.
+    // Hosted tenant: the tenant route owns the state cookie and redirects to
+    // the CP. Keep this effect single-owner so a React rerender cannot issue a
+    // second handoff while the browser is still following the first one.
+    navigationStarted.current = true;
+    window.location.replace(
+      `/api/auth/start-handoff?return_to=${encodeURIComponent(returnTo)}`,
+    );
   }, [
     authError,
     authLoading,
     authMethods,
     authUnavailable,
+    authenticatedUser,
     methodsLoading,
-    navigated,
     returnTo,
     logoutSuppressed,
   ]);
@@ -87,11 +82,8 @@ export default function LoginPage() {
     `/api/auth/start-handoff?return_to=${encodeURIComponent(returnTo)}` +
     (authError === 'cookie_loop' ? '&reset_attempt=1' : '');
   const beginLogin = () => {
-    try {
-      window.sessionStorage.removeItem('longhouse:logged-out');
-    } catch {
-      // Storage can be disabled; the navigation still starts the flow.
-    }
+    clearLogoutIntent();
+    clearLogoutBarrier();
     setLogoutSuppressed(false);
     window.location.assign(retryUrl);
   };
@@ -113,7 +105,9 @@ export default function LoginPage() {
         {errorMessage ? (
           <>
             <p role="alert">{errorMessage}</p>
-            <a href={retryUrl} style={{ color: '#D4A843' }}>Try signing in again</a>
+            <button type="button" onClick={beginLogin}>
+              Try signing in again
+            </button>
           </>
         ) : logoutSuppressed ? (
           <>

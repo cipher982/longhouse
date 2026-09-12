@@ -1,18 +1,21 @@
 /**
  * Hosted session authentication smoke - Live suite.
  *
- * Verifies a CP runtime token can authenticate hosted API/browser requests
- * and that the browser carries that cookie to the hosted API.
+ * Verifies a hosted browser/device credential can authenticate API/browser
+ * requests and that the browser carries the canonical session cookie to the
+ * hosted API.
  *
- * REQUIRES: SMOKE_RUNTIME_TOKEN environment variable set.
+ * REQUIRES: SMOKE_RUNTIME_TOKEN or LONGHOUSE_DEVICE_TOKEN.
  */
 
 import { test, expect, normalizeToken } from './fixtures';
 
-const runtimeToken = normalizeToken(process.env.SMOKE_RUNTIME_TOKEN);
-const shouldRun = !!runtimeToken;
+const authCredential =
+  normalizeToken(process.env.SMOKE_RUNTIME_TOKEN) ||
+  normalizeToken(process.env.LONGHOUSE_DEVICE_TOKEN);
+const shouldRun = !!authCredential;
 test.describe('Hosted Session Authentication - Live', () => {
-  test.skip(!shouldRun, 'SMOKE_RUNTIME_TOKEN required for hosted auth tests');
+  test.skip(!shouldRun, 'SMOKE_RUNTIME_TOKEN or LONGHOUSE_DEVICE_TOKEN required for hosted auth tests');
 
   test('runtime token authenticates API requests', async ({ playwright }) => {
     const apiUrl = process.env.API_URL || process.env.PLAYWRIGHT_API_BASE_URL || '';
@@ -22,7 +25,7 @@ test.describe('Hosted Session Authentication - Live', () => {
       baseURL: apiUrl,
       timeout: 30_000,
       extraHTTPHeaders: {
-        Authorization: `Bearer ${runtimeToken}`,
+        Authorization: `Bearer ${authCredential}`,
       },
     });
 
@@ -57,8 +60,9 @@ test.describe('Hosted Session Authentication - Live', () => {
     test.skip(!frontendUrl || !apiUrl, 'FRONTEND_URL and API_URL required');
 
     const cookies = await context.cookies();
+    const secure = new URL(apiUrl).protocol === 'https:';
     const sessionCookie = cookies.find(
-      (cookie) => cookie.name === '__Host-lh_session' || cookie.name === 'longhouse_session',
+      (cookie) => cookie.name === (secure ? '__Host-lh_session' : 'longhouse_session'),
     );
     expect(sessionCookie).toBeDefined();
 

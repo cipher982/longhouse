@@ -680,8 +680,12 @@ final class AppState: ObservableObject {
                 HTTPCookieStorage.shared.setCookie(cookie)
             }
             return LocalCredentialSnapshot(
-                hasRefreshCookie: cookies.contains { $0.name == SharedAuthStore.refreshCookieName },
-                hasSessionCookie: cookies.contains { $0.name == SharedAuthStore.sessionCookieName },
+                hasRefreshCookie: cookies.contains {
+                    $0.name == SharedAuthStore.activeRefreshCookieName(for: serverURL)
+                },
+                hasSessionCookie: cookies.contains {
+                    $0.name == SharedAuthStore.activeSessionCookieName(for: serverURL)
+                },
                 hasRuntimeToken: runtimeToken != nil,
                 hasNativeRefreshToken: nativeRefreshToken != nil
             )
@@ -750,6 +754,7 @@ final class AppState: ObservableObject {
     private func signOutLocallyAndRemotely() async {
         let capturedServerURL = serverURL
         let nativeRefreshToken = SharedAuthStore.nativeRefreshToken(for: capturedServerURL)
+        var nativeRevocationConfirmed = true
 
         if let nativeRefreshToken, let url = URL(string: "\(capturedServerURL)/api/auth/revoke-native-session") {
             var request = URLRequest(url: url)
@@ -757,7 +762,13 @@ final class AppState: ObservableObject {
             request.timeoutInterval = 5
             request.addValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try? JSONSerialization.data(withJSONObject: ["refresh_token": nativeRefreshToken])
-            _ = try? await URLSession.shared.data(for: request)
+            do {
+                let (_, response) = try await URLSession.shared.data(for: request)
+                nativeRevocationConfirmed = (response as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } ?? false
+            } catch {
+                nativeRevocationConfirmed = false
+                logger.error("native signout revocation failed error=\(error.localizedDescription, privacy: .public)")
+            }
         }
 
         // Fire-and-forget the server logout while cookies are still present.
@@ -772,19 +783,23 @@ final class AppState: ObservableObject {
         }
 
         GIDSignIn.sharedInstance.signOut()
-        await clearLocalSession()
-        authError = nil
+        await clearLocalSession(clearNativeRefreshToken: nativeRevocationConfirmed)
+        authError = nativeRevocationConfirmed
+            ? nil
+            : "Sign-out could not be confirmed. Try again when the account service is available."
         isValidating = false
         WidgetCenter.shared.reloadAllTimelines()
     }
 
-    private func clearLocalSession() async {
+    private func clearLocalSession(clearNativeRefreshToken: Bool = true) async {
         runtimeTokenRefreshTask?.cancel()
         runtimeTokenRefreshTask = nil
         SharedAuthStore.clearManagedCookies(for: serverURL)
         SharedAuthStore.removeSharedCookieStorage(for: serverURL)
         SharedAuthStore.clearRuntimeToken(for: serverURL)
-        SharedAuthStore.clearNativeRefreshToken(for: serverURL)
+        if clearNativeRefreshToken {
+            SharedAuthStore.clearNativeRefreshToken(for: serverURL)
+        }
         WidgetSessionSnapshotStore.clear()
         TimelineCacheStore.clear(serverURL: serverURL)
         TranscriptSnapshotStore.shared.clear(serverURL: serverURL)

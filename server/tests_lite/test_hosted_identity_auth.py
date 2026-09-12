@@ -15,6 +15,7 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret-1234")
 import httpx
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from starlette.requests import Request
@@ -23,13 +24,19 @@ from starlette.responses import Response
 from zerg.auth import cp_jwks
 from zerg.auth.cp_jwks import CPTokenClaims
 from zerg.auth.hosted import new_tenant_login_state
+from zerg.auth.hosted import tenant_cookie_secure
+from zerg.auth.hosted import tenant_login_cookie_name
+from zerg.auth.hosted import tenant_login_cookie_secret
 from zerg.auth.session_tokens import _encode_jwt
 from zerg.auth.strategy import HostedCPAuthStrategy
 from zerg.database import Base
 from zerg.dependencies import browser_auth
 from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
+from zerg.dependencies.form_post_origin import require_browser_auth_header
 from zerg.models.models import User
+from zerg.routers import auth_browser
+from zerg.routers import auth_sso
 from zerg.routers.auth_browser import logout
 from zerg.routers.auth_browser import refresh_session
 from zerg.routers.auth_browser import start_handoff
@@ -42,6 +49,127 @@ from zerg.routers.auth_sso import accept_native_handoff
 from zerg.routers.auth_sso import refresh_native_session
 from zerg.routers.auth_sso import refresh_runtime_token
 from zerg.routers.auth_sso import revoke_native_session
+
+
+def test_tenant_login_state_matches_control_plane_opaque_grammar():
+    state, cookie_name, secret = new_tenant_login_state(secure=True)
+
+    assert len(state) <= 128
+    assert state.count("-") >= 1
+    assert "." not in state
+    assert all(character.isalnum() or character in "_-" for character in state)
+    assert tenant_login_cookie_name(state, secure=True) == cookie_name
+    assert tenant_login_cookie_secret(state) == secret
+    assert tenant_login_cookie_name(f"{state}.legacy", secure=True) is None
+
+
+def test_hosted_cookie_policy_never_downgrades_public_tenants(monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_COOKIE_SECURE", "0")
+    settings = SimpleNamespace(
+        auth_disabled=False,
+        testing=False,
+        control_plane_url="https://control.longhouse.ai",
+        public_site_url="http://david010.longhouse.ai",
+        app_public_url=None,
+    )
+
+    assert tenant_cookie_secure(settings) is True
+
+
+def test_self_host_http_cookie_policy_is_local_only(monkeypatch):
+    monkeypatch.delenv("LONGHOUSE_COOKIE_SECURE", raising=False)
+    local_settings = SimpleNamespace(
+        auth_disabled=False,
+        testing=False,
+        control_plane_url=None,
+        public_site_url="http://127.0.0.1:8000",
+        app_public_url=None,
+    )
+    public_settings = SimpleNamespace(
+        auth_disabled=False,
+        testing=False,
+        control_plane_url=None,
+        public_site_url="http://example.test",
+        app_public_url=None,
+    )
+
+    assert tenant_cookie_secure(local_settings) is False
+    assert tenant_cookie_secure(public_settings) is True
+
+
+def test_native_handoff_rate_limit_binds_untrusted_attempts_to_ip(monkeypatch):
+    monkeypatch.setattr(auth_sso, "_HANDOFF_RATE_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(auth_sso, "_NATIVE_HANDOFF_IP_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(auth_sso, "_NATIVE_HANDOFF_TENANT_MAX_ATTEMPTS", 10)
+    tenant = f"rate-test-{id(object())}"
+    try:
+        for index in range(2):
+            auth_sso._enforce_handoff_rate_limit(
+                tenant=tenant,
+                surface="native",
+                attempt_id=f"untrusted-{index}",
+                client_ip="198.51.100.7",
+            )
+
+        with pytest.raises(HTTPException) as exc:
+            auth_sso._enforce_handoff_rate_limit(
+                tenant=tenant,
+                surface="native",
+                attempt_id="untrusted-final",
+                client_ip="198.51.100.7",
+            )
+        assert exc.value.status_code == 429
+    finally:
+        with auth_sso._HANDOFF_RATE_LOCK:
+            for key in list(auth_sso._HANDOFF_RATE_BUCKETS):
+                if tenant in key:
+                    del auth_sso._HANDOFF_RATE_BUCKETS[key]
+
+
+def test_native_auth_payloads_are_bounded_before_proxying():
+    with pytest.raises(ValidationError):
+        NativeHandoffRequest(code="one-use-code", tenant_state="x" * 129)
+    with pytest.raises(ValidationError):
+        NativeRefreshRequest(refresh_token="x" * 513)
+    with pytest.raises(ValidationError):
+        NativeRevokeRequest(refresh_token="x" * 513)
+
+
+def test_native_rate_limit_hashes_untrusted_attempt_ids(monkeypatch):
+    monkeypatch.setattr(auth_sso, "_HANDOFF_RATE_MAX_ATTEMPTS", 10)
+    tenant = f"hash-test-{id(object())}"
+    attempt_id = "x" * 128
+    try:
+        auth_sso._enforce_handoff_rate_limit(
+            tenant=tenant,
+            surface="native",
+            attempt_id=attempt_id,
+            client_ip="198.51.100.7",
+        )
+        with auth_sso._HANDOFF_RATE_LOCK:
+            keys = list(auth_sso._HANDOFF_RATE_BUCKETS)
+        assert all(attempt_id not in key for key in keys)
+    finally:
+        with auth_sso._HANDOFF_RATE_LOCK:
+            for key in list(auth_sso._HANDOFF_RATE_BUCKETS):
+                if tenant in key:
+                    del auth_sso._HANDOFF_RATE_BUCKETS[key]
+
+
+def test_native_rate_limit_uses_trusted_proxy_client_ip(monkeypatch):
+    monkeypatch.setenv("TRUSTED_PROXY_HOPS", "1")
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/auth/accept-native-handoff",
+            "client": ("127.0.0.1", 1234),
+            "headers": [(b"x-forwarded-for", b"203.0.113.9, 198.51.100.7")],
+            "query_string": b"",
+        }
+    )
+
+    assert auth_sso.get_client_ip(request) == "198.51.100.7"
 
 
 @pytest.fixture()
@@ -418,6 +546,7 @@ async def test_accept_native_handoff_exchanges_one_use_code(monkeypatch, db_sess
 
     result = await accept_native_handoff(
         Request({"type": "http", "method": "POST", "path": "/api/auth/accept-native-handoff", "headers": []}),
+        Response(),
         NativeHandoffRequest(code="one-use-code", tenant_state="verifier"),
     )
 
@@ -471,6 +600,7 @@ async def test_accept_native_handoff_revokes_orphan_when_runtime_validation_fail
     with pytest.raises(HTTPException) as exc:
         await accept_native_handoff(
             Request({"type": "http", "method": "POST", "path": "/api/auth/accept-native-handoff", "headers": []}),
+            Response(),
             NativeHandoffRequest(code="one-use-code", tenant_state="verifier"),
         )
 
@@ -499,6 +629,7 @@ async def test_accept_native_handoff_revokes_orphan_when_refresh_payload_missing
     with pytest.raises(HTTPException) as exc:
         await accept_native_handoff(
             Request({"type": "http", "method": "POST", "path": "/api/auth/accept-native-handoff", "headers": []}),
+            Response(),
             NativeHandoffRequest(code="one-use-code", tenant_state="verifier"),
         )
 
@@ -677,7 +808,9 @@ async def test_hosted_browser_logout_reports_cp_revocation_failure(monkeypatch):
 
     assert result.status_code == 503
     assert json.loads(result.body)["detail"]["code"] == "logout_revocation_unavailable"
-    assert any("longhouse_session=" in value and "Max-Age=0" in value for value in result.headers.getlist("set-cookie"))
+    # A transient CP outage must not erase the only credentials that can retry
+    # revocation; the frontend keeps the authenticated session and retries.
+    assert result.headers.getlist("set-cookie") == []
 
 
 @pytest.mark.asyncio
@@ -702,6 +835,132 @@ async def test_browser_auth_mutations_require_explicit_marker():
     assert exc.value.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_browser_auth_mutations_reject_cross_origin_even_with_marker():
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/auth/refresh",
+            "headers": [
+                (b"cookie", b"longhouse_refresh=lhr_old"),
+                (b"origin", b"https://attacker.example"),
+                (b"sec-fetch-site", b"cross-site"),
+                (b"x-longhouse-auth", b"1"),
+            ],
+            "query_string": b"",
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await refresh_session(request, Response())
+
+    assert exc.value.status_code == 403
+
+
+def test_password_rate_limit_admits_bounded_concurrent_verifications(monkeypatch):
+    monkeypatch.setattr(auth_browser, "_PASSWORD_RATE_LIMIT_MAX_ATTEMPTS", 2)
+    key = f"password-rate-test-{id(object())}"
+    try:
+        assert auth_browser._check_password_rate_limit(key) is None
+        assert auth_browser._check_password_rate_limit(key) is None
+        retry_after = auth_browser._check_password_rate_limit(key)
+        assert retry_after is not None
+
+        auth_browser._release_password_attempt(key)
+        auth_browser._release_password_attempt(key)
+        assert auth_browser._check_password_rate_limit(key) is None
+        auth_browser._release_password_attempt(key)
+    finally:
+        with auth_browser._PASSWORD_RATE_LIMIT_LOCK:
+            auth_browser._PASSWORD_ACTIVE_ATTEMPTS.pop(key, None)
+            auth_browser._PASSWORD_RATE_LIMIT_BUCKETS.pop(key, None)
+
+
+def test_csrf_guard_allows_explicit_dev_frontend_origin(monkeypatch):
+    monkeypatch.setattr(
+        "zerg.dependencies.form_post_origin.get_settings",
+        lambda: SimpleNamespace(
+            auth_disabled=True,
+            control_plane_url=None,
+            allowed_cors_origins="http://localhost:5173",
+            public_site_url=None,
+            public_api_url=None,
+        ),
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "http",
+            "server": ("backend", 8000),
+            "path": "/api/auth/refresh",
+            "headers": [
+                (b"origin", b"http://localhost:5173"),
+                (b"sec-fetch-site", b"cross-site"),
+                (b"x-longhouse-auth", b"1"),
+            ],
+            "query_string": b"",
+        }
+    )
+
+    require_browser_auth_header(request)
+
+
+def test_csrf_guard_rejects_hosted_apex_origin(monkeypatch):
+    monkeypatch.setattr(
+        "zerg.dependencies.form_post_origin.get_settings",
+        lambda: SimpleNamespace(
+            auth_disabled=False,
+            control_plane_url="https://control.longhouse.ai",
+            allowed_cors_origins="https://longhouse.ai,https://david010.longhouse.ai",
+            public_site_url="https://longhouse.ai",
+            public_api_url=None,
+        ),
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "server": ("david010.longhouse.ai", 443),
+            "path": "/api/auth/refresh",
+            "headers": [
+                (b"origin", b"https://longhouse.ai"),
+                (b"sec-fetch-site", b"cross-site"),
+                (b"x-longhouse-auth", b"1"),
+            ],
+            "query_string": b"",
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        require_browser_auth_header(request)
+
+    assert exc.value.status_code == 403
+
+
+def test_unknown_jwks_kid_forced_refresh_is_backed_off(monkeypatch):
+    cp_jwks.clear_jwks_cache()
+    fetches: list[bool] = []
+
+    monkeypatch.setattr(cp_jwks, "_control_plane_url", lambda: "https://cp.example")
+
+    def fake_fetch(*, force=False):
+        fetches.append(force)
+        return {}
+
+    monkeypatch.setattr(cp_jwks, "_fetch_jwks", fake_fetch)
+    monkeypatch.setattr(cp_jwks.jwt, "get_unverified_header", lambda token: {"kid": "unknown"})
+    try:
+        for _ in range(2):
+            with pytest.raises(cp_jwks.CPTokenError, match="Unknown CP token kid"):
+                cp_jwks.verify_runtime_token("ignored", audience="david010")
+        assert fetches == [False, True, False]
+    finally:
+        cp_jwks.clear_jwks_cache()
+
+
 def _refresh_request(*, auth_header: str | None):
     headers = []
     if auth_header is not None:
@@ -712,6 +971,19 @@ def _refresh_request(*, auth_header: str | None):
             "method": "POST",
             "path": "/api/auth/refresh-runtime-token",
             "headers": headers,
+            "query_string": b"",
+        }
+    )
+
+
+def _native_request(*, headers: list[tuple[bytes, bytes]] | None = None):
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/auth/native",
+            "client": ("127.0.0.1", 1234),
+            "headers": headers or [],
             "query_string": b"",
         }
     )
@@ -859,7 +1131,7 @@ async def test_refresh_native_session_proxies_refresh_token_to_cp(monkeypatch):
     monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
     monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", fake_post)
 
-    result = await refresh_native_session(NativeRefreshRequest(refresh_token="lhr_current"))
+    result = await refresh_native_session(_native_request(), Response(), NativeRefreshRequest(refresh_token="lhr_current"))
 
     assert result == {
         "runtime_token": "cp.fresh.jwt",
@@ -890,7 +1162,7 @@ async def test_refresh_native_session_propagates_cp_rejection(monkeypatch):
     monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", lambda *a, **k: FakeResponse())
 
     with pytest.raises(HTTPException) as exc:
-        await refresh_native_session(NativeRefreshRequest(refresh_token="lhr_revoked"))
+        await refresh_native_session(_native_request(), Response(), NativeRefreshRequest(refresh_token="lhr_revoked"))
     assert exc.value.status_code == 401
 
 
@@ -907,7 +1179,7 @@ async def test_refresh_native_session_returns_502_on_cp_network_error(monkeypatc
     monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", fake_post)
 
     with pytest.raises(HTTPException) as exc:
-        await refresh_native_session(NativeRefreshRequest(refresh_token="lhr_current"))
+        await refresh_native_session(_native_request(), Response(), NativeRefreshRequest(refresh_token="lhr_current"))
     assert exc.value.status_code == 502
 
 
@@ -918,7 +1190,7 @@ async def test_refresh_native_session_rejects_missing_token(monkeypatch):
         lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
     )
     with pytest.raises(HTTPException) as exc:
-        await refresh_native_session(NativeRefreshRequest(refresh_token=" "))
+        await refresh_native_session(_native_request(), Response(), NativeRefreshRequest(refresh_token=" "))
     assert exc.value.status_code == 401
 
 
@@ -940,9 +1212,10 @@ async def test_revoke_native_session_proxies_to_cp(monkeypatch):
         "zerg.routers.auth_sso.get_settings",
         lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
     )
+    monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
     monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", fake_post)
 
-    result = await revoke_native_session(NativeRevokeRequest(refresh_token="lhr_current"))
+    result = await revoke_native_session(_native_request(), Response(), NativeRevokeRequest(refresh_token="lhr_current"))
 
     assert result == {"status": "ok"}
     assert captured["url"] == "https://control.longhouse.ai/api/identity/revoke-native-session"
@@ -958,13 +1231,13 @@ async def test_revoke_native_session_ignores_empty_token(monkeypatch):
         lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
     )
 
-    result = await revoke_native_session(NativeRevokeRequest(refresh_token=" "))
-
-    assert result == {"status": "ok"}
+    with pytest.raises(HTTPException) as exc:
+        await revoke_native_session(_native_request(), Response(), NativeRevokeRequest(refresh_token=" "))
+    assert exc.value.status_code == 401
 
 
 @pytest.mark.asyncio
-async def test_revoke_native_session_treats_cp_rejection_as_idempotent(monkeypatch):
+async def test_revoke_native_session_reports_cp_rejection(monkeypatch):
     class FakeResponse:
         status_code = 500
 
@@ -973,14 +1246,16 @@ async def test_revoke_native_session_treats_cp_rejection_as_idempotent(monkeypat
         lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
     )
     monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", lambda *a, **k: FakeResponse())
+    monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
 
-    result = await revoke_native_session(NativeRevokeRequest(refresh_token="lhr_current"))
+    with pytest.raises(HTTPException) as exc:
+        await revoke_native_session(_native_request(), Response(), NativeRevokeRequest(refresh_token="lhr_current"))
 
-    assert result == {"status": "ok"}
+    assert exc.value.status_code == 503
 
 
 @pytest.mark.asyncio
-async def test_revoke_native_session_treats_cp_network_error_as_idempotent(monkeypatch):
+async def test_revoke_native_session_reports_cp_network_error(monkeypatch):
     def fake_post(*a, **k):
         raise httpx.HTTPError("connection refused")
 
@@ -989,10 +1264,12 @@ async def test_revoke_native_session_treats_cp_network_error_as_idempotent(monke
         lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
     )
     monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", fake_post)
+    monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
 
-    result = await revoke_native_session(NativeRevokeRequest(refresh_token="lhr_current"))
+    with pytest.raises(HTTPException) as exc:
+        await revoke_native_session(_native_request(), Response(), NativeRevokeRequest(refresh_token="lhr_current"))
 
-    assert result == {"status": "ok"}
+    assert exc.value.status_code == 503
 
 
 def test_jwks_cache_is_bounded_across_control_plane_urls(monkeypatch):

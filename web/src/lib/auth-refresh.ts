@@ -1,10 +1,9 @@
 /**
  * Single-flight 401 interceptor with automatic token refresh.
  *
- * Refresh is serialized in two scopes:
  * - one promise per tab;
- * - a Web Locks/lease lock across tabs, because rotating refresh cookies are
- *   shared by every tab in the origin.
+ * - the Web Locks API when available; server-side replay handling remains
+ *   authoritative when browser coordination is unavailable.
  *
  * Logout also has a short-lived cross-tab barrier. A refresh that starts after
  * logout begins must not install a new cookie after the logout response.
@@ -16,22 +15,14 @@ import { requestNativeAuth } from "./nativeAuthBridge";
 
 const AUTH_CHANNEL_NAME = "longhouse-auth-events";
 const LOGOUT_BARRIER_KEY = "longhouse:logout-barrier";
-const REFRESH_LOCK_KEY = "longhouse:refresh-lock";
 const REFRESH_LOCK_NAME = "longhouse-auth-refresh";
 const LOGOUT_BARRIER_TTL_MS = 30_000;
-const REFRESH_LEASE_TTL_MS = 15_000;
-const REFRESH_LOCK_WAIT_MS = 50;
-const REFRESH_LOCK_MAX_WAIT_MS = 15_000;
 
 let refreshPromise: Promise<boolean> | null = null;
 let refreshController: AbortController | null = null;
 let logoutBarrierActive = false;
 let lifecycleInstalled = false;
 let lifecycleChannel: BroadcastChannel | null = null;
-const tabId =
-  typeof globalThis.crypto?.randomUUID === "function"
-    ? globalThis.crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 export class RefreshUnavailableError extends Error {
   constructor() {
@@ -126,48 +117,7 @@ export function clearLogoutBarrier(): void {
   broadcastLifecycle("login-ready");
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
 
-async function withStorageRefreshLease<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
-  if (typeof window === "undefined") return operation();
-  const owner = `${tabId}:${Math.random().toString(36).slice(2)}`;
-  const deadline = Date.now() + REFRESH_LOCK_MAX_WAIT_MS;
-  while (Date.now() < deadline) {
-    if (signal.aborted || readLogoutBarrier()) throw new RefreshUnavailableError();
-    let lease: string;
-    try {
-      const current = window.localStorage.getItem(REFRESH_LOCK_KEY);
-      const currentExpiry = Number(current?.split(":", 2)[1] ?? 0);
-      if (current && currentExpiry > Date.now()) {
-        await sleep(REFRESH_LOCK_WAIT_MS);
-        continue;
-      }
-      lease = `${owner}:${Date.now() + REFRESH_LEASE_TTL_MS}`;
-      window.localStorage.setItem(REFRESH_LOCK_KEY, lease);
-      if (window.localStorage.getItem(REFRESH_LOCK_KEY) !== lease) {
-        await sleep(REFRESH_LOCK_WAIT_MS);
-        continue;
-      }
-    } catch {
-      // Private browsing/storage policy can remove localStorage entirely.
-      return operation();
-    }
-    try {
-      return await operation();
-    } finally {
-      try {
-        if (window.localStorage.getItem(REFRESH_LOCK_KEY) === lease) {
-          window.localStorage.removeItem(REFRESH_LOCK_KEY);
-        }
-      } catch {
-        // The lease expires on its own if storage becomes unavailable.
-      }
-    }
-  }
-  throw new RefreshUnavailableError();
-}
 
 async function withRefreshLock<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
   if (typeof navigator !== "undefined" && navigator.locks) {
@@ -187,7 +137,11 @@ async function withRefreshLock<T>(signal: AbortSignal, operation: () => Promise<
       throw error;
     }
   }
-  return withStorageRefreshLease(signal, operation);
+  if (signal.aborted || readLogoutBarrier()) throw new RefreshUnavailableError();
+  // Browser coordination is an optimization. The refresh endpoint owns
+  // rotation replay and family revocation, so do not emulate a lock with a
+  // non-atomic localStorage lease.
+  return operation();
 }
 
 async function doRefresh(signal: AbortSignal): Promise<boolean> {
@@ -264,6 +218,9 @@ export async function fetchWithRefresh(
       : new URL(input instanceof URL ? input.href : input, window.location.origin),
     init,
   );
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method) && !request.headers.has("X-Longhouse-Auth")) {
+    request.headers.set("X-Longhouse-Auth", "1");
+  }
   const response = await fetch(request.clone());
 
   if (response.status !== 401) {

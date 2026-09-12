@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth, useAuthMethods } from "../lib/auth";
 import { buildLoginUrl } from "../lib/loginRedirect";
+import { clearLogoutBarrier } from "../lib/auth-refresh";
 import { requestNativeAuth } from "../lib/nativeAuthBridge";
 import { ConnectionStatus, ConnectionStatusIndicator } from "../lib/useWebSocket";
 import { useApiHealth } from "../lib/apiHealth";
@@ -87,7 +88,14 @@ function WelcomeHeader() {
   const userInitials = getUserInitials(user);
 
   const controlPlaneBase = authMethods?.sso_url ? authMethods.sso_url.replace(/\/+$/, "") : null;
-  const controlPlaneLoginUrl = authMethods?.sso_login_url ?? null;
+
+  const controlPlaneLogoutUrl = (returnTo: string): string | null => {
+    if (!controlPlaneBase) return null;
+    const target = new URL('/auth/logout', `${controlPlaneBase}/`);
+    target.searchParams.set('return_to', returnTo);
+    return target.toString();
+  };
+
 
   const handleLogout = async () => {
     const confirmed = await confirm({
@@ -119,9 +127,14 @@ function WelcomeHeader() {
     closeUserMenu();
     const completed = await logout(true);
     if (!completed) return;
-    if (controlPlaneBase) {
-      const returnTo = window.location.origin;
-      window.location.href = `${controlPlaneBase}/?return_to=${encodeURIComponent(returnTo)}`;
+    const returnTo = window.location.pathname + window.location.search + window.location.hash;
+    const cpLogoutUrl = controlPlaneLogoutUrl(returnTo);
+    if (cpLogoutUrl) {
+      // Keep the refresh barrier and signed-out intent active through CP
+      // logout. The next explicit login clears both after handoff.
+      window.location.assign(cpLogoutUrl);
+    } else {
+      clearLogoutBarrier();
     }
   };
 
@@ -137,9 +150,14 @@ function WelcomeHeader() {
     closeUserMenu();
     const completed = await logout(true);
     if (!completed) return;
-    if (controlPlaneBase) {
-      const returnTo = controlPlaneLoginUrl ?? `${controlPlaneBase}/?switch=1`;
-      window.location.href = returnTo;
+    const returnTo = window.location.pathname + window.location.search + window.location.hash;
+    const cpLogoutUrl = controlPlaneLogoutUrl(returnTo);
+    if (cpLogoutUrl) {
+      // Keep the refresh barrier and signed-out intent active through CP
+      // logout. The next explicit login clears both after handoff.
+      window.location.assign(cpLogoutUrl);
+    } else {
+      clearLogoutBarrier();
     }
   };
 

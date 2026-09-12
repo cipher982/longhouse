@@ -1004,9 +1004,14 @@ struct LonghouseAPI: Sendable {
         let cookies = HTTPCookie.cookies(withResponseHeaderFields: headerFields, for: requestURL)
         guard !cookies.isEmpty else { return }
         SharedAuthStore.setManagedCookies(cookies, for: baseURL.absoluteString)
-        // Also mirror to HTTPCookieStorage.shared for the main app process.
+        // Mirror both active and legacy deletions so an older cookie cannot
+        // survive sign-out in the process-wide URLSession store.
         for cookie in cookies where SharedAuthStore.managedCookieNames.contains(cookie.name) {
-            HTTPCookieStorage.shared.setCookie(cookie)
+            if let expiresDate = cookie.expiresDate, expiresDate <= Date() {
+                HTTPCookieStorage.shared.deleteCookie(cookie)
+            } else {
+                HTTPCookieStorage.shared.setCookie(cookie)
+            }
         }
     }
 }

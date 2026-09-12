@@ -14,6 +14,7 @@ from zerg.auth.caller import Caller
 from zerg.auth.session_tokens import SESSION_COOKIE_NAME
 from zerg.config import get_settings
 from zerg.database import catalog_db_session
+from zerg.dependencies.form_post_origin import require_browser_auth_header
 
 # Compatibility seam for tests/extensions; catalog_db_session chooses the live
 # catalog in Runtime Hosts and the read-only archive in helper processes.
@@ -93,6 +94,18 @@ def _get_browser_session_user(request: Request, db=None):
 
 def get_current_browser_user(request: Request, db=Depends(auth_deps._auth_compat_db)):
     """Return the authenticated browser user or raise **401**."""
+    is_mutation = request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+    bearer = _bearer_token(request)
+    if not auth_deps.AUTH_DISABLED and bearer is not None:
+        user = _get_browser_session_user(request, db)
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired bearer token",
+            )
+        return user
+    if is_mutation and bearer is None:
+        require_browser_auth_header(request)
     user = _get_browser_session_user(request, db)
     if user is None:
         raise HTTPException(

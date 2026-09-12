@@ -129,20 +129,30 @@ export function buildRuntimeTokenStorageState(
   runtimeToken: string,
 ): StorageState {
   const parsed = new URL(baseUrl);
-  return {
-    cookies: [
-      {
-        name:
-          parsed.protocol === "https:" ? "__Host-lh_session" : "longhouse_session",
+  const secure = parsed.protocol === "https:";
+  const cookie = secure
+    ? {
+        name: "__Host-lh_session",
+        value: runtimeToken,
+        url: `${parsed.origin}/`,
+        path: "/",
+        expires: Math.floor(Date.now() / 1000) + 3600,
+        httpOnly: true,
+        secure: true,
+        sameSite: "Lax" as const,
+      }
+    : {
+        name: "longhouse_session",
         value: runtimeToken,
         domain: parsed.hostname,
         path: "/",
         expires: Math.floor(Date.now() / 1000) + 3600,
         httpOnly: true,
-        secure: parsed.protocol === "https:",
-        sameSite: "Lax",
-      },
-    ],
+        secure: false,
+        sameSite: "Lax" as const,
+      };
+  return {
+    cookies: [cookie],
     origins: [],
   };
 }
