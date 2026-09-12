@@ -81,6 +81,7 @@ ADAPTERS = {
     "omp": "omp_print",
 }
 CAN_RESUME = frozenset({"codex", "claude", "opencode", "cursor", "pi", "omp"})
+OMP_CONTEXT_LABEL = "LONGHOUSE_CONTEXT_VALUE"
 _VERSION_PATTERNS = {
     "codex": re.compile(r"^codex-cli (?P<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$"),
     "claude": re.compile(r"^(?P<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?) \(Claude Code\)$"),
@@ -1492,12 +1493,11 @@ def _native_model(provider: str, model: str) -> str:
     return f"openrouter/{model}" if provider == "opencode" and not model.startswith("openrouter/") else model
 
 
-def _omp_continuation_prompt(resume_marker: str) -> str:
+def _omp_continuation_prompt(context_marker: str, resume_marker: str) -> str:
     return (
-        "New-turn continuation check. Recall the value labelled "
-        '"Remember this context phrase:" from the earlier user message. '
-        f"Then reply with that value followed by exactly {resume_marker} "
-        "and no other text."
+        "New-turn continuation check. Without reading files, recall the exact value "
+        f"stored under the label {OMP_CONTEXT_LABEL!r} in the earlier user message. "
+        f"Reply with that value followed by exactly {resume_marker} and no other text."
     )
 
 
@@ -1771,9 +1771,9 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         message = f"Reply with exactly {marker} and nothing else."
         if provider in {"pi", "omp"}:
             message = (
-                f"New machine-check request. Remember this context phrase: {context_marker}. "
-                f"Use the read tool to read {proof_path}. After the tool returns, reply with "
-                f"exactly {marker} and no other text."
+                f"New machine-check request. Store the exact value {context_marker!r} "
+                f"under the label {OMP_CONTEXT_LABEL!r}. Use the read tool to read {proof_path}. "
+                f"After the tool returns, reply with exactly {marker} and no other text."
             )
         request_id = f"console-release-{uuid4()}"
         first = _start_turn(
@@ -1953,7 +1953,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             resume_marker = f"LH_{provider.upper()}_RESUME_{uuid4().hex}"
             resume_message = f"Reply with exactly {resume_marker} and nothing else."
             if provider in {"pi", "omp"}:
-                resume_message = _omp_continuation_prompt(resume_marker)
+                resume_message = _omp_continuation_prompt(context_marker, resume_marker)
             resume_request_id = f"console-resume-{uuid4()}"
             resume = _start_turn(
                 api_url=api_url,
