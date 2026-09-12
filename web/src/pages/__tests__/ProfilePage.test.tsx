@@ -31,6 +31,18 @@ vi.mock("../../lib/auth", () => ({
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
+function getRequestForPath(path: string): Request {
+  const call = mockFetch.mock.calls.find(([input]) => {
+    const url = input instanceof Request ? input.url : String(input);
+    return new URL(url, window.location.origin).pathname === path;
+  });
+  expect(call).toBeDefined();
+  const [input, init] = call ?? [];
+  if (input instanceof Request) return input;
+  if (input === undefined) throw new Error(`No fetch request for ${path}`);
+  return new Request(input as RequestInfo, init as RequestInit | undefined);
+}
+
 function renderProfilePage() {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -92,18 +104,14 @@ describe("ProfilePage", () => {
     const saveButton = saveButtons[0]; // Take first button due to StrictMode double rendering
     await user.click(saveButton);
 
-    await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith(
-        "/api/users/me",
-        expect.objectContaining({
-          method: "PUT",
-          credentials: "include",
-          headers: expect.objectContaining({ "Content-Type": "application/json" }),
-          body: JSON.stringify({
-            display_name: "Updated Name",
-          }),
-        })
-      );
+    await waitFor(async () => {
+      const request = getRequestForPath("/api/users/me");
+      expect(request.method).toBe("PUT");
+      expect(request.credentials).toBe("include");
+      expect(request.headers.get("Content-Type")).toBe("application/json");
+      await expect(request.clone().json()).resolves.toEqual({
+        display_name: "Updated Name",
+      });
     });
   });
 
@@ -136,13 +144,9 @@ describe("ProfilePage", () => {
     await user.upload(fileInput, file);
 
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith(
-        "/api/users/me/avatar",
-        expect.objectContaining({
-          method: "POST",
-          credentials: "include",
-        })
-      );
+      const request = getRequestForPath("/api/users/me/avatar");
+      expect(request.method).toBe("POST");
+      expect(request.credentials).toBe("include");
     });
   });
 
