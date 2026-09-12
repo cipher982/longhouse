@@ -334,6 +334,7 @@ struct OutboxCollectResult {
 
 struct UnmanagedBindingRefreshResult {
     generation: u64,
+    managed_observation_generation: u64,
     reason: &'static str,
     full_reconciliation_candidate: bool,
     managed: ManagedObservationSnapshot,
@@ -415,6 +416,10 @@ struct ManagedObservationSnapshot {
 
 struct ProjectionBuildInput {
     generation: u64,
+    // Independent from the Shadow refresh generation: a slow optional refresh
+    // must not invalidate fresh managed observations, while an older build
+    // must not publish over a newer managed scan.
+    managed_observation_generation: u64,
     managed_scan_partial: bool,
     managed_snapshot_complete: bool,
     unmanaged_snapshot_complete: bool,
@@ -435,6 +440,7 @@ struct ProjectionBuildInput {
 
 struct ProjectionBuildResult {
     generation: u64,
+    managed_observation_generation: u64,
     managed_scan_partial: bool,
     unmanaged_snapshot_complete: bool,
     result: Result<(heartbeat::StatusFileProjection, SessionSnapshotState), String>,
@@ -1072,6 +1078,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut pending_periodic_observation = false;
     let mut projection_build_pending = false;
     let mut projection_generation = 0_u64;
+    let mut managed_observation_generation = 0_u64;
     // Budget-overrun reporting state: how many ticks were over since the last
     // report, the worst one seen, and when we last said anything.
     let mut projection_over_budget_ticks = 0_u64;
@@ -1092,7 +1099,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut machine_presence_post_tasks: JoinSet<MachinePresencePostResult> = JoinSet::new();
     let mut unmanaged_binding_refresh_tasks: JoinSet<UnmanagedBindingRefreshResult> =
         JoinSet::new();
-    let mut unmanaged_binding_refresh_generation: Option<u64> = None;
+    let mut unmanaged_binding_refresh_generation: Option<(u64, u64)> = None;
     let mut storage_maintenance_tasks: JoinSet<()> = JoinSet::new();
 
     let outbox_dir = config::get_agent_outbox_dir()?;
@@ -1351,6 +1358,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     projection_generation = projection_generation.saturating_add(1);
                                     let input = ProjectionBuildInput {
                                         generation: projection_generation,
+                                        managed_observation_generation,
                                         managed_scan_partial: last_projected_managed_scan_partial,
                                         managed_snapshot_complete:
                                             last_projected_managed_snapshot_complete,
@@ -1651,11 +1659,21 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 match unmanaged_binding_refresh_result {
                     Some(Ok(result)) => {
                         let stale = result.generation != projection_generation;
+                        let managed_observation_current =
+                            result.managed_observation_generation == managed_observation_generation;
                         if stale {
                             tracing::debug!(
                                 generation = result.generation,
                                 latest_generation = projection_generation,
                                 "Discarded stale unmanaged reconciliation result"
+                            );
+                        } else if !managed_observation_current {
+                            tracing::debug!(
+                                result_managed_observation_generation =
+                                    result.managed_observation_generation,
+                                latest_managed_observation_generation =
+                                    managed_observation_generation,
+                                "Applying unmanaged result without replacing newer managed observations"
                             );
                         }
                         if !stale {
@@ -1676,17 +1694,23 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                         "Unmanaged binding refresh completed"
                                     );
                                 }
-                                last_projected_managed_observations = result.managed;
-                                last_projected_managed_scan_partial = result.managed_scan_partial;
-                                last_projected_managed_snapshot_complete =
-                                    result.full_reconciliation_candidate;
-                                last_projected_unmanaged_snapshot_complete =
-                                    result.full_reconciliation_candidate;
-                                last_unmanaged_session_bindings = Some(bindings);
-                                unmanaged_binding_refresh_failed = false;
-                                if result.full_reconciliation_candidate {
-                                    last_full_reconciled_at = Some(chrono::Utc::now().to_rfc3339());
+                                if managed_observation_current {
+                                    last_projected_managed_observations = result.managed;
+                                    last_projected_managed_scan_partial =
+                                        result.managed_scan_partial;
+                                    last_projected_managed_snapshot_complete =
+                                        result.full_reconciliation_candidate;
+                                    last_projected_unmanaged_snapshot_complete =
+                                        result.full_reconciliation_candidate;
+                                    unmanaged_binding_refresh_failed = false;
+                                    if result.full_reconciliation_candidate {
+                                        last_full_reconciled_at =
+                                            Some(chrono::Utc::now().to_rfc3339());
+                                    }
+                                } else {
+                                    last_projected_unmanaged_snapshot_complete = false;
                                 }
+                                last_unmanaged_session_bindings = Some(bindings);
                             }
                             Err(err) => {
                                 // Managed state files are authoritative for Helm ownership.
@@ -1695,11 +1719,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 // last-known unmanaged bindings, but mark only the unmanaged
                                 // scope incomplete so the Runtime Host cannot close missing
                                 // Shadow sessions from this partial observation.
-                                last_projected_managed_observations = result.managed;
-                                last_projected_managed_scan_partial =
-                                    result.managed_scan_partial;
-                                last_projected_managed_snapshot_complete =
-                                    result.full_reconciliation_candidate;
+                                if managed_observation_current {
+                                    last_projected_managed_observations = result.managed;
+                                    last_projected_managed_scan_partial =
+                                        result.managed_scan_partial;
+                                    last_projected_managed_snapshot_complete =
+                                        result.full_reconciliation_candidate;
+                                }
                                 last_projected_unmanaged_snapshot_complete = false;
                                 // Shadow discovery is optional. Do not turn a
                                 // per-pid lsof failure into an immediate full
@@ -1722,6 +1748,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             }
                             let input = ProjectionBuildInput {
                                 generation: projection_generation,
+                                managed_observation_generation,
                                 managed_scan_partial: last_projected_managed_scan_partial,
                                 managed_snapshot_complete:
                                     last_projected_managed_snapshot_complete,
@@ -1749,7 +1776,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                     }
                     Some(Err(err)) => {
-                        if refresh_generation == Some(projection_generation) {
+                        let refresh_is_current = refresh_generation
+                            == Some((projection_generation, managed_observation_generation));
+                        if refresh_is_current {
                             unmanaged_binding_refresh_failed = true;
                             managed_reconciliation =
                                 heartbeat::ProjectionReconciliation::failed("unmanaged_binding");
@@ -1762,8 +1791,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             tracing::warn!("Unmanaged binding refresh task failed: {}", err);
                         } else {
                             tracing::debug!(
-                                generation = ?refresh_generation,
+                                refresh_generation = ?refresh_generation,
                                 latest_generation = projection_generation,
+                                latest_managed_observation_generation =
+                                    managed_observation_generation,
                                 "Discarded stale unmanaged binding task failure: {}",
                                 err
                             );
@@ -1917,8 +1948,17 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             ManagedObservationSnapshot::from_result(&result).current_only();
                         let managed_observations_changed = !next_managed_observations
                             .projection_equivalent(&last_managed_observations);
-                        last_managed_observations = next_managed_observations;
                         let managed_scan_partial = result.retained_stale_rows > 0;
+                        let managed_snapshot_complete =
+                            result.full_reconciliation && !managed_scan_partial;
+                        let managed_evidence_changed = managed_observations_changed
+                            || result.full_reconciliation
+                            || managed_scan_partial != last_projected_managed_scan_partial;
+                        if managed_evidence_changed {
+                            managed_observation_generation =
+                                managed_observation_generation.saturating_add(1);
+                        }
+                        last_managed_observations = next_managed_observations;
                         pump_ready_local_work(
                             &mut scheduler,
                             &mut in_flight,
@@ -1947,13 +1987,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 result.process_inventory.clone(),
                                 result.reason,
                                 paired_generation,
+                                managed_observation_generation,
                                 last_managed_observations.clone(),
                                 managed_scan_partial,
                                 result.full_reconciliation && result.retained_stale_rows == 0,
                             );
                         if paired_refresh_started {
                             projection_generation = paired_generation;
-                            unmanaged_binding_refresh_generation = Some(projection_generation);
+                            unmanaged_binding_refresh_generation =
+                                Some((projection_generation, managed_observation_generation));
                         } else if result.full_reconciliation {
                             if result.reason == "wake" {
                                 pending_wake_reconciliation = true;
@@ -1972,14 +2014,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         // Publish it with the cached Shadow rows only as
                         // incomplete evidence; the refresh result can replace
                         // this projection later without blocking managed truth.
-                        let managed_snapshot_complete =
-                            result.full_reconciliation && !managed_scan_partial;
                         last_projected_managed_observations = last_managed_observations.clone();
                         last_projected_managed_scan_partial = managed_scan_partial;
                         last_projected_managed_snapshot_complete = managed_snapshot_complete;
                         last_projected_unmanaged_snapshot_complete = false;
                         let input = ProjectionBuildInput {
                             generation: projection_generation,
+                            managed_observation_generation,
                             managed_scan_partial: last_projected_managed_scan_partial,
                             managed_snapshot_complete:
                                 last_projected_managed_snapshot_complete,
@@ -2080,6 +2121,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 match projection_build_result {
                     Some(Ok(result)) => {
                         let is_current = result.generation == projection_generation
+                            && result.managed_observation_generation
+                                == managed_observation_generation
                             && result.managed_scan_partial
                                 == last_projected_managed_scan_partial
                             && result.unmanaged_snapshot_complete
@@ -2125,12 +2168,17 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 managed_reconciliation =
                                     heartbeat::ProjectionReconciliation::failed("provider_state_partial");
                             } else if managed_observation_scan_tasks.is_empty()
-                                && unmanaged_binding_refresh_tasks.is_empty()
                                 && !pending_wake_reconciliation
                                 && !pending_full_reconciliation
                                 && !unmanaged_binding_refresh_failed
                             {
-                                managed_reconciliation = heartbeat::ProjectionReconciliation::idle();
+                                // A managed scan is authoritative for the core
+                                // projection. Optional Shadow discovery remains
+                                // incomplete evidence, not a reason to keep the
+                                // core reconciliation marker running.
+                                managed_reconciliation =
+                                    heartbeat::ProjectionReconciliation::idle();
+                            }
                             }
                             shipping_progress.observe_pending_work(
                                 heartbeat::payload_has_pending_work(&projection.payload)
@@ -2202,6 +2250,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     projection_build_pending = false;
                     let input = ProjectionBuildInput {
                         generation: projection_generation,
+                        managed_observation_generation,
                         managed_scan_partial: last_projected_managed_scan_partial,
                         managed_snapshot_complete:
                             last_projected_managed_snapshot_complete,
@@ -2238,6 +2287,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 if last_status_projection.is_some() {
                     let input = ProjectionBuildInput {
                         generation: projection_generation,
+                        managed_observation_generation,
                         managed_scan_partial: last_projected_managed_scan_partial,
                         managed_snapshot_complete:
                             last_projected_managed_snapshot_complete,
@@ -2764,6 +2814,7 @@ fn maybe_start_projection_build(
         let started = Instant::now();
         let ProjectionBuildInput {
             generation,
+            managed_observation_generation,
             managed_scan_partial,
             managed_snapshot_complete,
             unmanaged_snapshot_complete,
@@ -2816,6 +2867,7 @@ fn maybe_start_projection_build(
             });
         ProjectionBuildResult {
             generation,
+            managed_observation_generation,
             managed_scan_partial,
             unmanaged_snapshot_complete,
             result,
@@ -3689,6 +3741,7 @@ fn maybe_start_unmanaged_binding_refresh(
     process_inventory: Vec<unmanaged_bindings::ProcessInfo>,
     reason: &'static str,
     generation: u64,
+    managed_observation_generation: u64,
     managed: ManagedObservationSnapshot,
     managed_scan_partial: bool,
     full_reconciliation_candidate: bool,
@@ -3713,6 +3766,7 @@ fn maybe_start_unmanaged_binding_refresh(
             });
         UnmanagedBindingRefreshResult {
             generation,
+            managed_observation_generation,
             reason,
             full_reconciliation_candidate,
             managed,

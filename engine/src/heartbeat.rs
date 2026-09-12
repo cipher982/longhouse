@@ -3783,7 +3783,10 @@ pub fn build_status_file_projection(
         phase_ledger,
         phase_ledger_status,
         generated_at: generated_at.clone(),
-        last_reconciled_at: generated_at,
+        // A projection pulse is not a successful full reconciliation. Keep
+        // this empty until the daemon supplies the timestamp from a completed
+        // authoritative full scan.
+        last_reconciled_at: String::new(),
     }
 }
 
@@ -5658,6 +5661,7 @@ mod tests {
             "idle"
         );
         assert!(parsed["local_projection"]["engine_pulse_at"].is_string());
+        assert_eq!(parsed["local_projection"]["last_reconciled_at"], "");
 
         let generated_at = parsed["local_projection"]["generated_at"].clone();
         let stable_dead_letters = parsed["recent_dead_letters"].clone();
