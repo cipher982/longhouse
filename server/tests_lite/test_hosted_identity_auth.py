@@ -584,8 +584,8 @@ async def test_accept_handoff_revokes_web_orphan_on_invalid_refresh_contract(mon
     )
     revoked = []
 
-    async def revoke(settings, refresh_token, *, orphan_cleanup=False):
-        revoked.append((refresh_token, orphan_cleanup))
+    async def revoke(settings, refresh_token, *, orphan_cleanup=False, transaction_id=None):
+        revoked.append((refresh_token, orphan_cleanup, transaction_id))
 
     monkeypatch.setattr("zerg.routers.auth_sso._best_effort_revoke_native_session", revoke)
     request = Request(
@@ -597,12 +597,11 @@ async def test_accept_handoff_revokes_web_orphan_on_invalid_refresh_contract(mon
             "query_string": f"code=one-use-code&tenant_state={tenant_state}".encode(),
         }
     )
-
     redirect = await accept_handoff_request(request, "one-use-code", tenant_state=tenant_state)
 
     assert redirect.status_code == 303
     assert redirect.headers["location"].endswith("auth_error=auth_misconfigured")
-    assert revoked == [("lhr_orphan", True)]
+    assert revoked == [("lhr_orphan", True, auth_sso._handoff_transaction_id(tenant_state))]
 
 
 @pytest.mark.asyncio
@@ -816,8 +815,8 @@ async def test_accept_native_handoff_revokes_orphan_when_refresh_payload_missing
     def exchange(**kwargs):
         return {"runtime_token": "cp.runtime.jwt", "expires_in": 3600}
 
-    def revoke(*, settings, refresh_token, strict):
-        revoked.append((refresh_token, strict))
+    def revoke(*, settings, transaction_id, strict):
+        revoked.append((transaction_id, strict))
 
     monkeypatch.setattr(
         "zerg.routers.auth_sso.get_settings",
@@ -825,7 +824,7 @@ async def test_accept_native_handoff_revokes_orphan_when_refresh_payload_missing
     )
     monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
     monkeypatch.setattr("zerg.routers.auth_sso._exchange_handoff_code", exchange)
-    monkeypatch.setattr("zerg.routers.auth_sso._revoke_native_session_payload", revoke)
+    monkeypatch.setattr("zerg.routers.auth_sso._revoke_handoff_session_payload", revoke)
 
     with pytest.raises(HTTPException) as exc:
         await accept_native_handoff(
@@ -835,7 +834,7 @@ async def test_accept_native_handoff_revokes_orphan_when_refresh_payload_missing
         )
 
     assert exc.value.status_code == 502
-    assert revoked == []
+    assert revoked == [(auth_sso._handoff_transaction_id("verifier"), False)]
 
 
 def test_runtime_payload_rejects_missing_or_nonpositive_credentials():
@@ -1632,7 +1631,7 @@ async def test_revoke_native_session_proxies_to_cp(monkeypatch):
     result = await revoke_native_session(
         _native_request(),
         Response(),
-        NativeRevokeRequest(refresh_token="lhr_current", tenant="david010"),
+        NativeRevokeRequest(refresh_token="lhr_current"),
     )
 
     assert result == {"status": "ok"}
@@ -1644,7 +1643,12 @@ async def test_revoke_native_session_proxies_to_cp(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_revoke_native_session_forwards_orphan_cleanup(monkeypatch):
+async def test_revoke_native_session_rejects_orphan_cleanup_field():
+    with pytest.raises(ValidationError):
+        NativeRevokeRequest(refresh_token="lhr_orphan", orphan_cleanup=True)
+
+
+def test_revoke_handoff_session_cleanup_proxies_transaction(monkeypatch):
     captured = {}
 
     class FakeResponse:
@@ -1655,28 +1659,22 @@ async def test_revoke_native_session_forwards_orphan_cleanup(monkeypatch):
             return {"status": "ok"}
 
     def fake_post(url, headers, json, timeout):
-        captured["json"] = json
+        captured.update(url=url, headers=headers, json=json, timeout=timeout)
         return FakeResponse()
 
-    monkeypatch.setattr(
-        "zerg.routers.auth_sso.get_settings",
-        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
-    )
+    settings = SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret")
     monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
     monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", fake_post)
 
-    result = await revoke_native_session(
-        _native_request(),
-        Response(),
-        NativeRevokeRequest(refresh_token="lhr_orphan", tenant="david010", orphan_cleanup=True),
+    assert auth_sso._revoke_handoff_session_payload(
+        settings=settings,
+        transaction_id="a" * 64,
     )
-
-    assert result == {"status": "ok"}
-    assert captured["json"] == {
-        "refresh_token": "lhr_orphan",
-        "tenant": "david010",
-        "orphan_cleanup": True,
-    }
+    assert captured["url"] == "https://control.longhouse.ai/api/identity/revoke-handoff-session"
+    assert captured["headers"]["X-Internal-Token"] == "secret"
+    assert captured["headers"]["X-Longhouse-Auth-Transaction"] == "a" * 64
+    assert captured["json"] == {"tenant": "david010", "transaction_id": "a" * 64}
+    assert captured["timeout"] == 5.0
 
 
 @pytest.mark.asyncio
@@ -1690,7 +1688,7 @@ async def test_revoke_native_session_ignores_empty_token(monkeypatch):
         await revoke_native_session(
             _native_request(),
             Response(),
-            NativeRevokeRequest(refresh_token=" ", tenant="david010"),
+            NativeRevokeRequest(refresh_token=" "),
         )
     assert exc.value.status_code == 401
 
@@ -1711,7 +1709,7 @@ async def test_revoke_native_session_reports_cp_rejection(monkeypatch):
         await revoke_native_session(
             _native_request(),
             Response(),
-            NativeRevokeRequest(refresh_token="lhr_current", tenant="david010"),
+            NativeRevokeRequest(refresh_token="lhr_current"),
         )
 
     assert exc.value.status_code == 503
@@ -1735,7 +1733,7 @@ async def test_revoke_native_session_rejects_non_success_cp_responses(monkeypatc
         await revoke_native_session(
             _native_request(),
             Response(),
-            NativeRevokeRequest(refresh_token="lhr_current", tenant="david010"),
+            NativeRevokeRequest(refresh_token="lhr_current"),
         )
 
     assert exc.value.status_code == 503
@@ -1757,7 +1755,7 @@ async def test_revoke_native_session_reports_cp_network_error(monkeypatch):
         await revoke_native_session(
             _native_request(),
             Response(),
-            NativeRevokeRequest(refresh_token="lhr_current", tenant="david010"),
+            NativeRevokeRequest(refresh_token="lhr_current"),
         )
 
     assert exc.value.status_code == 503

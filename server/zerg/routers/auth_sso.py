@@ -21,6 +21,7 @@ from fastapi import Response
 from fastapi import status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
 
 from zerg.auth.client_ip import get_client_ip
@@ -184,11 +185,12 @@ class NativeRefreshRequest(BaseModel):
 
 
 class NativeRevokeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     # A refresh token is the caller's proof of ownership. Session IDs are
     # identifiers carried in access tokens, not revocation credentials.
     refresh_token: str = Field(min_length=1, max_length=_MAX_NATIVE_REFRESH_TOKEN_LENGTH)
     revoke_authority: bool = False
-    orphan_cleanup: bool = False
 
 
 def _runtime_payload(data: dict) -> dict:
@@ -489,26 +491,101 @@ def _revoke_native_session_payload(
     return True
 
 
+def _revoke_handoff_session_payload(
+    *,
+    settings,
+    transaction_id: str | None,
+    strict: bool = True,
+) -> bool:
+    """Revoke a committed handoff family without fencing browser authority."""
+    control_plane_url = getattr(settings, "control_plane_url", None)
+    normalized_transaction_id = (transaction_id or "").strip()
+    if not control_plane_url or not normalized_transaction_id:
+        if strict and control_plane_url is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "cp_unavailable"},
+            )
+        return False
+    try:
+        response = httpx.post(
+            f"{control_plane_url.rstrip('/')}/api/identity/revoke-handoff-session",
+            headers={
+                "X-Internal-Token": settings.internal_api_secret,
+                "X-Longhouse-Auth-Transaction": normalized_transaction_id,
+            },
+            json={
+                "tenant": hosted_instance_id(),
+                "transaction_id": normalized_transaction_id,
+            },
+            timeout=5.0,
+        )
+    except httpx.HTTPError as exc:
+        logger.warning("control_plane_handoff_session_revoke_failed", exc_info=True)
+        if strict:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "cp_unavailable"},
+            ) from exc
+        return False
+    if response.status_code != status.HTTP_200_OK:
+        logger.warning(
+            "control_plane_handoff_session_revoke_rejected",
+            extra={"status_code": response.status_code, "auth_transaction_id": normalized_transaction_id},
+        )
+        if strict:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "cp_unavailable"},
+            )
+        return False
+    try:
+        body = response.json()
+    except (TypeError, ValueError):
+        body = None
+    if not isinstance(body, dict) or body.get("status") != "ok":
+        logger.warning("control_plane_handoff_session_revoke_invalid_response")
+        if strict:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "cp_unavailable"},
+            )
+        return False
+    return True
+
+
 async def _best_effort_revoke_native_session(
     settings,
     refresh_token: object,
     *,
     orphan_cleanup: bool = False,
+    transaction_id: str | None = None,
 ) -> None:
-    """Revoke an exchanged native session before returning a validation error."""
-    if not isinstance(refresh_token, str) or not refresh_token:
+    """Revoke an exchanged session before returning a validation error."""
+    revoked = False
+    if isinstance(refresh_token, str) and refresh_token:
+        try:
+            revoke_kwargs = {
+                "settings": settings,
+                "refresh_token": refresh_token,
+                "strict": False,
+            }
+            if orphan_cleanup:
+                revoke_kwargs["orphan_cleanup"] = True
+            revoked = await asyncio.to_thread(_revoke_native_session_payload, **revoke_kwargs)
+        except Exception:
+            logger.warning("tenant_handoff_orphan_revoke_failed", exc_info=True)
+    if revoked or not transaction_id:
         return
     try:
-        revoke_kwargs = {
-            "settings": settings,
-            "refresh_token": refresh_token,
-            "strict": False,
-        }
-        if orphan_cleanup:
-            revoke_kwargs["orphan_cleanup"] = True
-        await asyncio.to_thread(_revoke_native_session_payload, **revoke_kwargs)
+        await asyncio.to_thread(
+            _revoke_handoff_session_payload,
+            settings=settings,
+            transaction_id=transaction_id,
+            strict=False,
+        )
     except Exception:
-        logger.warning("tenant_handoff_orphan_revoke_failed", exc_info=True)
+        logger.warning("tenant_handoff_transaction_revoke_failed", exc_info=True)
 
 
 def _handoff_failure_redirect(
@@ -665,6 +742,13 @@ async def accept_handoff_request(
     if exchange_error is not None or payload is None:
         exc = exchange_error or HTTPException(status_code=502, detail={"code": "cp_unavailable"})
         detail = exc.detail if isinstance(exc.detail, dict) else {}
+        if detail.get("code") == "cp_contract_invalid":
+            await _best_effort_revoke_native_session(
+                settings,
+                None,
+                orphan_cleanup=True,
+                transaction_id=transaction_id,
+            )
         if exc.status_code in {404, 410}:
             error = "handoff_expired"
         elif exc.status_code == 403:
@@ -697,7 +781,12 @@ async def accept_handoff_request(
     refresh_token = payload.get("refresh_token")
     if not isinstance(refresh_token, str) or not refresh_token:
         logger.error("tenant_handoff_exchange_missing_refresh")
-        await _best_effort_revoke_native_session(settings, refresh_token, orphan_cleanup=True)
+        await _best_effort_revoke_native_session(
+            settings,
+            refresh_token,
+            orphan_cleanup=True,
+            transaction_id=transaction_id,
+        )
         return _handoff_failure_redirect(
             settings=settings,
             return_to=return_to,
@@ -711,7 +800,12 @@ async def accept_handoff_request(
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, dict) else {}
         logger.error("tenant_handoff_exchange_invalid_refresh_expiry")
-        await _best_effort_revoke_native_session(settings, refresh_token, orphan_cleanup=True)
+        await _best_effort_revoke_native_session(
+            settings,
+            refresh_token,
+            orphan_cleanup=True,
+            transaction_id=transaction_id,
+        )
         return _handoff_failure_redirect(
             settings=settings,
             return_to=return_to,
@@ -734,7 +828,12 @@ async def accept_handoff_request(
         logger.warning("tenant_handoff_runtime_validation_failed")
         preserve_state = validation_error == "catalog_unavailable"
         if not preserve_state:
-            await _best_effort_revoke_native_session(settings, refresh_token, orphan_cleanup=True)
+            await _best_effort_revoke_native_session(
+                settings,
+                refresh_token,
+                orphan_cleanup=True,
+                transaction_id=transaction_id,
+            )
         return _handoff_failure_redirect(
             settings=settings,
             return_to=return_to,
@@ -798,24 +897,46 @@ async def accept_native_handoff(request: Request, response: Response, body: Nati
         attempt_id=body.tenant_state,
         client_ip=get_client_ip(request),
     )
-    payload = await _exchange_handoff_with_retry(
-        control_plane_url=control_plane_url,
-        internal_api_secret=settings.internal_api_secret,
-        code=body.code,
-        tenant=tenant,
-        tenant_state=body.tenant_state,
-        code_verifier=body.code_verifier,
-        client="ios",
-        transaction_id=transaction_id,
-    )
-    # `_exchange_handoff_code` verifies this contract in production. Keep the
-    # structural check at the route boundary for defense-in-depth and tests,
-    # but never revoke a newly committed family here: the CP exchange is
-    # idempotently retryable after a response/validation failure.
-    normalized_payload = _runtime_payload(payload)
+    try:
+        payload = await _exchange_handoff_with_retry(
+            control_plane_url=control_plane_url,
+            internal_api_secret=settings.internal_api_secret,
+            code=body.code,
+            tenant=tenant,
+            tenant_state=body.tenant_state,
+            code_verifier=body.code_verifier,
+            client="ios",
+            transaction_id=transaction_id,
+        )
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        if detail.get("code") == "cp_contract_invalid":
+            await _best_effort_revoke_native_session(
+                settings,
+                None,
+                orphan_cleanup=True,
+                transaction_id=transaction_id,
+            )
+        raise
+    try:
+        normalized_payload = _runtime_payload(payload)
+    except HTTPException:
+        await _best_effort_revoke_native_session(
+            settings,
+            None,
+            orphan_cleanup=True,
+            transaction_id=transaction_id,
+        )
+        raise
     runtime_token = normalized_payload["runtime_token"]
     refresh_token = normalized_payload.get("refresh_token")
     if not isinstance(refresh_token, str) or not refresh_token:
+        await _best_effort_revoke_native_session(
+            settings,
+            None,
+            orphan_cleanup=True,
+            transaction_id=transaction_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail={"code": "cp_contract_invalid", "message": "Control plane response missing native refresh token."},
@@ -887,7 +1008,6 @@ async def revoke_native_session(request: Request, response: Response, body: Nati
         settings=settings,
         refresh_token=refresh_token,
         revoke_authority=body.revoke_authority,
-        orphan_cleanup=body.orphan_cleanup,
         strict=True,
     )
     _set_no_store(response)
