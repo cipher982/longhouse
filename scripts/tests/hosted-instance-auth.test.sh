@@ -43,7 +43,7 @@ if [[ "$json_payload" != '{"email":"quote\"@example.com","subdomain":"demo\\slas
 fi
 
 temp_json="$(mktemp)"
-trap 'rm -f "$temp_json"' EXIT
+trap 'rm -f "$temp_json" "$temp_json.request" "$temp_json.body" "$temp_json.attempts" "$temp_json.health-request"' EXIT
 
 cat >"$temp_json" <<'JSON'
 {"access_token":"access-123"}
@@ -247,5 +247,62 @@ if [[ "$(cat "$temp_json.health-request")" != 'https://demo.longhouse.ai/api/hea
   echo "Expected reprovision timeout fallback to poll hosted runtime health"
   exit 1
 fi
+
+# Exercise the real entrypoints with a stale runner-local dotenv. The helper is
+# deliberately absent in the scratch checkout: no network action can follow.
+python3 - "$ROOT_DIR" <<'PY'
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+
+scripts = Path(sys.argv[1])
+with tempfile.TemporaryDirectory(prefix="lh-ci-authority-") as directory:
+    root = Path(directory)
+    (root / ".env").write_text("echo STALE_AUTHORITY_LOADED >&2\nexit 93\n")
+    for relative in (
+        "ci/export-hosted-instance-env.sh",
+        "qa/run-prod-e2e.sh",
+        "qa/hosted-shipper-mixed-bench.sh",
+        "qa/smoke-prod.sh",
+        "qa/qa-live.sh",
+        "qa/render-canary.sh",
+    ):
+        target = root / "scripts" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(scripts / relative, target)
+        environment = {"PATH": os.environ["PATH"]}
+        local = subprocess.run(
+            ["bash", str(target)], env=environment, capture_output=True, timeout=10
+        )
+        assert local.returncode == 93, (relative, local.stderr)
+        ci = subprocess.run(
+            ["bash", str(target)], env={**environment, "CI": "true"},
+            capture_output=True, timeout=10,
+        )
+        assert ci.returncode != 93, (relative, ci.stderr)
+        assert b"STALE_AUTHORITY_LOADED" not in ci.stderr, (relative, ci.stderr)
+
+    # Make runs before these scripts and must preserve the same authority.
+    (root / ".env").write_text("CONTROL_PLANE_URL=stale-checkout\n")
+    probe = root / "authority.mk"
+    probe.write_text('authority-probe:\n\t@printf "%s\\n" "$$CONTROL_PLANE_URL"\n')
+    command = [
+        "make", "--no-print-directory", "-f", str(scripts.parent / "Makefile"),
+        "-f", str(probe), "authority-probe",
+    ]
+    environment = {"PATH": os.environ["PATH"], "CONTROL_PLANE_URL": "workflow-authority"}
+    local = subprocess.run(
+        command, cwd=root, env=environment, capture_output=True, check=True, timeout=10
+    )
+    assert local.stdout.strip() == b"stale-checkout", local.stdout
+    ci = subprocess.run(
+        command, cwd=root, env={**environment, "CI": "true"},
+        capture_output=True, check=True, timeout=10,
+    )
+    assert ci.stdout.strip() == b"workflow-authority", ci.stdout
+PY
 
 echo "hosted-instance auth tests passed"

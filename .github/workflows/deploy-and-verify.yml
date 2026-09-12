@@ -225,9 +225,9 @@ jobs:
       frontend_url: ${{ steps.instance.outputs.frontend_url }}
       api_url: ${{ steps.instance.outputs.api_url }}
     env:
-      CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
-      CONTROL_PLANE_URL: https://control.longhouse.ai
-      INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN || 'demo' }}
+      CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.HOSTED_CANARY_CONTROL_PLANE_ADMIN_TOKEN }}
+      CONTROL_PLANE_URL: ${{ vars.HOSTED_CANARY_CONTROL_PLANE_URL }}
+      INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -236,6 +236,15 @@ jobs:
           fetch-depth: 1
           filter: blob:none
           show-progress: false
+
+      - name: Require isolated canary authority
+        run: |
+          . scripts/lib/hosted-instance.sh
+          lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN INSTANCE_SUBDOMAIN
+          if [[ "${INSTANCE_SUBDOMAIN,,}" == "david010" || "${INSTANCE_SUBDOMAIN,,}" == "demo" ]]; then
+            echo "Refusing automated reprovision of personal dogfood or public demo; configure a dedicated hosted canary." >&2
+            exit 1
+          fi
 
       - name: Wait for runtime image publish
         if: ${{ needs.changes.outputs.runtime_image == 'true' }}
@@ -251,12 +260,6 @@ jobs:
       - name: Wait for control plane
         run: ./scripts/ci/wait-for-http.sh "$CONTROL_PLANE_URL/health" "Control plane"
 
-      - name: Reject personal dogfood as automated canary
-        run: |
-          if [[ "${INSTANCE_SUBDOMAIN,,}" == "david010" ]]; then
-            echo "Refusing automated canary reprovision of the personal dogfood tenant; configure HOSTED_CANARY_SUBDOMAIN (demo is the dedicated default)." >&2
-            exit 1
-          fi
 
       - name: Resolve hosted canary instance
         id: instance
@@ -282,10 +285,11 @@ jobs:
     timeout-minutes: 20
     needs: [gate, deploy_demo, reprovision_canary]
     env:
-      CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
-      CONTROL_PLANE_URL: https://control.longhouse.ai
+      CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.HOSTED_CANARY_CONTROL_PLANE_ADMIN_TOKEN }}
+      CONTROL_PLANE_URL: ${{ vars.HOSTED_CANARY_CONTROL_PLANE_URL }}
+      SMOKE_RUNTIME_TOKEN: ${{ secrets.HOSTED_CANARY_RUNTIME_TOKEN }}
       PUBLIC_DEMO_URL: https://longhouse.ai
-      INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN || 'demo' }}
+      INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
       API_URL: ${{ needs.reprovision_canary.outputs.api_url }}
       FRONTEND_URL: ${{ needs.reprovision_canary.outputs.frontend_url }}
       INSTANCE_URL: ${{ needs.reprovision_canary.outputs.instance_url }}
@@ -306,7 +310,10 @@ jobs:
 
       - name: Run fast smoke tests
         id: fast_smoke
-        run: ./scripts/qa/smoke-prod.sh --fast --no-llm
+        run: |
+          . scripts/lib/hosted-instance.sh
+          lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN INSTANCE_SUBDOMAIN SMOKE_RUNTIME_TOKEN
+          ./scripts/qa/smoke-prod.sh --fast --no-llm
 
       - name: Summary
         if: always()

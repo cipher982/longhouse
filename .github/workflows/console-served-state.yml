@@ -44,8 +44,9 @@ jobs:
       # else. Getting this wrong is silent -- it produced six "provider
       # unavailable" results that looked like a broken product and were really
       # an unauthenticated client.
-      LONGHOUSE_MACHINE_TOKEN: ${{ secrets.LONGHOUSE_DEVICE_TOKEN }}
-      LONGHOUSE_API_URL: https://${{ vars.HOSTED_CANARY_SUBDOMAIN || 'david010' }}.longhouse.ai
+      LONGHOUSE_MACHINE_TOKEN: ${{ secrets.HOSTED_CANARY_RUNTIME_TOKEN }}
+      INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
+      LONGHOUSE_API_URL: https://${{ vars.HOSTED_CANARY_SUBDOMAIN }}.longhouse.ai
       # "all" enumerates every connected machine and asks each only about the
       # providers it advertises. Pinning one device is how a second machine rots
       # unnoticed: the always-on box sat with a dead Claude credential while this
@@ -56,11 +57,38 @@ jobs:
       # THERE. The harness default is derived from the caller's home, which on a
       # CI runner is a path the machine has never heard of -- every turn came
       # back state=failed until this was explicit.
-      CONSOLE_QA_CWD: ${{ vars.CONSOLE_QA_CWD || '/Users/davidrose/git/zerg' }}
+      CONSOLE_QA_CWD: ${{ vars.CONSOLE_QA_CWD }}
+      CONSOLE_QA_PROVIDER: ${{ inputs.provider || 'all' }}
       QA_HOME: /tmp/console-served-state-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Validate isolated canary configuration
+        run: |
+          set -euo pipefail
+          case "${INSTANCE_SUBDOMAIN,,}" in
+            ""|david010|demo)
+              echo "::error::Configure a dedicated HOSTED_CANARY_SUBDOMAIN; refusing personal dogfood or demo." >&2
+              exit 1
+              ;;
+          esac
+          if [[ -z "$LONGHOUSE_MACHINE_TOKEN" ]]; then
+            echo "::error::Missing HOSTED_CANARY_RUNTIME_TOKEN; refusing unauthenticated Console coverage." >&2
+            exit 1
+          fi
+          if [[ -z "$CONSOLE_QA_CWD" || ! "$CONSOLE_QA_CWD" =~ ^/[A-Za-z0-9_./-]+$ ]]; then
+            echo "::error::CONSOLE_QA_CWD must be an explicit absolute canary-machine path." >&2
+            exit 1
+          fi
+          if [[ ! "$CONSOLE_QA_PROVIDER" =~ ^[A-Za-z0-9_-]+$ ]]; then
+            echo "::error::Console provider input contains unsafe characters." >&2
+            exit 1
+          fi
+          if [[ ! "$LONGHOUSE_DEVICE_ID" =~ ^[A-Za-z0-9_.:-]+$ ]]; then
+            echo "::error::Console device target contains unsafe characters." >&2
+            exit 1
+          fi
 
       - name: Set up Python
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
@@ -82,7 +110,7 @@ jobs:
           fi
           set +e
           make test-console-served-state-e2e \
-            ARGS="--provider ${{ github.event.inputs.provider || 'all' }} --device-id $LONGHOUSE_DEVICE_ID --cwd $CONSOLE_QA_CWD --json-out $GITHUB_WORKSPACE/console-served-state.json"
+            ARGS="--provider $CONSOLE_QA_PROVIDER --device-id $LONGHOUSE_DEVICE_ID --cwd $CONSOLE_QA_CWD --json-out $GITHUB_WORKSPACE/console-served-state.json"
           set -e
           # Red and unqualified are different facts and must not share an exit
           # code. Red means a Console turn broke on a machine that could run it.

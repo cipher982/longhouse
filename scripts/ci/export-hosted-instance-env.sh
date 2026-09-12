@@ -3,7 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-if [[ -f "$ROOT_DIR/.env" ]]; then
+# A persistent runner's checkout must never override workflow authority.
+if [[ -z "${CI:-}" && -f "$ROOT_DIR/.env" ]]; then
   set -a
   # shellcheck disable=SC1090
   . "$ROOT_DIR/.env"
@@ -16,6 +17,9 @@ if [[ ! -f "$HOSTED_INSTANCE_HELPER" ]]; then
   exit 1
 fi
 
+# Require the canary authority before the shared helper supplies manual CLI defaults.
+: "${CONTROL_PLANE_URL:?Set CONTROL_PLANE_URL explicitly for hosted CI}"
+
 # shellcheck disable=SC1090
 . "$HOSTED_INSTANCE_HELPER"
 
@@ -25,6 +29,15 @@ if [[ -z "$INSTANCE_SUBDOMAIN" ]]; then
   echo "Set INSTANCE_SUBDOMAIN or pass it as the first argument." >&2
   exit 1
 fi
+
+case "${INSTANCE_SUBDOMAIN,,}" in
+  david010|demo)
+    echo "Hosted CI requires a dedicated canary, not personal dogfood or public demo." >&2
+    exit 1
+    ;;
+esac
+
+lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN
 
 lh_hosted_prepare_target "$INSTANCE_SUBDOMAIN" "" ""
 

@@ -49,6 +49,13 @@ descendant_pids() {
   done
 }
 
+process_is_alive() {
+  local pid="$1" state
+  kill -0 "$pid" 2>/dev/null || return 1
+  state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+  [[ "$state" != Z* && "$state" != X* ]]
+}
+
 retain_failure_diagnostics() {
   local reason="$1" file name
   mkdir -p "$ROOT_DIR/artifacts/reliability-kernel" || return 0
@@ -74,7 +81,7 @@ retain_failure_diagnostics() {
 # exit trap. The watchdog bounds that without hiding a slow shutdown, because
 # a child that needed the SIGKILL still took the full grace period.
 stop_child() {
-  local pid="$1" label="${2:-child}" watchdog descendants child
+  local pid="$1" label="${2:-child}" watchdog descendants child remaining
   [[ -n "$pid" ]] || return 0
   descendants="$(descendant_pids "$pid")"
   for child in $descendants; do
@@ -95,19 +102,16 @@ stop_child() {
   kill "$watchdog" 2>/dev/null || true
   wait "$watchdog" 2>/dev/null || true
   for child in $descendants; do
-    if kill -0 "$child" 2>/dev/null; then
+    if process_is_alive "$child"; then
       kill -9 "$child" 2>/dev/null || true
     fi
   done
-  # SIGKILL is asynchronous from the kernel's point of view. Give reparented
-  # descendants a short bounded window to disappear before declaring cleanup
-  # failed; otherwise a process that exits immediately after this check turns a
-  # successful proof into a false cleanup failure.
-  local remaining=0
+  # SIGKILL is asynchronous for descendants we do not own as direct children.
+  # Give the kernel a bounded observation window before declaring teardown done.
   for _ in $(seq 1 50); do
     remaining=0
     for child in $descendants; do
-      if kill -0 "$child" 2>/dev/null; then
+      if process_is_alive "$child"; then
         remaining=1
         break
       fi
@@ -116,7 +120,7 @@ stop_child() {
     sleep 0.1
   done
   for child in $descendants; do
-    if kill -0 "$child" 2>/dev/null; then
+    if process_is_alive "$child"; then
       echo "warning: $label left owned descendant $child running" >&2
       CLEANUP_FAILURE=1
     fi
@@ -280,24 +284,32 @@ json_field() {
   python3 -c 'import sys, json; d=json.load(sys.stdin); v=d.get(sys.argv[1]); print("" if v is None else v)' "$1"
 }
 
-served_session_facts() {
-  curl -fsS "$BASE_URL/api/agents/sessions/$1/workspace?limit=1" \
-    -H "X-Agents-Token: $DEVICE_TOKEN"
-}
-
-served_session_terminal_state() {
-  # Ended control-only Helms intentionally have no storage workspace after
-  # their lease is withdrawn. Inspect canonical state diagnostics instead of
-  # treating that expected 404 as a missing terminal event.
-  curl -fsS "$BASE_URL/api/agents/sessions/$1/state-diagnostics" \
-    -H "X-Agents-Token: $DEVICE_TOKEN" \
-    | python3 -c '
-import json, sys
-diagnostics = json.load(sys.stdin)
-run = (diagnostics.get("shadow") or {}).get("run") or {}
-if run.get("lifecycle") == "ended":
-    print("session_ended")
-'
+canonical_owned_run_state() {
+  local session_id="$1"
+  sqlite3 "$TEST_ROOT/longhouse-live.db" "
+    SELECT COALESCE((
+      SELECT CASE
+        WHEN run.ended_at IS NULL THEN 'run_open'
+        WHEN EXISTS (
+          SELECT 1
+          FROM live_session_connections AS conn
+          WHERE conn.run_id = run.id
+            AND conn.released_at IS NULL
+            AND conn.state IN ('attached', 'degraded', 'detached')
+        ) THEN 'owned_connection_open'
+        ELSE 'run_ended'
+      END
+      FROM live_session_runs AS run
+      WHERE run.id = (
+        SELECT attempt.run_id
+        FROM live_session_launch_attempts AS attempt
+        WHERE attempt.session_id = '$session_id'
+          AND attempt.run_id IS NOT NULL
+        ORDER BY attempt.id DESC
+        LIMIT 1
+      )
+    ), 'unknown');
+  "
 }
 
 launch_attempt_state() {
@@ -315,7 +327,9 @@ wait_for_value() {
   shift 3
   local deadline=$((SECONDS + timeout_secs)) value=""
   while ((SECONDS < deadline)); do
-    value="$("$@" 2>/dev/null || true)"
+    if ! value="$("$@")"; then
+      fail "$description observation command failed"
+    fi
     if [[ "$value" == "$expected" ]]; then
       return 0
     fi
@@ -997,9 +1011,9 @@ codex_interrupt="$(post_live_action "$codex_control_session_id" interrupt)" \
   || fail "Runtime Host did not dispatch the Codex interrupt: $codex_interrupt"
 "$BIN_DIR/longhouse" codex stop --session-id "$codex_control_session_id" \
   || fail "Codex control-cycle cleanup failed"
-wait_for_value "Codex served terminal state" session_ended 20 \
-  served_session_terminal_state "$codex_control_session_id"
-echo "ok: Codex send, interrupt, and served session state reached terminal"
+wait_for_value "Codex canonical owned run" run_ended 20 \
+  canonical_owned_run_state "$codex_control_session_id"
+echo "ok: Codex send, interrupt, and canonical owned run reached terminal"
 
 opencode_send="$(send_live "$opencode_control_session_id" 'OPENCODE_LIFECYCLE_CONTROL')" \
   || fail "Runtime Host failed to send through the OpenCode bridge"
@@ -1013,9 +1027,9 @@ opencode_terminate="$(post_live_action "$opencode_control_session_id" terminate)
   || fail "Runtime Host failed to terminate the OpenCode bridge"
 [[ "$(printf '%s' "$opencode_terminate" | json_field terminate_dispatched)" == "True" ]] \
   || fail "Runtime Host did not dispatch OpenCode termination: $opencode_terminate"
-wait_for_value "OpenCode served terminal state" session_ended 20 \
-  served_session_terminal_state "$opencode_control_session_id"
-echo "ok: OpenCode send, interrupt, terminate, and served session state reached terminal"
+wait_for_value "OpenCode canonical owned run" run_ended 20 \
+  canonical_owned_run_state "$opencode_control_session_id"
+echo "ok: OpenCode send, interrupt, terminate, and canonical owned run reached terminal"
 
 claude_send="$(send_live "$claude_control_session_id" 'CLAUDE_LIFECYCLE_CONTROL')" \
   || fail "Runtime Host failed to send through the Claude channel"
@@ -1029,9 +1043,9 @@ claude_provider_pid="$(python3 -c 'import json,sys; print(json.load(open(sys.arg
 kill -TERM "$claude_provider_pid" || fail "could not stop the Claude control-cycle provider"
 wait "$CLAUDE_CONTROL_PID" || fail "Claude control-cycle facade did not exit cleanly"
 CLAUDE_CONTROL_PID=""
-wait_for_value "Claude served terminal state" session_ended 20 \
-  served_session_terminal_state "$claude_control_session_id"
-echo "ok: Claude send, interrupt, and served session state reached terminal"
+wait_for_value "Claude canonical owned run" run_ended 20 \
+  canonical_owned_run_state "$claude_control_session_id"
+echo "ok: Claude send, interrupt, and canonical owned run reached terminal"
 
 cursor_send="$(send_live "$cursor_control_session_id" 'CURSOR_LIFECYCLE_CONTROL')" \
   || fail "Runtime Host failed to send through Cursor Helm"
@@ -1052,9 +1066,9 @@ set -e
 CURSOR_CONTROL_PID=""
 [[ "$cursor_control_status" == "137" ]] \
   || fail "Cursor terminate returned unexpected facade status $cursor_control_status"
-wait_for_value "Cursor served terminal state" session_ended 20 \
-  served_session_terminal_state "$cursor_control_session_id"
-echo "ok: Cursor send, interrupt, terminate, and served session state reached terminal"
+wait_for_value "Cursor canonical owned run" run_ended 20 \
+  canonical_owned_run_state "$cursor_control_session_id"
+echo "ok: Cursor send, interrupt, terminate, and canonical owned run reached terminal"
 
 # ---------------------------------------------------------------------------
 # 4. A non-zero provider exit propagates rather than being swallowed.
