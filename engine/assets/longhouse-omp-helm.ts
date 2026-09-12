@@ -294,6 +294,7 @@ export default function (pi: any) {
 
   pi.on("session_start", async (event: Frame, ctx: any) => {
     shuttingDown = false;
+    lastAgentEndTerminal = undefined;
     if (socket) close();
     await connectChannel(ctx);
     lifecycle("session_start", event, ctx);
@@ -311,12 +312,18 @@ export default function (pi: any) {
     const completed = await waitForReplacement("session_before_switch", event, ctx);
     return completed ? undefined : { cancel: true };
   });
-  pi.on("session_switch", async (event: Frame, ctx: any) => lifecycle("session_switch", event, ctx));
+  pi.on("session_switch", async (event: Frame, ctx: any) => {
+    lastAgentEndTerminal = undefined;
+    lifecycle("session_switch", event, ctx);
+  });
   pi.on("session_before_branch", async (event: Frame, ctx: any) => {
     const completed = await waitForReplacement("session_before_branch", event, ctx);
     return completed ? undefined : { cancel: true };
   });
-  pi.on("session_branch", async (event: Frame, ctx: any) => lifecycle("session_branch", event, ctx));
+  pi.on("session_branch", async (event: Frame, ctx: any) => {
+    lastAgentEndTerminal = undefined;
+    lifecycle("session_branch", event, ctx);
+  });
   pi.on("session_shutdown", async (event: Frame, ctx: any) => {
     shuttingDown = true;
     if (reconnectTimer) clearTimeout(reconnectTimer);
