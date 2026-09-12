@@ -111,11 +111,30 @@ final class WebTranscriptScrollPinningTests: XCTestCase {
         // became unpinned in the first place".
         coordinator.scrollViewWillBeginDragging(webView.scrollView)
         webView.scrollView.setContentOffset(.zero, animated: false)
+        // Mutating UIScrollView directly does not update the document's scrollY.
+        // A real drag updates both sides through WebKit's scroll bridge; without
+        // mirroring that event here, WebKit restores its still-bottom DOM offset
+        // on the next viewport change and hides the native behavior under test.
+        _ = try await evaluate("window.scrollTo(0, 0); 1")
+        try await settle()
         coordinator.scrollViewDidEndDragging(webView.scrollView, willDecelerate: false)
         try await settle()
         XCTAssertFalse(
             coordinator.isStickingToBottomForTesting,
             "precondition: the simulated drag must have cleared the native stick-to-bottom intent"
+        )
+        XCTAssertEqual(
+            webView.scrollView.contentOffset.y,
+            0,
+            accuracy: 1,
+            "precondition: the simulated drag must leave native content at the requested older-message position"
+        )
+        let domOffset = try await number("window.scrollY")
+        XCTAssertEqual(
+            domOffset,
+            0,
+            accuracy: 1,
+            "precondition: the simulated drag must update the document scroll position too"
         )
 
         try await resizeViewport(height: 240)
