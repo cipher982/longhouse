@@ -29,9 +29,21 @@ def main() -> None:
     )
     for key in ("HOME", "TMPDIR", "LONGHOUSE_HOME"):
         Path(os.environ[key]).mkdir(parents=True, exist_ok=True)
+    Path("/work/artifacts").mkdir(parents=True, exist_ok=True)
     Path("/tmp/longhouse-test-isolated").touch()
     subprocess.run(["git", "init", "-q"], check=True)
-    subprocess.run(["git", "add", "--all"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "--literal-pathspecs",
+            "add",
+            "--force",
+            "--pathspec-from-file=/tmp/test-source-files",
+            "--pathspec-file-nul",
+        ],
+        check=True,
+    )
+    Path("/tmp/test-source-files").unlink()
     subprocess.run(
         [
             "git",

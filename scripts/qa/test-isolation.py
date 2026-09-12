@@ -20,13 +20,18 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 LABEL = "ai.longhouse.test-isolation"
-# Test selection and bounded tuning only. Never forward arbitrary Make variables:
-# HOME=..., SHELL=..., MAKEFLAGS=..., auth, URLs and binary overrides are authority.
+OWNER_LABEL = LABEL + ".owner"
+DEADLINE_LABEL = LABEL + ".deadline"
+OWNER = hashlib.sha256(str(ROOT).encode()).hexdigest()[:20]
+# Test selection, bounded tuning, and explicitly remapped artifact destinations.
+# Never forward arbitrary Make variables: HOME=..., SHELL=..., MAKEFLAGS=...,
+# auth, URLs, and binary overrides are authority.
 OPTIONS = {
     "TEST",
     "MODE",
@@ -38,6 +43,19 @@ OPTIONS = {
     "PLAYWRIGHT_WORKERS",
     "IOS_TEST_SCHEMES",
     "PROJECT",
+    "UNIVERSAL_PROVIDER",
+    "STORE_ROOT",
+    "BUNDLE_OUTPUT",
+    "ARTIFACT",
+    "EVIDENCE_ROOT",
+}
+MAKE_ASSIGNMENTS = {
+    "ARGS",
+    "UNIVERSAL_PROVIDER",
+    "STORE_ROOT",
+    "BUNDLE_OUTPUT",
+    "ARTIFACT",
+    "EVIDENCE_ROOT",
 }
 NATIVE = {
     "test-ios",
@@ -76,9 +94,20 @@ LIVE = {
     "provider-release-proof-universal-live-smoke",
     "provider-live-route-e2e",
     "provider-live-route-e2e-opencode-transcript",
+    "hosted-shipper-mixed-bench",
+    "render-canary",
+    "cohort-journey",
     "qa-live",
     "qa-unmanaged",
     "qa-landing-live",
+}
+ANONYMOUS_LIVE = {"qa-landing-live"}
+FIXTURE_SETTINGS = {
+    "UNIVERSAL_PROVIDER",
+    "STORE_ROOT",
+    "BUNDLE_OUTPUT",
+    "ARTIFACT",
+    "EVIDENCE_ROOT",
 }
 MANIFESTS = (
     "docker/test.dockerfile",
@@ -209,6 +238,56 @@ def source_archive(scratch: Path) -> Path:
     return archive
 
 
+ARTIFACT_OPTIONS = {
+    "STORE_ROOT",
+    "BUNDLE_OUTPUT",
+    "ARTIFACT",
+    "EVIDENCE_ROOT",
+    "LONGHOUSE_JOURNEY_OUTPUT",
+}
+
+
+def guest_artifact_path(value: str) -> str:
+    if "\x00" in value:
+        raise ValueError("artifact path contains NUL")
+    path = Path(value)
+    if path.is_absolute():
+        relative = Path(path.name)
+    else:
+        relative = path
+        if not relative.parts or ".." in relative.parts:
+            raise ValueError("artifact path must not escape its guest root")
+    if relative == Path(".") or not relative.name:
+        raise ValueError("artifact path must name an artifact")
+    return str(Path("/work/artifacts") / relative)
+
+
+def container_options(options: dict[str, str]) -> dict[str, str]:
+    result = dict(options)
+    for key in ARTIFACT_OPTIONS:
+        if key in result and result[key]:
+            result[key] = guest_artifact_path(result[key])
+    return result
+
+
+def make_command(args: argparse.Namespace, options: dict[str, str]) -> list[str]:
+    if args.command is not None:
+        return list(args.command)
+    command = ["make", args.target]
+    for key in (
+        "ARGS",
+        "UNIVERSAL_PROVIDER",
+        "STORE_ROOT",
+        "BUNDLE_OUTPUT",
+        "ARTIFACT",
+        "EVIDENCE_ROOT",
+    ):
+        value = options.get(key)
+        if value:
+            command.append(f"{key}={value}")
+    return command
+
+
 def test_environment(run_id: str, options: dict[str, str]) -> dict[str, str]:
     home = "/tmp/longhouse-test/home"
     env = {
@@ -259,13 +338,18 @@ def load_credentials(path: Path) -> dict[str, str]:
         "CURSOR_API_KEY",
         "CLAUDE_CODE_OAUTH_TOKEN",
         "LONGHOUSE_MACHINE_TOKEN",
+        "CONTROL_PLANE_ADMIN_TOKEN",
+        "SMOKE_RUNTIME_TOKEN",
+        "LONGHOUSE_CANARY_TOKEN",
+        "LONGHOUSE_JOURNEY_LEXICAL_QUERY",
+        "LONGHOUSE_JOURNEY_RECALL_QUERY",
     }
     if any(
         key not in allowed or not isinstance(value, str) or not value
         for key, value in data.items()
     ):
         raise ValueError(
-            "credential JSON accepts only explicit provider keys and a Longhouse machine token"
+            "credential JSON accepts only explicit provider, hosted-QA, and journey keys"
         )
     return data
 
@@ -300,6 +384,95 @@ def collect_artifacts(name: str, scratch: Path, destination: Path) -> None:
                     shutil.copyfileobj(data, output)
 
 
+def reap_stale_owned_containers(now: float | None = None) -> None:
+    """Remove only this worktree's containers whose supervisor deadline passed."""
+    listed = docker(
+        "ps",
+        "--all",
+        "--quiet",
+        "--filter",
+        f"label={LABEL}",
+        "--filter",
+        f"label={OWNER_LABEL}={OWNER}",
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if listed.returncode:
+        return
+    current = time.time() if now is None else now
+    for container_id in listed.stdout.splitlines():
+        inspected = docker(
+            "inspect",
+            "--format",
+            "{{json .}}",
+            container_id,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if inspected.returncode:
+            continue
+        try:
+            payload = json.loads(inspected.stdout)
+            labels = payload["Config"]["Labels"] or {}
+            deadline = float(labels[DEADLINE_LABEL])
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if labels.get(OWNER_LABEL) != OWNER or not (0 < deadline <= current):
+            continue
+        name = str(payload.get("Name") or "").lstrip("/")
+        run_id = str(labels.get(LABEL, ""))
+        if (
+            not re.fullmatch(r"[0-9a-f]{32}", run_id)
+            or name != f"longhouse-test-{run_id}"
+        ):
+            continue
+        receipt_dir = ROOT / "artifacts" / "test-isolation" / run_id
+        try:
+            if payload.get("State", {}).get("Running"):
+                docker(
+                    "stop",
+                    "--time",
+                    "5",
+                    name,
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            if receipt_dir.is_dir():
+                with tempfile.TemporaryDirectory(prefix="longhouse-stale-") as temp:
+                    collect_artifacts(name, Path(temp), receipt_dir / "files")
+        finally:
+            docker(
+                "rm",
+                "--force",
+                name,
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            remaining = docker(
+                "ps",
+                "--all",
+                "--quiet",
+                "--filter",
+                f"id={container_id}",
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            cleaned = remaining.returncode == 0 and not remaining.stdout.strip()
+            receipt_path = receipt_dir / "receipt.json"
+            if receipt_path.is_file():
+                stale_receipt = json.loads(receipt_path.read_text())
+                stale_receipt["stale_reaped"] = cleaned
+                stale_receipt["cleanup"] = cleaned
+                receipt_path.write_text(json.dumps(stale_receipt, indent=2) + "\n")
+            if not cleaned:
+                raise RuntimeError(f"stale owned container cleanup failed: {name}")
+
+
 def run_container(args: argparse.Namespace, options: dict[str, str]) -> int:
     if shutil.which("docker") is None:
         raise RuntimeError(
@@ -309,27 +482,37 @@ def run_container(args: argparse.Namespace, options: dict[str, str]) -> int:
         raise ValueError(
             f"{args.target} is a live proof. Use --live --image IMAGE --credentials PRIVATE_JSON --target {args.target}; no host-login fallback"
         )
-    if args.live and (not args.image or not args.credentials):
+    if args.live and not args.image:
         raise ValueError(
-            "live proofs require both an explicit provider image and private credential JSON"
+            "live proofs require an explicit provider image; prepare it separately with --prepare"
+        )
+    if args.live and args.target not in ANONYMOUS_LIVE and not args.credentials:
+        raise ValueError(
+            f"{args.target} requires explicit private credential JSON; anonymous live targets may omit --credentials"
         )
     if not args.live and (args.image or args.credentials):
         raise ValueError(
             "custom images and credentials require the explicit --live lane"
         )
-    credentials = load_credentials(args.credentials) if args.live else {}
+    credentials = load_credentials(args.credentials) if args.credentials else {}
+    options = container_options(options)
     run_id = uuid.uuid4().hex
     name = "longhouse-test-" + run_id
+    deadline = time.time() + args.timeout + 20
     receipt_dir = ROOT / "artifacts" / "test-isolation" / run_id
     receipt_dir.mkdir(parents=True, mode=0o700)
     receipt = {
         "run_id": run_id,
         "container": name,
+        "owner": OWNER,
+        "deadline": deadline,
         "target": args.target,
         "lane": "live" if args.live else "fixture",
         "network": "bridge" if args.live else "none",
         "cleanup": False,
     }
+    options.setdefault("ARTIFACT", f"/work/artifacts/{args.target}.json")
+    options.setdefault("EVIDENCE_ROOT", f"/work/artifacts/{args.target}")
     child = None
     scratch = Path(tempfile.mkdtemp(prefix="longhouse-test-"))
     previous_handlers = {}
@@ -344,6 +527,7 @@ def run_container(args: argparse.Namespace, options: dict[str, str]) -> int:
         previous_handlers[sig] = signal.signal(sig, interrupt)
     try:
         configure_docker(scratch)
+        reap_stale_owned_containers()
         image = args.image or prepare_image(scratch)
         receipt["image"] = image
         archive = source_archive(scratch)
@@ -353,16 +537,24 @@ def run_container(args: argparse.Namespace, options: dict[str, str]) -> int:
             ).hexdigest()
         (receipt_dir / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
         env = test_environment(run_id, options)
-        # The image entrypoint is ignored. Only this explicit configuration enters
-        # the child; credentials never appear in Docker argv or container config.
-        env.update(credentials)
-        env["LONGHOUSE_TEST_COMMAND"] = json.dumps(
-            args.command or ["make", args.target]
-        )
+        env["LONGHOUSE_TEST_COMMAND"] = json.dumps(make_command(args, options))
         env_file = scratch / "configuration.tar"
         with tarfile.open(env_file, "w") as archive_config:
             data = json.dumps(env).encode()
             member = tarfile.TarInfo("test-env.json")
+            member.size = len(data)
+            member.mode = 0o600
+            archive_config.addfile(member, io.BytesIO(data))
+            with tarfile.open(archive) as snapshot:
+                data = (
+                    b"\0".join(
+                        os.fsencode(member.name)
+                        for member in snapshot
+                        if not member.isdir()
+                    )
+                    + b"\0"
+                )
+            member = tarfile.TarInfo("test-source-files")
             member.size = len(data)
             member.mode = 0o600
             archive_config.addfile(member, io.BytesIO(data))
@@ -373,7 +565,10 @@ def run_container(args: argparse.Namespace, options: dict[str, str]) -> int:
             name,
             "--label",
             f"{LABEL}={run_id}",
-            "--init",
+            "--label",
+            f"{OWNER_LABEL}={OWNER}",
+            "--label",
+            f"{DEADLINE_LABEL}={deadline:.6f}",
             "--network",
             receipt["network"],
             "--cap-drop",
@@ -489,7 +684,23 @@ def run_native(args: argparse.Namespace, options: dict[str, str]) -> int:
         scratch = Path(temp)
         config = scratch / "options.json"
         config.write_text(
-            json.dumps({key: value for key, value in options.items() if value})
+            json.dumps(
+                {
+                    key: value
+                    for key, value in options.items()
+                    if value
+                    and key
+                    in {
+                        "TEST",
+                        "MODE",
+                        "SCENARIOS",
+                        "CARGO_PROFILE",
+                        "VERBOSE",
+                        "IOS_TEST_SCHEMES",
+                        "PROJECT",
+                    }
+                }
+            )
         )
         artifacts = ROOT / "artifacts" / "test-isolation" / uuid.uuid4().hex
         native = runpy.run_path(str(ROOT / "scripts/qa/native-test-isolation.py"))
@@ -520,7 +731,7 @@ def main() -> int:
         action="append",
         default=[],
         metavar="KEY=VALUE",
-        help="explicit live-proof settings; never inherited from the host",
+        help="explicit proof settings; fixture mode accepts only selection/output keys",
     )
     parser.add_argument(
         "--command",
@@ -539,19 +750,31 @@ def main() -> int:
     for setting in args.set:
         key, separator, value = setting.partition("=")
         if (
-            not args.live
+            (not args.live and key not in FIXTURE_SETTINGS)
             or not separator
             or key
             not in {
                 "ARGS",
+                "UNIVERSAL_PROVIDER",
+                "STORE_ROOT",
+                "BUNDLE_OUTPUT",
+                "ARTIFACT",
+                "EVIDENCE_ROOT",
                 "LONGHOUSE_API_URL",
                 "LONGHOUSE_DEVICE_ID",
                 "PLAYWRIGHT_BASE_URL",
                 "PLAYWRIGHT_API_BASE_URL",
+                "CONTROL_PLANE_URL",
+                "QA_INSTANCE_SUBDOMAIN",
+                "INSTANCE_SUBDOMAIN",
+                "CONSOLE_QA_PROVIDER",
+                "CONSOLE_QA_CWD",
+                "LONGHOUSE_JOURNEY_TARGET_LABEL",
+                "LONGHOUSE_JOURNEY_OUTPUT",
             }
         ):
             parser.error(
-                "--set requires --live and an explicit proof setting (ARGS, runtime URL/device, browser/API URL)"
+                "--set requires an explicit allowlisted setting; URLs and credentials require --live"
             )
         options[key] = value
     if args.timeout <= 0:

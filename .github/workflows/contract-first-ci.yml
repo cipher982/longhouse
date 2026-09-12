@@ -126,8 +126,8 @@ jobs:
         timeout-minutes: 3
         run: |
           make provider-capability-coordination-proof \
-            STORE_ROOT="$GITHUB_WORKSPACE/.build/canaries/provider-capability-proof/store" \
-            BUNDLE_OUTPUT="$GITHUB_WORKSPACE/.build/canaries/provider-capability-proof/bundle.json" \
+            STORE_ROOT="/work/artifacts/provider-capability-proof/store" \
+            BUNDLE_OUTPUT="/work/artifacts/provider-capability-proof/bundle.json" \
             PRODUCER_CLASS=release_ci \
             INVOCATION_ID="${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
             RUN_REFERENCE="github-actions://${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}" \
@@ -139,7 +139,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: provider-capability-proof-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .build/canaries/provider-capability-proof/**
+          path: artifacts/test-isolation/**/files/1/provider-capability-proof/**
           if-no-files-found: error
           retention-days: 14
 
@@ -149,8 +149,8 @@ jobs:
         with:
           name: provider-release-proof-validation-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            .build/canaries/provider-release-proof-universal-smoke/**
-            artifacts/reliability-kernel/managed-launch-lifecycle-failure.*/**
+            artifacts/test-isolation/**/files/1/provider-release-proof-universal-smoke/**
+            artifacts/test-isolation/**/files/1/reliability-kernel/managed-launch-lifecycle-failure.*/**
           if-no-files-found: ignore
           retention-days: 7
 

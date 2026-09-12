@@ -121,7 +121,7 @@ def main() -> int:
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip(),
         "lane": "github-standard-macos",
-        "network": "loopback-only",
+        "network": "github-hosted",
         "cleanup": False,
     }
 
@@ -131,8 +131,8 @@ def main() -> int:
     try:
         for sig in (signal.SIGINT, signal.SIGTERM):
             handlers[sig] = signal.signal(sig, interrupt)
-        # Resolve dependencies before disabling test egress. No provider secrets or
-        # login state enter either phase; this entire VM is discarded after the job.
+        # Resolve dependencies before setting package managers offline. No provider
+        # secrets or login state enter this VM; it is discarded after the job.
         if args.target in {
             "test-mobile-chat",
             "test-mobile-chat-stress",
@@ -219,12 +219,11 @@ def main() -> int:
                 check=True,
             )
         environment.update({"CARGO_NET_OFFLINE": "true", "UV_OFFLINE": "1"})
-        # Keep native frameworks/IPC working, but deny access to hosted services.
-        # The security boundary for files, Keychain and GUI is the disposable VM.
-        profile = '(version 1)(allow default)(deny network-outbound (remote ip "*:*"))(allow network-outbound (remote ip "localhost:*"))'
+        # The disposable VM is the native isolation boundary. An outer Seatbelt
+        # sandbox breaks Xcode/SwiftPM's own sandbox during manifest evaluation.
         MARKER.touch(exist_ok=False)
         child = subprocess.Popen(
-            ["sandbox-exec", "-p", profile, "make", args.target],
+            ["make", args.target],
             cwd=ROOT,
             env=environment,
             start_new_session=True,

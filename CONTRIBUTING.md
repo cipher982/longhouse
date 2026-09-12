@@ -62,10 +62,12 @@ Run the tier that matches your change — don't over-test:
 
 Ordinary `test-*`, `validate-*`, `qa-*`, and onboarding-funnel targets run
 through the disposable portable test boundary. Local runs require Docker; the
-supervisor copies a source snapshot into a container with no host mounts,
-ambient credentials, or external network access. It writes a receipt and collected
-evidence under `artifacts/test-isolation/<run-id>/`. Do not provide provider
-credentials to fixture targets.
+supervisor copies the current source into a container with no host mounts,
+ambient credentials, or external network access. Dependency preparation has
+network access and receives only the package manifests. Browser binaries come
+from the official Playwright image pinned to the version in `bun.lock`.
+Receipts and collected evidence go under `artifacts/test-isolation/<run-id>/`.
+Do not provide provider credentials to fixture targets.
 
 Backend tests go in `server/tests_lite/` (per-test SQLite DBs, no shared
 conftest). For `ios/` changes, use the native CI lane described below.
@@ -80,9 +82,12 @@ exact pushed SHA on a fresh standard GitHub-hosted macOS runner. CI invokes
 no self-hosted Mac or paid-runner substitute. Inspect the one-day CI artifact
 and its receipt when a native fixture fails.
 
-Fixture lanes never use real provider credentials. Portable live proofs require
-an explicit provider image and a private credential JSON file through
-`scripts/qa/test-isolation.py --live --image IMAGE --credentials FILE --target TARGET`.
+Fixture lanes never use real provider credentials. Live proofs require an
+explicit image through
+`scripts/qa/test-isolation.py --live --image IMAGE --target TARGET`.
+Authenticated proofs also require `--credentials FILE`, a private JSON file
+containing only the explicitly supported test credentials. Public settings use
+`--set KEY=VALUE`; neither lane imports the operator's environment.
 Private-input native proofs (`test-mobile-chat-replay` and
 `test-terminal-fidelity-ios`) are deliberately refused by public fixture CI.
 They require a separately authorized disposable macOS worker; never upload
@@ -123,8 +128,8 @@ make test-ios-helper
 
 Each verdict requires the final synthetic source reply in the server projection
 and a matching client-render acknowledgement; server-only progress cannot pass.
-Screenshots, logs, projections, timings, and failure verdicts are retained under
-the unique scratch run linked from `artifacts/simlab/current/summary.json`.
+Screenshots, logs, projections, timings, and verdicts are retained in the native
+CI artifact and downloaded beneath the run's `artifacts/test-isolation/` directory.
 Inspect the screenshots as well as the verdict. The loopback relay models
 connection loss, not cellular hardware; app termination is not iOS background
 suspension. These are hidden Shadow imports, not real provider/Console command

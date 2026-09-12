@@ -43,10 +43,31 @@ OPTIONS = {
 }
 
 
-def capture(*argv: str) -> str:
+def capture(*argv: str, timeout: float = 30) -> str:
     return subprocess.check_output(
-        argv, cwd=ROOT, text=True, start_new_session=True, timeout=30
+        argv, cwd=ROOT, text=True, start_new_session=True, timeout=timeout
     ).strip()
+
+
+def owned_run_ids(repository: str, title: str) -> list[str]:
+    runs = json.loads(
+        capture(
+            "gh",
+            "run",
+            "list",
+            "--repo",
+            repository,
+            "--workflow",
+            WORKFLOW,
+            "--event",
+            "workflow_dispatch",
+            "--limit",
+            "100",
+            "--json",
+            "databaseId,displayTitle",
+        )
+    )
+    return [str(row["databaseId"]) for row in runs if row.get("displayTitle") == title]
 
 
 def run(args: argparse.Namespace) -> int:
@@ -95,23 +116,94 @@ def run(args: argparse.Namespace) -> int:
         "target": args.target,
         "lane": "github-standard-macos",
         "run_id": None,
+        "dispatch_accepted": False,
         "cleanup": False,
     }
-    (artifacts / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+    receipt_path = artifacts / "receipt.json"
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     old_handlers = {}
     watch = None
     interrupted = 0
+    dispatch_started = False
 
     def interrupt(signum, _frame):
         nonlocal interrupted
         interrupted = signum
-        # Finish identifying an accepted dispatch before honoring cancellation.
-        if receipt["run_id"] is not None:
+        # Once dispatch has started, honor the interrupt and reconcile by the
+        # unique request ID rather than leaving an accepted run undiscovered.
+        if dispatch_started:
             raise KeyboardInterrupt
+
+    def reconcile_and_cancel() -> None:
+        deadline = time.monotonic() + 120
+        last_error = None
+        while time.monotonic() < deadline:
+            try:
+                run_ids = owned_run_ids(repository, title)
+            except Exception as exc:
+                run_ids = []
+                last_error = f"request reconciliation failed: {exc}"
+            if run_ids:
+                receipt["reconciled_run_ids"] = run_ids
+                receipt["run_id"] = run_ids[0]
+                receipt["url"] = (
+                    f"https://github.com/{repository}/actions/runs/{run_ids[0]}"
+                )
+                cancel_errors = []
+                for run_id in run_ids:
+                    try:
+                        cancel = subprocess.run(
+                            ["gh", "run", "cancel", run_id, "--repo", repository],
+                            check=False,
+                            timeout=max(1, min(30, deadline - time.monotonic())),
+                        )
+                        if cancel.returncode:
+                            cancel_errors.append(
+                                f"cancel {run_id} exited {cancel.returncode}"
+                            )
+                    except Exception as exc:
+                        cancel_errors.append(f"cancel {run_id} failed: {exc}")
+                try:
+                    results = [
+                        json.loads(
+                            capture(
+                                "gh",
+                                "run",
+                                "view",
+                                run_id,
+                                "--repo",
+                                repository,
+                                "--json",
+                                "status,conclusion",
+                                timeout=max(1, min(30, deadline - time.monotonic())),
+                            )
+                        )
+                        for run_id in run_ids
+                    ]
+                    receipt.update(results[0])
+                    if all(result["status"] == "completed" for result in results):
+                        receipt["cleanup"] = True
+                        return
+                    if cancel_errors:
+                        last_error = "; ".join(cancel_errors)
+                except Exception as exc:
+                    last_error = f"cancellation confirmation failed: {exc}"
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(min(2, deadline - time.monotonic()))
+        receipt["cleanup"] = False
+        detail = f"Cancellation unresolved for owned request {request_id}"
+        if last_error:
+            detail += f": {last_error}"
+        receipt["error"] = (
+            f"{receipt['error']}; {detail}" if receipt.get("error") else detail
+        )
+        print(receipt["error"], file=sys.stderr)
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         old_handlers[sig] = signal.signal(sig, interrupt)
     try:
+        dispatch_started = True
         subprocess.run(
             [
                 "gh",
@@ -134,29 +226,15 @@ def run(args: argparse.Namespace) -> int:
             check=True,
             cwd=ROOT,
             start_new_session=True,
+            timeout=min(args.timeout, 60),
         )
+        receipt["dispatch_accepted"] = True
+        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
-            runs = json.loads(
-                capture(
-                    "gh",
-                    "run",
-                    "list",
-                    "--repo",
-                    repository,
-                    "--workflow",
-                    WORKFLOW,
-                    "--event",
-                    "workflow_dispatch",
-                    "--limit",
-                    "100",
-                    "--json",
-                    "databaseId,displayTitle",
-                )
-            )
-            matches = [row for row in runs if row["displayTitle"] == title]
+            matches = owned_run_ids(repository, title)
             if matches:
-                receipt["run_id"] = matches[0]["databaseId"]
+                receipt["run_id"] = matches[0]
                 break
             time.sleep(2)
         if receipt["run_id"] is None:
@@ -165,7 +243,7 @@ def run(args: argparse.Namespace) -> int:
             )
         run_id = str(receipt["run_id"])
         receipt["url"] = f"https://github.com/{repository}/actions/runs/{run_id}"
-        (artifacts / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
         print(f"[native-test-isolation] {receipt['url']} source={sha}", flush=True)
         if interrupted:
             raise KeyboardInterrupt
@@ -207,45 +285,21 @@ def run(args: argparse.Namespace) -> int:
         receipt["evidence_downloaded"] = download.returncode == 0
         receipt["exit_code"] = status or download.returncode
         return receipt["exit_code"]
-    except (KeyboardInterrupt, subprocess.TimeoutExpired) as exc:
+    except KeyboardInterrupt as exc:
         for sig in old_handlers:
             signal.signal(sig, signal.SIG_IGN)
-        receipt["exit_code"] = (
-            124
-            if isinstance(exc, subprocess.TimeoutExpired)
-            else 128 + (interrupted or signal.SIGINT)
-        )
-        if receipt["run_id"]:
-            run_id = str(receipt["run_id"])
-            subprocess.run(
-                ["gh", "run", "cancel", run_id, "--repo", repository],
-                check=False,
-                timeout=30,
-            )
-            deadline = time.monotonic() + 120
-            while time.monotonic() < deadline:
-                result = json.loads(
-                    capture(
-                        "gh",
-                        "run",
-                        "view",
-                        run_id,
-                        "--repo",
-                        repository,
-                        "--json",
-                        "status,conclusion",
-                    )
-                )
-                receipt.update(result)
-                receipt["cleanup"] = result["status"] == "completed"
-                if receipt["cleanup"]:
-                    break
-                time.sleep(2)
-            if not receipt["cleanup"]:
-                receipt["error"] = (
-                    f"Cancellation unresolved; inspect {receipt.get('url', run_id)}"
-                )
-                print(receipt["error"], file=sys.stderr)
+        receipt["exit_code"] = 128 + (interrupted or signal.SIGINT)
+        receipt["error"] = str(exc) or "native isolation interrupted"
+        if dispatch_started:
+            reconcile_and_cancel()
+        return receipt["exit_code"]
+    except Exception as exc:
+        for sig in old_handlers:
+            signal.signal(sig, signal.SIG_IGN)
+        receipt["exit_code"] = 124 if isinstance(exc, subprocess.TimeoutExpired) else 2
+        receipt["error"] = str(exc)
+        if dispatch_started:
+            reconcile_and_cancel()
         return receipt["exit_code"]
     finally:
         if watch is not None and watch.poll() is None:
@@ -257,10 +311,8 @@ def run(args: argparse.Namespace) -> int:
                 watch.wait()
         for sig, handler in old_handlers.items():
             signal.signal(sig, handler)
-        (artifacts / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
-        print(
-            f"[native-test-isolation] receipt: {artifacts / 'receipt.json'}", flush=True
-        )
+        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+        print(f"[native-test-isolation] receipt: {receipt_path}", flush=True)
 
 
 def main() -> int:

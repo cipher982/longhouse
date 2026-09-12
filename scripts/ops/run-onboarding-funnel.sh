@@ -106,7 +106,7 @@ fi
 
 cd "$WORKDIR"
 # The README contract owns its HOME and installs its cloned Python package.
-unset LONGHOUSE_HOME PYTHONPATH
+unset LONGHOUSE_HOME CLAUDE_CONFIG_DIR PYTHONPATH TESTING
 
 steps_json="$(get_field steps)"
 cleanup_json="$(get_field cleanup)"

@@ -2,7 +2,7 @@
 
 # Dispatch before reading dotenv: tests never inherit the operator's login.
 # The marker is created inside the disposable container/macOS VM, not by env.
-ISOLATED_GOALS := $(filter test test-% validate validate-% lint-% import-smoke simlab-run menubar-harness ios-ui-shot ios-previews benchmark-ios-transcript onboarding-funnel launch-gate-local qa-% provider-%,$(MAKECMDGOALS))
+ISOLATED_GOALS := $(filter test test-% validate validate-% lint-% import-smoke simlab-run menubar-harness ios-ui-shot ios-previews benchmark-ios-transcript onboarding-funnel launch-gate-local hosted-shipper-mixed-bench render-canary cohort-journey qa-% provider-%,$(MAKECMDGOALS))
 ifeq ($(wildcard /tmp/longhouse-test-isolated),)
 ifneq ($(strip $(ISOLATED_GOALS)),)
 ifneq ($(words $(ISOLATED_GOALS)),$(words $(MAKECMDGOALS)))
@@ -13,7 +13,7 @@ endif
 endif
 
 ifeq ($(LONGHOUSE_TEST_DISPATCH),1)
-export TEST MODE FILES SCENARIOS CARGO_PROFILE VERBOSE PYTEST_XDIST_WORKERS PLAYWRIGHT_WORKERS IOS_TEST_SCHEMES PROJECT
+export ARGS TEST MODE FILES SCENARIOS CARGO_PROFILE VERBOSE PYTEST_XDIST_WORKERS PLAYWRIGHT_WORKERS IOS_TEST_SCHEMES PROJECT UNIVERSAL_PROVIDER STORE_ROOT BUNDLE_OUTPUT ARTIFACT EVIDENCE_ROOT
 .PHONY: $(ISOLATED_GOALS)
 $(ISOLATED_GOALS):
 	@python3 scripts/qa/test-isolation.py --target "$@"
