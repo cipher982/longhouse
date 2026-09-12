@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${LONGHOUSE_TEST_ISOLATED:-}" != "1" || ! -f /tmp/longhouse-test-isolated ]]; then
+  echo "Native tests run in a disposable hosted macOS VM. Use make test-ios." >&2
+  exit 2
+fi
+
 PROJECT_PATH="${PROJECT_PATH:-ios/XcodeHarness/LonghouseIOS.xcodeproj}"
 DESTINATION="${1:-${IOS_DESTINATION:-}}"
 

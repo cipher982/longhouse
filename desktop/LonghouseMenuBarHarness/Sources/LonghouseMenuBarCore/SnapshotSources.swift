@@ -3,14 +3,19 @@ import Dispatch
 
 public protocol HealthSnapshotSource: Sendable {
     func load() throws -> HealthSnapshot
+    /// Whether a loaded snapshot may activate the live Runtime Host stream or
+    /// local engine-status file monitor.
+    var supportsLiveMonitoring: Bool { get }
     /// Human-readable description of what this source runs, surfaced when a
     /// refresh fails so the user can see which command is broken.
     var describedCommand: String? { get }
 }
 
 extension HealthSnapshotSource {
+    public var supportsLiveMonitoring: Bool { true }
     public var describedCommand: String? { nil }
 }
+
 
 public enum SnapshotSourceError: Error, LocalizedError {
     case invalidArguments(String)
@@ -90,6 +95,11 @@ func runNativeCommand(
 
 public struct FixtureHealthSnapshotSource: HealthSnapshotSource {
     public let fileURL: URL
+
+    /// Fixture snapshots are immutable recordings. Their payload may retain
+    /// producer fields such as `realtime` and `engine_status.path` for schema
+    /// coverage, but it must never turn those fields into live side effects.
+    public var supportsLiveMonitoring: Bool { false }
 
     public init(fileURL: URL) {
         self.fileURL = fileURL

@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${LONGHOUSE_TEST_ISOLATED:-}" != "1" || ! -f /tmp/longhouse-test-isolated ]]; then
+  echo "Use make onboarding-funnel to run the contract in a disposable test environment." >&2
+  exit 2
+fi
+
 ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 README_PATH="$ROOT_DIR/README.md"
 WORKDIR_OVERRIDE=""
@@ -132,7 +137,7 @@ if [[ -n "$cleanup_json" && "$cleanup_json" != "null" ]]; then
   done < <(run_steps cleanup)
 fi
 
-DIAGNOSTICS_DIR="$WORKDIR/onboarding-diagnostics"
+DIAGNOSTICS_DIR="${E2E_ARTIFACT_DIR:?isolated artifact directory required}/onboarding-diagnostics"
 
 collect_diagnostics() {
   mkdir -p "$DIAGNOSTICS_DIR" 2>/dev/null || true
@@ -154,7 +159,7 @@ cleanup() {
   for cmd in "${cleanup_cmds[@]}"; do
     resolved="${cmd//\{\{WORKDIR\}\}/$WORKDIR}"
     echo "→ $resolved"
-    "$RUN_SHELL" -lc "$resolved"
+    "$RUN_SHELL" -c "$resolved"
   done
 }
 
@@ -202,7 +207,7 @@ while IFS= read -r cmd; do
   if [[ "$resolved" == *"http://127.0.0.1:8080/api/health"* ]]; then
     wait_for_onboarding_health
   else
-    "$RUN_SHELL" -lc "$resolved"
+    "$RUN_SHELL" -c "$resolved"
   fi
 done < <(run_steps steps)
 

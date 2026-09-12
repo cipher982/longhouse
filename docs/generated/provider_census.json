@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 268,
+  "file_count": 269,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -610,6 +610,13 @@
         "codex",
         "cursor",
         "opencode"
+      ]
+    },
+    {
+      "path": "scripts/qa/test-isolation-smoke.py",
+      "providers": [
+        "claude",
+        "codex"
       ]
     },
     {

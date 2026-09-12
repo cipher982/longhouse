@@ -1005,6 +1005,47 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    @MainActor
+    func fixtureStoreDoesNotStartLiveMonitoring() async throws {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let recordedURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/native-desktop-health.json")
+        let statusURL = tempDir.appendingPathComponent("engine-status.json")
+        try Data(#"{"managed_sessions":[]}"#.utf8).write(to: statusURL)
+
+        var fixture = try #require(
+            JSONSerialization.jsonObject(with: Data(contentsOf: recordedURL)) as? [String: Any]
+        )
+        var engineStatus = try #require(fixture["engine_status"] as? [String: Any])
+        engineStatus["path"] = statusURL.path
+        fixture["engine_status"] = engineStatus
+        let fixtureURL = tempDir.appendingPathComponent("fixture.json")
+        try JSONSerialization.data(withJSONObject: fixture, options: [.sortedKeys]).write(to: fixtureURL)
+
+        let source = FixtureHealthSnapshotSource(fileURL: fixtureURL)
+        #expect(source.supportsLiveMonitoring == false)
+        let store = SnapshotStore(source: source)
+        store.refresh(reason: .manual)
+        for _ in 0..<100 where store.isManualRefreshActive {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        let settledSuccessAt = try #require(store.refreshState.lastSuccessAt)
+
+        try Data(#"{"managed_sessions":[{"session_id":"unexpected-live-update"}]}"#.utf8)
+            .write(to: statusURL)
+        try? await Task.sleep(for: .milliseconds(150))
+
+        #expect(store.refreshState.lastSuccessAt == settledSuccessAt)
+        #expect(store.projectionState == .neverAttempted)
+        #expect(store.snapshot?.managedSessions?.first?.sessionId == "00000000-0000-4000-8000-000000000001")
+    }
+
+    @Test
     func parsesRuntimeArguments() throws {
         let config = try HarnessRuntimeConfig.parse(arguments: [
             "--input", "/tmp/example.json",

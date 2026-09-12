@@ -1,5 +1,24 @@
 # Longhouse
 
+# Dispatch before reading dotenv: tests never inherit the operator's login.
+# The marker is created inside the disposable container/macOS VM, not by env.
+ISOLATED_GOALS := $(filter test test-% validate validate-% lint-% import-smoke simlab-run menubar-harness ios-ui-shot ios-previews benchmark-ios-transcript onboarding-funnel launch-gate-local qa-% provider-%,$(MAKECMDGOALS))
+ifeq ($(wildcard /tmp/longhouse-test-isolated),)
+ifneq ($(strip $(ISOLATED_GOALS)),)
+ifneq ($(words $(ISOLATED_GOALS)),$(words $(MAKECMDGOALS)))
+$(error Run test/QA goals separately from host development or deployment goals)
+endif
+override LONGHOUSE_TEST_DISPATCH := 1
+endif
+endif
+
+ifeq ($(LONGHOUSE_TEST_DISPATCH),1)
+export TEST MODE FILES SCENARIOS CARGO_PROFILE VERBOSE PYTEST_XDIST_WORKERS PLAYWRIGHT_WORKERS IOS_TEST_SCHEMES PROJECT
+.PHONY: $(ISOLATED_GOALS)
+$(ISOLATED_GOALS):
+	@python3 scripts/qa/test-isolation.py --target "$@"
+else
+
 # Local convenience only; a runner checkout must not replace CI authority.
 ifeq ($(CI),)
 -include .env
@@ -29,7 +48,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: perf-proof validate-perf-proof cohort-journey validate-cohort-journey
 .PHONY: validate-format validate-legacy-nouns
 .PHONY: provider-release-proof-universal-live-smoke provider-capability-coordination-proof
-.PHONY: test-provider-contract
+.PHONY: test-provider-contract test-isolation
 # ---------------------------------------------------------------------------
 # Help
 # ---------------------------------------------------------------------------
@@ -107,6 +126,10 @@ test: ## Backend unit tests (tests_lite/, ~7.5min)
 test-backend-single: ## Focused backend test file/node (TEST=tests_lite/test_file.py)
 	@test -n "$(TEST)" || (echo "TEST is required" >&2; exit 2)
 	@cd server && LONGHOUSE_TEST_TARGET="$(TEST)" ./run_backend_tests_lite.sh
+
+test-isolation: ## Exercise the real credential/filesystem/network isolation boundary
+	@python3 scripts/qa/test-isolation-smoke.py
+
 
 test-provider-contract: ## @internal Exact-SHA ordinary-CI provider contract assertions
 	@cd server && uv run --extra dev pytest -q tests_lite/test_provider_resume_factory.py
@@ -900,13 +923,13 @@ validate-provider-brands: ## @internal Provider brand config drift check
 	fi
 
 validate-makefile: ## @internal Verify .PHONY vs documented targets
-	@failed=0; \
-	for t in $$(grep -E '^\.PHONY:' Makefile | sed -E 's/^\.PHONY:[[:space:]]*//; s/\\//g' | tr ' ' '\n' | sed '/^$$/d'); do \
+	@phony="$$( $(MAKE) --no-print-directory -pRrq help | sed -n 's/^\.PHONY: //p')"; failed=0; \
+	for t in $$phony; do \
 		case $$t in help|validate-makefile) continue ;; esac; \
 		if ! grep -Eq "^$$t:.*##" Makefile; then echo "Missing ## for .PHONY: $$t"; failed=1; fi; \
 	done; \
 	for t in $$(grep -E '^[a-zA-Z0-9_-]+:.*##' Makefile | sed -E 's/:.*##.*$$//'); do \
-		if ! grep -Eq "^\.PHONY:.*\\b$$t\\b" Makefile; then echo "Not in .PHONY: $$t"; failed=1; fi; \
+		case " $$phony " in *" $$t "*) ;; *) echo "Not in .PHONY: $$t"; failed=1 ;; esac; \
 	done; \
 	exit $$failed
 
@@ -1094,3 +1117,5 @@ ensure-js-deps: ## @internal Install JS deps if missing
 ensure-playwright-browser: ## @internal Install Playwright Chromium if missing
 	@$(MAKE) ensure-js-deps
 	@cd e2e && bunx playwright install chromium >/dev/null
+
+endif # LONGHOUSE_TEST_DISPATCH

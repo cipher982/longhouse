@@ -36,17 +36,17 @@ jobs:
     runs-on: ubuntu-latest
     name: "Changed paths"
     outputs:
-      backend:        ${{ steps.filter.outputs.backend }}
-      frontend:       ${{ steps.filter.outputs.frontend }}
-      engine:         ${{ steps.filter.outputs.engine }}
-      schemas:        ${{ steps.filter.outputs.schemas }}
-      ci_plumbing:    ${{ steps.filter.outputs.ci_plumbing }}
-      packaging:      ${{ steps.filter.outputs.packaging }}
-      runner:         ${{ steps.filter.outputs.runner }}
-      ios:            ${{ steps.filter.outputs.ios }}
-      e2e:            ${{ steps.filter.outputs.e2e }}
-      models:         ${{ steps.filter.outputs.models }}
-      scripts:        ${{ steps.filter.outputs.scripts }}
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      engine: ${{ steps.filter.outputs.engine }}
+      schemas: ${{ steps.filter.outputs.schemas }}
+      ci_plumbing: ${{ steps.filter.outputs.ci_plumbing }}
+      packaging: ${{ steps.filter.outputs.packaging }}
+      runner: ${{ steps.filter.outputs.runner }}
+      ios: ${{ steps.filter.outputs.ios }}
+      e2e: ${{ steps.filter.outputs.e2e }}
+      models: ${{ steps.filter.outputs.models }}
+      scripts: ${{ steps.filter.outputs.scripts }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -70,90 +70,89 @@ jobs:
     timeout-minutes: 35
 
     steps:
-    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      with:
-        fetch-depth: 1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
 
-    - name: Restore Bun download cache
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-      with:
-        path: ~/.bun/install/cache
-        key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-        restore-keys: |
-          longhouse-bun-${{ runner.os }}-
+      - name: Restore Bun download cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.bun/install/cache
+          key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            longhouse-bun-${{ runner.os }}-
 
-    - name: Set up Python
-      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-      with:
-        python-version: '3.12'
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
 
-    - name: Setup uv
-      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
 
-    - name: Setup Bun
-      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-      with:
-        bun-version: '1.2.20'
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.2.20"
 
-    - name: Ensure make available
-      run: ./scripts/ci/ensure-make.sh
+      - name: Ensure make available
+        run: ./scripts/ci/ensure-make.sh
 
-    - name: Validate contracts
-      timeout-minutes: 10
-      # One step, because two lists drift. This job used to enumerate a subset
-      # of `make validate` by hand, and twelve of its members -- including
-      # validate-session-state-contract, the drift check for the very
-      # vocabulary a Console phase mismatch went dark on -- ran in no workflow
-      # at all, reachable only by manual dispatch. Add a target to `validate`
-      # and CI runs it; there is no second list to remember.
-      #
-      # Members worth knowing about when this fails: the engine include_str!s
-      # the generated provider contract JSON, so the Rust-side provider
-      # authority rests on validate-managed-provider-contracts matching
-      # schemas/managed_providers.yml; and validate-provider-census keeps the
-      # census artifact from silently going stale.
-      run: make validate
+      - name: Validate contracts
+        timeout-minutes: 10
+        # One step, because two lists drift. This job used to enumerate a subset
+        # of `make validate` by hand, and twelve of its members -- including
+        # validate-session-state-contract, the drift check for the very
+        # vocabulary a Console phase mismatch went dark on -- ran in no workflow
+        # at all, reachable only by manual dispatch. Add a target to `validate`
+        # and CI runs it; there is no second list to remember.
+        #
+        # Members worth knowing about when this fails: the engine include_str!s
+        # the generated provider contract JSON, so the Rust-side provider
+        # authority rests on validate-managed-provider-contracts matching
+        # schemas/managed_providers.yml; and validate-provider-census keeps the
+        # census artifact from silently going stale.
+        run: make validate
 
-    - name: Managed launch lifecycle against a real Runtime Host
-      timeout-minutes: 15
-      # Real FastAPI server, real SQLite, real device-token auth, real request
-      # validation, scripted provider binaries. The installer smoke's fake
-      # Runtime Host answers every request identically and therefore cannot
-      # catch a provider gate -- the exact hole the cursor outage fell through.
-      run: make test-managed-launch-lifecycle
+      - name: Managed launch lifecycle against a real Runtime Host
+        timeout-minutes: 15
+        # Real FastAPI server, real SQLite, real device-token auth, real request
+        # validation, scripted provider binaries. The installer smoke's fake
+        # Runtime Host answers every request identically and therefore cannot
+        # catch a provider gate -- the exact hole the cursor outage fell through.
+        run: make test-managed-launch-lifecycle
 
-    - name: Produce executable provider capability proof bundle
-      timeout-minutes: 3
-      run: |
-        make provider-capability-coordination-proof \
-          STORE_ROOT="$GITHUB_WORKSPACE/.build/canaries/provider-capability-proof/store" \
-          BUNDLE_OUTPUT="$GITHUB_WORKSPACE/.build/canaries/provider-capability-proof/bundle.json" \
-          PRODUCER_CLASS=release_ci \
-          INVOCATION_ID="${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
-          RUN_REFERENCE="github-actions://${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}" \
-          LONGHOUSE_GIT_SHA="$GITHUB_SHA" \
-          PROVIDER_VERSION=hermetic-fixture \
-          PROVIDER_EXECUTABLE_IDENTITY=sha256:hermetic-fixture
+      - name: Produce executable provider capability proof bundle
+        timeout-minutes: 3
+        run: |
+          make provider-capability-coordination-proof \
+            STORE_ROOT="$GITHUB_WORKSPACE/.build/canaries/provider-capability-proof/store" \
+            BUNDLE_OUTPUT="$GITHUB_WORKSPACE/.build/canaries/provider-capability-proof/bundle.json" \
+            PRODUCER_CLASS=release_ci \
+            INVOCATION_ID="${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
+            RUN_REFERENCE="github-actions://${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}" \
+            LONGHOUSE_GIT_SHA="$GITHUB_SHA" \
+            PROVIDER_VERSION=hermetic-fixture \
+            PROVIDER_EXECUTABLE_IDENTITY=sha256:hermetic-fixture
 
-    - name: Upload provider capability proof bundle
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-      with:
-        name: provider-capability-proof-${{ github.run_id }}-${{ github.run_attempt }}
-        path: .build/canaries/provider-capability-proof/**
-        if-no-files-found: error
-        retention-days: 14
+      - name: Upload provider capability proof bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-capability-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .build/canaries/provider-capability-proof/**
+          if-no-files-found: error
+          retention-days: 14
 
-    - name: Upload provider release proof artifacts
-      if: always()
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-      with:
-        name: provider-release-proof-validation-${{ github.run_id }}-${{ github.run_attempt }}
-        path: |
-          .build/canaries/provider-release-proof-universal-smoke/**
-          artifacts/reliability-kernel/managed-launch-lifecycle-failure.*/**
-        if-no-files-found: ignore
-        retention-days: 7
-
+      - name: Upload provider release proof artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: provider-release-proof-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .build/canaries/provider-release-proof-universal-smoke/**
+            artifacts/reliability-kernel/managed-launch-lifecycle-failure.*/**
+          if-no-files-found: ignore
+          retention-days: 7
 
   backend-tests:
     timeout-minutes: 30
@@ -163,34 +162,34 @@ jobs:
     name: "Backend tests"
 
     steps:
-    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      with:
-        fetch-depth: 1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
 
-    - name: Set up Python
-      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-      with:
-        python-version: '3.12'
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
 
-    - name: Setup uv
-      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
 
-    - name: Setup Bun
-      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-      with:
-        bun-version: '1.2.20'
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.2.20"
 
-    - name: Ensure make available
-      run: ./scripts/ci/ensure-make.sh
+      - name: Ensure make available
+        run: ./scripts/ci/ensure-make.sh
 
-    - name: Run Python Backend Tests
-      run: make test
+      - name: Run Python Backend Tests
+        run: make test
 
-    - name: Run Hosted-Instance Helper Tests
-      run: make test-hosted-instance
+      - name: Run Hosted-Instance Helper Tests
+        run: make test-hosted-instance
 
-    - name: Run iOS simulator helper tests
-      run: make test-ios-helper
+      - name: Run iOS simulator helper tests
+        run: make test-ios-helper
 
   provider-contract-tests:
     # Always run: Loop 2 accepts an exact Longhouse SHA only after this job
@@ -201,23 +200,23 @@ jobs:
     name: "Provider contract tests"
 
     steps:
-    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      with:
-        fetch-depth: 1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
 
-    - name: Set up Python
-      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-      with:
-        python-version: '3.12'
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
 
-    - name: Setup uv
-      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
 
-    - name: Ensure make available
-      run: ./scripts/ci/ensure-make.sh
+      - name: Ensure make available
+        run: ./scripts/ci/ensure-make.sh
 
-    - name: Run exact-SHA provider contract assertions
-      run: make test-provider-contract
+      - name: Run exact-SHA provider contract assertions
+        run: make test-provider-contract
 
   engine-tests:
     timeout-minutes: 45
@@ -229,51 +228,51 @@ jobs:
       CARGO_PROFILE: ci
 
     steps:
-    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      with:
-        fetch-depth: 1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
 
-    - name: Set up Python
-      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-      with:
-        python-version: '3.12'
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
 
-    - name: Setup uv
-      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
 
-    - name: Setup Bun
-      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-      with:
-        bun-version: '1.2.20'
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.2.20"
 
-    - name: Cache Rust build artifacts
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          .build/cargo-target
-        key: engine-ci-${{ runner.os }}-${{ hashFiles('engine/Cargo.lock', 'engine/Cargo.toml') }}
-        restore-keys: |
-          engine-ci-${{ runner.os }}-
+      - name: Cache Rust build artifacts
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .build/cargo-target
+          key: engine-ci-${{ runner.os }}-${{ hashFiles('engine/Cargo.lock', 'engine/Cargo.toml') }}
+          restore-keys: |
+            engine-ci-${{ runner.os }}-
 
-    - name: Ensure make available
-      run: ./scripts/ci/ensure-make.sh
+      - name: Ensure make available
+        run: ./scripts/ci/ensure-make.sh
 
-    - name: Run Rust Engine Tests (unit + golden + adversarial)
-      if: ${{ needs.changes.outputs.engine == 'true' || github.event_name == 'workflow_dispatch' }}
-      run: make test-engine
+      - name: Run Rust Engine Tests (unit + golden + adversarial)
+        if: ${{ needs.changes.outputs.engine == 'true' || github.event_name == 'workflow_dispatch' }}
+        run: make test-engine
 
-    - name: Run Shipper Pipeline E2E (fixture → engine ship → API → DB)
-      run: make test-shipper-e2e
+      - name: Run Shipper Pipeline E2E (fixture → engine ship → API → DB)
+        run: make test-shipper-e2e
 
-    - name: Run Synthetic Shipper Bench
-      if: ${{ needs.changes.outputs.engine == 'true' || github.event_name == 'workflow_dispatch' }}
-      run: make test-shipper-synthetic-bench
+      - name: Run Synthetic Shipper Bench
+        if: ${{ needs.changes.outputs.engine == 'true' || github.event_name == 'workflow_dispatch' }}
+        run: make test-shipper-synthetic-bench
 
-    - name: Run Synthetic Mixed Live/Archive Bench
-      if: ${{ needs.changes.outputs.engine == 'true' || github.event_name == 'workflow_dispatch' }}
-      run: make test-shipper-synthetic-live-bench
+      - name: Run Synthetic Mixed Live/Archive Bench
+        if: ${{ needs.changes.outputs.engine == 'true' || github.event_name == 'workflow_dispatch' }}
+        run: make test-shipper-synthetic-live-bench
 
   frontend-tests:
     timeout-minutes: 20
@@ -283,39 +282,39 @@ jobs:
     name: "Frontend + runner tests"
 
     steps:
-    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      with:
-        fetch-depth: 1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
 
-    - name: Restore Bun download cache
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-      with:
-        path: ~/.bun/install/cache
-        key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-        restore-keys: |
-          longhouse-bun-${{ runner.os }}-
+      - name: Restore Bun download cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.bun/install/cache
+          key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            longhouse-bun-${{ runner.os }}-
 
-    - name: Setup Node
-      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-      with:
-        node-version: '20'
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "20"
 
-    - name: Setup Bun
-      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-      with:
-        bun-version: '1.2.20'
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.2.20"
 
-    - name: Install dependencies
-      run: bun install --frozen-lockfile
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
 
-    - name: Ensure make available
-      run: ./scripts/ci/ensure-make.sh
+      - name: Ensure make available
+        run: ./scripts/ci/ensure-make.sh
 
-    - name: Run Frontend Tests
-      run: make test-frontend
+      - name: Run Frontend Tests
+        run: make test-frontend
 
-    - name: Run Runner Unit Tests
-      run: make test-runner
+      - name: Run Runner Unit Tests
+        run: make test-runner
 
   ios-tests:
     needs: changes
@@ -325,56 +324,27 @@ jobs:
     name: "iOS tests"
 
     steps:
-    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      with:
-        fetch-depth: 1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30af803 # v6.1.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
 
-    - name: Restore Swift package cache
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-      with:
-        path: |
-          ~/Library/Caches/org.swift.swiftpm
-          ~/Library/org.swift.swiftpm
-          ~/Library/Developer/Xcode/DerivedData/LonghouseIOS-*/SourcePackages
-        key: longhouse-ios-spm-${{ runner.os }}-${{ hashFiles('ios/Package.swift', 'ios/XcodeHarness/project.yml') }}
-        restore-keys: |
-          longhouse-ios-spm-${{ runner.os }}-
+      - name: Install XcodeGen
+        run: brew install xcodegen
 
-    - name: Install XcodeGen
-      run: brew install xcodegen
+      - name: Run iOS fixture in the isolated GitHub-hosted macOS VM
+        env:
+          NATIVE_OPTIONS_JSON: "{}"
+        run: python3 scripts/qa/native-test-bootstrap.py --target test-ios
 
-    - name: Stage build identity for iOS bundle
-      run: |
-        python3 scripts/build/generate_build_identity.py
-        bash scripts/build/stage_ios_build_identity.sh
-
-    - name: Generate Xcode project
-      run: xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
-
-    - name: Select simulator destination
-      id: simulator
-      run: |
-        DESTINATION="$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)"
-        echo "destination=$DESTINATION" >> "$GITHUB_OUTPUT"
-
-    # Calls the Makefile target rather than naming schemes here. This step used to
-    # run "Longhouse LonghouseChatStress" while `make test-ios` ran
-    # "Longhouse LonghouseSmoke", so local runs were green against a scheme set CI
-    # never executed, and a wall-clock benchmark suite gated every merge from a
-    # shared runner. Benchmarks now live in `make test-ios-perf`.
-    - name: Run iOS tests
-      run: |
-        IOS_DERIVED_DATA_PATH="$RUNNER_TEMP/LonghouseIOSDerivedData" \
-        IOS_RESULTS_DIR="$RUNNER_TEMP/ios-test-results" \
-        make test-ios
-
-    - name: Upload iOS test results
-      if: failure()
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-      with:
-        name: ios-xcresult
-        if-no-files-found: ignore
-        path: ${{ runner.temp }}/ios-test-results
+      - name: Upload native iOS evidence
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ios-xcresult
+          if-no-files-found: ignore
+          path: ${{ runner.temp }}/native-isolation-evidence
+          retention-days: 1
 
   wheel-package:
     timeout-minutes: 20
@@ -384,28 +354,28 @@ jobs:
     name: "CLI wheel packaging"
 
     steps:
-    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      with:
-        fetch-depth: 1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
 
-    - name: Setup Node
-      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-      with:
-        node-version: '20'
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "20"
 
-    - name: Setup Bun
-      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-      with:
-        bun-version: '1.2.20'
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.2.20"
 
-    - name: Setup uv
-      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
 
-    - name: Ensure make available
-      run: ./scripts/ci/ensure-make.sh
+      - name: Ensure make available
+        run: ./scripts/ci/ensure-make.sh
 
-    - name: Verify CLI wheel packaging
-      run: make test-wheel-package
+      - name: Verify CLI wheel packaging
+        run: make test-wheel-package
 
   e2e-core:
     timeout-minutes: 30
@@ -414,74 +384,26 @@ jobs:
     runs-on: cube
     name: "Core E2E tests"
     env:
-      # E2E tests use per-backend SQLite databases (no Postgres needed)
-      FERNET_SECRET: ${{ secrets.FERNET_SECRET }}
-      # Isolate E2E DBs per run to avoid cross-run contamination on shared runners
-      E2E_DB_DIR: /tmp/zerg_e2e_dbs/${{ github.run_id }}-${{ github.run_attempt }}
-      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+      CI: "1"
 
     steps:
-    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      with:
-        fetch-depth: 1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
 
-    - name: Restore Bun download cache
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-      with:
-        path: ~/.bun/install/cache
-        key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-        restore-keys: |
-          longhouse-bun-${{ runner.os }}-
+      - name: Ensure make available
+        run: ./scripts/ci/ensure-make.sh
 
-    - name: Restore Playwright browser cache
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-      with:
-        path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
-        key: longhouse-playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
-        restore-keys: |
-          longhouse-playwright-${{ runner.os }}-${{ runner.arch }}-
+      - name: Run Core E2E Tests in the portable isolation boundary
+        run: make test-e2e-core
 
-    - name: Set up Python
-      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-      with:
-        python-version: '3.12'
-
-    - name: Setup uv
-      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
-
-    - name: Setup Node
-      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-      with:
-        node-version: '20'
-
-    - name: Setup Bun
-      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-      with:
-        bun-version: '1.2.20'
-
-    - name: Install dependencies
-      run: bun install --frozen-lockfile
-
-    - name: Ensure make available
-      run: ./scripts/ci/ensure-make.sh
-
-    - name: Install Playwright browsers + deps
-      run: ./scripts/ci/install-playwright.sh chromium
-
-    - name: Pre-install backend deps
-      run: cd server && uv sync
-
-    - name: Run Core E2E Tests
-      run: make test-e2e-core
-
-    - name: Upload E2E artifacts (on failure)
-      if: failure()
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-      with:
-        name: core-e2e-artifacts
-        path: |
-          e2e/test-results
-          e2e/playwright-report
+      - name: Upload isolated E2E artifacts (on failure)
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: core-e2e-artifacts
+          path: artifacts/test-isolation
+          retention-days: 1
 
   e2e-a11y:
     timeout-minutes: 30
@@ -490,74 +412,26 @@ jobs:
     runs-on: cube
     name: "Accessibility E2E tests"
     env:
-      # E2E tests use per-backend SQLite databases (no Postgres needed)
-      FERNET_SECRET: ${{ secrets.FERNET_SECRET }}
-      # Isolate E2E DBs per run/job to avoid cross-run contamination on shared runners
-      E2E_DB_DIR: /tmp/zerg_e2e_dbs/${{ github.run_id }}-${{ github.run_attempt }}-a11y
-      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+      CI: "1"
 
     steps:
-    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      with:
-        fetch-depth: 1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
 
-    - name: Restore Bun download cache
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-      with:
-        path: ~/.bun/install/cache
-        key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-        restore-keys: |
-          longhouse-bun-${{ runner.os }}-
+      - name: Ensure make available
+        run: ./scripts/ci/ensure-make.sh
 
-    - name: Restore Playwright browser cache
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-      with:
-        path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
-        key: longhouse-playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
-        restore-keys: |
-          longhouse-playwright-${{ runner.os }}-${{ runner.arch }}-
+      - name: Run Accessibility E2E Tests in the portable isolation boundary
+        run: make test-e2e-a11y
 
-    - name: Set up Python
-      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-      with:
-        python-version: '3.12'
-
-    - name: Setup uv
-      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
-
-    - name: Setup Node
-      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-      with:
-        node-version: '20'
-
-    - name: Setup Bun
-      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-      with:
-        bun-version: '1.2.20'
-
-    - name: Install dependencies
-      run: bun install --frozen-lockfile
-
-    - name: Ensure make available
-      run: ./scripts/ci/ensure-make.sh
-
-    - name: Install Playwright browsers + deps
-      run: ./scripts/ci/install-playwright.sh chromium
-
-    - name: Pre-install backend deps
-      run: cd server && uv sync
-
-    - name: Run Accessibility E2E Tests
-      run: make test-e2e-a11y
-
-    - name: Upload E2E artifacts (on failure)
-      if: failure()
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-      with:
-        name: accessibility-e2e-artifacts
-        path: |
-          e2e/test-results
-          e2e/playwright-report
+      - name: Upload isolated E2E artifacts (on failure)
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: accessibility-e2e-artifacts
+          path: artifacts/test-isolation
+          retention-days: 1
 
   model-smoke:
     timeout-minutes: 20
@@ -573,15 +447,15 @@ jobs:
       ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
 
     steps:
-    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      with:
-        fetch-depth: 1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
 
-    - name: Setup uv
-      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
 
-    - name: Smoke test all models
-      run: uv run --with openai --with anthropic python scripts/qa/smoke_models.py --ci
+      - name: Smoke test all models
+        run: uv run --with openai --with anthropic python scripts/qa/smoke_models.py --ci
 
   oss-qa:
     timeout-minutes: 30
@@ -590,46 +464,25 @@ jobs:
     runs-on: ubuntu-latest
     name: "OSS onboarding smoke"
     env:
-      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+      CI: "1"
 
     steps:
-    - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      with:
-        fetch-depth: 1
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30af803 # v6.1.0
+        with:
+          fetch-depth: 1
 
-    - name: Restore Bun download cache
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-      with:
-        path: ~/.bun/install/cache
-        key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-        restore-keys: |
-          longhouse-bun-${{ runner.os }}-
+      - name: Run OSS onboarding fixture in the portable isolation boundary
+        run: |
+          python3 scripts/qa/test-isolation.py \
+            --target qa-oss \
+            --command env ONBOARDING_PLAYWRIGHT_PROJECT=onboarding-chromium \
+              ./scripts/qa/qa-oss.sh --workdir /work --no-unit --no-e2e
 
-    - name: Restore Playwright browser cache
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-      with:
-        path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
-        key: longhouse-playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
-        restore-keys: |
-          longhouse-playwright-${{ runner.os }}-${{ runner.arch }}-
-
-    - name: Set up Python
-      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-      with:
-        python-version: '3.12'
-
-    - name: Setup uv
-      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
-
-    - name: Setup Bun
-      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-      with:
-        bun-version: '1.2.20'
-
-    - name: Install Playwright
-      run: cd e2e && bun install && bunx playwright install chromium
-
-    - name: Run OSS QA (no unit/e2e, UI check only)
-      env:
-        ONBOARDING_PLAYWRIGHT_PROJECT: onboarding-chromium
-      run: ./scripts/qa/qa-oss.sh --no-unit --no-e2e
+      - name: Upload OSS isolation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: oss-isolation-evidence
+          path: artifacts/test-isolation
+          if-no-files-found: ignore
+          retention-days: 1

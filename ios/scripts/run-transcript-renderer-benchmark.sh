@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${LONGHOUSE_TEST_ISOLATED:-}" != "1" || ! -f /tmp/longhouse-test-isolated ]]; then
+  echo "Use make benchmark-ios-transcript to run inside a disposable hosted macOS VM." >&2
+  exit 2
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 

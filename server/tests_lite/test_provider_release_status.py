@@ -249,7 +249,7 @@ def test_schema_mismatch_warns(monkeypatch, tmp_path: Path) -> None:
 def test_configured_but_unavailable_artifact_warns(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv(prs.CODEX_RELEASE_STATUS_FILE_ENV, str(tmp_path / "missing.json"))
 
-    status = prs.collect_provider_release_status({"codex": {"path": "/opt/homebrew/bin/codex"}})
+    status = prs.collect_provider_release_status({"codex": {"path": str(tmp_path / "missing-codex")}})
 
     assert status["warning_count"] == 1
     assert status["statuses"]["codex"]["status"] == "unavailable"

@@ -1,232 +1,195 @@
 #!/usr/bin/env node
 
 /**
- * Spawn isolated test backend for E2E tests
+ * Spawn the loopback-only E2E backend in an owned process group.
  *
- * SQLite-based isolation: Each E2E test run uses a dedicated SQLite database
- * in a temp directory. No Postgres required.
+ * The run root is unique per invocation. This process never loads dotenv,
+ * deletes another run's files, or finds a process to kill by port.
  */
 
-import crypto from 'crypto';
-import { spawn } from 'child_process';
-import { join } from 'path';
-import fs from 'fs';
-import net from 'net';
-import path from 'path';
-import os from 'os';
-import { fileURLToPath } from 'url';
+import crypto from "crypto";
+import { spawn } from "child_process";
+import { join } from "path";
+import fs from "fs";
+import net from "net";
+import path from "path";
+import { fileURLToPath } from "url";
+import {
+  ensureTestRuntime,
+  parsePort,
+  randomPort,
+  safeChildEnvironment,
+  signalProcessGroup,
+  stripAmbientSecrets,
+} from "./test-runtime.js";
+const suppliedIsolatedRuntime = process.env.LONGHOUSE_TEST_ISOLATED === "1";
+const runtime = ensureTestRuntime();
+stripAmbientSecrets();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-function findDotEnv(startDir) {
-    let dir = startDir;
-    for (let i = 0; i < 8; i++) {
-        const candidate = path.join(dir, '.env');
-        if (fs.existsSync(candidate)) return candidate;
-        const parent = path.dirname(dir);
-        if (parent === dir) break;
-        dir = parent;
-    }
-    return null;
-}
-
-function loadDotEnv(filePath) {
-    if (!fs.existsSync(filePath)) return;
-    const envContent = fs.readFileSync(filePath, 'utf8');
-    for (const rawLine of envContent.split('\n')) {
-        const line = rawLine.trim();
-        if (!line || line.startsWith('#')) continue;
-        const idx = line.indexOf('=');
-        if (idx <= 0) continue;
-        const key = line.slice(0, idx).trim();
-        let value = line.slice(idx + 1).trim();
-        const isQuoted = (value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"));
-        if (!isQuoted) {
-            // Strip inline comments for common `.env` style: KEY=value # comment
-            value = value.replace(/\s+#.*$/, '').trim();
-        }
-        if (isQuoted) {
-            value = value.slice(1, -1);
-        }
-        if (process.env[key] === undefined) {
-            process.env[key] = value;
-        }
-    }
-}
-
-// Ensure local runs inherit repo-root .env (Playwright also loads it, but this helps direct execution).
-{
-    const envPath = findDotEnv(__dirname);
-    if (envPath) loadDotEnv(envPath);
-}
-
-if (!process.env.FERNET_SECRET) {
-    const raw = crypto.randomBytes(32).toString('base64');
-    const urlSafe = raw.replace(/\+/g, '-').replace(/\//g, '_');
-    process.env.FERNET_SECRET = urlSafe;
-    console.log('[spawn-backend] FERNET_SECRET not set; generated ephemeral key for tests.');
-}
-
-// Backend port comes from env (set by playwright.config.js random port generation)
-// This script is spawned by Playwright, so env vars are already set
 function getBackendPort() {
-    const port = parseInt(process.env.BACKEND_PORT || '');
-    if (!port || isNaN(port)) {
-        throw new Error('BACKEND_PORT env var required (set by playwright.config.js)');
-    }
-    return port;
+  return suppliedIsolatedRuntime && process.env.E2E_BACKEND_PORT
+    ? parsePort(process.env.E2E_BACKEND_PORT, "E2E_BACKEND_PORT")
+    : randomPort();
 }
 
-// Optional worker ID from command line argument (legacy mode)
-const workerId = process.argv[2];
 const BACKEND_PORT = getBackendPort();
+process.env.E2E_BACKEND_PORT = String(BACKEND_PORT);
+process.env.BACKEND_PORT = String(BACKEND_PORT);
+const backendBaseUrl = `http://127.0.0.1:${BACKEND_PORT}`;
 
-const port = workerId ? BACKEND_PORT + parseInt(workerId) : BACKEND_PORT;
-const backendBaseUrl = `http://127.0.0.1:${port}`;
-
-async function isPortOpen(portToCheck) {
-    return new Promise((resolve) => {
-        const socket = net.createConnection({ host: '127.0.0.1', port: portToCheck }, () => {
-            socket.destroy();
-            resolve(true);
-        });
-        socket.once('error', () => {
-            socket.destroy();
-            resolve(false);
-        });
-        socket.setTimeout(1000, () => {
-            socket.destroy();
-            resolve(false);
-        });
+async function isPortOpen(port) {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host: "127.0.0.1", port }, () => {
+      socket.destroy();
+      resolve(true);
     });
+    socket.once("error", () => {
+      socket.destroy();
+      resolve(false);
+    });
+    socket.setTimeout(1000, () => {
+      socket.destroy();
+      resolve(false);
+    });
+  });
 }
 
-if (await isPortOpen(port)) {
-    console.error(`[spawn-backend] Refusing to reuse backend on port ${port}; stop the stale server or choose another BACKEND_PORT.`);
-    process.exit(1);
+if (await isPortOpen(BACKEND_PORT)) {
+  console.error(
+    `[spawn-backend] Refusing to reuse backend on port ${BACKEND_PORT}; choose another E2E_BACKEND_PORT.`,
+  );
+  process.exit(1);
 }
 
-// E2E tests now use SQLite per-backend-instance for isolation
-// No need for multiple uvicorn workers since SQLite is single-writer
-const uvicornWorkers = 1;
-
-// Create E2E SQLite database path
-const e2eDbDir = process.env.E2E_DB_DIR || path.join(os.tmpdir(), 'zerg_e2e_dbs');
-if (!fs.existsSync(e2eDbDir)) {
-    fs.mkdirSync(e2eDbDir, { recursive: true });
-}
-const dbPath = path.join(e2eDbDir, `e2e_${port}.db`);
+const dbPath = path.join(runtime.dbDir, "e2e.db");
 const databaseUrl = `sqlite:///${dbPath}`;
-const toolStubsPath = join(__dirname, 'fixtures', 'tool-stubs.json');
+const toolStubsPath = join(__dirname, "fixtures", "tool-stubs.json");
+const workspacePath = path.join(runtime.root, "workspaces");
+const claudeConfigDir = path.join(runtime.root, "claude");
+fs.mkdirSync(workspacePath, { recursive: true });
+fs.mkdirSync(claudeConfigDir, { recursive: true });
 
-for (const entry of fs.readdirSync(e2eDbDir)) {
-    // Also match `e2e_<port>-`: the backend derives its live-store DB as
-    // `e2e_<port>-live.db`, and a stale hot-lane file breaks hermeticity.
-    if (entry.startsWith(`e2e_${port}.db`) || entry.startsWith(`e2e_${port}-`) || entry.startsWith(`e2e_${port}_`)) {
-        fs.rmSync(path.join(e2eDbDir, entry), { force: true, recursive: true });
-    }
-}
-
-console.log(`[spawn-backend] Starting E2E backend on port ${port} with SQLite: ${dbPath}`);
-
-// Spawn the test backend with E2E configuration
-const backend = spawn('uv', [
-    'run', 'python', '-m', 'uvicorn', 'zerg.qa.e2e_app:app',
-    `--host=127.0.0.1`,
-    `--port=${port}`,
-    `--workers=${uvicornWorkers}`,
-    '--log-level=error'  // Only show errors, not INFO logs (reduces output from 26K to ~100 lines)
-], {
-    env: {
-        ...process.env,
-        // Add e2e/bin to PATH for mock-hatch CLI (used by workspace agents in E2E)
-        PATH: `${join(__dirname, 'bin')}:${process.env.PATH || ''}`,
-        ENVIRONMENT: 'test:e2e',  // Use E2E test config for real models
-        TEST_WORKER_ID: workerId || '0',
-        NODE_ENV: 'test',
-        TESTING: '1',  // Enable testing mode for database reset
-        AUTH_DISABLED: '1',  // Disable auth for E2E tests
-        SINGLE_TENANT: '0',  // E2E expects marketing + landing page routes
-        DEV_ADMIN: process.env.DEV_ADMIN || '1',
-        ADMIN_EMAILS: process.env.ADMIN_EMAILS || 'dev@local',
-        // SQLite database for this E2E backend instance
-        DATABASE_URL: databaseUrl,
-        LLM_TOKEN_STREAM: process.env.LLM_TOKEN_STREAM || 'true',  // Enable token streaming for E2E tests
-        E2E_FAKE_SESSION_CHAT: process.env.E2E_FAKE_SESSION_CHAT || '1',  // Deterministic fake Claude session chat for browser E2E
-        E2E_FAKE_SESSION_MESSAGES: process.env.E2E_FAKE_SESSION_MESSAGES || '1',  // Deterministic managed-local message delivery for E2E
-        // Force deterministic model for E2E chat flows (UI uses default model id)
-        E2E_DEFAULT_MODEL: process.env.E2E_DEFAULT_MODEL || 'gpt-scripted',
-        // LONGHOUSE_API_URL inherited from environment (for session continuity tests)
-        LONGHOUSE_API_URL: process.env.LONGHOUSE_API_URL || backendBaseUrl,
-        // Workspace path for workspace agents (use temp dir in E2E, not /var/longhouse)
-        LONGHOUSE_WORKSPACE_PATH: process.env.LONGHOUSE_WORKSPACE_PATH || os.tmpdir() + '/zerg-e2e-workspaces',
-        // Claude config dir for session files (use temp dir in E2E)
-        CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR || os.tmpdir() + '/zerg-e2e-claude',
-        // Mock hatch CLI for workspace agents in E2E (can't run real Claude Code agents)
-        E2E_HATCH_PATH: join(__dirname, 'bin', 'hatch'),
-        // Deterministic tool stubs for E2E (runner_exec/ssh_exec/web_search)
-        LONGHOUSE_TOOL_STUBS_PATH: toolStubsPath,
-        // The core suite intentionally creates many storage-v2 sessions in one
-        // process. Keep its real background search lane ahead of that bounded
-        // fixture backlog without changing production's single-writer-friendly
-        // steady-state default.
-        LONGHOUSE_SEARCH_PROJECTOR_WORKERS: process.env.LONGHOUSE_SEARCH_PROJECTOR_WORKERS || '4',
-        // Suppress Python logging noise for E2E tests
-        LOG_LEVEL: 'ERROR',
-        // Clear APP_PUBLIC_URL so backend /config.js returns empty WS_BASE_URL.
-        // This lets the frontend fall through to VITE_WS_BASE_URL (set by Playwright)
-        // which points to the correct E2E backend port.
-        APP_PUBLIC_URL: '',
-        PUBLIC_SITE_URL: '',
-    },
-    cwd: join(__dirname, '..', 'server'),
-    // Inherit stdio so Playwright can detect startup and we can see errors
-    stdio: 'inherit',
-    // uv launches Python as a child process. Give that tree its own process
-    // group so Playwright teardown can stop the whole backend rather than
-    // orphaning uvicorn on the cached port.
-    detached: process.platform !== 'win32',
+const fernetSecret = crypto
+  .randomBytes(32)
+  .toString("base64")
+  .replaceAll("+", "-")
+  .replaceAll("/", "_");
+const childEnv = safeChildEnvironment({
+  BACKEND_PORT: String(BACKEND_PORT),
+  E2E_BACKEND_PORT: String(BACKEND_PORT),
+  ENVIRONMENT: "test:e2e",
+  TEST_WORKER_ID: "0",
+  NODE_ENV: "test",
+  TESTING: "1",
+  AUTH_DISABLED: "1",
+  SINGLE_TENANT: "0",
+  DEV_ADMIN: "1",
+  ADMIN_EMAILS: "dev@local",
+  LLM_TOKEN_STREAM: "true",
+  E2E_FAKE_SESSION_CHAT: "1",
+  E2E_FAKE_SESSION_MESSAGES: "1",
+  E2E_DEFAULT_MODEL: "gpt-scripted",
+  LONGHOUSE_WORKSPACE_PATH: workspacePath,
+  CLAUDE_CONFIG_DIR: claudeConfigDir,
+  E2E_HATCH_PATH: join(__dirname, "bin", "hatch"),
+  LONGHOUSE_TOOL_STUBS_PATH: toolStubsPath,
+  LONGHOUSE_SEARCH_PROJECTOR_WORKERS: "4",
+  LOG_LEVEL: "ERROR",
+  APP_PUBLIC_URL: "",
+  PUBLIC_SITE_URL: "",
 });
+// These values are intentionally set after secret stripping: they are owned,
+// deterministic fixture inputs, not credentials inherited from the host.
+childEnv.APP_PUBLIC_URL = "";
+childEnv.PUBLIC_SITE_URL = "";
+childEnv.DATABASE_URL = databaseUrl;
+childEnv.FERNET_SECRET = fernetSecret;
+childEnv.LONGHOUSE_API_URL = backendBaseUrl;
+childEnv.PATH = `${join(__dirname, "bin")}:${childEnv.PATH || ""}`;
+
+console.log(
+  `[spawn-backend] Starting E2E backend on port ${BACKEND_PORT} with SQLite: ${dbPath}`,
+);
+
+const backend = spawn(
+  "uv",
+  [
+    "run",
+    "python",
+    "-m",
+    "uvicorn",
+    "zerg.qa.e2e_app:app",
+    "--host=127.0.0.1",
+    `--port=${BACKEND_PORT}`,
+    "--workers=1",
+    "--log-level=error",
+  ],
+  {
+    env: childEnv,
+    cwd: join(__dirname, "..", "server"),
+    stdio: "inherit",
+    detached: process.platform !== "win32",
+  },
+);
 
 let backendClosed = false;
+let shuttingDown = false;
+let requestedExitCode = 0;
+let forceTimer;
 
-// Handle backend process events
-backend.on('error', (error) => {
-    console.error(`[spawn-backend] Worker ${workerId} backend error:`, error);
-    process.exit(1);
-});
-
-backend.on('close', (code) => {
-    backendClosed = true;
-    console.log(`[spawn-backend] Worker ${workerId} backend exited with code ${code}`);
-    process.exit(code);
-});
-
-function shutdown(signal) {
-    console.log(`[spawn-backend] Worker ${workerId} received ${signal}, shutting down backend`);
-    const terminateBackend = (nextSignal) => {
-        if (process.platform !== 'win32' && backend.pid) {
-            try {
-                process.kill(-backend.pid, nextSignal);
-                return;
-            } catch {
-                // Fall back to the direct child if its process group exited.
-            }
-        }
-        backend.kill(nextSignal);
-    };
-    terminateBackend(signal);
-    setTimeout(() => {
-        if (!backendClosed) {
-            terminateBackend('SIGKILL');
-        }
-    }, 5000).unref();
+function terminateBackend(signal) {
+  if (!backend.pid) return;
+  try {
+    if (
+      !signalProcessGroup(backend.pid, signal) &&
+      backend.connected !== false
+    ) {
+      backend.kill(signal);
+    }
+  } catch (error) {
+    if (error?.code !== "ESRCH")
+      console.error(
+        `[spawn-backend] Failed to signal backend: ${error.message}`,
+      );
+  }
 }
 
-// Forward signals to backend process
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+function shutdown(signal, exitCode = 1) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  requestedExitCode = exitCode;
+  console.log(
+    `[spawn-backend] Received ${signal}; stopping owned backend process group`,
+  );
+  terminateBackend(signal);
+  forceTimer = setTimeout(() => {
+    if (!backendClosed) terminateBackend("SIGKILL");
+    process.exit(requestedExitCode);
+  }, 5000);
+  forceTimer.unref();
+}
 
-// Keep the spawner running
+backend.on("error", (error) => {
+  console.error(`[spawn-backend] Backend error: ${error.message}`);
+  shutdown("SIGTERM", 1);
+});
+
+backend.on("close", (code) => {
+  backendClosed = true;
+  clearTimeout(forceTimer);
+  // A reparented descendant retains the detached process group. Kill that
+  // group even when the uvicorn leader has already exited.
+  terminateBackend("SIGKILL");
+  if (!shuttingDown) requestedExitCode = code ?? 1;
+  process.exit(requestedExitCode);
+});
+
+process.on("SIGTERM", () => shutdown("SIGTERM", 143));
+process.on("SIGINT", () => shutdown("SIGINT", 130));
+process.on("exit", () => {
+  if (!backendClosed) terminateBackend("SIGKILL");
+});
+
 process.stdin.resume();

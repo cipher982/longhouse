@@ -2,12 +2,23 @@ import fs from "fs";
 import path from "path";
 
 function usage() {
-  console.log("Usage: node scripts/analyze_playwright_timeline.mjs [path-to-json]");
+  console.log(
+    "Usage: E2E_ARTIFACT_DIR=/isolated/artifacts/e2e node scripts/analyze_playwright_timeline.mjs [path-to-json]",
+  );
   process.exit(2);
 }
 
 const argPath = process.argv[2];
-const jsonPath = argPath ? path.resolve(process.cwd(), argPath) : path.resolve(process.cwd(), "test-results/playwright-timeline.json");
+const artifactDir = process.env.E2E_ARTIFACT_DIR;
+if (!argPath && (!artifactDir || !path.isAbsolute(artifactDir))) {
+  console.error(
+    "E2E_ARTIFACT_DIR must be an absolute isolated artifact path when no timeline path is supplied.",
+  );
+  usage();
+}
+const jsonPath = argPath
+  ? path.resolve(process.cwd(), argPath)
+  : path.resolve(artifactDir, "playwright-timeline.json");
 
 if (!fs.existsSync(jsonPath)) {
   console.error(`Timeline JSON not found: ${jsonPath}`);
@@ -76,7 +87,9 @@ console.log("Playwright timeline summary");
 console.log("--------------------------");
 console.log(`File: ${path.relative(process.cwd(), jsonPath)}`);
 console.log(`Tests (results): ${intervals.length}`);
-console.log(`Workers observed: ${workerSet.size} (${[...workerSet].sort((a, b) => a - b).join(", ")})`);
+console.log(
+  `Workers observed: ${workerSet.size} (${[...workerSet].sort((a, b) => a - b).join(", ")})`,
+);
 console.log(`Max concurrent tests: ${maxActive}`);
 console.log(`Wall time (min start → max end): ${(wallMs / 1000).toFixed(2)}s`);
 

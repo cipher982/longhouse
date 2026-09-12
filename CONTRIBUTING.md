@@ -51,17 +51,42 @@ docs/       Specs and runbooks — see docs/README.md for an index
 
 Run the tier that matches your change — don't over-test:
 
-| Change in | Run |
-|-----------|-----|
-| `server/zerg/` (backend) | `make test` |
-| `web/` (frontend) | `make test-frontend` |
-| `engine/` (Rust agent) | `make test-engine` |
-| `runner/` | `make test-runner` |
-| UI / runtime behavior | `make test-e2e` |
-| Before pushing | `make test-ci` |
+| Change in                | Run                  |
+| ------------------------ | -------------------- |
+| `server/zerg/` (backend) | `make test`          |
+| `web/` (frontend)        | `make test-frontend` |
+| `engine/` (Rust agent)   | `make test-engine`   |
+| `runner/`                | `make test-runner`   |
+| UI / runtime behavior    | `make test-e2e`      |
+| Before pushing           | `make test-ci`       |
+
+Ordinary `test-*`, `validate-*`, `qa-*`, and onboarding-funnel targets run
+through the disposable portable test boundary. Local runs require Docker; the
+supervisor copies a source snapshot into a container with no host mounts,
+ambient credentials, or external network access. It writes a receipt and collected
+evidence under `artifacts/test-isolation/<run-id>/`. Do not provide provider
+credentials to fixture targets.
 
 Backend tests go in `server/tests_lite/` (per-test SQLite DBs, no shared
-conftest). For `ios/` changes, run the Xcode `Longhouse` scheme tests.
+conftest). For `ios/` changes, use the native CI lane described below.
+
+### Native test isolation
+
+Native iOS, macOS packaging, and WebKit onboarding fixtures run only for an
+exact pushed SHA on a fresh standard GitHub-hosted macOS runner. CI invokes
+`python3 scripts/qa/native-test-bootstrap.py --target TARGET` with explicit
+`NATIVE_OPTIONS_JSON`; it creates a disposable home and records evidence under
+`$RUNNER_TEMP/native-isolation-evidence/`. There is no local native fallback and
+no self-hosted Mac or paid-runner substitute. Inspect the one-day CI artifact
+and its receipt when a native fixture fails.
+
+Fixture lanes never use real provider credentials. Portable live proofs require
+an explicit provider image and a private credential JSON file through
+`scripts/qa/test-isolation.py --live --image IMAGE --credentials FILE --target TARGET`.
+Private-input native proofs (`test-mobile-chat-replay` and
+`test-terminal-fidelity-ios`) are deliberately refused by public fixture CI.
+They require a separately authorized disposable macOS worker; never upload
+personal transcripts or tokens in workflow inputs.
 
 ### Session status and motion
 
@@ -77,16 +102,19 @@ then pass `CAPTURE=<private.json>` to the journey target or to
 `make capture-live-status-frames SURFACE=ledger`. Captures contain private session
 content; keep the generated frames, videos, and manifests local and untracked.
 Inspect the frames as well as the assertions, then stop the owned lab process.
-For native status layouts use `make ios-previews`; `make ios-ui-shot
-TEST=SessionChatUITests/testKeyboardFocusKeepsLatestTranscriptMessageVisible`
-also captures the real keyboard and composer.
+For native status layouts, use the native CI dispatcher rather than executing
+on the developer Mac:
+
+```bash
+make ios-previews
+make ios-ui-shot TEST=SessionChatUITests/testKeyboardFocusKeepsLatestTranscriptMessageVisible
+```
 
 ### Native pipeline recovery
 
-On macOS with Xcode and an iOS Simulator installed, `make simlab-run` exercises
-the real app against a scratch Runtime Host and Machine Agent. It covers live
-transcript arrival, malformed/split input, abandoned sends, app termination and
-reopen, and network loss/reconnection without relaunch. To run only recovery:
+`simlab-run` dispatches the clean pushed-SHA native job off the laptop; it
+does not run native code against the developer login. The helper assertions
+remain portable:
 
 ```bash
 make simlab-run SCENARIOS="interrupted-client-recovery client-network-recovery"
@@ -109,6 +137,9 @@ verify its ID is absent from the served inventory, stop owned processes, close
 tabs/simulators, and remove scratch homes. Do not make proof cleanup depend on a
 downstream archive, backup, or ingest worker; those paths may be degraded while
 the proof remains valid.
+The operator commands below run only inside that separately provisioned worker,
+with its own isolated test environment and deliberately supplied credentials and
+private inputs. They are not commands to run under the developer's login.
 
 For real provider sessions, use `make test-console-served-state-e2e ARGS="--help"`
 to create explicit hidden proof sessions, then feed their actual assistant replies
@@ -142,9 +173,9 @@ To run the complete local campaign without assembling a case manifest by hand:
 make test-terminal-fidelity-gate ARGS="--server-url https://your-runtime.example --browser-url http://127.0.0.1:47200 --device-id your-machine --provider codex --cwd /path/to/workspace --ios-destination 'platform=iOS Simulator,id=<uuid>'"
 ```
 
-Run on the provider-owning Mac after `make dev`. Repeat `--provider` for an
-explicit matrix. The command uses the existing machine token (or `--token-env
-NAME`), binds each successful Console proof to its original native source,
+Run inside the disposable native worker after `make dev`. Repeat `--provider`
+for an explicit matrix. Supply the worker's dedicated machine token with
+`--token-env NAME`; the command binds each proof to its original native source,
 runs web and iOS viewing, then both simlab recovery scenarios. Every requested
 provider remains in the verdict, including failures; unavailable prerequisites
 cannot silently skip a required stage. Logs, source hashes, individual proofs,
@@ -170,7 +201,7 @@ itself. The check needs network access and refuses when it cannot reach the
 remote. Each summary ends with a receipt naming the
 product build identities, provider readiness and verdicts, which boundary
 failed, the retained evidence path, and the next supported command for that
-boundary. No current proof records a provider *version*, so the receipt reports
+boundary. No current proof records a provider _version_, so the receipt reports
 readiness rather than claiming a provider build it does not have.
 
 Historical indexing is a separate qualification from upload receipts. On the

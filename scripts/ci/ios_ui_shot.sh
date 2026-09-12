@@ -11,6 +11,10 @@
 #         .xcresult bundle. Failure screenshots XCTest takes on its own are
 #         exported too, so a failing run still leaves a frame to look at.
 set -euo pipefail
+if [[ "${LONGHOUSE_TEST_ISOLATED:-}" != "1" || ! -f /tmp/longhouse-test-isolated ]]; then
+  echo "Use make ios-ui-shot TEST=... to run in a disposable hosted macOS VM." >&2
+  exit 2
+fi
 TEST="${1:?test id required, e.g. SessionChatUITests/testName}"
 if [[ "$TEST" == LiveSessionFidelityUITests* ]]; then
   for suffix in SERVER_URL AUTH_TOKEN SESSION_ID MARKERS_JSON; do

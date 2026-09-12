@@ -1,11 +1,18 @@
-import { devices } from '@playwright/test';
+import path from "path";
+import { devices } from "@playwright/test";
+import { ensureTestRuntime, stripAmbientSecrets } from "./test-runtime.js";
 
-const frontendBaseUrl = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:30080';
+stripAmbientSecrets();
+const runtime = ensureTestRuntime();
+const artifactDir = path.join(runtime.artifactDir, "onboarding");
+const frontendBaseUrl =
+  process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:30080";
 
 process.env.PLAYWRIGHT_BASE_URL = frontendBaseUrl;
 
 const config = {
-  testDir: './tests/onboarding',
+  testDir: "./tests/onboarding",
+  outputDir: path.join(artifactDir, "test-results"),
   fullyParallel: false,
   workers: 1,
   retries: 0,
@@ -15,45 +22,53 @@ const config = {
     baseURL: frontendBaseUrl,
     headless: true,
     viewport: { width: 1280, height: 800 },
-    trace: 'retain-on-failure',
-    screenshot: 'only-on-failure',
-    video: 'retain-on-failure',
+    trace: "retain-on-failure",
+    screenshot: "only-on-failure",
+    video: "retain-on-failure",
     navigationTimeout: 45_000,
     actionTimeout: 20_000,
   },
 
-  reporter: process.env.VERBOSE ? [
-    ['list'],
-    ['html', { open: 'never' }],
-    ['junit', { outputFile: 'test-results/junit.onboarding.xml' }],
-  ] : [
-    ['./reporters/minimal-reporter.ts', { outputDir: 'test-results' }],
-    ['html', { open: 'never' }],
-    ['junit', { outputFile: 'test-results/junit.onboarding.xml' }],
-  ],
+  reporter: process.env.VERBOSE
+    ? [
+        ["list"],
+        [
+          "html",
+          { open: "never", outputFolder: path.join(artifactDir, "html") },
+        ],
+        ["junit", { outputFile: path.join(artifactDir, "junit.xml") }],
+      ]
+    : [
+        ["./reporters/minimal-reporter.ts", { outputDir: artifactDir }],
+        [
+          "html",
+          { open: "never", outputFolder: path.join(artifactDir, "html") },
+        ],
+        ["junit", { outputFile: path.join(artifactDir, "junit.xml") }],
+      ],
 
   projects: [
     {
-      name: 'onboarding-chromium',
-      use: { ...devices['Desktop Chrome'] },
+      name: "onboarding-chromium",
+      use: { ...devices["Desktop Chrome"] },
     },
     {
-      name: 'onboarding-firefox',
-      use: { ...devices['Desktop Firefox'] },
+      name: "onboarding-firefox",
+      use: { ...devices["Desktop Firefox"] },
     },
     {
-      name: 'onboarding-webkit',
-      use: { ...devices['Desktop Safari'] },
+      name: "onboarding-webkit",
+      use: { ...devices["Desktop Safari"] },
     },
     {
-      name: 'onboarding-mobile-safari',
-      testIgnore: ['**/onboarding_funnel.spec.ts'],
-      use: { ...devices['iPhone 13'] },
+      name: "onboarding-mobile-safari",
+      testIgnore: ["**/onboarding_funnel.spec.ts"],
+      use: { ...devices["iPhone 13"] },
     },
     {
-      name: 'onboarding-mobile-chrome',
-      testIgnore: ['**/onboarding_funnel.spec.ts'],
-      use: { ...devices['Pixel 5'] },
+      name: "onboarding-mobile-chrome",
+      testIgnore: ["**/onboarding_funnel.spec.ts"],
+      use: { ...devices["Pixel 5"] },
     },
   ],
 };
