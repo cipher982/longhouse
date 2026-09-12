@@ -1773,7 +1773,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             message = (
                 f"New machine-check request. Store the exact value {context_marker!r} "
                 f"under the label {OMP_CONTEXT_LABEL!r}. Use the read tool to read {proof_path}. "
-                f"After the tool returns, reply with exactly {marker} and no other text."
+                f"After the tool returns, reply with the stored context phrase followed by {marker} and no other text."
             )
         request_id = f"console-release-{uuid4()}"
         first = _start_turn(
