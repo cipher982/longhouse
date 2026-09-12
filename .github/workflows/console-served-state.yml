@@ -45,6 +45,7 @@ jobs:
       # unavailable" results that looked like a broken product and were really
       # an unauthenticated client.
       LONGHOUSE_MACHINE_TOKEN: ${{ secrets.HOSTED_CANARY_RUNTIME_TOKEN }}
+      INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
       LONGHOUSE_API_URL: https://${{ vars.HOSTED_CANARY_SUBDOMAIN }}.longhouse.ai
       # "all" enumerates every connected machine and asks each only about the
       # providers it advertises. Pinning one device is how a second machine rots
@@ -66,10 +67,12 @@ jobs:
       - name: Validate isolated canary configuration
         run: |
           set -euo pipefail
-          if [[ "$LONGHOUSE_API_URL" != "https://kernel-canary.longhouse.ai" ]]; then
-            echo "::error::HOSTED_CANARY_SUBDOMAIN must resolve to kernel-canary; refusing non-canary Console target." >&2
-            exit 1
-          fi
+          case "${INSTANCE_SUBDOMAIN,,}" in
+            ""|david010|demo)
+              echo "::error::Configure a dedicated HOSTED_CANARY_SUBDOMAIN; refusing personal dogfood or demo." >&2
+              exit 1
+              ;;
+          esac
           if [[ -z "$LONGHOUSE_MACHINE_TOKEN" ]]; then
             echo "::error::Missing HOSTED_CANARY_RUNTIME_TOKEN; refusing unauthenticated Console coverage." >&2
             exit 1

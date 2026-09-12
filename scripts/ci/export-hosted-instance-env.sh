@@ -16,6 +16,9 @@ if [[ ! -f "$HOSTED_INSTANCE_HELPER" ]]; then
   exit 1
 fi
 
+# Require the canary authority before the shared helper supplies manual CLI defaults.
+: "${CONTROL_PLANE_URL:?Set CONTROL_PLANE_URL explicitly for hosted CI}"
+
 # shellcheck disable=SC1090
 . "$HOSTED_INSTANCE_HELPER"
 
@@ -25,6 +28,8 @@ if [[ -z "$INSTANCE_SUBDOMAIN" ]]; then
   echo "Set INSTANCE_SUBDOMAIN or pass it as the first argument." >&2
   exit 1
 fi
+
+lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN
 
 lh_hosted_prepare_target "$INSTANCE_SUBDOMAIN" "" ""
 

@@ -50,15 +50,13 @@ jobs:
       - name: Validate isolated canary configuration
         run: |
           set -euo pipefail
-          if [[ "$QA_INSTANCE_SUBDOMAIN" != "kernel-canary" ]]; then
-            echo "::error::HOSTED_CANARY_SUBDOMAIN must be kernel-canary; refusing non-canary QA target." >&2
-            exit 1
-          fi
-          if [[ "$CONTROL_PLANE_URL" != "http://100.125.140.78:18801" ]]; then
-            echo "::error::HOSTED_CANARY_CONTROL_PLANE_URL is not the approved isolated canary control plane; refusing QA." >&2
-            exit 1
-          fi
-          for name in CONTROL_PLANE_ADMIN_TOKEN SMOKE_RUNTIME_TOKEN LONGHOUSE_MACHINE_TOKEN; do
+          case "${QA_INSTANCE_SUBDOMAIN,,}" in
+            ""|david010|demo)
+              echo "::error::Configure a dedicated HOSTED_CANARY_SUBDOMAIN; refusing personal dogfood or demo." >&2
+              exit 1
+              ;;
+          esac
+          for name in CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN SMOKE_RUNTIME_TOKEN LONGHOUSE_MACHINE_TOKEN; do
             if [[ -z "${!name}" ]]; then
               echo "::error::Missing required canary configuration: $name" >&2
               exit 1

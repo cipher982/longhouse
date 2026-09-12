@@ -72,6 +72,7 @@ jobs:
       LONGHOUSE_BROWSER_SESSION_TOKEN: ${{ secrets.HOSTED_CANARY_RUNTIME_TOKEN }}
       HOSTED_SESSION_DEBUG_SSH_TARGET: ${{ vars.HOSTED_CANARY_SSH_TARGET }}
       SESSION_PROPAGATION_ATTEMPTS: ${{ inputs.attempts || '3' }}
+      HOSTED_CANARY_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
       SESSION_PROPAGATION_SUBDOMAIN: ${{ inputs.subdomain || vars.HOSTED_CANARY_SUBDOMAIN }}
       SESSION_PROPAGATION_PROJECT: ${{ inputs.project || 'zerg' }}
       SESSION_PROPAGATION_SLA_CASE: ${{ matrix.case }}
@@ -90,15 +91,17 @@ jobs:
       - name: Validate isolated canary configuration
         run: |
           set -euo pipefail
-          if [[ "$SESSION_PROPAGATION_SUBDOMAIN" != "kernel-canary" ]]; then
-            echo "::error::The session profiler may target only kernel-canary; refusing non-canary target." >&2
+          case "${HOSTED_CANARY_SUBDOMAIN,,}" in
+            ""|david010|demo)
+              echo "::error::Configure a dedicated HOSTED_CANARY_SUBDOMAIN; refusing personal dogfood or demo." >&2
+              exit 1
+              ;;
+          esac
+          if [[ "$SESSION_PROPAGATION_SUBDOMAIN" != "$HOSTED_CANARY_SUBDOMAIN" ]]; then
+            echo "::error::The profiler target must match the configured canary authority." >&2
             exit 1
           fi
-          if [[ "$CONTROL_PLANE_URL" != "http://100.125.140.78:18801" ]]; then
-            echo "::error::HOSTED_CANARY_CONTROL_PLANE_URL is not the approved isolated canary control plane; refusing profiling." >&2
-            exit 1
-          fi
-          for name in CONTROL_PLANE_ADMIN_TOKEN LONGHOUSE_BROWSER_SESSION_TOKEN HOSTED_SESSION_DEBUG_SSH_TARGET; do
+          for name in CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN LONGHOUSE_BROWSER_SESSION_TOKEN HOSTED_SESSION_DEBUG_SSH_TARGET; do
             if [[ -z "${!name}" ]]; then
               echo "::error::Missing required canary configuration: $name" >&2
               exit 1

@@ -25,14 +25,15 @@ jobs:
     if: ${{ github.repository == 'cipher982/longhouse' && (github.event_name != 'schedule' || vars.SMOKE_AFTER_DEPLOY_ENABLED != 'false') }}
     env:
       PUBLIC_DEMO_URL: https://longhouse.ai
-      CONTROL_PLANE_URL: https://control.longhouse.ai
-      INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN || 'demo' }}
+      CONTROL_PLANE_URL: ${{ vars.HOSTED_CANARY_CONTROL_PLANE_URL }}
+      INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
+      SMOKE_RUNTIME_TOKEN: ${{ secrets.HOSTED_CANARY_RUNTIME_TOKEN }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Resolve hosted instance
         env:
-          CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
+          CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.HOSTED_CANARY_CONTROL_PLANE_ADMIN_TOKEN }}
         run: |
           chmod +x scripts/ci/export-hosted-instance-env.sh
           ./scripts/ci/export-hosted-instance-env.sh
@@ -44,23 +45,27 @@ jobs:
 
       - name: Run smoke tests
         env:
-          CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
+          CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.HOSTED_CANARY_CONTROL_PLANE_ADMIN_TOKEN }}
         run: |
+          . scripts/lib/hosted-instance.sh
+          lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN INSTANCE_SUBDOMAIN SMOKE_RUNTIME_TOKEN
           chmod +x scripts/qa/smoke-prod.sh
           ./scripts/qa/smoke-prod.sh
 
       - name: Summary
         if: always()
         run: |
-          echo "## Smoke Test Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Instance:** $INSTANCE_SUBDOMAIN" >> $GITHUB_STEP_SUMMARY
-          echo "- **Frontend:** $FRONTEND_URL" >> $GITHUB_STEP_SUMMARY
-          echo "- **API:** $API_URL" >> $GITHUB_STEP_SUMMARY
-          echo "- **Public demo:** $PUBLIC_DEMO_URL" >> $GITHUB_STEP_SUMMARY
-          echo "- **Triggered by:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Email routing audit:** runs as a separate non-blocking job" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Smoke Test Results"
+            echo ""
+            echo "- **Instance:** $INSTANCE_SUBDOMAIN"
+            echo "- **Frontend:** $FRONTEND_URL"
+            echo "- **API:** $API_URL"
+            echo "- **Public demo:** $PUBLIC_DEMO_URL"
+            echo "- **Triggered by:** ${{ github.event_name }}"
+            echo "- **Commit:** ${{ github.sha }}"
+            echo "- **Email routing audit:** runs as a separate non-blocking job"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   email-routing-audit:
     name: "📬 Email Routing Audit"
@@ -85,7 +90,9 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          echo "## Email Routing Audit" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Site:** $PUBLIC_DEMO_URL" >> $GITHUB_STEP_SUMMARY
-          echo "- **Result:** ${{ steps.email_routing.outcome }}" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Email Routing Audit"
+            echo ""
+            echo "- **Site:** $PUBLIC_DEMO_URL"
+            echo "- **Result:** ${{ steps.email_routing.outcome }}"
+          } >> "$GITHUB_STEP_SUMMARY"
