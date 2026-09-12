@@ -340,30 +340,47 @@ def test_storage_v2_session_facts_accept_provider_conversation_identity():
     assert parsed["session_facts"]["provider_session_id"] == "provider-thread-new"
 
 
-def test_storage_v2_receipt_identity_mismatch_is_indeterminate():
-    receipt = {
-        "v": 2,
-        "envelope_id": "a" * 64,
-        "object_hash": "b" * 64,
-        "commit_seq": "1",
-        "raw_state": "durable",
-        "render_state": "ready",
-        "media_state": "complete",
-        "missing_media_hashes": [],
-    }
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage,field", [("commit", "object_hash"), ("replay", "envelope_id")])
+async def test_storage_v2_misrouted_receipt_is_not_acknowledged(monkeypatch, stage, field):
+    async with _storage_v2_stack(
+        monkeypatch,
+        render_pool_factory=_InlineRenderPool,
+        prefix="lh2-receipt-identity-",
+    ) as stack:
+        payload = _payload(tenant_id=get_settings().archive_primary_tenant_id, machine_id="cinder", epoch=uuid4())
+        route = "/agents/storage/v2/envelopes"
+        headers = {"X-Longhouse-Storage-Lane": "live"}
+        if stage == "replay":
+            baseline = await stack.client.post(route, json=payload, headers=headers)
+            assert baseline.status_code == 200, baseline.text
 
-    assert (
-        storage_router._validated_receipt(
-            receipt,
-            expected_envelope_id=receipt["envelope_id"],
-            expected_object_hash=receipt["object_hash"],
-        )
-        == receipt
-    )
-    with pytest.raises(storage_router.CatalogUnavailable, match="envelope identity"):
-        storage_router._validated_receipt(receipt, expected_envelope_id="c" * 64)
-    with pytest.raises(storage_router.CatalogUnavailable, match="object identity"):
-        storage_router._validated_receipt(receipt, expected_object_hash="d" * 64)
+        call = stack.catalog.call
+        committed_receipts = []
+
+        async def misroute_receipt(method, *args, **kwargs):
+            result = await call(method, *args, **kwargs)
+            if stage == "commit" and method == "storage.raw_object.commit.v2":
+                receipt = result["receipt"]
+                committed_receipts.append(receipt)
+                return {**result, "receipt": {**receipt, field: "0" * 64}}
+            if stage == "replay" and method == "storage.raw_object.exists.batch.v2":
+                item = result["objects"][0]
+                receipt = item["receipt"]
+                committed_receipts.append(receipt)
+                return {**result, "objects": [{**item, "receipt": {**receipt, field: "0" * 64}}]}
+            return result
+
+        with monkeypatch.context() as fault:
+            fault.setattr(stack.catalog, "call", misroute_receipt)
+            rejected = await stack.client.post(route, json=payload, headers=headers)
+        assert rejected.status_code == 503, rejected.text
+        assert rejected.json()["detail"]["code"] == "catalog_unavailable"
+
+        recovered = await stack.client.post(route, json=payload, headers=headers)
+        assert recovered.status_code == 200, recovered.text
+        assert recovered.json() == committed_receipts[0]
+        assert recovered.json()["envelope_id"] == payload["expected_envelope_id"]
 
 
 @pytest.mark.asyncio
