@@ -302,6 +302,7 @@ function flattenTimelineCards(body: unknown): JourneySession[] {
     ? (body as { sessions: unknown[] }).sessions
     : [];
   const result: JourneySession[] = [];
+  const seen = new Set<string>();
   for (const row of rows) {
     if (!row || typeof row !== "object") continue;
     const card = row as Record<string, unknown>;
@@ -310,9 +311,11 @@ function flattenTimelineCards(body: unknown): JourneySession[] {
       const session = candidate as Record<string, unknown>;
       if (
         typeof session.id !== "string" ||
-        typeof session.started_at !== "string"
+        typeof session.started_at !== "string" ||
+        seen.has(session.id)
       )
         continue;
+      seen.add(session.id);
       result.push({
         id: session.id,
         provider:

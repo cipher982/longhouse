@@ -40,7 +40,11 @@ from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import TranscriptShipper
 from zerg.qa.live_session_toolkit import isolated_provider_home
+from zerg.qa.live_session_toolkit import retire_qualification_session
 from zerg.qa.live_session_toolkit import start_transcript_shipper
+from zerg.qa.provider_console_lifecycle import _force_cleanup
+from zerg.qa.provider_console_lifecycle import _terminate_live_qualification_session
+from zerg.qa.provider_console_lifecycle import _wait_served_run_retirement
 from zerg.qa.provider_release_identity import now
 from zerg.qa.resume_assurance import ProducerRegistration
 
@@ -480,8 +484,15 @@ def main(argv: list[str] | None = None) -> int:
                     candidate = json.loads(claim_path.read_text(encoding="utf-8"))
                 except (OSError, json.JSONDecodeError):
                     continue
-                if isinstance(candidate, dict):
+                if isinstance(candidate, dict) and candidate.get("session_id") == session_id:
                     vehicle_claim = candidate
+        claims = [vehicle_claim] if vehicle_claim is not None else []
+        if failure is not None and session_id:
+            cleanup["termination_dispatch"] = _terminate_live_qualification_session(api_url, token, session_id)
+        try:
+            _force_cleanup(claims)
+        except Exception as exc:  # noqa: BLE001 - continue retirement even if local termination fails
+            failure = failure or exc
         if shipper is not None:
             try:
                 shipper_receipt = shipper.stop()
@@ -492,21 +503,29 @@ def main(argv: list[str] | None = None) -> int:
         else:
             shipper_receipt = {"stopped": True, "process_dead": True, "process_group_dead": True}
         hidden = False
+        served_retired = False
         if session_id:
             try:
-                hidden_result = Client(api_url, token).request(
-                    "PATCH",
-                    f"/api/agents/sessions/{session_id}/timeline-visibility",
-                    {"hidden": True},
+                served = _wait_served_run_retirement(api_url, token, session_id, claims)
+                cleanup["served_run_inventory"] = served
+                served_retired = served.get("retired") is True
+                retirement = retire_qualification_session(api_url, token, session_id, provider=provider)
+                cleanup["session_retirement"] = retirement
+                browser_session = Client(api_url, token).served_workspace(session_id).get("session") or {}
+                hidden = (
+                    retirement.get("status") == "pass"
+                    and browser_session.get("id") == session_id
+                    and browser_session.get("user_hidden_from_timeline") is True
+                    and browser_session.get("user_state") == "archived"
                 )
-                hidden = hidden_result.get("hidden") is True
+                cleanup["browser_retirement_observed"] = hidden
             except Exception as exc:  # noqa: BLE001 - cleanup failure is retained below
                 failure = failure or exc
-        provider_dead = _wait_vehicle_dead(vehicle_claim) if vehicle_claim is not None else True
+        provider_dead = _wait_vehicle_dead(vehicle_claim)
         machine_dead = all(shipper_receipt.get(field) is True for field in ("stopped", "process_dead", "process_group_dead"))
         cleanup.update(
             {
-                "status": "pass" if provider_dead and machine_dead and hidden else "fail",
+                "status": "pass" if provider_dead and machine_dead and hidden and served_retired else "fail",
                 "orphan_count": 0 if provider_dead and machine_dead else 1,
                 "session_id": session_id,
                 "requirements": {

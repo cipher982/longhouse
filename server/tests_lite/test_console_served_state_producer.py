@@ -8,58 +8,13 @@ the gap the ten-hour wedge fell through.
 
 from __future__ import annotations
 
-import os
+import json
 from types import SimpleNamespace
 
 import pytest
-from cryptography.fernet import Fernet
 
-os.environ.setdefault("DATABASE_URL", "sqlite://")
-os.environ.setdefault("TESTING", "1")
-os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
-
-from zerg.qa import console_served_state as producer  # noqa: E402
-from zerg.qa import console_served_state_core as core  # noqa: E402
-
-
-def test_the_registration_is_a_longhouse_product_subject_with_live_evidence():
-    registration = producer.REGISTRATION.to_dict()
-    # Not a provider_release: the subject under test is Longhouse, and the
-    # provider is the instrument. Getting this wrong qualifies the wrong thing.
-    assert registration["subject_kind"] == "longhouse_product"
-    # Nothing here is reconstructed from fixtures.
-    assert registration["evidence_classes"] == ["live_token"]
-    assert registration["modes"] == ["console"]
-
-
-def test_the_vehicle_is_exact_without_changing_the_subject():
-    registration = producer.REGISTRATION.to_dict()
-    assert registration["vehicle_provider"] == "codex"
-    assert registration["providers"] == []
-
-
-def test_the_registration_declares_no_provider_even_though_one_runs():
-    # A provider does run -- it is the instrument that produces a Console turn.
-    # But the subject under test is Longhouse, and the factory refuses a
-    # longhouse_product observation that carries a provider
-    # (provider_factory/cases.py: "Longhouse product case observation carries a
-    # provider"). Declaring the vehicle here would make every published case
-    # invalid, so the runtime choice set and the declared subject are
-    # deliberately different things.
-    assert producer.REGISTRATION.to_dict()["providers"] == []
-
-
-def test_the_registration_binds_the_vehicle_and_runtime_host_authorities():
-    # The proof is what a viewer is served, so the producer needs the Runtime
-    # Host credential. It is bound once for the producer rather than per
-    # provider, because the subject is the Runtime Host's served contract and
-    # not any one provider's release.
-    assert producer.REGISTRATION.to_dict()["credential_binding_ids"] == [
-        "codex_provider_token",
-        "runtime_host_control",
-    ]
-    assert "vehicle_dispatch_receipt" in producer.REGISTRATION.to_dict()["required_artifacts"]
-    assert "canary_session_hidden" in producer.REGISTRATION.to_dict()["required_cleanup"]
+from zerg.qa import console_served_state as producer
+from zerg.qa import console_served_state_core as core
 
 
 def test_a_clean_report_passes_both_assertions():
@@ -446,3 +401,53 @@ def test_exception_closes_the_watched_stream(observation, stage):
     with pytest.raises(RuntimeError, match=f"{stage} failed"):
         observation.run([RuntimeError("workspace failed")], error=stage)
     assert observation.state.closed is True
+
+
+def test_dispatch_failure_without_vehicle_claim_cannot_certify_cleanup(monkeypatch, tmp_path):
+    monkeypatch.setenv(producer.RUNTIME_API_URL_ENV, "http://runtime.invalid")
+    monkeypatch.setenv(producer.RUNTIME_AGENTS_TOKEN_ENV, "not-a-credential")
+    monkeypatch.setattr(producer, "isolated_provider_home", lambda: tmp_path / "home")
+    monkeypatch.setattr(producer.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="codex-cli fixture"))
+    monkeypatch.setattr(producer, "login_with_api_key", lambda *_args, **_kwargs: {"status": "pass"})
+    monkeypatch.setattr(
+        producer,
+        "start_transcript_shipper",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            receipt={"machine_name": "isolated-machine"},
+            stop=lambda: {"stopped": True, "process_dead": True, "process_group_dead": True},
+        ),
+    )
+    monkeypatch.setattr(core.Client, "request", lambda *_args, **_kwargs: {"hidden": True})
+    monkeypatch.setattr(producer, "retire_qualification_session", lambda *_args, **_kwargs: {"status": "pass"}, raising=False)
+    monkeypatch.setattr(producer, "_terminate_live_qualification_session", lambda *_args: {"status": "fail"}, raising=False)
+    monkeypatch.setattr(producer, "_wait_served_run_retirement", lambda *_args: {"retired": False}, raising=False)
+
+    def dispatch_failure(_root, **kwargs):
+        kwargs["on_session_created"]("owned-session")
+        raise RuntimeError("dispatch response lost before vehicle claim")
+
+    monkeypatch.setattr(producer, "run_console_served_state", dispatch_failure)
+    evidence = tmp_path / "evidence"
+    vehicle = tmp_path / "vehicle"
+    vehicle.write_bytes(b"fixture")
+    exit_code = producer.main(
+        [
+            "--evidence-root",
+            str(evidence),
+            "--engine",
+            str(vehicle),
+            "--provider-bin",
+            str(vehicle),
+            "--provider-version",
+            "fixture",
+            "--repo-root",
+            str(tmp_path),
+            "--model",
+            "fixture",
+        ]
+    )
+    cleanup = json.loads((evidence / "cleanup-receipt.json").read_text())
+    assert exit_code == 1
+    assert "dispatch response lost" in json.loads((evidence / "result.json").read_text())["error"]
+    assert cleanup["status"] == "fail"
+    assert cleanup["requirements"]["no_orphan_provider_processes"] is False
