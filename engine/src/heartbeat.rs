@@ -2137,7 +2137,10 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
                 process_start_time: binding.process_start_time.clone(),
                 boot_id: boot_id.clone(),
                 cwd: binding.cwd.clone(),
-                alive: true,
+                // A cached binding preserves identity evidence, not current
+                // process liveness. Only a complete process scope authorizes
+                // the positive alive claim.
+                alive: unmanaged_snapshot_complete,
                 source: "unmanaged_process_scan".to_string(),
                 observed_at: observed_at(&binding.observed_at),
             });
@@ -6187,7 +6190,16 @@ mod tests {
             0,
         );
         assert!(without_activity.activity.is_empty());
-        assert_eq!(without_activity.process, evidence.process);
+        assert!(without_activity
+            .process
+            .iter()
+            .filter(|fact| fact.source == "unmanaged_process_scan")
+            .all(|fact| !fact.alive));
+        assert!(evidence
+            .process
+            .iter()
+            .filter(|fact| fact.source == "unmanaged_process_scan")
+            .all(|fact| fact.alive));
         assert_eq!(without_activity.control, evidence.control);
         assert_eq!(without_activity.transcript, evidence.transcript);
         assert_eq!(without_activity.readiness, evidence.readiness);

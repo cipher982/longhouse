@@ -436,6 +436,7 @@ struct ProjectionBuildInput {
 struct ProjectionBuildResult {
     generation: u64,
     managed_scan_partial: bool,
+    unmanaged_snapshot_complete: bool,
     result: Result<(heartbeat::StatusFileProjection, SessionSnapshotState), String>,
     elapsed_ms: u64,
 }
@@ -1091,6 +1092,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut machine_presence_post_tasks: JoinSet<MachinePresencePostResult> = JoinSet::new();
     let mut unmanaged_binding_refresh_tasks: JoinSet<UnmanagedBindingRefreshResult> =
         JoinSet::new();
+    let mut unmanaged_binding_refresh_generation: Option<u64> = None;
     let mut storage_maintenance_tasks: JoinSet<()> = JoinSet::new();
 
     let outbox_dir = config::get_agent_outbox_dir()?;
@@ -1645,6 +1647,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
 
             unmanaged_binding_refresh_result = unmanaged_binding_refresh_tasks.join_next(), if !unmanaged_binding_refresh_tasks.is_empty() => {
+                let refresh_generation = unmanaged_binding_refresh_generation.take();
                 match unmanaged_binding_refresh_result {
                     Some(Ok(result)) => {
                         let stale = result.generation != projection_generation;
@@ -1746,11 +1749,25 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                     }
                     Some(Err(err)) => {
-                        projection_generation = projection_generation.saturating_add(1);
-                        unmanaged_binding_refresh_failed = true;
-                        managed_reconciliation =
-                            heartbeat::ProjectionReconciliation::failed("unmanaged_binding");
-                        tracing::warn!("Unmanaged binding refresh task failed: {}", err);
+                        if refresh_generation == Some(projection_generation) {
+                            unmanaged_binding_refresh_failed = true;
+                            managed_reconciliation =
+                                heartbeat::ProjectionReconciliation::failed("unmanaged_binding");
+                            heartbeat::refresh_existing_status_pulse(
+                                &managed_reconciliation,
+                                &mut shipping_progress,
+                                offline.is_offline,
+                                &status_path,
+                            );
+                            tracing::warn!("Unmanaged binding refresh task failed: {}", err);
+                        } else {
+                            tracing::debug!(
+                                generation = ?refresh_generation,
+                                latest_generation = projection_generation,
+                                "Discarded stale unmanaged binding task failure: {}",
+                                err
+                            );
+                        }
                     }
                     None => {}
                 }
@@ -1936,6 +1953,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             );
                         if paired_refresh_started {
                             projection_generation = paired_generation;
+                            unmanaged_binding_refresh_generation = Some(projection_generation);
                         } else if result.full_reconciliation {
                             if result.reason == "wake" {
                                 pending_wake_reconciliation = true;
@@ -1947,6 +1965,44 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 &mut projection_generation,
                                 &mut pending_full_reconciliation,
                             );
+                        }
+
+                        // A valid managed scan is fresh evidence even when the
+                        // optional unmanaged/Shadow refresh is still running.
+                        // Publish it with the cached Shadow rows only as
+                        // incomplete evidence; the refresh result can replace
+                        // this projection later without blocking managed truth.
+                        let managed_snapshot_complete =
+                            result.full_reconciliation && !managed_scan_partial;
+                        last_projected_managed_observations = last_managed_observations.clone();
+                        last_projected_managed_scan_partial = managed_scan_partial;
+                        last_projected_managed_snapshot_complete = managed_snapshot_complete;
+                        last_projected_unmanaged_snapshot_complete = false;
+                        let input = ProjectionBuildInput {
+                            generation: projection_generation,
+                            managed_scan_partial: last_projected_managed_scan_partial,
+                            managed_snapshot_complete:
+                                last_projected_managed_snapshot_complete,
+                            unmanaged_snapshot_complete:
+                                last_projected_unmanaged_snapshot_complete,
+                            db_path: projection_db_path.clone(),
+                            parse_tracker: parse_tracker.clone(),
+                            ship_stats: ship_stats.clone(),
+                            is_offline: offline.is_offline,
+                            last_ship_at: last_ship_at.clone(),
+                            machine_id: config.shipper_config.machine_name.clone(),
+                            managed: last_projected_managed_observations.clone(),
+                            unmanaged: last_unmanaged_session_bindings
+                                .clone()
+                                .unwrap_or_default(),
+                            limiter: adaptive_limiter.snapshot(),
+                            scheduler: scheduler.snapshot(),
+                            archive_repair_mode: config.archive_repair_mode,
+                            last_full_reconciled_at: last_full_reconciled_at.clone(),
+                            session_snapshot_state: session_snapshot_state.clone(),
+                        };
+                        if !maybe_start_projection_build(&mut projection_build_tasks, input) {
+                            projection_build_pending = true;
                         }
                         maybe_start_opencode_title_refresh(
                             &mut opencode_title_refresh_tasks,
@@ -2023,7 +2079,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             projection_build_result = projection_build_tasks.join_next(), if !projection_build_tasks.is_empty() => {
                 match projection_build_result {
                     Some(Ok(result)) => {
-                        let is_current = result.generation == projection_generation;
+                        let is_current = result.generation == projection_generation
+                            && result.managed_scan_partial
+                                == last_projected_managed_scan_partial
+                            && result.unmanaged_snapshot_complete
+                                == last_projected_unmanaged_snapshot_complete;
                         match result.result {
                         Ok((mut projection, next_snapshot_state)) => {
                             if result.elapsed_ms > LOCAL_STATUS_BUDGET_MS {
@@ -2050,6 +2110,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 tracing::debug!(
                                     generation = result.generation,
                                     latest_generation = projection_generation,
+                                    managed_scan_partial = result.managed_scan_partial,
+                                    latest_managed_scan_partial =
+                                        last_projected_managed_scan_partial,
+                                    unmanaged_snapshot_complete =
+                                        result.unmanaged_snapshot_complete,
+                                    latest_unmanaged_snapshot_complete =
+                                        last_projected_unmanaged_snapshot_complete,
                                     "Discarded stale local status projection"
                                 );
                             } else {
@@ -2750,6 +2817,7 @@ fn maybe_start_projection_build(
         ProjectionBuildResult {
             generation,
             managed_scan_partial,
+            unmanaged_snapshot_complete,
             result,
             elapsed_ms: started.elapsed().as_millis() as u64,
         }
@@ -2915,6 +2983,16 @@ fn build_local_status_projection_with_omp(
             pi_observations,
             omp_observations,
         );
+    // Keep cached Shadow bindings as timestamped raw evidence, but do not put
+    // them in the canonical current-session view until that process scope has
+    // been freshly observed. The incomplete scope remains fail-open for server
+    // reconciliation and prevents old process identity from becoming liveness.
+    let resolved_unmanaged_bindings: &[heartbeat::UnmanagedSessionBinding] =
+        if unmanaged_snapshot_complete {
+            &payload.unmanaged_session_bindings
+        } else {
+            &[]
+        };
     // Compute the fresh activity ledger once and feed the raw rows into the
     // typed evidence envelope. Activity facts remain independent of control
     // leases and of the resolved presentation projection below.
@@ -2964,7 +3042,7 @@ fn build_local_status_projection_with_omp(
     ));
     payload.sessions = heartbeat::resolved_sessions_from_observations_with_omp(
         &payload.managed_sessions,
-        &payload.unmanaged_session_bindings,
+        resolved_unmanaged_bindings,
         observations,
         claude_observations,
         opencode_observations,
@@ -5808,6 +5886,7 @@ mod tests {
         );
 
         assert_eq!(projection.payload.unmanaged_session_bindings, cached);
+        assert!(projection.payload.sessions.is_empty());
         let scopes = projection
             .payload
             .machine_evidence
