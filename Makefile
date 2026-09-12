@@ -955,7 +955,7 @@ render-canary: ## Playwright render-latency check against hosted (~2min)
 	@$(MAKE) ensure-js-deps
 	@./scripts/qa/render-canary.sh
 
-cohort-journey: ## Privacy-safe scheduled product journey against the non-demo dogfood tenant
+cohort-journey: ## Privacy-safe product journey using owned isolated-canary fixtures
 	@$(MAKE) ensure-js-deps
 	@./scripts/qa/cohort-journey.sh
 

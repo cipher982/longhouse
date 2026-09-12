@@ -74,6 +74,17 @@ describe("cohort journey helpers", () => {
     expect(cohorts.cold_gt_30d).toBeNull();
   });
 
+  test("selects only explicitly owned sessions when an ownership set is supplied", () => {
+    const owned = new Set(["owned"]);
+    const cohorts = selectJourneyCohorts([
+      session("owned", 1, { environment: "test" }),
+      session("other-test", 2, { environment: "test", ended_at: day(2) }),
+    ], NOW, "seed", owned);
+
+    expect(cohorts.active_recent?.id).toBe("owned");
+    expect(cohorts.recent_closed).toBeNull();
+  });
+
   test("classifies API resources without retaining identifiers or queries", () => {
     expect(classifyApiResource("https://x/api/timeline/sessions?query=private")).toBe("lexical_search");
     expect(classifyApiResource("https://x/api/timeline/sessions/abc-123/projection?cursor=secret")).toBe("session_projection");

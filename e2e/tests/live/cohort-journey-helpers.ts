@@ -11,6 +11,10 @@ export type JourneySession = {
   user_messages?: number | null;
   assistant_messages?: number | null;
   tool_calls?: number | null;
+  origin_kind?: string | null;
+  hidden_from_default_timeline?: boolean | null;
+  launch_actor?: string | null;
+  launch_surface?: string | null;
 };
 
 export type JourneyCohorts = {
@@ -56,8 +60,12 @@ function estimatedEntries(session: JourneySession): number {
     + Math.max(0, Number(session.tool_calls ?? 0));
 }
 
-function isEligible(session: JourneySession): boolean {
+function isEligible(
+  session: JourneySession,
+  ownedSessionIds?: ReadonlySet<string>,
+): boolean {
   if (!session.id || timestampMs(session) <= 0 || estimatedEntries(session) <= 0) return false;
+  if (ownedSessionIds) return ownedSessionIds.has(session.id);
   const environment = String(session.environment ?? "").toLowerCase();
   const provider = String(session.provider ?? "").toLowerCase();
   return !["test", "e2e", "automation"].includes(environment) && provider !== "canary";
@@ -76,10 +84,13 @@ export function selectJourneyCohorts(
   input: JourneySession[],
   nowMs: number,
   randomSeed: string,
+  ownedSessionIds?: ReadonlySet<string>,
 ): JourneyCohorts {
   const byId = new Map<string, JourneySession>();
   for (const session of input) {
-    if (isEligible(session) && !byId.has(session.id)) byId.set(session.id, session);
+    if (isEligible(session, ownedSessionIds) && !byId.has(session.id)) {
+      byId.set(session.id, session);
+    }
   }
   const sessions = [...byId.values()].sort((left, right) => timestampMs(right) - timestampMs(left));
   const ageMs = (session: JourneySession) => nowMs - timestampMs(session);
@@ -127,7 +138,7 @@ export function classifyApiResource(rawUrl: string): string | null {
   }
   const path = url.pathname.replace(/^\/api/, "");
   if (path === "/health") return "health";
-  if (path === "/timeline/recall") return "recall";
+  if (path === "/timeline/recall" || path === "/agents/recall") return "recall";
   if (path === "/timeline/sessions") return url.searchParams.has("query") ? "lexical_search" : "timeline_list";
   if (/^\/timeline\/sessions\/[^/]+\/workspace$/.test(path)) return "session_workspace";
   if (/^\/timeline\/sessions\/[^/]+\/projection$/.test(path)) return "session_projection";

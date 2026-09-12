@@ -34,8 +34,7 @@ jobs:
       CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.HOSTED_CANARY_CONTROL_PLANE_ADMIN_TOKEN }}
       SMOKE_RUNTIME_TOKEN: ${{ secrets.HOSTED_CANARY_RUNTIME_TOKEN }}
       LONGHOUSE_MACHINE_TOKEN: ${{ secrets.HOSTED_CANARY_RUNTIME_TOKEN }}
-      LONGHOUSE_JOURNEY_LEXICAL_QUERY: ${{ secrets.LONGHOUSE_JOURNEY_LEXICAL_QUERY }}
-      LONGHOUSE_JOURNEY_RECALL_QUERY: ${{ secrets.LONGHOUSE_JOURNEY_RECALL_QUERY }}
+      LONGHOUSE_CANARY_TOKEN: ${{ secrets.HOSTED_CANARY_TELEMETRY_TOKEN }}
       QA_INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
       QA_HOME: /tmp/hosted-live-qa-${{ github.run_id }}-${{ github.run_attempt }}
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
@@ -120,6 +119,14 @@ jobs:
       - name: Prepare isolated QA home
         run: mkdir -p "$QA_HOME" "$PLAYWRIGHT_BROWSERS_PATH"
 
+      - name: Verify deployed source before QA
+        run: |
+          set -euo pipefail
+          expected_sha="$(git rev-parse HEAD)"
+          health="$(curl --fail --silent --show-error --max-time 15 "https://${QA_INSTANCE_SUBDOMAIN}.longhouse.ai/api/health")"
+          printf '%s\n' "$health" | jq '{build}'
+          printf '%s\n' "$health" | jq --exit-status --arg expected "$expected_sha" '.build.commit == $expected and .build.dirty == false'
+
       - name: Run hosted live QA
         id: qa_live
         env:
@@ -145,28 +152,31 @@ jobs:
 
       - name: Run render-canary SLA check
         id: render_canary
-        if: always() && steps.qa_live.outcome == 'success' && env.SMOKE_RUNTIME_TOKEN != ''
+        if: always() && steps.qa_live.outcome == 'success' && env.SMOKE_RUNTIME_TOKEN != '' && env.LONGHOUSE_CANARY_TOKEN != ''
         env:
           HOME: ${{ env.QA_HOME }}
-          LONGHOUSE_CANARY_TOKEN: ${{ secrets.LONGHOUSE_CANARY_TOKEN }}
-        run: |
-          if [[ -z "$LONGHOUSE_CANARY_TOKEN" ]]; then
-            echo "LONGHOUSE_CANARY_TOKEN secret not set; skipping render-canary." >&2
-            exit 0
-          fi
-          make render-canary
+        run: make render-canary
 
       - name: Validate cohort journey contracts
         if: always() && steps.qa_live.outcome == 'success'
         run: make validate-cohort-journey
 
-      - name: Run privacy-safe dogfood cohort journey
+      - name: Run privacy-safe isolated cohort journey
         id: cohort_journey
         if: always() && steps.qa_live.outcome == 'success'
         env:
           HOME: ${{ env.QA_HOME }}
           LONGHOUSE_JOURNEY_OUTPUT: ${{ github.workspace }}/artifacts/cohort-journey/cohort-journey-${{ github.run_id }}-${{ github.run_attempt }}.json
         run: make cohort-journey
+
+      - name: Verify deployed source after QA
+        if: always() && steps.qa_live.outcome != 'skipped'
+        run: |
+          set -euo pipefail
+          expected_sha="$(git rev-parse HEAD)"
+          health="$(curl --fail --silent --show-error --max-time 15 "https://${QA_INSTANCE_SUBDOMAIN}.longhouse.ai/api/health")"
+          printf '%s\n' "$health" | jq '{build}'
+          printf '%s\n' "$health" | jq --exit-status --arg expected "$expected_sha" '.build.commit == $expected and .build.dirty == false'
 
       - name: Write summary
         if: always()
@@ -204,3 +214,11 @@ jobs:
             e2e/playwright-report
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Remove owned QA home
+        if: always()
+        run: |
+          set -euo pipefail
+          test "$QA_HOME" = "/tmp/hosted-live-qa-${{ github.run_id }}-${{ github.run_attempt }}"
+          rm -rf -- "$QA_HOME"
+          test ! -e "$QA_HOME"
