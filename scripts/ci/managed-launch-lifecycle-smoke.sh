@@ -99,6 +99,22 @@ stop_child() {
       kill -9 "$child" 2>/dev/null || true
     fi
   done
+  # SIGKILL is asynchronous from the kernel's point of view. Give reparented
+  # descendants a short bounded window to disappear before declaring cleanup
+  # failed; otherwise a process that exits immediately after this check turns a
+  # successful proof into a false cleanup failure.
+  local remaining=0
+  for _ in $(seq 1 50); do
+    remaining=0
+    for child in $descendants; do
+      if kill -0 "$child" 2>/dev/null; then
+        remaining=1
+        break
+      fi
+    done
+    [[ "$remaining" == "0" ]] && break
+    sleep 0.1
+  done
   for child in $descendants; do
     if kill -0 "$child" 2>/dev/null; then
       echo "warning: $label left owned descendant $child running" >&2
@@ -270,12 +286,16 @@ served_session_facts() {
 }
 
 served_session_terminal_state() {
-  served_session_facts "$1" | python3 -c '
+  # Ended control-only Helms intentionally have no storage workspace after
+  # their lease is withdrawn. Inspect canonical state diagnostics instead of
+  # treating that expected 404 as a missing terminal event.
+  curl -fsS "$BASE_URL/api/agents/sessions/$1/state-diagnostics" \
+    -H "X-Agents-Token: $DEVICE_TOKEN" \
+    | python3 -c '
 import json, sys
-session = json.load(sys.stdin)["session"]
-state = session["session_state"]
-run = state.get("run") or {}
-if run.get("lifecycle") == "ended" or state.get("disposition", {}).get("state") == "closed":
+diagnostics = json.load(sys.stdin)
+run = (diagnostics.get("shadow") or {}).get("run") or {}
+if run.get("lifecycle") == "ended":
     print("session_ended")
 '
 }
