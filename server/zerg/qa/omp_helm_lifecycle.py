@@ -1607,11 +1607,7 @@ def _helm_cleanup_ready(cleanup: Mapping[str, Any]) -> bool:
 def _exact_marker_prompt(marker: str) -> str:
     """Make sequential marker probes distinguish a fresh request."""
 
-    return (
-        "Machine check for this new turn. Output exactly "
-        f"{marker} as the entire visible answer. "
-        "Do not quote, mention, or reuse any earlier answer. No explanation."
-    )
+    return f"New machine-check request. The active marker for this request is {marker}. Reply with exactly {marker} and no other text."
 
 
 def _setup_marker_prompt(marker: str, *, setup: str) -> str:
@@ -1619,9 +1615,9 @@ def _setup_marker_prompt(marker: str, *, setup: str) -> str:
 
     return (
         f"{setup.rstrip()}\n\n"
-        "This is a machine check for the new turn. After completing that "
-        f"instruction, output exactly {marker} as the entire visible answer. "
-        "Do not quote, mention, or reuse any earlier answer. No explanation."
+        "New machine-check request. After completing that setup, the active "
+        f"marker for this request is {marker}. Reply with exactly {marker} "
+        "and no other text."
     )
 
 
