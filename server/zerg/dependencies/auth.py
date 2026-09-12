@@ -96,10 +96,6 @@ def get_current_user(request: Request, db=Depends(_auth_compat_db)):
     1. Authorization: Bearer <token> header
     2. longhouse_session cookie (browser auth)
     """
-    request_method = getattr(request, "method", "GET").upper()
-    if request_method in {"POST", "PUT", "PATCH", "DELETE"}:
-        require_browser_auth_header(request)
-
     # Check for either bearer token or session cookie
     has_bearer = "Authorization" in request.headers
     has_cookie = SESSION_COOKIE_NAME in request.cookies
@@ -110,6 +106,8 @@ def get_current_user(request: Request, db=Depends(_auth_compat_db)):
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    if not has_bearer and request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+        require_browser_auth_header(request)
     return _get_strategy().get_current_user(request, db)
 
 

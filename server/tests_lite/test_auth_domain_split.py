@@ -13,6 +13,7 @@ from starlette.requests import Request
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
+from zerg.dependencies import auth
 from zerg.dependencies import browser_auth
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.routers import auth as auth_router
@@ -117,13 +118,68 @@ def test_browser_mutation_does_not_fallback_from_invalid_bearer_to_cookie():
 
     with (
         patch.object(browser_auth.auth_deps, "AUTH_DISABLED", False),
-        patch.object(browser_auth, "_get_browser_session_user", return_value=object()) as resolve,
+        patch.object(browser_auth, "_get_browser_session_user", return_value=None) as resolve,
     ):
         with pytest.raises(HTTPException) as exc_info:
             browser_auth.get_current_browser_user(request, db=object())
 
-    assert exc_info.value.status_code == 403
-    resolve.assert_not_called()
+    assert exc_info.value.status_code == 401
+    resolve.assert_called_once()
+
+
+def test_browser_mutation_with_explicit_bearer_skips_cookie_csrf_guard():
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/api/timeline/sessions/1/action",
+            "query_string": b"",
+            "headers": [
+                (b"authorization", b"Bearer zdt_device"),
+                (b"origin", b"http://localhost:5173"),
+                (b"sec-fetch-site", b"cross-site"),
+            ],
+            "client": ("127.0.0.1", 5173),
+            "server": ("backend", 8000),
+        }
+    )
+    user = object()
+
+    with (
+        patch.object(browser_auth.auth_deps, "AUTH_DISABLED", False),
+        patch.object(browser_auth, "_get_browser_session_user", return_value=user) as resolve,
+    ):
+        assert browser_auth.get_current_browser_user(request, db=object()) is user
+
+    resolve.assert_called_once()
+def test_generic_mutation_with_explicit_bearer_skips_cookie_csrf_guard():
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/api/admin/action",
+            "query_string": b"",
+            "headers": [
+                (b"authorization", b"Bearer zdt_device"),
+                (b"origin", b"http://localhost:5173"),
+                (b"sec-fetch-site", b"cross-site"),
+            ],
+            "client": ("127.0.0.1", 5173),
+            "server": ("backend", 8000),
+        }
+    )
+    user = object()
+    strategy = SimpleNamespace(get_current_user=lambda request, db: user)
+
+    with (
+        patch.object(auth, "AUTH_DISABLED", False),
+        patch.object(auth, "_get_strategy", return_value=strategy),
+    ):
+        assert auth.get_current_user(request, db=object()) is user
+
+
 
 
 def test_get_current_browser_route_user_accepts_query_token_for_sse():

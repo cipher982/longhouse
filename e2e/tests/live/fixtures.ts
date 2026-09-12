@@ -135,7 +135,6 @@ export function buildRuntimeTokenStorageState(
         name: "__Host-lh_session",
         value: runtimeToken,
         url: `${parsed.origin}/`,
-        path: "/",
         expires: Math.floor(Date.now() / 1000) + 3600,
         httpOnly: true,
         secure: true,

@@ -87,8 +87,13 @@ export default defineConfig(({ mode }) => {
 
   const remoteProxyConfigure = devProxy
     ? (proxy: { on: (ev: string, cb: (proxyReq: { setHeader: (k: string, v: string) => void }) => void) => void }) => {
+        const targetOrigin = new URL(devProxy.target).origin;
         proxy.on("proxyReq", (proxyReq) => {
           proxyReq.setHeader("authorization", `Bearer ${devProxy.bearer}`);
+          // changeOrigin rewrites Host to the remote Runtime Host. Keep the
+          // forwarded browser origin aligned with that Host so cookie/form
+          // CSRF checks and auth refresh/logout work through the dev proxy.
+          proxyReq.setHeader("origin", targetOrigin);
         });
       }
     : undefined;
