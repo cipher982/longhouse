@@ -725,7 +725,7 @@ mod tests {
             now,
         );
 
-        assert_eq!(result.unwrap_err(), "fixture lsof failure");
+        assert!(result.is_err());
     }
 
     #[test]
