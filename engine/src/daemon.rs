@@ -2168,8 +2168,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 managed_reconciliation =
                                     heartbeat::ProjectionReconciliation::failed("provider_state_partial");
                             } else if managed_observation_scan_tasks.is_empty()
-                                && !pending_wake_reconciliation
-                                && !pending_full_reconciliation
                                 && !unmanaged_binding_refresh_failed
                             {
                                 // A managed scan is authoritative for the core
