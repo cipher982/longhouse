@@ -257,15 +257,16 @@ def guest_artifact_path(value: str) -> str:
     if "\x00" in value:
         raise ValueError("artifact path contains NUL")
     path = Path(value)
-    if path.is_absolute():
+    guest_root = Path("/work/artifacts")
+    if path.is_relative_to(guest_root):
+        relative = path.relative_to(guest_root)
+    elif path.is_absolute():
         relative = Path(path.name)
     else:
         relative = path
-        if not relative.parts or ".." in relative.parts:
-            raise ValueError("artifact path must not escape its guest root")
-    if relative == Path(".") or not relative.name:
-        raise ValueError("artifact path must name an artifact")
-    return str(Path("/work/artifacts") / relative)
+    if ".." in relative.parts or not relative.name:
+        raise ValueError("artifact path must name a destination inside its guest root")
+    return str(guest_root / relative)
 
 
 def container_options(options: dict[str, str]) -> dict[str, str]:
