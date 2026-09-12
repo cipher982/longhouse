@@ -46,6 +46,7 @@ from zerg.models.live_store import LiveSessionConnection  # noqa: E402
 from zerg.models.live_store import LiveSessionRun  # noqa: E402
 from zerg.models.live_store import LiveSessionThread  # noqa: E402
 from zerg.services.catalogd_supervisor import catalogd_paths  # noqa: E402
+from zerg.services.session_runtime import runtime_key_for_session  # noqa: E402
 
 OWNER_EMAIL = "owner@heartbeat.test"
 DEVICE_ID = "cinder"
@@ -1309,6 +1310,56 @@ def test_heartbeat_only_complete_snapshot_detaches_missing_managed_control(live_
     assert [row["id"] for row in runs] == [str(run_id)]
     assert runs[0]["ended_at"] is None
     assert runs[0]["exit_status"] is None
+
+
+def test_repeated_complete_omission_reconciles_late_runtime_observation(live_catalog, live_catalog_client):
+    session_id = uuid4()
+    headers = _headers(live_catalog)
+    _seed_open_run(session_id)
+    attached = live_catalog_client.post(
+        "/agents/heartbeat",
+        headers=headers,
+        json={"version": "0.7.0", "daemon_pid": 42, "sessions": [_resolved_managed_session(session_id)]},
+    )
+    assert attached.status_code == 204, attached.text
+    omitted = {
+        "version": "0.7.0",
+        "daemon_pid": 42,
+        "sessions": [],
+        "machine_evidence": _managed_snapshot_evidence(complete=True),
+    }
+    first = live_catalog_client.post("/agents/heartbeat", headers=headers, json=omitted)
+    assert first.status_code == 204, first.text
+    assert _catalog_rows(LiveSession.__table__)[0]["state"] == "missing"
+
+    observed = live_catalog_client.post(
+        "/agents/runtime/events/batch",
+        headers=headers,
+        json={
+            "events": [
+                {
+                    "runtime_key": runtime_key_for_session("codex", str(session_id)),
+                    "session_id": str(session_id),
+                    "provider": "codex",
+                    "device_id": DEVICE_ID,
+                    "source": "codex_bridge",
+                    "kind": "phase_signal",
+                    "phase": "running",
+                    "occurred_at": datetime.now(UTC).isoformat(),
+                    "dedupe_key": "late-runtime-after-omission",
+                }
+            ]
+        },
+    )
+    assert observed.status_code == 200, observed.text
+    assert observed.json()["accepted"] == 1
+    assert _catalog_rows(LiveSession.__table__)[0]["state"] == "observed"
+
+    omitted["machine_evidence"] = _managed_snapshot_evidence(complete=True)
+    second = live_catalog_client.post("/agents/heartbeat", headers=headers, json=omitted)
+    assert second.status_code == 204, second.text
+    assert _catalog_rows(LiveSession.__table__)[0]["state"] == "missing"
+    assert _catalog_rows(LiveSessionRun.__table__)[0]["ended_at"] is None
 
 
 def test_heartbeat_empty_resolved_sessions_does_not_detach_other_device_control(live_catalog, live_catalog_client):

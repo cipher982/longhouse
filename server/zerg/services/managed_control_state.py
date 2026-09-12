@@ -399,7 +399,7 @@ def mark_missing_live_control_leases(
     device_id: str,
     received_at: datetime,
 ) -> set[UUID]:
-    """Mark live control leases from this device offline when omitted from the snapshot."""
+    """Apply this device's accepted absence, including previously missing leases."""
 
     if os.environ.get(DISABLE_MISSING_MANAGED_LEASE_DETACH_ENV) in {"1", "true", "TRUE", "yes", "on"}:
         return set()
@@ -411,7 +411,7 @@ def mark_missing_live_control_leases(
     seen_at = normalize_utc(received_at) or _utc_now()
     query = db.query(LiveControlLease).filter(
         LiveControlLease.device_id == normalized_device_id,
-        LiveControlLease.state.in_(("attached", "degraded")),
+        LiveControlLease.state.in_(("attached", "degraded", "missing")),
     )
     if seen_session_ids:
         query = query.filter(LiveControlLease.session_id.notin_(seen_session_ids))
