@@ -848,6 +848,22 @@ def _wait_state(
     return _wait(observe, timeout=timeout, description="OMP Helm state")
 
 
+def _resume_state_is_settled(
+    state: Mapping[str, Any],
+    *,
+    native_session_id: str,
+    session_file: Path,
+) -> bool:
+    return (
+        state.get("ready") is True
+        and state.get("phase") == "idle"
+        and state.get("agent_end_observed") is True
+        and state.get("agent_end_is_terminal") is True
+        and state.get("native_session_id") == native_session_id
+        and state.get("session_file") == str(session_file)
+    )
+
+
 def _native_rows(session_file: Path, minimum_offset: int = 0) -> list[dict[str, Any]]:
     try:
         content = session_file.read_bytes()
@@ -2383,16 +2399,21 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "terminal_evidence": resume_terminal_evidence,
             "control_identity": resume_control_receipt,
         }
-        settled_state = _wait_state(
-            longhouse_home,
-            session_id=current_session_id,
-            predicate=lambda value: (
-                value.get("phase") == "idle"
-                and value.get("native_session_id") == str(resume_state.get("native_session_id") or "")
-                and value.get("session_file") == str(resume_file)
-                and value.get("updated_at") != resume_state.get("updated_at")
-            ),
-        )
+        settled_state = resume_channel_state
+        if not _resume_state_is_settled(
+            settled_state,
+            native_session_id=str(resume_state.get("native_session_id") or ""),
+            session_file=resume_file,
+        ):
+            settled_state = _wait_state(
+                longhouse_home,
+                session_id=current_session_id,
+                predicate=lambda value: _resume_state_is_settled(
+                    value,
+                    native_session_id=str(resume_state.get("native_session_id") or ""),
+                    session_file=resume_file,
+                ),
+            )
         final_flush = shipper.flush("omp-helm-final")
         if not _flush_receipt_complete(final_flush):
             raise RuntimeError("OMP Helm cold-resume transcript flush did not complete a bounded ship")

@@ -36,6 +36,7 @@ from zerg.qa.omp_helm_lifecycle import _native_settlement
 from zerg.qa.omp_helm_lifecycle import _redacted_state_snapshot
 from zerg.qa.omp_helm_lifecycle import _register_native_source
 from zerg.qa.omp_helm_lifecycle import _remove_isolation_after_source_retention
+from zerg.qa.omp_helm_lifecycle import _resume_state_is_settled
 from zerg.qa.omp_helm_lifecycle import _runtime_control_identity_is_complete
 from zerg.qa.omp_helm_lifecycle import _runtime_convergence
 from zerg.qa.omp_helm_lifecycle import _runtime_events_snapshot
@@ -219,6 +220,44 @@ def test_omp_helm_channel_terminal_evidence_preserves_lifecycle_field_presence(m
             minimum_turn_seq=3,
         )
         is None
+    )
+
+
+def test_omp_resume_settlement_accepts_terminal_channel_state_without_timestamp_change(tmp_path) -> None:
+    state = _omp_state("connection-1", "lease-1", "same")
+    state.update(
+        {
+            "phase": "idle",
+            "agent_end_observed": True,
+            "agent_end_is_terminal": True,
+        }
+    )
+
+    assert (
+        _resume_state_is_settled(
+            state,
+            native_session_id="native-1",
+            session_file=tmp_path / "session-1.jsonl",
+        )
+        is False
+    )
+    state["session_file"] = str(tmp_path / "session-1.jsonl")
+    assert (
+        _resume_state_is_settled(
+            state,
+            native_session_id="native-1",
+            session_file=tmp_path / "session-1.jsonl",
+        )
+        is True
+    )
+    state["phase"] = "thinking"
+    assert (
+        _resume_state_is_settled(
+            state,
+            native_session_id="native-1",
+            session_file=tmp_path / "session-1.jsonl",
+        )
+        is False
     )
 
 
