@@ -521,8 +521,10 @@ mod tests {
         command.args(["-c", "printf '%262144s' ready; printf diagnostic >&2"]);
         let output = output_with_timeout(command, Duration::from_secs(1)).unwrap();
         assert!(output.status.success());
+        let mut expected = vec![b' '; 262144];
+        expected[262139..].copy_from_slice(b"ready");
         assert!(
-            output.stdout == format!("{:>width$}", "ready", width = 262144).as_bytes(),
+            output.stdout == expected,
             "stdout must survive output backpressure"
         );
         #[cfg(unix)]
