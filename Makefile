@@ -989,8 +989,8 @@ validate-cohort-journey: ## @internal Validate cohort selection and artifact pri
 	@$(MAKE) ensure-playwright-browser
 	@cd e2e && bun test tests/live/cohort-journey-helpers.test.ts reporters/privacy-reporter.test.ts
 	@bash scripts/tests/cohort-journey.test.sh
-	@cd e2e && LONGHOUSE_JOURNEY_PRIVACY_MODE=1 bunx playwright test --config playwright.prod.config.js tests/live/element-timing.spec.ts
-	@cd e2e && LONGHOUSE_JOURNEY_PRIVACY_MODE=1 bunx playwright test --config playwright.prod.config.js tests/live/cohort-journey.spec.ts --list
+	@cd e2e && LONGHOUSE_JOURNEY_PRIVACY_MODE=1 PLAYWRIGHT_BASE_URL=http://127.0.0.1:9 PLAYWRIGHT_API_BASE_URL=http://127.0.0.1:9 bunx playwright test --config playwright.prod.config.js tests/live/element-timing.spec.ts
+	@cd e2e && LONGHOUSE_JOURNEY_PRIVACY_MODE=1 PLAYWRIGHT_BASE_URL=http://127.0.0.1:9 PLAYWRIGHT_API_BASE_URL=http://127.0.0.1:9 bunx playwright test --config playwright.prod.config.js tests/live/cohort-journey.spec.ts --list
 
 test-session-propagation-sla: ## Deterministic tests for the managed-session promotion metric
 	@python3 scripts/tests/session-propagation-sla.test.py

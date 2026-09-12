@@ -1468,24 +1468,24 @@ struct LonghouseMenuBarCoreTests {
 
     @Test
     func cliSourceLoadsLargeSnapshotWithoutPipeDeadlock() throws {
-        let python = "/usr/bin/python3"
-        guard FileManager.default.isExecutableFile(atPath: python) else {
-            return
-        }
-
-        let code = """
-        import json
-        print(json.dumps({
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let payloadURL = tempDir.appendingPathComponent("health.json")
+        let payload: [String: Any] = [
             "schema_version": 1,
             "collected_at": "2026-05-05T12:00:00Z",
             "health_state": "healthy",
             "severity": "green",
             "headline": "Longhouse shipping healthy",
-            "reasons": ["x" * 200000],
-            "suggested_actions": []
-        }))
-        """
-        let source = CLIHealthSnapshotSource(launchPath: python, arguments: ["-c", code])
+            "reasons": [String(repeating: "x", count: 200000)],
+            "suggested_actions": [String](),
+        ]
+        try JSONSerialization.data(withJSONObject: payload).write(to: payloadURL)
+        let source = CLIHealthSnapshotSource(
+            launchPath: "/bin/cat", arguments: [payloadURL.path]
+        )
 
         let snapshot = try source.load()
 

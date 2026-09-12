@@ -67,6 +67,9 @@ ambient credentials, or external network access. Dependency preparation has
 network access and receives only the package manifests. Browser binaries come
 from the official Playwright image pinned to the version in `bun.lock`.
 Receipts and collected evidence go under `artifacts/test-isolation/<run-id>/`.
+Each run has its own container and private home. The container deadline survives
+a killed supervisor; the next run removes expired resources owned by that
+checkout without touching active runs or another checkout's resources.
 Do not provide provider credentials to fixture targets.
 
 Backend tests go in `server/tests_lite/` (per-test SQLite DBs, no shared

@@ -466,6 +466,13 @@ def reap_stale_owned_containers(now: float | None = None) -> None:
             receipt_path = receipt_dir / "receipt.json"
             if receipt_path.is_file():
                 stale_receipt = json.loads(receipt_path.read_text())
+                scratch = Path("/tmp") / name
+                if stale_receipt.get("scratch_path") == str(scratch):
+                    if scratch.is_symlink():
+                        raise RuntimeError(f"owned scratch became a symlink: {scratch}")
+                    if scratch.exists():
+                        shutil.rmtree(scratch)
+                    stale_receipt["scratch_removed"] = not scratch.exists()
                 stale_receipt["stale_reaped"] = cleaned
                 stale_receipt["cleanup"] = cleaned
                 receipt_path.write_text(json.dumps(stale_receipt, indent=2) + "\n")
@@ -514,7 +521,9 @@ def run_container(args: argparse.Namespace, options: dict[str, str]) -> int:
     options.setdefault("ARTIFACT", f"/work/artifacts/{args.target}.json")
     options.setdefault("EVIDENCE_ROOT", f"/work/artifacts/{args.target}")
     child = None
-    scratch = Path(tempfile.mkdtemp(prefix="longhouse-test-"))
+    scratch = Path("/tmp") / name
+    scratch.mkdir(mode=0o700)
+    receipt["scratch_path"] = str(scratch)
     previous_handlers = {}
     interrupted = 0
 
@@ -537,9 +546,10 @@ def run_container(args: argparse.Namespace, options: dict[str, str]) -> int:
             ).hexdigest()
         (receipt_dir / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
         env = test_environment(run_id, options)
+        env.update(credentials)
         env["LONGHOUSE_TEST_COMMAND"] = json.dumps(make_command(args, options))
-        env_file = scratch / "configuration.tar"
-        with tarfile.open(env_file, "w") as archive_config:
+        configuration = io.BytesIO()
+        with tarfile.open(fileobj=configuration, mode="w") as archive_config:
             data = json.dumps(env).encode()
             member = tarfile.TarInfo("test-env.json")
             member.size = len(data)
@@ -558,9 +568,9 @@ def run_container(args: argparse.Namespace, options: dict[str, str]) -> int:
             member.size = len(data)
             member.mode = 0o600
             archive_config.addfile(member, io.BytesIO(data))
-        env_file.chmod(0o600)
         docker(
             "create",
+            "--init",
             "--name",
             name,
             "--label",
@@ -595,8 +605,8 @@ def run_container(args: argparse.Namespace, options: dict[str, str]) -> int:
         # No bind mounts: even symlinks or absolute writes remain in the container.
         with archive.open("rb") as source:
             docker("cp", "-", name + ":/work", stdin=source)
-        with env_file.open("rb") as configuration:
-            docker("cp", "-", name + ":/tmp", stdin=configuration)
+        docker("cp", "-", name + ":/tmp", input=configuration.getvalue())
+        configuration.close()
         print(
             f"[test-isolation] {run_id} target={args.target} network={receipt['network']}",
             flush=True,

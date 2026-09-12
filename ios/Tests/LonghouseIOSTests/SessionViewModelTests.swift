@@ -1500,6 +1500,10 @@ struct SessionViewModelTests {
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
         await waitForWorkspaceRequestCount(api, atLeast: 2)
+        // Reload joins an in-flight refresh; wait for the send's refresh to finish.
+        await waitForCondition("post-send tail refresh completion") {
+            !model.hasTailRefreshInFlightForTesting
+        }
 
         #expect(sent)
         #expect(model.submittedInputs.count == 1)
