@@ -269,6 +269,80 @@ async def test_session_deletion_removes_media_bytes_and_reports_what_it_left(tmp
 
 
 @pytest.mark.asyncio
+async def test_cross_owner_first_ingest_is_rejected_during_deletion_fence(tmp_path, monkeypatch):
+    root = _socket_root("lh-delete-live-only-owner-conflict")
+    object_root = tmp_path / "objects-v2"
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = uuid4()
+    daemon = CatalogDaemon(database_path=root / "live.db", socket_path=root / "catalogd.sock")
+    await daemon.start()
+    client = CatalogClient(root / "catalogd.sock", default_timeout_seconds=DELETION_TEST_RPC_TIMEOUT_SECONDS)
+    monkeypatch.setenv("LONGHOUSE_STORAGE_V2_ROOT", str(object_root))
+    monkeypatch.setattr("zerg.services.data_deletion.get_catalogd_client", lambda: client)
+    monkeypatch.setattr("zerg.services.data_deletion.get_searchd_client", lambda: None)
+    committed_files: list[Path] = []
+    original_call = client.call
+
+    async def cross_owner_ingest_at_fence(method, params, **kwargs):
+        if method == "storage.session.delete.v2":
+            foreign, raw, render = _commit_params(object_root, session_id=session_id, owner_id="99", now=now)
+            with pytest.raises(CatalogRemoteError) as conflict:
+                await original_call("storage.raw_object.commit.v2", foreign)
+            assert conflict.value.code == "source_epoch_conflict"
+            assert conflict.value.details["reason"] == "session_owner_conflict"
+            committed_files.extend((object_root / raw.object_path, object_root / render.object_path))
+            assert all(path.exists() for path in committed_files)
+        return await original_call(method, params, **kwargs)
+
+    monkeypatch.setattr(client, "call", cross_owner_ingest_at_fence)
+    launch = {
+        "owner_id": 42,
+        "git_repo": "cipher982/longhouse",
+        "git_branch": "main",
+        "started_at": now.isoformat(),
+        "expires_at": (now + timedelta(minutes=5)).isoformat(),
+        "plan": {
+            "session_id": str(session_id),
+            "provider": "cursor",
+            "provider_session_id": None,
+            "source_name": "kernel-canary-ci-bootstrap",
+            "source_runner_id": None,
+            "cwd": "/tmp/cursor",
+            "project": "longhouse",
+            "display_name": "Cursor",
+            "managed_session_name": "cursor-managed-live-only-owner-conflict",
+            "permission_mode": "provider_local",
+            "launch_actor": "automation",
+            "launch_surface": "test",
+            "managed_transport": "cursor_helm",
+            "attach_command": "",
+            "provider_config": {},
+        },
+    }
+    try:
+        await client.call("session.launch.local.create.v2", {"launch": launch})
+        with pytest.raises(SessionNotFound):
+            await delete_session_data(session_id=session_id, owner_id=99)
+
+        report = await delete_session_data(session_id=session_id, owner_id=42)
+        assert report.already_deleted is False
+        assert report.manifest_rows_retired == 0
+        assert report.raw_objects_deleted == 0
+        assert report.render_objects_deleted == 0
+        assert len(committed_files) == 2
+        assert all(path.exists() for path in committed_files)
+
+        after = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert after["found"] is False and after["deleted"] is True
+    finally:
+        await client.close()
+        await daemon.close()
+        for path in root.iterdir():
+            path.unlink(missing_ok=True)
+        root.rmdir()
+
+
+@pytest.mark.asyncio
 async def test_a_non_owner_cannot_tell_a_deleted_session_from_one_that_never_existed(tmp_path, monkeypatch):
     root = _socket_root("lh-delete-oracle")
     object_root = tmp_path / "objects-v2"

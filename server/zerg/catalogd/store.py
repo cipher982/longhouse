@@ -7410,6 +7410,20 @@ class CatalogStore:
             live_console_session = (
                 live_catalog_session if live_catalog_session is not None and live_catalog_session["origin_kind"] == "console" else None
             )
+            effective_owner_id = owner_id
+            if existing_session is None:
+                resolved_owner_id = self._resolve_session_owner_id(connection, session_id=session_key)
+                if owner_id is not None and resolved_owner_id is not None and str(owner_id) != resolved_owner_id:
+                    return {
+                        "source_epoch_conflict": True,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                        "conflict_details": {"reason": "session_owner_conflict"},
+                    }
+                # A missing ingest owner may still have an explicit live or
+                # launch binding. Carry that authority into the first durable
+                # row; leave genuinely unbound archive ingestion unbound.
+                if owner_id is None:
+                    effective_owner_id = resolved_owner_id
             # Gemini was retired as a product provider in favor of
             # Antigravity, but legacy Gemini JSON imports retain their original
             # immutable session rows. Let the canonical Antigravity source
@@ -7856,7 +7870,7 @@ class CatalogStore:
                     )
                 )
             session_values = {
-                "owner_id": owner_id,
+                "owner_id": effective_owner_id,
                 "environment": session_facts["environment"],
                 "project": session_facts["project"],
                 "cwd": session_facts["cwd"],
