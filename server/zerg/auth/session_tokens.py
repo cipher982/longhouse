@@ -20,9 +20,35 @@ JWT_SECRET = _settings.jwt_secret
 SESSION_COOKIE_PATH = "/"
 SESSION_COOKIE_SECURE = not _settings.auth_disabled and not _settings.testing
 
-# Refresh token cookie — scoped to auth endpoints only (minimises exposure).
-REFRESH_COOKIE_NAME = "longhouse_refresh"
-REFRESH_COOKIE_PATH = "/api/auth"
+# Refresh token cookie — host-only in secure deployments. In local/test
+# surfaces the legacy name/path remain valid because __Host- cookies require
+# HTTPS and Path=/.
+REFRESH_COOKIE_NAME = "__Host-lh_refresh" if SESSION_COOKIE_SECURE else "longhouse_refresh"
+LEGACY_SESSION_COOKIE_NAME = "longhouse_session"
+LEGACY_REFRESH_COOKIE_NAME = "longhouse_refresh"
+
+
+def _clear_legacy_cookies(response: Response) -> None:
+    """Retire pre-__Host cookies when a secure browser touches auth."""
+    if SESSION_COOKIE_NAME != LEGACY_SESSION_COOKIE_NAME:
+        response.delete_cookie(
+            key=LEGACY_SESSION_COOKIE_NAME,
+            path="/",
+            httponly=True,
+            secure=SESSION_COOKIE_SECURE,
+            samesite="lax",
+        )
+    if REFRESH_COOKIE_NAME != LEGACY_REFRESH_COOKIE_NAME:
+        response.delete_cookie(
+            key=LEGACY_REFRESH_COOKIE_NAME,
+            path="/api/auth",
+            httponly=True,
+            secure=SESSION_COOKIE_SECURE,
+            samesite="lax",
+        )
+
+
+REFRESH_COOKIE_PATH = "/" if SESSION_COOKIE_SECURE else "/api/auth"
 
 # Access token lifetime — kept short; refresh tokens handle longevity.
 ACCESS_TOKEN_LIFETIME = timedelta(minutes=10)
@@ -39,6 +65,7 @@ def _set_session_cookie(response: Response, token: str, max_age: int) -> None:
         secure=SESSION_COOKIE_SECURE,
         samesite="lax",
     )
+    _clear_legacy_cookies(response)
 
 
 def _clear_session_cookie(response: Response) -> None:
@@ -50,6 +77,7 @@ def _clear_session_cookie(response: Response) -> None:
         secure=SESSION_COOKIE_SECURE,
         samesite="lax",
     )
+    _clear_legacy_cookies(response)
 
 
 def _set_refresh_cookie(response: Response, token: str, max_age: int) -> None:
@@ -63,6 +91,7 @@ def _set_refresh_cookie(response: Response, token: str, max_age: int) -> None:
         secure=SESSION_COOKIE_SECURE,
         samesite="lax",
     )
+    _clear_legacy_cookies(response)
 
 
 def _clear_refresh_cookie(response: Response) -> None:
@@ -74,6 +103,7 @@ def _clear_refresh_cookie(response: Response) -> None:
         secure=SESSION_COOKIE_SECURE,
         samesite="lax",
     )
+    _clear_legacy_cookies(response)
 
 
 def _issue_access_token(

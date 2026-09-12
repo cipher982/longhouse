@@ -219,7 +219,21 @@ def _exchange_handoff_code(
     if exchange.status_code >= 400:
         _raise_control_plane_error(exchange, default="Control plane rejected handoff")
 
-    return _runtime_payload(_json_object(exchange))
+    raw_payload = _json_object(exchange)
+    try:
+        return _runtime_payload(raw_payload)
+    except HTTPException:
+        refresh_token = raw_payload.get("refresh_token")
+        if isinstance(refresh_token, str) and refresh_token:
+            try:
+                _revoke_native_session_payload(
+                    settings=get_settings(),
+                    refresh_token=refresh_token,
+                    strict=False,
+                )
+            except Exception:
+                logger.warning("tenant_handoff_orphan_revoke_failed", exc_info=True)
+        raise
 
 
 def _refresh_native_session_payload(*, settings, refresh_token: str) -> dict:

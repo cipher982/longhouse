@@ -1,48 +1,243 @@
 /**
  * Single-flight 401 interceptor with automatic token refresh.
  *
- * When a request gets a 401, we attempt ONE silent refresh via
- * POST /api/auth/refresh (the refresh cookie is sent automatically).
- * If it succeeds, the original request is retried with the new AT cookie.
- * If it fails, we redirect to /login.
+ * Refresh is serialized in two scopes:
+ * - one promise per tab;
+ * - a Web Locks/lease lock across tabs, because rotating refresh cookies are
+ *   shared by every tab in the origin.
  *
- * Only one refresh can be in-flight at a time (mutex). Concurrent 401s
- * queue behind the same refresh promise to avoid rotation races.
+ * Logout also has a short-lived cross-tab barrier. A refresh that starts after
+ * logout begins must not install a new cookie after the logout response.
  */
 
 import { config } from "./config";
 import { replaceWithLoginUrl } from "./loginRedirect";
 import { requestNativeAuth } from "./nativeAuthBridge";
 
-// ---------------------------------------------------------------------------
-// Single-flight mutex
-// ---------------------------------------------------------------------------
+const AUTH_CHANNEL_NAME = "longhouse-auth-events";
+const LOGOUT_BARRIER_KEY = "longhouse:logout-barrier";
+const REFRESH_LOCK_KEY = "longhouse:refresh-lock";
+const REFRESH_LOCK_NAME = "longhouse-auth-refresh";
+const LOGOUT_BARRIER_TTL_MS = 30_000;
+const REFRESH_LEASE_TTL_MS = 15_000;
+const REFRESH_LOCK_WAIT_MS = 50;
+const REFRESH_LOCK_MAX_WAIT_MS = 15_000;
 
 let refreshPromise: Promise<boolean> | null = null;
+let refreshController: AbortController | null = null;
+let logoutBarrierActive = false;
+let lifecycleInstalled = false;
+let lifecycleChannel: BroadcastChannel | null = null;
+const tabId =
+  typeof globalThis.crypto?.randomUUID === "function"
+    ? globalThis.crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-async function doRefresh(): Promise<boolean> {
+export class RefreshUnavailableError extends Error {
+  constructor() {
+    super("Authentication service temporarily unavailable");
+    this.name = "RefreshUnavailableError";
+  }
+}
+
+function isTransientRefreshStatus(status: number): boolean {
+  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+}
+
+function installLifecycleListeners(): void {
+  if (typeof window === "undefined" || lifecycleInstalled) return;
+  lifecycleInstalled = true;
+  const onMessage = (event: MessageEvent<{ type?: string }>) => {
+    if (event.data?.type === "logout-start") {
+      logoutBarrierActive = true;
+      cancelRefresh();
+    } else if (event.data?.type === "login-ready") {
+      logoutBarrierActive = false;
+    }
+  };
+  if (typeof window.BroadcastChannel === "function") {
+    lifecycleChannel = new BroadcastChannel(AUTH_CHANNEL_NAME);
+    lifecycleChannel.onmessage = onMessage;
+  } else {
+    window.addEventListener("storage", (event) => {
+      if (event.key !== LOGOUT_BARRIER_KEY) return;
+      if (event.newValue) {
+        logoutBarrierActive = true;
+        cancelRefresh();
+      } else {
+        logoutBarrierActive = false;
+      }
+    });
+  }
+}
+
+function broadcastLifecycle(type: "logout-start" | "login-ready"): void {
+  installLifecycleListeners();
+  lifecycleChannel?.postMessage({ type });
+}
+
+function readLogoutBarrier(): boolean {
+  if (typeof window === "undefined") return logoutBarrierActive;
+  if (logoutBarrierActive) {
+    try {
+      const expiresAt = Number(window.localStorage.getItem(LOGOUT_BARRIER_KEY));
+      if (Number.isFinite(expiresAt) && expiresAt > Date.now()) return true;
+      logoutBarrierActive = false;
+      window.localStorage.removeItem(LOGOUT_BARRIER_KEY);
+    } catch {
+      return true;
+    }
+  }
   try {
-    const res = await fetch(`${config.apiBaseUrl}/auth/refresh`, {
+    const expiresAt = Number(window.localStorage.getItem(LOGOUT_BARRIER_KEY));
+    if (Number.isFinite(expiresAt) && expiresAt > Date.now()) {
+      logoutBarrierActive = true;
+      return true;
+    }
+  } catch {
+    // The in-memory state still protects this tab when storage is unavailable.
+  }
+  return false;
+}
+
+/** Prevent refreshes in every tab while a logout request is in flight. */
+export function beginLogoutBarrier(): void {
+  installLifecycleListeners();
+  logoutBarrierActive = true;
+  try {
+    window.localStorage.setItem(LOGOUT_BARRIER_KEY, String(Date.now() + LOGOUT_BARRIER_TTL_MS));
+  } catch {
+    // The current tab remains protected by logoutBarrierActive.
+  }
+  cancelRefresh();
+  broadcastLifecycle("logout-start");
+}
+
+/** Re-enable refresh after a logout request failed and kept the session. */
+export function clearLogoutBarrier(): void {
+  logoutBarrierActive = false;
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.removeItem(LOGOUT_BARRIER_KEY);
+    } catch {
+      // Nothing else is required; the in-memory flag is authoritative here.
+    }
+  }
+  broadcastLifecycle("login-ready");
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function withStorageRefreshLease<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
+  if (typeof window === "undefined") return operation();
+  const owner = `${tabId}:${Math.random().toString(36).slice(2)}`;
+  const deadline = Date.now() + REFRESH_LOCK_MAX_WAIT_MS;
+  while (Date.now() < deadline) {
+    if (signal.aborted || readLogoutBarrier()) throw new RefreshUnavailableError();
+    let lease: string;
+    try {
+      const current = window.localStorage.getItem(REFRESH_LOCK_KEY);
+      const currentExpiry = Number(current?.split(":", 2)[1] ?? 0);
+      if (current && currentExpiry > Date.now()) {
+        await sleep(REFRESH_LOCK_WAIT_MS);
+        continue;
+      }
+      lease = `${owner}:${Date.now() + REFRESH_LEASE_TTL_MS}`;
+      window.localStorage.setItem(REFRESH_LOCK_KEY, lease);
+      if (window.localStorage.getItem(REFRESH_LOCK_KEY) !== lease) {
+        await sleep(REFRESH_LOCK_WAIT_MS);
+        continue;
+      }
+    } catch {
+      // Private browsing/storage policy can remove localStorage entirely.
+      return operation();
+    }
+    try {
+      return await operation();
+    } finally {
+      try {
+        if (window.localStorage.getItem(REFRESH_LOCK_KEY) === lease) {
+          window.localStorage.removeItem(REFRESH_LOCK_KEY);
+        }
+      } catch {
+        // The lease expires on its own if storage becomes unavailable.
+      }
+    }
+  }
+  throw new RefreshUnavailableError();
+}
+
+async function withRefreshLock<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
+  if (typeof navigator !== "undefined" && navigator.locks) {
+    try {
+      return await navigator.locks.request(
+        REFRESH_LOCK_NAME,
+        { mode: "exclusive", signal },
+        async () => {
+          if (signal.aborted || readLogoutBarrier()) throw new RefreshUnavailableError();
+          return operation();
+        },
+      );
+    } catch (error) {
+      if (signal.aborted || error instanceof DOMException && error.name === "AbortError") {
+        throw new RefreshUnavailableError();
+      }
+      throw error;
+    }
+  }
+  return withStorageRefreshLease(signal, operation);
+}
+
+async function doRefresh(signal: AbortSignal): Promise<boolean> {
+  let res: Response;
+  try {
+    res = await fetch(`${config.apiBaseUrl}/auth/refresh`, {
       method: "POST",
       credentials: "include",
+      headers: { "X-Longhouse-Auth": "1" },
+      signal,
     });
-    return res.ok;
-  } catch {
-    return false;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new RefreshUnavailableError();
+    }
+    throw new RefreshUnavailableError();
   }
+
+  if (isTransientRefreshStatus(res.status)) {
+    throw new RefreshUnavailableError();
+  }
+  return res.ok;
 }
 
 /**
  * Attempt a single-flight token refresh. Returns true if a new AT was issued.
  */
 export async function refreshAccessToken(): Promise<boolean> {
+  installLifecycleListeners();
+  if (readLogoutBarrier()) throw new RefreshUnavailableError();
   if (refreshPromise) {
     return refreshPromise;
   }
-  refreshPromise = doRefresh().finally(() => {
-    refreshPromise = null;
+  const controller = new AbortController();
+  refreshController = controller;
+  const promise = withRefreshLock(controller.signal, () => doRefresh(controller.signal)).finally(() => {
+    if (refreshPromise === promise) {
+      refreshPromise = null;
+      refreshController = null;
+    }
   });
-  return refreshPromise;
+  refreshPromise = promise;
+  return promise;
+}
+
+/** Abort a refresh before a logout request can install new cookies. */
+export function cancelRefresh(): void {
+  refreshController?.abort();
+  refreshController = null;
+  refreshPromise = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -60,33 +255,39 @@ export async function fetchWithRefresh(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Response> {
-  const response = await fetch(input, init);
+  // Keep the original fetch arguments for callers/tests that inspect them, but
+  // materialize a replayable Request before the first attempt. This preserves
+  // one-shot bodies for the retry without changing the public fetch shape.
+  const request = new Request(
+    input instanceof Request
+      ? input
+      : new URL(input instanceof URL ? input.href : input, window.location.origin),
+    init,
+  );
+  const response = await fetch(request.clone());
 
   if (response.status !== 401) {
     return response;
   }
 
-  // Don't retry auth endpoints — /auth/refresh would loop, /auth/logout is a
-  // deliberate sign-out. "/auth/login" no longer exists but is kept as a guard
-  // in case a server-side redirect ever produces that path.
-  // Match on pathname only so query params like ?return_to=/auth/logout don't
-  // accidentally suppress refresh on unrelated endpoints.
-  const rawUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-  const pathname = (() => {
-    try { return new URL(rawUrl, window.location.origin).pathname; } catch { return rawUrl; }
-  })();
-  if (
-    pathname.includes("/auth/refresh") ||
-    pathname.includes("/auth/logout") ||
-    pathname.includes("/auth/login")
-  ) {
+  // Do not retry auth endpoints. Match the pathname, not the raw URL, so a
+  // return_to query value containing "/auth/logout" cannot suppress refresh.
+  if (/(^|\/)auth\//.test(new URL(request.url, window.location.origin).pathname)) {
     return response;
   }
 
-  const refreshed = await refreshAccessToken();
+  let refreshed: boolean;
+  try {
+    refreshed = await refreshAccessToken();
+  } catch (error) {
+    if (error instanceof RefreshUnavailableError) {
+      return response;
+    }
+    throw error;
+  }
   if (!refreshed) {
-    // Refresh failed — session is dead. Hand auth back to the native shell
-    // when available; otherwise fall back to the browser login route.
+    // A definitive refresh rejection means the session is dead. Transient
+    // refresh failures return the original 401 above and leave auth intact.
     const returnTo = window.location.pathname + window.location.search + window.location.hash;
     if (!requestNativeAuth(returnTo)) {
       replaceWithLoginUrl(returnTo);
@@ -94,6 +295,8 @@ export async function fetchWithRefresh(
     return response;
   }
 
-  // Retry the original request with the new cookie.
-  return fetch(input, init);
+  // A refreshed cookie can still race with a server-side revocation or a
+  // route-specific authorization failure. Do not turn that single response
+  // into a global logout; the auth-status query owns session invalidation.
+  return fetch(request.clone());
 }
