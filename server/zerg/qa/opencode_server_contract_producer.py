@@ -205,6 +205,14 @@ def run_server_contract(args: argparse.Namespace) -> dict[str, Any]:
 
     process_clean = _no_orphan_opencode_server_processes(args.provider_bin)
     cleanup_receipt = {
+        "schema_version": 1,
+        "artifact_kind": "opencode_server_cleanup_receipt",
+        "status": "pass" if process_clean else "fail",
+        "orphan_count": 0 if process_clean else 1,
+        "required_cleanup": {
+            "opencode_server_process_exited": process_clean,
+            "no_orphan_provider_processes": process_clean,
+        },
         "opencode_server_process_exited": process_clean,
         "no_orphan_provider_processes": process_clean,
         "method": "run_opencode_live_canary_finally_stop_process_group_plus_independent_proc_scan",

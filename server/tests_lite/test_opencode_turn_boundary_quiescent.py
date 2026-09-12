@@ -287,6 +287,13 @@ def test_run_turn_boundary_quiescent_end_to_end_admissible_pass(tmp_path: Path, 
         "cleanup-receipt.json",
     ):
         assert (args.evidence_root / relative).is_file(), relative
+    cleanup = json.loads((args.evidence_root / "cleanup-receipt.json").read_text())
+    assert cleanup["status"] == "pass"
+    assert cleanup["orphan_count"] == 0
+    assert cleanup["required_cleanup"] == {
+        "managed_opencode_process_exited": True,
+        "no_orphan_provider_processes": True,
+    }
 
 
 def test_run_turn_boundary_quiescent_fails_when_correlation_times_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

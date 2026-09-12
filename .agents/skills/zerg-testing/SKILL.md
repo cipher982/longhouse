@@ -24,6 +24,11 @@ description: Zerg testing workflow (unit + E2E). Use when running or debugging t
   provider archive. If a protocol ignores that flag, record the exact native
   session path and remove it in the same `finally` block.
 - Every disposable proof run must allocate unique `mktemp -d` roots, record every path/PID it owns, and install an `EXIT/INT/TERM` trap; fixed `/tmp` names and untracked scratch files are prohibited.
+- Treat reparented descendants as still run-owned: a provider, bridge, shipper,
+  catalog daemon, or verification server whose parent is PID 1 is not cleaned
+  up. Record exact PID/PGID at launch, stop through that ownership record, and
+  re-read the exact inventory after the controller exits; never infer teardown
+  from a downstream worker or archive receipt.
 - Before handoff, delete every exact run-owned path and verify no run-owned process, session, simulator, tab, or service remains; retain only the requested receipt under ignored `artifacts/`.
 - In `finally`/cleanup, stop owned processes and services, retire the hosted
   session, close tabs/simulators, remove scratch homes and generated fixtures,
