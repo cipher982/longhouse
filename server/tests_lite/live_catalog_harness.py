@@ -214,6 +214,7 @@ class _RawReader:
         object_hash: str,
         tenant_id: str,
         *,
+        lane: str = "user",
         queue_timeout_seconds: float | None = None,
     ):
         return read_raw_object(self.root, object_path, expected_object_hash=object_hash)

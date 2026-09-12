@@ -8,6 +8,7 @@ from uuid import UUID
 from uuid import uuid4
 
 import pytest
+
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.server import CatalogDaemon
@@ -45,6 +46,7 @@ class _RawReader:
         object_hash: str,
         tenant_id: str,
         *,
+        lane: str = "user",
         queue_timeout_seconds: float | None = None,
     ):
         return read_raw_object(self.root, object_path, expected_object_hash=object_hash)
