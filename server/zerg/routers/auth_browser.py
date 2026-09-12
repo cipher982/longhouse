@@ -207,6 +207,11 @@ def _release_password_attempt(key: str) -> None:
             _PASSWORD_ACTIVE_ATTEMPTS[key] = active - 1
 
 
+def _clear_password_failures(key: str) -> None:
+    with _PASSWORD_RATE_LIMIT_LOCK:
+        _PASSWORD_RATE_LIMIT_BUCKETS.pop(key, None)
+
+
 def _verify_pbkdf2_sha256(password: str, stored: str) -> bool:
     try:
         _, iterations_str, salt_b64, hash_b64 = stored.split("$", 3)
@@ -711,6 +716,7 @@ async def password_login(
         _record_password_failure(client_ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid password")
     _release_password_attempt(client_ip)
+    _clear_password_failures(client_ip)
 
     user = await asyncio.to_thread(_resolve_password_user)
 
@@ -755,6 +761,7 @@ async def cli_login(
         _record_password_failure(client_ip)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid password")
     _release_password_attempt(client_ip)
+    _clear_password_failures(client_ip)
 
     user = await asyncio.to_thread(_resolve_password_user)
     access_token = _issue_access_token(

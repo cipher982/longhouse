@@ -82,6 +82,7 @@ export default function LoginPage() {
     `/api/auth/start-handoff?return_to=${encodeURIComponent(returnTo)}` +
     (authError === 'cookie_loop' ? '&reset_attempt=1' : '');
   const beginLogin = () => {
+    navigationStarted.current = true;
     clearLogoutIntent();
     clearLogoutBarrier();
     setLogoutSuppressed(false);

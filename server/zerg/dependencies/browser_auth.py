@@ -94,7 +94,11 @@ def _get_browser_session_user(request: Request, db=None):
 
 def get_current_browser_user(request: Request, db=Depends(auth_deps._auth_compat_db)):
     """Return the authenticated browser user or raise **401**."""
-    is_mutation = request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+    request_method = getattr(request, "method", "GET").upper()
+    is_mutation = request_method in {"POST", "PUT", "PATCH", "DELETE"}
+    if is_mutation:
+        require_browser_auth_header(request)
+
     bearer = _bearer_token(request)
     if not auth_deps.AUTH_DISABLED and bearer is not None:
         user = _get_browser_session_user(request, db)
@@ -104,8 +108,6 @@ def get_current_browser_user(request: Request, db=Depends(auth_deps._auth_compat
                 detail="Invalid or expired bearer token",
             )
         return user
-    if is_mutation and bearer is None:
-        require_browser_auth_header(request)
     user = _get_browser_session_user(request, db)
     if user is None:
         raise HTTPException(

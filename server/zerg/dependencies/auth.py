@@ -22,6 +22,7 @@ from zerg.auth.strategy import HostedCPAuthStrategy
 from zerg.auth.strategy import JWTAuthStrategy
 from zerg.config import get_settings
 from zerg.database import get_db
+from zerg.dependencies.form_post_origin import require_browser_auth_header
 
 # ---------------------------------------------------------------------------
 # Choose strategy once per interpreter – no per-request branching.
@@ -95,6 +96,10 @@ def get_current_user(request: Request, db=Depends(_auth_compat_db)):
     1. Authorization: Bearer <token> header
     2. longhouse_session cookie (browser auth)
     """
+    request_method = getattr(request, "method", "GET").upper()
+    if request_method in {"POST", "PUT", "PATCH", "DELETE"}:
+        require_browser_auth_header(request)
+
     # Check for either bearer token or session cookie
     has_bearer = "Authorization" in request.headers
     has_cookie = SESSION_COOKIE_NAME in request.cookies

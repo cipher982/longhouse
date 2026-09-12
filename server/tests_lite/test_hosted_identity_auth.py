@@ -1255,6 +1255,28 @@ async def test_revoke_native_session_reports_cp_rejection(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [400, 404, 410, 422])
+async def test_revoke_native_session_treats_terminal_cp_rejection_as_success(monkeypatch, status_code):
+    class FakeResponse:
+        pass
+
+    FakeResponse.status_code = status_code
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
+    )
+    monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", lambda *a, **k: FakeResponse())
+    monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
+
+    result = await revoke_native_session(
+        _native_request(),
+        Response(),
+        NativeRevokeRequest(refresh_token="lhr_current"),
+    )
+
+    assert result == {"status": "ok"}
+
+@pytest.mark.asyncio
 async def test_revoke_native_session_reports_cp_network_error(monkeypatch):
     def fake_post(*a, **k):
         raise httpx.HTTPError("connection refused")

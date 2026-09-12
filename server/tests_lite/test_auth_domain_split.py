@@ -8,10 +8,12 @@ from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
+from zerg.dependencies import browser_auth
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.routers import auth as auth_router
 from zerg.routers import auth_browser
@@ -93,6 +95,35 @@ def test_short_lived_browser_auth_closes_db_after_validation():
     assert result is None
     assert db.closed is True
     auth.assert_called_once_with(request, db)
+
+def test_browser_mutation_does_not_fallback_from_invalid_bearer_to_cookie():
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "path": "/api/timeline/sessions/1/action",
+            "query_string": b"",
+            "headers": [
+                (b"authorization", b"Bearer invalid"),
+                (b"cookie", b"longhouse_session=valid-cookie"),
+                (b"origin", b"https://evil.example"),
+                (b"sec-fetch-site", b"cross-site"),
+            ],
+            "client": ("198.51.100.10", 1234),
+            "server": ("tenant.longhouse.test", 443),
+        }
+    )
+
+    with (
+        patch.object(browser_auth.auth_deps, "AUTH_DISABLED", False),
+        patch.object(browser_auth, "_get_browser_session_user", return_value=object()) as resolve,
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            browser_auth.get_current_browser_user(request, db=object())
+
+    assert exc_info.value.status_code == 403
+    resolve.assert_not_called()
 
 
 def test_get_current_browser_route_user_accepts_query_token_for_sse():

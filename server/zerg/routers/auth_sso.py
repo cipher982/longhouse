@@ -341,7 +341,7 @@ def _revoke_native_session_payload(
             "control_plane_native_session_revoke_rejected",
             extra={"status_code": response.status_code},
         )
-        if strict:
+        if strict and response.status_code not in {400, 404, 410, 422}:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={"code": "cp_unavailable"},
