@@ -26,8 +26,10 @@ export type JourneyCohorts = {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const UUID_PATTERN = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i;
-const SESSION_PATH_PATTERN = /\/(?:api\/)?(?:(?:timeline|agents)\/sessions|timeline)\/[A-Za-z0-9_-]+/i;
+const UUID_PATTERN =
+  /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i;
+const SESSION_PATH_PATTERN =
+  /\/(?:api\/)?(?:(?:timeline|agents)\/sessions|timeline)\/[A-Za-z0-9_-]+/i;
 const QUERY_PARAMETER_PATTERN = /[?&](?:query|q)=/i;
 const LOCAL_PATH_PATTERN = /(?:\/Users\/|\/home\/|[A-Za-z]:\\)/;
 const FORBIDDEN_KEYS = new Set([
@@ -55,20 +57,30 @@ function timestampMs(session: JourneySession): number {
 }
 
 function estimatedEntries(session: JourneySession): number {
-  return Math.max(0, Number(session.user_messages ?? 0))
-    + Math.max(0, Number(session.assistant_messages ?? 0))
-    + Math.max(0, Number(session.tool_calls ?? 0));
+  return (
+    Math.max(0, Number(session.user_messages ?? 0)) +
+    Math.max(0, Number(session.assistant_messages ?? 0)) +
+    Math.max(0, Number(session.tool_calls ?? 0))
+  );
 }
 
 function isEligible(
   session: JourneySession,
   ownedSessionIds?: ReadonlySet<string>,
 ): boolean {
-  if (!session.id || timestampMs(session) <= 0 || estimatedEntries(session) <= 0) return false;
+  if (
+    !session.id ||
+    timestampMs(session) <= 0 ||
+    estimatedEntries(session) <= 0
+  )
+    return false;
   if (ownedSessionIds) return ownedSessionIds.has(session.id);
   const environment = String(session.environment ?? "").toLowerCase();
   const provider = String(session.provider ?? "").toLowerCase();
-  return !["test", "e2e", "automation"].includes(environment) && provider !== "canary";
+  return (
+    !["test", "e2e", "automation"].includes(environment) &&
+    provider !== "canary"
+  );
 }
 
 function seededIndex(seed: string, size: number): number {
@@ -92,25 +104,56 @@ export function selectJourneyCohorts(
       byId.set(session.id, session);
     }
   }
-  const sessions = [...byId.values()].sort((left, right) => timestampMs(right) - timestampMs(left));
+  const sessions = [...byId.values()].sort(
+    (left, right) => timestampMs(right) - timestampMs(left),
+  );
   const ageMs = (session: JourneySession) => nowMs - timestampMs(session);
+  const used = new Set<string>();
+  const remember = (session: JourneySession | null): JourneySession | null => {
+    if (session) used.add(session.id);
+    return session;
+  };
 
-  const activeRecent = sessions.find(
-    (session) => !session.ended_at && ageMs(session) >= 0 && ageMs(session) <= 30 * DAY_MS,
-  ) ?? sessions.find((session) => ageMs(session) >= 0 && ageMs(session) <= 30 * DAY_MS) ?? null;
-  const recentClosed = sessions.find(
-    (session) => Boolean(session.ended_at) && ageMs(session) >= 0 && ageMs(session) <= 30 * DAY_MS,
-  ) ?? null;
-  const cold = sessions.find(
-    (session) => ageMs(session) > 30 * DAY_MS && ageMs(session) <= 90 * DAY_MS,
-  ) ?? null;
-  const pagination = [...sessions]
-    .filter((session) => estimatedEntries(session) > 200)
-    .sort((left, right) => estimatedEntries(right) - estimatedEntries(left))[0] ?? null;
+  const activeRecent = remember(
+    sessions.find(
+      (session) =>
+        !session.ended_at &&
+        ageMs(session) >= 0 &&
+        ageMs(session) <= 30 * DAY_MS,
+    ) ?? null,
+  );
+  const recentClosed = remember(
+    sessions.find(
+      (session) =>
+        Boolean(session.ended_at) &&
+        !used.has(session.id) &&
+        ageMs(session) >= 0 &&
+        ageMs(session) <= 30 * DAY_MS,
+    ) ?? null,
+  );
+  const pagination =
+    [...sessions]
+      .filter(
+        (session) => estimatedEntries(session) > 200 && !used.has(session.id),
+      )
+      .sort(
+        (left, right) => estimatedEntries(right) - estimatedEntries(left),
+      )[0] ?? null;
+  remember(pagination);
+  const cold = remember(
+    sessions.find(
+      (session) =>
+        !used.has(session.id) &&
+        ageMs(session) > 30 * DAY_MS &&
+        ageMs(session) <= 90 * DAY_MS,
+    ) ?? null,
+  );
 
-  const used = new Set([activeRecent?.id, recentClosed?.id, cold?.id, pagination?.id].filter(Boolean));
   const randomPool = sessions.filter((session) => !used.has(session.id));
-  const random = randomPool.length > 0 ? randomPool[seededIndex(randomSeed, randomPool.length)] : null;
+  const random =
+    randomPool.length > 0
+      ? randomPool[seededIndex(randomSeed, randomPool.length)]
+      : null;
 
   return {
     active_recent: activeRecent,
@@ -121,7 +164,9 @@ export function selectJourneyCohorts(
   };
 }
 
-export function resultCountBucket(count: number): "0" | "1" | "2-5" | "6-20" | "21+" {
+export function resultCountBucket(
+  count: number,
+): "0" | "1" | "2-5" | "6-20" | "21+" {
   if (count <= 0) return "0";
   if (count === 1) return "1";
   if (count <= 5) return "2-5";
@@ -139,10 +184,14 @@ export function classifyApiResource(rawUrl: string): string | null {
   const path = url.pathname.replace(/^\/api/, "");
   if (path === "/health") return "health";
   if (path === "/timeline/recall" || path === "/agents/recall") return "recall";
-  if (path === "/timeline/sessions") return url.searchParams.has("query") ? "lexical_search" : "timeline_list";
-  if (/^\/timeline\/sessions\/[^/]+\/workspace$/.test(path)) return "session_workspace";
-  if (/^\/timeline\/sessions\/[^/]+\/projection$/.test(path)) return "session_projection";
-  if (/^\/timeline\/sessions\/[^/]+\/thread$/.test(path)) return "session_thread";
+  if (path === "/timeline/sessions")
+    return url.searchParams.has("query") ? "lexical_search" : "timeline_list";
+  if (/^\/timeline\/sessions\/[^/]+\/workspace$/.test(path))
+    return "session_workspace";
+  if (/^\/timeline\/sessions\/[^/]+\/projection$/.test(path))
+    return "session_projection";
+  if (/^\/timeline\/sessions\/[^/]+\/thread$/.test(path))
+    return "session_thread";
   if (/^\/timeline\/sessions\/[^/]+\/turns$/.test(path)) return "session_turns";
   if (/^\/timeline\/sessions\/[^/]+$/.test(path)) return "session_detail";
   return null;
@@ -155,11 +204,14 @@ export function classifyJourneyFailure(error: unknown): string {
   if (message.includes("http_5")) return "http_5xx";
   if (message.includes("empty_result")) return "empty_result";
   if (message.includes("missing_cohort")) return "missing_cohort";
-  if (message.includes("fixture_not_configured")) return "fixture_not_configured";
+  if (message.includes("fixture_not_configured"))
+    return "fixture_not_configured";
   if (message.includes("demo_target")) return "demo_target";
   if (message.includes("build_identity")) return "build_identity_unavailable";
-  if (message.includes("projection_not_appended")) return "projection_not_appended";
-  if (message.includes("paint_evidence_unavailable")) return "paint_evidence_unavailable";
+  if (message.includes("projection_not_appended"))
+    return "projection_not_appended";
+  if (message.includes("paint_evidence_unavailable"))
+    return "paint_evidence_unavailable";
   return "browser_or_contract_failure";
 }
 
@@ -170,7 +222,8 @@ function visit(value: unknown, forbiddenStrings: string[]): void {
   }
   if (value && typeof value === "object") {
     for (const [key, item] of Object.entries(value)) {
-      if (FORBIDDEN_KEYS.has(key.toLowerCase())) throw new Error(`privacy_forbidden_key:${key}`);
+      if (FORBIDDEN_KEYS.has(key.toLowerCase()))
+        throw new Error(`privacy_forbidden_key:${key}`);
       visit(item, forbiddenStrings);
     }
     return;
@@ -178,14 +231,18 @@ function visit(value: unknown, forbiddenStrings: string[]): void {
   if (typeof value !== "string") return;
   if (UUID_PATTERN.test(value)) throw new Error("privacy_uuid");
   if (SESSION_PATH_PATTERN.test(value)) throw new Error("privacy_session_path");
-  if (QUERY_PARAMETER_PATTERN.test(value)) throw new Error("privacy_query_parameter");
+  if (QUERY_PARAMETER_PATTERN.test(value))
+    throw new Error("privacy_query_parameter");
   if (LOCAL_PATH_PATTERN.test(value)) throw new Error("privacy_local_path");
   for (const forbidden of forbiddenStrings.filter(Boolean)) {
     if (value === forbidden) throw new Error("privacy_fixture_value");
   }
 }
 
-export function assertPrivacySafeArtifact(payload: unknown, forbiddenStrings: string[] = []): void {
+export function assertPrivacySafeArtifact(
+  payload: unknown,
+  forbiddenStrings: string[] = [],
+): void {
   visit(payload, forbiddenStrings);
 }
 
@@ -196,32 +253,39 @@ export async function waitForElementPaint(
   timeoutMs = 15_000,
 ): Promise<number> {
   const epochMs = await page.evaluate(
-    ({ expectedMarker, minimumEpochMs, timeoutMs }) => new Promise<number | false>((resolve) => {
-      let observer: PerformanceObserver | null = null;
-      let timeoutId = 0;
-      const finish = (value: number | false) => {
-        window.clearTimeout(timeoutId);
-        observer?.disconnect();
-        resolve(value);
-      };
-      const inspect = (entries: PerformanceEntry[]) => {
-        const match = (entries as Array<PerformanceEntry & { identifier?: string }>).find((entry) => (
-          entry.identifier === expectedMarker
-          && performance.timeOrigin + entry.startTime >= minimumEpochMs
-        ));
-        if (match) finish(performance.timeOrigin + match.startTime);
-      };
+    ({ expectedMarker, minimumEpochMs, timeoutMs }) =>
+      new Promise<number | false>((resolve) => {
+        let observer: PerformanceObserver | null = null;
+        let timeoutId = 0;
+        const finish = (value: number | false) => {
+          window.clearTimeout(timeoutId);
+          observer?.disconnect();
+          resolve(value);
+        };
+        const inspect = (entries: PerformanceEntry[]) => {
+          const match = (
+            entries as Array<PerformanceEntry & { identifier?: string }>
+          ).find(
+            (entry) =>
+              entry.identifier === expectedMarker &&
+              performance.timeOrigin + entry.startTime >= minimumEpochMs,
+          );
+          if (match) finish(performance.timeOrigin + match.startTime);
+        };
 
-      timeoutId = window.setTimeout(() => finish(false), timeoutMs);
-      try {
-        observer = new PerformanceObserver((list) => inspect(list.getEntries()));
-        observer.observe({ type: "element", buffered: true });
-      } catch {
-        finish(false);
-      }
-    }),
+        timeoutId = window.setTimeout(() => finish(false), timeoutMs);
+        try {
+          observer = new PerformanceObserver((list) =>
+            inspect(list.getEntries()),
+          );
+          observer.observe({ type: "element", buffered: true });
+        } catch {
+          finish(false);
+        }
+      }),
     { expectedMarker: marker, minimumEpochMs: afterEpochMs, timeoutMs },
   );
-  if (typeof epochMs !== "number" || !Number.isFinite(epochMs)) throw new Error("paint_evidence_unavailable");
+  if (typeof epochMs !== "number" || !Number.isFinite(epochMs))
+    throw new Error("paint_evidence_unavailable");
   return epochMs;
 }

@@ -161,7 +161,8 @@ export function buildRuntimeTokenStorageState(
     ? {
         name: "__Host-lh_session",
         value: runtimeToken,
-        url: `${parsed.origin}/`,
+        domain: parsed.hostname,
+        path: "/",
         expires: Math.floor(Date.now() / 1000) + 3600,
         httpOnly: true,
         secure: true,
@@ -203,22 +204,26 @@ async function waitForHostedQaTranscript(
   await expect
     .poll(
       async () => {
-        const params = new URLSearchParams({
-          include_test: "true",
-          include_automation: "true",
-          project: fixture.project,
-          days_back: "90",
-          limit: "20",
-        });
-        const response = await request.get(`/api/agents/sessions?${params}`);
-        if (!response.ok()) return false;
-        const body = await response.json();
-        const sessions = Array.isArray(body?.sessions) ? body.sessions : [];
-        return sessions.some(
-          (session: { id?: unknown }) => session.id === fixture.sessionId,
-        );
+        return hostedQaSessionPresent(request, fixture);
       },
-      { timeout: 30_000, intervals: [500, 1_000, 2_000] },
+      { timeout: 15_000, intervals: [500, 1_000, 2_000] },
+    )
+    .toBe(true);
+}
+
+async function waitForHostedQaTranscripts(
+  request: APIRequestContext,
+  fixtures: HostedQaTranscript[],
+): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const present = await Promise.all(
+          fixtures.map((fixture) => hostedQaSessionPresent(request, fixture)),
+        );
+        return present.every(Boolean);
+      },
+      { timeout: 15_000, intervals: [500, 1_000, 2_000] },
     )
     .toBe(true);
 }
@@ -227,25 +232,56 @@ async function hostedQaSessionPresent(
   request: APIRequestContext,
   fixture: HostedQaTranscript,
 ): Promise<boolean> {
-  const params = new URLSearchParams({
-    include_test: "true",
-    include_automation: "true",
-    project: fixture.project,
-    days_back: "90",
-    limit: "100",
-    hide_autonomous: "false",
-  });
-  const response = await request.get(`/api/agents/sessions?${params}`);
-  if (!response.ok()) {
-    throw new Error(
-      `Hosted QA diagnostic inventory returned ${response.status()}: ${await response.text()}`,
-    );
+  const limit = 100;
+  let offset = 0;
+  let total: number | undefined;
+
+  while (true) {
+    const params = new URLSearchParams({
+      provider: "claude",
+      include_test: "true",
+      include_automation: "true",
+      hide_autonomous: "false",
+      project: fixture.project,
+      days_back: "90",
+      limit: String(limit),
+      offset: String(offset),
+    });
+    const response = await request.get(`/api/agents/sessions?${params}`);
+    if (!response.ok()) {
+      throw new Error(
+        `Hosted QA served inventory returned ${response.status()}: ${await response.text()}`,
+      );
+    }
+    const body = await response.json();
+    const sessions = Array.isArray(body?.sessions) ? body.sessions : null;
+    if (!sessions) {
+      throw new Error("Hosted QA served inventory has no valid sessions list");
+    }
+    const inventoryTotal = body?.total;
+    if (
+      !Number.isInteger(inventoryTotal) ||
+      inventoryTotal < 0 ||
+      (total !== undefined && inventoryTotal !== total)
+    ) {
+      throw new Error(
+        "Hosted QA served inventory has an invalid or changing total",
+      );
+    }
+    total ??= inventoryTotal;
+    if (
+      sessions.some(
+        (session: { id?: unknown }) => session.id === fixture.sessionId,
+      )
+    ) {
+      return true;
+    }
+    offset += sessions.length;
+    if (offset >= total) return false;
+    if (sessions.length === 0) {
+      throw new Error("Hosted QA served inventory pagination ended early");
+    }
   }
-  const body = await response.json();
-  const sessions = Array.isArray(body?.sessions) ? body.sessions : [];
-  return sessions.some(
-    (session: { id?: unknown }) => session.id === fixture.sessionId,
-  );
 }
 
 async function waitForHostedQaSessionGone(
@@ -254,55 +290,71 @@ async function waitForHostedQaSessionGone(
 ): Promise<void> {
   await expect
     .poll(() => hostedQaSessionPresent(request, fixture), {
-      timeout: 30_000,
+      timeout: 15_000,
       intervals: [500, 1_000, 2_000],
     })
     .toBe(false);
 }
 
 async function cleanupHostedQaSession(
-  context: BrowserContext,
-  diagnosticRequest: APIRequestContext,
+  request: APIRequestContext,
   state: HostedQaCleanupState,
 ): Promise<void> {
   if (!state.attempted) return;
 
-  const response = await context.request.delete(
-    `/api/user-data/sessions/${state.sessionId}`,
+  const visibilityResponse = await request.patch(
+    `/api/agents/sessions/${state.sessionId}/timeline-visibility`,
+    { data: { hidden: true } },
   );
-  if (response.status() === 404) {
-    const present = await hostedQaSessionPresent(diagnosticRequest, state);
+  if (visibilityResponse.status() === 404) {
+    const present = await hostedQaSessionPresent(request, state);
     if (state.materialized || present) {
       throw new Error(
-        `Hosted QA fixture ${state.sessionId} returned 404 after materialization (present=${present})`,
+        `Hosted QA fixture ${state.sessionId} was absent before retirement but was materialized or served (materialized=${state.materialized}, present=${present})`,
       );
     }
     return;
   }
-  if (!response.ok()) {
+  if (!visibilityResponse.ok()) {
     throw new Error(
-      `Hosted QA fixture deletion failed: ${response.status()} ${await response.text()}`,
+      `Hosted QA fixture visibility retirement failed: ${visibilityResponse.status()} ${await visibilityResponse.text()}`,
     );
   }
 
-  const report = await response.json();
-  if (report.complete !== true) {
+  const visibility = await visibilityResponse.json();
+  if (visibility.hidden !== true) {
     throw new Error(
-      `Hosted QA fixture deletion was partial: ${JSON.stringify(report.partial ?? [])}`,
+      `Hosted QA fixture visibility retirement was not confirmed: ${JSON.stringify(visibility)}`,
     );
   }
-  await waitForHostedQaSessionGone(diagnosticRequest, state);
+
+  const archiveResponse = await request.post(
+    `/api/agents/sessions/${state.sessionId}/action`,
+    { data: { action: "archive" } },
+  );
+  if (!archiveResponse.ok()) {
+    throw new Error(
+      `Hosted QA fixture archive retirement failed: ${archiveResponse.status()} ${await archiveResponse.text()}`,
+    );
+  }
+
+  const archive = await archiveResponse.json();
+  if (archive.user_state !== "archived") {
+    throw new Error(
+      `Hosted QA fixture archive retirement was not confirmed: ${JSON.stringify(archive)}`,
+    );
+  }
+  await waitForHostedQaSessionGone(request, state);
 }
 
 async function cleanupHostedQaSessions(
-  context: BrowserContext,
-  diagnosticRequest: APIRequestContext,
+  request: APIRequestContext,
   states: HostedQaCleanupState[],
 ): Promise<void> {
   const failures: unknown[] = [];
   for (const state of [...states].reverse()) {
     try {
-      await cleanupHostedQaSession(context, diagnosticRequest, state);
+      await cleanupHostedQaSession(request, state);
     } catch (error) {
       failures.push(error);
     }
@@ -334,7 +386,8 @@ function buildHostedQaCohortSession(
   const endedAt = ended ? events.at(-1)!.timestamp : null;
   const userText = events.find((event) => event.role === "user")!.content_text;
   const assistantText =
-    events.find((event) => event.role === "assistant")?.content_text ?? userText;
+    events.find((event) => event.role === "assistant")?.content_text ??
+    userText;
   return {
     sessionId,
     project,
@@ -375,14 +428,18 @@ export const test = base.extend<LiveFixtures>({
 
   browserStorageState: [
     async ({ apiBaseUrl, playwright }, use) => {
-      const runtimeToken = normalizeToken(process.env.SMOKE_RUNTIME_TOKEN) || readDeviceToken();
+      const runtimeToken =
+        normalizeToken(process.env.SMOKE_RUNTIME_TOKEN) || readDeviceToken();
       if (runtimeToken) {
         await waitForHealthy(playwright.request, apiBaseUrl);
         await use(buildRuntimeTokenStorageState(apiBaseUrl, runtimeToken));
         return;
       }
 
-      test.skip(true, "SMOKE_RUNTIME_TOKEN or LONGHOUSE_DEVICE_TOKEN not set; skipping live prod E2E");
+      test.skip(
+        true,
+        "SMOKE_RUNTIME_TOKEN or LONGHOUSE_DEVICE_TOKEN not set; skipping live prod E2E",
+      );
     },
     { scope: "worker" },
   ],
@@ -400,14 +457,18 @@ export const test = base.extend<LiveFixtures>({
         );
       }
 
-      const runtimeToken = normalizeToken(process.env.SMOKE_RUNTIME_TOKEN) || readDeviceToken();
+      const runtimeToken =
+        normalizeToken(process.env.SMOKE_RUNTIME_TOKEN) || readDeviceToken();
       if (runtimeToken) {
         await waitForHealthy(playwright.request, apiBaseUrl);
         await use(runtimeToken);
         return;
       }
 
-      test.skip(true, "SMOKE_RUNTIME_TOKEN or LONGHOUSE_DEVICE_TOKEN not set; skipping live prod E2E");
+      test.skip(
+        true,
+        "SMOKE_RUNTIME_TOKEN or LONGHOUSE_DEVICE_TOKEN not set; skipping live prod E2E",
+      );
     },
     { scope: "worker" },
   ],
@@ -473,7 +534,7 @@ export const test = base.extend<LiveFixtures>({
       });
     }
   },
-  hostedQaTranscript: async ({ agentsRequest, context }, use) => {
+  hostedQaTranscript: async ({ agentsRequest }, use) => {
     const sessionId = randomUUID();
     const marker = `hosted-qa-${sessionId}`;
     const project = `hosted-qa-${sessionId.slice(0, 8)}`;
@@ -511,38 +572,81 @@ export const test = base.extend<LiveFixtures>({
         launchSurface: "test",
         events: [
           { role: "user", content_text: userText, timestamp: startedAt },
-          { role: "assistant", content_text: assistantText, timestamp: endedAt },
+          {
+            role: "assistant",
+            content_text: assistantText,
+            timestamp: endedAt,
+          },
         ],
       });
       state.materialized = true;
       await waitForHostedQaTranscript(agentsRequest, fixture);
       await use(fixture);
     } finally {
-      await cleanupHostedQaSession(context, agentsRequest, state);
+      await cleanupHostedQaSession(agentsRequest, state);
     }
   },
-  hostedQaCohort: async ({ agentsRequest, context }, use) => {
+  hostedQaCohort: async ({ agentsRequest }, use) => {
     const marker = `hosted-qa-cohort-${randomUUID()}`;
     const project = `${marker}-project`;
     const sessions = {
-      active_recent: buildHostedQaCohortSession(project, "active-recent", marker, 1, false, 2),
-      recent_closed: buildHostedQaCohortSession(project, "recent-closed", marker, 2, true, 2),
-      cold_gt_30d: buildHostedQaCohortSession(project, "cold-31-90d", marker, 45, true, 2),
-      older_projection: buildHostedQaCohortSession(project, "older-pagination", marker, 45, true, 205),
-      random_readable: buildHostedQaCohortSession(project, "independent-readable", marker, 10, true, 2),
+      active_recent: buildHostedQaCohortSession(
+        project,
+        "active-recent",
+        marker,
+        1,
+        false,
+        2,
+      ),
+      recent_closed: buildHostedQaCohortSession(
+        project,
+        "recent-closed",
+        marker,
+        2,
+        true,
+        2,
+      ),
+      cold_gt_30d: buildHostedQaCohortSession(
+        project,
+        "cold-31-90d",
+        marker,
+        45,
+        true,
+        2,
+      ),
+      older_projection: buildHostedQaCohortSession(
+        project,
+        "older-pagination",
+        marker,
+        45,
+        true,
+        205,
+      ),
+      random_readable: buildHostedQaCohortSession(
+        project,
+        "independent-readable",
+        marker,
+        10,
+        true,
+        2,
+      ),
     };
     const cohort: HostedQaCohort = {
       project,
       sessions,
-      ownedSessionIds: Object.values(sessions).map((session) => session.sessionId),
+      ownedSessionIds: Object.values(sessions).map(
+        (session) => session.sessionId,
+      ),
       lexicalQuery: sessions.active_recent.searchText,
       recallQuery: sessions.cold_gt_30d.searchText,
     };
-    const states: HostedQaCleanupState[] = Object.values(sessions).map((session) => ({
-      ...session,
-      attempted: false,
-      materialized: false,
-    }));
+    const states: HostedQaCleanupState[] = Object.values(sessions).map(
+      (session) => ({
+        ...session,
+        attempted: false,
+        materialized: false,
+      }),
+    );
 
     try {
       for (const [index, session] of Object.values(sessions).entries()) {
@@ -564,11 +668,11 @@ export const test = base.extend<LiveFixtures>({
           events: session.events,
         });
         state.materialized = true;
-        await waitForHostedQaTranscript(agentsRequest, session);
       }
+      await waitForHostedQaTranscripts(agentsRequest, Object.values(sessions));
       await use(cohort);
     } finally {
-      await cleanupHostedQaSessions(context, agentsRequest, states);
+      await cleanupHostedQaSessions(agentsRequest, states);
     }
   },
 });

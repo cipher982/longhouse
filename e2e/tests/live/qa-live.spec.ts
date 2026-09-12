@@ -90,6 +90,24 @@ async function failWithScreenshot(
   throw new Error(`${message}\nScreenshot saved: ${path}`);
 }
 
+async function scopeTimelineToOwnedProject(
+  page: Page,
+  project: string,
+): Promise<void> {
+  await page.route("**/api/timeline/sessions**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname !== "/api/timeline/sessions") {
+      await route.continue();
+      return;
+    }
+    url.searchParams.set("project", project);
+    url.searchParams.set("include_test", "true");
+    url.searchParams.set("include_automation", "true");
+    const response = await route.fetch({ url: url.toString() });
+    await route.fulfill({ response });
+  });
+}
+
 async function waitForLivePageReady(
   page: Page,
   testName: string,
@@ -283,40 +301,23 @@ test("removed loop login handoff resolves to timeline", async ({
       typeof methods?.sso_login_url === "string"
         ? new URL(methods.sso_login_url)
         : null;
-    let interceptedLoginUrl: URL | null = null;
 
     if (methods?.sso === true) {
       expect(
         configuredLoginUrl,
         "SSO-enabled tenants must publish their configured login URL",
       ).not.toBeNull();
-      await page.route("**/*", async (route) => {
-        const url = new URL(route.request().url());
-        if (
-          configuredLoginUrl &&
-          url.origin === configuredLoginUrl.origin &&
-          url.pathname === configuredLoginUrl.pathname
-        ) {
-          interceptedLoginUrl = url;
-          await route.abort();
-          return;
-        }
-        await route.continue();
-      });
     }
 
-    await page.goto(`${baseOrigin}/loop`, { waitUntil: "domcontentloaded" }).catch(
-      (error) => {
-        if (methods?.sso !== true) throw error;
-      },
-    );
+    await page.goto(`${baseOrigin}/loop`, { waitUntil: "domcontentloaded" });
 
     if (methods?.sso === true) {
-      await expect
-        .poll(() => interceptedLoginUrl?.href ?? "", { timeout: 15_000 })
-        .not.toBe("");
-      expect(interceptedLoginUrl?.origin).toBe(configuredLoginUrl?.origin);
-      expect(interceptedLoginUrl?.pathname).toBe(configuredLoginUrl?.pathname);
+      await expect(page).toHaveURL(
+        (url) =>
+          url.origin === configuredLoginUrl?.origin &&
+          url.pathname === configuredLoginUrl?.pathname,
+        { timeout: 15_000 },
+      );
     } else {
       await expect(page).toHaveURL(
         (url) => url.origin === baseOrigin && url.pathname === "/login",
@@ -324,25 +325,14 @@ test("removed loop login handoff resolves to timeline", async ({
       );
     }
 
-    await page.unroute("**/*");
-
     // --- Part 2: authenticated removed /loop route lands on the supported home route ---
     const state = buildRuntimeTokenStorageState(baseOrigin, runtimeToken);
     await context.addCookies(state.cookies);
     await page.goto(`${baseOrigin}/loop`, { waitUntil: "domcontentloaded" });
-    await page.waitForURL((url) => url.pathname === "/timeline", {
-      timeout: 20_000,
-    });
-
-    const finalPath = new URL(page.url()).pathname;
-    expect(
-      finalPath,
-      `Expected removed /loop handoff to resolve to /timeline, got ${finalPath}`,
-    ).toBe("/timeline");
-    expect(
-      finalPath,
-      "Removed /loop should not remain a visible destination",
-    ).not.toContain("/loop");
+    await expect(page).toHaveURL(
+      (url) => url.origin === baseOrigin && url.pathname === "/timeline",
+      { timeout: 20_000 },
+    );
   } catch (error) {
     await failWithScreenshot(
       page,
@@ -454,7 +444,9 @@ test("owned canary transcript detail renders exact events", async ({
     `Owned fixture events returned ${eventsResponse.status()}: ${await eventsResponse.text()}`,
   ).toBe(true);
   const eventsBody = await eventsResponse.json();
-  const eventTexts = (Array.isArray(eventsBody?.events) ? eventsBody.events : [])
+  const eventTexts = (
+    Array.isArray(eventsBody?.events) ? eventsBody.events : []
+  )
     .map((event: { content_text?: unknown }) => event.content_text)
     .filter((text: unknown): text is string => typeof text === "string");
   expect(eventTexts).toEqual(
@@ -554,10 +546,14 @@ test("owned canary transcript detail renders exact events", async ({
     `Expected at least 1 compatible timeline item in session ${renderedSessionId}`,
   ).toBeGreaterThan(0);
   await expect(
-    page.getByText(hostedQaTranscript.userText, { exact: true }),
+    page
+      .getByTestId("session-timeline-list")
+      .getByText(hostedQaTranscript.userText, { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByText(hostedQaTranscript.assistantText, { exact: true }),
+    page
+      .getByTestId("session-timeline-list")
+      .getByText(hostedQaTranscript.assistantText, { exact: true }),
   ).toBeVisible();
 
   await page.close();
@@ -764,20 +760,7 @@ test("timeline search finds the owned fixture and has AI toggle", async ({
       authErrors.push(response.url());
     }
   });
-  let diagnosticSearchUrl: URL | null = null;
-  await page.route("**/api/timeline/sessions**", async (route) => {
-    const url = new URL(route.request().url());
-    if (url.pathname !== "/api/timeline/sessions") {
-      await route.continue();
-      return;
-    }
-    url.searchParams.set("project", hostedQaTranscript.project);
-    url.searchParams.set("include_test", "true");
-    url.searchParams.set("include_automation", "true");
-    diagnosticSearchUrl = url;
-    const response = await route.fetch({ url: url.toString() });
-    await route.fulfill({ response });
-  });
+  await scopeTimelineToOwnedProject(page, hostedQaTranscript.project);
 
   await expect
     .poll(
@@ -788,12 +771,15 @@ test("timeline search finds the owned fixture and has AI toggle", async ({
           query: hostedQaTranscript.searchText,
           limit: "10",
         });
-        const response = await agentsRequest.get(`/api/agents/sessions?${params}`);
+        const response = await agentsRequest.get(
+          `/api/agents/sessions?${params}`,
+        );
         if (!response.ok()) return false;
         const body = await response.json();
         const sessions = Array.isArray(body?.sessions) ? body.sessions : [];
         return sessions.some(
-          (session: { id?: unknown }) => session.id === hostedQaTranscript.sessionId,
+          (session: { id?: unknown }) =>
+            session.id === hostedQaTranscript.sessionId,
         );
       },
       { timeout: 20_000, intervals: [500, 1_000, 2_000] },
@@ -825,22 +811,21 @@ test("timeline search finds the owned fixture and has AI toggle", async ({
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-pressed", "false");
 
-  await page.getByPlaceholder("Search sessions...").fill(hostedQaTranscript.searchText);
+  await page
+    .getByPlaceholder("Search sessions...")
+    .fill(hostedQaTranscript.searchText);
   const ownedRow = page.getByTestId("session-row").first();
   await expect(ownedRow).toBeVisible({
     timeout: 15_000,
   });
-  const visibleIds = await page.getByTestId("session-row").evaluateAll((rows) =>
-    rows
-      .map((row) => row.getAttribute("data-session-id"))
-      .filter((id): id is string => Boolean(id)),
-  );
-  expect(visibleIds).toContain(hostedQaTranscript.sessionId);
-  expect(diagnosticSearchUrl?.searchParams.get("project")).toBe(
-    hostedQaTranscript.project,
-  );
-  expect(diagnosticSearchUrl?.searchParams.get("include_test")).toBe("true");
-  expect(diagnosticSearchUrl?.searchParams.get("include_automation")).toBe("true");
+  const visibleIds = await page
+    .getByTestId("session-row")
+    .evaluateAll((rows) =>
+      rows
+        .map((row) => row.getAttribute("data-session-id"))
+        .filter((id): id is string => Boolean(id)),
+    );
+  expect(visibleIds).toEqual([hostedQaTranscript.sessionId]);
 
   if (authErrors.length > 0) {
     await failWithScreenshot(
@@ -871,10 +856,14 @@ test("timeline search finds the owned fixture and has AI toggle", async ({
 // Test 7: Recall panel opens and renders search input
 // ---------------------------------------------------------------------------
 
-test("recall panel opens and shows search input", async ({ context }) => {
+test("recall panel opens and shows search input", async ({
+  context,
+  hostedQaTranscript,
+}) => {
   test.setTimeout(20_000);
 
   const page = await context.newPage();
+  await scopeTimelineToOwnedProject(page, hostedQaTranscript.project);
   await page.goto("/timeline", { waitUntil: "domcontentloaded" });
   await waitForLivePageReady(
     page,
