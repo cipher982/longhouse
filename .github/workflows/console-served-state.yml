@@ -112,15 +112,14 @@ jobs:
           make test-console-served-state-e2e \
             ARGS="--provider $CONSOLE_QA_PROVIDER --device-id $LONGHOUSE_DEVICE_ID --cwd $CONSOLE_QA_CWD --json-out $GITHUB_WORKSPACE/console-served-state.json"
           set -e
-          # Red and unqualified are different facts and must not share an exit
-          # code. Red means a Console turn broke on a machine that could run it.
-          # Unqualified means no machine could run one, which says nothing about
-          # Console -- failing on it would cry wolf nightly and teach everyone
-          # to ignore the one signal that is supposed to mean something.
+          # Green means the served surface completed a real Console turn.
+          # Unqualified means the canary could not run one; it is not evidence
+          # of success and must fail the check so release qualification cannot
+          # publish a green result for an empty machine directory.
           verdict="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("verdict",""))' console-served-state.json 2>/dev/null || echo "")"
           case "$verdict" in
             green) echo "Console proved on the served surface." ;;
-            unqualified) echo "::warning::No machine could serve a Console turn; nothing was proved." ;;
+            unqualified) echo "::error::No machine could serve a Console turn; nothing was proved."; exit 1 ;;
             *) echo "::error::Console served-state verdict: ${verdict:-unknown}"; exit 1 ;;
           esac
 
