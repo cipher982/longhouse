@@ -147,8 +147,13 @@ def evaluate_historical_admission(
     admitted_bytes: int,
     stored_bytes: int | None,
     enforce_stored_ceiling: bool = True,
+    enforce_byte_budget: bool = True,
 ) -> HistoricalAdmissionDecision:
-    """Evaluate one historical unit; live work must never call this function."""
+    """Evaluate shared storage safety and, when requested, historical pacing.
+
+    Live ingestion uses the shared disk and stored-usage checks but must not
+    consume the historical repair byte bucket.
+    """
 
     min_free_bytes, min_free_ratio = _disk_watermark_configuration()
     disk = sample_storage_disk(root)
@@ -189,28 +194,29 @@ def evaluate_historical_admission(
                 stored_bytes=stored_bytes,
                 stored_ceiling_bytes=stored_ceiling,
             )
-    rate, burst = _byte_budget_configuration()
-    if rate > 0 and burst > 0 and admitted_bytes > burst:
-        return HistoricalAdmissionDecision(
-            False,
-            "historical_unit_exceeds_burst",
-            300,
-            disk_free_bytes=disk.free_bytes,
-            disk_free_ratio=disk.free_ratio,
-            stored_bytes=stored_bytes,
-            stored_ceiling_bytes=stored_ceiling or None,
-        )
-    admitted, retry_after, _available = _budget.consume(max(0, admitted_bytes))
-    if not admitted:
-        return HistoricalAdmissionDecision(
-            False,
-            "historical_byte_budget",
-            retry_after,
-            disk_free_bytes=disk.free_bytes,
-            disk_free_ratio=disk.free_ratio,
-            stored_bytes=stored_bytes,
-            stored_ceiling_bytes=stored_ceiling or None,
-        )
+    if enforce_byte_budget:
+        rate, burst = _byte_budget_configuration()
+        if rate > 0 and burst > 0 and admitted_bytes > burst:
+            return HistoricalAdmissionDecision(
+                False,
+                "historical_unit_exceeds_burst",
+                300,
+                disk_free_bytes=disk.free_bytes,
+                disk_free_ratio=disk.free_ratio,
+                stored_bytes=stored_bytes,
+                stored_ceiling_bytes=stored_ceiling or None,
+            )
+        admitted, retry_after, _available = _budget.consume(max(0, admitted_bytes))
+        if not admitted:
+            return HistoricalAdmissionDecision(
+                False,
+                "historical_byte_budget",
+                retry_after,
+                disk_free_bytes=disk.free_bytes,
+                disk_free_ratio=disk.free_ratio,
+                stored_bytes=stored_bytes,
+                stored_ceiling_bytes=stored_ceiling or None,
+            )
     return HistoricalAdmissionDecision(
         True,
         "admitted",

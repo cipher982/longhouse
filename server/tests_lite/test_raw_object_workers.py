@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
 from uuid import uuid4
 
 import pytest
 
-from zerg.services.raw_object_workers import RawObjectWorkerPool
+import zerg.services.raw_object_workers as worker_module
 from zerg.services.raw_object_workers import RawObjectWorkerBusy
 from zerg.services.raw_object_workers import RawObjectWorkerError
+from zerg.services.raw_object_workers import RawObjectWorkerPool
+from zerg.services.render_object_workers import RenderObjectWorkerPool
 from zerg.storage_v2.raw_objects import RawObjectSpec
 from zerg.storage_v2.raw_objects import RawRecord
 
@@ -79,28 +83,76 @@ async def test_identical_user_reads_share_one_inflight_decode(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_timed_out_seal_holds_capacity_until_child_finishes(tmp_path):
-    pool = RawObjectWorkerPool(tmp_path, live_workers=1, repair_workers=1, queue_multiplier=1)
+async def test_stopped_repair_read_leaves_user_and_live_work_available(tmp_path):
+    pool = RawObjectWorkerPool(tmp_path, live_workers=1, repair_workers=1, user_read_workers=1, queue_multiplier=1)
+    stopped = None
+    pending = None
     try:
         await pool.start()
         spec = _spec()
-        spec = RawObjectSpec(
-            tenant_id=spec.tenant_id,
-            machine_id=spec.machine_id,
-            session_id=spec.session_id,
-            provider=spec.provider,
-            opaque_source_id=spec.opaque_source_id,
-            source_epoch=spec.source_epoch,
-            range_kind=spec.range_kind,
-            range_start=0,
-            range_end=4 * 1024 * 1024,
-            records=(RawRecord(source_position=0, data=bytes(range(256)) * (16 * 1024)),),
+        sealed = await pool.seal(spec, lane="live")
+        stopped = next(iter(pool._repair_pool.executor._processes.values()))
+        os.kill(stopped.pid, signal.SIGSTOP)
+        pending = asyncio.create_task(
+            pool.read(sealed.object_path, sealed.object_hash, spec.tenant_id, lane="repair", operation_timeout_seconds=1.0)
         )
-        with pytest.raises(RawObjectWorkerError, match="exceeded its deadline"):
-            await pool.seal(spec, lane="live", operation_timeout_seconds=1e-9)
-        assert pool._live_slots.locked()
+        await asyncio.sleep(0)
+        decoded = await pool.read(sealed.object_path, sealed.object_hash, spec.tenant_id, lane="user", operation_timeout_seconds=1.0)
+        assert decoded.spec == spec
+        fresh_spec = _spec()
+        fresh = await pool.seal(fresh_spec, lane="live")
+        assert (await pool.read(fresh.object_path, fresh.object_hash, fresh_spec.tenant_id)).spec == fresh_spec
+        with pytest.raises(RawObjectWorkerError, match="deadline"):
+            await pending
+        await asyncio.to_thread(stopped.join, 3.0)
+        assert not stopped.is_alive()
+        assert (await pool.read(sealed.object_path, sealed.object_hash, spec.tenant_id, lane="repair")).spec == spec
     finally:
-        await pool.close()
+        if pending is not None:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        try:
+            await asyncio.wait_for(pool.close(), timeout=5.0)
+        finally:
+            if stopped is not None and stopped.is_alive():
+                stopped.kill()
+                stopped.join(3.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pool_type", [RawObjectWorkerPool, RenderObjectWorkerPool])
+async def test_failed_close_reports_failure_and_can_retry_child_cleanup(tmp_path, monkeypatch, pool_type):
+    pool = pool_type(tmp_path, live_workers=1, repair_workers=1, user_read_workers=1)
+    original = worker_module._terminate_owned_executor
+    children = []
+    try:
+        await pool.start()
+        children = [
+            child for owner in (pool._live_pool, pool._repair_pool, pool._user_read_pool) for child in owner.executor._processes.values()
+        ]
+        stopped = next(iter(pool._repair_pool.executor._processes.values()))
+        os.kill(stopped.pid, signal.SIGSTOP)
+
+        def fail_cleanup(executor, _processes):
+            executor.shutdown(wait=False, cancel_futures=True)
+            return False
+
+        monkeypatch.setattr(worker_module, "_terminate_owned_executor", fail_cleanup)
+        with pytest.raises(RuntimeError, match="could not be stopped"):
+            await pool.close()
+        assert stopped.is_alive()
+        monkeypatch.setattr(worker_module, "_terminate_owned_executor", original)
+        await asyncio.wait_for(pool.close(), timeout=5.0)
+        assert all(not child.is_alive() for child in children)
+    finally:
+        monkeypatch.setattr(worker_module, "_terminate_owned_executor", original)
+        try:
+            await asyncio.wait_for(pool.close(), timeout=5.0)
+        finally:
+            for child in children:
+                if child.is_alive():
+                    child.kill()
+                    child.join(3.0)
 
 
 @pytest.mark.asyncio

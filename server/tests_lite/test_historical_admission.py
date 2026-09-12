@@ -53,6 +53,38 @@ def test_historical_unit_larger_than_burst_is_explicitly_rejected(monkeypatch, t
     assert decision.reason == "historical_unit_exceeds_burst"
 
 
+def test_live_admission_skips_repair_byte_bucket_but_keeps_disk_safety(monkeypatch, tmp_path):
+    admission.reset_historical_admission_for_tests()
+    monkeypatch.setenv("LONGHOUSE_HISTORICAL_MIN_FREE_BYTES", "200")
+    monkeypatch.setenv("LONGHOUSE_HISTORICAL_MIN_FREE_RATIO", "0.10")
+    monkeypatch.setenv("LONGHOUSE_HISTORICAL_BYTES_PER_SECOND", "10")
+    monkeypatch.setenv("LONGHOUSE_HISTORICAL_BURST_BYTES", "10")
+    monkeypatch.setattr(admission.shutil, "disk_usage", lambda _path: _disk_usage(free=900))
+
+    live = admission.evaluate_historical_admission(
+        root=tmp_path,
+        admitted_bytes=8,
+        stored_bytes=0,
+        enforce_byte_budget=False,
+    )
+    repair_first = admission.evaluate_historical_admission(root=tmp_path, admitted_bytes=8, stored_bytes=0)
+    repair_second = admission.evaluate_historical_admission(root=tmp_path, admitted_bytes=8, stored_bytes=0)
+
+    assert live.admitted is True
+    assert repair_first.admitted is True
+    assert repair_second.reason == "historical_byte_budget"
+
+    admission.reset_historical_admission_for_tests()
+    monkeypatch.setattr(admission.shutil, "disk_usage", lambda _path: _disk_usage(free=100))
+    unsafe_live = admission.evaluate_historical_admission(
+        root=tmp_path,
+        admitted_bytes=1,
+        stored_bytes=0,
+        enforce_byte_budget=False,
+    )
+    assert unsafe_live.reason == "disk_watermark"
+
+
 def test_stored_byte_ceiling_uses_accounted_bytes_not_tenant_estimates(monkeypatch, tmp_path):
     admission.reset_historical_admission_for_tests()
     monkeypatch.setenv("LONGHOUSE_HISTORICAL_MIN_FREE_BYTES", "0")

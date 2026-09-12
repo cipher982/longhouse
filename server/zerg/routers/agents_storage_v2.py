@@ -224,6 +224,7 @@ async def _admit_historical_storage(*, admitted_bytes: int, path: str, lane: str
         stored_bytes=(
             snapshot.total_stored_bytes if not stored_ceiling_enabled or (snapshot.fresh and snapshot.last_error is None) else None
         ),
+        enforce_byte_budget=lane == "repair",
     )
     if not decision.admitted:
         _raise_historical_storage_backpressure(decision, path=path, lane=lane)
@@ -764,7 +765,12 @@ def _authenticated_machine_id(auth_token: DeviceToken | object | None, payload: 
     return _canonical_text(machine_id, "machine_id", 255)
 
 
-def _validated_receipt(value: object) -> dict[str, object]:
+def _validated_receipt(
+    value: object,
+    *,
+    expected_envelope_id: str,
+    expected_object_hash: str | None = None,
+) -> dict[str, object]:
     if not isinstance(value, dict) or value.get("raw_state") != "durable":
         raise CatalogUnavailable("catalog returned an invalid durable receipt")
     try:
@@ -780,6 +786,10 @@ def _validated_receipt(value: object) -> dict[str, object]:
         raise CatalogUnavailable("catalog returned an invalid durable receipt") from exc
     if receipt != value:
         raise CatalogUnavailable("catalog durable receipt is not canonical")
+    if receipt["envelope_id"] != expected_envelope_id:
+        raise CatalogUnavailable("catalog durable receipt envelope identity does not match the request")
+    if expected_object_hash is not None and receipt["object_hash"] != expected_object_hash:
+        raise CatalogUnavailable("catalog durable receipt object identity does not match the sealed object")
     return receipt
 
 
@@ -908,7 +918,11 @@ async def put_storage_v2_media(
             raise CatalogUnavailable("catalogd is not supervised")
         if lane == "repair":
             try:
-                decoded = await workers.read_media(media_object_relative_path(canonical_hash).as_posix(), canonical_hash)
+                decoded = await workers.read_media(
+                    media_object_relative_path(canonical_hash).as_posix(),
+                    canonical_hash,
+                    lane="repair",
+                )
             except (RawObjectWorkerError, MediaObjectCorruptError):
                 decoded = None
             if decoded is not None and decoded.data == data:
@@ -1176,6 +1190,10 @@ async def _commit_admitted_envelope(
         if not isinstance(objects, list) or len(objects) != 1 or not isinstance(objects[0], dict):
             raise CatalogUnavailable("catalog returned an invalid raw-object existence result")
         if objects[0].get("receipt") is not None:
+            replay_receipt = _validated_receipt(
+                objects[0]["receipt"],
+                expected_envelope_id=parsed["expected_envelope_id"],
+            )
             if parsed["provider_facts"]:
                 # The bytes are already durable; facts a pre-facts engine never
                 # shipped (or a backfill re-sends) still need their rows, and
@@ -1192,7 +1210,7 @@ async def _commit_admitted_envelope(
                 replayed_title = _first_provider_title(parsed["provider_facts"])
                 if replayed_title is not None:
                     await _apply_provider_title(catalogd, spec.session_id, replayed_title)
-            return _validated_receipt(objects[0]["receipt"])
+            return replay_receipt
 
         owner_value = getattr(auth_token, "owner_id", None)
         render_spec = parsed["render_spec"]
@@ -1205,6 +1223,7 @@ async def _commit_admitted_envelope(
                 raw_spec=spec,
                 render_spec=render_spec,
                 manifest_cache={},
+                lane=lane,
             )
 
         # Admission guards the shared archive filesystem every tenant writes
@@ -1307,6 +1326,11 @@ async def _commit_admitted_envelope(
             },
             timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
         )
+        committed_receipt = _validated_receipt(
+            committed.get("receipt"),
+            expected_envelope_id=sealed.envelope_id,
+            expected_object_hash=sealed.object_hash,
+        )
         provider_title = _first_provider_title(parsed["provider_facts"])
         if provider_title is not None:
             # The provider named this session. Whether that freezes an empty
@@ -1363,7 +1387,7 @@ async def _commit_admitted_envelope(
             # refetches the render events that just became durable.
             bus.publish(topic_session(str(spec.session_id)), payload)
             bus.publish(TOPIC_TIMELINE, payload)
-        return _validated_receipt(committed.get("receipt"))
+        return committed_receipt
     except CatalogRemoteError as exc:
         _raise_catalog_error(exc)
     except CatalogUnavailable as exc:

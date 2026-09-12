@@ -96,6 +96,7 @@ async def recover_render_interaction_kinds(
         return {}
     if raw_workers is None:
         raise StorageV2SemanticRecoveryError("raw worker pool is required to recover legacy render semantics")
+    read_lane = "repair" if projector_read else "user"
 
     # A neighborhood is complete only for its center. Reusing the session-level
     # union for a later companion could put that companion at the cached edge
@@ -139,6 +140,7 @@ async def recover_render_interaction_kinds(
             str(manifest["object_path"]),
             str(manifest["object_hash"]),
             str(manifest["tenant_id"]),
+            lane=read_lane,
             queue_timeout_seconds=_SESSION_DETAIL_WORKER_QUEUE_TIMEOUT_SECONDS,
         )
     except Exception as exc:  # worker errors are provider-independent recovery failures
@@ -179,6 +181,7 @@ async def recover_render_interaction_kinds(
                 manifests=manifests,
                 sequence_context_cache=sequence_context_cache,
                 stats=stats,
+                lane=read_lane,
             )
         elif reclassify_sequence_controls:
             sequence_context = {}
@@ -192,6 +195,7 @@ async def recover_render_interaction_kinds(
                 current_raw_spec=decoded.spec,
                 current_envelope_id=source_envelope_id,
                 manifests=manifests,
+                lane=read_lane,
             )
     finally:
         if stats is not None:
@@ -232,6 +236,7 @@ async def enrich_render_interaction_kinds(
     raw_spec: RawObjectSpec,
     render_spec: RenderObjectSpec,
     manifest_cache: MutableMapping[str, dict[str, dict[str, object]]],
+    lane: str = "live",
 ) -> RenderObjectSpec:
     """Resolve current render facts with raw sequence context before sealing.
 
@@ -241,6 +246,8 @@ async def enrich_render_interaction_kinds(
     evidence are deferred until the preceding raw objects can be replayed.
     """
 
+    if lane not in {"live", "repair"}:
+        raise ValueError("render semantic enrichment lane must be live or repair")
     normalized_provider = render_spec.provider.strip().lower()
     reclassify_claude = normalized_provider == "claude"
     candidates: set[int] = set()
@@ -287,6 +294,7 @@ async def enrich_render_interaction_kinds(
         current_raw_spec=raw_spec,
         current_envelope_id=render_spec.source_envelope_id,
         manifests=manifests,
+        lane=lane,
     )
     recovered = _classify_render_records_in_raw_order(
         provider=render_spec.provider,
@@ -374,6 +382,7 @@ async def _seed_sequence_context_from_prior_raw(
     current_raw_spec: RawObjectSpec,
     current_envelope_id: str,
     manifests: Mapping[str, dict[str, object]],
+    lane: str,
 ) -> dict[str, object]:
     if provider.strip().lower() != "claude" or owner_id is None:
         return {}
@@ -399,6 +408,7 @@ async def _seed_sequence_context_from_prior_raw(
                 str(item["object_path"]),
                 str(item["object_hash"]),
                 str(item["tenant_id"]),
+                lane=lane,
                 queue_timeout_seconds=_SESSION_DETAIL_WORKER_QUEUE_TIMEOUT_SECONDS,
             )
         except Exception as exc:  # provider-independent raw recovery failure
@@ -433,6 +443,7 @@ async def _seed_sequence_context_from_adjacent_raw(
     manifests: Mapping[str, dict[str, object]],
     sequence_context_cache: MutableMapping[tuple[str, ...], dict[str, object]] | None,
     stats: SemanticRecoveryStats | None,
+    lane: str,
 ) -> dict[str, object]:
     """Seed Claude evidence from the fixed native interaction neighborhood.
 
@@ -500,6 +511,7 @@ async def _seed_sequence_context_from_adjacent_raw(
                 str(item["object_path"]),
                 str(item["object_hash"]),
                 str(item["tenant_id"]),
+                lane=lane,
                 queue_timeout_seconds=_SESSION_DETAIL_WORKER_QUEUE_TIMEOUT_SECONDS,
             )
         except Exception as exc:  # provider-independent raw recovery failure
