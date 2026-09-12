@@ -864,18 +864,14 @@ def test_start_handoff_sets_state_and_attempt_cookies(monkeypatch):
     assert "tenant_state=" in redirect.headers["location"]
     cookies = redirect.headers.getlist("set-cookie")
     assert any(
-        "__Host-lh_login_" in value
-        and "__Host-lh_login_attempt=" not in value
-        and f"Max-Age={TENANT_LOGIN_STATE_MAX_AGE}" in value
+        "__Host-lh_login_" in value and "__Host-lh_login_attempt=" not in value and f"Max-Age={TENANT_LOGIN_STATE_MAX_AGE}" in value
         for value in cookies
     )
     assert any("__Host-lh_handoff_attempt=" in value and "Max-Age=60" in value for value in cookies)
-    assert any(
-        "__Host-lh_login_attempt=" in value and f"Max-Age={TENANT_LOGIN_ATTEMPT_MAX_AGE}" in value
-        for value in cookies
-    )
+    assert any("__Host-lh_login_attempt=" in value and f"Max-Age={TENANT_LOGIN_ATTEMPT_MAX_AGE}" in value for value in cookies)
     assert redirect.headers["cache-control"] == "no-store"
     assert redirect.headers["referrer-policy"] == "no-referrer"
+
 
 def test_start_handoff_uses_trusted_proxy_client_ip(monkeypatch):
     monkeypatch.setenv("INSTANCE_ID", "david010")
@@ -950,6 +946,7 @@ def test_start_handoff_rate_limit_returns_recoverable_redirect(monkeypatch):
     assert "auth_error=rate_limited" in redirect.headers["location"]
     assert redirect.headers["retry-after"] == "9"
     assert redirect.headers["cache-control"] == "no-store"
+
 
 def test_start_handoff_rejects_conflicting_tenant(monkeypatch):
     monkeypatch.setenv("INSTANCE_ID", "david010")
