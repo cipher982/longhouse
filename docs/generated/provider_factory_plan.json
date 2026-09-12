@@ -3090,18 +3090,183 @@
       "reason": "deployed release-lane profiles for pi",
       "qualification_profile": "pi_print_v1",
       "qualification_profiles": [
-        "pi_print_v1"
+        "pi_print_v1",
+        "pi_console_tool_v1",
+        "pi_helm_v1"
       ],
       "scenario_ids": [
-        "pi_print"
+        "pi_print",
+        "pi_console_tool_lifecycle",
+        "pi_helm_lifecycle"
       ],
       "harness_scenarios": [],
       "credential_requirement": [
         "OPENROUTER_API_KEY",
         "LONGHOUSE_PI_LIVE",
-        "LONGHOUSE_PI_QUALIFICATION_MODEL"
+        "LONGHOUSE_PI_QUALIFICATION_MODEL",
+        "LONGHOUSE_ENGINE_BIN",
+        "LONGHOUSE_CLI_BIN",
+        "LONGHOUSE_RUNTIME_API_URL",
+        "LONGHOUSE_RUNTIME_AGENTS_TOKEN"
       ],
-      "assertion_status": []
+      "assertion_status": [
+        {
+          "assertion_id": "pi_helm_launch_registration",
+          "variant": null,
+          "scenario_id": "pi_helm_lifecycle",
+          "minimum_scenario_revision": 3,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "pi_helm_native_tool_taxonomy",
+          "variant": null,
+          "scenario_id": "pi_helm_lifecycle",
+          "minimum_scenario_revision": 3,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "pi_helm_send_idle",
+          "variant": null,
+          "scenario_id": "pi_helm_lifecycle",
+          "minimum_scenario_revision": 3,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "pi_helm_steer_active",
+          "variant": null,
+          "scenario_id": "pi_helm_lifecycle",
+          "minimum_scenario_revision": 3,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "pi_helm_follow_up_native",
+          "variant": null,
+          "scenario_id": "pi_helm_lifecycle",
+          "minimum_scenario_revision": 3,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "pi_helm_abort_native",
+          "variant": null,
+          "scenario_id": "pi_helm_lifecycle",
+          "minimum_scenario_revision": 3,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "pi_helm_terminate_owned",
+          "variant": null,
+          "scenario_id": "pi_helm_lifecycle",
+          "minimum_scenario_revision": 3,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "pi_helm_reload_rebind",
+          "variant": null,
+          "scenario_id": "pi_helm_lifecycle",
+          "minimum_scenario_revision": 3,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "pi_helm_session_replacement_rebind",
+          "variant": null,
+          "scenario_id": "pi_helm_lifecycle",
+          "minimum_scenario_revision": 3,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "pi_helm_cold_resume_exact_file",
+          "variant": null,
+          "scenario_id": "pi_helm_lifecycle",
+          "minimum_scenario_revision": 3,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "pi_helm_stale_owner_refused",
+          "variant": null,
+          "scenario_id": "pi_helm_lifecycle",
+          "minimum_scenario_revision": 3,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        },
+        {
+          "assertion_id": "pi_console_tool_enabled",
+          "variant": null,
+          "scenario_id": "pi_console_tool_lifecycle",
+          "minimum_scenario_revision": 3,
+          "acceptable_evidence": [
+            "live_token"
+          ],
+          "producible_evidence": [
+            "live_token"
+          ],
+          "satisfiable": true
+        }
+      ]
     },
     {
       "provider": "pi",

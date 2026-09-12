@@ -168,11 +168,15 @@ def test_release_poll_runs_for_pi_observed_install(facts) -> None:
     assert cell.qualification_profile == "pi_print_v1"
     assert cell.qualification_profiles == DEPLOYED_RELEASE_LANE_PROFILES["pi"]
     assert cell.harness_scenarios == ()
-    assert cell.scenario_ids == ("pi_print",)
+    assert cell.scenario_ids == ("pi_print", "pi_console_tool_lifecycle", "pi_helm_lifecycle")
     assert cell.credential_requirement == (
         "OPENROUTER_API_KEY",
         "LONGHOUSE_PI_LIVE",
         "LONGHOUSE_PI_QUALIFICATION_MODEL",
+        "LONGHOUSE_ENGINE_BIN",
+        "LONGHOUSE_CLI_BIN",
+        "LONGHOUSE_RUNTIME_API_URL",
+        "LONGHOUSE_RUNTIME_AGENTS_TOKEN",
     )
 
 
