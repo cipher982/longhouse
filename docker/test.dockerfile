@@ -32,5 +32,6 @@ COPY engine/Cargo.toml engine/Cargo.lock engine/
 RUN mkdir -p engine/src && touch engine/src/main.rs engine/src/longhouse.rs \
     && cargo fetch --manifest-path engine/Cargo.toml --locked \
     && rm -rf engine/src
+RUN rustup component add rustfmt
 # No credentials, user HOME, provider binaries, git configuration, or daemon socket.
 ENV UV_OFFLINE=1 UV_NO_SYNC=1 CARGO_NET_OFFLINE=true

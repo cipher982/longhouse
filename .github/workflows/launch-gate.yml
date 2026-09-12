@@ -7,6 +7,8 @@ name: Launch Gate
 
 on:
   push:
+    branches:
+      - "**"
     tags-ignore:
       - "v*"
     paths:
@@ -322,7 +324,7 @@ jobs:
     name: "launch-gate--runtime-packaging--macos-latest"
 
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30af803 # v6.1.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
 
