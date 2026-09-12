@@ -315,7 +315,7 @@ def upsert_live_control_leases(
     device_id: str,
     received_at: datetime,
 ) -> set[UUID]:
-    """Materialize managed lease snapshots into the Live Store hot lane."""
+    """Retain device telemetry and return sessions accepted for owned projections."""
 
     touched: set[UUID] = set()
     seen_at = normalize_utc(received_at) or _utc_now()
@@ -380,6 +380,10 @@ def upsert_live_control_leases(
                         clear_expires=True,
                         now=seen_at,
                     )
+        except PermissionError:
+            # Retain the device's raw lease, but do not let it rewrite the
+            # current owner's singleton session index or readiness.
+            continue
         except RuntimeError:
             # Heartbeats may precede catalog ingest for a newly discovered
             # Shadow session. The next catalog sync/heartbeat converges it.
@@ -435,6 +439,8 @@ def mark_missing_live_control_leases(
                 external_name=row.machine_id,
                 observed_at=seen_at,
             )
+        except PermissionError:
+            continue
         except RuntimeError:
             logger.debug("Missing live control lease has no catalog session %s", row.session_id)
         try:

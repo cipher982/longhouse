@@ -2308,18 +2308,17 @@ class CatalogStore:
             orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
             try:
                 if lease_objects:
-                    touched.update(
-                        upsert_live_control_leases(
-                            orm,
-                            lease_objects,
-                            device_id=device_id,
-                            received_at=received_at,
-                        )
+                    accepted_session_ids = upsert_live_control_leases(
+                        orm,
+                        lease_objects,
+                        device_id=device_id,
+                        received_at=received_at,
                     )
+                    touched.update(accepted_session_ids)
                     touched.update(
                         upsert_live_sessions_from_managed_leases(
                             orm,
-                            lease_objects,
+                            [lease for lease in lease_objects if lease.session_id in accepted_session_ids],
                             device_id=device_id,
                             owner_id=owner_id,
                             received_at=received_at,

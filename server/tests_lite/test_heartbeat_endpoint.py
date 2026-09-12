@@ -40,6 +40,7 @@ from zerg.machine_evidence import canonical_evidence_hash  # noqa: E402
 from zerg.machine_evidence import validate_machine_evidence_identities  # noqa: E402
 from zerg.models.live_store import LiveControlLease  # noqa: E402
 from zerg.models.live_store import LiveHeartbeatStamp  # noqa: E402
+from zerg.models.live_store import LiveSession  # noqa: E402
 from zerg.models.live_store import LiveSessionCatalog  # noqa: E402
 from zerg.models.live_store import LiveSessionConnection  # noqa: E402
 from zerg.models.live_store import LiveSessionRun  # noqa: E402
@@ -1358,6 +1359,7 @@ def test_heartbeat_old_device_cannot_change_current_session_control(live_catalog
 
     current = _catalog_rows(LiveSessionConnection.__table__)
     assert [(row["run_id"], row["device_id"], row["state"]) for row in current] == [(run_id, DEVICE_ID, "attached")]
+    current_index = _catalog_rows(LiveSession.__table__)
     response = live_catalog_client.post(
         "/agents/heartbeat",
         headers=tokens["old-device"],
@@ -1370,6 +1372,7 @@ def test_heartbeat_old_device_cannot_change_current_session_control(live_catalog
     )
     assert response.status_code == 204, response.text
     assert _catalog_rows(LiveSessionConnection.__table__) == current
+    assert _catalog_rows(LiveSession.__table__) == current_index
     assert {row["device_id"]: row["state"] for row in _leases()} == {
         DEVICE_ID: "attached",
         "old-device": "attached" if stale_report == "attached" else "missing",

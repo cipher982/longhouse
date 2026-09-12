@@ -295,7 +295,7 @@ def attach_live_catalog_control(
 
     observing = run_id is None and not force_new_run
     if observing and run.host_id not in (None, "", device_id):
-        return None
+        raise PermissionError("observer device does not own the current run")
 
     contract = require_contract_for_provider(provider)
     if contract.control_plane is None:
@@ -309,7 +309,7 @@ def attach_live_catalog_control(
         .first()
     )
     if observing and connection is not None and connection.device_id not in (None, "", device_id):
-        return None
+        raise PermissionError("observer device does not own the current connection")
     if connection is None:
         connection = LiveSessionConnection(
             run_id=str(run.id),
