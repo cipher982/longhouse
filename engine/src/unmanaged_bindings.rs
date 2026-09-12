@@ -33,6 +33,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 use chrono::DateTime;
 use chrono::Utc;
@@ -51,6 +52,12 @@ const MAX_BINDINGS: usize = 128;
 /// user's recent-unmanaged-sessions set is small; older files are noise
 /// for liveness decisions.
 const TRANSCRIPT_MTIME_WINDOW: chrono::Duration = chrono::Duration::hours(24);
+/// Bound one optional process inspection so one dead provider cannot hold the
+/// whole Shadow discovery pass open.
+const LSOF_CALL_TIMEOUT: Duration = Duration::from_secs(2);
+/// Stop starting more optional work after this cooperative per-pass budget.
+/// Expiry is non-authoritative, not an empty or complete process inventory.
+const UNMANAGED_REFRESH_BUDGET: Duration = Duration::from_secs(10);
 
 /// Merge fd-scanned bindings with hook-observed unmanaged provider bindings.
 ///
@@ -84,6 +91,7 @@ fn collect_unmanaged_session_bindings_from_processes(
     processes: Vec<ProcessInfo>,
     scanner: &dyn ProcessScanner,
 ) -> Result<Vec<UnmanagedSessionBinding>, String> {
+    let deadline = Instant::now() + UNMANAGED_REFRESH_BUDGET;
     let provider_processes = unresolved_unmanaged_processes(processes, excluded_managed_pids);
     let store = UnmanagedProcessBindingStore::new(conn);
     if let Err(err) = store.prune_older_than(now - chrono::Duration::days(30)) {
@@ -92,6 +100,9 @@ fn collect_unmanaged_session_bindings_from_processes(
     let hook_rows = store
         .load_all()
         .map_err(|err| format!("reading unmanaged process binding state failed: {err}"))?;
+    if Instant::now() >= deadline {
+        return Err(unmanaged_refresh_timeout());
+    }
     let mut out = Vec::new();
     let mut hook_resolved_pids = HashSet::new();
 
@@ -147,16 +158,23 @@ fn collect_unmanaged_session_bindings_from_processes(
         .filter(|process| !hook_resolved_pids.contains(&process.pid))
         .collect::<Vec<_>>();
     if unresolved_processes.is_empty() {
+        if Instant::now() >= deadline {
+            return Err(unmanaged_refresh_timeout());
+        }
         return Ok(out);
     }
 
     let transcripts = discover_recent_transcripts(now);
+    if Instant::now() >= deadline {
+        return Err(unmanaged_refresh_timeout());
+    }
     let fd_bindings = collect_from_transcripts_with_processes(
         machine_id,
         &transcripts,
         scanner,
         now,
         &unresolved_processes,
+        deadline,
     )?;
     for binding in fd_bindings {
         upsert_newer_binding(&mut out, binding);
@@ -201,10 +219,10 @@ impl ProcessScanner for SystemScanner {
 }
 
 fn run_lsof(pid: u32) -> Result<Vec<PathBuf>, String> {
-    let output = Command::new("lsof")
-        .args(["-F", "n", "-p", &pid.to_string()])
-        .output()
-        .map_err(|err| format!("running lsof for unmanaged pid {pid}: {err}"))?;
+    let mut command = Command::new("lsof");
+    command.args(["-F", "n", "-p", &pid.to_string()]);
+    let output = crate::process_identity::output_with_timeout(command, LSOF_CALL_TIMEOUT)
+        .ok_or_else(|| format!("lsof output unavailable or timed out for unmanaged pid {pid}"))?;
     if !output.status.success() {
         if lsof_reports_no_match(&output.status, &output.stderr) {
             // The process inventory is a point-in-time observation. A provider
@@ -226,6 +244,13 @@ fn run_lsof(pid: u32) -> Result<Vec<PathBuf>, String> {
     }
     let text = String::from_utf8_lossy(&output.stdout);
     Ok(parse_lsof(&text))
+}
+
+fn unmanaged_refresh_timeout() -> String {
+    format!(
+        "unmanaged binding refresh exceeded {}ms",
+        UNMANAGED_REFRESH_BUDGET.as_millis()
+    )
 }
 
 fn lsof_reports_no_match(status: &std::process::ExitStatus, stderr: &[u8]) -> bool {
@@ -457,7 +482,14 @@ pub fn collect_from_transcripts(
         .cloned()
         .filter(|process| is_provider_process(&process.command).is_some())
         .collect::<Vec<_>>();
-    collect_from_transcripts_with_processes(machine_id, transcripts, scanner, now, &processes)
+    collect_from_transcripts_with_processes(
+        machine_id,
+        transcripts,
+        scanner,
+        now,
+        &processes,
+        Instant::now() + UNMANAGED_REFRESH_BUDGET,
+    )
 }
 
 fn collect_from_transcripts_with_processes(
@@ -466,7 +498,11 @@ fn collect_from_transcripts_with_processes(
     scanner: &dyn ProcessScanner,
     now: DateTime<Utc>,
     processes: &[ProcessInfo],
+    deadline: Instant,
 ) -> Result<Vec<UnmanagedSessionBinding>, String> {
+    if Instant::now() >= deadline {
+        return Err(unmanaged_refresh_timeout());
+    }
     if transcripts.is_empty() {
         return Ok(Vec::new());
     }
@@ -489,10 +525,17 @@ fn collect_from_transcripts_with_processes(
     let mut best_by_transcript: HashMap<PathBuf, (ProcessInfo, &'static str)> = HashMap::new();
 
     for proc in processes {
+        if Instant::now() >= deadline {
+            return Err(unmanaged_refresh_timeout());
+        }
         let Some(provider) = is_provider_process(&proc.command) else {
             continue;
         };
-        for open_path in scanner.list_open_files(proc.pid)? {
+        let open_files = scanner.list_open_files(proc.pid)?;
+        if Instant::now() >= deadline {
+            return Err(unmanaged_refresh_timeout());
+        }
+        for open_path in open_files {
             let canon = canonicalize(&open_path);
             let matched_transcript = transcript_index
                 .get(&canon)
@@ -522,6 +565,9 @@ fn collect_from_transcripts_with_processes(
 
     let mut bindings: Vec<UnmanagedSessionBinding> = Vec::new();
     for (canon_path, (proc, provider)) in best_by_transcript {
+        if Instant::now() >= deadline {
+            return Err(unmanaged_refresh_timeout());
+        }
         let Some((display_path, _)) = transcript_index.get(&canon_path) else {
             continue;
         };
@@ -679,7 +725,34 @@ mod tests {
             now,
         );
 
-        assert_eq!(result.unwrap_err(), "fixture lsof failure");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn expired_binding_pass_is_non_authoritative_instead_of_partial_truth() {
+        let now = t("2026-04-27T12:00:00Z");
+        let tmp = tempfile::tempdir().unwrap();
+        let transcript = tmp.path().join("abc.jsonl");
+        std::fs::write(&transcript, "{}\n").unwrap();
+        let scanner = FakeScanner {
+            processes: vec![proc_info(
+                1234,
+                "2026-04-27T10:00:00Z",
+                "/usr/local/bin/codex",
+            )],
+            open_files: RefCell::new(HashMap::new()),
+        };
+
+        let result = collect_from_transcripts_with_processes(
+            "mac",
+            &[(transcript, "codex")],
+            &scanner,
+            now,
+            &scanner.processes,
+            Instant::now(),
+        );
+
+        assert!(result.is_err());
     }
 
     #[test]
