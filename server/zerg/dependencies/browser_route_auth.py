@@ -25,8 +25,9 @@ def get_current_browser_route_user(
     ),
 ):
     """Resolve the authenticated browser user for routes that also support SSE tokens."""
+    request_method = getattr(request, "method", "GET").upper()
     if token:
-        if request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+        if request_method in {"POST", "PUT", "PATCH", "DELETE"}:
             require_browser_auth_header(request)
         if getattr(get_settings(), "control_plane_url", None) and not token.startswith("zdt_"):
             raise HTTPException(
@@ -38,7 +39,7 @@ def get_current_browser_route_user(
             return user
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
-    if request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+    if request_method in {"POST", "PUT", "PATCH", "DELETE"}:
         require_browser_auth_header(request)
     return get_current_browser_user(request, db)
 
