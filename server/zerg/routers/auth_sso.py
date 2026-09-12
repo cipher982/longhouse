@@ -49,7 +49,6 @@ logger = logging.getLogger(__name__)
 _HANDOFF_RATE_WINDOW_SECONDS = 60
 _HANDOFF_RATE_MAX_ATTEMPTS = 20
 _WEB_HANDOFF_IP_MAX_ATTEMPTS = 60
-_WEB_HANDOFF_TENANT_MAX_ATTEMPTS = 600
 _NATIVE_HANDOFF_IP_MAX_ATTEMPTS = 60
 _NATIVE_HANDOFF_TENANT_MAX_ATTEMPTS = 300
 _NATIVE_REFRESH_IP_MAX_ATTEMPTS = 120
@@ -87,7 +86,6 @@ def _enforce_handoff_rate_limit(
         checks.extend(
             [
                 (f"web-ip:{tenant}:{_rate_limit_digest(ip_key)}", _WEB_HANDOFF_IP_MAX_ATTEMPTS),
-                (f"web-tenant:{tenant}", _WEB_HANDOFF_TENANT_MAX_ATTEMPTS),
             ]
         )
     elif surface == "native":

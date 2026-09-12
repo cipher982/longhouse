@@ -1,7 +1,7 @@
 """Shared helpers for hosted tenant auth flows."""
 
-from __future__ import annotations
-
+import hashlib
+import hmac
 import logging
 import os
 import re
@@ -146,17 +146,19 @@ def tenant_handoff_attempt_cookie_name(*, secure: bool) -> str:
 def new_tenant_login_state(*, secure: bool | None = None) -> tuple[str, str, str]:
     """Return (state, cookie_name, cookie_secret) for one browser attempt.
 
-    The state is deliberately a single URL-safe opaque value. Its fixed-width
-    attempt-id prefix lets the tenant use an isolated host-only cookie per tab,
-    while the control plane can carry the value through its bounded state
-    validator without a cross-repository grammar mismatch.
+    The URL state carries only a public nonce. The cookie value is an HMAC of
+    that state under the tenant's server-side internal secret, so a callback
+    URL capture cannot forge the browser binding.
     """
     if secure is None:
         secure = tenant_cookie_secure()
     attempt_id = f"{int(time.time() * 1000):013d}_{secrets.token_hex(6)}"
-    secret = secrets.token_urlsafe(32)
-    state = f"{attempt_id}{_STATE_SEPARATOR}{secret}"
-    return state, f"{tenant_login_cookie_prefix(secure=secure)}{attempt_id}", secret
+    nonce = secrets.token_urlsafe(32)
+    state = f"{attempt_id}{_STATE_SEPARATOR}{nonce}"
+    cookie_secret = tenant_login_cookie_secret(state)
+    if cookie_secret is None:
+        raise RuntimeError("Unable to derive tenant login cookie binding")
+    return state, f"{tenant_login_cookie_prefix(secure=secure)}{attempt_id}", cookie_secret
 
 
 def _split_tenant_login_state(state: str | None) -> tuple[str, str] | None:
@@ -182,10 +184,21 @@ def tenant_login_cookie_name(state: str | None, *, secure: bool) -> str | None:
 
 
 def tenant_login_cookie_secret(state: str | None) -> str | None:
-    """Return the secret half of a syntactically valid login state."""
-
+    """Return the server-bound cookie secret for a valid login state."""
     parsed = _split_tenant_login_state(state)
-    return parsed[1] if parsed is not None else None
+    if parsed is None:
+        return None
+    attempt_id, nonce = parsed
+    canonical_state = f"{attempt_id}{_STATE_SEPARATOR}{nonce}"
+    settings = get_settings()
+    binding_secret = str(getattr(settings, "internal_api_secret", "") or "")
+    if not binding_secret:
+        raise RuntimeError("INTERNAL_API_SECRET is required for hosted login state")
+    return hmac.new(
+        binding_secret.encode("utf-8"),
+        canonical_state.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def hosted_instance_id() -> str:

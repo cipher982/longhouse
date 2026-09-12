@@ -92,6 +92,7 @@ def test_tenant_login_state_matches_control_plane_opaque_grammar():
     assert all(character.isalnum() or character in "_-" for character in state)
     assert tenant_login_cookie_name(state, secure=True) == cookie_name
     assert tenant_login_cookie_secret(state) == secret
+    assert secret != state[27:]
     legacy_state = f"{state[:26]}.{state[27:]}"
     assert tenant_login_cookie_name(legacy_state, secure=True) == cookie_name
     assert tenant_login_cookie_secret(legacy_state) == secret

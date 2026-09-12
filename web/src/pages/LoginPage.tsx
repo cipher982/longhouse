@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Navigate, useSearchParams } from 'react-router-dom';
-import { markLoginAttempt } from '../lib/auth-refresh';
+import { clearLogoutBarrier, markLoginAttempt } from '../lib/auth-refresh';
 import { sanitizeReturnTo } from '../lib/loginRedirect';
 import config from '../lib/config';
-import { hasLogoutIntent, useAuth, useAuthMethods } from '../lib/auth';
+import { clearLogoutIntent, hasLogoutIntent, useAuth, useAuthMethods } from '../lib/auth';
 
 export default function LoginPage() {
   const [params] = useSearchParams();
@@ -147,6 +147,8 @@ export default function LoginPage() {
     `/api/auth/start-handoff?return_to=${encodeURIComponent(returnTo)}` +
     (authError === 'cookie_loop' ? '&reset_attempt=1' : '');
   const beginLogin = () => {
+    clearLogoutIntent();
+    clearLogoutBarrier();
     markLoginAttempt();
     navigationStarted.current = true;
     setLogoutSuppressed(false);
