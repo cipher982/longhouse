@@ -552,6 +552,61 @@ def test_served_run_inventory_accepts_canonical_ended_terminal_state(monkeypatch
     assert evidence["active_run_count"] == 0
 
 
+def test_failed_console_cleanup_dispatches_live_termination(monkeypatch):
+    calls = []
+
+    def request(api_url, token, method, path, payload=None):
+        calls.append((api_url, token, method, path, payload))
+        return {"terminate_dispatched": True, "session_id": "session-1"}
+
+    monkeypatch.setattr(lifecycle, "_request", request)
+
+    receipt = lifecycle._terminate_live_qualification_session(
+        "https://runtime.example",
+        "token",
+        "session-1",
+    )
+
+    assert receipt == {
+        "status": "pass",
+        "dispatched": True,
+        "session_id": "session-1",
+        "response": {"terminate_dispatched": True, "session_id": "session-1"},
+    }
+    assert calls == [
+        (
+            "https://runtime.example",
+            "token",
+            "POST",
+            "/api/agents/sessions/session-1/terminate-live",
+            None,
+        )
+    ]
+
+
+def test_served_run_retirement_wait_returns_without_sleep_when_already_terminal(monkeypatch):
+    monkeypatch.setattr(
+        lifecycle,
+        "_served_run_inventory_evidence",
+        lambda *_args: {
+            "retired": True,
+            "active_run_count": 0,
+            "session_id": "session-1",
+        },
+    )
+
+    evidence = lifecycle._wait_served_run_retirement(
+        "https://runtime.example",
+        "token",
+        "session-1",
+        [{"session_id": "session-1", "run_id": "run-1", "state": "terminal"}],
+    )
+
+    assert evidence["retired"] is True
+    assert evidence["retirement_wait_attempts"] == 0
+    assert evidence["retirement_wait_status"] == "pass"
+
+
 def test_served_run_inventory_uses_terminal_facts_when_activity_head_is_unknown(monkeypatch):
     monkeypatch.setattr(
         lifecycle,

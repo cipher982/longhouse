@@ -1371,6 +1371,64 @@ def _served_run_inventory_evidence(
     }
 
 
+def _terminate_live_qualification_session(
+    api_url: str,
+    token: str,
+    session_id: str | None,
+) -> dict[str, object]:
+    """Dispatch terminal cleanup before killing a failed provider owner."""
+
+    if not session_id:
+        return {
+            "status": "fail",
+            "dispatched": False,
+            "error": "session_id_unavailable",
+        }
+    try:
+        response = _request(
+            api_url,
+            token,
+            "POST",
+            f"/api/agents/sessions/{session_id}/terminate-live",
+        )
+    except Exception as exc:  # noqa: BLE001 - cleanup must continue and report failure
+        return {
+            "status": "fail",
+            "dispatched": False,
+            "session_id": session_id,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    dispatched = response.get("terminate_dispatched") is True
+    return {
+        "status": "pass" if dispatched else "fail",
+        "dispatched": dispatched,
+        "session_id": session_id,
+        "response": response,
+    }
+
+
+def _wait_served_run_retirement(
+    api_url: str,
+    token: str,
+    session_id: str,
+    claims: list[dict[str, Any]],
+    *,
+    timeout: float = 30,
+) -> dict[str, object]:
+    """Wait for the terminal run fact to reach the served projection."""
+
+    deadline = time.monotonic() + timeout
+    attempts = 0
+    last = _served_run_inventory_evidence(api_url, token, session_id, claims)
+    while last.get("retired") is not True and time.monotonic() < deadline:
+        attempts += 1
+        time.sleep(0.5)
+        last = _served_run_inventory_evidence(api_url, token, session_id, claims)
+    last["retirement_wait_attempts"] = attempts
+    last["retirement_wait_status"] = "pass" if last.get("retired") is True else "fail"
+    return last
+
+
 def _force_cleanup(claims: list[dict[str, Any]]) -> None:
     groups = {
         int(claim["process_group_id"])
@@ -2236,7 +2294,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             )
             write_json(root / "interrupt-contract-receipt.json", interrupt_receipt)
         shipper_stop = shipper.stop() if shipper is not None else {}
-        served_run_inventory = _served_run_inventory_evidence(api_url, token, session_id, claims)
+        served_run_inventory = _wait_served_run_retirement(api_url, token, session_id, claims)
         session_retirement = retire_qualification_session(
             api_url,
             token,
@@ -2401,15 +2459,19 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
     finally:
         if not cleanup_written:
             _retain_failure_claim_diagnostics(root, claims, environment)
+        termination_dispatch = _terminate_live_qualification_session(api_url, token, session_id) if not cleanup_written else None
         _force_cleanup(claims)
         shipper_stop: Mapping[str, object] | None = None
         if shipper is not None:
-            shipper_stop = shipper.stop()
+            try:
+                shipper_stop = shipper.stop()
+            except Exception as exc:  # noqa: BLE001 - cleanup must continue and report failure
+                shipper_stop = {"status": "fail", "error": f"{type(exc).__name__}: {exc}"}
         if not cleanup_written:
             retained_sources = _retain_claim_sources(root, claims, environment)
         if not cleanup_written:
             served_run_inventory = (
-                _served_run_inventory_evidence(api_url, token, session_id, claims)
+                _wait_served_run_retirement(api_url, token, str(session_id), claims)
                 if session_id is not None
                 else {"retired": False, "active_run_count": None, "error": "session_id_unavailable"}
             )
@@ -2430,6 +2492,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
                 expected_session_id=session_id,
                 run_failed=True,
             )
+            cleanup["termination_dispatch"] = termination_dispatch
             write_json(root / "cleanup-receipt.json", cleanup)
 
 

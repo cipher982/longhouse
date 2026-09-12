@@ -182,6 +182,38 @@ def test_qualification_session_retirement_paginates_served_inventory(monkeypatch
     assert "offset=2" in requests[3][1]
 
 
+def test_qualification_session_retirement_retries_transient_action_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, str, dict[str, object]]] = []
+    responses = iter(
+        [
+            RuntimeError("PATCH /api/agents/sessions/session-1/timeline-visibility returned HTTP 503: busy"),
+            {"hidden": True},
+        ]
+    )
+
+    def request(method: str, path: str, payload: dict[str, object]) -> dict[str, object]:
+        calls.append((method, path, payload))
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    monkeypatch.setattr(live_session_toolkit.time, "sleep", lambda _seconds: None)
+
+    hidden, retries = live_session_toolkit._retirement_action_request(
+        request,
+        "PATCH",
+        "/api/agents/sessions/session-1/timeline-visibility",
+        {"hidden": True},
+        retry_count=0,
+        transient_errors=[],
+    )
+
+    assert hidden == {"hidden": True}
+    assert retries == 1
+    assert len(calls) == 2
+
+
 def test_qualification_session_retirement_retries_transient_inventory_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

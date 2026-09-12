@@ -2452,6 +2452,13 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "control_identity": final_control_receipt,
         }
     finally:
+        termination_dispatch: dict[str, Any] = {"status": "pass", "dispatched": False, "skipped": True}
+        if not served_run_inventory and current_session_id:
+            termination_dispatch = lifecycle._terminate_live_qualification_session(
+                str(args.api_url or ""),
+                str(args.agents_token or ""),
+                current_session_id,
+            )
         for provider_session in sessions:
             if provider_session.alive():
                 try:
@@ -2499,19 +2506,28 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         )
         dispatch_session_id = str(current_session_id or "")
         dispatch_run_id = str(current_state.get("run_id") or "")
-        if not served_run_inventory:
-            retirement_claims = retirement_claims or [
+        if not retirement_claims:
+            retirement_claims = [
                 {
                     "session_id": dispatch_session_id,
                     "run_id": dispatch_run_id,
                     "state": "terminal",
                 }
             ]
-            served_run_inventory = lifecycle._served_run_inventory_evidence(
-                args.api_url,
-                args.agents_token,
-                dispatch_session_id,
-                retirement_claims,
+        if not served_run_inventory:
+            served_run_inventory = (
+                _wait_served_run_retirement(
+                    args.api_url,
+                    args.agents_token,
+                    dispatch_session_id,
+                    retirement_claims,
+                )
+                if dispatch_session_id and retirement_claims
+                else {
+                    "retired": False,
+                    "active_run_count": None,
+                    "error": "session_or_run_identity_unavailable",
+                }
             )
         session_retirement = retire_qualification_session(
             args.api_url,
@@ -2519,6 +2535,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             str(current_session_id or ""),
             provider="omp",
         )
+        cleanup["termination_dispatch"] = termination_dispatch
         cleanup["session_retirement"] = session_retirement
         cleanup["served_run_inventory"] = served_run_inventory
         cleanup["served_run_retired"] = (

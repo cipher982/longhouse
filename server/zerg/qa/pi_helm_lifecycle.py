@@ -23,6 +23,7 @@ from typing import Any
 from urllib.request import Request
 from urllib.request import urlopen
 
+from zerg.qa import provider_console_lifecycle as console_lifecycle
 from zerg.qa.console_served_state_core import assistant_marker_events
 from zerg.qa.console_served_state_core import event_text
 from zerg.qa.live_session_toolkit import new_qualification_isolation_root
@@ -92,7 +93,13 @@ REGISTRATION = ProducerRegistration(
         "stale_owner_receipt",
         "cleanup_receipt",
     ),
-    required_cleanup=("provider_process_dead", "process_group_dead", "no_orphan_provider_processes", "canary_session_hidden"),
+    required_cleanup=(
+        "provider_process_dead",
+        "process_group_dead",
+        "no_orphan_provider_processes",
+        "canary_session_hidden",
+        "served_run_retired",
+    ),
     implementation="server/zerg/qa/pi_helm_lifecycle.py",
     oracle_source="server/zerg/qa/pi_helm_lifecycle.py",
     oracle_entrypoint="pi_helm_lifecycle_assertions",
@@ -1892,6 +1899,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         finally:
             resume.close()
         observations["resume_terminate"] = resume_terminate
+        current_state = resumed_state
         observations["cold_resume_receipt"] = {
             "status": "pass" if observations["cold_resume_exact_file"] else "fail",
             "provider": "pi",
@@ -1964,6 +1972,16 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         if runtime_failure is not None:
             observations["runtime_failure"] = runtime_failure
     finally:
+        termination_dispatch: dict[str, Any] = {"accepted": False, "skipped": True}
+        if failure is not None and session_id:
+            try:
+                termination_dispatch = _run_engine(args.engine, "terminate", session_id, env)
+            except Exception as exc:  # noqa: BLE001 - cleanup must continue and report failure
+                termination_dispatch = {
+                    "accepted": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+        observations["termination_dispatch"] = termination_dispatch
         for process in sessions:
             try:
                 process.close()
@@ -1987,6 +2005,22 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             except Exception as exc:  # noqa: BLE001 - cleanup failure must remain visible
                 observations.setdefault("cleanup_errors", []).append(f"{type(exc).__name__}: {exc}")
                 observations["shipper_stop"] = {"status": "fail", "error": f"{type(exc).__name__}: {exc}"}
+        final_run_id = str(current_state.get("run_id") or "")
+        served_run_inventory = (
+            console_lifecycle._wait_served_run_retirement(
+                str(args.api_url or ""),
+                str(args.agents_token or ""),
+                session_id,
+                [{"session_id": session_id, "run_id": final_run_id, "state": "terminal"}],
+            )
+            if session_id and final_run_id
+            else {
+                "retired": False,
+                "active_run_count": None,
+                "error": "session_or_run_identity_unavailable",
+            }
+        )
+        observations["served_run_inventory"] = served_run_inventory
         observations["session_retirement"] = retire_qualification_session(
             args.api_url,
             args.agents_token,
@@ -2032,6 +2066,13 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             _write_scenario_receipts(root, args, observations, source_secrets)
         observations["retained_source_artifacts"] = retained_sources
         observations["cleanup"] = _cleanup_receipt(owned_processes)
+        observations["cleanup"]["termination_dispatch"] = termination_dispatch
+        observations["cleanup"]["served_run_inventory"] = served_run_inventory
+        observations["cleanup"]["served_run_retired"] = (
+            served_run_inventory.get("retired") is True
+            and served_run_inventory.get("session_id") == session_id
+            and served_run_inventory.get("active_run_count") == 0
+        )
         session_retirement = observations.get("session_retirement")
         observations["cleanup"]["session_retirement"] = dict(session_retirement) if isinstance(session_retirement, dict) else None
         observations["cleanup"]["canary_session_hidden"] = (
@@ -2085,6 +2126,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             "pass"
             if observations["cleanup"].get("status") == "pass"
             and observations["cleanup"].get("canary_session_hidden") is True
+            and observations["cleanup"].get("served_run_retired") is True
             and shipper_stop_ok
             and observations["cleanup"].get("source_retention_verified") is True
             and observations["scratch_removed"] is True
@@ -2092,7 +2134,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             else "fail"
         )
         if failure is None and observations["cleanup"]["status"] != "pass":
-            failure = RuntimeError("Pi Helm cleanup did not prove source retention, shipper stop, and scratch removal")
+            failure = RuntimeError("Pi Helm cleanup did not prove run retirement, source retention, shipper stop, and scratch removal")
             observations["error"] = str(failure)
         if failure is not None:
             _write_json(
