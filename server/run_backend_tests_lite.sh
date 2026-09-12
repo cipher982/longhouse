@@ -6,7 +6,7 @@
 # Does not require Docker or Postgres.
 
 set -euo pipefail
-if [[ "${LONGHOUSE_TEST_ISOLATED:-}" != "1" || ! -e /tmp/longhouse-test-isolated ]]; then
+if ! python3 "$(dirname "${BASH_SOURCE[0]}")/../scripts/qa/test_boundary.py"; then
     cat >&2 <<'EOF'
 Refusing direct backend test launch outside the isolated test runtime.
 Use `make test` or `make test-backend-single TEST=tests_lite/<file.py>` from the repository root.

@@ -33,6 +33,7 @@ OWNER = hashlib.sha256(str(ROOT).encode()).hexdigest()[:20]
 # Never forward arbitrary Make variables: HOME=..., SHELL=..., MAKEFLAGS=...,
 # auth, URLs, and binary overrides are authority.
 OPTIONS = {
+    "ARGS",
     "TEST",
     "MODE",
     "FILES",
@@ -48,6 +49,10 @@ OPTIONS = {
     "BUNDLE_OUTPUT",
     "ARTIFACT",
     "EVIDENCE_ROOT",
+    "LONGHOUSE_NATIVE_SMOKE_REMOTE",
+    "LONGHOUSE_NATIVE_SMOKE_EXPECTED_VERSION",
+    "LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT",
+    "LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG",
 }
 MAKE_ASSIGNMENTS = {
     "ARGS",
@@ -58,6 +63,7 @@ MAKE_ASSIGNMENTS = {
     "EVIDENCE_ROOT",
 }
 NATIVE = {
+    "test-install",
     "test-ios",
     "test-ios-perf",
     "test-ios-session-open",
@@ -103,6 +109,7 @@ LIVE = {
 }
 ANONYMOUS_LIVE = {"qa-landing-live"}
 FIXTURE_SETTINGS = {
+    "ARGS",
     "UNIVERSAL_PROVIDER",
     "STORE_ROOT",
     "BUNDLE_OUTPUT",
@@ -708,6 +715,10 @@ def run_native(args: argparse.Namespace, options: dict[str, str]) -> int:
                         "VERBOSE",
                         "IOS_TEST_SCHEMES",
                         "PROJECT",
+                        "LONGHOUSE_NATIVE_SMOKE_REMOTE",
+                        "LONGHOUSE_NATIVE_SMOKE_EXPECTED_VERSION",
+                        "LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT",
+                        "LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG",
                     }
                 }
             )

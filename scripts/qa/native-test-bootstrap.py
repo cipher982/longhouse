@@ -13,9 +13,11 @@ import sys
 import tempfile
 from pathlib import Path
 
+from test_boundary import boundary_active, create_boundary
+
 ROOT = Path(__file__).resolve().parents[2]
-MARKER = Path("/tmp/longhouse-test-isolated")
 TARGETS = {
+    "test-install",
     "test-ios",
     "test-ios-perf",
     "test-ios-session-open",
@@ -37,6 +39,10 @@ OPTIONS = {
     "VERBOSE",
     "IOS_TEST_SCHEMES",
     "PROJECT",
+    "LONGHOUSE_NATIVE_SMOKE_REMOTE",
+    "LONGHOUSE_NATIVE_SMOKE_EXPECTED_VERSION",
+    "LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT",
+    "LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG",
 }
 
 
@@ -48,7 +54,7 @@ def main() -> int:
         sys.platform != "darwin"
         or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted"
         or os.environ.get("GITHUB_ACTIONS") != "true"
-        or MARKER.exists()
+        or boundary_active()
     ):
         parser.error(
             "native tests require a fresh GitHub-hosted macOS VM; never the developer login"
@@ -59,7 +65,17 @@ def main() -> int:
         for key, value in options.items()
     ):
         parser.error("invalid native fixture options")
-    if options.get("MODE") not in (
+    if args.target == "test-install":
+        if options.get("MODE") not in (None, ""):
+            parser.error("test-install does not support MODE; use installer options")
+        if options.get("LONGHOUSE_NATIVE_SMOKE_REMOTE") not in (
+            None,
+            "",
+            "0",
+            "1",
+        ):
+            parser.error("LONGHOUSE_NATIVE_SMOKE_REMOTE must be 0 or 1")
+    elif options.get("MODE") not in (
         None,
         "",
         "test",
@@ -111,8 +127,14 @@ def main() -> int:
         "BUN_INSTALL_CACHE_DIR": str(scratch / "bun-cache"),
         **options,
     }
+    if args.target == "test-install":
+        # Never honor a caller's host path; installer evidence belongs to this run.
+        environment["LONGHOUSE_NATIVE_SMOKE_ARTIFACT_DIR"] = str(
+            scratch / "artifacts/native-installer"
+        )
     for key in ("HOME", "TMPDIR", "LONGHOUSE_HOME", "CARGO_HOME"):
         Path(environment[key]).mkdir(parents=True, exist_ok=True)
+    boundary_path = None
     child = None
     handlers = {}
     receipt = {
@@ -145,7 +167,7 @@ def main() -> int:
                 env=environment,
                 check=True,
             )
-        if args.target == "simlab-run":
+        if args.target in {"simlab-run", "test-install"}:
             subprocess.run(
                 ["cargo", "fetch", "--manifest-path", "engine/Cargo.toml", "--locked"],
                 cwd=ROOT,
@@ -219,9 +241,11 @@ def main() -> int:
                 check=True,
             )
         environment.update({"CARGO_NET_OFFLINE": "true", "UV_OFFLINE": "1"})
-        # The disposable VM is the native isolation boundary. An outer Seatbelt
-        # sandbox breaks Xcode/SwiftPM's own sandbox during manifest evaluation.
-        MARKER.touch(exist_ok=False)
+        # The boundary is created only after dependency preparation, immediately
+        # before make. An outer Seatbelt sandbox breaks Xcode/SwiftPM's own
+        # sandbox during manifest evaluation.
+        create_boundary(scratch, environment)
+        boundary_path = Path(environment["LONGHOUSE_TEST_BOUNDARY"])
         child = subprocess.Popen(
             ["make", args.target],
             cwd=ROOT,
@@ -264,9 +288,11 @@ def main() -> int:
                         ),
                     )
         finally:
-            MARKER.unlink(missing_ok=True)
             shutil.rmtree(scratch)
-            receipt["cleanup"] = not scratch.exists() and not MARKER.exists()
+            receipt["boundary_removed"] = (
+                boundary_path is None or not boundary_path.exists()
+            )
+            receipt["cleanup"] = not scratch.exists() and receipt["boundary_removed"]
             (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
             for sig, handler in handlers.items():
                 signal.signal(sig, handler)

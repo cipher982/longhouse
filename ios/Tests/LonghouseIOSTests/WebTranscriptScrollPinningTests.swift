@@ -291,9 +291,20 @@ final class WebTranscriptScrollPinningTests: XCTestCase {
     /// Two frames: `scrollToBottom` re-scrolls inside a requestAnimationFrame,
     /// and the resize re-pin schedules one of its own.
     private func settle() async throws {
-        for _ in 0..<2 {
-            _ = try? await evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(1))))")
-            try await Task.sleep(nanoseconds: 60_000_000)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            webView.callAsyncJavaScript(
+                """
+                return await Promise.race([
+                    new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(1)))),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error("frame did not settle")), 10000))
+                ]);
+                """,
+                arguments: [:],
+                in: nil,
+                in: .page
+            ) { result in
+                continuation.resume(with: result.map { _ in () })
+            }
         }
     }
 

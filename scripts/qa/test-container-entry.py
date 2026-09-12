@@ -6,6 +6,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from test_boundary import create_boundary
+
 
 def main() -> None:
     config = Path("/tmp/test-env.json")
@@ -30,7 +32,7 @@ def main() -> None:
     for key in ("HOME", "TMPDIR", "LONGHOUSE_HOME"):
         Path(os.environ[key]).mkdir(parents=True, exist_ok=True)
     Path("/work/artifacts").mkdir(parents=True, exist_ok=True)
-    Path("/tmp/longhouse-test-isolated").touch()
+    create_boundary(Path(os.environ["LONGHOUSE_TEST_ROOT"]), os.environ)
     subprocess.run(["git", "init", "-q"], check=True)
     subprocess.run(
         [

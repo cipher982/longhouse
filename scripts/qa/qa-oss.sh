@@ -2,8 +2,17 @@
 set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+ROOT_DIR="$(cd "$ROOT_DIR" && pwd -P)"
+if ! python3 "$(dirname "${BASH_SOURCE[0]}")/test_boundary.py"; then
+  cat >&2 <<'EOF'
+❌ OSS QA must run through the isolated dispatcher.
+Use `make qa-oss`; direct host execution is refused.
+EOF
+  exit 2
+fi
+
+
 WORKDIR=""
-KEEP_WORKDIR=0
 RUN_UNIT=1
 RUN_CORE_E2E=1
 RUN_UI=1
@@ -15,8 +24,7 @@ usage() {
 Usage: scripts/qa-oss.sh [options]
 
 Options:
-  --workdir <path>   Use existing workspace (skip clone)
-  --keep             Keep workspace after run
+  --workdir <path>   Use the prepared isolated workspace (default: repository root)
   --quick            Skip unit tests + core E2E (UI check only)
   --no-e2e           Skip core E2E suite
   --no-unit          Skip unit/onboarding tests
@@ -37,10 +45,6 @@ while [[ $# -gt 0 ]]; do
     --workdir)
       WORKDIR="${2:-}"
       shift 2
-      ;;
-    --keep)
-      KEEP_WORKDIR=1
-      shift
       ;;
     --quick)
       RUN_UNIT=0
@@ -81,19 +85,37 @@ require_cmd bun
 require_cmd curl
 require_cmd python3
 
-CLONED=0
 if [[ -z "$WORKDIR" ]]; then
-  WORKDIR="$(mktemp -d -t longhouse-oss-qa-XXXXXX)"
-  CLONED=1
-  echo "📦 Cloning repo into $WORKDIR"
-  git clone --quiet "$ROOT_DIR" "$WORKDIR"
+  WORKDIR="$ROOT_DIR"
 else
   if [[ ! -d "$WORKDIR" ]]; then
-    echo "❌ Workdir does not exist: $WORKDIR"
+    echo "❌ Workdir does not exist: $WORKDIR" >&2
     exit 1
   fi
-  echo "📦 Using existing workspace at $WORKDIR"
+  WORKDIR="$(cd "$WORKDIR" && pwd -P)"
 fi
+if [[ "$WORKDIR" != "$ROOT_DIR" ]]; then
+  echo "❌ Isolated OSS QA may only use its prepared repository workspace." >&2
+  exit 1
+fi
+echo "📦 Using prepared isolated workspace at $WORKDIR"
+
+require_prepared_workspace() {
+  if [[ ! -x "$WORKDIR/server/.venv/bin/python" ]]; then
+    echo "❌ Isolated workspace is missing the prepared server/.venv." >&2
+    exit 1
+  fi
+  if [[ ! -d "$WORKDIR/node_modules" ]]; then
+    echo "❌ Isolated workspace is missing the prepared JavaScript dependencies." >&2
+    exit 1
+  fi
+  if [[ "$RUN_UI" -eq 1 && ! -x "$WORKDIR/node_modules/.bin/playwright" ]]; then
+    echo "❌ Isolated workspace is missing the prepared Playwright CLI." >&2
+    exit 1
+  fi
+}
+
+require_prepared_workspace
 
 QA_HOME="$WORKDIR/.qa-home"
 SERVER_PID=""
@@ -105,14 +127,11 @@ cleanup() {
     wait "$SERVER_PID" >/dev/null 2>&1 || true
   fi
 
-  if [[ "$KEEP_WORKDIR" -eq 0 && "$CLONED" -eq 1 ]]; then
-    rm -rf "$WORKDIR"
-  fi
 }
 trap cleanup EXIT
 
-echo "🏗️  Building frontend dist..."
-(cd "$WORKDIR/web" && bun install --silent && bun run build)
+echo "🏗️  Building frontend dist from prepared dependencies..."
+(cd "$WORKDIR/web" && bun run build)
 
 if [[ "$RUN_UNIT" -eq 1 ]]; then
   echo "🧪 Running unit + onboarding-sqlite tests..."
@@ -162,15 +181,14 @@ if [[ "$ready" -ne 1 ]]; then
 fi
 
 if [[ "$RUN_UI" -eq 1 ]]; then
-  echo "🎭 Running onboarding UI check..."
   (
     cd "$WORKDIR/e2e"
-    bun install --silent
+    playwright_args=(test --config playwright.onboarding.config.js)
     if [[ -n "$ONBOARDING_PLAYWRIGHT_PROJECT" ]]; then
-      PLAYWRIGHT_BASE_URL="$BASE_URL" bunx playwright test --config playwright.onboarding.config.js --project "$ONBOARDING_PLAYWRIGHT_PROJECT"
-    else
-      PLAYWRIGHT_BASE_URL="$BASE_URL" bunx playwright test --config playwright.onboarding.config.js
+      playwright_args+=(--project "$ONBOARDING_PLAYWRIGHT_PROJECT")
     fi
+    PLAYWRIGHT_BASE_URL="$BASE_URL" "$WORKDIR/node_modules/.bin/playwright" \
+      "${playwright_args[@]}"
   )
 fi
 

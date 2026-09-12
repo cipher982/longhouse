@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 E2E_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-if [[ "${LONGHOUSE_TEST_ISOLATED:-}" != "1" || ! -e /tmp/longhouse-test-isolated ]]; then
+if ! python3 "$E2E_DIR/../scripts/qa/test_boundary.py"; then
     cat >&2 <<'EOF'
 Refusing Playwright timeline launch outside the isolated test runtime.
 Use `make test-e2e` or the portable `scripts/qa/test-isolation.py --command` wrapper.

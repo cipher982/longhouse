@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
@@ -45,7 +47,11 @@ function ensureAbsoluteRoot(value) {
 export function ensureTestRuntime() {
   if (
     process.env.LONGHOUSE_TEST_ISOLATED !== "1" ||
-    !fs.existsSync("/tmp/longhouse-test-isolated")
+    spawnSync(
+      "python3",
+      [fileURLToPath(new URL("../scripts/qa/test_boundary.py", import.meta.url))],
+      { stdio: "ignore" },
+    ).status !== 0
   ) {
     throw new Error(
       "E2E requires the isolated test lane; use make test-e2e or scripts/qa/test-isolation.py --command",

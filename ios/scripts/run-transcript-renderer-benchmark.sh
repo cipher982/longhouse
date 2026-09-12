@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "${LONGHOUSE_TEST_ISOLATED:-}" != "1" || ! -f /tmp/longhouse-test-isolated ]]; then
+if ! python3 "$(dirname "${BASH_SOURCE[0]}")/../../scripts/qa/test_boundary.py"; then
   echo "Use make benchmark-ios-transcript to run inside a disposable hosted macOS VM." >&2
   exit 2
 fi

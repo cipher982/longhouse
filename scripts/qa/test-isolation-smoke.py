@@ -9,9 +9,32 @@ import subprocess
 import sys
 from pathlib import Path
 
+from test_boundary import boundary_active
+
 
 def main() -> int:
     root = Path(os.environ["LONGHOUSE_TEST_ROOT"])
+    assert boundary_active(), "isolated child has no live invocation boundary"
+    verifier = Path(__file__).with_name("test_boundary.py")
+    invalid = dict(os.environ, LONGHOUSE_TEST_BOUNDARY_NONCE="stale")
+    assert subprocess.run([sys.executable, str(verifier)], env=invalid).returncode == 1
+    # A valid private record must stop authorizing children when its owner exits.
+    expired = subprocess.check_output(
+        [
+            sys.executable,
+            "-c",
+            "import json,os; from pathlib import Path; "
+            "from test_boundary import create_boundary; "
+            "create_boundary(Path(os.environ['LONGHOUSE_TEST_ROOT']), os.environ); "
+            "print(json.dumps({k: os.environ[k] for k in "
+            "('LONGHOUSE_TEST_BOUNDARY', 'LONGHOUSE_TEST_BOUNDARY_NONCE')}))",
+        ],
+        cwd=verifier.parent,
+        text=True,
+    )
+    assert subprocess.run(
+        [sys.executable, str(verifier)], env={**os.environ, **json.loads(expired)}
+    ).returncode == 1
     assert Path.home().is_relative_to(root), "HOME escaped the disposable root"
     for key in (
         "CODEX_HOME",

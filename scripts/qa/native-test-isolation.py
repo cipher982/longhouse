@@ -19,6 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = "native-test-isolation.yml"
 TARGETS = {
+    "test-install",
     "test-ios",
     "test-ios-perf",
     "test-ios-session-open",
@@ -40,6 +41,10 @@ OPTIONS = {
     "VERBOSE",
     "IOS_TEST_SCHEMES",
     "PROJECT",
+    "LONGHOUSE_NATIVE_SMOKE_REMOTE",
+    "LONGHOUSE_NATIVE_SMOKE_EXPECTED_VERSION",
+    "LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT",
+    "LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG",
 }
 
 
@@ -81,7 +86,17 @@ def run(args: argparse.Namespace) -> int:
         for key, value in options.items()
     ):
         raise ValueError("invalid native test options")
-    if options.get("MODE") not in (
+    if args.target == "test-install":
+        if options.get("MODE") not in (None, ""):
+            raise ValueError("test-install does not support MODE; use installer options")
+        if options.get("LONGHOUSE_NATIVE_SMOKE_REMOTE") not in (
+            None,
+            "",
+            "0",
+            "1",
+        ):
+            raise ValueError("LONGHOUSE_NATIVE_SMOKE_REMOTE must be 0 or 1")
+    elif options.get("MODE") not in (
         None,
         "",
         "test",
