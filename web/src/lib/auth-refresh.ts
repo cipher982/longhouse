@@ -18,6 +18,159 @@ const LOGOUT_BARRIER_KEY = "longhouse:logout-barrier";
 const REFRESH_LOCK_NAME = "longhouse-auth-refresh";
 const LOGOUT_BARRIER_TTL_MS = 30_000;
 
+const LOGIN_ATTEMPT_KEY = "longhouse:login-attempt";
+const LOGOUT_GENERATION_KEY = "longhouse:logout-generation";
+let loginAttemptGeneration: string | null = null;
+let logoutGeneration = "0";
+
+function readLogoutGeneration(): string {
+  if (typeof window === "undefined") return logoutGeneration;
+  let storageReadFailed = false;
+  let found = false;
+  for (const storage of ["localStorage", "sessionStorage"] as const) {
+    try {
+      const stored = window[storage].getItem(LOGOUT_GENERATION_KEY);
+      if (stored && /^\d+$/.test(stored)) {
+        found = true;
+        logoutGeneration = String(Math.max(Number(stored), Number(logoutGeneration)));
+      }
+    } catch {
+      storageReadFailed = true;
+      // Storage can be disabled independently; keep checking the other
+      // durable/in-tab fence and the in-memory generation.
+    }
+  }
+  if (!found && !storageReadFailed) logoutGeneration = "0";
+  return logoutGeneration;
+}
+
+function advanceLogoutGeneration(): void {
+  const current = Number(readLogoutGeneration());
+  logoutGeneration = String(Math.max(Date.now(), current + 1));
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(LOGOUT_GENERATION_KEY, logoutGeneration);
+  } catch {
+    // The current tab remains protected by the in-memory generation.
+  }
+  try {
+    window.sessionStorage.setItem(LOGOUT_GENERATION_KEY, logoutGeneration);
+  } catch {
+    // Cross-tab storage is best effort; the cookie marker still fences
+    // server-issued handoff completion in this browser.
+  }
+  // The tenant cannot write sessionStorage for a handoff initiated from the
+  // control-plane dashboard. Keep the current client generation in the
+  // host-only marker cookie so that a server-issued login-ready signal can
+  // still be associated with the latest explicit logout fence.
+  setLoginAttemptCookie(logoutGeneration);
+}
+
+function loginAttemptCookieName(): string {
+  return window.location.protocol === "https:" ? "__Host-lh_login_attempt" : "lh_login_attempt";
+}
+
+function setLoginAttemptCookie(generation: string): void {
+  if (typeof window === "undefined") return;
+  const secure = window.location.protocol === "https:" ? " Secure;" : "";
+  document.cookie = `${loginAttemptCookieName()}=${generation}; Max-Age=600; Path=/; SameSite=Lax;${secure}`;
+}
+
+export function markLoginAttempt(): void {
+  const generation = readLogoutGeneration();
+  // The first hosted handoff predates any durable logout generation and the
+  // server uses "1" as that pre-generation marker.
+  loginAttemptGeneration = generation === "0" ? "1" : generation;
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(LOGIN_ATTEMPT_KEY, loginAttemptGeneration);
+  } catch {
+    // The in-memory marker still covers this tab.
+  }
+  setLoginAttemptCookie(loginAttemptGeneration);
+}
+
+
+export function clearLoginAttempt(): void {
+  loginAttemptGeneration = null;
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(LOGIN_ATTEMPT_KEY);
+  } catch {
+    // Nothing else is required; the per-tab marker is already cleared.
+  }
+}
+function readCookieValue(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const prefix = `${name}=`;
+  for (const part of document.cookie.split(";")) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith(prefix)) return trimmed.slice(prefix.length);
+  }
+  return null;
+}
+
+function isCurrentLoginGeneration(marker: string | null): boolean {
+  if (!marker) return false;
+  const current = readLogoutGeneration();
+  // "1" is the pre-generation server marker. It remains valid only before
+  // the first durable logout generation exists.
+  return marker === current || (marker === "1" && current === "0");
+}
+
+function readLoginAttemptGeneration(): string | null {
+  let marker = loginAttemptGeneration;
+  if (typeof window !== "undefined") {
+    try {
+      const stored = window.sessionStorage.getItem(LOGIN_ATTEMPT_KEY);
+      if (!marker) marker = stored;
+    } catch {
+      // The host-only cookie is the cross-origin handoff fallback.
+    }
+  }
+  return marker ?? readCookieValue(loginAttemptCookieName());
+}
+
+export function currentLoginAttemptGeneration(): string | null {
+  const marker = readLoginAttemptGeneration();
+  return marker && isCurrentLoginGeneration(marker) ? marker : null;
+}
+
+export function consumeLoginAttempt(expectedMarker?: string): boolean {
+  const marker = currentLoginAttemptGeneration();
+  if (!marker || (expectedMarker !== undefined && marker !== expectedMarker)) {
+    return false;
+  }
+  loginAttemptGeneration = null;
+  if (typeof window !== "undefined") {
+    try {
+      window.sessionStorage.removeItem(LOGIN_ATTEMPT_KEY);
+    } catch {
+      // The host-only cookie remains the cross-origin fallback marker.
+    }
+  }
+  return true;
+}
+
+function loginReadyCookieName(): string {
+  return window.location.protocol === "https:" ? "__Host-lh_login_ready" : "lh_login_ready";
+}
+
+export function loginReadyGeneration(): string | null {
+  return readCookieValue(loginReadyCookieName());
+}
+
+export function consumeLoginReadySignal(expectedMarker?: string): boolean {
+  const marker = loginReadyGeneration();
+  if (!marker || (expectedMarker !== undefined && marker !== expectedMarker)) {
+    return false;
+  }
+  const secure = window.location.protocol === "https:" ? " Secure;" : "";
+  document.cookie = `${loginReadyCookieName()}=; Max-Age=0; Path=/; SameSite=Lax;${secure}`;
+  return true;
+}
+
+
 let refreshPromise: Promise<boolean> | null = null;
 let refreshController: AbortController | null = null;
 let logoutBarrierActive = false;
@@ -91,9 +244,15 @@ function readLogoutBarrier(): boolean {
   return false;
 }
 
+export function isLogoutBarrierActive(): boolean {
+  return readLogoutBarrier();
+}
+
+
 /** Prevent refreshes in every tab while a logout request is in flight. */
 export function beginLogoutBarrier(): void {
-  installLifecycleListeners();
+  advanceLogoutGeneration();
+  clearLoginAttempt();
   logoutBarrierActive = true;
   try {
     window.localStorage.setItem(LOGOUT_BARRIER_KEY, String(Date.now() + LOGOUT_BARRIER_TTL_MS));

@@ -935,8 +935,10 @@ struct LonghouseAPI: Sendable {
               let refreshExpiry = json["refresh_token_expires_at"] as? String,
               let refreshExpiresAt = Self.parseServerDate(refreshExpiry),
               refreshExpiresAt > Date() else {
-            Self.invalidateNativeSessionIfCurrent(serverURL: serverURL, generation: generation)
-            throw LonghouseAPIError.notAuthenticated
+            // A malformed 200 is an upstream contract failure, not proof that
+            // the locally held refresh credential was rejected. Preserve the
+            // pair so a retry can recover after a deploy or transient proxy bug.
+            throw LonghouseAPIError.upstreamFailed
         }
 
         let expiresAt = Date().addingTimeInterval(TimeInterval(expiresIn))

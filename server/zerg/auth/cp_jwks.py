@@ -160,7 +160,11 @@ def verify_runtime_token(token: str, *, audience: str) -> CPTokenClaims:
         with _jwks_cache_lock:
             retry_after = _jwks_unknown_kid_retry_after.get(base, 0.0)
         if retry_after > now:
-            raise CPTokenError("Unknown CP token kid")
+            # The issuer-wide backoff deliberately suppresses another network
+            # fetch. Treat that interval as temporary authority unavailability,
+            # not a definitive invalid credential: a legitimate key rotation
+            # may have landed during the backoff window.
+            raise CPAuthorityUnavailable("CP JWKS key refresh is temporarily rate-limited")
 
         # Fetch before setting the issuer-wide backoff. A caller may present
         # an unknown key id immediately before a legitimate CP key rotation;
@@ -177,7 +181,13 @@ def verify_runtime_token(token: str, *, audience: str) -> CPTokenClaims:
             with _jwks_cache_lock:
                 _jwks_unknown_kid_retry_after.pop(base, None)
     if jwk is None:
-        raise CPTokenError("Unknown CP token kid")
+        # A forced refresh that still lacks the requested kid is not proof
+        # that this token is invalid: the issuer may be publishing a new key
+        # and the tenant may observe the rotation before JWKS propagation
+        # completes. Treat the bounded backoff as authority unavailability so
+        # callers preserve credentials instead of orphan-revoking a fresh
+        # session family.
+        raise CPAuthorityUnavailable("CP JWKS does not yet contain the requested signing key")
 
     issuer = _control_plane_url()
     try:

@@ -35,6 +35,7 @@ struct LoginView: View {
     @State private var authMethods: AuthMethods?
     @State private var hostedAuthSession: ASWebAuthenticationSession?
     @State private var hostedHandoffVerifier: String?
+    @State private var hostedCodeVerifier: String?
     @State private var forceEphemeralHostedSignIn = false
     @State private var isLoadingAuthMethods = false
     @State private var isSigningIn = false
@@ -349,35 +350,65 @@ struct LoginView: View {
             localErrorMessage = "Invalid Longhouse server URL"
             return
         }
+        let expectedServerURL = appState.serverURL
 
-        let verifier = HostedAuthFlow.makeHandoffVerifier()
-        guard let authURL = HostedAuthFlow.openInstanceURL(tenant: tenant, handoffVerifier: verifier) else {
+        let handoffVerifier = HostedAuthFlow.makeHandoffVerifier()
+        let codeVerifier = HostedAuthFlow.makeCodeVerifier()
+        let codeChallenge = HostedAuthFlow.codeChallenge(for: codeVerifier)
+        guard let authURL = HostedAuthFlow.openInstanceURL(
+            tenant: tenant,
+            handoffVerifier: handoffVerifier,
+            codeChallenge: codeChallenge
+        ) else {
             localErrorMessage = "Hosted sign-in is not configured"
             return
         }
 
         forceEphemeralHostedSignIn = false
-        startHostedAuthSession(authURL, handoffVerifier: verifier, ephemeral: ephemeral)
+        startHostedAuthSession(
+            authURL,
+            handoffVerifier: handoffVerifier,
+            codeVerifier: codeVerifier,
+            expectedTenant: tenant,
+            expectedServerURL: expectedServerURL,
+            ephemeral: ephemeral
+        )
     }
 
     private func startHostedBootstrapSignIn(ephemeral: Bool = false) {
-        let verifier = HostedAuthFlow.makeHandoffVerifier()
-        guard let authURL = HostedAuthFlow.openInstanceURL(handoffVerifier: verifier) else {
+        let handoffVerifier = HostedAuthFlow.makeHandoffVerifier()
+        let codeVerifier = HostedAuthFlow.makeCodeVerifier()
+        let codeChallenge = HostedAuthFlow.codeChallenge(for: codeVerifier)
+        guard let authURL = HostedAuthFlow.openInstanceURL(
+            handoffVerifier: handoffVerifier,
+            codeChallenge: codeChallenge
+        ) else {
             localErrorMessage = "Hosted sign-in is not configured"
             return
         }
 
-        startHostedAuthSession(authURL, handoffVerifier: verifier, ephemeral: ephemeral)
+        startHostedAuthSession(
+            authURL,
+            handoffVerifier: handoffVerifier,
+            codeVerifier: codeVerifier,
+            expectedTenant: nil,
+            expectedServerURL: nil,
+            ephemeral: ephemeral
+        )
     }
 
     private func startHostedAuthSession(
         _ authURL: URL,
         handoffVerifier: String,
+        codeVerifier: String,
+        expectedTenant: String?,
+        expectedServerURL: String?,
         ephemeral: Bool = false
     ) {
         appState.clearAuthError()
         localErrorMessage = nil
         hostedHandoffVerifier = handoffVerifier
+        hostedCodeVerifier = codeVerifier
 
         if UITestHooks.shouldCaptureHostedAuthAttempt {
             appState.recordHostedAuthAttempt(authURL)
@@ -396,6 +427,7 @@ struct LoginView: View {
 
                 if let error {
                     hostedHandoffVerifier = nil
+                    hostedCodeVerifier = nil
                     if (error as NSError).code == ASWebAuthenticationSessionError.canceledLogin.rawValue {
                         return
                     }
@@ -405,11 +437,16 @@ struct LoginView: View {
 
                 guard let callbackURL else {
                     hostedHandoffVerifier = nil
+                    hostedCodeVerifier = nil
                     localErrorMessage = "Hosted sign-in did not return to the app"
                     return
                 }
 
-                await handleHostedAuthCallback(callbackURL)
+                await handleHostedAuthCallback(
+                    callbackURL,
+                    expectedTenant: expectedTenant,
+                    expectedServerURL: expectedServerURL
+                )
             }
         }
 
@@ -420,47 +457,83 @@ struct LoginView: View {
         if !session.start() {
             hostedAuthSession = nil
             hostedHandoffVerifier = nil
+            hostedCodeVerifier = nil
             isSigningIn = false
             localErrorMessage = "Failed to start hosted sign-in"
         }
     }
 
-    private func handleHostedAuthCallback(_ callbackURL: URL) async {
+    private func handleHostedAuthCallback(
+        _ callbackURL: URL,
+        expectedTenant: String?,
+        expectedServerURL: String?
+    ) async {
         guard let payload = HostedAuthFlow.callbackPayload(from: callbackURL) else {
             hostedHandoffVerifier = nil
+            hostedCodeVerifier = nil
             localErrorMessage = "Hosted sign-in returned an invalid callback"
             return
         }
 
+        // Error callbacks intentionally may omit tenant_state: the control
+        // plane has not minted a handoff code, so there is no authenticated
+        // success to accept. Surface account-switch and retryable errors before
+        // applying the success-only verifier binding.
         if let error = payload.error {
             hostedHandoffVerifier = nil
+            hostedCodeVerifier = nil
             forceEphemeralHostedSignIn = error == "tenant_not_owned"
             localErrorMessage = friendlyHostedError(error)
             return
         }
 
-        guard let verifier = hostedHandoffVerifier else {
+        guard let verifier = hostedHandoffVerifier,
+              let codeVerifier = hostedCodeVerifier else {
+            hostedHandoffVerifier = nil
+            hostedCodeVerifier = nil
             localErrorMessage = "Hosted sign-in returned without a verifier"
             return
         }
         guard payload.tenantState == verifier else {
             hostedHandoffVerifier = nil
+            hostedCodeVerifier = nil
             localErrorMessage = "Hosted sign-in returned an invalid state"
             return
         }
-
-        if let instanceURL = payload.instanceURL,
-           !instanceURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            await appState.prepareServerForHostedLogin(instanceURL)
+        if let expectedTenant,
+           payload.tenant?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != expectedTenant.lowercased() {
+            hostedHandoffVerifier = nil
+            hostedCodeVerifier = nil
+            localErrorMessage = "Hosted sign-in returned an unexpected tenant"
+            return
         }
+
+        guard let rawInstanceURL = payload.instanceURL,
+              let instanceURL = HostedAuthFlow.validatedInstanceURL(
+                  rawInstanceURL,
+                  tenant: payload.tenant,
+                  expectedServerURL: expectedServerURL
+              ) else {
+            hostedHandoffVerifier = nil
+            hostedCodeVerifier = nil
+            localErrorMessage = "Hosted sign-in returned an unexpected instance"
+            return
+        }
+        await appState.prepareServerForHostedLogin(instanceURL)
 
         guard let code = payload.code else {
             hostedHandoffVerifier = nil
+            hostedCodeVerifier = nil
             localErrorMessage = "Hosted sign-in returned without a handoff code"
             return
         }
-        let sessionEstablished = await appState.exchangeHostedHandoffCode(code, handoffVerifier: verifier)
+        let sessionEstablished = await appState.exchangeHostedHandoffCode(
+            code,
+            handoffVerifier: verifier,
+            codeVerifier: codeVerifier
+        )
         hostedHandoffVerifier = nil
+        hostedCodeVerifier = nil
         if !sessionEstablished {
             localErrorMessage = appState.authError ?? "Hosted sign-in failed"
         }

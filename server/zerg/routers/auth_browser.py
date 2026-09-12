@@ -37,10 +37,11 @@ from zerg.auth.hosted import MAX_TENANT_LOGIN_ATTEMPTS
 from zerg.auth.hosted import TENANT_LOGIN_ATTEMPT_MAX_AGE
 from zerg.auth.hosted import hosted_cookie_origin_is_secure
 from zerg.auth.hosted import hosted_instance_id
+from zerg.auth.hosted import is_tenant_login_cookie_name
 from zerg.auth.hosted import new_tenant_login_state
 from zerg.auth.hosted import tenant_cookie_secure
 from zerg.auth.hosted import tenant_handoff_attempt_cookie_name
-from zerg.auth.hosted import tenant_login_cookie_prefix
+from zerg.auth.hosted import tenant_login_attempt_cookie_name
 from zerg.auth.hosted import tenant_login_ready_cookie_name
 from zerg.auth.redirects import normalize_local_return_to
 from zerg.auth.session_tokens import ACCESS_TOKEN_LIFETIME
@@ -475,6 +476,8 @@ async def logout(request: Request, response: Response, everywhere: bool = False)
     raw_rt = request.cookies.get(REFRESH_COOKIE_NAME)
     settings = get_settings()
     revocation_failed = False
+    revocation_rejected = False
+    authority_missing = False
     if raw_rt:
         try:
             if _control_plane_url(settings):
@@ -494,25 +497,53 @@ async def logout(request: Request, response: Response, everywhere: bool = False)
                     token_hash=refresh_tokens._hash_token(raw_rt),
                     now=datetime.now(timezone.utc),
                 )
+        except HTTPException as exc:
+            if everywhere and exc.status_code == status.HTTP_409_CONFLICT:
+                revocation_rejected = True
+                logger.warning("account-wide logout rejected because the session changed")
+            else:
+                revocation_failed = True
+                logger.warning("session revocation failed during logout", exc_info=True)
         except Exception:
-            # Local logout is unconditional. Retaining a bearer because CP is
-            # unavailable turns an operator outage into a credential-retention
-            # bug; CP will observe the failed revocation through telemetry and
-            # the short-lived access token cannot be refreshed after clearing.
+            # Local logout is unconditional. Surface a degraded CP revoke so
+            # callers do not mistake an outage for a fully revoked session.
             revocation_failed = True
             logger.warning("session revocation failed during logout", exc_info=True)
+    elif everywhere:
+        authority_missing = True
+        logger.warning("account-wide logout requested without a refresh credential")
 
-    if revocation_failed:
+    if authority_missing:
+        response.status_code = status.HTTP_401_UNAUTHORIZED
+        response.headers["x-longhouse-error-code"] = "missing_authority"
+    elif revocation_rejected:
+        response.status_code = status.HTTP_409_CONFLICT
+        response.headers["x-longhouse-error-code"] = "revocation_not_authorized"
+    elif revocation_failed:
         logger.warning("session revocation degraded during logout")
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         response.headers["retry-after"] = "5"
 
     _clear_session_cookie(response)
     _clear_refresh_cookie(response)
+    cookie_secure = tenant_cookie_secure(settings)
+    # Keep the non-sensitive generation marker so a dashboard-originated
+    # handoff can prove it belongs after this logout. Login-state and
+    # handoff-attempt cookies are disposable and are cleared here.
+    for cookie_name in request.cookies:
+        if is_tenant_login_cookie_name(cookie_name, secure=cookie_secure) or cookie_name == tenant_handoff_attempt_cookie_name(
+            secure=cookie_secure
+        ):
+            response.delete_cookie(
+                cookie_name,
+                path="/",
+                secure=cookie_secure,
+                samesite="lax",
+            )
     response.delete_cookie(
-        tenant_login_ready_cookie_name(secure=tenant_cookie_secure(settings)),
+        tenant_login_ready_cookie_name(secure=cookie_secure),
         path="/",
-        secure=tenant_cookie_secure(settings),
+        secure=cookie_secure,
         samesite="lax",
     )
     _set_no_store(response)
@@ -797,7 +828,6 @@ def start_handoff(
     Self-host tenants (no CONTROL_PLANE_URL) get a redirect to the
     local `/login` React route instead, which renders the tenant's
     own login form.
-
     """
     settings = get_settings()
     control_plane_url = _control_plane_url(settings)
@@ -830,6 +860,13 @@ def start_handoff(
         redirect = RedirectResponse(f"/login?{query}", status_code=303)
         redirect.headers["cache-control"] = "no-store"
         redirect.headers["referrer-policy"] = "no-referrer"
+        redirect.delete_cookie(
+            attempt_cookie_name,
+            path="/",
+            httponly=True,
+            secure=cookie_secure,
+            samesite="lax",
+        )
         return redirect
     next_attempt = f"{attempt_count + 1}:{time.time()}"
 
@@ -843,7 +880,7 @@ def start_handoff(
         )
     resolved_tenant = canonical_tenant
     tenant_state, login_cookie_name, login_cookie_secret = new_tenant_login_state(secure=cookie_secure)
-    existing_login_cookies = sorted(name for name in request.cookies if name.startswith(tenant_login_cookie_prefix(secure=cookie_secure)))
+    existing_login_cookies = sorted(name for name in request.cookies if is_tenant_login_cookie_name(name, secure=cookie_secure))
     safe_return_to = normalize_local_return_to(return_to) or "/timeline"
 
     cp_base = control_plane_url.rstrip("/")
@@ -880,6 +917,16 @@ def start_handoff(
         max_age=_HANDOFF_ATTEMPT_MAX_AGE,
         path="/",
         httponly=True,
+        secure=cookie_secure,
+        samesite="lax",
+    )
+    login_attempt_marker = request.cookies.get(tenant_login_attempt_cookie_name(secure=cookie_secure)) or "1"
+    redirect.set_cookie(
+        tenant_login_attempt_cookie_name(secure=cookie_secure),
+        login_attempt_marker,
+        max_age=TENANT_LOGIN_ATTEMPT_MAX_AGE,
+        path="/",
+        httponly=False,
         secure=cookie_secure,
         samesite="lax",
     )

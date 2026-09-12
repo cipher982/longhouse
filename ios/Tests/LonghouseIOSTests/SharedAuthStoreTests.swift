@@ -130,4 +130,24 @@ struct SharedAuthStoreTests {
         #expect(SharedAuthStore.nativeRefreshToken(for: serverURL) == "current-refresh")
         SharedAuthStore.clearRuntimeToken(for: serverURL)
     }
+
+    @Test
+    func pendingNativeRevocationsKeepFamiliesIndependent() throws {
+        guard SharedAuthStore.isAppGroupAvailable else {
+            return
+        }
+        let serverURL = "https://pending-revocations-test.longhouse.ai"
+        SharedAuthStore.clearPendingNativeRevocationToken(for: serverURL)
+
+        SharedAuthStore.savePendingNativeRevocationToken("family-a", for: serverURL)
+        SharedAuthStore.savePendingNativeRevocationToken("family-b", for: serverURL)
+        SharedAuthStore.savePendingNativeRevocationToken("family-a", for: serverURL)
+
+        #expect(SharedAuthStore.pendingNativeRevocationTokens(for: serverURL) == ["family-a", "family-b"])
+        SharedAuthStore.clearPendingNativeRevocationToken("family-a", for: serverURL)
+        #expect(SharedAuthStore.pendingNativeRevocationTokens(for: serverURL) == ["family-b"])
+
+        SharedAuthStore.clearPendingNativeRevocationToken("family-b", for: serverURL)
+        #expect(SharedAuthStore.pendingNativeRevocationTokens(for: serverURL).isEmpty)
+    }
 }

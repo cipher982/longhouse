@@ -34,6 +34,79 @@ struct HostedAuthFlowTests {
     }
 
     @Test
+    func openInstanceURLIncludesPKCEChallenge() throws {
+        let url = try #require(
+            HostedAuthFlow.openInstanceURL(
+                tenant: "Demo",
+                handoffVerifier: "state-123",
+                codeChallenge: "challenge-123"
+            )
+        )
+        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+
+        #expect(components.queryItems == [
+            URLQueryItem(name: "tenant", value: "demo"),
+            URLQueryItem(name: "tenant_state", value: "state-123"),
+            URLQueryItem(name: "code_challenge", value: "challenge-123"),
+            URLQueryItem(name: "code_challenge_method", value: "S256"),
+        ])
+    }
+
+    @Test
+    func codeChallengeUsesRFC7636S256Encoding() {
+        let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+        #expect(
+            HostedAuthFlow.codeChallenge(for: verifier)
+                == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        )
+    }
+
+    @Test
+    func validatedInstanceURLRequiresExpectedHostedOrigin() {
+        #expect(
+            HostedAuthFlow.validatedInstanceURL(
+                "https://testuser.longhouse.ai/",
+                tenant: "testuser",
+                expectedServerURL: nil
+            ) == "https://testuser.longhouse.ai"
+        )
+        #expect(
+            HostedAuthFlow.validatedInstanceURL(
+                "https://attacker.example.test",
+                tenant: "testuser",
+                expectedServerURL: nil
+            ) == nil
+        )
+        #expect(
+            HostedAuthFlow.validatedInstanceURL(
+                "https://other.longhouse.ai",
+                tenant: "testuser",
+                expectedServerURL: "https://testuser.longhouse.ai"
+            ) == nil
+        )
+    }
+
+    @Test
+    func validatedInstanceURLRequiresCallbackTenant() {
+        #expect(
+            HostedAuthFlow.validatedInstanceURL(
+                "https://testuser.longhouse.ai",
+                tenant: nil,
+                expectedServerURL: nil
+            ) == nil
+        )
+    }
+
+    @Test
+    func callbackPayloadRejectsDuplicateSensitiveValues() throws {
+        let callbackURL = try #require(URL(
+            string: "ai.longhouse.ios://auth-callback?tenant=testuser&tenant_state=one&tenant_state=two"
+        ))
+
+        #expect(HostedAuthFlow.callbackPayload(from: callbackURL) == nil)
+    }
+
+    @Test
     func callbackPayloadExtractsInstanceURLAndHandoffState() throws {
         let callbackURL = try #require(URL(
             string: "ai.longhouse.ios://auth-callback?tenant=testuser&instance_url=https%3A%2F%2Ftestuser.longhouse.ai&tenant_state=state123"

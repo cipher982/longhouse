@@ -592,23 +592,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/auth/accept-handoff": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Accept Handoff Request */
-        get: operations["accept_handoff_request_auth_accept_handoff_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/auth/accept-native-handoff": {
         parameters: {
             query?: never;
@@ -654,34 +637,6 @@ export interface paths {
         put?: never;
         /** Revoke Native Session */
         post: operations["revoke_native_session_auth_revoke_native_session_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/auth/refresh-runtime-token": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Refresh Runtime Token
-         * @description Proxy a CP runtime token refresh for iOS/hosted native clients.
-         *
-         *     iOS stores the CP-issued bearer in keychain and sends it on every request.
-         *     Active runtime tokens have a short lifetime, so the client proactively
-         *     refreshes before expiry and retries with refresh on a 401. This route
-         *     forwards the current bearer to the CP's
-         *     /api/identity/refresh-runtime-token and returns the re-minted token. No
-         *     local validation — the CP is the issuer and is the authority on token
-         *     validity, including the long native-app refresh window.
-         */
-        post: operations["refresh_runtime_token_auth_refresh_runtime_token_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5689,6 +5644,8 @@ export interface components {
             code: string;
             /** Tenant State */
             tenant_state: string;
+            /** Code Verifier */
+            code_verifier: string;
         };
         /** NativeRefreshRequest */
         NativeRefreshRequest: {
@@ -5704,6 +5661,11 @@ export interface components {
              * @default false
              */
             revoke_authority: boolean;
+            /**
+             * Orphan Cleanup
+             * @default false
+             */
+            orphan_cleanup: boolean;
         };
         /** ObservabilityOverviewResponse */
         ObservabilityOverviewResponse: {
@@ -11551,39 +11513,6 @@ export interface operations {
             };
         };
     };
-    accept_handoff_request_auth_accept_handoff_get: {
-        parameters: {
-            query: {
-                code: string;
-                return_to?: string | null;
-                tenant_state?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     accept_native_handoff_auth_accept_native_handoff_post: {
         parameters: {
             query?: never;
@@ -11679,26 +11608,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    refresh_runtime_token_auth_refresh_runtime_token_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
         };

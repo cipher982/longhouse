@@ -6,7 +6,14 @@ import { toast } from 'react-hot-toast';
 import {
   beginLogoutBarrier,
   cancelRefresh,
+  clearLoginAttempt,
   clearLogoutBarrier,
+  consumeLoginAttempt,
+  consumeLoginReadySignal,
+  currentLoginAttemptGeneration,
+  isLogoutBarrierActive,
+  loginReadyGeneration,
+  markLoginAttempt,
   refreshAccessToken,
   RefreshUnavailableError,
 } from './auth-refresh';
@@ -47,26 +54,9 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | null>(null);
 export const CURRENT_USER_QUERY_KEY = ['current-user'] as const;
 export const AUTH_METHODS_QUERY_KEY = ['auth-methods'] as const;
-const AUTH_CHANNEL_NAME = 'longhouse-auth-events';
+
 const LOGGED_OUT_SESSION_KEY = 'longhouse:logged-out';
-
-function consumeLoginReadySignal(): boolean {
-  if (typeof document === 'undefined') return false;
-  const readyName = window.location.protocol === 'https:'
-    ? '__Host-lh_login_ready'
-    : 'lh_login_ready';
-  const names = new Set(
-    document.cookie
-      .split(';')
-      .map((part) => part.trim().split('=', 1)[0])
-      .filter(Boolean),
-  );
-  if (!names.has(readyName)) return false;
-  const secure = window.location.protocol === 'https:' ? ' Secure;' : '';
-  document.cookie = `${readyName}=; Max-Age=0; Path=/; SameSite=Lax;${secure}`;
-  return true;
-}
-
+const AUTH_CHANNEL_NAME = 'longhouse-auth-events';
 export function hasLogoutIntent(): boolean {
   if (typeof window === 'undefined') return false;
   try {
@@ -130,14 +120,27 @@ type AuthStatusResponse = {
 };
 
 async function getCurrentUser(): Promise<User | null> {
-  const loginReady = consumeLoginReadySignal();
+  const readyGeneration = loginReadyGeneration();
+  const attemptGeneration = readyGeneration ? currentLoginAttemptGeneration() : null;
+  const loginReady =
+    readyGeneration !== null &&
+    attemptGeneration !== null &&
+    readyGeneration === attemptGeneration &&
+    consumeLoginAttempt(readyGeneration) &&
+    consumeLoginReadySignal(readyGeneration);
   if (loginReady) {
-    // A successful tenant handoff is the only server-issued signal that can
-    // clear a deliberate local sign-out barrier without a login button click.
+    // A server-issued handoff marker clears a deliberate local sign-out
+    // barrier only when this tab has the same current-generation attempt.
     clearLogoutBarrier();
     clearLogoutIntent();
   }
-  if (typeof window !== 'undefined' && !loginReady && hasLogoutIntent()) {
+  // A logout barrier is established before the network request starts. Do not
+  // let an in-flight status response repopulate the authenticated projection
+  // while local logout is still fencing refresh and cookie installation.
+  if (isLogoutBarrierActive()) {
+    return null;
+  }
+  if (typeof window !== 'undefined' && hasLogoutIntent()) {
     return null;
   }
 
@@ -145,11 +148,19 @@ async function getCurrentUser(): Promise<User | null> {
     credentials: 'include',
   });
 
+  // Logout may have started while /status was in flight. The response is no
+  // longer authoritative for this tab; the barrier wins over stale server data.
+  if (isLogoutBarrierActive() || (typeof window !== 'undefined' && hasLogoutIntent())) {
+    return null;
+  }
   if (!response.ok) {
     throw new HttpError(`Failed to get auth status (${response.status})`, response.status);
   }
 
   const data = (await response.json()) as AuthStatusResponse;
+  if (isLogoutBarrierActive() || (typeof window !== 'undefined' && hasLogoutIntent())) {
+    return null;
+  }
   if (data.authenticated) {
     return data.user;
   }
@@ -165,17 +176,23 @@ async function getCurrentUser(): Promise<User | null> {
     }
     throw error;
   }
-  if (!refreshed) {
+  if (!refreshed || isLogoutBarrierActive() || (typeof window !== 'undefined' && hasLogoutIntent())) {
     return null;
   }
 
   const retryResponse = await fetch(`${config.apiBaseUrl}/auth/status`, {
     credentials: 'include',
   });
+  if (isLogoutBarrierActive() || (typeof window !== 'undefined' && hasLogoutIntent())) {
+    return null;
+  }
   if (!retryResponse.ok) {
     throw new HttpError(`Failed to get auth status (${retryResponse.status})`, retryResponse.status);
   }
   const retryData = (await retryResponse.json()) as AuthStatusResponse;
+  if (isLogoutBarrierActive() || (typeof window !== 'undefined' && hasLogoutIntent())) {
+    return null;
+  }
   return retryData.authenticated ? retryData.user : null;
 }
 
@@ -318,13 +335,6 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     refetch,
   } = useCurrentUserQuery();
 
-  useEffect(() => {
-    if (!userData) return;
-    // A successful hosted handoff is a login too; it does not pass through
-    // loginMutation, so clear the prior signed-out intent here.
-    clearLogoutBarrier();
-    clearLogoutIntent();
-  }, [userData]);
 
 
   const loginMutation = useMutation({
@@ -406,13 +416,12 @@ export function useCurrentUserQuery() {
       return false;
     },
     retryDelay: (attemptIndex) => Math.min(1000 * Math.pow(2, attemptIndex), 10000),
-    staleTime: 5 * 60 * 1000,
   });
 }
-
 function NativeAuthHandoff({ returnTo }: { returnTo: string }) {
   useEffect(() => {
     clearLogoutIntent();
+    markLoginAttempt();
     requestNativeAuth(returnTo);
   }, [returnTo]);
 

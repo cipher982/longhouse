@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from fastapi import HTTPException
 from fastapi import status
 from zerg.config import get_settings
+from zerg.config import normalize_instance_id
 
 logger = logging.getLogger(__name__)
 
@@ -115,8 +116,24 @@ def tenant_login_ready_cookie_name(*, secure: bool) -> str:
     return "__Host-lh_login_ready" if secure else "lh_login_ready"
 
 
+def tenant_login_attempt_cookie_name(*, secure: bool) -> str:
+    """Name the short-lived client-visible marker for a started login."""
+    return "__Host-lh_login_attempt" if secure else "lh_login_attempt"
+
+
 def tenant_login_cookie_prefix(*, secure: bool) -> str:
     return "__Host-lh_login_" if secure else "lh_login_"
+
+
+def is_tenant_login_cookie_name(name: str, *, secure: bool) -> bool:
+    """Return whether ``name`` is an actual per-attempt state cookie.
+
+    The login-ready and login-attempt markers share the historical prefix but
+    are not outstanding OAuth attempts and must not consume attempt slots.
+    """
+
+    prefix = tenant_login_cookie_prefix(secure=secure)
+    return bool(_ATTEMPT_ID_RE.fullmatch(name.removeprefix(prefix))) if name.startswith(prefix) else False
 
 
 def tenant_handoff_attempt_cookie_name(*, secure: bool) -> str:
@@ -153,6 +170,7 @@ def _split_tenant_login_state(state: str | None) -> tuple[str, str] | None:
 
 def tenant_login_cookie_name(state: str | None, *, secure: bool) -> str | None:
     """Map a state to its isolated host-only cookie name, or reject it."""
+
     parsed = _split_tenant_login_state(state)
     if parsed is None:
         return None
@@ -162,20 +180,24 @@ def tenant_login_cookie_name(state: str | None, *, secure: bool) -> str | None:
 
 def tenant_login_cookie_secret(state: str | None) -> str | None:
     """Return the secret half of a syntactically valid login state."""
+
     parsed = _split_tenant_login_state(state)
     return parsed[1] if parsed is not None else None
 
 
 def hosted_instance_id() -> str:
-    instance_id = os.getenv("INSTANCE_ID", "").strip()
-    if instance_id:
-        return instance_id
+    """Return the deployment's explicit tenant identity.
 
-    settings = get_settings()
-    public_url = settings.app_public_url or settings.public_site_url or ""
-    if public_url:
-        host = urlparse(public_url).hostname or ""
-        if host:
-            return host.split(".")[0]
+    A public hostname is presentation data, not an authority identifier.
+    Deriving the tenant from its first DNS label makes a mistyped apex or
+    shared ingress address look like a valid tenant, so hosted deployments
+    must configure INSTANCE_ID explicitly.
+    """
 
-    raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="INSTANCE_ID is not configured")
+    instance_id = normalize_instance_id(os.getenv("INSTANCE_ID"))
+    if instance_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="INSTANCE_ID is not configured",
+        )
+    return instance_id

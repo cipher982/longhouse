@@ -21,7 +21,6 @@ import os
 from abc import ABC
 from abc import abstractmethod
 from typing import Any
-from urllib.parse import urlparse
 
 import jwt
 from fastapi import HTTPException
@@ -34,6 +33,7 @@ from zerg.auth.cp_jwks import CPTokenError
 from zerg.auth.cp_jwks import verify_runtime_token
 from zerg.auth.hosted import tenant_cookie_secure
 from zerg.config import get_settings
+from zerg.config import normalize_instance_id
 from zerg.crud import count_users
 from zerg.crud import create_user
 from zerg.crud import get_user
@@ -528,14 +528,10 @@ def _legacy_auth_allowed(db: Session | None) -> bool:
 
 
 def _hosted_audience(settings) -> str:
-    instance_id = os.getenv("INSTANCE_ID", "").strip()
-    if instance_id:
-        return instance_id
-    public_url = settings.app_public_url or settings.public_site_url or ""
-    host = urlparse(public_url).hostname or ""
-    if host:
-        return host.split(".")[0]
-    raise RuntimeError("Hosted auth requires INSTANCE_ID or APP_PUBLIC_URL")
+    instance_id = normalize_instance_id(os.getenv("INSTANCE_ID"))
+    if instance_id is None:
+        raise RuntimeError("Hosted auth requires a valid INSTANCE_ID")
+    return instance_id
 
 
 # Public re-exports ---------------------------------------------------------

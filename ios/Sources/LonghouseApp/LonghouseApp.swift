@@ -385,17 +385,26 @@ final class AppState: ObservableObject {
         SharedAuthStore.primeSharedCookieStorage(for: trimmed)
     }
 
-    func exchangeHostedHandoffCode(_ code: String, handoffVerifier: String) async -> Bool {
+    func exchangeHostedHandoffCode(
+        _ code: String,
+        handoffVerifier: String,
+        codeVerifier: String
+    ) async -> Bool {
         let capturedServerURL = serverURL
         let generation = SharedAuthStore.authGeneration(for: capturedServerURL)
         let trimmedCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedVerifier = handoffVerifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedState = handoffVerifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedVerifier = codeVerifier.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedCode.isEmpty else {
             authError = "Hosted sign-in returned without a handoff code"
             return false
         }
+        guard !trimmedState.isEmpty else {
+            authError = "Hosted sign-in returned without a handoff state"
+            return false
+        }
         guard !trimmedVerifier.isEmpty else {
-            authError = "Hosted sign-in returned without a handoff verifier"
+            authError = "Hosted sign-in returned without a code verifier"
             return false
         }
         guard let url = URL(string: "\(capturedServerURL)/api/auth/accept-native-handoff") else {
@@ -410,7 +419,11 @@ final class AppState: ObservableObject {
 
         do {
             request.httpBody = try JSONSerialization.data(
-                withJSONObject: ["code": trimmedCode, "tenant_state": trimmedVerifier]
+                withJSONObject: [
+                    "code": trimmedCode,
+                    "tenant_state": trimmedState,
+                    "code_verifier": trimmedVerifier
+                ]
             )
             let (data, response) = try await URLSession.shared.data(for: request)
             guard serverURL == capturedServerURL,
@@ -843,36 +856,65 @@ final class AppState: ObservableObject {
     }
 
     private func retryPendingNativeRevocation(for serverURL: String) async {
-        guard let token = SharedAuthStore.pendingNativeRevocationToken(for: serverURL),
-              let url = URL(string: "\(serverURL)/api/auth/revoke-native-session") else {
+        guard let url = URL(string: "\(serverURL)/api/auth/revoke-native-session") else {
             return
         }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 5
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["refresh_token": token])
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  (200..<300).contains(httpResponse.statusCode) else {
+        for token in SharedAuthStore.pendingNativeRevocationTokens(for: serverURL) {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 5
+            request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try? JSONSerialization.data(withJSONObject: ["refresh_token": token])
+            do {
+                let (_, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    return
+                }
+                if httpResponse.statusCode == 409 {
+                    // The CP has definitively rejected this family member
+                    // rather than reporting an outage. It cannot authorize a
+                    // different family, so discard only this obligation and
+                    // continue draining independent pending logouts.
+                    SharedAuthStore.clearPendingNativeRevocationToken(token, for: serverURL)
+                    continue
+                }
+                guard (200..<300).contains(httpResponse.statusCode) else {
+                    return
+                }
+                // A newer logout may have added another family while this
+                // request was in flight. Remove only the family just proved
+                // revoked.
+                guard SharedAuthStore.pendingNativeRevocationTokens(for: serverURL).contains(token) else {
+                    continue
+                }
+                SharedAuthStore.clearPendingNativeRevocationToken(token, for: serverURL)
+                if SharedAuthStore.nativeRefreshToken(for: serverURL) == token {
+                    SharedAuthStore.clearNativeRefreshToken(for: serverURL)
+                }
+            } catch {
+                logger.warning("pending native revocation retry deferred error=\(error.localizedDescription, privacy: .public)")
                 return
             }
-            SharedAuthStore.clearPendingNativeRevocationToken(for: serverURL)
-            if SharedAuthStore.nativeRefreshToken(for: serverURL) == token {
-                SharedAuthStore.clearNativeRefreshToken(for: serverURL)
-            }
-        } catch {
-            logger.warning("pending native revocation retry deferred error=\(error.localizedDescription, privacy: .public)")
         }
     }
 
     private func signOutLocallyAndRemotely() async {
         let capturedServerURL = serverURL
         let nativeRefreshToken = SharedAuthStore.nativeRefreshToken(for: capturedServerURL)
-        var nativeRevocationConfirmed = true
+        let authorizationHeader = SharedAuthStore.authorizationHeader(for: capturedServerURL)
+        let cookieHeader = SharedAuthStore.cookieHeader(for: capturedServerURL)
+        // Fence this generation and clear active credentials before any network
+        // await. A new sign-in on the same server must not be erased by this
+        // logout's late response.
+        GIDSignIn.sharedInstance.signOut()
+        await clearLocalSession(
+            clearNativeRefreshToken: false,
+            preservePendingNativeRevocation: true
+        )
 
-        if let nativeRefreshToken, let url = URL(string: "\(capturedServerURL)/api/auth/revoke-native-session") {
+        var nativeRevocationConfirmed = nativeRefreshToken == nil
+        if let nativeRefreshToken,
+           let url = URL(string: "\(capturedServerURL)/api/auth/revoke-native-session") {
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.timeoutInterval = 5
@@ -882,29 +924,41 @@ final class AppState: ObservableObject {
                 let (_, response) = try await URLSession.shared.data(for: request)
                 nativeRevocationConfirmed = (response as? HTTPURLResponse).map { (200..<300).contains($0.statusCode) } ?? false
             } catch {
-                nativeRevocationConfirmed = false
                 logger.error("native signout revocation failed error=\(error.localizedDescription, privacy: .public)")
             }
         }
 
-        // Fire-and-forget the server logout while cookies are still present.
-        if let url = URL(string: "\(capturedServerURL)/api/auth/logout") {
+        var browserLogoutConfirmed = authorizationHeader == nil && cookieHeader == nil
+        if !browserLogoutConfirmed,
+           let url = URL(string: "\(capturedServerURL)/api/auth/logout") {
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.timeoutInterval = 5
-            if let authorizationHeader = SharedAuthStore.authorizationHeader(for: capturedServerURL) {
+            request.httpShouldHandleCookies = false
+            if let authorizationHeader {
                 request.setValue(authorizationHeader, forHTTPHeaderField: "Authorization")
             }
-            _ = try? await URLSession.shared.data(for: request)
+            if let cookieHeader {
+                request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+            }
+            do {
+                let (_, response) = try await URLSession.shared.data(for: request)
+                let statusCode = (response as? HTTPURLResponse)?.statusCode
+                // 401 means the browser session is already absent; it is an
+                // idempotent logout result, unlike a network/5xx failure.
+                browserLogoutConfirmed = statusCode == 401 || (statusCode.map { (200..<300).contains($0) } ?? false)
+            } catch {
+                logger.error("browser signout failed error=\(error.localizedDescription, privacy: .public)")
+            }
         }
+        nativeRevocationConfirmed = nativeRevocationConfirmed && browserLogoutConfirmed
 
-        // A concurrent server switch owns the old credential slot. Never let
-        // this sign-out finish by clearing or reporting state for the new one.
+        if let nativeRefreshToken, nativeRevocationConfirmed {
+            SharedAuthStore.clearPendingNativeRevocationToken(nativeRefreshToken, for: capturedServerURL)
+        }
         guard serverURL == capturedServerURL else {
             return
         }
-        GIDSignIn.sharedInstance.signOut()
-        await clearLocalSession(clearNativeRefreshToken: nativeRevocationConfirmed)
         authError = nativeRevocationConfirmed
             ? nil
             : "Sign-out could not be confirmed. Try again when the account service is available."

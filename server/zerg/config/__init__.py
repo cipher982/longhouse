@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import enum
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
@@ -48,6 +49,22 @@ def _truthy(value: str | None) -> bool:  # noqa: D401 – small helper
     if value is None:
         return False
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def normalize_instance_id(value: str | None) -> str | None:
+    """Return a canonical hosted instance identifier or ``None``.
+
+    Instance IDs are used as both the tenant origin label and the JWT
+    audience. Keep one grammar at every validation boundary: DNS-safe,
+    lowercase ASCII, and 3–63 characters.
+    """
+
+    if value is None:
+        return None
+    candidate = value.strip().lower()
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])", candidate):
+        return None
+    return candidate
 
 
 def _env_or_fallback(primary: str, fallback: str) -> str | None:
@@ -361,13 +378,13 @@ class Settings:  # noqa: D401 – simple data container
 
 
 def _origin_from_url(raw_url: str | None) -> str | None:
-    """Return scheme://host[:port] from a URL or None if invalid."""
+    """Return a canonical scheme://host[:port] origin or None if invalid."""
     if not raw_url:
         return None
-    parsed = urlparse(raw_url)
+    parsed = urlparse(raw_url.strip())
     if not parsed.scheme or not parsed.netloc:
         return None
-    return f"{parsed.scheme}://{parsed.netloc}"
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
 
 
 def _split_csv(value: str) -> list[str]:
@@ -384,15 +401,14 @@ def _origin_hosts(origins: list[str]) -> set[str]:
 
 
 def get_public_origins(settings: Settings) -> list[str]:
-    """Return configured public origins (site + API), normalized."""
-    origins: list[str] = []
+    """Return the single canonical browser origin for credentialed cookies.
+
+    ``PUBLIC_API_URL`` identifies the fetch target, not an origin that should
+    be allowed to read credentialed responses. Treating it as a CORS caller
+    would authorize sibling or apex hosts by configuration accident.
+    """
     site_origin = _origin_from_url(settings.public_site_url)
-    api_origin = _origin_from_url(settings.public_api_url)
-    if site_origin:
-        origins.append(site_origin)
-    if api_origin and api_origin not in origins:
-        origins.append(api_origin)
-    return origins
+    return [site_origin] if site_origin else []
 
 
 def resolve_cors_origins(settings: Settings) -> list[str]:
@@ -402,10 +418,11 @@ def resolve_cors_origins(settings: Settings) -> list[str]:
         configured = _split_csv(cors_env)
         if getattr(settings, "control_plane_url", None):
             canonical = set(get_public_origins(settings))
-            # A hosted runtime has one canonical browser origin. If it is not
-            # configured, disable cross-origin browser access rather than
-            # trusting an arbitrary sibling/apex allowlist.
-            return [origin for origin in configured if origin in canonical] if canonical else []
+            # A hosted runtime has one canonical browser origin. Normalize
+            # harmless operator formatting such as a trailing slash rather
+            # than booting with an allowlist that browsers will never match.
+            configured_canonical = [origin for origin in (_origin_from_url(item) for item in configured) if origin is not None]
+            return [origin for origin in configured_canonical if origin in canonical] if canonical else []
         return configured
 
     public_origins = get_public_origins(settings)
@@ -435,10 +452,8 @@ def validate_public_origin_config(settings: Settings, cors_origins: list[str]) -
             "PUBLIC_SITE_URL/APP_PUBLIC_URL does not appear in CORS origins. Set ALLOWED_CORS_ORIGINS or PUBLIC_SITE_URL to match."
         )
 
-    if getattr(settings, "control_plane_url", None) and settings.allowed_cors_origins.strip() and not get_public_origins(settings):
-        warnings.append(
-            "Hosted CORS allowlist is disabled because PUBLIC_SITE_URL/PUBLIC_API_URL is missing; configure the canonical public origin."
-        )
+    if getattr(settings, "control_plane_url", None) and not public_site_origin:
+        warnings.append("Hosted authentication requires one canonical PUBLIC_SITE_URL origin.")
     elif not public_site_origin and not settings.allowed_cors_origins and not settings.auth_disabled:
         warnings.append("PUBLIC_SITE_URL (or APP_PUBLIC_URL) is not set and ALLOWED_CORS_ORIGINS is empty. CORS will default to localhost.")
 
@@ -598,21 +613,47 @@ def _validate_required(settings: Settings) -> None:  # noqa: D401 – helper
     once the first LLM call is made.
     """
 
-    # SAFETY GATE: Fail-fast if test infrastructure is enabled in production
-    # Tool stubbing should NEVER be enabled outside of tests
+    # SAFETY GATE: Fail-fast if test infrastructure is enabled in production.
+    # Tool stubbing should NEVER be enabled outside of tests.
     tool_stubs_path = os.getenv("LONGHOUSE_TOOL_STUBS_PATH")
     if tool_stubs_path and not settings.testing:
         raise RuntimeError(
             f"CRITICAL: LONGHOUSE_TOOL_STUBS_PATH is set ('{tool_stubs_path}') but TESTING is not enabled. "
-            f"Tool stubbing is TEST-ONLY infrastructure and must not be used in production. "
-            f"Either unset LONGHOUSE_TOOL_STUBS_PATH or set TESTING=1."
+            "Tool stubbing is TEST-ONLY infrastructure and must not be used in production. "
+            "Either unset LONGHOUSE_TOOL_STUBS_PATH or set TESTING=1."
         )
 
-    if settings.testing:  # Unit-/integration tests run with stubbed LLMs
+    if settings.control_plane_url:
+        hosted_errors: list[str] = []
+        instance_id = normalize_instance_id(os.getenv("INSTANCE_ID"))
+        if settings.auth_disabled or settings.demo_mode or settings.testing:
+            hosted_errors.append("AUTH_DISABLED/TESTING/DEMO_MODE must be disabled when CONTROL_PLANE_URL is set")
+        if instance_id is None or os.getenv("INSTANCE_ID", "").strip() != instance_id:
+            hosted_errors.append("INSTANCE_ID must be a lowercase 3-63 character DNS label")
+        public_origin = _origin_from_url(settings.public_site_url)
+        if not public_origin:
+            hosted_errors.append("PUBLIC_SITE_URL")
+        else:
+            parsed_origin = urlparse(public_origin)
+            if parsed_origin.scheme.lower() != "https":
+                hosted_errors.append("PUBLIC_SITE_URL must use HTTPS")
+            configured_origins = _split_csv(settings.allowed_cors_origins)
+            # Compare canonical origins so a harmless trailing slash or host
+            # casing difference cannot take a tenant offline.
+            configured_canonical = {origin for origin in (_origin_from_url(item) for item in configured_origins) if origin is not None}
+            # An empty explicit allowlist intentionally resolves to the
+            # canonical PUBLIC_SITE_URL above. Only reject a non-empty list
+            # that omits that one credentialed browser origin.
+            if configured_canonical and public_origin not in configured_canonical:
+                hosted_errors.append("ALLOWED_CORS_ORIGINS must contain PUBLIC_SITE_URL")
+        control_plane_origin = _origin_from_url(settings.control_plane_url)
+        if not control_plane_origin or urlparse(control_plane_origin).scheme.lower() != "https":
+            hosted_errors.append("CONTROL_PLANE_URL must use HTTPS")
+        if hosted_errors:
+            raise RuntimeError("CRITICAL: invalid hosted authentication configuration: " + ", ".join(hosted_errors))
+    if settings.testing:
         return
 
-    # Demo mode: read-only demo needs minimal config.
-    # Auto-generate a throwaway Fernet key and skip DATABASE_URL check
     # (empty URL → SQLite, which is correct for demo).
     if settings.demo_mode:
         if not settings.fernet_secret:
@@ -713,4 +754,5 @@ __all__ = [
     "get_settings_unchecked",
     "validate_required_settings",
     "resolve_app_mode",
+    "normalize_instance_id",
 ]

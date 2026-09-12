@@ -23,11 +23,15 @@ from pydantic import BaseModel
 from pydantic import Field
 
 from zerg.auth.client_ip import get_client_ip
+from zerg.auth.cp_jwks import CPAuthorityUnavailable
+from zerg.auth.cp_jwks import CPTokenError
+from zerg.auth.cp_jwks import verify_runtime_token
 from zerg.auth.hosted import MAX_TENANT_LOGIN_STATE_LENGTH
 from zerg.auth.hosted import hosted_cookie_origin_is_secure
 from zerg.auth.hosted import hosted_instance_id
 from zerg.auth.hosted import tenant_cookie_secure
 from zerg.auth.hosted import tenant_handoff_attempt_cookie_name
+from zerg.auth.hosted import tenant_login_attempt_cookie_name
 from zerg.auth.hosted import tenant_login_cookie_name
 from zerg.auth.hosted import tenant_login_cookie_secret
 from zerg.auth.hosted import tenant_login_ready_cookie_name
@@ -150,6 +154,7 @@ def _hosted_refresh_cookie_max_age(payload: dict) -> int:
 class NativeHandoffRequest(BaseModel):
     code: str = Field(min_length=1, max_length=256)
     tenant_state: str = Field(min_length=1, max_length=MAX_TENANT_LOGIN_STATE_LENGTH)
+    code_verifier: str = Field(min_length=43, max_length=128)
 
 
 class NativeRefreshRequest(BaseModel):
@@ -157,8 +162,11 @@ class NativeRefreshRequest(BaseModel):
 
 
 class NativeRevokeRequest(BaseModel):
+    # A refresh token is the caller's proof of ownership. Session IDs are
+    # identifiers carried in access tokens, not revocation credentials.
     refresh_token: str = Field(min_length=1, max_length=_MAX_NATIVE_REFRESH_TOKEN_LENGTH)
     revoke_authority: bool = False
+    orphan_cleanup: bool = False
 
 
 def _runtime_payload(data: dict) -> dict:
@@ -218,7 +226,7 @@ def _runtime_payload(data: dict) -> dict:
             detail="Control plane response has an elapsed refresh expiry",
         )
     token_type = data.get("token_type", "bearer")
-    if token_type != "bearer":
+    if not isinstance(token_type, str) or token_type.lower() != "bearer":
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Control plane response has an invalid token type",
@@ -232,6 +240,43 @@ def _runtime_payload(data: dict) -> dict:
     device_session_id = data.get("device_session_id")
     if isinstance(device_session_id, str) and device_session_id:
         payload["device_session_id"] = device_session_id
+    return payload
+
+
+def _validate_runtime_payload(payload: dict, *, audience: str) -> dict:
+    """Verify a CP replacement before it reaches a browser or native client."""
+    runtime_token = payload["runtime_token"]
+    try:
+        claims = verify_runtime_token(runtime_token, audience=audience)
+    except CPAuthorityUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "cp_unavailable", "message": "Control plane authentication is temporarily unavailable."},
+        ) from exc
+    except CPTokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Control plane returned an invalid runtime token",
+        ) from exc
+
+    expected_session_id = payload.get("device_session_id")
+    if expected_session_id is not None and expected_session_id != claims.device_session_id:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Control plane runtime session binding changed",
+        )
+    remaining = claims.expires_at - int(time.time())
+    if remaining <= 0 or payload["expires_in"] <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Control plane returned an expired runtime token",
+        )
+    # ``expires_in`` was calculated before the CP response crossed the
+    # network. Transport and JWKS verification can consume seconds, so the
+    # signed JWT expiry is authoritative; never reject or revoke a valid
+    # rotated refresh family solely because that relative value is stale.
+    payload["expires_in"] = min(payload["expires_in"], remaining)
+    payload["device_session_id"] = claims.device_session_id
     return payload
 
 
@@ -275,6 +320,7 @@ def _exchange_handoff_code(
     code: str,
     tenant: str,
     tenant_state: str | None = None,
+    code_verifier: str | None = None,
     client: str | None = None,
 ) -> dict:
     if not code or len(code) > 256 or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for char in code):
@@ -282,6 +328,8 @@ def _exchange_handoff_code(
     payload = {"code": code, "tenant": tenant}
     if tenant_state:
         payload["tenant_state"] = tenant_state
+    if code_verifier:
+        payload["code_verifier"] = code_verifier
     if client:
         payload["client"] = client
     try:
@@ -301,20 +349,12 @@ def _exchange_handoff_code(
         _raise_control_plane_error(exchange, default="Control plane rejected handoff")
 
     raw_payload = _json_object(exchange)
-    try:
-        return _runtime_payload(raw_payload)
-    except HTTPException:
-        refresh_token = raw_payload.get("refresh_token")
-        if isinstance(refresh_token, str) and refresh_token:
-            try:
-                _revoke_native_session_payload(
-                    settings=get_settings(),
-                    refresh_token=refresh_token,
-                    strict=False,
-                )
-            except Exception:
-                logger.warning("tenant_handoff_orphan_revoke_failed", exc_info=True)
-        raise
+    # The CP response is a cross-service contract. A 200 response with an
+    # unverifiable token is an operational/contract failure, not proof that the
+    # newly committed family is stolen. Preserve it for CP-side expiry and
+    # retry after the issuer/JWKS contract recovers.
+    payload = _runtime_payload(raw_payload)
+    return _validate_runtime_payload(payload, audience=tenant)
 
 
 def _refresh_native_session_payload(*, settings, refresh_token: str) -> dict:
@@ -339,29 +379,18 @@ def _refresh_native_session_payload(*, settings, refresh_token: str) -> dict:
     if exchange.status_code >= 400:
         _raise_control_plane_error(exchange, default="Control plane rejected native refresh")
     raw_payload = _json_object(exchange)
-    try:
-        return _runtime_payload(raw_payload)
-    except HTTPException:
-        replacement_refresh = raw_payload.get("refresh_token")
-        if isinstance(replacement_refresh, str) and replacement_refresh:
-            try:
-                _revoke_native_session_payload(
-                    settings=settings,
-                    refresh_token=replacement_refresh,
-                    strict=False,
-                )
-            except Exception:
-                logger.warning("native_refresh_orphan_revoke_failed", exc_info=True)
-        raise
+    payload = _runtime_payload(raw_payload)
+    return _validate_runtime_payload(payload, audience=hosted_instance_id())
 
 
 def _revoke_native_session_payload(
     *,
     settings,
-    refresh_token: str,
+    refresh_token: str | None = None,
     revoke_authority: bool = False,
+    orphan_cleanup: bool = False,
     strict: bool = True,
-) -> None:
+) -> bool:
     control_plane_url = getattr(settings, "control_plane_url", None)
     if not control_plane_url or not refresh_token:
         if strict and control_plane_url is None:
@@ -369,8 +398,10 @@ def _revoke_native_session_payload(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "cp_unavailable"},
             )
-        return
-    payload = {"refresh_token": refresh_token, "tenant": hosted_instance_id()}
+        return False
+    payload = {"tenant": hosted_instance_id(), "refresh_token": refresh_token}
+    if orphan_cleanup:
+        payload["orphan_cleanup"] = True
     if revoke_authority:
         payload["revoke_authority"] = True
     try:
@@ -387,19 +418,27 @@ def _revoke_native_session_payload(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={"code": "cp_unavailable"},
             ) from exc
-        return
+        return False
 
     if response.status_code != status.HTTP_200_OK:
         logger.warning(
             "control_plane_native_session_revoke_rejected",
             extra={"status_code": response.status_code},
         )
+        if strict and response.status_code == status.HTTP_409_CONFLICT:
+            try:
+                body = response.json()
+            except (TypeError, ValueError):
+                body = None
+            detail = body.get("detail") if isinstance(body, dict) else None
+            if isinstance(detail, dict) and detail.get("code") == "revocation_not_authorized":
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
         if strict:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={"code": "cp_unavailable"},
             )
-        return
+        return False
 
     try:
         body = response.json()
@@ -412,6 +451,8 @@ def _revoke_native_session_payload(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={"code": "cp_unavailable"},
             )
+        return False
+    return True
 
 
 async def _best_effort_revoke_native_session(settings, refresh_token: object) -> None:
@@ -471,7 +512,7 @@ def _handoff_failure_redirect(
 @router.get("/accept-handoff", include_in_schema=False)
 async def accept_handoff_request(
     request: Request,
-    code: str,
+    code: str | None = None,
     return_to: str | None = None,
     tenant_state: str | None = None,
 ):
@@ -479,6 +520,9 @@ async def accept_handoff_request(
     control_plane_url = getattr(settings, "control_plane_url", None)
     if not control_plane_url:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Hosted handoff is not configured")
+    if not code:
+        logger.warning("tenant_handoff_code_missing")
+        return _handoff_failure_redirect(settings=settings, return_to=return_to, error="handoff_missing")
     if not hosted_cookie_origin_is_secure(settings):
         logger.error("hosted_auth_public_origin_invalid")
         return _handoff_failure_redirect(settings=settings, return_to=return_to, error="auth_misconfigured")
@@ -581,15 +625,6 @@ async def accept_handoff_request(
         refresh_cookie_max_age = _hosted_refresh_cookie_max_age(payload)
     except HTTPException:
         logger.error("tenant_handoff_exchange_invalid_refresh_expiry")
-        try:
-            await asyncio.to_thread(
-                _revoke_native_session_payload,
-                settings=settings,
-                refresh_token=refresh_token,
-                strict=False,
-            )
-        except Exception:
-            logger.warning("tenant_handoff_orphan_revoke_failed", exc_info=True)
         return _handoff_failure_redirect(
             settings=settings,
             return_to=return_to,
@@ -610,15 +645,6 @@ async def accept_handoff_request(
         logger.warning("tenant_handoff_runtime_validation_failed error=%s", validation_error)
     if user is None:
         logger.warning("tenant_handoff_runtime_validation_failed")
-        try:
-            await asyncio.to_thread(
-                _revoke_native_session_payload,
-                settings=settings,
-                refresh_token=refresh_token,
-                strict=False,
-            )
-        except Exception:
-            logger.warning("tenant_handoff_orphan_revoke_failed", exc_info=True)
         return _handoff_failure_redirect(
             settings=settings,
             return_to=return_to,
@@ -629,9 +655,10 @@ async def accept_handoff_request(
     redirect = RedirectResponse(normalize_local_return_to(return_to) or "/timeline", status_code=303)
     _set_session_cookie(redirect, runtime_token, expires_in)
     _set_refresh_cookie(redirect, refresh_token, refresh_cookie_max_age)
+    login_attempt_marker = request.cookies.get(tenant_login_attempt_cookie_name(secure=cookie_secure)) or "1"
     redirect.set_cookie(
         tenant_login_ready_cookie_name(secure=cookie_secure),
-        "1",
+        login_attempt_marker,
         max_age=30,
         path="/",
         httponly=False,
@@ -679,6 +706,7 @@ async def accept_native_handoff(request: Request, response: Response, body: Nati
         code=body.code,
         tenant=tenant,
         tenant_state=body.tenant_state,
+        code_verifier=body.code_verifier,
         client="ios",
     )
     try:
@@ -701,8 +729,9 @@ async def accept_native_handoff(request: Request, response: Response, body: Nati
 
     try:
         user = await asyncio.to_thread(_get_strategy().validate_ws_token, runtime_token)
-    except Exception:
-        await _best_effort_revoke_native_session(settings, refresh_token)
+    except HTTPException as exc:
+        if exc.status_code < 500:
+            await _best_effort_revoke_native_session(settings, refresh_token)
         raise
     if user is None:
         await _best_effort_revoke_native_session(settings, refresh_token)
@@ -758,6 +787,7 @@ async def revoke_native_session(request: Request, response: Response, body: Nati
         settings=settings,
         refresh_token=refresh_token,
         revoke_authority=body.revoke_authority,
+        orphan_cleanup=body.orphan_cleanup,
         strict=True,
     )
     _set_no_store(response)

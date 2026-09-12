@@ -61,13 +61,14 @@ struct HostedAuthRefreshTests {
     }
 
     @Test
-    func nativeRefreshResponseWithoutReplacementClearsStaleRefreshToken() async throws {
+    func nativeRefreshResponseWithoutReplacementPreservesCredentialsForRetry() async throws {
         guard SharedAuthStore.isAppGroupAvailable else {
             return
         }
         let serverURL = "https://missing-refresh-api-test.longhouse.ai"
         clearTokens(serverURL)
         SharedAuthStore.saveNativeRefreshToken("old-refresh", for: serverURL)
+        SharedAuthStore.saveRuntimeToken("runtime-old", for: serverURL)
         let api = makeAPI(serverURL: serverURL) { request in
             jsonResponse(for: request, statusCode: 200, body: [
                 "runtime_token": "runtime-new",
@@ -77,14 +78,14 @@ struct HostedAuthRefreshTests {
 
         do {
             try await api.refreshHostedSession()
-            Issue.record("expected notAuthenticated")
-        } catch LonghouseAPIError.notAuthenticated {
-            #expect(SharedAuthStore.runtimeToken(for: serverURL) == nil)
-            #expect(SharedAuthStore.nativeRefreshToken(for: serverURL) == nil)
+            Issue.record("expected upstreamFailed")
+        } catch LonghouseAPIError.upstreamFailed {
+            #expect(SharedAuthStore.runtimeToken(for: serverURL) == "runtime-old")
+            #expect(SharedAuthStore.nativeRefreshToken(for: serverURL) == "old-refresh")
+        } catch {
+            Issue.record("expected upstreamFailed, got \(error)")
         }
 
-        #expect(SharedAuthStore.runtimeToken(for: serverURL) == nil)
-        #expect(SharedAuthStore.nativeRefreshToken(for: serverURL) == nil)
         clearTokens(serverURL)
     }
 

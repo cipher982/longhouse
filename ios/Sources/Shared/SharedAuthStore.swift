@@ -311,18 +311,44 @@ enum SharedAuthStore {
 
     static func savePendingNativeRevocationToken(_ token: String, for serverURL: String) {
         let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let data = value.data(using: .utf8), !value.isEmpty else { return }
+        guard !value.isEmpty else { return }
+        var tokens = pendingNativeRevocationTokens(for: serverURL)
+        if !tokens.contains(value) {
+            tokens.append(value)
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: tokens) else { return }
         _ = saveKeychainData(data, account: pendingNativeRevocationStorageKey(for: serverURL))
     }
 
-    static func pendingNativeRevocationToken(for serverURL: String) -> String? {
-        guard let data = loadKeychainData(account: pendingNativeRevocationStorageKey(for: serverURL)),
-              let token = String(data: data, encoding: .utf8)?
-                  .trimmingCharacters(in: .whitespacesAndNewlines),
-              !token.isEmpty else {
-            return nil
+    static func pendingNativeRevocationTokens(for serverURL: String) -> [String] {
+        guard let data = loadKeychainData(account: pendingNativeRevocationStorageKey(for: serverURL)) else {
+            return []
         }
-        return token
+        if let tokens = try? JSONSerialization.jsonObject(with: data) as? [String] {
+            return tokens.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        }
+        // Read the pre-set format so an upgrade never drops an unresolved
+        // revocation obligation.
+        guard let legacy = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !legacy.isEmpty else {
+            return []
+        }
+        return [legacy]
+    }
+
+    static func pendingNativeRevocationToken(for serverURL: String) -> String? {
+        pendingNativeRevocationTokens(for: serverURL).first
+    }
+
+    static func clearPendingNativeRevocationToken(_ token: String, for serverURL: String) {
+        let remaining = pendingNativeRevocationTokens(for: serverURL).filter { $0 != token }
+        if remaining.isEmpty {
+            clearPendingNativeRevocationToken(for: serverURL)
+            return
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: remaining) else { return }
+        _ = saveKeychainData(data, account: pendingNativeRevocationStorageKey(for: serverURL))
     }
 
     static func clearPendingNativeRevocationToken(for serverURL: String) {

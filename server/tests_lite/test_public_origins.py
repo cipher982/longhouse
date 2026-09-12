@@ -59,12 +59,12 @@ def _make_settings(**overrides):
     return Settings(**base)
 
 
-def test_public_origins_from_site_and_api():
+def test_public_origins_use_only_the_credentialed_site_origin():
     settings = _make_settings(
         public_site_url="https://longhouse.ai",
         public_api_url="https://api.longhouse.ai",
     )
-    assert get_public_origins(settings) == ["https://longhouse.ai", "https://api.longhouse.ai"]
+    assert get_public_origins(settings) == ["https://longhouse.ai"]
 
 
 def test_resolve_cors_origins_prefers_explicit_env():
@@ -78,6 +78,17 @@ def test_resolve_cors_origins_filters_hosted_sibling_origins():
         control_plane_url="https://control.longhouse.ai",
         allowed_cors_origins="https://longhouse.ai, https://david010.longhouse.ai",
         public_site_url="https://david010.longhouse.ai",
+    )
+
+    assert resolve_cors_origins(settings) == ["https://david010.longhouse.ai"]
+
+
+def test_resolve_hosted_cors_normalizes_operator_origin_formatting():
+    settings = _make_settings(
+        auth_disabled=False,
+        control_plane_url="https://control.longhouse.ai",
+        allowed_cors_origins="HTTPS://DAVID010.LONGHOUSE.AI/",
+        public_site_url="https://david010.longhouse.ai/",
     )
 
     assert resolve_cors_origins(settings) == ["https://david010.longhouse.ai"]
@@ -98,7 +109,6 @@ def test_validate_public_origins_explains_hosted_allowlist_fail_closed():
         control_plane_url="https://control.longhouse.ai",
         allowed_cors_origins="https://longhouse.ai",
     )
-
     warnings = validate_public_origin_config(settings, resolve_cors_origins(settings))
 
-    assert any("Hosted CORS allowlist is disabled" in warning for warning in warnings)
+    assert any("Hosted authentication requires one canonical PUBLIC_SITE_URL origin" in warning for warning in warnings)

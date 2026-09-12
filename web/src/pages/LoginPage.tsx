@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Navigate, useSearchParams } from 'react-router-dom';
-import { clearLogoutIntent, hasLogoutIntent, useAuth, useAuthMethods } from '../lib/auth';
 import { clearLogoutBarrier } from '../lib/auth-refresh';
+import { markLoginAttempt } from '../lib/auth-refresh';
 import { sanitizeReturnTo } from '../lib/loginRedirect';
 import config from '../lib/config';
+import { clearLogoutIntent, hasLogoutIntent, useAuth, useAuthMethods } from '../lib/auth';
 
 export default function LoginPage() {
   const [params] = useSearchParams();
@@ -60,6 +61,7 @@ export default function LoginPage() {
     // Hosted tenant: the tenant route owns the state cookie and redirects to
     // the CP. Keep this effect single-owner so a React rerender cannot issue a
     // second handoff while the browser is still following the first one.
+    markLoginAttempt();
     navigationStarted.current = true;
     window.location.replace(
       `/api/auth/start-handoff?return_to=${encodeURIComponent(returnTo)}`,
@@ -87,6 +89,7 @@ export default function LoginPage() {
     `/api/auth/start-handoff?return_to=${encodeURIComponent(returnTo)}` +
     (authError === 'cookie_loop' ? '&reset_attempt=1' : '');
   const beginLogin = () => {
+    markLoginAttempt();
     navigationStarted.current = true;
     clearLogoutIntent();
     clearLogoutBarrier();
