@@ -762,11 +762,15 @@ class RawObjectWorkerPool:
             task.cancel()
         if self._slot_drainers:
             await asyncio.gather(*tuple(self._slot_drainers), return_exceptions=True)
-        await asyncio.gather(
+        results = await asyncio.gather(
             self._live_pool.close(),
             self._repair_pool.close(),
             self._user_read_pool.close(),
+            return_exceptions=True,
         )
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
         self._cleanup_complete = True
 
 
