@@ -129,15 +129,13 @@ async def delete_session_data(*, session_id: UUID, owner_id: int) -> SessionDele
 
     catalog = _require_catalog()
     head = await _read_purge_head(catalog, session_id=str(session_id))
-    # Ownership is proven from the durable ``sessions`` row, which survives a
-    # tombstone with its owner_id intact. Anyone who cannot match it gets the
-    # one indistinguishable answer.
+    # Ownership comes from durable storage or the live launch binding. Anyone
+    # who cannot match it gets one indistinguishable answer.
     if not head["session_found"] or head["owner_id"] is None or str(head["owner_id"]) != str(owner_id):
         raise SessionNotFound(str(session_id))
     return await _delete_owned_session(
         catalog,
         session_id=str(session_id),
-        tenant_id=str(head["tenant_id"]),
         owner_id=owner_id,
         already_deleted=bool(head["deleted"]),
     )
@@ -176,7 +174,6 @@ async def delete_account_data(*, owner_id: int) -> AccountDeletionReport:
             session_report = await _delete_owned_session(
                 catalog,
                 session_id=str(row["session_id"]),
-                tenant_id=str(row["tenant_id"]),
                 owner_id=owner_id,
                 already_deleted=bool(row.get("deleted")),
             )
@@ -245,7 +242,6 @@ async def _delete_owned_session(
     catalog: CatalogClient,
     *,
     session_id: str,
-    tenant_id: str,
     owner_id: int,
     already_deleted: bool,
 ) -> SessionDeletionReport:
@@ -290,31 +286,35 @@ async def _delete_owned_session(
         except (CatalogRemoteError, CatalogUnavailable) as exc:
             report.partial.append(f"the search index and embeddings were not deleted: {exc}")
 
-    # 3. Enumerate the final object set and remove the bytes.
-    raw, render, media = await _list_purge_objects(catalog, session_id=session_id)
-    deleted, freed, unverifiable = await asyncio.to_thread(
-        _delete_objects,
-        tenant_id=tenant_id,
-        objects=raw + render,
-    )
-    report.raw_objects_deleted = sum(1 for index in deleted if index < len(raw))
-    report.render_objects_deleted = len(deleted) - report.raw_objects_deleted
-    report.object_bytes_deleted = freed
-    if unverifiable:
-        report.partial.append(f"{unverifiable} object file(s) did not match their manifest hash and were left in place")
+    # 3. Read the final tenant and object set after fencing: initial transcript
+    # ingest can create the storage row after the live-only ownership check.
+    tenant_id, raw, render, media = await _list_purge_objects(catalog, session_id=session_id)
+    if raw or render or media:
+        if tenant_id is None:
+            raise DataDeletionUnavailable("The fenced object manifest has no tenant identity")
+        deleted, freed, unverifiable = await asyncio.to_thread(
+            _delete_objects,
+            tenant_id=tenant_id,
+            objects=raw + render,
+        )
+        report.raw_objects_deleted = sum(1 for index in deleted if index < len(raw))
+        report.render_objects_deleted = len(deleted) - report.raw_objects_deleted
+        report.object_bytes_deleted = freed
+        if unverifiable:
+            report.partial.append(f"{unverifiable} object file(s) did not match their manifest hash and were left in place")
 
-    media_deleted, media_bytes, media_shared, media_unverifiable = await _delete_media(
-        catalog,
-        tenant_id=tenant_id,
-        media=media,
-    )
-    report.media_objects_deleted = media_deleted
-    report.media_objects_retained_shared = media_shared
-    report.object_bytes_deleted += media_bytes
-    if media_shared:
-        report.partial.append(f"{media_shared} media object(s) are still referenced by another session, so their bytes were kept")
-    if media_unverifiable:
-        report.partial.append(f"{media_unverifiable} media file(s) did not match their content hash and were left in place")
+        media_deleted, media_bytes, media_shared, media_unverifiable = await _delete_media(
+            catalog,
+            tenant_id=tenant_id,
+            media=media,
+        )
+        report.media_objects_deleted = media_deleted
+        report.media_objects_retained_shared = media_shared
+        report.object_bytes_deleted += media_bytes
+        if media_shared:
+            report.partial.append(f"{media_shared} media object(s) are still referenced by another session, so their bytes were kept")
+        if media_unverifiable:
+            report.partial.append(f"{media_unverifiable} media file(s) did not match their content hash and were left in place")
 
     report.partial.append(_ARCHIVE_TIER_UNREACHABLE)
     report.complete = not report.partial
@@ -340,7 +340,7 @@ async def _list_purge_objects(
     catalog: CatalogClient,
     *,
     session_id: str,
-) -> tuple[list[tuple[str, str, int]], list[tuple[str, str, int]], list[dict[str, Any]]]:
+) -> tuple[str | None, list[tuple[str, str, int]], list[tuple[str, str, int]], list[dict[str, Any]]]:
     """Page every object the session will ever own, split by kind.
 
     Called only after the fence. The RPC applies no retirement, generation, or
@@ -364,9 +364,10 @@ async def _list_purge_objects(
                 "limit": _PURGE_PAGE,
             },
         )
+        tenant_id = str(page["tenant_id"]) if page["tenant_id"] is not None else None
         rows = page.get("objects")
         if not isinstance(rows, list) or not rows:
-            return raw, render, media
+            return tenant_id, raw, render, media
         for row in rows:
             kind = str(row["kind"])
             if kind == "media":
@@ -376,7 +377,7 @@ async def _list_purge_objects(
             else:
                 raw.append(_object_ref(row))
         if page.get("has_more") is not True:
-            return raw, render, media
+            return tenant_id, raw, render, media
         after_kind = str(rows[-1]["kind"])
         after_key = str(rows[-1]["key"])
 

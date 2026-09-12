@@ -18,12 +18,14 @@ from __future__ import annotations
 import hashlib
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from uuid import UUID
 from uuid import uuid4
 
 import pytest
 from zerg.catalogd.client import CatalogClient
+from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.server import CatalogDaemon
 from zerg.services.data_deletion import SessionNotFound
 from zerg.services.data_deletion import delete_session_data
@@ -303,6 +305,84 @@ async def test_a_non_owner_cannot_tell_a_deleted_session_from_one_that_never_exi
 
         # The owner, and only the owner, gets the terminal-state answer.
         assert (await delete_session_data(session_id=doomed_session, owner_id=42)).already_deleted is True
+    finally:
+        await client.close()
+        await daemon.close()
+        for path in root.iterdir():
+            path.unlink(missing_ok=True)
+        root.rmdir()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ingest_before_fence", [False, True])
+async def test_live_only_managed_registration_can_be_deleted_before_ingest(tmp_path, monkeypatch, ingest_before_fence):
+    root = _socket_root("lh-delete-live-only")
+    object_root = tmp_path / "objects-v2"
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = uuid4()
+    daemon = CatalogDaemon(database_path=root / "live.db", socket_path=root / "catalogd.sock")
+    await daemon.start()
+    client = CatalogClient(root / "catalogd.sock", default_timeout_seconds=DELETION_TEST_RPC_TIMEOUT_SECONDS)
+    monkeypatch.setenv("LONGHOUSE_STORAGE_V2_ROOT", str(object_root))
+    monkeypatch.setattr("zerg.services.data_deletion.get_catalogd_client", lambda: client)
+    monkeypatch.setattr("zerg.services.data_deletion.get_searchd_client", lambda: None)
+    committed_files: list[Path] = []
+    original_call = client.call
+
+    async def ingest_at_fence(method, params, **kwargs):
+        if method == "storage.session.delete.v2" and ingest_before_fence:
+            committed, raw, render = _commit_params(object_root, session_id=session_id, owner_id="42", now=now)
+            await original_call("storage.raw_object.commit.v2", committed)
+            committed_files.extend((object_root / raw.object_path, object_root / render.object_path))
+            assert all(path.exists() for path in committed_files)
+        return await original_call(method, params, **kwargs)
+
+    monkeypatch.setattr(client, "call", ingest_at_fence)
+    launch = {
+        "owner_id": 42,
+        "git_repo": "cipher982/longhouse",
+        "git_branch": "main",
+        "started_at": now.isoformat(),
+        "expires_at": (now + timedelta(minutes=5)).isoformat(),
+        "plan": {
+            "session_id": str(session_id),
+            "provider": "cursor",
+            "provider_session_id": None,
+            "source_name": "kernel-canary-ci-bootstrap",
+            "source_runner_id": None,
+            "cwd": "/tmp/cursor",
+            "project": "longhouse",
+            "display_name": "Cursor",
+            "managed_session_name": "cursor-managed-live-only",
+            "permission_mode": "provider_local",
+            "launch_actor": "automation",
+            "launch_surface": "test",
+            "managed_transport": "cursor_helm",
+            "attach_command": "",
+            "provider_config": {},
+        },
+    }
+    try:
+        await client.call("session.launch.local.create.v2", {"launch": launch})
+        before = await client.call("session.read.v2", {"session_id": str(session_id)})
+        assert before["found"] is True
+
+        with pytest.raises(SessionNotFound):
+            await delete_session_data(session_id=session_id, owner_id=99)
+
+        report = await delete_session_data(session_id=session_id, owner_id=42)
+        assert report.already_deleted is False
+        assert not any(path.exists() for path in committed_files)
+        live_after = await client.call("session.read.v2", {"session_id": str(session_id)})
+        assert live_after["found"] is False
+
+        after = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert after["found"] is False and after["deleted"] is True
+
+        late, _, _ = _commit_params(object_root, session_id=session_id, owner_id="42", now=now + timedelta(seconds=1))
+        with pytest.raises(CatalogRemoteError) as fenced:
+            await client.call("storage.raw_object.commit.v2", late)
+        assert fenced.value.code == "session_deleted"
     finally:
         await client.close()
         await daemon.close()

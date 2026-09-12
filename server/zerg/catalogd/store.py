@@ -10466,10 +10466,11 @@ class CatalogStore:
         media a session referenced. A filter here would leave bytes on disk with
         nothing left able to name them.
 
-        Ownership comes off the durable ``sessions`` row, which survives the
-        tombstone, so a repeated delete can still prove who is asking. The page
-        is ordered by ``(kind, key)`` and the cursor is that pair, so a walk
-        visits each object exactly once.
+        Ownership comes off the durable ``sessions`` row when present. A
+        live-only registration has no such row, so it uses the catalog's normal
+        live/launch ownership resolver instead. The page is ordered by
+        ``(kind, key)`` and the cursor is that pair, so a walk visits each
+        object exactly once.
         """
 
         sessions = StorageSession.__table__
@@ -10485,6 +10486,10 @@ class CatalogStore:
                 .mappings()
                 .first()
             )
+            if session_row is not None:
+                owner_id = str(session_row["owner_id"]) if session_row["owner_id"] is not None else None
+            else:
+                owner_id = self._resolve_session_owner_id(connection, session_id=session_key)
             deleted = connection.execute(
                 select(tombstones.c.deletion_revision).where(tombstones.c.session_id == session_key)
             ).scalar_one_or_none()
@@ -10589,8 +10594,8 @@ class CatalogStore:
             has_more = len(rows) > limit
             rows = rows[:limit]
             return {
-                "session_found": session_row is not None,
-                "owner_id": (str(session_row["owner_id"]) if session_row is not None and session_row["owner_id"] is not None else None),
+                "session_found": session_row is not None or owner_id is not None,
+                "owner_id": owner_id,
                 "tenant_id": str(session_row["tenant_id"]) if session_row is not None else None,
                 "deleted": deleted is not None,
                 "objects": rows,

@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 268,
+  "file_count": 269,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1695,6 +1695,13 @@
         "cursor",
         "omp",
         "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_user_data_deletion.py",
+      "providers": [
+        "codex",
+        "cursor"
       ]
     },
     {
