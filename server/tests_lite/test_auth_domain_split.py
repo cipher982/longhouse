@@ -97,6 +97,7 @@ def test_short_lived_browser_auth_closes_db_after_validation():
     assert db.closed is True
     auth.assert_called_once_with(request, db)
 
+
 def test_browser_mutation_does_not_fallback_from_invalid_bearer_to_cookie():
     request = Request(
         {
@@ -153,6 +154,8 @@ def test_browser_mutation_with_explicit_bearer_skips_cookie_csrf_guard():
         assert browser_auth.get_current_browser_user(request, db=object()) is user
 
     resolve.assert_called_once()
+
+
 def test_generic_mutation_with_explicit_bearer_skips_cookie_csrf_guard():
     request = Request(
         {
@@ -178,8 +181,6 @@ def test_generic_mutation_with_explicit_bearer_skips_cookie_csrf_guard():
         patch.object(auth, "_get_strategy", return_value=strategy),
     ):
         assert auth.get_current_user(request, db=object()) is user
-
-
 
 
 def test_get_current_browser_route_user_accepts_query_token_for_sse():

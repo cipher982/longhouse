@@ -1276,6 +1276,7 @@ async def test_revoke_native_session_treats_terminal_cp_rejection_as_success(mon
 
     assert result == {"status": "ok"}
 
+
 @pytest.mark.asyncio
 async def test_revoke_native_session_reports_cp_network_error(monkeypatch):
     def fake_post(*a, **k):
