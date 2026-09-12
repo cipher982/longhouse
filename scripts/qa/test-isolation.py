@@ -29,9 +29,9 @@ LABEL = "ai.longhouse.test-isolation"
 OWNER_LABEL = LABEL + ".owner"
 DEADLINE_LABEL = LABEL + ".deadline"
 OWNER = hashlib.sha256(str(ROOT).encode()).hexdigest()[:20]
-# Test selection, bounded tuning, and explicitly remapped artifact destinations.
+# Test selection, public proof metadata, bounded tuning, and artifact destinations.
 # Never forward arbitrary Make variables: HOME=..., SHELL=..., MAKEFLAGS=...,
-# auth, URLs, and binary overrides are authority.
+# auth, service URLs, and binary overrides are authority.
 OPTIONS = {
     "ARGS",
     "TEST",
@@ -45,6 +45,13 @@ OPTIONS = {
     "IOS_TEST_SCHEMES",
     "PROJECT",
     "UNIVERSAL_PROVIDER",
+    "PROVIDER",
+    "PRODUCER_CLASS",
+    "INVOCATION_ID",
+    "RUN_REFERENCE",
+    "LONGHOUSE_GIT_SHA",
+    "PROVIDER_VERSION",
+    "PROVIDER_EXECUTABLE_IDENTITY",
     "STORE_ROOT",
     "BUNDLE_OUTPUT",
     "ARTIFACT",
@@ -53,14 +60,6 @@ OPTIONS = {
     "LONGHOUSE_NATIVE_SMOKE_EXPECTED_VERSION",
     "LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT",
     "LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG",
-}
-MAKE_ASSIGNMENTS = {
-    "ARGS",
-    "UNIVERSAL_PROVIDER",
-    "STORE_ROOT",
-    "BUNDLE_OUTPUT",
-    "ARTIFACT",
-    "EVIDENCE_ROOT",
 }
 NATIVE = {
     "test-install",
