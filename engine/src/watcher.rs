@@ -320,7 +320,9 @@ mod tests {
 
     #[tokio::test]
     async fn provider_created_after_start_delivers_native_file_events() {
-        let temp = tempfile::tempdir().unwrap();
+        // FSEvents can omit the system temporary tree. Keep this OS-event
+        // fixture on the source volume, where provider archives are watched.
+        let temp = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
         let root = temp.path().join("new-provider").join("sessions");
         let mut providers = Vec::new();
         let mut watcher = SessionWatcher::new(&providers, &[]).unwrap();
@@ -334,12 +336,27 @@ mod tests {
             }],
         );
         let path = root.join("new-session.jsonl");
-        std::fs::write(&path, b"{\"type\":\"session_meta\"}\n").unwrap();
-        let observed =
-            tokio::time::timeout(std::time::Duration::from_secs(5), watcher.next_event())
-                .await
-                .unwrap()
-                .unwrap();
+        // Native backends can coalesce initial creation until a later write.
+        // Exercise a live source; the oracle is still a real OS notification.
+        let observed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let mut writes = tokio::time::interval(std::time::Duration::from_millis(100));
+            loop {
+                tokio::select! {
+                    event = watcher.next_event() => break event.unwrap(),
+                    _ = writes.tick() => {
+                        let mut source = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&path)
+                            .unwrap();
+                        std::io::Write::write_all(&mut source, b"{\"type\":\"session_meta\"}\n")
+                            .unwrap();
+                    }
+                }
+            }
+        })
+        .await
+        .unwrap();
         assert_eq!(
             observed.path.canonicalize().unwrap(),
             path.canonicalize().unwrap()

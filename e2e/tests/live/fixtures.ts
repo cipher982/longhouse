@@ -261,17 +261,9 @@ async function waitForHostedQaTranscripts(
   request: APIRequestContext,
   fixtures: HostedQaTranscript[],
 ): Promise<void> {
-  await expect
-    .poll(
-      async () => {
-        const present = await Promise.all(
-          fixtures.map((fixture) => hostedQaSessionPresent(request, fixture)),
-        );
-        return present.every(Boolean);
-      },
-      { timeout: 15_000, intervals: [500, 1_000, 2_000] },
-    )
-    .toBe(true);
+  await Promise.all(
+    fixtures.map((fixture) => waitForHostedQaTranscript(request, fixture)),
+  );
 }
 
 async function hostedQaSessionPresent(

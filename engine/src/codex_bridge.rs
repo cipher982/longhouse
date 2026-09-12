@@ -1757,7 +1757,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     if let Some(parent) = config.state_file.parent() {
         fs::create_dir_all(parent)?;
     }
-    acquire_bridge_lock(&bridge_lock_path(&config.state_file))?;
+    std::mem::forget(acquire_bridge_lock(&bridge_lock_path(&config.state_file)).await?);
     crate::codex_attachments::cleanup_session_tmpdir(&config.session_id);
     write_state_file(&config.state_file, &initial_state)?;
 
@@ -3368,18 +3368,21 @@ pub(crate) fn try_acquire_bridge_lock(lock_path: &Path) -> Result<Option<BridgeL
     }
 }
 
-fn acquire_bridge_lock(lock_path: &Path) -> Result<()> {
-    match try_acquire_bridge_lock(lock_path)? {
-        Some(lock) => {
-            // Leak the file so the kernel releases the lock only when this
-            // bridge process exits, including on a crash or SIGKILL.
-            Box::leak(Box::new(lock));
-            Ok(())
+async fn acquire_bridge_lock(lock_path: &Path) -> Result<BridgeLock> {
+    // Reconciliation briefly holds the same lock. Yield through that bounded
+    // contention without admitting a second bridge or waiting on a live owner.
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        if let Some(lock) = try_acquire_bridge_lock(lock_path)? {
+            return Ok(lock);
         }
-        None => bail!(
-            "another codex bridge already owns lock {}",
-            lock_path.display()
-        ),
+        if Instant::now() >= deadline {
+            bail!(
+                "bridge ownership lock remained busy: {}",
+                lock_path.display()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
     }
 }
 
@@ -7296,6 +7299,22 @@ mod tests {
         assert_eq!(state.app_server_pid, None);
         assert_eq!(state.app_server_pgid, None);
         assert_eq!(state.app_server_ws_url, None);
+    }
+
+    #[tokio::test]
+    async fn bridge_start_waits_for_transient_reconciliation_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let lock_path = temp.path().join("bridge.lock");
+        let held = try_acquire_bridge_lock(&lock_path).unwrap().unwrap();
+        let release = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(75)).await;
+            drop(held);
+        });
+        let acquired = acquire_bridge_lock(&lock_path).await.unwrap();
+        release.await.unwrap();
+        assert!(try_acquire_bridge_lock(&lock_path).unwrap().is_none());
+        drop(acquired);
+        assert!(try_acquire_bridge_lock(&lock_path).unwrap().is_some());
     }
 
     #[test]
