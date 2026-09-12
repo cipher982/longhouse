@@ -53,7 +53,7 @@ const LOGGED_OUT_SESSION_KEY = 'longhouse:logged-out';
 export function hasLogoutIntent(): boolean {
   if (typeof window === 'undefined') return false;
   try {
-    if (window.localStorage.getItem(LOGGED_OUT_SESSION_KEY)) return true;
+    if (window.localStorage.getItem(LOGGED_OUT_SESSION_KEY) === '1') return true;
   } catch {
     // Fall through to the per-tab fallback.
   }
@@ -325,6 +325,13 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     // response can install a fresh cookie after the logout response clears it.
     beginLogoutBarrier();
     const completed = await logoutFromServer(everywhere);
+    if (!completed) {
+      // Keep the authenticated UI and retry path when the authority could not
+      // confirm revocation. The barrier must be cleared so normal requests can
+      // continue while the user retries.
+      clearLogoutBarrier();
+      return false;
+    }
     try {
       window.sessionStorage.setItem(LOGGED_OUT_SESSION_KEY, '1');
     } catch {
@@ -332,10 +339,7 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     }
     await clearLocalAuth();
     notifyLogout();
-    // Local sign-out is complete even when remote revocation is unavailable.
-    // Keep the logout barrier and explicit intent active so a stale cookie
-    // cannot silently re-authenticate this browser.
-    return completed;
+    return true;
   };
 
   const refreshAuth = async () => {

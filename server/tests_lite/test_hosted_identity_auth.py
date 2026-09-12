@@ -15,6 +15,7 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret-1234")
 import httpx
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from starlette.requests import Request
@@ -121,6 +122,52 @@ def test_native_handoff_rate_limit_binds_untrusted_attempts_to_ip(monkeypatch):
             for key in list(auth_sso._HANDOFF_RATE_BUCKETS):
                 if tenant in key:
                     del auth_sso._HANDOFF_RATE_BUCKETS[key]
+
+
+def test_native_auth_payloads_are_bounded_before_proxying():
+    with pytest.raises(ValidationError):
+        NativeHandoffRequest(code="one-use-code", tenant_state="x" * 129)
+    with pytest.raises(ValidationError):
+        NativeRefreshRequest(refresh_token="x" * 513)
+    with pytest.raises(ValidationError):
+        NativeRevokeRequest(refresh_token="x" * 513)
+
+
+def test_native_rate_limit_hashes_untrusted_attempt_ids(monkeypatch):
+    monkeypatch.setattr(auth_sso, "_HANDOFF_RATE_MAX_ATTEMPTS", 10)
+    tenant = f"hash-test-{id(object())}"
+    attempt_id = "x" * 128
+    try:
+        auth_sso._enforce_handoff_rate_limit(
+            tenant=tenant,
+            surface="native",
+            attempt_id=attempt_id,
+            client_ip="198.51.100.7",
+        )
+        with auth_sso._HANDOFF_RATE_LOCK:
+            keys = list(auth_sso._HANDOFF_RATE_BUCKETS)
+        assert all(attempt_id not in key for key in keys)
+    finally:
+        with auth_sso._HANDOFF_RATE_LOCK:
+            for key in list(auth_sso._HANDOFF_RATE_BUCKETS):
+                if tenant in key:
+                    del auth_sso._HANDOFF_RATE_BUCKETS[key]
+
+
+def test_native_rate_limit_uses_trusted_proxy_client_ip(monkeypatch):
+    monkeypatch.setenv("TRUSTED_PROXY_HOPS", "1")
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/auth/accept-native-handoff",
+            "client": ("127.0.0.1", 1234),
+            "headers": [(b"x-forwarded-for", b"203.0.113.9, 198.51.100.7")],
+            "query_string": b"",
+        }
+    )
+
+    assert auth_sso.get_client_ip(request) == "198.51.100.7"
 
 
 @pytest.fixture()
@@ -796,6 +843,19 @@ def _refresh_request(*, auth_header: str | None):
     )
 
 
+def _native_request(*, headers: list[tuple[bytes, bytes]] | None = None):
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/auth/native",
+            "client": ("127.0.0.1", 1234),
+            "headers": headers or [],
+            "query_string": b"",
+        }
+    )
+
+
 @pytest.mark.asyncio
 async def test_refresh_runtime_token_proxies_bearer_to_cp(monkeypatch):
     captured = {}
@@ -938,7 +998,7 @@ async def test_refresh_native_session_proxies_refresh_token_to_cp(monkeypatch):
     monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
     monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", fake_post)
 
-    result = await refresh_native_session(NativeRefreshRequest(refresh_token="lhr_current"))
+    result = await refresh_native_session(_native_request(), NativeRefreshRequest(refresh_token="lhr_current"))
 
     assert result == {
         "runtime_token": "cp.fresh.jwt",
@@ -969,7 +1029,7 @@ async def test_refresh_native_session_propagates_cp_rejection(monkeypatch):
     monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", lambda *a, **k: FakeResponse())
 
     with pytest.raises(HTTPException) as exc:
-        await refresh_native_session(NativeRefreshRequest(refresh_token="lhr_revoked"))
+        await refresh_native_session(_native_request(), NativeRefreshRequest(refresh_token="lhr_revoked"))
     assert exc.value.status_code == 401
 
 
@@ -986,7 +1046,7 @@ async def test_refresh_native_session_returns_502_on_cp_network_error(monkeypatc
     monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", fake_post)
 
     with pytest.raises(HTTPException) as exc:
-        await refresh_native_session(NativeRefreshRequest(refresh_token="lhr_current"))
+        await refresh_native_session(_native_request(), NativeRefreshRequest(refresh_token="lhr_current"))
     assert exc.value.status_code == 502
 
 
@@ -997,7 +1057,7 @@ async def test_refresh_native_session_rejects_missing_token(monkeypatch):
         lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
     )
     with pytest.raises(HTTPException) as exc:
-        await refresh_native_session(NativeRefreshRequest(refresh_token=" "))
+        await refresh_native_session(_native_request(), NativeRefreshRequest(refresh_token=" "))
     assert exc.value.status_code == 401
 
 
@@ -1019,9 +1079,10 @@ async def test_revoke_native_session_proxies_to_cp(monkeypatch):
         "zerg.routers.auth_sso.get_settings",
         lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
     )
+    monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
     monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", fake_post)
 
-    result = await revoke_native_session(NativeRevokeRequest(refresh_token="lhr_current"))
+    result = await revoke_native_session(_native_request(), NativeRevokeRequest(refresh_token="lhr_current"))
 
     assert result == {"status": "ok"}
     assert captured["url"] == "https://control.longhouse.ai/api/identity/revoke-native-session"
@@ -1037,9 +1098,9 @@ async def test_revoke_native_session_ignores_empty_token(monkeypatch):
         lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
     )
 
-    result = await revoke_native_session(NativeRevokeRequest(refresh_token=" "))
-
-    assert result == {"status": "ok"}
+    with pytest.raises(HTTPException) as exc:
+        await revoke_native_session(_native_request(), NativeRevokeRequest(refresh_token=" "))
+    assert exc.value.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -1052,8 +1113,9 @@ async def test_revoke_native_session_treats_cp_rejection_as_idempotent(monkeypat
         lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
     )
     monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", lambda *a, **k: FakeResponse())
+    monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
 
-    result = await revoke_native_session(NativeRevokeRequest(refresh_token="lhr_current"))
+    result = await revoke_native_session(_native_request(), NativeRevokeRequest(refresh_token="lhr_current"))
 
     assert result == {"status": "ok"}
 
@@ -1068,8 +1130,9 @@ async def test_revoke_native_session_treats_cp_network_error_as_idempotent(monke
         lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
     )
     monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", fake_post)
+    monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
 
-    result = await revoke_native_session(NativeRevokeRequest(refresh_token="lhr_current"))
+    result = await revoke_native_session(_native_request(), NativeRevokeRequest(refresh_token="lhr_current"))
 
     assert result == {"status": "ok"}
 

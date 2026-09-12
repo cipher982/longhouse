@@ -1,6 +1,7 @@
 """Hosted SSO bridge routes for tenant auth."""
 
 import asyncio
+import hashlib
 import hmac
 import logging
 import time
@@ -19,7 +20,9 @@ from fastapi import Response
 from fastapi import status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
+from pydantic import Field
 
+from zerg.auth.client_ip import get_client_ip
 from zerg.auth.hosted import MAX_TENANT_LOGIN_STATE_LENGTH
 from zerg.auth.hosted import hosted_instance_id
 from zerg.auth.hosted import tenant_cookie_secure
@@ -44,6 +47,12 @@ _HANDOFF_RATE_MAX_KEYS = 2048
 _HANDOFF_RATE_BUCKETS: OrderedDict[str, deque[float]] = OrderedDict()
 _HANDOFF_RATE_LOCK = Lock()
 
+_MAX_NATIVE_REFRESH_TOKEN_LENGTH = 512
+
+
+def _rate_limit_digest(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:32]
+
 
 def _enforce_handoff_rate_limit(
     *,
@@ -52,18 +61,13 @@ def _enforce_handoff_rate_limit(
     attempt_id: str,
     client_ip: str | None = None,
 ) -> None:
-    """Bound browser attempts and native code-spray independently.
-
-    Web attempts are bound to the host-only login cookie. Native callers have
-    no browser binding and control ``tenant_state``, so they also consume
-    per-IP and tenant-wide buckets.
-    """
-    checks = [(f"{surface}:{tenant}:{attempt_id}", _HANDOFF_RATE_MAX_ATTEMPTS)]
-    if surface == "native":
+    """Bound browser attempts and native credential abuse independently."""
+    checks = [(f"{surface}:{tenant}:{_rate_limit_digest(attempt_id)}", _HANDOFF_RATE_MAX_ATTEMPTS)]
+    if surface.startswith("native"):
         ip_key = (client_ip or "unknown").strip() or "unknown"
         checks.extend(
             [
-                (f"native-ip:{tenant}:{ip_key}", _NATIVE_HANDOFF_IP_MAX_ATTEMPTS),
+                (f"native-ip:{tenant}:{_rate_limit_digest(ip_key)}", _NATIVE_HANDOFF_IP_MAX_ATTEMPTS),
                 (f"native-tenant:{tenant}", _NATIVE_HANDOFF_TENANT_MAX_ATTEMPTS),
             ]
         )
@@ -126,16 +130,16 @@ def _hosted_refresh_cookie_max_age(payload: dict) -> int:
 
 
 class NativeHandoffRequest(BaseModel):
-    code: str
-    tenant_state: str
+    code: str = Field(min_length=1, max_length=256)
+    tenant_state: str = Field(min_length=1, max_length=MAX_TENANT_LOGIN_STATE_LENGTH)
 
 
 class NativeRefreshRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str = Field(min_length=1, max_length=_MAX_NATIVE_REFRESH_TOKEN_LENGTH)
 
 
 class NativeRevokeRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str = Field(min_length=1, max_length=_MAX_NATIVE_REFRESH_TOKEN_LENGTH)
     revoke_authority: bool = False
 
 
@@ -569,7 +573,7 @@ async def accept_native_handoff(request: Request, body: NativeHandoffRequest):
         tenant=tenant,
         surface="native",
         attempt_id=body.tenant_state,
-        client_ip=request.client.host if request.client else None,
+        client_ip=get_client_ip(request),
     )
     payload = await asyncio.to_thread(
         _exchange_handoff_code,
@@ -611,11 +615,21 @@ async def accept_native_handoff(request: Request, body: NativeHandoffRequest):
 
 
 @router.post("/refresh-native-session")
-async def refresh_native_session(body: NativeRefreshRequest):
+async def refresh_native_session(request: Request, body: NativeRefreshRequest):
+    reject_cross_origin_form_post(request)
     refresh_token = body.refresh_token.strip()
     if not refresh_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token")
     settings = get_settings()
+    if not getattr(settings, "control_plane_url", None):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Hosted native session refresh is not configured")
+    tenant = hosted_instance_id()
+    _enforce_handoff_rate_limit(
+        tenant=tenant,
+        surface="native-refresh",
+        attempt_id="credential",
+        client_ip=get_client_ip(request),
+    )
     return await asyncio.to_thread(
         _refresh_native_session_payload,
         settings=settings,
@@ -624,12 +638,25 @@ async def refresh_native_session(body: NativeRefreshRequest):
 
 
 @router.post("/revoke-native-session")
-async def revoke_native_session(body: NativeRevokeRequest):
+async def revoke_native_session(request: Request, body: NativeRevokeRequest):
+    reject_cross_origin_form_post(request)
+    refresh_token = body.refresh_token.strip()
+    if not refresh_token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing refresh token")
     settings = get_settings()
+    if not getattr(settings, "control_plane_url", None):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Hosted native session revoke is not configured")
+    tenant = hosted_instance_id()
+    _enforce_handoff_rate_limit(
+        tenant=tenant,
+        surface="native-revoke",
+        attempt_id="credential",
+        client_ip=get_client_ip(request),
+    )
     await asyncio.to_thread(
         _revoke_native_session_payload,
         settings=settings,
-        refresh_token=body.refresh_token.strip(),
+        refresh_token=refresh_token,
         revoke_authority=body.revoke_authority,
         strict=False,
     )

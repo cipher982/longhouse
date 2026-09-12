@@ -5,7 +5,6 @@ import base64
 import hashlib
 import hmac
 import logging
-import os
 import secrets
 import time
 import urllib.parse
@@ -32,6 +31,7 @@ from zerg.auth.catalog_gateway import create_refresh
 from zerg.auth.catalog_gateway import resolve_local_user
 from zerg.auth.catalog_gateway import revoke_refresh_family
 from zerg.auth.catalog_gateway import rotate_refresh
+from zerg.auth.client_ip import get_client_ip
 from zerg.auth.hosted import MAX_TENANT_LOGIN_ATTEMPTS
 from zerg.auth.hosted import TENANT_LOGIN_ATTEMPT_MAX_AGE
 from zerg.auth.hosted import new_tenant_login_state
@@ -150,38 +150,6 @@ _PASSWORD_RATE_LIMIT_WINDOW_SECONDS = 60
 # Hard ceiling on distinct keys we track, so a spoofed key space can't grow the dict.
 _PASSWORD_RATE_LIMIT_MAX_KEYS = 1024
 _PASSWORD_RATE_LIMIT_BUCKETS: OrderedDict[str, deque[float]] = OrderedDict()
-
-
-def _trusted_proxy_hops() -> int:
-    """How many appending reverse proxies sit in front of this instance.
-
-    Read per call rather than at import so process env changes take effect.
-    """
-    try:
-        return max(int(os.getenv("TRUSTED_PROXY_HOPS", "0")), 0)
-    except ValueError:
-        return 0
-
-
-def _get_client_ip(request: Request) -> str:
-    """Rate-limit key for the caller, counted from the RIGHT of X-Forwarded-For.
-
-    Our documented proxies append (`$proxy_add_x_forwarded_for` in nginx, same in
-    Caddy), so with N trusted proxies the client address is the Nth entry from the
-    right and everything left of it is attacker-supplied. With no trusted proxies
-    configured (the default) the direct peer is the only honest source.
-    """
-    hops = _trusted_proxy_hops()
-    if hops:
-        forwarded = request.headers.get("x-forwarded-for")
-        chain = [part.strip() for part in (forwarded or "").split(",") if part.strip()]
-        # A chain shorter than the configured hop count means the proxies aren't
-        # appending the way we expect — fall back to the direct peer.
-        if len(chain) >= hops:
-            return chain[-hops]
-    if request.client and request.client.host:
-        return request.client.host
-    return "unknown"
 
 
 def _check_password_rate_limit(key: str) -> int | None:
@@ -673,7 +641,7 @@ async def password_login(
     if not settings.longhouse_password and not settings.longhouse_password_hash:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password auth not configured")
 
-    client_ip = _get_client_ip(request)
+    client_ip = get_client_ip(request)
     retry_after = _check_password_rate_limit(client_ip)
     if retry_after is not None:
         raise HTTPException(
@@ -713,7 +681,7 @@ async def cli_login(
     if not settings.longhouse_password and not settings.longhouse_password_hash:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password auth not configured")
 
-    client_ip = _get_client_ip(request)
+    client_ip = get_client_ip(request)
     retry_after = _check_password_rate_limit(client_ip)
     if retry_after is not None:
         raise HTTPException(
