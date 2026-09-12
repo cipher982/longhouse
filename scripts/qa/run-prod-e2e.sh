@@ -51,11 +51,17 @@ if [[ -z "${LONGHOUSE_DEVICE_TOKEN:-}" && -n "${SMOKE_RUNTIME_TOKEN:-}" ]]; then
 
   echo "Provisioning ephemeral hosted QA device token for $INSTANCE_SUBDOMAIN..." >&2
   LH_SMOKE_DEVICE_ACCESS_TOKEN="$SMOKE_RUNTIME_TOKEN"
-  export SMOKE_RUNTIME_TOKEN="${SMOKE_RUNTIME_TOKEN:-$LH_SMOKE_DEVICE_ACCESS_TOKEN}"
-  IFS=$'\t' read -r LH_SMOKE_DEVICE_TOKEN_ID LONGHOUSE_DEVICE_TOKEN <<< \
-    "$(lh_hosted_create_device_token "$LH_SMOKE_DEVICE_ACCESS_TOKEN" "$API_URL" "qa-live-${INSTANCE_SUBDOMAIN}-${RANDOM}")"
-  export LONGHOUSE_DEVICE_TOKEN
   trap cleanup_ephemeral_device_token EXIT
+  LH_SMOKE_DEVICE_CREDENTIALS="$(lh_hosted_create_device_token "$LH_SMOKE_DEVICE_ACCESS_TOKEN" "$API_URL" "qa-live-${INSTANCE_SUBDOMAIN}-${RANDOM}")"
+  IFS=$'\t' read -r LH_SMOKE_DEVICE_TOKEN_ID LONGHOUSE_DEVICE_TOKEN <<< "$LH_SMOKE_DEVICE_CREDENTIALS"
+  if [[ -z "$LH_SMOKE_DEVICE_TOKEN_ID" || -z "$LONGHOUSE_DEVICE_TOKEN" ]]; then
+    echo "Failed to obtain an owned hosted QA device token" >&2
+    exit 1
+  fi
+  export LONGHOUSE_DEVICE_TOKEN
+  # Failure traces may retain browser credentials. Expose only the token
+  # this run revokes, never the long-lived bootstrap credential.
+  export SMOKE_RUNTIME_TOKEN="$LONGHOUSE_DEVICE_TOKEN"
 fi
 
 if [[ -z "${LONGHOUSE_DEVICE_TOKEN:-}" && -z "${SMOKE_RUNTIME_TOKEN:-}" ]]; then
