@@ -1081,6 +1081,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut last_projected_managed_scan_partial = false;
     let mut last_projected_managed_snapshot_complete = false;
     let mut last_projected_unmanaged_snapshot_complete = false;
+    let mut unmanaged_binding_refresh_failed = false;
     let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
     let mut outbox_collect_tasks: JoinSet<OutboxCollectResult> = JoinSet::new();
@@ -1679,6 +1680,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 last_projected_unmanaged_snapshot_complete =
                                     result.full_reconciliation_candidate;
                                 last_unmanaged_session_bindings = Some(bindings);
+                                unmanaged_binding_refresh_failed = false;
                                 if result.full_reconciliation_candidate {
                                     last_full_reconciled_at = Some(chrono::Utc::now().to_rfc3339());
                                 }
@@ -1696,7 +1698,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 last_projected_managed_snapshot_complete =
                                     result.full_reconciliation_candidate;
                                 last_projected_unmanaged_snapshot_complete = false;
-                                pending_full_reconciliation = true;
+                                // Shadow discovery is optional. Do not turn a
+                                // per-pid lsof failure into an immediate full
+                                // managed scan, which would repeatedly advance
+                                // projection generations and starve managed
+                                // truth. The scheduled full observation is the
+                                // retry path; keep this projection incomplete
+                                // so missing Shadow sessions remain unknown.
+                                pending_full_reconciliation = false;
+                                unmanaged_binding_refresh_failed = true;
                                 managed_reconciliation =
                                     heartbeat::ProjectionReconciliation::failed("unmanaged_binding");
                                 tracing::warn!(
@@ -1737,6 +1747,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     }
                     Some(Err(err)) => {
                         projection_generation = projection_generation.saturating_add(1);
+                        unmanaged_binding_refresh_failed = true;
                         managed_reconciliation =
                             heartbeat::ProjectionReconciliation::failed("unmanaged_binding");
                         tracing::warn!("Unmanaged binding refresh task failed: {}", err);
@@ -2038,6 +2049,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 && unmanaged_binding_refresh_tasks.is_empty()
                                 && !pending_wake_reconciliation
                                 && !pending_full_reconciliation
+                                && !unmanaged_binding_refresh_failed
                             {
                                 managed_reconciliation = heartbeat::ProjectionReconciliation::idle();
                             }

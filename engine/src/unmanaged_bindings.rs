@@ -206,13 +206,38 @@ fn run_lsof(pid: u32) -> Result<Vec<PathBuf>, String> {
         .output()
         .map_err(|err| format!("running lsof for unmanaged pid {pid}: {err}"))?;
     if !output.status.success() {
+        if lsof_reports_no_match(&output.status, &output.stderr) {
+            // The process inventory is a point-in-time observation. A provider
+            // can exit between that snapshot and this per-pid lookup; that is
+            // no open-file match, not evidence that lsof itself is unreadable.
+            return Ok(Vec::new());
+        }
+        let detail = String::from_utf8_lossy(&output.stderr);
+        let detail = detail.trim();
         return Err(format!(
-            "lsof for unmanaged pid {pid} exited with {}",
-            output.status
+            "lsof for unmanaged pid {pid} exited with {}{}",
+            output.status,
+            if detail.is_empty() {
+                String::new()
+            } else {
+                format!(": {detail}")
+            }
         ));
     }
     let text = String::from_utf8_lossy(&output.stdout);
     Ok(parse_lsof(&text))
+}
+
+fn lsof_reports_no_match(status: &std::process::ExitStatus, stderr: &[u8]) -> bool {
+    if status.code() != Some(1) {
+        return false;
+    }
+    let detail = String::from_utf8_lossy(stderr);
+    let detail = detail.trim();
+    detail.is_empty()
+        || detail
+            .lines()
+            .all(|line| line.trim_end().ends_with("No such process"))
 }
 
 /// Parse `lsof -F n -p <pid>` output. `-F n` only prints `n<path>` records
@@ -609,6 +634,31 @@ mod tests {
         assert_eq!(paths.len(), 2);
         assert!(paths[0].ends_with("abc.jsonl"));
         assert!(paths[1].ends_with(".zshrc"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lsof_process_race_is_no_match_but_unreadable_scan_is_not() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let exited_without_match = std::process::ExitStatus::from_raw(1 << 8);
+        assert!(lsof_reports_no_match(&exited_without_match, b""));
+        assert!(lsof_reports_no_match(
+            &exited_without_match,
+            b"lsof: status error on 1234: No such process"
+        ));
+        assert!(!lsof_reports_no_match(
+            &exited_without_match,
+            b"lsof: permission denied"
+        ));
+        assert!(!lsof_reports_no_match(
+            &exited_without_match,
+            b"lsof: status error on 1234: No such process\nlsof: permission denied"
+        ));
+        assert!(!lsof_reports_no_match(
+            &std::process::ExitStatus::from_raw(2 << 8),
+            b""
+        ));
     }
 
     #[test]
