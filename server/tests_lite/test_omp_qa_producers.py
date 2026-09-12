@@ -107,7 +107,6 @@ def test_omp_qualification_producers_are_registered_on_their_own_contracts() -> 
     assert CONSOLE_REGISTRATION.scenario_revision == 8
     assert "console_continuation_receipt" in CONSOLE_REGISTRATION.required_artifacts
     assert HELM_REGISTRATION.producer_id == "omp.helm_lifecycle.v1"
-    assert HELM_REGISTRATION.producer_revision == 8
     assert HELM_REGISTRATION.scenario_revision == 8
     assert HELM_REGISTRATION.providers == ("omp",)
     assert HELM_REGISTRATION.scenario_id == "omp_helm_lifecycle"
@@ -273,7 +272,7 @@ def test_omp_terminal_proof_is_not_reused_after_run_becomes_active(monkeypatch) 
             "activity": {"state": "quiescent"},
         },
     }
-    monkeypatch.setattr(lifecycle, "_request", lambda *_args: diagnostic)
+    monkeypatch.setattr(lifecycle, "_request", lambda *_args, **_kwargs: diagnostic)
     claims: list[dict[str, object]] = []
     _append_retirement_claim(claims, session_id="session-1", state={"run_id": "run-1"})
     _record_retirement_claim_terminal("https://runtime.example", "token", claims, session_id="session-1", run_id="run-1")
@@ -292,7 +291,7 @@ def test_omp_replacement_requires_new_proof_when_run_identity_is_retained(monkey
     monkeypatch.setattr(
         lifecycle,
         "_request",
-        lambda *_args: {
+        lambda *_args, **_kwargs: {
             "session_id": "session-1",
             "served_path": "canonical_session_detail",
             "shadow": {"run": {"id": "run-1", "lifecycle": "ended"}, "activity": {"state": "quiescent"}},
@@ -1496,6 +1495,7 @@ def test_omp_registers_each_native_source_before_later_cleanup() -> None:
         label="initial",
         source_path="/omp/initial.jsonl",
         session_id="session-1",
+        run_id="run-1",
         native_session_id="native-1",
     )
     _register_native_source(
@@ -1503,6 +1503,7 @@ def test_omp_registers_each_native_source_before_later_cleanup() -> None:
         label="replacement",
         source_path="/omp/replacement.jsonl",
         session_id="session-1",
+        run_id="run-2",
         native_session_id="native-2",
     )
     _register_native_source(
@@ -1510,6 +1511,7 @@ def test_omp_registers_each_native_source_before_later_cleanup() -> None:
         label="duplicate",
         source_path="/omp/initial.jsonl",
         session_id="session-1",
+        run_id="run-1",
         native_session_id="native-1",
     )
 
@@ -1563,11 +1565,17 @@ def test_omp_cleanup_waits_for_async_owner_exit(monkeypatch) -> None:
     assert _wait_cleanup_receipt(records, timeout=1) == {"status": "pass", "birth_identities_verified": True}
 
 
-def test_omp_keeps_isolation_when_complete_source_retention_fails(tmp_path) -> None:
+def test_omp_keeps_isolation_when_complete_source_retention_fails(tmp_path, monkeypatch) -> None:
     isolation = tmp_path / "isolation"
     isolation.mkdir()
     source = isolation / "session.jsonl"
     source.write_bytes(b"complete native bytes\n")
+    write_bytes = Path.write_bytes
+
+    def corrupt_retained_copy(path, content):
+        return write_bytes(path, b"damaged copy\n" if path.parent.name == "provider-sources" else content)
+
+    monkeypatch.setattr(Path, "write_bytes", corrupt_retained_copy)
     retained = lifecycle._retain_claim_sources(
         tmp_path,
         [{"run_id": "initial", "source_path": str(source)}],
@@ -1576,18 +1584,17 @@ def test_omp_keeps_isolation_when_complete_source_retention_fails(tmp_path) -> N
     )
     cleanup: dict[str, object] = {}
 
-    assert retained[0]["complete"] is True
-    assert (tmp_path / str(retained[0]["path"])).read_bytes() == source.read_bytes()
     assert (
         _remove_isolation_after_source_retention(
             isolation,
-            source_retention_verified=False,
-            runtime_cleanup_verified=False,
+            source_retention_verified=all(item.get("retained") is True for item in retained),
+            runtime_cleanup_verified=True,
             cleanup=cleanup,
         )
         is False
     )
     assert isolation.exists()
+    assert source.read_bytes() == b"complete native bytes\n"
     assert cleanup["authoritative_source_evidence_retained"] is True
 
 

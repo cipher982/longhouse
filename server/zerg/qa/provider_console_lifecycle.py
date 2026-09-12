@@ -93,7 +93,7 @@ _VERSION_PATTERNS = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="provider.console_lifecycle.v1",
-    producer_revision=12,
+    producer_revision=13,
     scenario_id=SCENARIO_IDS[0],
     scenario_ids=SCENARIO_IDS,
     scenario_revision=4,
@@ -1245,7 +1245,19 @@ def _console_cleanup_receipt(
     orphan_count = sum(not (_pid_dead(claim.get("pid")) and _process_group_dead(claim.get("process_group_id"))) for claim in claims)
     process_stop_verified = provider_process_dead and process_group_dead and orphan_count == 0 and process_stop_wait_completed is not False
     source_retention_verified = bool(retained_sources) and all(
-        item.get("retained") is True and isinstance(item.get("path"), str) and bool(item["path"]) for item in retained_sources
+        item.get("retained") is True
+        and item.get("complete") is True
+        and bool(item.get("original_sha256"))
+        and bool(item.get("retained_sha256"))
+        and isinstance(item.get("path"), str)
+        and bool(item["path"])
+        and bool(item.get("identities"))
+        and all(
+            all(identity.get(field) for field in ("provider", "session_id", "thread_id", "run_id"))
+            and (expected_session_id is None or identity["session_id"] == expected_session_id)
+            for identity in item["identities"]
+        )
+        for item in retained_sources
     )
     shipper_stop_verified = (
         isinstance(shipper_stop, Mapping)
@@ -1609,45 +1621,60 @@ def _retain_claim_sources(
     *,
     complete: bool = False,
 ) -> list[dict[str, object]]:
-    """Keep provider-native sources before the isolated HOME disappears."""
+    """Verify retained provider bytes before the isolated HOME can disappear."""
 
     secrets = [value for name, value in environment.items() if value and (name.endswith("_KEY") or name.endswith("_TOKEN"))]
     target_root = root / "provider-sources"
     retained: list[dict[str, object]] = []
-    seen: set[tuple[str, str]] = set()
+    seen: dict[tuple[str, str], list[dict[str, object]]] = {}
     for index, claim in enumerate(claims):
         run_id = str(claim.get("run_id") or index)
+        identity = {
+            name: claim.get(name) for name in ("provider", "session_id", "thread_id", "run_id", "provider_thread_id", "native_session_id")
+        }
         for field in ("source_path", "stdout_path"):
             raw_path = claim.get(field)
-            if not isinstance(raw_path, str) or not raw_path or (raw_path, field) in seen:
+            if not isinstance(raw_path, str) or not raw_path:
                 continue
-            seen.add((raw_path, field))
+            key = (raw_path, field)
+            if key in seen:
+                seen[key].append(identity)
+                continue
+            identities = [identity]
+            seen[key] = identities
+            entry: dict[str, object] = {"source": raw_path, "kind": field, "identities": identities, "retained": False}
             source = Path(raw_path)
             try:
                 content = source.read_bytes()
+                original_digest = _sha256_bytes(content)
+                for secret in secrets:
+                    content = content.replace(secret.encode(), b"[REDACTED]")
+                max_bytes = 16 * 1024 * 1024
+                truncated = not complete and len(content) > max_bytes
+                if truncated:
+                    content = content[:max_bytes] + b"\n[truncated by QA evidence bound]\n"
+                expected_digest = _sha256_bytes(content)
+                target = target_root / f"{index}-{run_id}-{field}.raw"
+                target_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+                target.write_bytes(content)
+                retained_digest = _sha256_file(target)
+                verified = retained_digest == expected_digest and _sha256_file(source) == original_digest
+                entry.update(
+                    {
+                        "path": target.relative_to(root).as_posix(),
+                        "retained": verified,
+                        "complete": not truncated,
+                        "truncated": truncated,
+                        "bytes": len(content),
+                        "original_sha256": original_digest,
+                        "retained_sha256": retained_digest,
+                    }
+                )
+                if not verified:
+                    entry["error"] = "source changed during retention or retained bytes failed verification"
             except OSError as exc:
-                retained.append({"source": raw_path, "kind": field, "retained": False, "error": f"{type(exc).__name__}: {exc}"})
-                continue
-            for secret in secrets:
-                content = content.replace(secret.encode(), b"[REDACTED]")
-            max_bytes = 16 * 1024 * 1024
-            truncated = not complete and len(content) > max_bytes
-            if truncated:
-                content = content[:max_bytes] + b"\n[truncated by QA evidence bound]\n"
-            target = target_root / f"{index}-{run_id}-{field}.raw"
-            target_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-            target.write_bytes(content)
-            retained.append(
-                {
-                    "source": raw_path,
-                    "kind": field,
-                    "path": target.relative_to(root).as_posix(),
-                    "retained": True,
-                    "complete": not truncated,
-                    "truncated": truncated,
-                    "bytes": len(content),
-                }
-            )
+                entry["error"] = f"{type(exc).__name__}: {exc}"
+            retained.append(entry)
     write_json(root / "provider-source-retention.json", {"sources": retained})
     return retained
 
@@ -2324,7 +2351,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         write_json(root / "interrupt-contract-receipt.json", interrupt_receipt)
 
         naturally_dead = _wait_owned_processes_dead(claims)
-        retained_sources = _retain_claim_sources(root, claims, environment)
+        retained_sources = _retain_claim_sources(root, claims, environment, complete=True)
         if variant == SUPPORTED_VARIANT and _interrupt_output_contract_applies(provider):
             post_interrupt_output = _retained_post_interrupt_output_evidence(
                 provider,
@@ -2513,7 +2540,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
             except Exception as exc:  # noqa: BLE001 - cleanup must continue and report failure
                 shipper_stop = {"status": "fail", "error": f"{type(exc).__name__}: {exc}"}
         if not cleanup_written:
-            retained_sources = _retain_claim_sources(root, claims, environment)
+            retained_sources = _retain_claim_sources(root, claims, environment, complete=True)
         if not cleanup_written:
             served_run_inventory = (
                 _wait_served_run_retirement(api_url, token, str(session_id), claims)

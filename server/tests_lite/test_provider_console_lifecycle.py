@@ -64,7 +64,6 @@ def test_registration_covers_each_launch_provider_with_least_authority_credentia
     assert registration["providers"] == list(lifecycle.PROVIDERS)
     assert registration["subject_kind"] == "provider_release"
     assert registration["provider_artifact_required"] is True
-    assert registration["producer_revision"] == 12
     assert registration["credential_binding_ids"] == []
     assert "console_continuation_receipt" in registration["required_artifacts"]
     for provider in lifecycle.PROVIDERS:
@@ -807,64 +806,43 @@ def test_pi_claim_output_evidence_ignores_non_assistant_message_end(tmp_path):
     assert evidence["provider_response_marker_count"] == 1
 
 
-def test_console_cleanup_cannot_pass_on_a_failure_path(monkeypatch):
+def test_console_cleanup_cannot_pass_on_a_failure_path(tmp_path, monkeypatch):
     monkeypatch.setattr(lifecycle, "_pid_dead", lambda _pid: True)
     monkeypatch.setattr(lifecycle, "_process_group_dead", lambda _pgid: True)
-    claims = [{"pid": 1, "process_group_id": 1, "boot_id": "boot-1", "process_start_time": "start-1", "state": "terminal"}]
-    shipper = {"stopped": True, "process_dead": True, "process_group_dead": True}
-    inventory = {"retired": True, "active_run_count": 0, "session_id": "session-1"}
-
-    passed = lifecycle._console_cleanup_receipt(
-        claims,
-        [{"retained": True, "path": "source.raw"}],
-        process_stop_wait_completed=True,
-        shipper_stop=shipper,
-        served_run_inventory=inventory,
-        session_retirement={
+    source = tmp_path / "native.jsonl"
+    source.write_bytes(b"complete source\n")
+    claims = [
+        {
+            "pid": 1,
+            "process_group_id": 1,
+            "boot_id": "boot-1",
+            "process_start_time": "start-1",
+            "state": "terminal",
+            "provider": "omp",
+            "session_id": "session-1",
+            "thread_id": "thread-1",
+            "run_id": "run-1",
+            "source_path": str(source),
+        }
+    ]
+    retained = lifecycle._retain_claim_sources(tmp_path, claims, {}, complete=True)
+    ready = {
+        "process_stop_wait_completed": True,
+        "shipper_stop": {"stopped": True, "process_dead": True, "process_group_dead": True},
+        "served_run_inventory": {"retired": True, "active_run_count": 0, "session_id": "session-1"},
+        "session_retirement": {
             "status": "pass",
             "session_id": "session-1",
             "hidden": True,
             "archived": True,
             "present_in_served_inventory": False,
         },
-    )
-    failed = lifecycle._console_cleanup_receipt(
-        claims,
-        [{"retained": True, "path": "source.raw"}],
-        process_stop_wait_completed=True,
-        shipper_stop=shipper,
-        served_run_inventory=inventory,
-        run_failed=True,
-    )
-    unretired = lifecycle._console_cleanup_receipt(
-        claims,
-        [{"retained": True, "path": "source.raw"}],
-        process_stop_wait_completed=True,
-        shipper_stop=shipper,
-        served_run_inventory=inventory,
-    )
+        "expected_session_id": "session-1",
+    }
 
-    assert unretired["status"] == "fail"
-
-    assert passed["status"] == "pass"
-    assert failed["status"] == "fail"
-    assert passed["owned_process_count"] == 1
-    assert passed["owned_processes"] == [
-        {
-            "pid": 1,
-            "process_group_id": 1,
-            "boot_id": "boot-1",
-            "process_start_time": "start-1",
-            "run_id": None,
-            "turn_id": None,
-            "state": "terminal",
-            "pid_positive": True,
-            "process_group_positive": True,
-            "birth_identity_present": True,
-            "pid_dead": True,
-            "process_group_dead": True,
-        }
-    ]
+    assert lifecycle._console_cleanup_receipt(claims, retained, **ready)["status"] == "pass"
+    assert lifecycle._console_cleanup_receipt(claims, retained, **ready, run_failed=True)["status"] == "fail"
+    assert lifecycle._console_cleanup_receipt(claims, retained, **(ready | {"session_retirement": None}))["status"] == "fail"
 
 
 def test_omp_interrupt_recovery_is_bound_to_retained_marker_and_terminal_output(tmp_path):
@@ -896,3 +874,21 @@ def test_omp_interrupt_recovery_is_bound_to_retained_marker_and_terminal_output(
     assert evidence["valid"] is True
     assert evidence["assistant_marker_count"] == 1
     assert evidence["terminal_event_index"] > evidence["marker_event_index"]
+
+
+def test_source_retention_rejects_a_source_changed_during_copy(tmp_path, monkeypatch):
+    source = tmp_path / "native.jsonl"
+    source.write_bytes(b"original source\n")
+    write_bytes = Path.write_bytes
+
+    def append_during_retention(path, content):
+        written = write_bytes(path, content)
+        if path.parent.name == "provider-sources":
+            write_bytes(source, b"original source\nlate source bytes\n")
+        return written
+
+    monkeypatch.setattr(Path, "write_bytes", append_during_retention)
+    retained = lifecycle._retain_claim_sources(tmp_path, [{"run_id": "run-1", "source_path": str(source)}], {}, complete=True)
+
+    assert retained[0]["retained"] is False
+    assert source.read_bytes() == b"original source\nlate source bytes\n"

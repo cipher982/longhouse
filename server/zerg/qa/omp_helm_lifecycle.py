@@ -73,7 +73,7 @@ _CELL_BY_VARIANT = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="omp.helm_lifecycle.v1",
-    producer_revision=8,
+    producer_revision=9,
     scenario_id=SCENARIO_ID,
     scenario_revision=8,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
@@ -1483,18 +1483,20 @@ def _register_native_source(
     label: str,
     source_path: object,
     session_id: object,
+    run_id: object,
     native_session_id: object,
 ) -> None:
     """Claim a native source before later lifecycle work can fail."""
 
     if not isinstance(source_path, str) or not source_path:
         return
-    if any(item.get("source_path") == source_path for item in claims):
+    if any(item.get("source_path") == source_path and item.get("run_id") == run_id for item in claims):
         return
     claims.append(
         {
             "label": label,
-            "run_id": label,
+            "provider": "omp",
+            "run_id": run_id,
             "source_path": source_path,
             "session_id": session_id,
             "native_session_id": native_session_id,
@@ -1834,6 +1836,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             label="initial",
             source_path=str(current_session_file),
             session_id=current_session_id,
+            run_id=current_state.get("run_id"),
             native_session_id=current_state.get("native_session_id"),
         )
         initial_session_file = current_session_file
@@ -2216,6 +2219,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             label="replacement",
             source_path=str(current_session_file),
             session_id=current_session_id,
+            run_id=replaced_state.get("run_id"),
             native_session_id=current_native_id,
         )
         replacement_control_identity = _wait_runtime_control_identity(
@@ -2378,6 +2382,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             label="cold_resume",
             source_path=str(resume_file),
             session_id=current_session_id,
+            run_id=resume_state.get("run_id"),
             native_session_id=resume_state.get("native_session_id"),
         )
         source_generations.append(
@@ -2770,7 +2775,17 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             ]
             lifecycle.write_json(root / "provider-source-retention.json", {"sources": retained_sources})
         source_retention_verified = bool(retained_sources) and all(
-            item.get("retained") is True and item.get("complete") is True and isinstance(item.get("path"), str) and bool(item.get("path"))
+            item.get("retained") is True
+            and item.get("complete") is True
+            and bool(item.get("original_sha256"))
+            and bool(item.get("retained_sha256"))
+            and isinstance(item.get("path"), str)
+            and bool(item["path"])
+            and bool(item.get("identities"))
+            and all(
+                all(identity.get(field) for field in ("provider", "session_id", "run_id", "native_session_id"))
+                for identity in item["identities"]
+            )
             for item in retained_sources
         )
         cleanup["source_retention_verified"] = source_retention_verified
