@@ -931,13 +931,9 @@ opencode_failed_session_id="$(sed -n 's/^Longhouse OpenCode session: \([0-9a-f-]
 [[ -n "$opencode_failed_session_id" ]] \
   || fail "failed OpenCode startup did not print its exact session identity"
 opencode_failed_state="$(launch_attempt_state "$opencode_failed_session_id")"
-if [[ -n "$opencode_failed_state" ]]; then
-  [[ "$opencode_failed_state" == "failed" ]] \
-    || fail "failed OpenCode startup recorded $opencode_failed_state instead of failed"
-  echo "ok: OpenCode server startup failure aborts its exact registered launch"
-else
-  echo "ok: OpenCode server startup failure had no durable registration to abort"
-fi
+[[ "$opencode_failed_state" == "failed" ]] \
+  || fail "failed OpenCode startup recorded $opencode_failed_state instead of failed"
+echo "ok: OpenCode server startup failure aborts its exact registered launch"
 
 # ---------------------------------------------------------------------------
 # 3e. Start the real Machine Agent control channel and drive provider control
@@ -1227,6 +1223,28 @@ for provider in cursor claude codex opencode; do
   assert_opens_under_fault "$provider" launch-outcome hang 0
   echo "ok: $provider opens through every launch-outcome fault"
 done
+
+# A foreground registration can commit after its response deadline. If the
+# provider then fails before readiness, the replay can also lose its response;
+# the abort must still settle the exact client-minted session rather than pass
+# because the state lookup is empty or leave a late registration pending.
+late_opencode_out="$TEST_ROOT/opencode-late-registration-start-failed.out"
+start_fault_proxy managed-local/this-device forward-status:503 2
+set +e
+LONGHOUSE_FAKE_OPENCODE_START_FAIL=1 \
+  launch_through_fault opencode "$late_opencode_out"
+late_opencode_status=$?
+set -e
+stop_fault_proxy
+[[ "$late_opencode_status" != "0" ]] \
+  || fail "OpenCode startup failure after late registration returned success"
+late_opencode_session_id="$(sed -n 's/^Longhouse OpenCode session: \([0-9a-f-]*\).*/\1/p' \
+  "$late_opencode_out" | tail -1 | tr -d '\r')"
+[[ -n "$late_opencode_session_id" ]] \
+  || fail "late OpenCode startup failure did not print its exact session identity"
+wait_for_value "late OpenCode startup abort" failed 20 \
+  launch_attempt_state "$late_opencode_session_id"
+echo "ok: OpenCode aborts an accepted registration after both responses are lost"
 
 for provider in cursor claude codex opencode; do
   # Registration degradation has its own recovery path; assert it against the

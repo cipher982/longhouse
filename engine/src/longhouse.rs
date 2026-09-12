@@ -2062,7 +2062,7 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
         if !degraded_launch {
             return;
         }
-        match register_managed_launch_with_timeout(
+        if let Err(error) = register_managed_launch_with_timeout(
             &runtime,
             &url,
             &token,
@@ -2071,20 +2071,17 @@ fn launch_managed_opencode(args: OpencodeLaunchArgs) -> anyhow::Result<()> {
             Some(&session_id),
             managed_launch_lifecycle::RECOVERY_REGISTRATION_TIMEOUT,
         ) {
-            Ok(response) => {
-                let transaction = ManagedLaunchTransaction::new(
-                    &runtime,
-                    &url,
-                    &token,
-                    &response.session_id,
-                    &response.run_id,
-                );
-                drop(transaction);
-            }
-            Err(error) => eprintln!(
+            eprintln!(
                 "Longhouse warning: could not settle degraded OpenCode startup failure: {error:#}"
-            ),
+            );
         }
+        drop(ManagedLaunchTransaction::new(
+            &runtime,
+            &url,
+            &token,
+            &session_id,
+            &run_id,
+        ));
     };
     let bridge = paired_engine_path()?;
     let mut start = Command::new(&bridge);
