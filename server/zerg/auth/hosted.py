@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import secrets
 import time
+from ipaddress import ip_address
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
 from fastapi import status
 from zerg.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 # A login attempt is an independent host-only cookie. Shared mutable cookie
 # lists lose transactions when two tabs start or finish out of order.
@@ -28,12 +32,25 @@ _STATE_SECRET_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _STATE_SEPARATOR = "-"
 
 
-def tenant_cookie_secure(settings=None) -> bool:
-    """Choose secure cookie names from the effective public browser scheme.
+def _is_local_cookie_host(host: str | None) -> bool:
+    if not host:
+        return False
+    normalized = host.rstrip(".").lower()
+    if normalized == "localhost" or normalized.endswith(".localhost"):
+        return True
+    try:
+        address = ip_address(normalized)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_private or address.is_link_local
 
-    Production defaults to secure cookies. An explicit local HTTP public URL or
-    ``LONGHOUSE_COOKIE_SECURE=0`` is required to opt out; this keeps an
-    auth-enabled HTTPS deployment from silently falling back to legacy names.
+
+def tenant_cookie_secure(settings=None) -> bool:
+    """Choose cookie generation without weakening hosted tenant isolation.
+
+    Hosted tenants always use ``Secure``/``__Host-`` cookies. Insecure cookies
+    are only available for auth-disabled/test surfaces or explicitly local
+    self-host URLs, where there is no shared public parent domain to protect.
     """
     if settings is None:
         settings = get_settings()
@@ -41,14 +58,24 @@ def tenant_cookie_secure(settings=None) -> bool:
         return False
 
     override = os.getenv("LONGHOUSE_COOKIE_SECURE", "").strip().lower()
-    if override in {"0", "false", "no", "off"}:
-        return False
+    public_url = getattr(settings, "public_site_url", None) or getattr(settings, "app_public_url", None)
+    parsed_url = urlparse(str(public_url)) if public_url else None
+    host = parsed_url.hostname if parsed_url else None
+    is_local_host = _is_local_cookie_host(host)
+    hosted = bool(getattr(settings, "control_plane_url", None))
+
+    if hosted:
+        if override in {"0", "false", "no", "off"}:
+            logger.warning("ignoring insecure cookie override for hosted tenant")
+        return True
     if override in {"1", "true", "yes", "on"}:
         return True
-
-    public_url = getattr(settings, "public_site_url", None) or getattr(settings, "app_public_url", None)
-    scheme = urlparse(str(public_url)).scheme.lower() if public_url else ""
-    if scheme == "http":
+    if override in {"0", "false", "no", "off"}:
+        if is_local_host:
+            return False
+        logger.warning("ignoring insecure cookie override for non-local host")
+        return True
+    if parsed_url and parsed_url.scheme.lower() == "http" and is_local_host:
         return False
     return True
 

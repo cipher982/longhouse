@@ -50,11 +50,31 @@ export const AUTH_METHODS_QUERY_KEY = ['auth-methods'] as const;
 const AUTH_CHANNEL_NAME = 'longhouse-auth-events';
 const LOGGED_OUT_SESSION_KEY = 'longhouse:logged-out';
 
-function hasLogoutIntent(): boolean {
+export function hasLogoutIntent(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    if (window.localStorage.getItem(LOGGED_OUT_SESSION_KEY)) return true;
+  } catch {
+    // Fall through to the per-tab fallback.
+  }
   try {
     return window.sessionStorage.getItem(LOGGED_OUT_SESSION_KEY) === '1';
   } catch {
     return false;
+  }
+}
+
+export function clearLogoutIntent(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(LOGGED_OUT_SESSION_KEY);
+  } catch {
+    // Storage can be disabled; the session fallback is still cleared.
+  }
+  try {
+    window.sessionStorage.removeItem(LOGGED_OUT_SESSION_KEY);
+  } catch {
+    // Storage can be disabled; authenticated server state still wins.
   }
 }
 
@@ -221,9 +241,8 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     if (typeof window === 'undefined') return;
     window.dispatchEvent(new Event('longhouse-auth-logout'));
     try {
-      // Always publish a storage event as a fallback for tabs where
-      // BroadcastChannel is unavailable (private windows can differ).
-      window.localStorage.setItem(LOGGED_OUT_SESSION_KEY, String(Date.now()));
+      // Every tab reads this durable intent before trusting a stale cookie.
+      window.localStorage.setItem(LOGGED_OUT_SESSION_KEY, '1');
     } catch {
       // BroadcastChannel and the current tab still provide local protection.
     }
@@ -238,10 +257,20 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     if (typeof window === 'undefined') return;
     const clearFromAnotherTab = (event?: StorageEvent) => {
       if (event && event.key !== LOGGED_OUT_SESSION_KEY) return;
+      if (event?.newValue === null) {
+        // Another tab explicitly started a new login. Do not turn that
+        // user-initiated clear into another logout in this tab.
+        try {
+          window.sessionStorage.removeItem(LOGGED_OUT_SESSION_KEY);
+        } catch {
+          // Storage can be disabled; the next auth query will decide.
+        }
+        return;
+      }
       try {
         window.sessionStorage.setItem(LOGGED_OUT_SESSION_KEY, '1');
       } catch {
-        // Storage can be disabled; the in-memory query state still clears.
+        // The in-memory query state still clears.
       }
       void clearLocalAuth().then(() => {
         window.dispatchEvent(new Event('longhouse-auth-logout'));
@@ -273,11 +302,7 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     // A successful hosted handoff is a login too; it does not pass through
     // loginMutation, so clear the prior signed-out intent here.
     clearLogoutBarrier();
-    try {
-      window.sessionStorage.removeItem(LOGGED_OUT_SESSION_KEY);
-    } catch {
-      // Storage can be disabled; authenticated server state still wins.
-    }
+    clearLogoutIntent();
   }, [userData]);
 
 
@@ -285,11 +310,7 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     mutationFn: loginWithGoogle,
     onSuccess: async () => {
       clearLogoutBarrier();
-      try {
-        window.sessionStorage.removeItem(LOGGED_OUT_SESSION_KEY);
-      } catch {
-        // Storage can be disabled; a successful cookie login still wins.
-      }
+      clearLogoutIntent();
       await refetch();
     },
     onError: (error: Error) => {
@@ -347,7 +368,6 @@ export function useAuth(): AuthContextType {
   }
   return context;
 }
-
 export function useCurrentUserQuery() {
   return useQuery<User | null>({
     queryKey: CURRENT_USER_QUERY_KEY,
@@ -366,6 +386,7 @@ export function useCurrentUserQuery() {
 
 function NativeAuthHandoff({ returnTo }: { returnTo: string }) {
   useEffect(() => {
+    clearLogoutIntent();
     requestNativeAuth(returnTo);
   }, [returnTo]);
 

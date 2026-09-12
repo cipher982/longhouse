@@ -263,6 +263,7 @@ enum SharedAuthStore {
     /// `URLSession.shared` auto-attaches them to every request. Call on
     /// launch and after any auth flow.
     static func primeSharedCookieStorage(for serverURL: String) {
+        removeSharedCookieStorage(for: serverURL)
         let cookies = managedCookies(for: serverURL)
         for cookie in cookies {
             HTTPCookieStorage.shared.setCookie(cookie)
@@ -287,13 +288,13 @@ enum SharedAuthStore {
         }
     }
 
-    /// Remove auth cookies from `HTTPCookieStorage.shared` on sign-out or
-    /// server switch. Keychain cookies are cleared separately via
-    /// `clearManagedCookies(for:)`.
+    /// Remove both current and legacy auth cookies from
+    /// `HTTPCookieStorage.shared` on sign-out or server switch. Keychain
+    /// cookies are cleared separately via `clearManagedCookies(for:)`.
     static func removeSharedCookieStorage(for serverURL: String) {
         guard let host = normalizedHost(for: serverURL) else { return }
         for cookie in HTTPCookieStorage.shared.cookies ?? [] {
-            if cookieNames(for: serverURL).contains(cookie.name) && domainMatches(cookie.domain, host: host) {
+            if managedCookieNames.contains(cookie.name) && domainMatches(cookie.domain, host: host) {
                 HTTPCookieStorage.shared.deleteCookie(cookie)
             }
         }

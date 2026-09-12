@@ -1,20 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Navigate, useSearchParams } from 'react-router-dom';
+import { clearLogoutIntent, hasLogoutIntent, useAuth, useAuthMethods } from '../lib/auth';
 import { sanitizeReturnTo } from '../lib/loginRedirect';
-import { useAuth, useAuthMethods } from '../lib/auth';
 import config from '../lib/config';
 
 export default function LoginPage() {
   const [params] = useSearchParams();
   const returnTo = sanitizeReturnTo(params.get('return_to'));
   const authError = params.get('auth_error');
-  const [logoutSuppressed, setLogoutSuppressed] = useState(() => {
-    try {
-      return window.sessionStorage.getItem('longhouse:logged-out') === '1';
-    } catch {
-      return false;
-    }
-  });
+  const [logoutSuppressed, setLogoutSuppressed] = useState(hasLogoutIntent);
   const navigationStarted = useRef(false);
   const {
     data: authMethods,
@@ -87,11 +81,7 @@ export default function LoginPage() {
     `/api/auth/start-handoff?return_to=${encodeURIComponent(returnTo)}` +
     (authError === 'cookie_loop' ? '&reset_attempt=1' : '');
   const beginLogin = () => {
-    try {
-      window.sessionStorage.removeItem('longhouse:logged-out');
-    } catch {
-      // Storage can be disabled; the navigation still starts the flow.
-    }
+    clearLogoutIntent();
     setLogoutSuppressed(false);
     window.location.assign(retryUrl);
   };

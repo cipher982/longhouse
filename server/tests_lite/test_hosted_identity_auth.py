@@ -23,6 +23,7 @@ from starlette.responses import Response
 from zerg.auth import cp_jwks
 from zerg.auth.cp_jwks import CPTokenClaims
 from zerg.auth.hosted import new_tenant_login_state
+from zerg.auth.hosted import tenant_cookie_secure
 from zerg.auth.hosted import tenant_login_cookie_name
 from zerg.auth.hosted import tenant_login_cookie_secret
 from zerg.auth.session_tokens import _encode_jwt
@@ -32,6 +33,7 @@ from zerg.dependencies import browser_auth
 from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.models import User
+from zerg.routers import auth_sso
 from zerg.routers.auth_browser import logout
 from zerg.routers.auth_browser import refresh_session
 from zerg.routers.auth_browser import start_handoff
@@ -56,6 +58,69 @@ def test_tenant_login_state_matches_control_plane_opaque_grammar():
     assert tenant_login_cookie_name(state, secure=True) == cookie_name
     assert tenant_login_cookie_secret(state) == secret
     assert tenant_login_cookie_name(f"{state}.legacy", secure=True) is None
+
+
+def test_hosted_cookie_policy_never_downgrades_public_tenants(monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_COOKIE_SECURE", "0")
+    settings = SimpleNamespace(
+        auth_disabled=False,
+        testing=False,
+        control_plane_url="https://control.longhouse.ai",
+        public_site_url="http://david010.longhouse.ai",
+        app_public_url=None,
+    )
+
+    assert tenant_cookie_secure(settings) is True
+
+
+def test_self_host_http_cookie_policy_is_local_only(monkeypatch):
+    monkeypatch.delenv("LONGHOUSE_COOKIE_SECURE", raising=False)
+    local_settings = SimpleNamespace(
+        auth_disabled=False,
+        testing=False,
+        control_plane_url=None,
+        public_site_url="http://127.0.0.1:8000",
+        app_public_url=None,
+    )
+    public_settings = SimpleNamespace(
+        auth_disabled=False,
+        testing=False,
+        control_plane_url=None,
+        public_site_url="http://example.test",
+        app_public_url=None,
+    )
+
+    assert tenant_cookie_secure(local_settings) is False
+    assert tenant_cookie_secure(public_settings) is True
+
+
+def test_native_handoff_rate_limit_binds_untrusted_attempts_to_ip(monkeypatch):
+    monkeypatch.setattr(auth_sso, "_HANDOFF_RATE_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(auth_sso, "_NATIVE_HANDOFF_IP_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(auth_sso, "_NATIVE_HANDOFF_TENANT_MAX_ATTEMPTS", 10)
+    tenant = f"rate-test-{id(object())}"
+    try:
+        for index in range(2):
+            auth_sso._enforce_handoff_rate_limit(
+                tenant=tenant,
+                surface="native",
+                attempt_id=f"untrusted-{index}",
+                client_ip="198.51.100.7",
+            )
+
+        with pytest.raises(HTTPException) as exc:
+            auth_sso._enforce_handoff_rate_limit(
+                tenant=tenant,
+                surface="native",
+                attempt_id="untrusted-final",
+                client_ip="198.51.100.7",
+            )
+        assert exc.value.status_code == 429
+    finally:
+        with auth_sso._HANDOFF_RATE_LOCK:
+            for key in list(auth_sso._HANDOFF_RATE_BUCKETS):
+                if tenant in key:
+                    del auth_sso._HANDOFF_RATE_BUCKETS[key]
 
 
 @pytest.fixture()
