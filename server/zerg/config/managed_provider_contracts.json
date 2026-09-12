@@ -3261,7 +3261,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "6b54c5cbf549fc703db773fedb68343b31c757fb60c995055056a6725706032a"
+      "adapter_digest": "8fac65f7b56320bedd972b33346c24af65a336facc701df9eee62af8204db9b2"
     },
     {
       "provider": "omp",

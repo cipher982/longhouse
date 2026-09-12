@@ -452,7 +452,7 @@ class PiHarnessAdapter(UniversalProviderAdapter):
         process = subprocess.Popen(
             command,
             cwd=str(package.path("workspace")),
-            env=self._pi_environment(),
+            env=self._pi_environment(package),
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -604,7 +604,7 @@ class PiHarnessAdapter(UniversalProviderAdapter):
         process = subprocess.Popen(
             command,
             cwd=str(package.path("workspace")),
-            env=self._pi_environment(),
+            env=self._pi_environment(package),
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
