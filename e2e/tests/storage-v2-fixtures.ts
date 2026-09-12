@@ -23,6 +23,10 @@ type SessionOptions = {
   endedAt: string | null;
   events: StorageV2Event[];
   agentsToken?: string;
+  originKind?: string | null;
+  hiddenFromDefaultTimeline?: boolean;
+  launchActor?: string | null;
+  launchSurface?: string | null;
 };
 
 function lengthPrefixed(value: Buffer, width: number): Buffer {
@@ -168,10 +172,10 @@ export async function ingestStorageV2Session(
         started_at: options.startedAt,
         last_activity_at: options.events.at(-1)?.timestamp ?? options.startedAt,
         ended_at: options.endedAt,
-        origin_kind: "shadow",
-        hidden_from_default_timeline: false,
-        launch_actor: null,
-        launch_surface: null,
+        origin_kind: options.originKind ?? "shadow",
+        hidden_from_default_timeline: options.hiddenFromDefaultTimeline ?? false,
+        launch_actor: options.launchActor ?? null,
+        launch_surface: options.launchSurface ?? null,
         provider_session_id: options.providerSessionId ?? null,
       },
       records: records.map((record, index) => ({

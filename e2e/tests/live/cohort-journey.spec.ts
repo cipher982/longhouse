@@ -1,7 +1,7 @@
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { APIRequestContext, Locator, Page, Response } from "@playwright/test";
-import { test, expect } from "./fixtures";
+import { test, expect, type HostedQaCohort } from "./fixtures";
 import { waitForPageReady } from "../helpers/ready-signals";
 import {
   assertPrivacySafeArtifact,
@@ -42,7 +42,7 @@ type ActionResult = {
 type ApiResponse = Awaited<ReturnType<APIRequestContext["get"]>>;
 type CohortInventory = { sessions: JourneySession[]; complete: boolean };
 
-const JOURNEY_COHORT = "dogfood_scheduled_v1";
+const JOURNEY_COHORT = "isolated_synthetic_canary_v1";
 const JOURNEY_OUTPUT = resolve(
   process.env.LONGHOUSE_JOURNEY_OUTPUT || "../artifacts/cohort-journey/cohort-journey.json",
 );
@@ -269,15 +269,35 @@ function flattenTimelineCards(body: unknown): JourneySession[] {
         user_messages: typeof session.user_messages === "number" ? session.user_messages : 0,
         assistant_messages: typeof session.assistant_messages === "number" ? session.assistant_messages : 0,
         tool_calls: typeof session.tool_calls === "number" ? session.tool_calls : 0,
+        origin_kind: typeof session.origin_kind === "string" ? session.origin_kind : null,
+        hidden_from_default_timeline:
+          typeof session.hidden_from_default_timeline === "boolean"
+            ? session.hidden_from_default_timeline
+            : null,
+        launch_actor: typeof session.launch_actor === "string" ? session.launch_actor : null,
+        launch_surface: typeof session.launch_surface === "string" ? session.launch_surface : null,
       });
     }
   }
   return result;
 }
 
-async function fetchCohortInventory(request: APIRequestContext, apiBaseUrl: string): Promise<CohortInventory> {
+async function fetchCohortInventory(
+  request: APIRequestContext,
+  apiBaseUrl: string,
+  project: string,
+): Promise<CohortInventory> {
   const base = `${apiBaseUrl.replace(/\/$/, "")}/api/timeline/sessions`;
-  const first = await getWithRetry(request, `${base}?days_back=90&limit=100&offset=0`);
+  const params = new URLSearchParams({
+    project,
+    days_back: "90",
+    limit: "100",
+    offset: "0",
+    include_test: "true",
+    include_automation: "true",
+    hide_autonomous: "false",
+  });
+  const first = await getWithRetry(request, `${base}?${params}`);
   if (!first.ok()) throw responseFailure(first);
   const firstBody = await first.json();
   const total = Number(firstBody?.total ?? 0);
@@ -287,7 +307,8 @@ async function fetchCohortInventory(request: APIRequestContext, apiBaseUrl: stri
   const sessions = flattenTimelineCards(firstBody);
   let complete = true;
   for (const offset of [...offsets].filter((value) => value > 0)) {
-    const response = await getWithRetry(request, `${base}?days_back=90&limit=100&offset=${offset}`);
+    params.set("offset", String(offset));
+    const response = await getWithRetry(request, `${base}?${params}`);
     if (!response.ok()) {
       complete = false;
       continue;
@@ -330,10 +351,15 @@ function writeArtifact(payload: unknown, fixtureValues: string[]): void {
   renameSync(temporary, JOURNEY_OUTPUT);
 }
 
-test("scheduled dogfood cohort journey", async ({ apiBaseUrl, context }, testInfo) => {
+test("scheduled isolated synthetic canary cohort journey", async ({
+  apiBaseUrl,
+  context,
+  deviceToken,
+  hostedQaCohort,
+}, testInfo) => {
   test.setTimeout(180_000);
-  const lexicalFixture = process.env.LONGHOUSE_JOURNEY_LEXICAL_QUERY?.trim() ?? "";
-  const recallFixture = process.env.LONGHOUSE_JOURNEY_RECALL_QUERY?.trim() ?? "";
+  const lexicalFixture = hostedQaCohort.lexicalQuery;
+  const recallFixture = hostedQaCohort.recallQuery;
   const nowMs = Date.now();
   const phases: PhaseResult[] = [];
   const preflightFailures: string[] = [];
@@ -370,14 +396,28 @@ test("scheduled dogfood cohort journey", async ({ apiBaseUrl, context }, testInf
   }
 
   let inventory: JourneySession[] = [];
-  let cohorts = selectJourneyCohorts(inventory, nowMs, new Date(nowMs).toISOString().slice(0, 10));
+  let cohorts = selectJourneyCohorts(
+    inventory,
+    nowMs,
+    new Date(nowMs).toISOString().slice(0, 10),
+    new Set(hostedQaCohort.ownedSessionIds),
+  );
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      const inventoryResult = await fetchCohortInventory(context.request, apiBaseUrl);
+      const inventoryResult = await fetchCohortInventory(
+        context.request,
+        apiBaseUrl,
+        hostedQaCohort.project,
+      );
       inventory = inventoryResult.sessions;
       if (!inventoryResult.complete) preflightFailures.push("inventory_incomplete");
       if (inventory.length === 0) throw new Error("missing_cohort");
-      cohorts = selectJourneyCohorts(inventory, nowMs, new Date(nowMs).toISOString().slice(0, 10));
+      cohorts = selectJourneyCohorts(
+        inventory,
+        nowMs,
+        new Date(nowMs).toISOString().slice(0, 10),
+        new Set(hostedQaCohort.ownedSessionIds),
+      );
       if (Object.values(cohorts).every(Boolean)) break;
       if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 1_000));
     } catch (error) {
@@ -386,14 +426,78 @@ test("scheduled dogfood cohort journey", async ({ apiBaseUrl, context }, testInf
     }
   }
 
+  const selectedIds = Object.values(cohorts)
+    .filter((session): session is JourneySession => session !== null)
+    .map((session) => session.id);
+  if (
+    selectedIds.length !== hostedQaCohort.ownedSessionIds.length
+    || new Set(selectedIds).size !== selectedIds.length
+    || selectedIds.some((id) => !hostedQaCohort.ownedSessionIds.includes(id))
+  ) {
+    preflightFailures.push("unowned_cohort_selection");
+  }
+  for (const session of inventory.filter((candidate) =>
+    hostedQaCohort.ownedSessionIds.includes(candidate.id),
+  )) {
+    if (
+      session.environment !== "test"
+      || session.origin_kind !== "test_or_canary"
+      || session.hidden_from_default_timeline !== true
+      || session.launch_actor !== "automation"
+      || session.launch_surface !== "test"
+    ) {
+      preflightFailures.push("fixture_metadata");
+    }
+  }
+
   page = await context.newPage();
   tracker = createResponseTracker(page);
+  await page.route("**/api/timeline/sessions**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname !== "/api/timeline/sessions") {
+      await route.continue();
+      return;
+    }
+    url.searchParams.set("project", hostedQaCohort.project);
+    url.searchParams.set("include_test", "true");
+    url.searchParams.set("include_automation", "true");
+    url.searchParams.set("hide_autonomous", "false");
+    const response = await route.fetch({ url: url.toString() });
+    await route.fulfill({ response });
+  });
+  await page.route("**/api/timeline/recall**", async (route) => {
+    const requestUrl = new URL(route.request().url());
+    const diagnosticUrl = new URL(requestUrl);
+    diagnosticUrl.pathname = diagnosticUrl.pathname.replace(
+      "/api/timeline/recall",
+      "/api/agents/recall",
+    );
+    diagnosticUrl.searchParams.set("project", hostedQaCohort.project);
+    diagnosticUrl.searchParams.set("include_test", "true");
+    diagnosticUrl.searchParams.set("include_automation", "true");
+    const headers = { ...route.request().headers() };
+    if (deviceToken) headers["x-agents-token"] = deviceToken;
+    const response = await route.fetch({
+      url: diagnosticUrl.toString(),
+      headers,
+    });
+    await route.fulfill({ response });
+  });
   try {
     phases.push(await measurePhase(page, tracker, "timeline_initial_load", "timeline", "all", async () => {
-      await page!.goto("/timeline?days_back=90", { waitUntil: "domcontentloaded" });
+      await page!.goto(
+        `/timeline?days_back=90&project=${encodeURIComponent(hostedQaCohort.project)}`,
+        { waitUntil: "domcontentloaded" },
+      );
       await waitForPageReady(page!, { timeout: 25_000 });
       const rows = page!.getByTestId("session-row");
       await expect(rows.first()).toBeVisible({ timeout: 20_000 });
+      const visibleIds = await rows.evaluateAll((elements) =>
+        elements
+          .map((element) => element.getAttribute("data-session-id"))
+          .filter((id): id is string => Boolean(id)),
+      );
+      expect(visibleIds.every((id) => hostedQaCohort.ownedSessionIds.includes(id))).toBe(true);
       return { resultCount: await rows.count(), paintMarker: "longhouse-session-row" };
     }));
 
@@ -458,13 +562,17 @@ test("scheduled dogfood cohort journey", async ({ apiBaseUrl, context }, testInf
       const body = await response.json();
       const total = Number(body?.total ?? 0);
       if (total <= 0) throw new Error("empty_result");
+      expect(flattenTimelineCards(body).some((session) => session.id === cohorts.active_recent?.id)).toBe(true);
       await expect(page!.getByTestId("session-row").first()).toBeVisible({ timeout: 20_000 });
       return { resultCount: total, paintMarker: "longhouse-session-row" };
     }));
 
     phases.push(await measurePhase(page, tracker, "stable_recall", "stable_recall", "recent_0_90d", async () => {
       if (!recallFixture) throw new Error("fixture_not_configured");
-      await page!.goto("/timeline?days_back=90", { waitUntil: "domcontentloaded" });
+      await page!.goto(
+        `/timeline?days_back=90&project=${encodeURIComponent(hostedQaCohort.project)}`,
+        { waitUntil: "domcontentloaded" },
+      );
       await waitForPageReady(page!, { timeout: 25_000 });
       await page!.getByTestId("recall-toggle").click();
       const paintAfterEpochMs = Date.now();
@@ -474,6 +582,11 @@ test("scheduled dogfood cohort journey", async ({ apiBaseUrl, context }, testInf
       const body = await response.json();
       const total = Number(body?.total ?? 0);
       if (total <= 0) throw new Error("empty_result");
+      expect(
+        (Array.isArray(body?.results) ? body.results : []).some(
+          (result: { session_id?: unknown }) => result.session_id === cohorts.cold_gt_30d?.id,
+        ),
+      ).toBe(true);
       await expect(page!.getByTestId("recall-card").first()).toBeVisible({ timeout: 25_000 });
       return {
         resultCount: total,
@@ -491,6 +604,7 @@ test("scheduled dogfood cohort journey", async ({ apiBaseUrl, context }, testInf
     schema_version: 1,
     generated_at: new Date().toISOString(),
     traffic_class: "synthetic",
+    cohort_scope: "isolated_synthetic_canary",
     synthetic_cohort: JOURNEY_COHORT,
     trigger: process.env.GITHUB_EVENT_NAME === "schedule" ? "schedule" : "operator",
     build,

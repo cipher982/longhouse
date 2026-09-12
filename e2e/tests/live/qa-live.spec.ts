@@ -101,55 +101,6 @@ async function waitForLivePageReady(
   });
 }
 
-type AgentsSessionCandidate = {
-  id?: unknown;
-  provider?: unknown;
-  user_messages?: unknown;
-  assistant_messages?: unknown;
-  tool_calls?: unknown;
-};
-
-function numericField(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
-function isTranscriptBackedNonInternalSession(
-  session: AgentsSessionCandidate,
-): boolean {
-  if (typeof session?.id !== "string" || session.id.length === 0) {
-    return false;
-  }
-  if (String(session.provider ?? "").toLowerCase() === "canary") {
-    return false;
-  }
-  return (
-    numericField(session.user_messages) +
-      numericField(session.assistant_messages) +
-      numericField(session.tool_calls) >
-    0
-  );
-}
-
-async function findTranscriptBackedSessionIdsViaAgentsApi(
-  request: APIRequestContext,
-): Promise<string[]> {
-  const response = await request.get("/api/agents/sessions?limit=100");
-  if (!response.ok()) {
-    return [];
-  }
-
-  const body = await response.json();
-  const sessions = Array.isArray(body?.sessions) ? body.sessions : [];
-  const ids: string[] = [];
-  for (const session of sessions) {
-    if (isTranscriptBackedNonInternalSession(session)) {
-      ids.push(session.id);
-    }
-  }
-
-  return ids;
-}
-
 async function findEngineControlSessionIdViaAgentsApi(
   request: APIRequestContext,
 ): Promise<string | null> {
@@ -205,7 +156,7 @@ async function findClosedSessionIdViaAgentsApi(
 // Test 1: Auth + Timeline loads
 // ---------------------------------------------------------------------------
 
-test("auth + timeline loads with session rows", async ({
+test("auth + timeline loads the valid empty or populated state", async ({
   context,
   frontendBaseUrl,
   apiBaseUrl,
@@ -286,12 +237,13 @@ test("auth + timeline loads with session rows", async ({
     );
   }
 
-  // At least one session row should be visible (this is the dev instance with real data)
+  // The isolated canary has no default-visible sessions. This is a valid
+  // consumer state; populated proof comes from the owned fixture tests below.
   const rowCount = await page.getByTestId("session-row").count();
-  expect(
-    rowCount,
-    `Expected at least 1 session row on /timeline, found ${rowCount}. Page may be broken or empty.`,
-  ).toBeGreaterThan(0);
+  expect(rowCount).toBe(0);
+  await expect(
+    page.getByRole("heading", { name: "Connect your first machine" }),
+  ).toBeVisible();
 
   await page.close();
 });
@@ -317,33 +269,61 @@ test("removed loop login handoff resolves to timeline", async ({
   const page = await context.newPage();
 
   try {
-    // --- Part 1: Unauthenticated /loop starts hosted SSO on the control plane ---
-    // Intercept the navigation instead of actually going to control.longhouse.ai.
-    await page.route("**/*", (route) => {
-      const url = new URL(route.request().url());
-      if (url.host === "control.longhouse.ai") {
-        route.abort();
-      } else {
-        route.continue();
-      }
-    });
-
-    const [interceptedRequest] = await Promise.all([
-      page.waitForRequest(
-        (req) => new URL(req.url()).host === "control.longhouse.ai",
-        { timeout: 15_000 },
-      ),
-      page.goto(`${baseOrigin}/loop`, { waitUntil: "domcontentloaded" }),
-    ]);
-
-    const redirectParsed = new URL(interceptedRequest.url());
+    // /loop is a removed SPA route. The supported unauthenticated contract is
+    // the configured tenant login handoff, not a hard-coded control hostname.
+    const methodsResponse = await context.request.get(
+      `${baseOrigin}/api/auth/methods`,
+    );
     expect(
-      redirectParsed.host,
-      "Unauthenticated /loop should redirect to control.longhouse.ai",
-    ).toBe("control.longhouse.ai");
-    expect(redirectParsed.pathname).toBe("/auth/start");
+      methodsResponse.ok(),
+      `GET /api/auth/methods returned ${methodsResponse.status()}`,
+    ).toBe(true);
+    const methods = await methodsResponse.json();
+    const configuredLoginUrl =
+      typeof methods?.sso_login_url === "string"
+        ? new URL(methods.sso_login_url)
+        : null;
+    let interceptedLoginUrl: URL | null = null;
 
-    // Clean up route handler before continuing
+    if (methods?.sso === true) {
+      expect(
+        configuredLoginUrl,
+        "SSO-enabled tenants must publish their configured login URL",
+      ).not.toBeNull();
+      await page.route("**/*", async (route) => {
+        const url = new URL(route.request().url());
+        if (
+          configuredLoginUrl &&
+          url.origin === configuredLoginUrl.origin &&
+          url.pathname === configuredLoginUrl.pathname
+        ) {
+          interceptedLoginUrl = url;
+          await route.abort();
+          return;
+        }
+        await route.continue();
+      });
+    }
+
+    await page.goto(`${baseOrigin}/loop`, { waitUntil: "domcontentloaded" }).catch(
+      (error) => {
+        if (methods?.sso !== true) throw error;
+      },
+    );
+
+    if (methods?.sso === true) {
+      await expect
+        .poll(() => interceptedLoginUrl?.href ?? "", { timeout: 15_000 })
+        .not.toBe("");
+      expect(interceptedLoginUrl?.origin).toBe(configuredLoginUrl?.origin);
+      expect(interceptedLoginUrl?.pathname).toBe(configuredLoginUrl?.pathname);
+    } else {
+      await expect(page).toHaveURL(
+        (url) => url.origin === baseOrigin && url.pathname === "/login",
+        { timeout: 15_000 },
+      );
+    }
+
     await page.unroute("**/*");
 
     // --- Part 2: authenticated removed /loop route lands on the supported home route ---
@@ -456,21 +436,33 @@ test("forum route redirects to timeline without auth errors", async ({
 // Test 3: Session detail loads events
 // ---------------------------------------------------------------------------
 
-test("session detail renders event timeline", async ({
+test("owned canary transcript detail renders exact events", async ({
   context,
   agentsRequest,
   frontendBaseUrl,
   apiBaseUrl,
+  hostedQaTranscript,
 }) => {
   test.setTimeout(45_000);
 
-  const candidateSessionIds = await findTranscriptBackedSessionIdsViaAgentsApi(
-    agentsRequest,
-  ).catch(() => []);
+  const candidateSessionIds = [hostedQaTranscript.sessionId];
+  const eventsResponse = await agentsRequest.get(
+    `/api/agents/sessions/${hostedQaTranscript.sessionId}/events?limit=20`,
+  );
   expect(
-    candidateSessionIds.length,
-    "No transcript-backed non-internal sessions available for detail QA. Canary/heartbeat-only rows are intentionally not valid detail candidates.",
-  ).toBeGreaterThan(0);
+    eventsResponse.ok(),
+    `Owned fixture events returned ${eventsResponse.status()}: ${await eventsResponse.text()}`,
+  ).toBe(true);
+  const eventsBody = await eventsResponse.json();
+  const eventTexts = (Array.isArray(eventsBody?.events) ? eventsBody.events : [])
+    .map((event: { content_text?: unknown }) => event.content_text)
+    .filter((text: unknown): text is string => typeof text === "string");
+  expect(eventTexts).toEqual(
+    expect.arrayContaining([
+      hostedQaTranscript.userText,
+      hostedQaTranscript.assistantText,
+    ]),
+  );
 
   const page = await context.newPage();
 
@@ -561,6 +553,12 @@ test("session detail renders event timeline", async ({
     eventCount,
     `Expected at least 1 compatible timeline item in session ${renderedSessionId}`,
   ).toBeGreaterThan(0);
+  await expect(
+    page.getByText(hostedQaTranscript.userText, { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText(hostedQaTranscript.assistantText, { exact: true }),
+  ).toBeVisible();
 
   await page.close();
 });
@@ -745,10 +743,63 @@ test("launch picker: workspaces load via browser-cookie surface", async ({
 // Test 6: AI search toggle — off by default, toggles on
 // ---------------------------------------------------------------------------
 
-test("timeline has AI search toggle", async ({ context }) => {
+test("timeline search finds the owned fixture and has AI toggle", async ({
+  context,
+  agentsRequest,
+  hostedQaTranscript,
+  frontendBaseUrl,
+  apiBaseUrl,
+}) => {
   test.setTimeout(20_000);
 
   const page = await context.newPage();
+  const { consoleErrors, serverErrors } = attachErrorCollectors(
+    page,
+    frontendBaseUrl,
+    apiBaseUrl,
+  );
+  const authErrors: string[] = [];
+  page.on("response", (response) => {
+    if (response.url().includes("/api/") && response.status() === 401) {
+      authErrors.push(response.url());
+    }
+  });
+  let diagnosticSearchUrl: URL | null = null;
+  await page.route("**/api/timeline/sessions**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname !== "/api/timeline/sessions") {
+      await route.continue();
+      return;
+    }
+    url.searchParams.set("project", hostedQaTranscript.project);
+    url.searchParams.set("include_test", "true");
+    url.searchParams.set("include_automation", "true");
+    diagnosticSearchUrl = url;
+    const response = await route.fetch({ url: url.toString() });
+    await route.fulfill({ response });
+  });
+
+  await expect
+    .poll(
+      async () => {
+        const params = new URLSearchParams({
+          include_test: "true",
+          include_automation: "true",
+          query: hostedQaTranscript.searchText,
+          limit: "10",
+        });
+        const response = await agentsRequest.get(`/api/agents/sessions?${params}`);
+        if (!response.ok()) return false;
+        const body = await response.json();
+        const sessions = Array.isArray(body?.sessions) ? body.sessions : [];
+        return sessions.some(
+          (session: { id?: unknown }) => session.id === hostedQaTranscript.sessionId,
+        );
+      },
+      { timeout: 20_000, intervals: [500, 1_000, 2_000] },
+    )
+    .toBe(true);
+
   await page.goto("/timeline", { waitUntil: "domcontentloaded" });
   await waitForLivePageReady(
     page,
@@ -773,6 +824,45 @@ test("timeline has AI search toggle", async ({ context }) => {
   // Click again to disable
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+  await page.getByPlaceholder("Search sessions...").fill(hostedQaTranscript.searchText);
+  const ownedRow = page.getByTestId("session-row").first();
+  await expect(ownedRow).toBeVisible({
+    timeout: 15_000,
+  });
+  const visibleIds = await page.getByTestId("session-row").evaluateAll((rows) =>
+    rows
+      .map((row) => row.getAttribute("data-session-id"))
+      .filter((id): id is string => Boolean(id)),
+  );
+  expect(visibleIds).toContain(hostedQaTranscript.sessionId);
+  expect(diagnosticSearchUrl?.searchParams.get("project")).toBe(
+    hostedQaTranscript.project,
+  );
+  expect(diagnosticSearchUrl?.searchParams.get("include_test")).toBe("true");
+  expect(diagnosticSearchUrl?.searchParams.get("include_automation")).toBe("true");
+
+  if (authErrors.length > 0) {
+    await failWithScreenshot(
+      page,
+      "timeline-search-auth",
+      `Auth failures while searching: ${authErrors.join(", ")}`,
+    );
+  }
+  if (serverErrors.length > 0) {
+    await failWithScreenshot(
+      page,
+      "timeline-search-500",
+      `Server errors while searching: ${serverErrors.join(", ")}`,
+    );
+  }
+  if (consoleErrors.length > 0) {
+    await failWithScreenshot(
+      page,
+      "timeline-search-console",
+      `JS errors while searching: ${consoleErrors.join(" | ")}`,
+    );
+  }
 
   await page.close();
 });

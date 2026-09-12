@@ -39,7 +39,8 @@ cleanup_ephemeral_device_token() {
   fi
 
   if ! lh_hosted_revoke_device_token "$LH_SMOKE_DEVICE_ACCESS_TOKEN" "$LH_SMOKE_DEVICE_TOKEN_ID" "$API_URL" >/dev/null 2>&1; then
-    echo "Warning: failed to revoke ephemeral hosted QA device token $LH_SMOKE_DEVICE_TOKEN_ID" >&2
+    echo "Failed to revoke owned hosted QA device token $LH_SMOKE_DEVICE_TOKEN_ID" >&2
+    exit 1
   fi
 }
 
