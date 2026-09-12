@@ -76,6 +76,8 @@ import zerg.database as database_module  # noqa: E402
 from zerg.auth import managed_session_tokens as managed_tokens  # noqa: E402
 from zerg.auth import session_tokens  # noqa: E402
 from zerg.catalogd.client import CatalogClient  # noqa: E402
+from zerg.catalogd.client import call_catalogd_sync  # noqa: E402
+from zerg.catalogd.schema import catalogd_ping_is_compatible  # noqa: E402
 from zerg.catalogd.server import CatalogDaemon  # noqa: E402
 from zerg.config import get_settings_unchecked  # noqa: E402
 from zerg.dependencies import auth as auth_deps  # noqa: E402
@@ -779,6 +781,15 @@ def provision_live_catalog(
         _reset_storage_worker_pools()
 
         try:
+            # Socket publication is not the production startup contract. Warm
+            # the same control-read path that /readyz probes, once and without
+            # retrying, so the test's first request is not a cold-start race.
+            catalog_ping = call_catalogd_sync(
+                catalog_socket,
+                "ping.v2",
+                timeout_seconds=RPC_TIMEOUT_SECONDS,
+            )
+            assert catalogd_ping_is_compatible(catalog_ping), f"catalogd startup ping was incompatible: {catalog_ping}"
             yield LiveCatalog(root, loop, catalog_socket, search_socket, instance_id)
         finally:
             loop.run(raw_object_workers.close_raw_object_worker_pool())
