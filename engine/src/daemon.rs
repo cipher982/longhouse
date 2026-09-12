@@ -1869,6 +1869,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             managed_reconciliation = heartbeat::ProjectionReconciliation::failed(
                                 result.reason,
                             );
+                            heartbeat::refresh_existing_status_pulse(
+                                &managed_reconciliation,
+                                &mut shipping_progress,
+                                offline.is_offline,
+                                &status_path,
+                            );
                             if pending_wake_reconciliation {
                                 if maybe_start_managed_observation_scan(
                                     &mut managed_observation_scan_tasks,
@@ -1994,6 +2000,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 .reason
                                 .clone()
                                 .unwrap_or_else(|| "managed_observation".to_string()),
+                        );
+                        heartbeat::refresh_existing_status_pulse(
+                            &managed_reconciliation,
+                            &mut shipping_progress,
+                            offline.is_offline,
+                            &status_path,
                         );
                     }
                     None => {}

@@ -3931,8 +3931,23 @@ pub fn refresh_existing_status_pulse(
     let now = chrono::Utc::now().to_rfc3339();
     let monotonic_now = Instant::now();
     let pending_work = progress_observation.has_pending_work();
+    let daemon_started_at = DAEMON_STARTED_AT.get_or_init(|| now.clone()).clone();
+    let (binary_path, binary_mtime) = inspect_current_exe();
     status["daemon_pid"] = serde_json::json!(std::process::id());
     status["last_updated"] = serde_json::json!(now);
+    status["build"] = serde_json::to_value(BuildIdentity::current())
+        .unwrap_or(serde_json::Value::Null);
+    status["daemon_started_at"] = serde_json::json!(daemon_started_at);
+    if let Some(binary_path) = binary_path {
+        status["binary_path"] = serde_json::json!(binary_path);
+    } else if let Some(object) = status.as_object_mut() {
+        object.remove("binary_path");
+    }
+    if let Some(binary_mtime) = binary_mtime {
+        status["binary_mtime"] = serde_json::json!(binary_mtime);
+    } else if let Some(object) = status.as_object_mut() {
+        object.remove("binary_mtime");
+    }
     status["local_projection"]["engine_pulse_at"] = serde_json::json!(now);
     status["local_projection"]["reconciliation"] =
         serde_json::to_value(reconciliation).unwrap_or(serde_json::Value::Null);
@@ -4138,7 +4153,17 @@ mod tests {
         let path = temp.path().join("status.json");
         std::fs::write(
             &path,
-            r#"{"shipping_progress":{"pending_work":false},"local_projection":{}}"#,
+            r#"{
+                "build":{"commit":"old-build"},
+                "binary_path":"/old/longhouse-engine",
+                "binary_mtime":"old-mtime",
+                "daemon_started_at":"old-start",
+                "shipping_progress":{"pending_work":false},
+                "local_projection":{
+                    "generated_at":"old-generated",
+                    "last_reconciled_at":"old-reconciled"
+                }
+            }"#,
         )
         .unwrap();
         let start = Instant::now() - Duration::from_secs(70);
@@ -4153,6 +4178,18 @@ mod tests {
         );
         let status: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            status["build"],
+            serde_json::to_value(BuildIdentity::current()).unwrap()
+        );
+        assert!(status["binary_path"].is_string());
+        assert!(status["binary_mtime"].is_string());
+        assert!(status["daemon_started_at"].is_string());
+        assert_eq!(status["local_projection"]["generated_at"], "old-generated");
+        assert_eq!(
+            status["local_projection"]["last_reconciled_at"],
+            "old-reconciled"
+        );
         assert_eq!(status["shipping_progress"]["stalled"], true);
         assert!(
             status["shipping_progress"]["seconds_without_progress"]
