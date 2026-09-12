@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from datetime import datetime
 from datetime import timedelta
@@ -23,6 +22,7 @@ from starlette.responses import Response
 
 from zerg.auth import cp_jwks
 from zerg.auth.cp_jwks import CPTokenClaims
+from zerg.auth.hosted import hosted_cookie_origin_is_secure
 from zerg.auth.hosted import new_tenant_login_state
 from zerg.auth.hosted import tenant_cookie_secure
 from zerg.auth.hosted import tenant_login_cookie_name
@@ -47,7 +47,6 @@ from zerg.routers.auth_sso import _runtime_payload
 from zerg.routers.auth_sso import accept_handoff_request
 from zerg.routers.auth_sso import accept_native_handoff
 from zerg.routers.auth_sso import refresh_native_session
-from zerg.routers.auth_sso import refresh_runtime_token
 from zerg.routers.auth_sso import revoke_native_session
 
 
@@ -60,6 +59,9 @@ def test_tenant_login_state_matches_control_plane_opaque_grammar():
     assert all(character.isalnum() or character in "_-" for character in state)
     assert tenant_login_cookie_name(state, secure=True) == cookie_name
     assert tenant_login_cookie_secret(state) == secret
+    legacy_state = f"{state[:26]}.{state[27:]}"
+    assert tenant_login_cookie_name(legacy_state, secure=True) == cookie_name
+    assert tenant_login_cookie_secret(legacy_state) == secret
     assert tenant_login_cookie_name(f"{state}.legacy", secure=True) is None
 
 
@@ -74,6 +76,39 @@ def test_hosted_cookie_policy_never_downgrades_public_tenants(monkeypatch):
     )
 
     assert tenant_cookie_secure(settings) is True
+
+
+def test_hosted_cookie_policy_stays_secure_when_auth_disabled_is_misconfigured(monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_COOKIE_SECURE", "0")
+    settings = SimpleNamespace(
+        auth_disabled=True,
+        testing=True,
+        control_plane_url="https://control.longhouse.ai",
+        public_site_url="https://david010.longhouse.ai",
+        app_public_url=None,
+    )
+
+    assert tenant_cookie_secure(settings) is True
+
+
+def test_hosted_cookie_origin_requires_public_url():
+    settings = SimpleNamespace(
+        control_plane_url="https://control.longhouse.ai",
+        public_site_url=None,
+        app_public_url=None,
+    )
+
+    assert hosted_cookie_origin_is_secure(settings) is False
+
+
+def test_hosted_cookie_origin_rejects_private_http_host():
+    settings = SimpleNamespace(
+        control_plane_url="https://control.longhouse.ai",
+        public_site_url="http://192.168.1.10",
+        app_public_url=None,
+    )
+
+    assert hosted_cookie_origin_is_secure(settings) is False
 
 
 def test_self_host_http_cookie_policy_is_local_only(monkeypatch):
@@ -445,6 +480,7 @@ async def test_accept_handoff_binds_web_code_to_tenant_cookie(monkeypatch, db_se
         "zerg.routers.auth_sso.get_settings",
         lambda: SimpleNamespace(
             control_plane_url="https://control.longhouse.ai",
+            public_site_url="https://david010.longhouse.ai",
             internal_api_secret="secret",
             auth_disabled=False,
             testing=False,
@@ -492,6 +528,7 @@ async def test_accept_handoff_requires_cookie_for_tenant_state(monkeypatch, db_s
         "zerg.routers.auth_sso.get_settings",
         lambda: SimpleNamespace(
             control_plane_url="https://control.longhouse.ai",
+            public_site_url="https://david010.longhouse.ai",
             auth_disabled=False,
             testing=False,
         ),
@@ -508,7 +545,61 @@ async def test_accept_handoff_requires_cookie_for_tenant_state(monkeypatch, db_s
 
     redirect = await accept_handoff_request(request, "one-use-code", tenant_state="state-1")
 
-    assert redirect.headers["location"].endswith("auth_error=login_state_missing")
+    assert redirect.headers["location"].endswith("auth_error=login_state_malformed")
+    assert redirect.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_accept_handoff_missing_tenant_state_returns_recoverable_redirect(monkeypatch, db_session):
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(
+            control_plane_url="https://control.longhouse.ai",
+            public_site_url="https://david010.longhouse.ai",
+            auth_disabled=False,
+            testing=False,
+        ),
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/auth/accept-handoff",
+            "headers": [],
+            "query_string": b"code=one-use-code",
+        }
+    )
+
+    redirect = await accept_handoff_request(request, "one-use-code", tenant_state=None)
+
+    assert redirect.status_code == 303
+    assert redirect.headers["location"].endswith("auth_error=login_state_not_returned")
+    assert redirect.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_accept_handoff_fails_closed_when_hosted_origin_is_insecure(monkeypatch):
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(
+            control_plane_url="https://control.longhouse.ai",
+            public_site_url="http://david010.longhouse.ai",
+        ),
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/auth/accept-handoff",
+            "headers": [],
+            "query_string": b"code=one-use-code",
+        }
+    )
+
+    redirect = await accept_handoff_request(request, "one-use-code", tenant_state=None)
+
+    assert redirect.status_code == 303
+    assert redirect.headers["location"].endswith("auth_error=auth_misconfigured")
     assert redirect.headers["cache-control"] == "no-store"
 
 
@@ -643,6 +734,11 @@ def test_runtime_payload_rejects_missing_or_nonpositive_credentials():
     assert missing.value.status_code == 502
     assert "missing token" in str(missing.value.detail).lower()
 
+    with pytest.raises(HTTPException) as missing_refresh:
+        _runtime_payload({"runtime_token": "runtime", "expires_in": 600})
+    assert missing_refresh.value.status_code == 502
+    assert "missing refresh token" in str(missing_refresh.value.detail).lower()
+
     with pytest.raises(HTTPException) as invalid_expiry:
         _runtime_payload({"runtime_token": "runtime", "expires_in": 0})
     assert invalid_expiry.value.status_code == 502
@@ -650,10 +746,12 @@ def test_runtime_payload_rejects_missing_or_nonpositive_credentials():
 
 
 def test_start_handoff_sets_state_and_attempt_cookies(monkeypatch):
+    monkeypatch.setenv("INSTANCE_ID", "david010")
     monkeypatch.setattr(
         "zerg.routers.auth_browser.get_settings",
         lambda: SimpleNamespace(
             control_plane_url="https://control.longhouse.ai",
+            public_site_url="https://david010.longhouse.ai",
             auth_disabled=False,
             testing=False,
         ),
@@ -680,6 +778,68 @@ def test_start_handoff_sets_state_and_attempt_cookies(monkeypatch):
     assert any("__Host-lh_handoff_attempt=" in value and "Max-Age=60" in value for value in cookies)
     assert redirect.headers["cache-control"] == "no-store"
     assert redirect.headers["referrer-policy"] == "no-referrer"
+
+
+def test_start_handoff_rejects_conflicting_tenant(monkeypatch):
+    monkeypatch.setenv("INSTANCE_ID", "david010")
+    monkeypatch.setattr(
+        "zerg.routers.auth_browser.get_settings",
+        lambda: SimpleNamespace(
+            control_plane_url="https://control.longhouse.ai",
+            public_site_url="https://david010.longhouse.ai",
+            auth_disabled=False,
+            testing=False,
+        ),
+    )
+    request = Request(
+        {
+            "type": "http",
+            "scheme": "https",
+            "server": ("david010.longhouse.ai", 443),
+            "client": ("127.0.0.1", 1234),
+            "method": "GET",
+            "path": "/api/auth/start-handoff",
+            "headers": [(b"host", b"david010.longhouse.ai")],
+            "query_string": b"",
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        start_handoff(request, tenant="other", return_to="/timeline")
+
+    assert exc_info.value.status_code == 400
+
+
+def test_start_handoff_fails_closed_for_insecure_hosted_origin(monkeypatch):
+    monkeypatch.setenv("INSTANCE_ID", "david010")
+    monkeypatch.setattr(
+        "zerg.routers.auth_browser.get_settings",
+        lambda: SimpleNamespace(
+            control_plane_url="https://control.longhouse.ai",
+            public_site_url="http://david010.longhouse.ai",
+            app_public_url=None,
+            auth_disabled=False,
+            testing=False,
+        ),
+    )
+    request = Request(
+        {
+            "type": "http",
+            "scheme": "http",
+            "server": ("david010.longhouse.ai", 80),
+            "client": ("127.0.0.1", 1234),
+            "method": "GET",
+            "path": "/api/auth/start-handoff",
+            "headers": [(b"host", b"david010.longhouse.ai")],
+            "query_string": b"",
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        start_handoff(request, return_to="/timeline")
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["code"] == "auth_misconfigured"
 
 
 def _cookie_request(value: str) -> Request:
@@ -804,13 +964,13 @@ async def test_hosted_browser_logout_reports_cp_revocation_failure(monkeypatch):
     monkeypatch.setattr("zerg.routers.auth_browser.get_settings", lambda: settings)
     monkeypatch.setattr("zerg.routers.auth_browser._revoke_native_session_payload", unavailable)
 
-    result = await logout(_cookie_request("longhouse_refresh=lhr_old"), Response())
+    response = Response()
+    result = await logout(_cookie_request("longhouse_refresh=lhr_old"), response)
 
-    assert result.status_code == 503
-    assert json.loads(result.body)["detail"]["code"] == "logout_revocation_unavailable"
-    # A transient CP outage must not erase the only credentials that can retry
-    # revocation; the frontend keeps the authenticated session and retries.
-    assert result.headers.getlist("set-cookie") == []
+    assert result is None
+    # Local logout is unconditional even when CP revocation is degraded.
+    assert any("longhouse_session=" in value and "Max-Age=0" in value for value in response.headers.getlist("set-cookie"))
+    assert any("longhouse_refresh=" in value and "Max-Age=0" in value for value in response.headers.getlist("set-cookie"))
 
 
 @pytest.mark.asyncio
@@ -940,7 +1100,7 @@ def test_csrf_guard_rejects_hosted_apex_origin(monkeypatch):
     assert exc.value.status_code == 403
 
 
-def test_unknown_jwks_kid_forced_refresh_is_backed_off(monkeypatch):
+def test_unknown_jwks_kid_forced_refresh_is_backed_off_per_issuer(monkeypatch):
     cp_jwks.clear_jwks_cache()
     fetches: list[bool] = []
 
@@ -951,7 +1111,8 @@ def test_unknown_jwks_kid_forced_refresh_is_backed_off(monkeypatch):
         return {}
 
     monkeypatch.setattr(cp_jwks, "_fetch_jwks", fake_fetch)
-    monkeypatch.setattr(cp_jwks.jwt, "get_unverified_header", lambda token: {"kid": "unknown"})
+    kids = iter(["unknown-a", "unknown-b"])
+    monkeypatch.setattr(cp_jwks.jwt, "get_unverified_header", lambda token: {"kid": next(kids)})
     try:
         for _ in range(2):
             with pytest.raises(cp_jwks.CPTokenError, match="Unknown CP token kid"):
@@ -961,19 +1122,8 @@ def test_unknown_jwks_kid_forced_refresh_is_backed_off(monkeypatch):
         cp_jwks.clear_jwks_cache()
 
 
-def _refresh_request(*, auth_header: str | None):
-    headers = []
-    if auth_header is not None:
-        headers.append((b"authorization", auth_header.encode()))
-    return Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": "/api/auth/refresh-runtime-token",
-            "headers": headers,
-            "query_string": b"",
-        }
-    )
+def test_bearer_refresh_route_is_not_registered():
+    assert all(route.path != "/auth/refresh-runtime-token" for route in auth_sso.router.routes)
 
 
 def _native_request(*, headers: list[tuple[bytes, bytes]] | None = None):
@@ -987,118 +1137,6 @@ def _native_request(*, headers: list[tuple[bytes, bytes]] | None = None):
             "query_string": b"",
         }
     )
-
-
-@pytest.mark.asyncio
-async def test_refresh_runtime_token_proxies_bearer_to_cp(monkeypatch):
-    captured = {}
-
-    class FakeResponse:
-        status_code = 200
-
-        def json(self):
-            return {
-                "runtime_token": "cp.fresh.jwt",
-                "expires_in": 3600,
-                "refresh_token": "lhr_refresh",
-                "refresh_token_expires_at": "2027-01-01T00:00:00+00:00",
-                "device_session_id": "nds_session",
-            }
-
-    def fake_post(url, headers, timeout):
-        captured["url"] = url
-        captured["headers"] = headers
-        captured["timeout"] = timeout
-        return FakeResponse()
-
-    monkeypatch.setattr(
-        "zerg.routers.auth_sso.get_settings",
-        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai"),
-    )
-    monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", fake_post)
-
-    result = await refresh_runtime_token(_refresh_request(auth_header="Bearer cp.current.jwt"))
-
-    assert result == {
-        "runtime_token": "cp.fresh.jwt",
-        "expires_in": 3600,
-        "refresh_token": "lhr_refresh",
-        "refresh_token_expires_at": "2027-01-01T00:00:00+00:00",
-        "device_session_id": "nds_session",
-    }
-    assert captured["url"] == "https://control.longhouse.ai/api/identity/refresh-runtime-token"
-    assert captured["headers"] == {"Authorization": "Bearer cp.current.jwt"}
-    assert captured["timeout"] == 10.0
-
-
-@pytest.mark.asyncio
-async def test_refresh_runtime_token_rejects_missing_bearer(monkeypatch):
-    monkeypatch.setattr(
-        "zerg.routers.auth_sso.get_settings",
-        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai"),
-    )
-    with pytest.raises(HTTPException) as exc:
-        await refresh_runtime_token(_refresh_request(auth_header=None))
-    assert exc.value.status_code == 401
-    assert "Missing bearer" in exc.value.detail
-
-
-@pytest.mark.asyncio
-async def test_refresh_runtime_token_rejects_device_token(monkeypatch):
-    monkeypatch.setattr(
-        "zerg.routers.auth_sso.get_settings",
-        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai"),
-    )
-    with pytest.raises(HTTPException) as exc:
-        await refresh_runtime_token(_refresh_request(auth_header="Bearer zdt_abc"))
-    assert exc.value.status_code == 401
-    assert "Runtime token required" in exc.value.detail
-
-
-@pytest.mark.asyncio
-async def test_refresh_runtime_token_returns_404_when_not_hosted(monkeypatch):
-    monkeypatch.setattr(
-        "zerg.routers.auth_sso.get_settings",
-        lambda: SimpleNamespace(control_plane_url=None),
-    )
-    with pytest.raises(HTTPException) as exc:
-        await refresh_runtime_token(_refresh_request(auth_header="Bearer cp.jwt"))
-    assert exc.value.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_refresh_runtime_token_propagates_cp_rejection(monkeypatch):
-    class FakeResponse:
-        status_code = 401
-
-        def json(self):
-            return {"detail": "Invalid or expired runtime token"}
-
-    monkeypatch.setattr(
-        "zerg.routers.auth_sso.get_settings",
-        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai"),
-    )
-    monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", lambda *a, **k: FakeResponse())
-
-    with pytest.raises(HTTPException) as exc:
-        await refresh_runtime_token(_refresh_request(auth_header="Bearer cp.expired.jwt"))
-    assert exc.value.status_code == 401
-
-
-@pytest.mark.asyncio
-async def test_refresh_runtime_token_returns_502_on_cp_network_error(monkeypatch):
-    def fake_post(*a, **k):
-        raise httpx.HTTPError("connection refused")
-
-    monkeypatch.setattr(
-        "zerg.routers.auth_sso.get_settings",
-        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai"),
-    )
-    monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", fake_post)
-
-    with pytest.raises(HTTPException) as exc:
-        await refresh_runtime_token(_refresh_request(auth_header="Bearer cp.jwt"))
-    assert exc.value.status_code == 502
 
 
 @pytest.mark.asyncio
@@ -1131,7 +1169,11 @@ async def test_refresh_native_session_proxies_refresh_token_to_cp(monkeypatch):
     monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
     monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", fake_post)
 
-    result = await refresh_native_session(_native_request(), Response(), NativeRefreshRequest(refresh_token="lhr_current"))
+    result = await refresh_native_session(
+        _native_request(),
+        Response(),
+        NativeRefreshRequest(refresh_token="lhr_current", tenant="david010"),
+    )
 
     assert result == {
         "runtime_token": "cp.fresh.jwt",
@@ -1162,7 +1204,11 @@ async def test_refresh_native_session_propagates_cp_rejection(monkeypatch):
     monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", lambda *a, **k: FakeResponse())
 
     with pytest.raises(HTTPException) as exc:
-        await refresh_native_session(_native_request(), Response(), NativeRefreshRequest(refresh_token="lhr_revoked"))
+        await refresh_native_session(
+            _native_request(),
+            Response(),
+            NativeRefreshRequest(refresh_token="lhr_revoked", tenant="david010"),
+        )
     assert exc.value.status_code == 401
 
 
@@ -1179,7 +1225,11 @@ async def test_refresh_native_session_returns_502_on_cp_network_error(monkeypatc
     monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", fake_post)
 
     with pytest.raises(HTTPException) as exc:
-        await refresh_native_session(_native_request(), Response(), NativeRefreshRequest(refresh_token="lhr_current"))
+        await refresh_native_session(
+            _native_request(),
+            Response(),
+            NativeRefreshRequest(refresh_token="lhr_current", tenant="david010"),
+        )
     assert exc.value.status_code == 502
 
 
@@ -1190,7 +1240,11 @@ async def test_refresh_native_session_rejects_missing_token(monkeypatch):
         lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
     )
     with pytest.raises(HTTPException) as exc:
-        await refresh_native_session(_native_request(), Response(), NativeRefreshRequest(refresh_token=" "))
+        await refresh_native_session(
+            _native_request(),
+            Response(),
+            NativeRefreshRequest(refresh_token=" ", tenant="david010"),
+        )
     assert exc.value.status_code == 401
 
 
@@ -1200,6 +1254,10 @@ async def test_revoke_native_session_proxies_to_cp(monkeypatch):
 
     class FakeResponse:
         status_code = 200
+
+        @staticmethod
+        def json():
+            return {"status": "ok"}
 
     def fake_post(url, headers, json, timeout):
         captured["url"] = url
@@ -1215,12 +1273,16 @@ async def test_revoke_native_session_proxies_to_cp(monkeypatch):
     monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
     monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", fake_post)
 
-    result = await revoke_native_session(_native_request(), Response(), NativeRevokeRequest(refresh_token="lhr_current"))
+    result = await revoke_native_session(
+        _native_request(),
+        Response(),
+        NativeRevokeRequest(refresh_token="lhr_current", tenant="david010"),
+    )
 
     assert result == {"status": "ok"}
     assert captured["url"] == "https://control.longhouse.ai/api/identity/revoke-native-session"
     assert captured["headers"] == {"X-Internal-Token": "secret"}
-    assert captured["json"] == {"refresh_token": "lhr_current"}
+    assert captured["json"] == {"refresh_token": "lhr_current", "tenant": "david010"}
     assert captured["timeout"] == 5.0
 
 
@@ -1232,7 +1294,11 @@ async def test_revoke_native_session_ignores_empty_token(monkeypatch):
     )
 
     with pytest.raises(HTTPException) as exc:
-        await revoke_native_session(_native_request(), Response(), NativeRevokeRequest(refresh_token=" "))
+        await revoke_native_session(
+            _native_request(),
+            Response(),
+            NativeRevokeRequest(refresh_token=" ", tenant="david010"),
+        )
     assert exc.value.status_code == 401
 
 
@@ -1249,14 +1315,18 @@ async def test_revoke_native_session_reports_cp_rejection(monkeypatch):
     monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
 
     with pytest.raises(HTTPException) as exc:
-        await revoke_native_session(_native_request(), Response(), NativeRevokeRequest(refresh_token="lhr_current"))
+        await revoke_native_session(
+            _native_request(),
+            Response(),
+            NativeRevokeRequest(refresh_token="lhr_current", tenant="david010"),
+        )
 
     assert exc.value.status_code == 503
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status_code", [400, 404, 410, 422])
-async def test_revoke_native_session_treats_terminal_cp_rejection_as_success(monkeypatch, status_code):
+@pytest.mark.parametrize("status_code", [301, 400, 404, 410, 422, 500])
+async def test_revoke_native_session_rejects_non_success_cp_responses(monkeypatch, status_code):
     class FakeResponse:
         pass
 
@@ -1268,13 +1338,15 @@ async def test_revoke_native_session_treats_terminal_cp_rejection_as_success(mon
     monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", lambda *a, **k: FakeResponse())
     monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
 
-    result = await revoke_native_session(
-        _native_request(),
-        Response(),
-        NativeRevokeRequest(refresh_token="lhr_current"),
-    )
+    with pytest.raises(HTTPException) as exc:
+        await revoke_native_session(
+            _native_request(),
+            Response(),
+            NativeRevokeRequest(refresh_token="lhr_current", tenant="david010"),
+        )
 
-    assert result == {"status": "ok"}
+    assert exc.value.status_code == 503
+
 
 
 @pytest.mark.asyncio
@@ -1290,7 +1362,11 @@ async def test_revoke_native_session_reports_cp_network_error(monkeypatch):
     monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
 
     with pytest.raises(HTTPException) as exc:
-        await revoke_native_session(_native_request(), Response(), NativeRevokeRequest(refresh_token="lhr_current"))
+        await revoke_native_session(
+            _native_request(),
+            Response(),
+            NativeRevokeRequest(refresh_token="lhr_current", tenant="david010"),
+        )
 
     assert exc.value.status_code == 503
 

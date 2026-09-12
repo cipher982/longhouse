@@ -34,9 +34,9 @@ struct HostedAuthFlowTests {
     }
 
     @Test
-    func callbackPayloadExtractsInstanceURLAndRuntimeToken() throws {
+    func callbackPayloadExtractsInstanceURLAndHandoffState() throws {
         let callbackURL = try #require(URL(
-            string: "ai.longhouse.ios://auth-callback?tenant=testuser&instance_url=https%3A%2F%2Ftestuser.longhouse.ai&runtime_token=abc123&tenant_state=state123"
+            string: "ai.longhouse.ios://auth-callback?tenant=testuser&instance_url=https%3A%2F%2Ftestuser.longhouse.ai&tenant_state=state123"
         ))
 
         let payload = try #require(HostedAuthFlow.callbackPayload(from: callbackURL))
@@ -46,7 +46,6 @@ struct HostedAuthFlowTests {
                 tenant: "testuser",
                 instanceURL: "https://testuser.longhouse.ai",
                 code: nil,
-                runtimeToken: "abc123",
                 tenantState: "state123",
                 error: nil
             )
@@ -54,14 +53,16 @@ struct HostedAuthFlowTests {
     }
 
     @Test
-    func callbackPayloadAcceptsLegacySSOTokenQueryName() throws {
+    func callbackPayloadIgnoresLegacyCredentialQueryValues() throws {
         let callbackURL = try #require(URL(
-            string: "ai.longhouse.ios://auth-callback?tenant=testuser&instance_url=https%3A%2F%2Ftestuser.longhouse.ai&sso_token=abc123"
+            string: "ai.longhouse.ios://auth-callback?tenant=testuser&runtime_token=abc123&sso_token=old"
         ))
 
         let payload = try #require(HostedAuthFlow.callbackPayload(from: callbackURL))
 
-        #expect(payload.runtimeToken == "abc123")
+        #expect(payload.code == nil)
+        #expect(payload.tenant == "testuser")
+        #expect(payload.error == nil)
     }
 
     @Test
@@ -73,7 +74,6 @@ struct HostedAuthFlowTests {
         let payload = try #require(HostedAuthFlow.callbackPayload(from: callbackURL))
 
         #expect(payload.code == "handoff123")
-        #expect(payload.runtimeToken == nil)
         #expect(payload.tenant == "testuser")
         #expect(payload.instanceURL == "https://testuser.longhouse.ai")
     }
@@ -88,7 +88,6 @@ struct HostedAuthFlowTests {
 
         #expect(payload.error == "instance_not_found")
         #expect(payload.tenant == "testuser")
-        #expect(payload.runtimeToken == nil)
         #expect(payload.code == nil)
     }
 

@@ -35,6 +35,7 @@ struct LoginView: View {
     @State private var authMethods: AuthMethods?
     @State private var hostedAuthSession: ASWebAuthenticationSession?
     @State private var hostedHandoffVerifier: String?
+    @State private var forceEphemeralHostedSignIn = false
     @State private var isLoadingAuthMethods = false
     @State private var isSigningIn = false
     @State private var localErrorMessage: String?
@@ -146,6 +147,14 @@ struct LoginView: View {
                 .font(.caption)
                 .foregroundStyle(.white.opacity(0.45))
                 .multilineTextAlignment(.center)
+            if forceEphemeralHostedSignIn {
+                Button("Sign in with a different Longhouse account") {
+                    startHostedSignIn(methods, ephemeral: true)
+                }
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.white.opacity(0.8))
+                .accessibilityIdentifier("login.switchLonghouseAccount")
+            }
         } else {
             // Self-host fallback: legacy Google + password form, kept
             // bit-for-bit unchanged. This path is exercised only on
@@ -223,7 +232,7 @@ struct LoginView: View {
 
     @ViewBuilder
     private var hostedBootstrapControls: some View {
-        Button(action: startHostedBootstrapSignIn) {
+        Button(action: { startHostedBootstrapSignIn() }) {
             HStack(spacing: 10) {
                 Image(systemName: "arrow.up.forward.square.fill")
                     .font(.system(size: 18))
@@ -330,7 +339,7 @@ struct LoginView: View {
         }
     }
 
-    private func startHostedSignIn(_ methods: AuthMethods) {
+    private func startHostedSignIn(_ methods: AuthMethods, ephemeral: Bool = false) {
         guard methods.ssoURL != nil else {
             localErrorMessage = "Hosted sign-in is not configured"
             return
@@ -347,20 +356,25 @@ struct LoginView: View {
             return
         }
 
-        startHostedAuthSession(authURL, handoffVerifier: verifier)
+        forceEphemeralHostedSignIn = false
+        startHostedAuthSession(authURL, handoffVerifier: verifier, ephemeral: ephemeral)
     }
 
-    private func startHostedBootstrapSignIn() {
+    private func startHostedBootstrapSignIn(ephemeral: Bool = false) {
         let verifier = HostedAuthFlow.makeHandoffVerifier()
         guard let authURL = HostedAuthFlow.openInstanceURL(handoffVerifier: verifier) else {
             localErrorMessage = "Hosted sign-in is not configured"
             return
         }
 
-        startHostedAuthSession(authURL, handoffVerifier: verifier)
+        startHostedAuthSession(authURL, handoffVerifier: verifier, ephemeral: ephemeral)
     }
 
-    private func startHostedAuthSession(_ authURL: URL, handoffVerifier: String) {
+    private func startHostedAuthSession(
+        _ authURL: URL,
+        handoffVerifier: String,
+        ephemeral: Bool = false
+    ) {
         appState.clearAuthError()
         localErrorMessage = nil
         hostedHandoffVerifier = handoffVerifier
@@ -400,7 +414,7 @@ struct LoginView: View {
         }
 
         session.presentationContextProvider = authPresentationContext
-        session.prefersEphemeralWebBrowserSession = false
+        session.prefersEphemeralWebBrowserSession = ephemeral
         hostedAuthSession = session
 
         if !session.start() {
@@ -420,7 +434,18 @@ struct LoginView: View {
 
         if let error = payload.error {
             hostedHandoffVerifier = nil
+            forceEphemeralHostedSignIn = error == "tenant_not_owned"
             localErrorMessage = friendlyHostedError(error)
+            return
+        }
+
+        guard let verifier = hostedHandoffVerifier else {
+            localErrorMessage = "Hosted sign-in returned without a verifier"
+            return
+        }
+        guard payload.tenantState == verifier else {
+            hostedHandoffVerifier = nil
+            localErrorMessage = "Hosted sign-in returned an invalid state"
             return
         }
 
@@ -429,25 +454,18 @@ struct LoginView: View {
             await appState.prepareServerForHostedLogin(instanceURL)
         }
 
-        let sessionEstablished: Bool
-        if let code = payload.code {
-            guard let verifier = hostedHandoffVerifier else {
-                hostedHandoffVerifier = nil
-                localErrorMessage = "Hosted sign-in returned without a verifier"
-                return
-            }
-            sessionEstablished = await appState.exchangeHostedHandoffCode(code, handoffVerifier: verifier)
-        } else if let runtimeToken = payload.runtimeToken {
-            sessionEstablished = await appState.finishHostedRuntimeToken(runtimeToken)
-        } else {
-            localErrorMessage = "Hosted sign-in returned without a session token"
+        guard let code = payload.code else {
+            hostedHandoffVerifier = nil
+            localErrorMessage = "Hosted sign-in returned without a handoff code"
             return
         }
+        let sessionEstablished = await appState.exchangeHostedHandoffCode(code, handoffVerifier: verifier)
         hostedHandoffVerifier = nil
         if !sessionEstablished {
             localErrorMessage = appState.authError ?? "Hosted sign-in failed"
         }
     }
+
 
     private func signInWithGoogle() {
         guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,

@@ -25,11 +25,16 @@ export default function LoginPage() {
   } = useAuth();
 
   const errorMessages: Record<string, string> = {
+    login_state_not_returned: 'Your sign-in response was missing its browser binding. Start again.',
+    login_state_malformed: 'Your sign-in response was invalid. Start again.',
+    login_cookie_absent: 'Your sign-in browser cookie was unavailable. Check cookies and start again.',
+    login_cookie_mismatch: 'Your sign-in browser cookie did not match. Start again.',
     login_state_missing: 'Your sign-in attempt expired or was opened in a different browser tab.',
     login_state_mismatch: 'Your sign-in attempt could not be verified. Start again.',
     handoff_expired: 'That sign-in link expired. Start again.',
     cp_unavailable: 'The account service is temporarily unavailable. Try again in a moment.',
     catalog_unavailable: 'The instance is temporarily unavailable. Try again in a moment.',
+    auth_misconfigured: 'This instance cannot complete secure sign-in right now. Try again later.',
     cookie_loop: 'This browser could not keep the sign-in cookie. Check that cookies are enabled, then try again.',
     handoff_failed: 'Longhouse could not finish signing you in. Start again.',
   };

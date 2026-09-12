@@ -24,11 +24,13 @@ from pydantic import Field
 
 from zerg.auth.client_ip import get_client_ip
 from zerg.auth.hosted import MAX_TENANT_LOGIN_STATE_LENGTH
+from zerg.auth.hosted import hosted_cookie_origin_is_secure
 from zerg.auth.hosted import hosted_instance_id
 from zerg.auth.hosted import tenant_cookie_secure
 from zerg.auth.hosted import tenant_handoff_attempt_cookie_name
 from zerg.auth.hosted import tenant_login_cookie_name
 from zerg.auth.hosted import tenant_login_cookie_secret
+from zerg.auth.hosted import tenant_login_ready_cookie_name
 from zerg.auth.redirects import normalize_local_return_to
 from zerg.auth.session_tokens import _set_refresh_cookie
 from zerg.auth.session_tokens import _set_session_cookie
@@ -184,16 +186,52 @@ def _runtime_payload(data: dict) -> dict:
             detail="Control plane response has an invalid expiry",
         )
     runtime_token = data.get("runtime_token")
-    if not isinstance(runtime_token, str) or not runtime_token:
+    if not isinstance(runtime_token, str) or not runtime_token or len(runtime_token) > 16_384:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Control plane response missing token",
         )
-    payload = {"runtime_token": runtime_token, "expires_in": expires_in}
-    for key in ("refresh_token", "refresh_token_expires_at", "device_session_id"):
-        value = data.get(key)
-        if isinstance(value, str) and value:
-            payload[key] = value
+    refresh_token = data.get("refresh_token")
+    if not isinstance(refresh_token, str) or not refresh_token or len(refresh_token) > _MAX_NATIVE_REFRESH_TOKEN_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Control plane response missing refresh token",
+        )
+    refresh_expires_at = data.get("refresh_token_expires_at")
+    if not isinstance(refresh_expires_at, str) or not refresh_expires_at or len(refresh_expires_at) > 128:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Control plane response missing refresh expiry",
+        )
+    try:
+        parsed_refresh_expiry = datetime.fromisoformat(refresh_expires_at)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Control plane response has an invalid refresh expiry",
+        ) from exc
+    if parsed_refresh_expiry.tzinfo is None:
+        parsed_refresh_expiry = parsed_refresh_expiry.replace(tzinfo=timezone.utc)
+    if parsed_refresh_expiry <= datetime.now(timezone.utc):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Control plane response has an elapsed refresh expiry",
+        )
+    token_type = data.get("token_type", "bearer")
+    if token_type != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Control plane response has an invalid token type",
+        )
+    payload = {
+        "runtime_token": runtime_token,
+        "expires_in": expires_in,
+        "refresh_token": refresh_token,
+        "refresh_token_expires_at": refresh_expires_at,
+    }
+    device_session_id = data.get("device_session_id")
+    if isinstance(device_session_id, str) and device_session_id:
+        payload["device_session_id"] = device_session_id
     return payload
 
 
@@ -300,7 +338,21 @@ def _refresh_native_session_payload(*, settings, refresh_token: str) -> dict:
         ) from exc
     if exchange.status_code >= 400:
         _raise_control_plane_error(exchange, default="Control plane rejected native refresh")
-    return _runtime_payload(_json_object(exchange))
+    raw_payload = _json_object(exchange)
+    try:
+        return _runtime_payload(raw_payload)
+    except HTTPException:
+        replacement_refresh = raw_payload.get("refresh_token")
+        if isinstance(replacement_refresh, str) and replacement_refresh:
+            try:
+                _revoke_native_session_payload(
+                    settings=settings,
+                    refresh_token=replacement_refresh,
+                    strict=False,
+                )
+            except Exception:
+                logger.warning("native_refresh_orphan_revoke_failed", exc_info=True)
+        raise
 
 
 def _revoke_native_session_payload(
@@ -318,7 +370,7 @@ def _revoke_native_session_payload(
                 detail={"code": "cp_unavailable"},
             )
         return
-    payload = {"refresh_token": refresh_token}
+    payload = {"refresh_token": refresh_token, "tenant": hosted_instance_id()}
     if revoke_authority:
         payload["revoke_authority"] = True
     try:
@@ -336,12 +388,26 @@ def _revoke_native_session_payload(
                 detail={"code": "cp_unavailable"},
             ) from exc
         return
-    if response.status_code >= 400:
+
+    if response.status_code != status.HTTP_200_OK:
         logger.warning(
             "control_plane_native_session_revoke_rejected",
             extra={"status_code": response.status_code},
         )
-        if strict and response.status_code not in {400, 404, 410, 422}:
+        if strict:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "cp_unavailable"},
+            )
+        return
+
+    try:
+        body = response.json()
+    except (TypeError, ValueError):
+        body = None
+    if not isinstance(body, dict) or body.get("status") != "ok":
+        logger.warning("control_plane_native_session_revoke_invalid_response")
+        if strict:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={"code": "cp_unavailable"},
@@ -361,23 +427,6 @@ async def _best_effort_revoke_native_session(settings, refresh_token: object) ->
         )
     except Exception:
         logger.warning("tenant_handoff_orphan_revoke_failed", exc_info=True)
-
-
-def _refresh_runtime_token_payload(*, control_plane_url: str, token: str) -> dict:
-    try:
-        exchange = httpx.post(
-            f"{control_plane_url.rstrip('/')}/api/identity/refresh-runtime-token",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=10.0,
-        )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Control plane runtime token refresh failed",
-        ) from exc
-    if exchange.status_code >= 400:
-        raise HTTPException(status_code=exchange.status_code, detail="Control plane rejected refresh")
-    return _runtime_payload(_json_object(exchange))
 
 
 def _handoff_failure_redirect(
@@ -407,10 +456,19 @@ def _handoff_failure_redirect(
                 secure=cookie_secure,
                 samesite="lax",
             )
+    # Failed attempts must not ratchet the browser into the cookie-loop
+    # breaker. The next explicit login starts with a fresh bounded attempt.
+    redirect.delete_cookie(
+        tenant_handoff_attempt_cookie_name(secure=cookie_secure),
+        path="/",
+        httponly=True,
+        secure=cookie_secure,
+        samesite="lax",
+    )
     return redirect
 
 
-@router.get("/accept-handoff")
+@router.get("/accept-handoff", include_in_schema=False)
 async def accept_handoff_request(
     request: Request,
     code: str,
@@ -421,6 +479,9 @@ async def accept_handoff_request(
     control_plane_url = getattr(settings, "control_plane_url", None)
     if not control_plane_url:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Hosted handoff is not configured")
+    if not hosted_cookie_origin_is_secure(settings):
+        logger.error("hosted_auth_public_origin_invalid")
+        return _handoff_failure_redirect(settings=settings, return_to=return_to, error="auth_misconfigured")
 
     # Browser prefetchers must never spend a one-use login code. A real
     # top-level navigation is ``document``; other fetch destinations cannot
@@ -428,38 +489,49 @@ async def accept_handoff_request(
     purpose = f"{request.headers.get('purpose', '')},{request.headers.get('sec-purpose', '')}".lower()
     fetch_dest = request.headers.get("sec-fetch-dest", "").strip().lower()
     if "prefetch" in purpose or (fetch_dest and fetch_dest != "document"):
+        logger.info("tenant_handoff_prefetch_ignored", extra={"fetch_dest": fetch_dest or None})
         return Response(
             status_code=status.HTTP_204_NO_CONTENT,
             headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
         )
 
     cookie_secure = tenant_cookie_secure(settings)
-    if not tenant_state or len(tenant_state) > MAX_TENANT_LOGIN_STATE_LENGTH:
+    if not tenant_state:
         logger.warning("tenant_login_state_query_missing")
-        return _handoff_failure_redirect(settings=settings, return_to=return_to, error="login_state_missing")
+        return _handoff_failure_redirect(settings=settings, return_to=return_to, error="login_state_not_returned")
+    if len(tenant_state) > MAX_TENANT_LOGIN_STATE_LENGTH:
+        logger.warning("tenant_login_state_oversized", extra={"state_length": len(tenant_state)})
+        return _handoff_failure_redirect(settings=settings, return_to=return_to, error="login_state_malformed")
     login_cookie_name = tenant_login_cookie_name(tenant_state, secure=cookie_secure)
     expected_secret = tenant_login_cookie_secret(tenant_state)
     if login_cookie_name is None or expected_secret is None:
-        logger.warning("tenant_login_state_invalid")
+        logger.warning(
+            "tenant_login_state_invalid",
+            extra={"state_length": len(tenant_state)},
+        )
         return _handoff_failure_redirect(
             settings=settings,
             return_to=return_to,
-            error="login_state_missing",
+            error="login_state_malformed",
         )
     actual_secret = request.cookies.get(login_cookie_name)
     if not actual_secret:
-        logger.warning("tenant_login_cookie_missing")
+        logger.warning("tenant_login_cookie_missing", extra={"state_length": len(tenant_state)})
         return _handoff_failure_redirect(
             settings=settings,
             return_to=return_to,
-            error="login_state_missing",
+            error="login_cookie_absent",
+            clear_login_state=True,
+            tenant_state=tenant_state,
         )
     if not hmac.compare_digest(expected_secret.encode("utf-8"), actual_secret.encode("utf-8")):
-        logger.warning("tenant_login_state_mismatch")
+        logger.warning("tenant_login_state_mismatch", extra={"state_length": len(tenant_state)})
         return _handoff_failure_redirect(
             settings=settings,
             return_to=return_to,
-            error="login_state_mismatch",
+            error="login_cookie_mismatch",
+            clear_login_state=True,
+            tenant_state=tenant_state,
         )
 
     tenant = hosted_instance_id()
@@ -557,6 +629,15 @@ async def accept_handoff_request(
     redirect = RedirectResponse(normalize_local_return_to(return_to) or "/timeline", status_code=303)
     _set_session_cookie(redirect, runtime_token, expires_in)
     _set_refresh_cookie(redirect, refresh_token, refresh_cookie_max_age)
+    redirect.set_cookie(
+        tenant_login_ready_cookie_name(secure=cookie_secure),
+        "1",
+        max_age=30,
+        path="/",
+        httponly=False,
+        secure=cookie_secure,
+        samesite="lax",
+    )
     redirect.delete_cookie(
         login_cookie_name,
         path="/",
@@ -683,40 +764,6 @@ async def revoke_native_session(request: Request, response: Response, body: Nati
     return {"status": "ok"}
 
 
-@router.post("/refresh-runtime-token")
-async def refresh_runtime_token(request: Request):
-    """Proxy a CP runtime token refresh for iOS/hosted native clients.
-
-    iOS stores the CP-issued bearer in keychain and sends it on every request.
-    Active runtime tokens have a short lifetime, so the client proactively
-    refreshes before expiry and retries with refresh on a 401. This route
-    forwards the current bearer to the CP's
-    /api/identity/refresh-runtime-token and returns the re-minted token. No
-    local validation — the CP is the issuer and is the authority on token
-    validity, including the long native-app refresh window.
-    """
-    settings = get_settings()
-    control_plane_url = getattr(settings, "control_plane_url", None)
-    if not control_plane_url:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Hosted runtime token refresh is not configured",
-        )
-
-    auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
-    if not auth_header or not auth_header.lower().startswith("bearer "):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
-    token = auth_header.split(" ", 1)[1].strip()
-    if not token or token.startswith("zdt_"):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Runtime token required")
-
-    return await asyncio.to_thread(
-        _refresh_runtime_token_payload,
-        control_plane_url=control_plane_url,
-        token=token,
-    )
-
-
 __all__ = [
     "NativeHandoffRequest",
     "NativeRefreshRequest",
@@ -724,7 +771,6 @@ __all__ = [
     "accept_handoff_request",
     "accept_native_handoff",
     "refresh_native_session",
-    "refresh_runtime_token",
     "revoke_native_session",
     "router",
 ]

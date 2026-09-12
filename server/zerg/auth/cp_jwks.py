@@ -49,7 +49,7 @@ _jwks_cache: OrderedDict[str, tuple[float, dict[str, dict[str, Any]]]] = Ordered
 _jwks_cache_lock = Lock()
 _jwks_fetch_events: dict[str, Event] = {}
 _jwks_retry_after: dict[str, float] = {}
-_jwks_unknown_kid_retry_after: OrderedDict[tuple[str, str], float] = OrderedDict()
+_jwks_unknown_kid_retry_after: dict[str, float] = {}
 JWKS_FETCH_WAIT_SECONDS = 1.0
 JWKS_RETRY_BACKOFF_SECONDS = 5.0
 
@@ -156,21 +156,26 @@ def verify_runtime_token(token: str, *, audience: str) -> CPTokenClaims:
     jwk = keys.get(kid)
     if jwk is None:
         base = _control_plane_url()
-        unknown_key = (base, kid)
+        now = time.time()
         with _jwks_cache_lock:
-            retry_after = _jwks_unknown_kid_retry_after.get(unknown_key, 0.0)
-            if retry_after > time.time():
-                raise CPTokenError("Unknown CP token kid")
+            retry_after = _jwks_unknown_kid_retry_after.get(base, 0.0)
+        if retry_after > now:
+            raise CPTokenError("Unknown CP token kid")
+
+        # Fetch before setting the issuer-wide backoff. A caller may present
+        # an unknown key id immediately before a legitimate CP key rotation;
+        # setting the backoff first would make that newly published key fail
+        # for the whole window. If the forced fetch still has no key, the
+        # issuer-wide backoff prevents arbitrary attacker-controlled kids from
+        # turning into one CP request each.
         keys = _fetch_jwks(force=True)
         jwk = keys.get(kid)
-        with _jwks_cache_lock:
-            if jwk is None:
-                _jwks_unknown_kid_retry_after[unknown_key] = time.time() + JWKS_UNKNOWN_KID_BACKOFF_SECONDS
-                _jwks_unknown_kid_retry_after.move_to_end(unknown_key)
-                while len(_jwks_unknown_kid_retry_after) > JWKS_UNKNOWN_KID_MAX_ENTRIES:
-                    _jwks_unknown_kid_retry_after.popitem(last=False)
-            else:
-                _jwks_unknown_kid_retry_after.pop(unknown_key, None)
+        if jwk is None:
+            with _jwks_cache_lock:
+                _jwks_unknown_kid_retry_after[base] = now + JWKS_UNKNOWN_KID_BACKOFF_SECONDS
+        else:
+            with _jwks_cache_lock:
+                _jwks_unknown_kid_retry_after.pop(base, None)
     if jwk is None:
         raise CPTokenError("Unknown CP token kid")
 
@@ -194,6 +199,7 @@ def verify_runtime_token(token: str, *, audience: str) -> CPTokenClaims:
                     "exp",
                     "jti",
                     "sid",
+                    "typ",
                 ]
             },
         )
@@ -201,6 +207,8 @@ def verify_runtime_token(token: str, *, audience: str) -> CPTokenClaims:
         raise CPTokenError("Invalid CP runtime token") from exc
     if payload.get("aud") != audience:
         raise CPTokenError("CP token audience is not exact")
+    if payload.get("typ") != "access":
+        raise CPTokenError("CP token type is not access")
 
     sub = str(payload.get("sub") or "")
     if not sub.isdecimal():

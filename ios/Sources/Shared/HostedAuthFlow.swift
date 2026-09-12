@@ -5,7 +5,6 @@ struct HostedAuthCallbackPayload: Equatable {
     let tenant: String?
     let instanceURL: String?
     let code: String?
-    let runtimeToken: String?
     let tenantState: String?
     let error: String?
 }
@@ -63,7 +62,6 @@ enum HostedAuthFlow {
             tenant: value("tenant"),
             instanceURL: value("instance_url"),
             code: value("code"),
-            runtimeToken: value("runtime_token") ?? value("sso_token"),
             tenantState: value("tenant_state"),
             error: value("error")
         )

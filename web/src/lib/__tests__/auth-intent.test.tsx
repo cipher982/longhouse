@@ -46,7 +46,42 @@ describe("logout intent", () => {
     expect(hasLogoutIntent()).toBe(true);
   });
 
-  it("keeps the session visible when the server cannot confirm logout", async () => {
+  it("accepts a completed hosted handoff despite a stale logout intent", async () => {
+    window.localStorage.setItem(LOGGED_OUT_SESSION_KEY, "1");
+    document.cookie = "lh_login_ready=1; Path=/";
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          authenticated: true,
+          user: {
+            id: 1,
+            email: "handoff@example.com",
+            is_active: true,
+            created_at: new Date(0).toISOString(),
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <AuthHarness />
+        </AuthProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("handoff@example.com")).toBeInTheDocument();
+    expect(window.localStorage.getItem(LOGGED_OUT_SESSION_KEY)).toBeNull();
+    expect(document.cookie).not.toContain("lh_login_ready");
+  });
+
+  it("clears the local session even when the server cannot confirm logout", async () => {
     const fetchMock = vi.fn<typeof fetch>();
     fetchMock
       .mockResolvedValueOnce(
@@ -81,7 +116,7 @@ describe("logout intent", () => {
     await userEvent.click(screen.getByRole("button", { name: "Log out" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    expect(screen.getByText("user@example.com")).toBeInTheDocument();
-    expect(window.localStorage.getItem(LOGGED_OUT_SESSION_KEY)).toBeNull();
+    expect(screen.getByText("signed out")).toBeInTheDocument();
+    expect(window.localStorage.getItem(LOGGED_OUT_SESSION_KEY)).toBe("1");
   });
 });

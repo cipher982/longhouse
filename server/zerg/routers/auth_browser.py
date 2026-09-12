@@ -35,10 +35,13 @@ from zerg.auth.catalog_gateway import rotate_refresh
 from zerg.auth.client_ip import get_client_ip
 from zerg.auth.hosted import MAX_TENANT_LOGIN_ATTEMPTS
 from zerg.auth.hosted import TENANT_LOGIN_ATTEMPT_MAX_AGE
+from zerg.auth.hosted import hosted_cookie_origin_is_secure
+from zerg.auth.hosted import hosted_instance_id
 from zerg.auth.hosted import new_tenant_login_state
 from zerg.auth.hosted import tenant_cookie_secure
 from zerg.auth.hosted import tenant_handoff_attempt_cookie_name
 from zerg.auth.hosted import tenant_login_cookie_prefix
+from zerg.auth.hosted import tenant_login_ready_cookie_name
 from zerg.auth.redirects import normalize_local_return_to
 from zerg.auth.session_tokens import ACCESS_TOKEN_LIFETIME
 from zerg.auth.session_tokens import REFRESH_COOKIE_NAME
@@ -492,21 +495,26 @@ async def logout(request: Request, response: Response, everywhere: bool = False)
                     now=datetime.now(timezone.utc),
                 )
         except Exception:
-            # Keep both credentials so the browser can retry revocation. A
-            # transient control-plane failure must never become a false logout.
+            # Local logout is unconditional. Retaining a bearer because CP is
+            # unavailable turns an operator outage into a credential-retention
+            # bug; CP will observe the failed revocation through telemetry and
+            # the short-lived access token cannot be refreshed after clearing.
             revocation_failed = True
             logger.warning("session revocation failed during logout", exc_info=True)
 
     if revocation_failed:
-        failure = JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={"detail": {"code": "logout_revocation_unavailable"}},
-        )
-        _set_no_store(failure)
-        return failure
+        logger.warning("session revocation degraded during logout")
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        response.headers["retry-after"] = "5"
 
     _clear_session_cookie(response)
     _clear_refresh_cookie(response)
+    response.delete_cookie(
+        tenant_login_ready_cookie_name(secure=tenant_cookie_secure(settings)),
+        path="/",
+        secure=tenant_cookie_secure(settings),
+        samesite="lax",
+    )
     _set_no_store(response)
 
 
@@ -802,6 +810,12 @@ def start_handoff(
         redirect.headers["cache-control"] = "no-store"
         redirect.headers["referrer-policy"] = "no-referrer"
         return redirect
+    if not hosted_cookie_origin_is_secure(settings):
+        logger.error("hosted_auth_requires_https_public_origin")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "auth_misconfigured", "message": "Hosted authentication requires an HTTPS public origin."},
+        )
     cookie_secure = tenant_cookie_secure(settings)
     attempt_cookie_name = tenant_handoff_attempt_cookie_name(secure=cookie_secure)
     attempt_count = _handoff_attempt_count(
@@ -819,19 +833,15 @@ def start_handoff(
         return redirect
     next_attempt = f"{attempt_count + 1}:{time.time()}"
 
-    # Derive the tenant from the request host if not explicitly given.
-    # This makes the React LoginPage simpler — it doesn't have to know
-    # its own subdomain.
-    resolved_tenant = (tenant or "").strip().lower()
-    if not resolved_tenant:
-        host = (request.url.hostname or "").lower()
-        # Strip the root domain suffix (longhouse.ai or localhost).
-        # The tenant subdomain is everything before the first dot.
-        if host.endswith(".longhouse.ai"):
-            resolved_tenant = host[: -len(".longhouse.ai")]
-        elif host.endswith(".localhost"):
-            resolved_tenant = host[: -len(".localhost")]
-        # else: leave empty; CP will reject unknown tenant.
+    canonical_tenant = hosted_instance_id().strip().lower()
+    requested_tenant = (tenant or "").strip().lower()
+    if requested_tenant and requested_tenant != canonical_tenant:
+        logger.warning("hosted_auth_tenant_override_rejected")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tenant does not match this runtime",
+        )
+    resolved_tenant = canonical_tenant
     tenant_state, login_cookie_name, login_cookie_secret = new_tenant_login_state(secure=cookie_secure)
     existing_login_cookies = sorted(name for name in request.cookies if name.startswith(tenant_login_cookie_prefix(secure=cookie_secure)))
     safe_return_to = normalize_local_return_to(return_to) or "/timeline"

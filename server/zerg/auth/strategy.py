@@ -254,20 +254,19 @@ class JWTAuthStrategy(AuthStrategy):
     # Internal ----------------------------------------------------------
 
     def _extract_token(self, request: Request) -> str | None:
-        """Extract JWT from request: prefer bearer header, fall back to cookie.
+        """Extract one explicit bearer or the browser session cookie.
 
-        Order:
-        1. Authorization: Bearer <token> header (for API clients)
-        2. longhouse_session cookie (for browser auth)
+        An Authorization header is terminal: malformed or empty bearer
+        credentials must not fall through to a cookie from another auth
+        context.
         """
-        # 1. Check Authorization header first
         auth_header: str | None = request.headers.get("Authorization")
-        if auth_header and auth_header.lower().startswith("bearer "):
-            token = auth_header[7:].strip()
-            if token:
-                return token
-
-        # 2. Fall back to session cookie (browser auth)
+        if auth_header is not None:
+            scheme, _, token = auth_header.partition(" ")
+            if scheme.lower() != "bearer":
+                return None
+            token = token.strip()
+            return token or None
         return request.cookies.get(SESSION_COOKIE_NAME)
 
     # Public API --------------------------------------------------------
@@ -355,10 +354,12 @@ class HostedCPAuthStrategy(AuthStrategy):
 
     def _extract_token(self, request: Request) -> str | None:
         auth_header: str | None = request.headers.get("Authorization")
-        if auth_header and auth_header.lower().startswith("bearer "):
-            token = auth_header[7:].strip()
-            if token:
-                return token
+        if auth_header is not None:
+            scheme, _, token = auth_header.partition(" ")
+            if scheme.lower() != "bearer":
+                return None
+            token = token.strip()
+            return token or None
         return request.cookies.get(SESSION_COOKIE_NAME)
 
     def _resolve_claims_user(self, db: Session, claims: CPTokenClaims):

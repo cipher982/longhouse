@@ -20,6 +20,14 @@ struct SharedAuthDebugState: Sendable {
 }
 
 enum SharedAuthStore {
+    private struct HostedTokenBundle: Codable {
+        let runtimeToken: String
+        let runtimeExpiresAt: Date?
+        let refreshToken: String
+        let refreshExpiresAt: Date?
+        let generation: String
+    }
+
     static let appGroupIdentifier = "group.ai.longhouse.shared"
     static let sessionCookieName = "__Host-lh_session"
     static let refreshCookieName = "__Host-lh_refresh"
@@ -59,8 +67,10 @@ enum SharedAuthStore {
     private static let runtimeTokenExpiryPrefix = "runtime_token_expires_at."
     private static let nativeRefreshTokenStoragePrefix = "native_refresh_tokens."
     private static let nativeRefreshTokenExpiryPrefix = "native_refresh_token_expires_at."
+    private static let hostedTokenBundlePrefix = "hosted_token_bundles."
+    private static let pendingNativeRevocationPrefix = "pending_native_revocations."
+    private static let authGenerationPrefix = "auth_generations."
     private static let keychainService = "ai.longhouse.shared-cookies"
-
     private static var defaults: UserDefaults? {
         UserDefaults(suiteName: appGroupIdentifier)
     }
@@ -88,6 +98,24 @@ enum SharedAuthStore {
             return nil
         }
         return value
+    }
+
+    /// Generation-fences asynchronous auth work. A response captured before
+    /// logout or server switching may finish later, but it cannot become the
+    /// active credential pair after the generation changes.
+    static func authGeneration(for serverURL: String) -> String {
+        defaults?.string(forKey: authGenerationKey(for: serverURL)) ?? "initial"
+    }
+
+    @discardableResult
+    static func advanceAuthGeneration(for serverURL: String) -> String {
+        let generation = UUID().uuidString
+        defaults?.set(generation, forKey: authGenerationKey(for: serverURL))
+        return generation
+    }
+
+    static func isAuthGenerationCurrent(_ generation: String, for serverURL: String) -> Bool {
+        authGeneration(for: serverURL) == generation
     }
 
     static func clearServerURL() {
@@ -132,24 +160,52 @@ enum SharedAuthStore {
             return
         }
         saveKeychainData(data, account: runtimeTokenStorageKey(for: serverURL))
-        KeychainHelper.saveAuthToken("Bearer \(value)")
         saveRuntimeTokenExpiry(expiresAt, for: serverURL)
     }
 
+    @discardableResult
     static func saveHostedTokens(
         runtimeToken: String,
         runtimeExpiresAt: Date?,
-        refreshToken: String?,
+        refreshToken: String,
         refreshExpiresAt: Date?,
-        for serverURL: String
-    ) {
-        if let refreshToken {
-            saveNativeRefreshToken(refreshToken, expiresAt: refreshExpiresAt, for: serverURL)
+        for serverURL: String,
+        expectedGeneration: String? = nil
+    ) -> Bool {
+        let token = runtimeToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        let refresh = refreshToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty, !refresh.isEmpty else {
+            return false
         }
-        saveRuntimeToken(runtimeToken, expiresAt: runtimeExpiresAt, for: serverURL)
+        let generation = expectedGeneration ?? authGeneration(for: serverURL)
+        guard isAuthGenerationCurrent(generation, for: serverURL) else {
+            return false
+        }
+        let bundle = HostedTokenBundle(
+            runtimeToken: token,
+            runtimeExpiresAt: runtimeExpiresAt,
+            refreshToken: refresh,
+            refreshExpiresAt: refreshExpiresAt,
+            generation: generation
+        )
+        guard let data = try? JSONEncoder().encode(bundle) else {
+            return false
+        }
+        return saveKeychainData(data, account: hostedTokenBundleStorageKey(for: serverURL))
+    }
+
+    private static func hostedTokenBundle(for serverURL: String) -> HostedTokenBundle? {
+        guard let data = loadKeychainData(account: hostedTokenBundleStorageKey(for: serverURL)) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(HostedTokenBundle.self, from: data)
     }
 
     static func runtimeToken(for serverURL: String) -> String? {
+        if let bundle = hostedTokenBundle(for: serverURL) {
+            guard bundle.generation == authGeneration(for: serverURL) else { return nil }
+            return bundle.runtimeToken
+        }
         guard let data = loadKeychainData(account: runtimeTokenStorageKey(for: serverURL)),
               let token = String(data: data, encoding: .utf8)?
                   .trimmingCharacters(in: .whitespacesAndNewlines),
@@ -160,6 +216,10 @@ enum SharedAuthStore {
     }
 
     static func runtimeTokenExpiresAt(for serverURL: String) -> Date? {
+        if let bundle = hostedTokenBundle(for: serverURL) {
+            guard bundle.generation == authGeneration(for: serverURL) else { return nil }
+            return bundle.runtimeExpiresAt
+        }
         let key = runtimeTokenExpiryKey(for: serverURL)
         let ts = defaults?.double(forKey: key) ?? 0
         guard ts > 0 else { return nil }
@@ -187,8 +247,8 @@ enum SharedAuthStore {
     }
 
     static func clearRuntimeToken(for serverURL: String) {
+        deleteKeychainData(account: hostedTokenBundleStorageKey(for: serverURL))
         deleteKeychainData(account: runtimeTokenStorageKey(for: serverURL))
-        KeychainHelper.deleteAuthToken()
         saveRuntimeTokenExpiry(nil, for: serverURL)
     }
 
@@ -206,6 +266,10 @@ enum SharedAuthStore {
     }
 
     static func nativeRefreshToken(for serverURL: String) -> String? {
+        if let bundle = hostedTokenBundle(for: serverURL) {
+            guard bundle.generation == authGeneration(for: serverURL) else { return nil }
+            return bundle.refreshToken
+        }
         guard let data = loadKeychainData(account: nativeRefreshTokenStorageKey(for: serverURL)),
               let token = String(data: data, encoding: .utf8)?
                   .trimmingCharacters(in: .whitespacesAndNewlines),
@@ -220,6 +284,10 @@ enum SharedAuthStore {
     }
 
     static func nativeRefreshTokenExpiresAt(for serverURL: String) -> Date? {
+        if let bundle = hostedTokenBundle(for: serverURL) {
+            guard bundle.generation == authGeneration(for: serverURL) else { return nil }
+            return bundle.refreshExpiresAt
+        }
         let key = nativeRefreshTokenExpiryKey(for: serverURL)
         let ts = defaults?.double(forKey: key) ?? 0
         guard ts > 0 else { return nil }
@@ -236,8 +304,29 @@ enum SharedAuthStore {
     }
 
     static func clearNativeRefreshToken(for serverURL: String) {
+        deleteKeychainData(account: hostedTokenBundleStorageKey(for: serverURL))
         deleteKeychainData(account: nativeRefreshTokenStorageKey(for: serverURL))
         saveNativeRefreshTokenExpiry(nil, for: serverURL)
+    }
+
+    static func savePendingNativeRevocationToken(_ token: String, for serverURL: String) {
+        let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = value.data(using: .utf8), !value.isEmpty else { return }
+        _ = saveKeychainData(data, account: pendingNativeRevocationStorageKey(for: serverURL))
+    }
+
+    static func pendingNativeRevocationToken(for serverURL: String) -> String? {
+        guard let data = loadKeychainData(account: pendingNativeRevocationStorageKey(for: serverURL)),
+              let token = String(data: data, encoding: .utf8)?
+                  .trimmingCharacters(in: .whitespacesAndNewlines),
+              !token.isEmpty else {
+            return nil
+        }
+        return token
+    }
+
+    static func clearPendingNativeRevocationToken(for serverURL: String) {
+        deleteKeychainData(account: pendingNativeRevocationStorageKey(for: serverURL))
     }
 
     static func setManagedCookies(_ cookies: [HTTPCookie], for serverURL: String) {
@@ -280,12 +369,6 @@ enum SharedAuthStore {
             activeNames.contains($0.name) && domainMatches($0.domain, host: host)
         }
         setManagedCookies(cookies, for: serverURL)
-        let sessionName = activeSessionCookieName(for: serverURL)
-        if let session = cookies.first(where: { $0.name == sessionName }) {
-            KeychainHelper.saveAuthToken("\(session.name)=\(session.value)")
-        } else {
-            KeychainHelper.deleteAuthToken()
-        }
     }
 
     /// Remove both current and legacy auth cookies from
@@ -354,6 +437,18 @@ enum SharedAuthStore {
         nativeRefreshTokenExpiryPrefix + (normalizedHost(for: serverURL) ?? serverURL)
     }
 
+    private static func hostedTokenBundleStorageKey(for serverURL: String) -> String {
+        hostedTokenBundlePrefix + (normalizedHost(for: serverURL) ?? serverURL)
+    }
+
+    private static func pendingNativeRevocationStorageKey(for serverURL: String) -> String {
+        pendingNativeRevocationPrefix + (normalizedHost(for: serverURL) ?? serverURL)
+    }
+
+    private static func authGenerationKey(for serverURL: String) -> String {
+        authGenerationPrefix + (normalizedHost(for: serverURL) ?? serverURL)
+    }
+
     private static func cookieDictionary(from cookie: HTTPCookie) -> [String: Any]? {
         guard let properties = cookie.properties else {
             return nil
@@ -399,13 +494,22 @@ enum SharedAuthStore {
     /// Always `ThisDeviceOnly`: everything stored here is a credential, and a
     /// non-`ThisDeviceOnly` item rides an encrypted backup and restores onto a
     /// different device.
-    private static func saveKeychainData(_ data: Data, account: String) {
+    @discardableResult
+    private static func saveKeychainData(_ data: Data, account: String) -> Bool {
         let query = keychainQuery(account: account)
-        SecItemDelete(query as CFDictionary)
+        var attributes: [String: Any] = [kSecValueData as String: data]
+        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if updateStatus == errSecSuccess {
+            return true
+        }
+        guard updateStatus == errSecItemNotFound else {
+            return false
+        }
+        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         var addQuery = query
         addQuery[kSecValueData as String] = data
         addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        SecItemAdd(addQuery as CFDictionary, nil)
+        return SecItemAdd(addQuery as CFDictionary, nil) == errSecSuccess
     }
 
     private static func loadKeychainData(account: String) -> Data? {

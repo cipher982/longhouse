@@ -396,10 +396,17 @@ def get_public_origins(settings: Settings) -> list[str]:
 
 
 def resolve_cors_origins(settings: Settings) -> list[str]:
-    """Resolve CORS origins with explicit env taking priority."""
+    """Resolve credentialed browser origins without widening hosted tenants."""
     cors_env = settings.allowed_cors_origins.strip()
     if cors_env:
-        return _split_csv(cors_env)
+        configured = _split_csv(cors_env)
+        if getattr(settings, "control_plane_url", None):
+            canonical = set(get_public_origins(settings))
+            # A hosted runtime has one canonical browser origin. If it is not
+            # configured, disable cross-origin browser access rather than
+            # trusting an arbitrary sibling/apex allowlist.
+            return [origin for origin in configured if origin in canonical] if canonical else []
+        return configured
 
     public_origins = get_public_origins(settings)
     if public_origins:
@@ -428,7 +435,11 @@ def validate_public_origin_config(settings: Settings, cors_origins: list[str]) -
             "PUBLIC_SITE_URL/APP_PUBLIC_URL does not appear in CORS origins. Set ALLOWED_CORS_ORIGINS or PUBLIC_SITE_URL to match."
         )
 
-    if not public_site_origin and not settings.allowed_cors_origins and not settings.auth_disabled:
+    if getattr(settings, "control_plane_url", None) and settings.allowed_cors_origins.strip() and not get_public_origins(settings):
+        warnings.append(
+            "Hosted CORS allowlist is disabled because PUBLIC_SITE_URL/PUBLIC_API_URL is missing; configure the canonical public origin."
+        )
+    elif not public_site_origin and not settings.allowed_cors_origins and not settings.auth_disabled:
         warnings.append("PUBLIC_SITE_URL (or APP_PUBLIC_URL) is not set and ALLOWED_CORS_ORIGINS is empty. CORS will default to localhost.")
 
     return warnings

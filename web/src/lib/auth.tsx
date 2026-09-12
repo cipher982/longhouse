@@ -50,6 +50,23 @@ export const AUTH_METHODS_QUERY_KEY = ['auth-methods'] as const;
 const AUTH_CHANNEL_NAME = 'longhouse-auth-events';
 const LOGGED_OUT_SESSION_KEY = 'longhouse:logged-out';
 
+function consumeLoginReadySignal(): boolean {
+  if (typeof document === 'undefined') return false;
+  const readyName = window.location.protocol === 'https:'
+    ? '__Host-lh_login_ready'
+    : 'lh_login_ready';
+  const names = new Set(
+    document.cookie
+      .split(';')
+      .map((part) => part.trim().split('=', 1)[0])
+      .filter(Boolean),
+  );
+  if (!names.has(readyName)) return false;
+  const secure = window.location.protocol === 'https:' ? ' Secure;' : '';
+  document.cookie = `${readyName}=; Max-Age=0; Path=/; SameSite=Lax;${secure}`;
+  return true;
+}
+
 export function hasLogoutIntent(): boolean {
   if (typeof window === 'undefined') return false;
   try {
@@ -77,7 +94,6 @@ export function clearLogoutIntent(): void {
     // Storage can be disabled; authenticated server state still wins.
   }
 }
-
 // Custom error class that includes HTTP status for retry logic
 class HttpError extends Error {
   status: number;
@@ -114,10 +130,14 @@ type AuthStatusResponse = {
 };
 
 async function getCurrentUser(): Promise<User | null> {
-  // A deliberate local sign-out is authoritative until the user explicitly
-  // starts a new login. This prevents a failed remote revocation or a stale
-  // cookie from silently signing the browser back in.
-  if (typeof window !== 'undefined' && hasLogoutIntent()) {
+  const loginReady = consumeLoginReadySignal();
+  if (loginReady) {
+    // A successful tenant handoff is the only server-issued signal that can
+    // clear a deliberate local sign-out barrier without a login button click.
+    clearLogoutBarrier();
+    clearLogoutIntent();
+  }
+  if (typeof window !== 'undefined' && !loginReady && hasLogoutIntent()) {
     return null;
   }
 
@@ -327,10 +347,11 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     beginLogoutBarrier();
     const completed = await logoutFromServer(everywhere);
     if (!completed) {
-      // Keep the authenticated UI and retry path when the authority could not
-      // confirm revocation. The barrier must be cleared so normal requests can
-      // continue while the user retries.
-      clearLogoutBarrier();
+      // The server clears local cookies even when CP revocation is degraded.
+      // Drop this tab's authenticated projection too; the next explicit login
+      // can establish a fresh session after the authority recovers.
+      await clearLocalAuth();
+      notifyLogout();
       return false;
     }
     try {
