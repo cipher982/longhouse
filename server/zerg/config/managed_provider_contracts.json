@@ -167,7 +167,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "d0ff0b1519ddb99a4f704a3c72cbd255a95d4aab902d8aed80f76aa064055ab2"
+              "oracle_digest": "fcf72be6e2f758746abab65061bfe5313a995916284ea3c898c443dd30079acb"
             }
           ]
         },
@@ -1041,7 +1041,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "d0ff0b1519ddb99a4f704a3c72cbd255a95d4aab902d8aed80f76aa064055ab2"
+              "oracle_digest": "fcf72be6e2f758746abab65061bfe5313a995916284ea3c898c443dd30079acb"
             },
             {
               "id": "real_print_marker_returned",
@@ -1552,7 +1552,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "d0ff0b1519ddb99a4f704a3c72cbd255a95d4aab902d8aed80f76aa064055ab2"
+              "oracle_digest": "fcf72be6e2f758746abab65061bfe5313a995916284ea3c898c443dd30079acb"
             }
           ]
         },
@@ -2434,7 +2434,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "d0ff0b1519ddb99a4f704a3c72cbd255a95d4aab902d8aed80f76aa064055ab2"
+              "oracle_digest": "fcf72be6e2f758746abab65061bfe5313a995916284ea3c898c443dd30079acb"
             }
           ]
         },
@@ -3295,6 +3295,7 @@
         "server/zerg/services/provider_interaction_semantics.py",
         "server/zerg/qa/provider_adapters/omp.py",
         "server/zerg/qa/omp_console_producer.py",
+        "server/zerg/qa/provider_console_lifecycle.py",
         "server/zerg/qa/omp_helm_lifecycle.py"
       ],
       "wire_families": [
@@ -3725,7 +3726,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "e127a1f93e22cdcbcde0e4a28649f14e0a7aed448bb2a7e5610ef37c0fcb9730"
+      "adapter_digest": "687db52a2ae7ff6d6520a8b19d2d2538292d47a41a18fba3eb88a10a9fabc398"
     }
   ]
 }

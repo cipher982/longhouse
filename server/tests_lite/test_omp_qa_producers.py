@@ -654,15 +654,15 @@ def test_omp_native_model_evidence_publishes_the_first_turn_event_window(tmp_pat
     }
 
 
-def test_omp_continuation_prompt_names_the_earlier_context_label_without_tool_or_marker_replay() -> None:
+def test_omp_continuation_prompt_keeps_context_and_marker_in_one_reply() -> None:
     prompt = _omp_continuation_prompt("OMP_RESUME_MARKER")
 
     assert '"Remember this context phrase:"' in prompt
     assert "earlier user message" in prompt
     assert "OMP_RESUME_MARKER" in prompt
-    assert "exactly OMP_RESUME_MARKER" in prompt
-    assert "Use only this request's marker" in prompt
-    assert "no other text" in prompt
+    assert "followed by exactly OMP_RESUME_MARKER" in prompt
+    assert "and no other text" in prompt
+    assert "Use only this request's marker" not in prompt
 
 
 def test_omp_helm_marker_prompts_preserve_setup_instructions() -> None:

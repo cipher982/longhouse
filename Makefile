@@ -331,7 +331,7 @@ test-ios-helper: ## iOS simulator helper script tests
 	@python3 scripts/tests/simlab-proxy.test.py
 
 test-frontend: ## Frontend unit tests + type-check (~15s)
-	@cd web && bun run validate:types && bun run test -- --run
+	@cd web && bun run validate:types && bun run test -- --run --runInBand
 
 test-engine: ## Rust engine tests (~20s)
 	@python3 scripts/build/generate_build_identity.py

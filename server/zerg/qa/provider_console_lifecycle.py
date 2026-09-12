@@ -1496,8 +1496,8 @@ def _omp_continuation_prompt(resume_marker: str) -> str:
     return (
         "New-turn continuation check. Recall the value labelled "
         '"Remember this context phrase:" from the earlier user message. '
-        f"Then reply with that value followed by exactly {resume_marker}. "
-        "Use only this request's marker and no other text."
+        f"Then reply with that value followed by exactly {resume_marker} "
+        "and no other text."
     )
 
 
