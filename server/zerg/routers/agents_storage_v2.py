@@ -1190,9 +1190,14 @@ async def _commit_admitted_envelope(
         if not isinstance(objects, list) or len(objects) != 1 or not isinstance(objects[0], dict):
             raise CatalogUnavailable("catalog returned an invalid raw-object existence result")
         if objects[0].get("receipt") is not None:
+            try:
+                stored_object_hash = _lower_hash(objects[0]["object_hash"], "object_hash")
+            except (KeyError, TypeError, ValueError) as exc:
+                raise CatalogUnavailable("catalog returned an invalid raw-object existence result") from exc
             replay_receipt = _validated_receipt(
                 objects[0]["receipt"],
                 expected_envelope_id=parsed["expected_envelope_id"],
+                expected_object_hash=stored_object_hash,
             )
             if parsed["provider_facts"]:
                 # The bytes are already durable; facts a pre-facts engine never

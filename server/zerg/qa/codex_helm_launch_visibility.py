@@ -675,8 +675,11 @@ def _human_launch_sequence(
         cleanup = hide_and_verify_canary_isolation(
             lambda path, method, body: _runtime_request(args, path, method, body),
             session_id=session_id,
+            run_id=str(resumed_registration.get("run_id") or ""),
             provider="codex",
             project=project,
+            api_url=args.api_url,
+            agents_token=args.agents_token,
             device_id=canonical_device_id,
             cwd=str(workspace),
             owned_processes_dead=lambda: all(_pid_dead(pid) for pid in pids),
@@ -791,8 +794,11 @@ def _automation_launch(
         cleanup = hide_and_verify_canary_isolation(
             lambda path, method, body: _runtime_request(args, path, method, body),
             session_id=session_id,
+            run_id=str(registration.get("run_id") or ""),
             provider="codex",
             project=project,
+            api_url=args.api_url,
+            agents_token=args.agents_token,
             device_id=canonical_device_id,
             cwd=str(workspace),
             owned_processes_dead=lambda: all(_pid_dead(pid) for pid in pids),

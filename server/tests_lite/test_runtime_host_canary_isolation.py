@@ -2,8 +2,38 @@ from __future__ import annotations
 
 from io import StringIO
 
+import pytest
+
 import zerg.qa.runtime_host_canary_isolation as isolation
 from zerg.qa.runtime_host_canary_isolation import hide_and_verify_canary_isolation
+
+
+@pytest.fixture(autouse=True)
+def stub_canonical_retirement(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        isolation,
+        "_wait_served_run_retirement",
+        lambda _api_url, _token, session_id, claims, *, timeout: {
+            "retired": True,
+            "active_run_count": 0,
+            "session_id": session_id,
+            "expected_run_id": claims[0]["run_id"],
+            "terminal_state": "completed",
+        },
+    )
+    monkeypatch.setattr(
+        isolation,
+        "retire_qualification_session",
+        lambda _api_url, _token, session_id, *, provider, project: {
+            "status": "pass",
+            "session_id": session_id,
+            "hidden": True,
+            "archived": True,
+            "present_in_served_inventory": False,
+            "provider": provider,
+            "project": project,
+        },
+    )
 
 
 def test_runtime_host_request_routes_through_machine_api(monkeypatch):
@@ -37,8 +67,11 @@ def test_canary_isolation_proves_all_user_surface_axes_and_preserves_retrieval()
     receipt = hide_and_verify_canary_isolation(
         request,
         session_id="session-1",
+        run_id="run-1",
         provider="codex",
         project="factory-proof-1",
+        api_url="https://runtime.example",
+        agents_token="agents-token",
         device_id="machine-1",
         cwd="/tmp/factory-proof-1",
         owned_processes_dead=lambda: True,
@@ -47,7 +80,7 @@ def test_canary_isolation_proves_all_user_surface_axes_and_preserves_retrieval()
 
     assert receipt["status"] == "pass"
     assert all(receipt["axes"].values())
-    assert calls[0] == ("sessions/session-1/timeline-visibility", "PATCH", {"hidden": True})
+    assert calls[0][0] == "sessions/session-1"
     assert sum(path.startswith("sessions?") for path, _method, _body in calls) == 2
     assert not any(path.startswith("/api/") for path, _method, _body in calls)
     assert not any(path.startswith("sessions/active?") for path, _method, _body in calls)
@@ -68,8 +101,11 @@ def test_canary_isolation_fails_when_session_remains_on_broad_user_surface():
     receipt = hide_and_verify_canary_isolation(
         request,
         session_id="session-1",
+        run_id="run-1",
         provider="codex",
         project="factory-proof-1",
+        api_url="https://runtime.example",
+        agents_token="agents-token",
         device_id="machine-1",
         cwd="/tmp/factory-proof-1",
         owned_processes_dead=lambda: True,
@@ -94,8 +130,11 @@ def test_canary_isolation_refuses_title_debt_even_when_other_surfaces_are_clean(
     receipt = hide_and_verify_canary_isolation(
         request,
         session_id="session-1",
+        run_id="run-1",
         provider="codex",
         project="factory-proof-1",
+        api_url="https://runtime.example",
+        agents_token="agents-token",
         device_id="machine-1",
         cwd="/tmp/factory-proof-1",
         owned_processes_dead=lambda: True,
@@ -123,8 +162,11 @@ def test_canary_isolation_accepts_the_products_explicit_resume_seed_marker():
     receipt = hide_and_verify_canary_isolation(
         request,
         session_id="session-1",
+        run_id="run-1",
         provider="codex",
         project="factory-proof-1",
+        api_url="https://runtime.example",
+        agents_token="agents-token",
         device_id="machine-1",
         cwd="/tmp/factory-proof-1",
         owned_processes_dead=lambda: True,
@@ -152,8 +194,11 @@ def test_provider_factory_origin_is_not_misclassified_as_title_debt():
     receipt = hide_and_verify_canary_isolation(
         request,
         session_id="session-1",
+        run_id="run-1",
         provider="codex",
         project="provider-factory-codex-launch-fixture",
+        api_url="https://runtime.example",
+        agents_token="agents-token",
         device_id="provider-factory-resume",
         cwd="/tmp/lch-fixture/workspace",
         owned_processes_dead=lambda: True,
@@ -162,3 +207,42 @@ def test_provider_factory_origin_is_not_misclassified_as_title_debt():
 
     assert receipt["status"] == "pass"
     assert receipt["title_debt_basis"] == "origin_ineligible"
+
+
+def test_canary_isolation_rejects_visibility_patch_without_canonical_retirement(monkeypatch):
+    monkeypatch.setattr(
+        isolation,
+        "retire_qualification_session",
+        lambda *_args, **_kwargs: {
+            "status": "fail",
+            "session_id": "session-1",
+            "hidden": True,
+            "archived": False,
+            "present_in_served_inventory": True,
+        },
+    )
+
+    def request(path: str, _method: str, _body: dict | None) -> dict:
+        if path == "sessions/session-1":
+            return {"id": "session-1", "user_messages": 0}
+        if path.startswith("machines/"):
+            return {"workspaces": []}
+        return {"sessions": []}
+
+    receipt = hide_and_verify_canary_isolation(
+        request,
+        session_id="session-1",
+        run_id="run-1",
+        provider="codex",
+        project="factory-proof-1",
+        api_url="https://runtime.example",
+        agents_token="agents-token",
+        device_id="machine-1",
+        cwd="/tmp/factory-proof-1",
+        owned_processes_dead=lambda: True,
+        timeout_seconds=0.02,
+    )
+
+    assert receipt["status"] == "fail"
+    assert receipt["hidden"] is True
+    assert receipt["canary_session_hidden"] is False

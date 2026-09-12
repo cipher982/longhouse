@@ -341,7 +341,10 @@ def test_storage_v2_session_facts_accept_provider_conversation_identity():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stage,field", [("commit", "object_hash"), ("replay", "envelope_id")])
+@pytest.mark.parametrize(
+    "stage,field",
+    [("commit", "object_hash"), ("replay", "envelope_id"), ("replay", "object_hash")],
+)
 async def test_storage_v2_misrouted_receipt_is_not_acknowledged(monkeypatch, stage, field):
     async with _storage_v2_stack(
         monkeypatch,

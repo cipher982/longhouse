@@ -82,4 +82,5 @@ export SMOKE_RUNTIME_TOKEN="$LONGHOUSE_DEVICE_TOKEN"
 
 cd "$ROOT_DIR/e2e"
 
-bunx playwright test --config playwright.prod.config.js "$@"
+env -u LONGHOUSE_MACHINE_TOKEN -u CONTROL_PLANE_ADMIN_TOKEN -u LH_INSTANCE_PASSWORD \
+  bunx playwright test --config playwright.prod.config.js "$@"

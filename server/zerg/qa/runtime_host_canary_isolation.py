@@ -16,6 +16,8 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
+from zerg.qa.live_session_toolkit import retire_qualification_session
+from zerg.qa.provider_console_lifecycle import _wait_served_run_retirement
 from zerg.services.session_title import is_resume_seed_marker
 from zerg.services.session_visibility_policy import SessionVisibilityFacts
 from zerg.services.session_visibility_policy import evaluate_origin_visibility
@@ -54,26 +56,42 @@ def runtime_host_request(
     return result
 
 
-def _ids(payload: dict[str, Any]) -> set[str]:
+def _ids(payload: dict[str, Any]) -> set[str] | None:
     rows = payload.get("sessions")
     if not isinstance(rows, list):
-        return set()
-    return {str(row.get("id") or row.get("session_id")) for row in rows if isinstance(row, dict)}
+        return None
+    ids: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            return None
+        value = row.get("id") or row.get("session_id")
+        if not isinstance(value, str) or not value.strip():
+            return None
+        ids.add(value)
+    return ids
 
 
-def _workspace_paths(payload: dict[str, Any]) -> set[str]:
+def _workspace_paths(payload: dict[str, Any]) -> set[str] | None:
     rows = payload.get("workspaces")
     if not isinstance(rows, list):
-        return set()
-    return {str(row.get("path")) for row in rows if isinstance(row, dict) and row.get("path")}
+        return None
+    paths: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("path"), str) or not row["path"].strip():
+            return None
+        paths.add(row["path"])
+    return paths
 
 
 def hide_and_verify_canary_isolation(
     request: RuntimeRequest,
     *,
     session_id: str,
+    run_id: str,
     provider: str,
     project: str,
+    api_url: str,
+    agents_token: str,
     device_id: str,
     cwd: str,
     owned_processes_dead: Callable[[], bool],
@@ -86,7 +104,53 @@ def hide_and_verify_canary_isolation(
     same sufficient facts that keep a row out of the storage title queue.
     """
 
-    hidden = request(f"sessions/{session_id}/timeline-visibility", "PATCH", {"hidden": True})
+    served_run_inventory: dict[str, Any]
+    if not run_id.strip():
+        served_run_inventory = {
+            "retired": False,
+            "active_run_count": None,
+            "session_id": session_id,
+            "expected_run_id": None,
+            "error": "run_id_unavailable",
+        }
+    else:
+        try:
+            served_run_inventory = dict(
+                _wait_served_run_retirement(
+                    api_url,
+                    agents_token,
+                    session_id,
+                    [{"state": "terminal", "session_id": session_id, "run_id": run_id}],
+                    timeout=timeout_seconds,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - cleanup evidence must fail closed
+            served_run_inventory = {
+                "retired": False,
+                "active_run_count": None,
+                "session_id": session_id,
+                "expected_run_id": run_id,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+    session_retirement = retire_qualification_session(
+        api_url,
+        agents_token,
+        session_id,
+        provider=provider,
+        project=project,
+    )
+    served_run_retired = (
+        served_run_inventory.get("retired") is True
+        and served_run_inventory.get("session_id") == session_id
+        and served_run_inventory.get("active_run_count") == 0
+    )
+    canary_session_hidden = (
+        session_retirement.get("status") == "pass"
+        and session_retirement.get("session_id") == session_id
+        and session_retirement.get("hidden") is True
+        and session_retirement.get("archived") is True
+        and session_retirement.get("present_in_served_inventory") is False
+    )
     query = urllib.parse.urlencode(
         {
             "project": project,
@@ -113,7 +177,11 @@ def hide_and_verify_canary_isolation(
             "GET",
             None,
         )
-        user_messages = int(direct.get("user_messages") or 0)
+        default_ids = _ids(default)
+        open_ids = _ids(open_sessions)
+        workspace_paths = _workspace_paths(workspaces)
+        raw_user_messages = direct.get("user_messages")
+        user_messages = raw_user_messages if type(raw_user_messages) is int and raw_user_messages >= 0 else None
         anchor_title = str(direct.get("anchor_title") or "").strip()
         first_user_message = str(direct.get("first_user_message_preview") or "")
         title_origin_eligible = evaluate_origin_visibility(
@@ -126,6 +194,8 @@ def hide_and_verify_canary_isolation(
         ).title_origin_eligible
         if not title_origin_eligible:
             title_debt_basis = "origin_ineligible"
+        elif user_messages is None:
+            title_debt_basis = "user_message_count_unavailable"
         elif user_messages == 0:
             title_debt_basis = "no_user_messages"
         elif anchor_title:
@@ -135,22 +205,29 @@ def hide_and_verify_canary_isolation(
         else:
             title_debt_basis = "storage_title_candidate"
         axes = {
-            "default_timeline_absent": session_id not in _ids(default),
-            "open_absent": session_id not in _ids(open_sessions),
-            "title_debt_absent": title_debt_basis != "storage_title_candidate",
-            "workspace_suggestion_absent": cwd not in _workspace_paths(workspaces),
+            "default_timeline_absent": default_ids is not None and session_id not in default_ids,
+            "open_absent": open_ids is not None and session_id not in open_ids,
+            "title_debt_absent": title_debt_basis
+            in {"origin_ineligible", "no_user_messages", "anchor_title_present", "resume_seed_marker"},
+            "workspace_suggestion_absent": workspace_paths is not None and cwd not in workspace_paths,
             "direct_retrieval_succeeds": str(direct.get("id") or "") == session_id,
-            "owned_processes_dead": owned_processes_dead(),
+            "owned_processes_dead": owned_processes_dead() is True,
         }
         last = {
-            "status": "pass" if all(axes.values()) else "pending",
+            "status": (
+                "pass" if all(value is True for value in axes.values()) and served_run_retired and canary_session_hidden else "pending"
+            ),
             "session_id": session_id,
-            "hidden": hidden.get("hidden") is True,
+            "hidden": session_retirement.get("hidden") is True,
             "axes": axes,
             "title_debt_basis": title_debt_basis,
             "workspace_path": cwd,
+            "served_run_inventory": served_run_inventory,
+            "served_run_retired": served_run_retired,
+            "session_retirement": session_retirement,
+            "canary_session_hidden": canary_session_hidden,
         }
-        if last["hidden"] and last["status"] == "pass":
+        if last["status"] == "pass":
             return last
         time.sleep(0.25)
     return {**last, "status": "fail", "failure_code": "canary_isolation_timeout"}

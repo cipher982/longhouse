@@ -58,7 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           case "${QA_INSTANCE_SUBDOMAIN,,}" in
-            ""|david010|demo)
+            ""|david010|demo|dogfood|personal)
               echo "::error::Configure a dedicated HOSTED_CANARY_SUBDOMAIN; refusing personal dogfood or demo." >&2
               exit 1
               ;;
@@ -130,13 +130,19 @@ jobs:
       - name: Verify deployed source before QA
         id: runtime_before
         env:
-          EXPECTED_RUNTIME_TAG: ${{ inputs.runtime_image_tag || inputs.source_sha || 'latest' }}
+          EXPECTED_RUNTIME_TAG: ${{ inputs.runtime_image_tag || inputs.source_sha || '' }}
         run: |
           set -euo pipefail
+          if [[ -n "$EXPECTED_RUNTIME_TAG" && ! "$EXPECTED_RUNTIME_TAG" =~ ^[0-9a-f]{40}$ ]]; then
+            EXPECTED_RUNTIME_TAG="$(docker buildx imagetools inspect \
+              "ghcr.io/${{ github.repository_owner }}/longhouse-runtime:$EXPECTED_RUNTIME_TAG" \
+              --format '{{json .Image}}' |
+              jq --exit-status --raw-output '.config.Labels["org.opencontainers.image.revision"] | select(type == "string" and test("^[0-9a-f]{40}$"))')"
+          fi
           health="$(curl --fail --silent --show-error --max-time 15 "https://${QA_INSTANCE_SUBDOMAIN}.longhouse.ai/api/health")"
           printf '%s\n' "$health" | jq '{build}'
           actual_sha="$(printf '%s\n' "$health" | jq --exit-status --raw-output '.build | select(.dirty == false) | .commit | select(type == "string" and test("^[0-9a-f]{40}$"))')"
-          if [[ "$EXPECTED_RUNTIME_TAG" =~ ^[0-9a-f]{40}$ && "$actual_sha" != "$EXPECTED_RUNTIME_TAG" ]]; then
+          if [[ -n "$EXPECTED_RUNTIME_TAG" && "$actual_sha" != "$EXPECTED_RUNTIME_TAG" ]]; then
             echo "Deployed runtime $actual_sha does not match requested image $EXPECTED_RUNTIME_TAG" >&2
             exit 1
           fi
