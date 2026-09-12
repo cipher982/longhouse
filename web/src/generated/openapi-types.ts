@@ -5661,11 +5661,6 @@ export interface components {
              * @default false
              */
             revoke_authority: boolean;
-            /**
-             * Orphan Cleanup
-             * @default false
-             */
-            orphan_cleanup: boolean;
         };
         /** ObservabilityOverviewResponse */
         ObservabilityOverviewResponse: {

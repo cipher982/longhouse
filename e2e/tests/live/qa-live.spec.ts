@@ -251,6 +251,18 @@ test("removed route auth fallback resolves to timeline", async ({
   const context = await browser.newContext({ baseURL: baseOrigin });
   const page = await context.newPage();
 
+  const gotoAllowingExpectedAuthRedirect = async (url: string) => {
+    const navigation = page.goto(url, { waitUntil: "domcontentloaded" }).catch((error) => {
+      // LoginPage immediately hands hosted users to the control plane. Chromium
+      // reports that expected document replacement as ERR_ABORTED even though
+      // the navigation continues and the next URL is the supported auth page.
+      if (!(error instanceof Error) || !error.message.includes("net::ERR_ABORTED")) {
+        throw error;
+      }
+    });
+    await navigation;
+  };
+
   try {
     // /loop is a removed SPA route. The supported unauthenticated contract is
     // the configured tenant login handoff, not a hard-coded control hostname.
@@ -274,7 +286,7 @@ test("removed route auth fallback resolves to timeline", async ({
       ).not.toBeNull();
     }
 
-    await page.goto(`${baseOrigin}/loop`, { waitUntil: "domcontentloaded" });
+    await gotoAllowingExpectedAuthRedirect(`${baseOrigin}/loop`);
 
     if (methods?.sso === true) {
       await expect(page).toHaveURL(
@@ -293,7 +305,7 @@ test("removed route auth fallback resolves to timeline", async ({
     // --- Part 2: authenticated removed /loop route lands on the supported home route ---
     const state = buildRuntimeTokenStorageState(baseOrigin, runtimeToken);
     await context.addCookies(state.cookies);
-    await page.goto(`${baseOrigin}/loop`, { waitUntil: "domcontentloaded" });
+    await gotoAllowingExpectedAuthRedirect(`${baseOrigin}/loop`);
     await expect(page).toHaveURL(
       (url) => url.origin === baseOrigin && url.pathname === "/timeline",
       { timeout: 20_000 },
