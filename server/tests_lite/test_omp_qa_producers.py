@@ -1451,12 +1451,31 @@ def test_omp_keeps_isolation_when_complete_source_retention_fails(tmp_path) -> N
         _remove_isolation_after_source_retention(
             isolation,
             source_retention_verified=False,
+            runtime_cleanup_verified=False,
             cleanup=cleanup,
         )
         is False
     )
     assert isolation.exists()
     assert cleanup["authoritative_source_evidence_retained"] is True
+
+
+def test_omp_keeps_isolation_when_owned_runtime_cleanup_is_unverified(tmp_path) -> None:
+    isolation = tmp_path / "isolation"
+    isolation.mkdir()
+    cleanup: dict[str, object] = {}
+
+    assert (
+        _remove_isolation_after_source_retention(
+            isolation,
+            source_retention_verified=True,
+            runtime_cleanup_verified=False,
+            cleanup=cleanup,
+        )
+        is False
+    )
+    assert isolation.exists()
+    assert cleanup["isolation_retention_reason"] == "owned runtime cleanup is incomplete"
 
 
 def test_omp_selected_assertion_status_ignores_unrelated_sibling_failures() -> None:

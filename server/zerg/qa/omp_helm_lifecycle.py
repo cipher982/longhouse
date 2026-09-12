@@ -1416,11 +1416,15 @@ def _remove_isolation_after_source_retention(
     isolation: Path,
     *,
     source_retention_verified: bool,
+    runtime_cleanup_verified: bool,
     cleanup: dict[str, Any],
 ) -> bool:
-    if not source_retention_verified:
+    if not source_retention_verified or not runtime_cleanup_verified:
         cleanup["isolation_retained"] = True
         cleanup["authoritative_source_evidence_retained"] = isolation.exists()
+        cleanup["isolation_retention_reason"] = (
+            "source retention is incomplete" if not source_retention_verified else "owned runtime cleanup is incomplete"
+        )
         return False
     try:
         shutil.rmtree(isolation)
@@ -1841,7 +1845,36 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         send_offset = _read_source_size(current_session_file)
         send_prompt = _exact_marker_prompt(send_marker)
         send = _run_engine(args.engine, "send", current_session_id, env, text=send_prompt)
-        send_row = _wait_native_marker(current_session_file, send_marker, minimum_offset=send_offset)
+        send_channel_evidence = _channel_command_evidence(send, current_state)
+        controls["send"] = {
+            "action_label": "send",
+            "prompt": send_prompt,
+            "state": dict(current_state),
+            "command": send,
+            "marker_wait": {
+                "status": "pending",
+                "marker": send_marker,
+                "source_offset": send_offset,
+                "source_size_before": send_offset,
+            },
+            "evidence": send_channel_evidence,
+        }
+        try:
+            send_row = _wait_native_marker(current_session_file, send_marker, minimum_offset=send_offset)
+        except BaseException as exc:
+            controls["send"]["marker_wait"] = {
+                **controls["send"]["marker_wait"],
+                "status": "failed",
+                "source_size_after": _read_source_size(current_session_file),
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            observation["send_evidence"] = {
+                **send_channel_evidence,
+                "marker": send_marker,
+                "minimum_offset": send_offset,
+                "marker_observed": False,
+            }
+            raise
         send_evidence = _native_marker_evidence(
             send_row,
             current_session_file,
@@ -1849,16 +1882,9 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             minimum_offset=send_offset,
             native_session_id=str(current_state.get("native_session_id") or ""),
         )
-        send_evidence.update(_channel_command_evidence(send, current_state))
+        send_evidence.update(send_channel_evidence)
         send_evidence.update({"observation_scope": "initial", "source_generation": "initial"})
-        controls["send"] = {
-            "action_label": "send",
-            "prompt": send_prompt,
-            "state": dict(current_state),
-            "command": send,
-            "marker_row": send_row,
-            "evidence": send_evidence,
-        }
+        controls["send"].update({"marker_row": send_row, "evidence": send_evidence})
         observation["send_idle"] = (
             send_evidence["channel_ack_bound"] and send_evidence["native_source_bound"] and send_evidence["marker_count"] == 1
         )
@@ -2456,6 +2482,24 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "stopped_state": final_stopped,
             "control_identity": final_control_receipt,
         }
+    except BaseException as exc:
+        partial_observation = {
+            "schema_version": 1,
+            "status": "fail",
+            "error": f"{type(exc).__name__}: {exc}",
+            "observation": {
+                **observation,
+                "controls": redact_state_for_evidence(controls),
+                "native_source_generations": source_generations,
+                "current_state": redact_state_for_evidence(current_state),
+            },
+        }
+        try:
+            lifecycle.write_json(root / "partial-observation.json", partial_observation)
+        except Exception:
+            pass
+        raise
+
     finally:
         termination_dispatch: dict[str, Any] = {"status": "pass", "dispatched": False, "skipped": True}
         if not served_run_inventory and current_session_id:
@@ -2616,9 +2660,16 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         }
         if not source_retention_verified:
             cleanup["status"] = "fail"
+        runtime_cleanup_verified = (
+            cleanup.get("process_stop", {}).get("verified") is True
+            and cleanup.get("shipper_stop_verified") is True
+            and cleanup.get("canary_session_hidden") is True
+            and cleanup.get("served_run_retired") is True
+        )
         isolation_removed = _remove_isolation_after_source_retention(
             isolation,
             source_retention_verified=source_retention_verified,
+            runtime_cleanup_verified=runtime_cleanup_verified,
             cleanup=cleanup,
         )
         cleanup["isolation_removed"] = isolation_removed
