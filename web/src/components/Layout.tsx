@@ -3,6 +3,7 @@ import { useState, useCallback, useEffect, useRef, type PropsWithChildren } from
 import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth, useAuthMethods } from "../lib/auth";
+import { buildLoginUrl } from "../lib/loginRedirect";
 import { requestNativeAuth } from "../lib/nativeAuthBridge";
 import { ConnectionStatus, ConnectionStatusIndicator } from "../lib/useWebSocket";
 import { useApiHealth } from "../lib/apiHealth";
@@ -96,10 +97,13 @@ function WelcomeHeader() {
       cancelLabel: 'Stay signed in',
       variant: 'default',
     });
-    if (confirmed) {
-      closeUserMenu();
-      await logout();
-      requestNativeAuth(window.location.pathname + window.location.search + window.location.hash);
+    if (!confirmed) return;
+    closeUserMenu();
+    const completed = await logout();
+    if (!completed) return;
+    const returnTo = window.location.pathname + window.location.search + window.location.hash;
+    if (!requestNativeAuth(returnTo)) {
+      window.location.replace(buildLoginUrl(returnTo));
     }
   };
 
@@ -113,10 +117,11 @@ function WelcomeHeader() {
     });
     if (!confirmed) return;
     closeUserMenu();
-    await logout();
+    const completed = await logout(true);
+    if (!completed) return;
     if (controlPlaneBase) {
       const returnTo = window.location.origin;
-      window.location.href = `${controlPlaneBase}/auth/logout?return_to=${encodeURIComponent(returnTo)}`;
+      window.location.href = `${controlPlaneBase}/?return_to=${encodeURIComponent(returnTo)}`;
     }
   };
 
@@ -130,10 +135,11 @@ function WelcomeHeader() {
     });
     if (!confirmed) return;
     closeUserMenu();
-    await logout();
+    const completed = await logout(true);
+    if (!completed) return;
     if (controlPlaneBase) {
       const returnTo = controlPlaneLoginUrl ?? `${controlPlaneBase}/?switch=1`;
-      window.location.href = `${controlPlaneBase}/auth/logout?return_to=${encodeURIComponent(returnTo)}`;
+      window.location.href = returnTo;
     }
   };
 

@@ -29,6 +29,11 @@ describe("fetchWithRefresh", () => {
     expect(requestAuth).toHaveBeenCalledWith({
       return_to: "/timeline/abc?view=compact#notes",
     });
+    expect(fetchMock.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({
+        headers: { "X-Longhouse-Auth": "1" },
+      }),
+    );
     expect(replaceSpy).not.toHaveBeenCalled();
   });
 
@@ -44,5 +49,22 @@ describe("fetchWithRefresh", () => {
 
     expect(response.status).toBe(401);
     expect(replaceSpy).toHaveBeenCalledWith("/timeline/abc?view=compact#notes");
+  });
+
+  it("does not turn a control-plane outage into a logout", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(new Response(null, { status: 503 }));
+
+    const replaceSpy = vi.spyOn(loginRedirect, "replaceWithLoginUrl").mockImplementation(() => {});
+    const requestAuth = vi.fn();
+    window.LonghouseNativeAuth = { requestAuth };
+
+    const response = await fetchWithRefresh("/api/users/me");
+
+    expect(response.status).toBe(401);
+    expect(replaceSpy).not.toHaveBeenCalled();
+    expect(requestAuth).not.toHaveBeenCalled();
   });
 });

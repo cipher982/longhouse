@@ -1,12 +1,17 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
-import { useLatest } from '../hooks/useLatest';
 import { getWebSocketConfig } from './config';
+import { useLatest } from '../hooks/useLatest';
+import { RefreshUnavailableError, refreshAccessToken } from './auth-refresh';
+import { replaceWithLoginUrl } from './loginRedirect';
+import { requestNativeAuth } from './nativeAuthBridge';
 
 // Maximum number of messages to queue when disconnected
 // Prevents memory leak if user performs many actions while offline
 const MAX_QUEUED_MESSAGES = 100;
+const MAX_AUTH_RECOVERY_ATTEMPTS = 3;
+const AUTH_READY_GRACE_MS = 3000;
 const STREAMING_MESSAGE_TYPES = new Set([
   'stream_start',
   'stream_chunk',
@@ -72,6 +77,14 @@ interface UseWebSocketOptions {
   autoConnect?: boolean;
 }
 
+function subscriptionTopics(message: WebSocketMessage): string[] {
+  if (message.type !== 'subscribe' && message.type !== 'unsubscribe') return [];
+  const data = message.data;
+  if (!data || typeof data !== 'object' || !('topics' in data)) return [];
+  const topics = data.topics;
+  return Array.isArray(topics) ? topics.filter((topic): topic is string => typeof topic === 'string' && topic.length > 0) : [];
+}
+
 interface UseWebSocketReturn {
   connectionStatus: ConnectionStatus;
   sendMessage: (message: WebSocketMessage) => void;
@@ -122,7 +135,13 @@ export function useWebSocket(
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const messageQueueRef = useRef<WebSocketMessage[]>([]);
+  const authRecoveryPromiseRef = useRef<Promise<void> | null>(null);
+  const authRecoveryAttemptsRef = useRef(0);
+  const authReadyTimeoutRef = useRef<number | null>(null);
+  const authenticatedRef = useRef(false);
   const connectRef = useRef<(() => void) | null>(null);
+  const activeSubscriptionTopicsRef = useRef<Set<string>>(new Set());
+  const hasAuthenticatedConnectionRef = useRef(false);
   const intentionalCloseRef = useRef(false);
   const latestOptionsRef = useLatest({
     invalidateQueries,
@@ -150,6 +169,42 @@ export function useWebSocket(
     return url.toString();
   }, []);
 
+  const clearAuthReadyTimeout = useCallback(() => {
+    if (authReadyTimeoutRef.current !== null) {
+      window.clearTimeout(authReadyTimeoutRef.current);
+      authReadyTimeoutRef.current = null;
+    }
+  }, []);
+  const markAuthenticated = useCallback(() => {
+    clearAuthReadyTimeout();
+    const isReconnect = hasAuthenticatedConnectionRef.current;
+    authenticatedRef.current = true;
+    hasAuthenticatedConnectionRef.current = true;
+    authRecoveryAttemptsRef.current = 0;
+    setConnectionStatus(ConnectionStatus.CONNECTED);
+    reconnectAttemptsRef.current = 0;
+
+    if (isReconnect && wsRef.current?.readyState === WebSocket.OPEN && activeSubscriptionTopicsRef.current.size > 0) {
+      const resubscribe = createEnvelope(
+        'subscribe',
+        'system',
+        { topics: Array.from(activeSubscriptionTopicsRef.current) },
+        `resubscribe-${Date.now()}`,
+      );
+      wsRef.current.send(JSON.stringify(resubscribe));
+    }
+
+    if (wsRef.current && messageQueueRef.current.length > 0) {
+      messageQueueRef.current.forEach(message => {
+        wsRef.current?.send(JSON.stringify(message));
+      });
+      messageQueueRef.current = [];
+    }
+
+    latestOptionsRef.current.onConnect?.();
+  }, [clearAuthReadyTimeout, latestOptionsRef]);
+
+
   const handleMessage = useCallback((event: MessageEvent) => {
     let message: WebSocketMessage;
 
@@ -158,6 +213,10 @@ export function useWebSocket(
     } catch {
       // If not JSON, treat as simple message
       message = { type: 'message', data: event.data };
+    }
+    if (message.type === 'auth_ready') {
+      markAuthenticated();
+      return;
     }
 
     // Handle heartbeat protocol — respond with envelope-format pong
@@ -187,40 +246,131 @@ export function useWebSocket(
         queryClient.invalidateQueries({ queryKey });
       });
     }
-  }, [latestOptionsRef, queryClient]);
+  }, [latestOptionsRef, markAuthenticated, queryClient]);
 
   const handleConnect = useCallback(() => {
-    // console.log('[WS] ✅ WebSocket connected successfully');
-    setConnectionStatus(ConnectionStatus.CONNECTED);
-    reconnectAttemptsRef.current = 0;
+    // New servers emit auth_ready only after validating the cookie and
+    // registering the socket. The bounded fallback preserves compatibility
+    // with older servers that authenticated before accept() but had no
+    // auth_ready frame; it never runs after an explicit auth rejection.
+    setConnectionStatus(ConnectionStatus.CONNECTING);
+    clearAuthReadyTimeout();
+    authReadyTimeoutRef.current = window.setTimeout(() => {
+      authReadyTimeoutRef.current = null;
+      if (!authenticatedRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
+        markAuthenticated();
+      }
+    }, AUTH_READY_GRACE_MS);
+  }, [clearAuthReadyTimeout, markAuthenticated]);
 
-    // Send any queued messages
-    if (wsRef.current && messageQueueRef.current.length > 0) {
-      // console.log('[WS] 📬 Sending', messageQueueRef.current.length, 'queued messages');
-      messageQueueRef.current.forEach(message => {
-        wsRef.current?.send(JSON.stringify(message));
-      });
-      messageQueueRef.current = [];
+  const scheduleReconnect = useCallback(() => {
+    if (
+      !enabled
+      || !wsRef.current
+      || reconnectTimeoutRef.current !== null
+      || reconnectAttemptsRef.current >= maxReconnectAttempts
+    ) {
+      return;
+    }
+    setConnectionStatus(ConnectionStatus.RECONNECTING);
+    const retryDelay = Math.min(
+      reconnectInterval * Math.pow(2, reconnectAttemptsRef.current),
+      30000,
+    );
+    reconnectTimeoutRef.current = window.setTimeout(() => {
+      reconnectTimeoutRef.current = null;
+      reconnectAttemptsRef.current++;
+      connectRef.current?.();
+    }, retryDelay);
+  }, [enabled, maxReconnectAttempts, reconnectInterval]);
+
+  const scheduleAuthReconnect = useCallback(() => {
+    const attempt = authRecoveryAttemptsRef.current;
+    if (
+      !enabled
+      || !wsRef.current
+      || reconnectTimeoutRef.current !== null
+      || attempt > MAX_AUTH_RECOVERY_ATTEMPTS
+    ) {
+      return;
+    }
+    const retryDelay = Math.min(
+      reconnectInterval * Math.pow(2, Math.max(attempt - 1, 0)),
+      30000,
+    );
+    setConnectionStatus(ConnectionStatus.RECONNECTING);
+    reconnectTimeoutRef.current = window.setTimeout(() => {
+      reconnectTimeoutRef.current = null;
+      connectRef.current?.();
+    }, retryDelay);
+  }, [enabled, reconnectInterval]);
+
+  const recoverAuthentication = useCallback(async () => {
+    if (authRecoveryPromiseRef.current) {
+      await authRecoveryPromiseRef.current;
+      return;
     }
 
-    latestOptionsRef.current.onConnect?.();
-  }, [latestOptionsRef]);
+    const recovery = (async () => {
+      try {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) {
+          if (!enabled || wsRef.current === null) return;
+          authRecoveryAttemptsRef.current += 1;
+          if (authRecoveryAttemptsRef.current > MAX_AUTH_RECOVERY_ATTEMPTS) {
+            const returnTo = window.location.pathname + window.location.search + window.location.hash;
+            if (!requestNativeAuth(returnTo)) {
+              replaceWithLoginUrl(returnTo);
+            }
+            setConnectionStatus(ConnectionStatus.ERROR);
+            return;
+          }
+          scheduleAuthReconnect();
+          return;
+        }
 
-  const handleDisconnect = useCallback(() => {
+        const returnTo = window.location.pathname + window.location.search + window.location.hash;
+        if (!requestNativeAuth(returnTo)) {
+          replaceWithLoginUrl(returnTo);
+        }
+        setConnectionStatus(ConnectionStatus.ERROR);
+      } catch (error) {
+        if (!(error instanceof RefreshUnavailableError)) {
+          throw error;
+        }
+        // The refresh authority is unavailable, not rejecting the user.
+        // Keep the socket recoverable with the same bounded backoff as a
+        // transport reconnect.
+        scheduleReconnect();
+      } finally {
+        authRecoveryPromiseRef.current = null;
+      }
+    })();
+
+    authRecoveryPromiseRef.current = recovery;
+    await recovery;
+  }, [enabled, scheduleAuthReconnect, scheduleReconnect]);
+
+  const handleDisconnect = useCallback((event?: Event) => {
+    clearAuthReadyTimeout();
+    authenticatedRef.current = false;
     setConnectionStatus(ConnectionStatus.DISCONNECTED);
     latestOptionsRef.current.onDisconnect?.();
 
-    // Attempt reconnection if enabled and we haven't exceeded max attempts
-    if (enabled && reconnectAttemptsRef.current < maxReconnectAttempts) {
+    // A 4401 is an expired browser access cookie, not a transport outage.
+    // Refresh the HttpOnly session first; blindly reconnecting only repeats
+    // rejected handshakes and makes a healthy user look disconnected.
+    if ((event as CloseEvent | undefined)?.code === 4401) {
       setConnectionStatus(ConnectionStatus.RECONNECTING);
-      reconnectTimeoutRef.current = window.setTimeout(() => {
-        reconnectAttemptsRef.current++;
-        connectRef.current?.();
-      }, reconnectInterval);
+      void recoverAuthentication();
+      return;
     }
-  }, [enabled, latestOptionsRef, maxReconnectAttempts, reconnectInterval]);
+
+    scheduleReconnect();
+  }, [clearAuthReadyTimeout, latestOptionsRef, recoverAuthentication, scheduleReconnect]);
 
   const handleError = useCallback((error: Event) => {
+    clearAuthReadyTimeout();
     // Skip self-inflicted errors (StrictMode cleanup during handshake)
     if (intentionalCloseRef.current) {
       intentionalCloseRef.current = false;
@@ -236,9 +386,10 @@ export function useWebSocket(
     } else if (reconnectAttemptsRef.current < maxReconnectAttempts) {
       toast.error("Connection lost. Attempting to reconnect...", { duration: 3000 });
     }
-  }, [latestOptionsRef, maxReconnectAttempts]);
+  }, [clearAuthReadyTimeout, latestOptionsRef, maxReconnectAttempts]);
 
   const connect = useCallback(() => {
+    clearAuthReadyTimeout();
     // Clean up existing connection
     if (wsRef.current) {
       const existingSocket = wsRef.current;
@@ -277,6 +428,7 @@ export function useWebSocket(
     }
 
     try {
+      authenticatedRef.current = false;
       setConnectionStatus(ConnectionStatus.CONNECTING);
       const wsUrl = buildWebSocketUrl();
       // console.log('[WS] 🔌 Attempting to connect to:', wsUrl);
@@ -301,12 +453,13 @@ export function useWebSocket(
       setConnectionStatus(ConnectionStatus.ERROR);
       console.error('Failed to create WebSocket connection:', error);
     }
-  }, [enabled, buildWebSocketUrl, handleMessage, handleConnect, handleDisconnect, handleError]);
+  }, [clearAuthReadyTimeout, enabled, buildWebSocketUrl, handleMessage, handleConnect, handleDisconnect, handleError]);
 
   // Store connect function in ref to avoid circular dependencies
   connectRef.current = connect;
 
   const disconnect = useCallback(() => {
+    clearAuthReadyTimeout();
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
@@ -340,7 +493,7 @@ export function useWebSocket(
     }
 
     setConnectionStatus(ConnectionStatus.DISCONNECTED);
-  }, [handleMessage, handleConnect, handleDisconnect, handleError]);
+  }, [clearAuthReadyTimeout, handleMessage, handleConnect, handleDisconnect, handleError]);
 
   const reconnect = useCallback(() => {
     reconnectAttemptsRef.current = 0;
@@ -348,7 +501,16 @@ export function useWebSocket(
   }, [connect]);
 
   const sendMessage = useCallback((message: WebSocketMessage) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
+    const topics = subscriptionTopics(message);
+    if (topics.length > 0) {
+      if (message.type === 'subscribe') {
+        topics.forEach(topic => activeSubscriptionTopicsRef.current.add(topic));
+      } else {
+        topics.forEach(topic => activeSubscriptionTopicsRef.current.delete(topic));
+      }
+    }
+
+    if (authenticatedRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(message));
     } else {
       // Queue message if not connected, but enforce bounds to prevent memory leak
@@ -378,6 +540,11 @@ export function useWebSocket(
       disconnect();
     };
   }, [enabled, autoConnect, connect, disconnect]);
+  useEffect(() => {
+    const handleAuthLogout = () => disconnect();
+    window.addEventListener('longhouse-auth-logout', handleAuthLogout);
+    return () => window.removeEventListener('longhouse-auth-logout', handleAuthLogout);
+  }, [disconnect]);
 
   // Expose sendMessage for E2E testing of queue behavior
   // This allows tests to directly call sendMessage to test queue bounds

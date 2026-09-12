@@ -1,8 +1,15 @@
-import { createContext, useContext, useEffect, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, type ReactNode } from 'react';
+import config from './config';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Navigate, useLocation } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
-import config from './config';
+import {
+  beginLogoutBarrier,
+  cancelRefresh,
+  clearLogoutBarrier,
+  refreshAccessToken,
+  RefreshUnavailableError,
+} from './auth-refresh';
 import { buildLoginUrl } from './loginRedirect';
 import { requestNativeAuth, supportsNativeAuthBridge } from './nativeAuthBridge';
 import { useServiceHealth, isServiceUnavailable } from './useServiceHealth';
@@ -30,14 +37,18 @@ interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  authUnavailable: boolean;
+  authRetryCount: number;
   login: (idToken: string) => Promise<TokenData>;
-  logout: () => Promise<void>;
+  logout: (everywhere?: boolean) => Promise<boolean>;
   refreshAuth: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
 export const CURRENT_USER_QUERY_KEY = ['current-user'] as const;
 export const AUTH_METHODS_QUERY_KEY = ['auth-methods'] as const;
+const AUTH_CHANNEL_NAME = 'longhouse-auth-events';
+const LOGGED_OUT_SESSION_KEY = 'longhouse:logged-out';
 
 // Custom error class that includes HTTP status for retry logic
 class HttpError extends Error {
@@ -75,7 +86,7 @@ type AuthStatusResponse = {
 
 async function getCurrentUser(): Promise<User | null> {
   const response = await fetch(`${config.apiBaseUrl}/auth/status`, {
-    credentials: 'include', // Use cookie for auth
+    credentials: 'include',
   });
 
   if (!response.ok) {
@@ -83,17 +94,51 @@ async function getCurrentUser(): Promise<User | null> {
   }
 
   const data = (await response.json()) as AuthStatusResponse;
-  return data.authenticated ? data.user : null;
+  if (data.authenticated) {
+    return data.user;
+  }
+
+  // A browser access cookie is intentionally short-lived. Share the same
+  // single-flight refresh as API calls before treating the user as signed out.
+  let refreshed: boolean;
+  try {
+    refreshed = await refreshAccessToken();
+  } catch (error) {
+    if (error instanceof RefreshUnavailableError) {
+      throw new HttpError('Authentication service temporarily unavailable', 503);
+    }
+    throw error;
+  }
+  if (!refreshed) {
+    return null;
+  }
+
+  const retryResponse = await fetch(`${config.apiBaseUrl}/auth/status`, {
+    credentials: 'include',
+  });
+  if (!retryResponse.ok) {
+    throw new HttpError(`Failed to get auth status (${retryResponse.status})`, retryResponse.status);
+  }
+  const retryData = (await retryResponse.json()) as AuthStatusResponse;
+  return retryData.authenticated ? retryData.user : null;
 }
 
-async function logoutFromServer(): Promise<void> {
+async function logoutFromServer(everywhere = false): Promise<boolean> {
   try {
-    await fetch(`${config.apiBaseUrl}/auth/logout`, {
+    const suffix = everywhere ? '?everywhere=1' : '';
+    const response = await fetch(`${config.apiBaseUrl}/auth/logout${suffix}`, {
       method: 'POST',
       credentials: 'include', // Required to clear the cookie
+      headers: { 'X-Longhouse-Auth': '1' },
     });
+    if (!response.ok) {
+      toast.error(`Could not complete logout (${response.status})`);
+      return false;
+    }
+    return true;
   } catch {
-    // Ignore logout errors - user is logged out client-side anyway
+    toast.error('Could not reach Longhouse to complete logout');
+    return false;
   }
 }
 
@@ -108,8 +153,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
       user: null,
       isAuthenticated: false,
       isLoading: false,
+      authUnavailable: false,
+      authRetryCount: 0,
       login: async () => ({ access_token: '', expires_in: 0 }),
-      logout: async () => {},
+      logout: async () => true,
       refreshAuth: async () => {},
     };
 
@@ -131,8 +178,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
       },
       isAuthenticated: true,
       isLoading: false,
+      authUnavailable: false,
+      authRetryCount: 0,
       login: async () => ({ access_token: '', expires_in: 0 }),
-      logout: async () => {},
+      logout: async () => true,
       refreshAuth: async () => {},
     };
 
@@ -144,31 +193,98 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
 function AuthProviderInner({ children }: AuthProviderProps) {
   const queryClient = useQueryClient();
+  const clearLocalAuth = useCallback(async () => {
+    cancelRefresh();
+    await queryClient.cancelQueries({ queryKey: CURRENT_USER_QUERY_KEY });
+    queryClient.removeQueries({
+      predicate: (query) => query.queryKey[0] !== CURRENT_USER_QUERY_KEY[0],
+    });
+    queryClient.setQueryData(CURRENT_USER_QUERY_KEY, null);
+  }, [queryClient]);
 
-  const { data: userData, isLoading, refetch } = useCurrentUserQuery();
+  const notifyLogout = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new Event('longhouse-auth-logout'));
+    if (typeof window.BroadcastChannel === 'function') {
+      const channel = new BroadcastChannel(AUTH_CHANNEL_NAME);
+      channel.postMessage({ type: 'logout' });
+      channel.close();
+    } else {
+      window.localStorage.setItem(LOGGED_OUT_SESSION_KEY, String(Date.now()));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const clearFromAnotherTab = (event?: StorageEvent) => {
+      if (event && event.key !== LOGGED_OUT_SESSION_KEY) return;
+      try {
+        window.sessionStorage.setItem(LOGGED_OUT_SESSION_KEY, '1');
+      } catch {
+        // Storage can be disabled; the in-memory query state still clears.
+      }
+      void clearLocalAuth().then(() => {
+        window.dispatchEvent(new Event('longhouse-auth-logout'));
+      });
+    };
+    let channel: BroadcastChannel | null = null;
+    if (typeof window.BroadcastChannel === 'function') {
+      channel = new BroadcastChannel(AUTH_CHANNEL_NAME);
+      channel.onmessage = (event) => {
+        if (event.data?.type === 'logout') clearFromAnotherTab();
+      };
+    } else {
+      window.addEventListener('storage', clearFromAnotherTab);
+    }
+    return () => {
+      channel?.close();
+      window.removeEventListener('storage', clearFromAnotherTab);
+    };
+  }, [clearLocalAuth]);
+  const {
+    data: userData,
+    isLoading,
+    error: authError,
+    failureCount: authRetryCount,
+    refetch,
+  } = useCurrentUserQuery();
 
   const loginMutation = useMutation({
     mutationFn: loginWithGoogle,
     onSuccess: async () => {
-      // Cookie is set by server; refetch user data
+      clearLogoutBarrier();
+      try {
+        window.sessionStorage.removeItem(LOGGED_OUT_SESSION_KEY);
+      } catch {
+        // Storage can be disabled; a successful cookie login still wins.
+      }
       await refetch();
     },
     onError: (error: Error) => {
       toast.error(`Login failed: ${error.message}`);
     },
   });
-
   const login = async (idToken: string): Promise<TokenData> => {
-    const result = await loginMutation.mutateAsync(idToken);
-    return result;
+    return loginMutation.mutateAsync(idToken);
   };
-
-  const logout = async () => {
-    await logoutFromServer(); // Clear server-side cookie
-    queryClient.removeQueries({
-      predicate: (query) => query.queryKey[0] !== CURRENT_USER_QUERY_KEY[0],
-    });
-    queryClient.setQueryData(CURRENT_USER_QUERY_KEY, null);
+  const logout = async (everywhere = false): Promise<boolean> => {
+    // Fence every tab before contacting the authority. Otherwise a refresh
+    // response can install a fresh cookie after the logout response clears it.
+    beginLogoutBarrier();
+    const completed = await logoutFromServer(everywhere);
+    if (!completed) {
+      clearLogoutBarrier();
+      await refetch();
+      return false;
+    }
+    try {
+      window.sessionStorage.setItem(LOGGED_OUT_SESSION_KEY, '1');
+    } catch {
+      // Storage can be disabled; the current tab still receives the event.
+    }
+    await clearLocalAuth();
+    notifyLogout();
+    return true;
   };
 
   const refreshAuth = async () => {
@@ -180,6 +296,8 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     user: userData ?? null,
     isAuthenticated: Boolean(userData),
     isLoading,
+    authUnavailable: isServiceUnavailable(authError),
+    authRetryCount,
     login,
     logout,
     refreshAuth,
@@ -267,7 +385,6 @@ export interface AuthMethods {
   sso_url: string | null;
   sso_login_url?: string | null;
 }
-
 export function useAuthMethods() {
   return useQuery<AuthMethods>({
     queryKey: AUTH_METHODS_QUERY_KEY,
@@ -276,31 +393,18 @@ export function useAuthMethods() {
   });
 }
 
-// Fetch available authentication methods from the backend.
-// Keep this internal to prevent components from bypassing the shared query hook.
+// Fetch available authentication methods from the backend. A failed discovery
+// request is a real service error, not evidence that this tenant is self-hosted:
+// falling back to local methods can strand hosted users on a login spinner or
+// send them down a disabled path.
 async function getAuthMethods(): Promise<AuthMethods> {
-  try {
-    const response = await fetch(`${config.apiBaseUrl}/auth/methods`);
-    if (!response.ok) {
-      return {
-        google: true,
-        password: true,
-        sso: false,
-        sso_url: null,
-        sso_login_url: null,
-      };
-    }
-    return response.json();
-  } catch {
-    // Default to showing both on network errors
-    return {
-      google: true,
-      password: true,
-      sso: false,
-      sso_url: null,
-      sso_login_url: null,
-    };
+  const response = await fetch(`${config.apiBaseUrl}/auth/methods`, {
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    throw new HttpError(`Failed to discover authentication methods (${response.status})`, response.status);
   }
+  return response.json();
 }
 
 // Auth guard component — redirects unauthenticated users to /login
@@ -310,7 +414,13 @@ interface AuthGuardProps {
 }
 
 export function AuthGuard({ children }: AuthGuardProps) {
-  const { isAuthenticated, isLoading } = useAuth();
+  const {
+    isAuthenticated,
+    isLoading,
+    authUnavailable,
+    authRetryCount,
+    refreshAuth,
+  } = useAuth();
   const { status: serviceStatus, retryCount, retry } = useServiceHealth();
   const location = useLocation();
 
@@ -336,6 +446,12 @@ export function AuthGuard({ children }: AuthGuardProps) {
     return <ServiceUnavailable retryCount={retryCount} onRetry={retry} />;
   }
 
+  // A healthy tenant can still be unable to reach the CP refresh authority.
+  // Keep that state distinct from anonymous so a transient outage never
+  // redirects the user into a fresh login handoff.
+  if (authUnavailable) {
+    return <ServiceUnavailable retryCount={authRetryCount} onRetry={() => void refreshAuth()} />;
+  }
   if (isLoading) {
     return (
       <div style={{

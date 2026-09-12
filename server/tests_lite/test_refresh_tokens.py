@@ -260,7 +260,7 @@ def test_cleanup_expired(tmp_path):
 
 
 def test_refresh_endpoint_issues_new_tokens(tmp_path):
-    """POST /auth/refresh with a valid RT cookie returns a new AT + rotated RT."""
+    """POST /auth/refresh returns a cookie-only bearer refresh result."""
     import os
 
     os.environ.setdefault("AUTH_DISABLED", "0")
@@ -295,9 +295,10 @@ def test_refresh_endpoint_issues_new_tokens(tmp_path):
 
     assert resp.status_code == 200
     body = resp.json()
-    assert "access_token" in body
-    assert body["expires_in"] == 600  # 10 minutes
-
+    assert "access_token" not in body
+    assert body == {"expires_in": 600, "token_type": "bearer"}
+    assert any("longhouse_session=" in value for value in resp.headers.get_list("set-cookie"))
+    assert any("longhouse_refresh=" in value for value in resp.headers.get_list("set-cookie"))
 
 def test_refresh_endpoint_routes_rotation_through_catalog(tmp_path):
     """POST /auth/refresh sends only hashes through the catalog boundary."""
@@ -320,10 +321,10 @@ def test_refresh_endpoint_routes_rotation_through_catalog(tmp_path):
     api_app.dependency_overrides[get_db] = _override_db
 
     raw_rt = refresh_tokens._generate_token()
-    observed: dict = {}
+    observed: list[dict] = []
 
     def _rotate_refresh(**params):
-        observed.update(params)
+        observed.append(params)
         return {
             "status": "rotated",
             "user": AuthenticatedUser(id=1, email="test@local", created_at=datetime.now(UTC)),
@@ -335,13 +336,14 @@ def test_refresh_endpoint_routes_rotation_through_catalog(tmp_path):
     with patch("zerg.routers.auth_browser.rotate_refresh", side_effect=_rotate_refresh):
         client = TestClient(api_app)
         resp = client.post("/auth/refresh", cookies={"longhouse_refresh": raw_rt})
+        retry = client.post("/auth/refresh", cookies={"longhouse_refresh": raw_rt})
 
     api_app.dependency_overrides.pop(get_db, None)
 
     assert resp.status_code == 200
-    assert observed["token_hash"] == refresh_tokens._hash_token(raw_rt)
-    assert observed["next_token_hash"] != observed["token_hash"]
-
+    assert retry.status_code == 200
+    assert observed[0]["token_hash"] == refresh_tokens._hash_token(raw_rt)
+    assert observed[0]["next_token_hash"] == observed[1]["next_token_hash"]
 
 def test_refresh_endpoint_rejects_missing_cookie(tmp_path):
     """POST /auth/refresh without a cookie returns 401."""

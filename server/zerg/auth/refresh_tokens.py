@@ -15,7 +15,9 @@ Key invariants:
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
 import logging
 import secrets
 import uuid
@@ -26,6 +28,7 @@ from datetime import timezone
 
 from sqlalchemy import update
 from sqlalchemy.orm import Session
+from zerg.config import get_settings
 from zerg.models.refresh_session import RefreshSession
 
 logger = logging.getLogger(__name__)
@@ -48,6 +51,19 @@ REUSE_GRACE_SECONDS = 10  # tolerate concurrent tab refreshes
 def _generate_token() -> str:
     """Return a URL-safe opaque token string."""
     return secrets.token_urlsafe(TOKEN_BYTES)
+
+
+def _derive_rotation_token(raw_token: str) -> str:
+    """Derive a replayable successor without storing raw token material.
+
+    Catalogd stores only hashes. A random successor therefore cannot be
+    reconstructed when two requests race or the first response is lost. HMAC
+    keeps the successor opaque while making a retry from the same parent
+    produce the same child.
+    """
+    secret = get_settings().jwt_secret.encode("utf-8")
+    digest = hmac.new(secret, b"refresh-rotation:" + raw_token.encode("utf-8"), hashlib.sha256).digest()
+    return "lhr_" + base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
 def _hash_token(raw: str) -> str:

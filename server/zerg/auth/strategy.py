@@ -28,6 +28,7 @@ from fastapi import HTTPException
 from fastapi import Request
 from fastapi import status
 from sqlalchemy.orm import Session
+from zerg.auth.cp_jwks import CPAuthorityUnavailable
 from zerg.auth.cp_jwks import CPTokenClaims
 from zerg.auth.cp_jwks import CPTokenError
 from zerg.auth.cp_jwks import verify_runtime_token
@@ -38,8 +39,11 @@ from zerg.crud import get_user
 from zerg.crud import get_user_by_email
 from zerg.utils.time import utc_now_naive
 
-# Cookie name for browser-based auth (must match routers/auth.py)
-SESSION_COOKIE_NAME = "longhouse_session"
+# Host-only cookies cannot be injected by a sibling subdomain. Keep the
+# unprefixed names only for insecure local/test surfaces where __Host- cookies
+# would be rejected by the browser.
+_COOKIE_SECURE = not (get_settings().auth_disabled or get_settings().testing)
+SESSION_COOKIE_NAME = "__Host-lh_session" if _COOKIE_SECURE else "longhouse_session"
 # ``typ`` stamped on browser session JWTs. Managed-session (``zst_``) tokens are
 # signed with the same ``JWT_SECRET``, so browser auth must require this claim
 # instead of accepting any HS256 token that carries a ``sub``.
@@ -444,6 +448,11 @@ class HostedCPAuthStrategy(AuthStrategy):
             return user
         try:
             claims = verify_runtime_token(token, audience=self._audience)
+        except CPAuthorityUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "cp_unavailable", "message": "Control plane authentication is temporarily unavailable."},
+            ) from exc
         except CPTokenError:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
         if not _legacy_auth_allowed(db):

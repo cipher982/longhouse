@@ -1,11 +1,10 @@
 """Browser-session login and status routes for tenant auth."""
 
-from __future__ import annotations
-
 import asyncio
 import base64
 import hashlib
 import hmac
+import logging
 import os
 import secrets
 import time
@@ -24,6 +23,7 @@ from fastapi import HTTPException
 from fastapi import Request
 from fastapi import Response
 from fastapi import status
+from fastapi.responses import JSONResponse
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
@@ -32,7 +32,13 @@ from zerg.auth.catalog_gateway import create_refresh
 from zerg.auth.catalog_gateway import resolve_local_user
 from zerg.auth.catalog_gateway import revoke_refresh_family
 from zerg.auth.catalog_gateway import rotate_refresh
-from zerg.auth.hosted import TENANT_LOGIN_STATE_COOKIE
+from zerg.auth.hosted import MAX_TENANT_LOGIN_ATTEMPTS
+from zerg.auth.hosted import TENANT_LOGIN_ATTEMPT_MAX_AGE
+from zerg.auth.hosted import new_tenant_login_state
+from zerg.auth.hosted import tenant_cookie_secure
+from zerg.auth.hosted import tenant_handoff_attempt_cookie_name
+from zerg.auth.hosted import tenant_login_cookie_prefix
+from zerg.auth.redirects import normalize_local_return_to
 from zerg.auth.session_tokens import ACCESS_TOKEN_LIFETIME
 from zerg.auth.session_tokens import REFRESH_COOKIE_NAME
 from zerg.auth.session_tokens import _clear_refresh_cookie
@@ -43,16 +49,58 @@ from zerg.auth.session_tokens import _set_session_cookie
 from zerg.config import get_settings
 from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.dependencies.browser_auth import get_optional_browser_user
+from zerg.dependencies.form_post_origin import reject_cross_origin_form_post
+from zerg.dependencies.form_post_origin import require_browser_auth_header
+from zerg.routers.auth_sso import _hosted_refresh_cookie_max_age
+from zerg.routers.auth_sso import _refresh_native_session_payload
+from zerg.routers.auth_sso import _revoke_native_session_payload
 from zerg.schemas.schemas import TokenOut
 
+
+class RefreshOut(BaseModel):
+    expires_in: int
+    token_type: str = "bearer"
+
+
 router = APIRouter(prefix="/auth", tags=["auth"])
-# Refresh token cookie max-age: 90 days (matches absolute lifetime in refresh_tokens module).
+logger = logging.getLogger(__name__)
+# Local refresh-token cookie max-age: 90 days.
 _REFRESH_COOKIE_MAX_AGE = 90 * 24 * 60 * 60
+_HANDOFF_ATTEMPT_MAX_AGE = 60
+_HANDOFF_ATTEMPT_MAX_COUNT = 4
 
 
 def _control_plane_url(settings: Any | None = None) -> str | None:
     settings = settings or get_settings()
     return getattr(settings, "control_plane_url", None) or None
+
+
+def _refresh_failure_response(*, status_code: int, detail: str | dict[str, str]) -> Response:
+    response = JSONResponse(status_code=status_code, content={"detail": detail})
+    _clear_session_cookie(response)
+    _clear_refresh_cookie(response)
+    _set_no_store(response)
+    return response
+
+
+def _set_no_store(response: Response) -> None:
+    response.headers["cache-control"] = "no-store"
+    response.headers["pragma"] = "no-cache"
+    response.headers["vary"] = "Cookie"
+
+
+def _handoff_attempt_count(value: str | None, *, reset: bool = False) -> int:
+    if reset or not value:
+        return 0
+    try:
+        count_text, started_text = value.split(":", 1)
+        count = int(count_text)
+        started_at = float(started_text)
+    except (TypeError, ValueError):
+        return 0
+    if count < 0 or time.time() - started_at > _HANDOFF_ATTEMPT_MAX_AGE:
+        return 0
+    return min(count, _HANDOFF_ATTEMPT_MAX_COUNT)
 
 
 async def _issue_session(
@@ -92,6 +140,7 @@ async def _issue_session(
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Catalog refresh issuance failed")
     _set_session_cookie(response, access_token, at_seconds)
     _set_refresh_cookie(response, raw_rt, _REFRESH_COOKIE_MAX_AGE)
+    _set_no_store(response)
 
     return TokenOut(access_token=access_token, expires_in=at_seconds)
 
@@ -313,7 +362,8 @@ async def service_login(request: Request, response: Response) -> TokenOut:
 
 
 @router.post("/google", response_model=TokenOut)
-async def google_sign_in(response: Response, body: dict[str, str]) -> TokenOut:
+async def google_sign_in(request: Request, response: Response, body: dict[str, str]) -> TokenOut:
+    reject_cross_origin_form_post(request)
     if _control_plane_url():
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Hosted local Google login is disabled")
 
@@ -368,14 +418,14 @@ async def google_sign_in(response: Response, body: dict[str, str]) -> TokenOut:
 
 @router.get("/verify", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 def verify_session(_request: Request, _user=Depends(get_current_browser_user)):
-    settings = get_settings()
-    if settings.auth_disabled:
-        return Response(status_code=status.HTTP_204_NO_CONTENT)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    _set_no_store(response)
+    return response
 
 
 @router.get("/status")
-def auth_status(_request: Request, user=Depends(get_optional_browser_user)):
+def auth_status(response: Response, _request: Request, user=Depends(get_optional_browser_user)):
+    _set_no_store(response)
     if not user:
         return {"authenticated": False, "user": None}
 
@@ -397,36 +447,109 @@ def auth_status(_request: Request, user=Depends(get_optional_browser_user)):
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
-async def logout(request: Request, response: Response):
-    # Revoke the refresh token family so the RT can't be replayed after logout.
+async def logout(request: Request, response: Response, everywhere: bool = False):
+    require_browser_auth_header(request)
     raw_rt = request.cookies.get(REFRESH_COOKIE_NAME)
+    settings = get_settings()
+    revocation_failed = False
     if raw_rt:
-        await asyncio.to_thread(
-            revoke_refresh_family,
-            token_hash=refresh_tokens._hash_token(raw_rt),
-            now=datetime.now(timezone.utc),
+        try:
+            if _control_plane_url(settings):
+                revoke_kwargs = {
+                    "settings": settings,
+                    "refresh_token": raw_rt,
+                }
+                if everywhere:
+                    revoke_kwargs["revoke_authority"] = True
+                await asyncio.to_thread(
+                    _revoke_native_session_payload,
+                    **revoke_kwargs,
+                )
+            else:
+                await asyncio.to_thread(
+                    revoke_refresh_family,
+                    token_hash=refresh_tokens._hash_token(raw_rt),
+                    now=datetime.now(timezone.utc),
+                )
+        except Exception:
+            # Always clear this browser's cookies, but do not tell the caller
+            # that logout is complete when the revocation authority failed.
+            revocation_failed = True
+            logger.warning("session revocation failed during logout", exc_info=True)
+
+    if revocation_failed:
+        failure = JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"detail": {"code": "logout_revocation_unavailable"}},
         )
+        _clear_session_cookie(failure)
+        _clear_refresh_cookie(failure)
+        _set_no_store(failure)
+        return failure
 
     _clear_session_cookie(response)
     _clear_refresh_cookie(response)
+    _set_no_store(response)
 
 
-@router.post("/refresh", response_model=TokenOut)
-async def refresh_session(request: Request, response: Response) -> TokenOut:
-    """Exchange a valid refresh token for a new access token + rotated refresh token.
-
-    This is the silent-refresh endpoint called by the frontend on 401.
-    """
-    if _control_plane_url():
-        _clear_session_cookie(response)
-        _clear_refresh_cookie(response)
-        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Hosted refresh is not available")
+@router.post("/refresh", response_model=RefreshOut)
+async def refresh_session(request: Request, response: Response) -> RefreshOut | Response:
+    """Rotate the hosted CP refresh family or the local catalog family."""
+    require_browser_auth_header(request)
+    settings = get_settings()
+    if _control_plane_url(settings):
+        raw_rt = request.cookies.get(REFRESH_COOKIE_NAME)
+        if not raw_rt:
+            return _refresh_failure_response(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="No refresh token",
+            )
+        try:
+            payload = await asyncio.to_thread(
+                _refresh_native_session_payload,
+                settings=settings,
+                refresh_token=raw_rt,
+            )
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            if exc.status_code in {
+                status.HTTP_502_BAD_GATEWAY,
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+            } or detail.get("code") in {"cp_unavailable", "tenant_internal_auth_failed"}:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={"code": "cp_unavailable"},
+                ) from exc
+            if exc.status_code in {400, 401, 403, 410, 422}:
+                return _refresh_failure_response(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Refresh token expired or revoked",
+                )
+            raise
+        next_raw = payload.get("refresh_token")
+        if not isinstance(next_raw, str) or not next_raw:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "cp_unavailable"},
+            )
+        at_seconds = int(payload["expires_in"])
+        browser_response = JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={"expires_in": at_seconds, "token_type": "bearer"},
+        )
+        _set_session_cookie(browser_response, payload["runtime_token"], at_seconds)
+        _set_refresh_cookie(browser_response, next_raw, _hosted_refresh_cookie_max_age(payload))
+        _set_no_store(browser_response)
+        return browser_response
 
     raw_rt = request.cookies.get(REFRESH_COOKIE_NAME)
     if not raw_rt:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No refresh token")
+        return _refresh_failure_response(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No refresh token",
+        )
 
-    next_raw = refresh_tokens._generate_token()
+    next_raw = refresh_tokens._derive_rotation_token(raw_rt)
     now = datetime.now(timezone.utc)
     result = await asyncio.to_thread(
         rotate_refresh,
@@ -436,14 +559,34 @@ async def refresh_session(request: Request, response: Response) -> TokenOut:
         idle_expires_at=now + refresh_tokens.IDLE_LIFETIME,
         reuse_grace_seconds=refresh_tokens.REUSE_GRACE_SECONDS,
     )
-    if result.get("status") not in {"rotated", "exact_replay"}:
-        # Token invalid, expired, or revoked — clear cookies and force re-login.
-        _clear_session_cookie(response)
-        _clear_refresh_cookie(response)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token expired or revoked")
+    result_status = result.get("status")
+    if result_status == "stale_replay":
+        current_hash = result.get("current_token_hash")
+        candidate = raw_rt
+        for _ in range(32):
+            candidate = refresh_tokens._derive_rotation_token(candidate)
+            if current_hash and hmac.compare_digest(
+                refresh_tokens._hash_token(candidate),
+                str(current_hash),
+            ):
+                next_raw = candidate
+                break
+        else:
+            # A pre-cutover random child cannot be reconstructed from its
+            # parent. Preserve the browser's cookies rather than turning this
+            # recoverable response race into a logout.
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content={"detail": "Refresh retry superseded"},
+                headers={"Cache-Control": "no-store", "Vary": "Cookie"},
+            )
+    elif result_status not in {"rotated", "exact_replay"}:
+        return _refresh_failure_response(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token expired or revoked",
+        )
 
     user = result["user"]
-
     at_seconds = int(ACCESS_TOKEN_LIFETIME.total_seconds())
     access_token = _issue_access_token(
         user.id,
@@ -453,12 +596,13 @@ async def refresh_session(request: Request, response: Response) -> TokenOut:
     )
     _set_session_cookie(response, access_token, at_seconds)
     _set_refresh_cookie(response, next_raw, _REFRESH_COOKIE_MAX_AGE)
-
-    return TokenOut(access_token=access_token, expires_in=at_seconds)
+    _set_no_store(response)
+    return RefreshOut(expires_in=at_seconds)
 
 
 @router.get("/methods")
-def get_auth_methods():
+def get_auth_methods(response: Response):
+    _set_no_store(response)
     settings = get_settings()
     control_plane_url = _control_plane_url(settings)
     sso_base = control_plane_url.rstrip("/") if control_plane_url else None
@@ -522,6 +666,7 @@ async def password_login(
     response: Response,
     body: PasswordLoginRequest,
 ) -> TokenOut:
+    reject_cross_origin_form_post(request)
     settings = get_settings()
     if _control_plane_url(settings):
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Hosted local password login is disabled")
@@ -602,6 +747,7 @@ def start_handoff(
     request: Request,
     tenant: str | None = None,
     return_to: str | None = None,
+    reset_attempt: int = 0,
 ) -> RedirectResponse:
     """Browser entry point for hosted login.
 
@@ -618,11 +764,30 @@ def start_handoff(
     settings = get_settings()
     control_plane_url = _control_plane_url(settings)
     if not control_plane_url:
-        safe_return_to = return_to or "/timeline"
-        return RedirectResponse(
+        safe_return_to = normalize_local_return_to(return_to) or "/timeline"
+        redirect = RedirectResponse(
             f"/login?return_to={urllib.parse.quote(safe_return_to, safe='')}",
             status_code=302,
         )
+        redirect.headers["cache-control"] = "no-store"
+        redirect.headers["referrer-policy"] = "no-referrer"
+        return redirect
+    cookie_secure = tenant_cookie_secure(settings)
+    attempt_cookie_name = tenant_handoff_attempt_cookie_name(secure=cookie_secure)
+    attempt_count = _handoff_attempt_count(
+        request.cookies.get(attempt_cookie_name),
+        reset=reset_attempt > 0,
+    )
+    if attempt_count >= _HANDOFF_ATTEMPT_MAX_COUNT:
+        safe_return_to = normalize_local_return_to(return_to) or "/timeline"
+        query = urllib.parse.urlencode(
+            {"return_to": safe_return_to, "auth_error": "cookie_loop"},
+        )
+        redirect = RedirectResponse(f"/login?{query}", status_code=303)
+        redirect.headers["cache-control"] = "no-store"
+        redirect.headers["referrer-policy"] = "no-referrer"
+        return redirect
+    next_attempt = f"{attempt_count + 1}:{time.time()}"
 
     # Derive the tenant from the request host if not explicitly given.
     # This makes the React LoginPage simpler — it doesn't have to know
@@ -637,9 +802,9 @@ def start_handoff(
         elif host.endswith(".localhost"):
             resolved_tenant = host[: -len(".localhost")]
         # else: leave empty; CP will reject unknown tenant.
-
-    safe_return_to = return_to or "/timeline"
-    tenant_state = secrets.token_urlsafe(32)
+    tenant_state, login_cookie_name, login_cookie_secret = new_tenant_login_state(secure=cookie_secure)
+    existing_login_cookies = sorted(name for name in request.cookies if name.startswith(tenant_login_cookie_prefix(secure=cookie_secure)))
+    safe_return_to = normalize_local_return_to(return_to) or "/timeline"
 
     cp_base = control_plane_url.rstrip("/")
     target = f"{cp_base}/auth/start"
@@ -649,13 +814,33 @@ def start_handoff(
     target += "?" + urllib.parse.urlencode(params)
 
     redirect = RedirectResponse(target, status_code=302)
+    redirect.headers["cache-control"] = "no-store"
+    redirect.headers["referrer-policy"] = "no-referrer"
+    stale_count = max(0, len(existing_login_cookies) - (MAX_TENANT_LOGIN_ATTEMPTS - 1))
+    for stale_cookie in existing_login_cookies[:stale_count]:
+        redirect.delete_cookie(
+            stale_cookie,
+            path="/",
+            httponly=True,
+            secure=cookie_secure,
+            samesite="lax",
+        )
     redirect.set_cookie(
-        TENANT_LOGIN_STATE_COOKIE,
-        tenant_state,
-        max_age=600,
+        login_cookie_name,
+        login_cookie_secret,
+        max_age=TENANT_LOGIN_ATTEMPT_MAX_AGE,
         path="/",
         httponly=True,
-        secure=not settings.auth_disabled and not settings.testing,
+        secure=cookie_secure,
+        samesite="lax",
+    )
+    redirect.set_cookie(
+        attempt_cookie_name,
+        next_attempt,
+        max_age=_HANDOFF_ATTEMPT_MAX_AGE,
+        path="/",
+        httponly=True,
+        secure=cookie_secure,
         samesite="lax",
     )
     return redirect

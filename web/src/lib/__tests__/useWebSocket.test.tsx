@@ -102,6 +102,7 @@ describe("useWebSocket", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.stubGlobal("WebSocket", originalWebSocket);
   });
 
@@ -223,5 +224,46 @@ describe("useWebSocket", () => {
         { duration: 5000 },
       );
     });
+  });
+
+  it("resubscribes active topics after an authenticated reconnect", async () => {
+    vi.useFakeTimers();
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+    const wrapper = createWrapper(queryClient);
+    const { result, unmount } = renderHook(() => useWebSocket(true), { wrapper });
+
+    act(() => {
+      mockSockets[0].emit("open", new Event("open"));
+      mockSockets[0].emitMessage({ type: "auth_ready" });
+      result.current.sendMessage({
+        type: "subscribe",
+        topic: "system",
+        data: { topics: ["timeline"] },
+      });
+      mockSockets[0].emit("close", new Event("close"));
+      vi.advanceTimersByTime(1000);
+    });
+
+    expect(mockSockets).toHaveLength(2);
+
+    act(() => {
+      mockSockets[1].emit("open", new Event("open"));
+      mockSockets[1].emitMessage({ type: "auth_ready" });
+    });
+
+    const sent = mockSockets[1].sent.map(payload => JSON.parse(payload));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      type: "subscribe",
+      topic: "system",
+      data: { topics: ["timeline"] },
+    });
+
+    unmount();
+    vi.useRealTimers();
   });
 });
