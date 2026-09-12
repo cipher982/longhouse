@@ -22,6 +22,11 @@ from zerg.qa.pi_native import pi_native_model_evidence
 from zerg.qa.pi_native import pi_native_shadow_taxonomy
 from zerg.qa.pi_native import pi_transcript_rows
 from zerg.qa.provider_adapters.pi import _run_pi_with_pty
+from zerg.qa.provider_qualification import _PROFILES
+
+
+def test_pi_qualification_profiles_are_registered_in_both_managed_lanes() -> None:
+    assert {("pi", profile) for profile in ("pi_print_v1", "pi_console_tool_v1", "pi_helm_v1")} <= set(_PROFILES)
 
 
 def test_pi_print_runner_allocates_tty_for_stock_cli(tmp_path) -> None:

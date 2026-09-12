@@ -26,6 +26,8 @@ from zerg.qa import omp_console_producer
 from zerg.qa import omp_helm_lifecycle
 from zerg.qa import opencode_release_identity
 from zerg.qa import opencode_server_qualification
+from zerg.qa import pi_console_tool_producer
+from zerg.qa import pi_helm_lifecycle
 from zerg.qa import pi_qualification
 
 _PROFILES = {
@@ -45,8 +47,10 @@ _PROFILES = {
     ("opencode", opencode_release_identity.PROFILE): opencode_release_identity.run,
     ("opencode", opencode_server_qualification.PROFILE): opencode_server_qualification.run,
     ("pi", pi_qualification.PROFILE): pi_qualification.run,
-    ("omp", "omp_print_v1"): omp_console_producer.run,
-    ("omp", "omp_helm_v1"): omp_helm_lifecycle.run,
+    ("pi", pi_console_tool_producer.PROFILE): pi_console_tool_producer.run,
+    ("pi", pi_helm_lifecycle.PROFILE): pi_helm_lifecycle.run,
+    ("omp", omp_console_producer.PROFILE): omp_console_producer.run,
+    ("omp", omp_helm_lifecycle.PROFILE): omp_helm_lifecycle.run,
     **{
         (provider, profile): (
             lambda request_path, output_root, provider=provider: conversation_reset_qualification.run(provider, request_path, output_root)
@@ -56,6 +60,8 @@ _PROFILES = {
 }
 _IDENTITY_PROFILES = {
     ("pi", pi_qualification.PROFILE): pi_qualification._PROFILE,
+    ("pi", pi_console_tool_producer.PROFILE): pi_console_tool_producer._PROFILE,
+    ("pi", pi_helm_lifecycle.PROFILE): pi_helm_lifecycle._PROFILE,
     ("omp", omp_console_producer.PROFILE): omp_console_producer._PROFILE,
     ("omp", omp_helm_lifecycle.PROFILE): omp_helm_lifecycle._PROFILE,
 }

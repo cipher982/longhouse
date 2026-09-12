@@ -12,6 +12,8 @@ from zerg.qa import antigravity_release_identity
 from zerg.qa import claude_release_identity
 from zerg.qa import cursor_release_identity
 from zerg.qa import opencode_release_identity
+from zerg.qa import pi_console_tool_producer
+from zerg.qa import pi_helm_lifecycle
 from zerg.qa import provider_qualification
 from zerg.qa import provider_release_identity as identity
 from zerg.services.managed_provider_contracts import contract_for_provider
@@ -413,3 +415,52 @@ def test_main_constructs_local_pi_semantic_request(tmp_path: Path, monkeypatch: 
     assert request["profile"] == "pi_print_v1"
     assert request["expected_provider_version"] == "0.85.1"
     assert json.loads((output / "coverage-manifest.json").read_text())["profile"] == "pi_print_v1"
+
+
+@pytest.mark.parametrize(
+    "profile",
+    (pi_console_tool_producer.PROFILE, pi_helm_lifecycle.PROFILE),
+)
+def test_main_constructs_local_pi_managed_requests(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    profile: str,
+) -> None:
+    binary = tmp_path / "pi"
+    binary.write_text(f"#!{sys.executable}\nprint('0.85.1')\n", encoding="utf-8")
+    binary.chmod(0o700)
+    output = tmp_path / f"{profile}-output"
+    real_run = subprocess.run
+    captured: list[tuple[Path, Path]] = []
+
+    def run(command, *args, **kwargs):
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(command, 0, stdout=TEST_SHA, stderr="")
+        return real_run(command, *args, **kwargs)
+
+    def fake_qualification(request_path: Path, output_root: Path) -> dict[str, object]:
+        captured.append((request_path, output_root))
+        return {"valid": True}
+
+    monkeypatch.setattr(provider_qualification.subprocess, "run", run)
+    monkeypatch.setattr(provider_qualification, "run", fake_qualification)
+    result = provider_qualification.main(
+        [
+            "--provider",
+            "pi",
+            "--profile",
+            profile,
+            "--provider-bin",
+            str(binary),
+            "--output-root",
+            str(output),
+            "--json",
+        ]
+    )
+
+    assert result == 0
+    request_path = tmp_path / f"{profile}-output.request.json"
+    request = json.loads(request_path.read_text())
+    assert request["profile"] == profile
+    assert request["expected_provider_version"] == "0.85.1"
+    assert captured == [(request_path, output)]

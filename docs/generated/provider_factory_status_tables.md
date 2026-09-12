@@ -24,7 +24,7 @@
 | cursor | push | generated_fake | runs — 4 scenarios |
 | cursor | weekly_cron | generated_fake | runs — 32 scenarios |
 | cursor | manual | observed_install | runs — 32 scenarios |
-| pi | release_poll | observed_install | runs — 1 scenario |
+| pi | release_poll | observed_install | runs — 3 scenarios |
 | pi | push | generated_fake | runs — 4 scenarios |
 | pi | weekly_cron | generated_fake | runs — 32 scenarios |
 | pi | manual | observed_install | never runs — every capability-proof assertion declared for pi is already satisfiable by an automated trigger |

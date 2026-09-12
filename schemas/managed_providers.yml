@@ -2114,7 +2114,7 @@ providers:
   - server/zerg/qa/provider_console_lifecycle.py
   - server/zerg/qa/omp_helm_lifecycle.py
   wire_families: [omp_jsonl]
-  observation_sources: [native_archive]
+  observation_sources: [native_archive, managed_bridge]
   normalization_ruleset: omp
   presentation_ruleset: shared_tool_presentation
   proof_profiles:

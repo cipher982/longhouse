@@ -24,6 +24,8 @@ from urllib.request import Request
 from urllib.request import urlopen
 
 from zerg.qa import provider_console_lifecycle as console_lifecycle
+from zerg.qa import provider_release_identity as identity
+from zerg.qa import provider_semantic_qualification as semantic
 from zerg.qa.console_served_state_core import assistant_marker_events
 from zerg.qa.console_served_state_core import event_text
 from zerg.qa.live_session_toolkit import new_qualification_isolation_root
@@ -38,8 +40,18 @@ from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
+from zerg.services.provider_capability_proof import AssertionOutcome
+from zerg.services.provider_capability_proof import EvidenceClass
 
 SCENARIO_ID = "pi_helm_lifecycle"
+PROFILE = "pi_helm_v1"
+_PROFILE = identity.IdentityProfile(
+    provider="pi",
+    profile=PROFILE,
+    scenario_id=SCENARIO_ID,
+    version_line=identity.semver_version_line(),
+    oracle_source=Path(__file__),
+)
 _RUNTIME_HOST_USER_AGENT = "LonghouseProviderFactory/1.0"
 _PROPAGATING_HTTP_STATUSES = frozenset({404, 429, 500, 502, 503, 504})
 ASSERTIONS = (
@@ -2185,6 +2197,67 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         result["diagnostic_assertions"] = result.pop("assertions")
     _write_json(root / "result.json", result)
     return result
+
+
+def _request_args(
+    request_path: Path,
+    output_root: Path,
+    *,
+    request: dict[str, Any] | None = None,
+) -> argparse.Namespace:
+    request = dict(request) if request is not None else json.loads(request_path.read_text(encoding="utf-8"))
+    return argparse.Namespace(
+        evidence_root=output_root,
+        repo_root=Path(__file__).resolve().parents[3],
+        provider_bin=Path(str(request["provider_bin"])),
+        provider_version=str(request["expected_provider_version"]),
+        engine=Path(os.environ.get("LONGHOUSE_ENGINE_BIN") or ""),
+        longhouse_cli=Path(os.environ.get("LONGHOUSE_CLI_BIN") or "longhouse"),
+        api_url=os.environ.get("LONGHOUSE_RUNTIME_API_URL"),
+        agents_token=os.environ.get("LONGHOUSE_RUNTIME_AGENTS_TOKEN"),
+        model=os.environ.get("LONGHOUSE_PI_QUALIFICATION_MODEL", ""),
+        variant=None,
+    )
+
+
+def run(request_path: Path, output_root: Path) -> dict[str, object]:
+    request = identity.load_request(
+        request_path,
+        provider="pi",
+        profile=PROFILE,
+        version_grammar=_PROFILE.version_grammar,
+    )
+    runtime_token = str(os.environ.get("LONGHOUSE_RUNTIME_AGENTS_TOKEN") or "")
+
+    def execute(binary: Path, evidence_root: Path):
+        run_args = _request_args(request_path, evidence_root, request=request)
+        run_args.provider_bin = binary
+        result = run_pi_helm_lifecycle(run_args)
+        observation = dict(result.get("observation") or result.get("diagnostic_observation") or {})
+        assertions = dict(result.get("assertions") or result.get("diagnostic_assertions") or {})
+        semantic_assertions = tuple(
+            semantic.SemanticAssertion(
+                assertion,
+                AssertionOutcome.PASS if assertions.get(assertion) is True else AssertionOutcome.SEMANTIC_FAIL,
+                EvidenceClass.LIVE_TOKEN,
+            )
+            for assertion in ASSERTIONS
+        )
+        return (
+            observation,
+            semantic_assertions,
+            tuple(dict.fromkeys(value for value in (runtime_token, str(os.environ.get("OPENROUTER_API_KEY") or "").strip()) if value)),
+        )
+
+    return semantic.run_semantic_profile(
+        request_path,
+        output_root,
+        profile=_PROFILE,
+        assertion_ids=ASSERTIONS,
+        executor=execute,
+        oracle_source=Path(__file__),
+        scenario_revision=REGISTRATION.scenario_revision,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

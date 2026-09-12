@@ -1282,7 +1282,13 @@ def test_unsupported_profile_is_rejected(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     ("provider", "profile"),
-    (("pi", "pi_print_v1"), ("omp", "omp_print_v1"), ("omp", "omp_helm_v1")),
+    (
+        ("pi", "pi_print_v1"),
+        ("pi", "pi_console_tool_v1"),
+        ("pi", "pi_helm_v1"),
+        ("omp", "omp_print_v1"),
+        ("omp", "omp_helm_v1"),
+    ),
 )
 def test_tier1_profile_dispatch_runs_the_native_profile_producer(
     tmp_path: Path,
