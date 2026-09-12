@@ -1223,7 +1223,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 result.failed_spool
                             );
                         }
-                        if result.events_shipped > 0 || result.bytes_shipped > 0 || result.resolved_spool > 0 {
+                        // Checking an unchanged source head advances reconciliation
+                        // without creating a new upload receipt.
+                        if reconciled_to_head || result.events_shipped > 0 || result.bytes_shipped > 0 || result.resolved_spool > 0 {
                             shipping_progress.record_progress(Instant::now());
                         }
                         if result.had_connect_error {
