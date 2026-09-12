@@ -23,6 +23,7 @@ from zerg.qa.omp_helm_lifecycle import _PROFILE as HELM_PROFILE
 from zerg.qa.omp_helm_lifecycle import _VARIANTS
 from zerg.qa.omp_helm_lifecycle import ASSERTIONS as HELM_ASSERTIONS
 from zerg.qa.omp_helm_lifecycle import REGISTRATION as HELM_REGISTRATION
+from zerg.qa.omp_helm_lifecycle import _append_retirement_claim
 from zerg.qa.omp_helm_lifecycle import _assertion_result_status
 from zerg.qa.omp_helm_lifecycle import _channel_command_evidence
 from zerg.qa.omp_helm_lifecycle import _cleanup_receipt
@@ -259,6 +260,20 @@ def test_omp_resume_settlement_accepts_terminal_channel_state_without_timestamp_
         )
         is False
     )
+
+
+def test_omp_retirement_claims_record_each_acquired_run_once() -> None:
+    claims: list[dict[str, object]] = []
+    state = {"run_id": "run-1"}
+
+    _append_retirement_claim(claims, session_id="session-1", state=state)
+    _append_retirement_claim(claims, session_id="session-1", state=state)
+    _append_retirement_claim(claims, session_id="session-1", state={"run_id": "run-2"})
+
+    assert claims == [
+        {"session_id": "session-1", "run_id": "run-1", "state": "terminal"},
+        {"session_id": "session-1", "run_id": "run-2", "state": "terminal"},
+    ]
 
 
 def test_omp_native_model_evidence_binds_provider_event_to_retained_source(tmp_path) -> None:
@@ -694,14 +709,15 @@ def test_omp_native_model_evidence_publishes_the_first_turn_event_window(tmp_pat
 
 
 def test_omp_continuation_prompt_keeps_context_and_marker_in_one_reply() -> None:
-    prompt = _omp_continuation_prompt("OMP_RESUME_MARKER")
+    prompt = _omp_continuation_prompt("OMP_CONTEXT_VALUE", "OMP_RESUME_MARKER")
 
-    assert '"Remember this context phrase:"' in prompt
+    assert "LONGHOUSE_CONTEXT_VALUE" in prompt
     assert "earlier user message" in prompt
+    assert "OMP_CONTEXT_VALUE" not in prompt
     assert "OMP_RESUME_MARKER" in prompt
     assert "followed by exactly OMP_RESUME_MARKER" in prompt
     assert "and no other text" in prompt
-    assert "Use only this request's marker" not in prompt
+    assert "Remember this context phrase:" not in prompt
 
 
 def test_omp_helm_marker_prompts_preserve_setup_instructions() -> None:

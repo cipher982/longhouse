@@ -1077,6 +1077,19 @@ def _exact_session_retirement(receipt: Mapping[str, Any] | None, session_id: str
     )
 
 
+def _append_retirement_claim(
+    claims: list[dict[str, Any]],
+    *,
+    session_id: str | None,
+    state: Mapping[str, Any],
+) -> None:
+    run_id = str(state.get("run_id") or "").strip()
+    normalized_session_id = str(session_id or "").strip()
+    if not normalized_session_id or not run_id or any(item.get("run_id") == run_id for item in claims):
+        return
+    claims.append({"session_id": normalized_session_id, "run_id": run_id, "state": "terminal"})
+
+
 def _wait_served_run_retirement(
     api_url: str,
     token: str,
@@ -1738,6 +1751,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         current_state = _wait_state(longhouse_home)
         current_session_id = str(current_state["session_id"])
         current_session_file = Path(str(current_state["session_file"]))
+        _append_retirement_claim(retirement_claims, session_id=current_session_id, state=current_state)
         owner_records.append(
             _process_record(
                 current_state.get("launcher_pid"),
@@ -2110,6 +2124,23 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         }
         current_state = replaced_state
         current_session_file = Path(str(replaced_state["session_file"]))
+        _append_retirement_claim(retirement_claims, session_id=current_session_id, state=current_state)
+        owner_records.append(
+            _process_record(
+                current_state.get("launcher_pid"),
+                current_state.get("launcher_process_start_time"),
+                "launcher",
+                owner="replacement",
+            )
+        )
+        owner_records.append(
+            _process_record(
+                current_state.get("provider_pid"),
+                current_state.get("provider_process_start_time"),
+                "provider",
+                owner="replacement",
+            )
+        )
         current_native_id = str(replaced_state["native_session_id"])
         context_phrase = f"OMP_HELM_CONTEXT_{os.urandom(8).hex()}"
         _register_native_source(
@@ -2200,25 +2231,10 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         )
         observation["replacement_evidence"] = replacement_evidence
 
-        owner_records.append(
-            _process_record(
-                current_state.get("launcher_pid"),
-                current_state.get("launcher_process_start_time"),
-                "launcher",
-                owner="replacement",
-            )
-        )
-        owner_records.append(
-            _process_record(
-                current_state.get("provider_pid"),
-                current_state.get("provider_process_start_time"),
-                "provider",
-                owner="replacement",
-            )
-        )
         terminate = _run_engine(args.engine, "terminate", current_session_id, env)
         stopped = _wait_stopped(longhouse_home, current_session_id)
         first.process.wait(timeout=15)
+        terminated_run_id = str(current_state.get("run_id") or "")
         controls["terminate"] = {
             "action_label": "terminate",
             "state": dict(replaced_state),
@@ -2246,7 +2262,30 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             thread_name="omp-helm-resume-qualification-terminal-drain",
         )
         sessions.append(resumed)
-        resume_state = _wait_state(longhouse_home, session_id=current_session_id)
+        resume_state = _wait_state(
+            longhouse_home,
+            session_id=current_session_id,
+            predicate=lambda value: bool(value.get("run_id")) and value.get("run_id") != terminated_run_id,
+        )
+        current_state = dict(resume_state)
+        current_session_file = Path(str(resume_state["session_file"]))
+        _append_retirement_claim(retirement_claims, session_id=current_session_id, state=current_state)
+        owner_records.append(
+            _process_record(
+                resume_state.get("launcher_pid"),
+                resume_state.get("launcher_process_start_time"),
+                "launcher",
+                owner="cold_resume",
+            )
+        )
+        owner_records.append(
+            _process_record(
+                resume_state.get("provider_pid"),
+                resume_state.get("provider_process_start_time"),
+                "provider",
+                owner="cold_resume",
+            )
+        )
         resume_control_identity = _wait_runtime_control_identity(
             str(args.api_url),
             str(args.agents_token),
@@ -2341,21 +2380,6 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         )
         resume_marker_evidence.update({"observation_scope": "cold_resume", "source_generation": "cold_resume"})
         resume_terminal_evidence.update({"observation_scope": "cold_resume", "source_generation": "cold_resume"})
-        resume_owner_records = [
-            _process_record(
-                resume_state.get("launcher_pid"),
-                resume_state.get("launcher_process_start_time"),
-                "launcher",
-                owner="cold_resume",
-            ),
-            _process_record(
-                resume_state.get("provider_pid"),
-                resume_state.get("provider_process_start_time"),
-                "provider",
-                owner="cold_resume",
-            ),
-        ]
-        owner_records.extend(resume_owner_records)
         observation["cold_resume_exact_file"] = (
             resume_state.get("native_session_id") == current_native_id
             and resume_state.get("session_file") == str(current_session_file)
@@ -2474,13 +2498,6 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         final_terminate = _run_engine(args.engine, "terminate", current_session_id, env)
         final_stopped = _wait_stopped(longhouse_home, current_session_id)
         resumed.process.wait(timeout=15)
-        retirement_claims = [
-            {
-                "session_id": str(current_session_id or ""),
-                "run_id": str(current_state.get("run_id") or ""),
-                "state": "terminal",
-            }
-        ]
         if shipper is not None:
             try:
                 terminal_flush = shipper.flush("omp-helm-terminal-retirement")
@@ -2573,13 +2590,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         dispatch_session_id = str(current_session_id or "")
         dispatch_run_id = str(current_state.get("run_id") or "")
         if not retirement_claims:
-            retirement_claims = [
-                {
-                    "session_id": dispatch_session_id,
-                    "run_id": dispatch_run_id,
-                    "state": "terminal",
-                }
-            ]
+            _append_retirement_claim(retirement_claims, session_id=current_session_id, state=current_state)
         if not served_run_inventory:
             served_run_inventory = (
                 _wait_served_run_retirement(
