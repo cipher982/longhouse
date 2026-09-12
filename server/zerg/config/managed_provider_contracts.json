@@ -3376,7 +3376,7 @@
       ],
       "release_channel": {
         "channel": "github_releases",
-        "coordinate": "can1357/oh-my-pi@3b3a6dc9bbd85102ce19d0b1c11bf6870915f6ec",
+        "coordinate": "can1357/oh-my-pi@00085d4e7dfdcfbf302c122fa2682b410a0f43d1",
         "version_discovery": "stable_github_releases",
         "verification": "sha256_asset_digest_and_version",
         "platform_artifacts": {
@@ -3421,7 +3421,7 @@
       "operation_evidence": {
         "launch_local": {
           "level": "live_no_token",
-          "source": "OMP 18.1.17 native Helm launcher and PTY fixture",
+          "source": "OMP 18.1.18 native Helm launcher and PTY fixture",
           "disposition": "implemented",
           "owner_action": "Run bounded OMP native lifecycle canary",
           "blocker": "budget"
@@ -3725,7 +3725,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "0590b910a9c09ae10d5bc0161cda4d594f9defd45015a555cf38119e8e81b185"
+      "adapter_digest": "267a708145d77e00bb312919bae1ae9ea7f664a8e9e89cf54146135a19d7e42d"
     }
   ]
 }

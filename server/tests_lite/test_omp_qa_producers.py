@@ -115,10 +115,10 @@ def test_omp_qualification_producers_are_registered_on_their_own_contracts() -> 
 
 
 def test_omp_stock_version_line_is_prefixed_for_both_release_profiles() -> None:
-    assert CONSOLE_PROFILE.version_line.fullmatch("omp/18.1.17")
-    assert HELM_PROFILE.version_line.fullmatch("omp/18.1.17")
-    assert CONSOLE_PROFILE.version_line.fullmatch("18.1.17") is None
-    assert HELM_PROFILE.version_line.fullmatch("18.1.17") is None
+    assert CONSOLE_PROFILE.version_line.fullmatch("omp/18.1.18")
+    assert HELM_PROFILE.version_line.fullmatch("omp/18.1.18")
+    assert CONSOLE_PROFILE.version_line.fullmatch("18.1.18") is None
+    assert HELM_PROFILE.version_line.fullmatch("18.1.18") is None
 
 
 def test_qualification_isolation_root_uses_short_sandbox_alias(monkeypatch, tmp_path) -> None:

@@ -124,6 +124,21 @@ async def test_cp_resolution_preserves_link_conflicts_and_email_collision_rule(d
         assert linked["user"]["provider_user_id"] == "cp:41"
         assert linked["commit_seq"] == "2"
 
+        read = await client.call(
+            "auth.user.get_cp.v2",
+            {
+                "cp_user_id": 41,
+                "email": "owner@example.com",
+                "email_verified": True,
+                "display_name": "Owner",
+                "avatar_url": None,
+            },
+        )
+        assert read["found"] is True
+        assert read["sync_due"] is False
+        assert read["user"]["id"] == local["user"]["id"]
+        assert read["commit_seq"] == "2"
+
         other = await client.call(
             "auth.user.resolve_local.v2",
             _local_params(email="other@example.com", adopt_existing=False),

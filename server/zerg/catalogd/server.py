@@ -486,6 +486,8 @@ class CatalogDaemon:
             return await self._get_active_owner(request)
         if request.method == "auth.single_tenant.ensure.v2":
             return await self._ensure_single_tenant_owner(request)
+        if request.method == "auth.user.get_cp.v2":
+            return await self._get_cp_user(request)
         if request.method == "auth.user.resolve_cp.v2":
             return await self._resolve_cp_user(request)
         if request.method == "auth.user.resolve_local.v2":
@@ -871,6 +873,28 @@ class CatalogDaemon:
             result["commit_seq"] = stamped["commit_seq"]
             if stamped.get("last_used_at") is not None and isinstance(result.get("token"), dict):
                 result["token"]["last_used_at"] = stamped["last_used_at"]
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _get_cp_user(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"cp_user_id", "email", "email_verified", "display_name", "avatar_url"}
+        if set(request.params) != expected:
+            return self._error(
+                request,
+                "invalid_request",
+                "auth.user.get_cp.v2 requires cp_user_id, email, email_verified, display_name, and avatar_url",
+            )
+        params = request.params
+        if type(params["cp_user_id"]) is not int or params["cp_user_id"] <= 0:
+            return self._error(request, "invalid_request", "cp_user_id must be a positive integer")
+        if not _is_string(params["email"], maximum=320):
+            return self._error(request, "invalid_request", "email must contain 1 to 320 characters")
+        if type(params["email_verified"]) is not bool:
+            return self._error(request, "invalid_request", "email_verified must be a boolean")
+        for field in ("display_name", "avatar_url"):
+            if params[field] is not None and not isinstance(params[field], str):
+                return self._error(request, "invalid_request", f"{field} must be a string or null")
+        assert self._store is not None
+        result = await self._run_control_read_store(self._store.get_cp_user, **params)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _resolve_cp_user(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

@@ -1537,6 +1537,47 @@ class CatalogStore:
                 "commit_seq": str(_advance_commit_seq(connection, now)),
             }
 
+    def get_cp_user(
+        self,
+        *,
+        cp_user_id: int,
+        email: str,
+        email_verified: bool,
+        display_name: str | None,
+        avatar_url: str | None,
+    ) -> dict[str, Any]:
+        """Read an established CP identity without taking the writer."""
+        user_table = LiveUser.__table__
+        with _read_snapshot(self.engine) as connection:
+            user = connection.execute(select(user_table).where(user_table.c.cp_user_id == cp_user_id)).mappings().first()
+            commit_seq = _current_commit_seq(connection)
+            if user is None:
+                return {"found": False, "sync_due": True, "commit_seq": str(commit_seq)}
+
+            desired_display_name = display_name or user["display_name"]
+            desired_avatar_url = avatar_url or user["avatar_url"]
+            email_collision = connection.execute(
+                select(user_table.c.id).where(user_table.c.email == email, user_table.c.id != user["id"])
+            ).first()
+            sync_due = any(
+                (
+                    user["provider"] != "control-plane",
+                    user["provider_user_id"] != f"cp:{cp_user_id}",
+                    user["email"] != email and email_collision is None,
+                    user["display_name"] != desired_display_name,
+                    user["avatar_url"] != desired_avatar_url,
+                    user["email_verified"] != email_verified,
+                    user["is_active"] is not True,
+                    user["last_login"] is None,
+                )
+            )
+            return {
+                "found": True,
+                "sync_due": sync_due,
+                "user": _user_dto(user),
+                "commit_seq": str(commit_seq),
+            }
+
     def resolve_cp_user(
         self,
         *,
@@ -1800,12 +1841,27 @@ class CatalogStore:
                 }
 
             if parent["used_at"] is not None:
+                elapsed = (now - _as_aware_utc(parent["used_at"])).total_seconds()
+                if elapsed > reuse_grace_seconds:
+                    count = connection.execute(
+                        update(table).where(table.c.family_id == parent["family_id"], table.c.revoked_at.is_(None)).values(revoked_at=now)
+                    ).rowcount
+                    commit_seq = _advance_commit_seq(connection, now) if count else _current_commit_seq(connection)
+                    return {
+                        "status": "family_revoked",
+                        "revoked_count": count,
+                        "commit_seq": str(commit_seq),
+                    }
+
                 child = (
                     connection.execute(select(table).where(table.c.parent_id == parent["id"], table.c.revoked_at.is_(None)))
                     .mappings()
                     .first()
                 )
-                if child is not None and hmac.compare_digest(str(child["token_hash"]), next_token_hash):
+                if child is None or not hmac.compare_digest(str(child["token_hash"]), next_token_hash):
+                    return {"status": "invalid", "commit_seq": str(_current_commit_seq(connection))}
+
+                if child["used_at"] is None:
                     return {
                         "status": "exact_replay",
                         "session_id": child["id"],
@@ -1814,17 +1870,48 @@ class CatalogStore:
                         "user": _user_dto(user),
                         "commit_seq": str(_current_commit_seq(connection)),
                     }
-                elapsed = (now - _as_aware_utc(parent["used_at"])).total_seconds()
-                if elapsed <= reuse_grace_seconds:
-                    return {"status": "invalid", "commit_seq": str(_current_commit_seq(connection))}
-                count = connection.execute(
-                    update(table).where(table.c.family_id == parent["family_id"], table.c.revoked_at.is_(None)).values(revoked_at=now)
-                ).rowcount
-                commit_seq = _advance_commit_seq(connection, now) if count else _current_commit_seq(connection)
+
+                # A delayed request can arrive after two tabs have already
+                # rotated again. Do not clear the browser's valid cookies for
+                # that race. Return the current generation so the HTTP layer
+                # can deterministically reconstruct it from the presented raw
+                # token; a replay outside grace still revokes the family.
+                current = child
+                while current["used_at"] is not None:
+                    child_elapsed = (now - _as_aware_utc(current["used_at"])).total_seconds()
+                    if child_elapsed > reuse_grace_seconds:
+                        count = connection.execute(
+                            update(table)
+                            .where(table.c.family_id == parent["family_id"], table.c.revoked_at.is_(None))
+                            .values(revoked_at=now)
+                        ).rowcount
+                        commit_seq = _advance_commit_seq(connection, now) if count else _current_commit_seq(connection)
+                        return {
+                            "status": "family_revoked",
+                            "revoked_count": count,
+                            "commit_seq": str(commit_seq),
+                        }
+                    descendant = (
+                        connection.execute(
+                            select(table).where(
+                                table.c.parent_id == current["id"],
+                                table.c.revoked_at.is_(None),
+                            )
+                        )
+                        .mappings()
+                        .first()
+                    )
+                    if descendant is None:
+                        return {"status": "invalid", "commit_seq": str(_current_commit_seq(connection))}
+                    current = descendant
                 return {
-                    "status": "family_revoked",
-                    "revoked_count": count,
-                    "commit_seq": str(commit_seq),
+                    "status": "stale_replay",
+                    "session_id": current["id"],
+                    "user_id": parent["user_id"],
+                    "family_id": parent["family_id"],
+                    "current_token_hash": current["token_hash"],
+                    "user": _user_dto(user),
+                    "commit_seq": str(_current_commit_seq(connection)),
                 }
 
             collision = connection.execute(select(table).where(table.c.token_hash == next_token_hash)).first()

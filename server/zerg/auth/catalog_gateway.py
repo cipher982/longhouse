@@ -67,16 +67,32 @@ def _resolve_device(token: str, *, touch_last_used: bool) -> dict[str, Any] | No
 
 
 def resolve_control_plane_user(claims: CPTokenClaims) -> AuthenticatedUser:
+    """Resolve a hosted CP principal through catalogd's durable auth boundary."""
+
+    params = {
+        "cp_user_id": claims.cp_user_id,
+        "email": claims.email,
+        "email_verified": claims.email_verified,
+        "display_name": claims.display_name,
+        "avatar_url": claims.avatar_url,
+    }
+    try:
+        result = _call("auth.user.get_cp.v2", params)
+    except CatalogRemoteError as exc:
+        # API and catalogd may restart independently. An older catalogd does
+        # not know the read fast-path yet, so use the durable resolver instead
+        # of turning a safe deploy skew into a fleet-wide 503.
+        if exc.code != "unknown_method":
+            raise
+        result = None
+
+    if result is not None and result.get("found") is True and result.get("sync_due") is not True:
+        return _principal(result.get("user"))
+
     try:
         result = _call(
             "auth.user.resolve_cp.v2",
-            {
-                "cp_user_id": claims.cp_user_id,
-                "email": claims.email,
-                "email_verified": claims.email_verified,
-                "display_name": claims.display_name,
-                "avatar_url": claims.avatar_url,
-            },
+            params,
         )
     except CatalogRemoteError as exc:
         if exc.code == "conflict":
@@ -164,9 +180,10 @@ def rotate_refresh(
             "reuse_grace_seconds": reuse_grace_seconds,
         },
     )
-    if result.get("status") in {"rotated", "exact_replay"}:
+    if result.get("status") in {"rotated", "exact_replay", "stale_replay"}:
         result = dict(result)
         result["user"] = _principal(result.get("user"))
+
     return result
 
 
@@ -223,7 +240,7 @@ def _call(method: str, params: dict) -> dict:
                 timeout_seconds=min(AUTH_CATALOG_ATTEMPT_TIMEOUT_SECONDS, remaining),
             )
         except CatalogRemoteError as exc:
-            if exc.code == "conflict":
+            if exc.code in {"conflict", "unknown_method"}:
                 raise
             if not exc.retryable:
                 raise _unavailable() from exc

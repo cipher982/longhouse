@@ -45,9 +45,9 @@ _SKIP_PREFIXES = (
 # routes include the ``/api`` mount prefix. To cover a new route, add its
 # template here; that is the whole registration step.
 #
-# Credentials carried in a query string (the WebSocket ``?token=``) or a header
-# (``X-Agents-Token``, ``Authorization``, the session cookie) need no entry:
-# this log records the path only.
+# Credentials carried in headers (``X-Agents-Token``, ``Authorization``, the
+# session cookie) need no entry: this log records the path only. Browser
+# WebSockets deliberately do not accept bearer query parameters.
 _CREDENTIAL_ROUTES = (
     # Share-link token: whoever holds it can read the shared transcript.
     "/api/public/session-shares/{credential}/preview",
@@ -193,10 +193,10 @@ class AccessLogMiddleware:
         it is still being read.
 
         Accept/reject is the first moment the principal exists for the two
-        sockets that authenticate from the handshake itself: ``/api/ws`` (query
-        token or session cookie) and ``/api/agents/control/ws`` (device token
-        header). Both resolve their caller before accepting and stamp
-        ``scope["state"]["principal"]``, so the accept-time line carries it.
+        sockets that authenticate from the handshake itself: ``/api/ws``
+        (Authorization header or session cookie) and ``/api/agents/control/ws``
+        (device token header). Both resolve their caller before accepting and
+        stamp ``scope["state"]["principal"]``, so the accept-time line carries it.
 
         ``/api/runners/ws`` is the exception: its secret arrives in the ``hello``
         frame, after accept, so its accept-time line is honestly

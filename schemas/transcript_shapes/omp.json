@@ -3,8 +3,8 @@
   "upstream": {
     "package": "@oh-my-pi/pi-coding-agent",
     "binary": "omp",
-    "version": "18.1.17",
-    "commit": "3b3a6dc9bbd85102ce19d0b1c11bf6870915f6ec"
+    "version": "18.1.18",
+    "commit": "00085d4e7dfdcfbf302c122fa2682b410a0f43d1"
   },
   "source": {
     "root": "$XDG_DATA_HOME/omp/sessions",

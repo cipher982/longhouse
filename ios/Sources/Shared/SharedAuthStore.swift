@@ -21,8 +21,8 @@ struct SharedAuthDebugState: Sendable {
 
 enum SharedAuthStore {
     static let appGroupIdentifier = "group.ai.longhouse.shared"
-    static let sessionCookieName = "longhouse_session"
-    static let refreshCookieName = "longhouse_refresh"
+    static let sessionCookieName = "__Host-lh_session"
+    static let refreshCookieName = "__Host-lh_refresh"
     static let managedCookieNames: Set<String> = [sessionCookieName, refreshCookieName]
 
     private static let serverURLKey = "longhouse_server_url"

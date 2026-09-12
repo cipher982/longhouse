@@ -9,14 +9,18 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from typing import Optional
 from urllib.parse import urlparse
 
+import jwt
 from fastapi import APIRouter
+from fastapi import HTTPException
 from fastapi import WebSocket
 from fastapi import WebSocketDisconnect
 
+from zerg.auth.strategy import SESSION_COOKIE_NAME
 from zerg.config import get_settings
 from zerg.config import resolve_cors_origins
 from zerg.database import reset_test_worker_id
@@ -47,23 +51,45 @@ def _origin_is_allowed(origin: str) -> bool:
     return urlparse(origin).hostname in {"localhost", "127.0.0.1", "::1"}
 
 
+def _unverified_expiry(token: str | None) -> float | None:
+    """Return a validated token's expiry for connection lifetime fencing.
+
+    Authentication already verified the token before this helper runs. This
+    second, unverified decode is only a timer input; a forged expiry cannot
+    authorize a socket because ``validate_ws_jwt`` remains the gate.
+    """
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, options={"verify_signature": False})
+        return float(payload["exp"])
+    except (KeyError, TypeError, ValueError, jwt.PyJWTError):
+        return None
+
+
+async def _close_after_expiry(websocket: WebSocket, expires_at: float) -> None:
+    delay = max(0.0, expires_at - time.time())
+    await asyncio.sleep(delay)
+    logger.info("WebSocket auth expired; closing connection")
+    await websocket.close(code=4401, reason="Unauthorized")
+
+
 @router.websocket("/ws")
 async def websocket_endpoint(
     websocket: WebSocket,
     initial_topics: Optional[str] = None,
-    token: Optional[str] = None,
 ):
     """WebSocket endpoint supporting topic-based subscriptions.
+
+    Browser clients authenticate with the HttpOnly session cookie. Native/API
+    clients must send ``Authorization: Bearer <runtime-token>`` in the
+    handshake; credentials in query strings are deliberately unsupported so
+    reverse proxies and browser history cannot capture them.
 
     Args:
         websocket: The WebSocket connection
         initial_topics: Optional comma-separated list of topics to subscribe to
             immediately upon connection (e.g., "user:1,ops:events")
-        token: Optional JWT from query param (for non-browser clients)
-
-    Auth order:
-    1. Query param token (for API clients)
-    2. longhouse_session cookie (for browser auth)
     """
     client_id = str(uuid.uuid4())
     # E2E: capture worker id from query params to route DB sessions.
@@ -79,25 +105,33 @@ async def websocket_endpoint(
             reset_test_worker_id(worker_token)
         return
 
-    # ------------------------------------------------------------------
-    # Authenticate BEFORE accepting the WebSocket handshake.  If auth fails
-    # we close with code 4401 and return early (Stage-8 hardening).
-    # ------------------------------------------------------------------
-
-    # Extract token: prefer query param, fall back to cookie
-    auth_token = token
+    # Authenticate before subscribing to any topic. Accepting solely to send
+    # an explicit close frame is intentional: browsers otherwise surface a
+    # pre-accept rejection as 1006 and cannot distinguish expired auth from a
+    # network outage.
+    auth_token = None
+    auth_header = websocket.headers.get("authorization")
+    if auth_header and auth_header.lower().startswith("bearer "):
+        auth_token = auth_header[7:].strip()
     if not auth_token:
-        # Try to get token from session cookie (browser auth)
-        auth_token = websocket.cookies.get("longhouse_session")
+        auth_token = websocket.cookies.get(SESSION_COOKIE_NAME)
 
-    user = await asyncio.to_thread(validate_ws_jwt, auth_token)
+    try:
+        user = await asyncio.to_thread(validate_ws_jwt, auth_token)
+    except HTTPException as exc:
+        if exc.status_code < 500:
+            raise
+        logger.warning("WebSocket auth authority unavailable for client %s", client_id)
+        await websocket.accept()
+        await websocket.close(code=4503, reason="Authentication service unavailable")
+        if worker_token is not None:
+            reset_test_worker_id(worker_token)
+        return
     user_id = getattr(user, "id", None) if user is not None else None
 
     if user is None:
-        # Auth failed and AUTH_DISABLED is *not* enabled.  We close the
-        # connection *before* accepting the handshake so the browser sees a
-        # clean 4401 closure code.  (4401 chosen to mirror HTTP 401.)
         logger.info("WebSocket auth failed – closing connection for client %s", client_id)
+        await websocket.accept()
         await websocket.close(code=4401, reason="Unauthorized")
         if worker_token is not None:
             reset_test_worker_id(worker_token)
@@ -115,10 +149,16 @@ async def websocket_endpoint(
     if user_id is not None:
         websocket.state.principal = f"user:{user_id}"
 
+    expiry_task: asyncio.Task[None] | None = None
+
     try:
         await websocket.accept()
         await topic_manager.connect(client_id, websocket, user_id, auto_system=True, principal=user)
+        await websocket.send_json({"type": "auth_ready"})
         logger.info(f"WebSocket connection established for client {client_id}")
+        expires_at = _unverified_expiry(auth_token)
+        if expires_at is not None:
+            expiry_task = asyncio.create_task(_close_after_expiry(websocket, expires_at))
 
         # Handle initial topic subscriptions if provided
         if initial_topics:
@@ -158,7 +198,10 @@ async def websocket_endpoint(
             await websocket.send_json(error_envelope.model_dump())
         except Exception as send_error:
             logger.debug("Could not send websocket error envelope to %s: %s", client_id, send_error)
+
     finally:
+        if expiry_task is not None:
+            expiry_task.cancel()
         await topic_manager.disconnect(client_id)
         if worker_token is not None:
             reset_test_worker_id(worker_token)

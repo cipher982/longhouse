@@ -27,8 +27,10 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from types import SimpleNamespace
 
+import jwt
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -104,23 +106,43 @@ def test_machine_control_socket_logs_the_device_token(monkeypatch, caplog):
     assert _principal_for(caplog, "WS /api/agents/control/ws accepted") == f"device:{DEVICE_TOKEN_ID}"
 
 
-def test_rejected_handshake_stays_unattributed(monkeypatch, caplog):
-    """A refused connection has no principal, and must not borrow one.
+def test_auth_rejection_is_explicit_and_unattributed(monkeypatch, caplog):
+    """An accepted handshake can still close with an explicit auth code.
 
-    ``unattributed`` is a fact about the connection, not a formatting default.
-    A stamp that fired before the auth decision would label rejected traffic
-    with whoever it was pretending to be.
+    Accept-then-close lets browsers distinguish an expired cookie (4401) from
+    a network failure while the access log still records no principal.
     """
-
     monkeypatch.setattr("zerg.routers.websocket.validate_ws_jwt", lambda token, *args, **kwargs: None)
 
     client = TestClient(app)
     with caplog.at_level(logging.INFO, logger=ACCESS_LOGGER):
-        with pytest.raises(WebSocketDisconnect):
-            with client.websocket_connect("/api/ws"):
-                pass
+        with client.websocket_connect("/api/ws") as socket:
+            with pytest.raises(WebSocketDisconnect) as exc:
+                socket.receive_text()
 
-    assert _principal_for(caplog, "WS /api/ws rejected") == "unattributed"
+    assert exc.value.code == 4401
+    assert _principal_for(caplog, "WS /api/ws accepted") == "unattributed"
+
+
+def test_browser_stream_closes_when_bearer_token_expires(monkeypatch):
+    """An open browser stream cannot outlive its authenticated JWT."""
+    monkeypatch.setattr(
+        "zerg.routers.websocket.validate_ws_jwt",
+        lambda token, *args, **kwargs: SimpleNamespace(id=BROWSER_USER_ID, email="ws-expiry@example.com"),
+    )
+    token = jwt.encode(
+        {"sub": str(BROWSER_USER_ID), "exp": int(time.time()) - 1},
+        os.environ["JWT_SECRET"],
+        algorithm="HS256",
+    )
+
+    client = TestClient(app)
+    with client.websocket_connect("/api/ws", headers={"Authorization": f"Bearer {token}"}) as socket:
+        assert socket.receive_json() == {"type": "auth_ready"}
+        with pytest.raises(WebSocketDisconnect) as exc:
+            socket.receive_text()
+
+    assert exc.value.code == 4401
 
 
 def test_runner_socket_is_unattributed_at_accept_then_attributed_after_hello(monkeypatch, caplog):

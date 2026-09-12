@@ -130,7 +130,7 @@ Hard Codex contract:
 ### OMP
 
 - `longhouse omp` manages stock `omp` as a distinct provider; it is not a Pi
-  alias even though OMP 18.1.17 accepts Pi-compatible `PI_CONFIG_DIR`,
+  alias even though OMP 18.1.18 accepts Pi-compatible `PI_CONFIG_DIR`,
   `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`, and `PI_PROFILE`
   variables in its child environment. Preserve those variables for the stock
   binary, but Longhouse's OMP discovery and launch roots MUST use
