@@ -88,6 +88,7 @@ def _run_hook(
     )
     script.chmod(0o755)
     env = os.environ.copy()
+    env["LONGHOUSE_HOME"] = str(tmp_path / "lh")
     env.pop("LONGHOUSE_MANAGED_SESSION_ID", None)
     env.pop("LONGHOUSE_MANAGED_PROVIDER", None)
     env.pop("LONGHOUSE_IS_SIDECHAIN", None)
