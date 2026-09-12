@@ -500,8 +500,13 @@ def _stop_launch(
     session_id: str,
     isolation_root: Path,
 ) -> dict[str, Any]:
-    bridge = bridge_canary._stop_bridge(args, session_id, isolation_root)
-    tui.close()
+    try:
+        bridge = bridge_canary._stop_bridge(args, session_id, isolation_root)
+    finally:
+        tui.close()
+    verification = bridge.get("verification")
+    if not isinstance(verification, dict) or verification.get("verified") is not True:
+        raise RuntimeError(f"Codex bridge cleanup was not verified for session {session_id}")
     return {
         "wrapper_pid": tui.process.pid,
         "wrapper_exit_code": tui.process.returncode,

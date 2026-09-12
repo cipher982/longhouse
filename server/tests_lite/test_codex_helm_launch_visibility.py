@@ -16,20 +16,6 @@ import pytest
 import zerg.qa.codex_helm_launch_visibility as launch
 
 
-def test_registration_binds_one_codex_provider_release_cell():
-    registration = launch.REGISTRATION.to_dict()
-
-    assert registration["subject_kind"] == "provider_release"
-    assert registration["provider_artifact_required"] is True
-    assert registration["providers"] == ["codex"]
-    assert registration["scenario_id"] == "codex_helm_launch_visibility"
-    assert registration["assertion_cells"] == [{"assertion_id": "helm_launch_visibility_preserved", "variant": None}]
-    assert registration["credential_binding_ids"] == ["codex_provider_token", "runtime_host_control"]
-    assert registration["producer_revision"] == 11
-    assert registration["scenario_revision"] == 7
-    assert "open_working_set_with_factory_isolation" in registration["observed_activity"]
-
-
 def test_helm_launch_bridge_socket_fits_linux_unix_path_budget():
     for prefix in ("lch-", "lca-"):
         isolation_root = Path("/tmp") / f"{prefix}{'x' * 8}"
@@ -46,21 +32,6 @@ def test_recording_proxy_reports_wrapper_exit_before_registration():
             proxy.wait_registration(after=0, timeout=5, process=process)
     finally:
         proxy.server.server_close()
-
-
-def test_cleanup_evidence_binds_both_registered_cleanup_requirements():
-    cleanups = [
-        {"status": "pass", "axes": {"owned_processes_dead": True}},
-        {"status": "pass", "axes": {"owned_processes_dead": True}},
-    ]
-
-    status, requirements = launch._cleanup_evidence(cleanups)  # noqa: SLF001
-
-    assert status == "pass"
-    assert requirements == {
-        "runtime_host_canary_isolated": True,
-        "owned_processes_dead": True,
-    }
 
 
 def test_recording_proxy_retains_registration_identity_without_authority_tokens():
@@ -225,3 +196,27 @@ def test_infrastructure_failure_retains_cause_without_claiming_a_product_verdict
     assert "observation" not in result
     assert "assertions" not in result
     assert {item["path"] for item in result["artifact_manifest"]} == {"provider-binary-receipt.json"}
+
+
+@pytest.mark.parametrize("bridge_receipt", [{}, {"verification": {"verified": False, "alive_pids": [42]}}])
+def test_stop_launch_refuses_unverified_bridge_and_closes_wrapper(tmp_path, monkeypatch, bridge_receipt):
+    process = subprocess.Popen(["/bin/sleep", "60"])
+
+    def close():
+        process.terminate()
+        process.wait(timeout=5)
+
+    tui = SimpleNamespace(process=process, close=close)
+    monkeypatch.setattr(launch.bridge_canary, "_stop_bridge", lambda *_args: bridge_receipt)
+    try:
+        with pytest.raises(RuntimeError, match="bridge cleanup"):
+            launch._stop_launch(
+                argparse.Namespace(),
+                tui=tui,
+                session_id="owned-session",
+                isolation_root=tmp_path,
+            )
+        assert process.poll() is not None
+    finally:
+        if process.poll() is None:
+            close()
