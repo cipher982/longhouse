@@ -20,6 +20,7 @@ def test_resolve_longhouse_home_preserves_explicit_longhouse_home(tmp_path):
 
 
 def test_resolve_longhouse_home_uses_claude_env_when_present(tmp_path, monkeypatch):
+    monkeypatch.delenv("LONGHOUSE_HOME", raising=False)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / ".claude"))
 
     assert resolve_longhouse_home() == tmp_path / ".longhouse"
@@ -33,6 +34,7 @@ def test_resolve_longhouse_home_prefers_longhouse_home_env(tmp_path, monkeypatch
 
 
 def test_resolve_longhouse_home_maps_custom_provider_env_to_sibling_longhouse(tmp_path, monkeypatch):
+    monkeypatch.delenv("LONGHOUSE_HOME", raising=False)
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
 
     assert resolve_longhouse_home() == tmp_path / ".longhouse"

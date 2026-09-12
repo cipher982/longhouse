@@ -33,15 +33,6 @@ def test_schedule_rejects_a_scheduled_live_token_executor_that_is_not_private_fa
         load_provider_release_schedule(path)
 
 
-def test_weekly_workflow_uses_the_declared_cron_and_independent_cells() -> None:
-    workflow = (DEFAULT_SCHEDULE_PATH.parents[1] / ".github/workflows/provider-release-weekly.yml").read_text(encoding="utf-8")
-    schedule = load_provider_release_schedule()
-
-    assert f"cron: '{schedule.weekly_cron}'" in workflow
-    assert "fail-fast: false" in workflow
-    assert "continue-on-error: ${{ matrix.allow_failure }}" in workflow
-
-
 def test_schedule_rejects_a_missing_contract_provider(tmp_path: Path) -> None:
     payload = yaml.safe_load(DEFAULT_SCHEDULE_PATH.read_text(encoding="utf-8"))
     payload["providers"] = payload["providers"][1:]

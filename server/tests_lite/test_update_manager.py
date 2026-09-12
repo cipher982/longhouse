@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from cryptography.fernet import Fernet
 from typer.testing import CliRunner
 
@@ -16,6 +17,12 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 from zerg import build_info
 from zerg.cli.main import app
 from zerg.cli import update_manager
+
+
+@pytest.fixture(autouse=True)
+def isolate_home_fallback(monkeypatch):
+    monkeypatch.delenv("LONGHOUSE_HOME", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
 
 
 class _FakeResource:

@@ -13,7 +13,7 @@ COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
 ENV PATH=/usr/local/cargo/bin:$PATH
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    make git build-essential pkg-config libssl-dev curl ca-certificates sqlite3 \
+    make git build-essential pkg-config libssl-dev curl ca-certificates sqlite3 jq \
     && rm -rf /var/lib/apt/lists/* \
     && ln -s /usr/local/bin/bun /usr/local/bin/bunx \
     && ln -s /ms-playwright /opt/playwright \
