@@ -285,6 +285,14 @@ def run_console_served_state(
     )
     report = core.run(arguments, on_session_created=on_session_created)
     assertions = assertions_from_report(report)
+    cleanup = report.get("cleanup_receipt")
+    cleanup_ok = (
+        isinstance(cleanup, dict)
+        and cleanup.get("status") == "pass"
+        and cleanup.get("archived") is True
+        and cleanup.get("present_in_served_inventory") is False
+        and cleanup.get("served_run_retired") is True
+    )
     _write_json(root / "console-served-state-observation.json", report)
     return {
         "schema_version": 1,
@@ -302,7 +310,7 @@ def run_console_served_state(
         "scenario_revision": REGISTRATION.scenario_revision,
         "evidence_class": "live_token",
         "generated_at": now(),
-        "status": "pass" if all(assertions.values()) else "fail",
+        "status": "pass" if all(assertions.values()) and cleanup_ok else "fail",
         "observation": report,
         "assertions": assertions,
     }
@@ -332,8 +340,6 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "fail", "failure_code": "vehicle_arguments_missing"}))
         return 2
 
-    from zerg.qa.console_served_state_core import Client
-
     root = args.evidence_root.resolve()
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
     cleanup: dict[str, object] = {
@@ -343,7 +349,9 @@ def main(argv: list[str] | None = None) -> int:
         "orphan_count": 0,
         "requirements": {
             "no_orphan_provider_processes": False,
+            "served_run_retired": False,
             "canary_session_hidden": False,
+            "served_session_absent": False,
         },
     }
     provider = "codex"
@@ -478,27 +486,46 @@ def main(argv: list[str] | None = None) -> int:
             _write_json(root / "machine-shipper-receipt.json", shipper_receipt)
         else:
             shipper_receipt = {"stopped": True, "process_dead": True, "process_group_dead": True}
-        hidden = False
-        if session_id:
+        retirement: dict[str, object] | None = None
+        observation = result.get("observation") if isinstance(result, dict) else None
+        candidate = observation.get("cleanup_receipt") if isinstance(observation, dict) else None
+        if isinstance(candidate, dict):
+            retirement = candidate
+        elif session_id:
             try:
-                hidden_result = Client(api_url, token).request(
-                    "PATCH",
-                    f"/api/agents/sessions/{session_id}/timeline-visibility",
-                    {"hidden": True},
+                from zerg.qa.live_session_toolkit import retire_qualification_session
+
+                retirement = retire_qualification_session(
+                    api_url,
+                    token,
+                    session_id,
+                    provider=provider,
+                    project="console-served-state-e2e",
                 )
-                hidden = hidden_result.get("hidden") is True
-            except Exception as exc:  # noqa: BLE001 - cleanup failure is retained below
-                failure = failure or exc
+            except Exception as exc:  # noqa: BLE001 - cleanup failure must remain visible
+                retirement = {
+                    "status": "fail",
+                    "session_id": session_id,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+        hidden = isinstance(retirement, dict) and retirement.get("hidden") is True
+        archived = isinstance(retirement, dict) and retirement.get("archived") is True
+        served_session_absent = isinstance(retirement, dict) and retirement.get("present_in_served_inventory") is False
+        served_run_retired = isinstance(retirement, dict) and retirement.get("served_run_retired") is True
         provider_dead = _wait_vehicle_dead(vehicle_claim) if vehicle_claim is not None else True
         machine_dead = all(shipper_receipt.get(field) is True for field in ("stopped", "process_dead", "process_group_dead"))
+        cleanup_ok = provider_dead and machine_dead and served_run_retired and hidden and archived and served_session_absent
         cleanup.update(
             {
-                "status": "pass" if provider_dead and machine_dead and hidden else "fail",
-                "orphan_count": 0 if provider_dead and machine_dead else 1,
+                "status": "pass" if cleanup_ok else "fail",
+                "orphan_count": 0 if cleanup_ok else 1,
                 "session_id": session_id,
+                "session_retirement": retirement,
                 "requirements": {
                     "no_orphan_provider_processes": provider_dead and machine_dead,
+                    "served_run_retired": served_run_retired,
                     "canary_session_hidden": hidden,
+                    "served_session_absent": served_session_absent and archived,
                 },
             }
         )
