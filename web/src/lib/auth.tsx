@@ -94,6 +94,7 @@ async function loginWithGoogle(idToken: string): Promise<{ access_token: string;
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'X-Longhouse-Auth': '1',
     },
     credentials: 'include', // Required for cookie to be set
     body: JSON.stringify({ id_token: idToken }),

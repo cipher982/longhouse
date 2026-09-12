@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Navigate, useSearchParams } from 'react-router-dom';
 import { clearLogoutIntent, hasLogoutIntent, useAuth, useAuthMethods } from '../lib/auth';
+import { clearLogoutBarrier } from '../lib/auth-refresh';
 import { sanitizeReturnTo } from '../lib/loginRedirect';
 import config from '../lib/config';
 
@@ -82,6 +83,7 @@ export default function LoginPage() {
     (authError === 'cookie_loop' ? '&reset_attempt=1' : '');
   const beginLogin = () => {
     clearLogoutIntent();
+    clearLogoutBarrier();
     setLogoutSuppressed(false);
     window.location.assign(retryUrl);
   };
@@ -103,7 +105,9 @@ export default function LoginPage() {
         {errorMessage ? (
           <>
             <p role="alert">{errorMessage}</p>
-            <a href={retryUrl} style={{ color: '#D4A843' }}>Try signing in again</a>
+            <button type="button" onClick={beginLogin}>
+              Try signing in again
+            </button>
           </>
         ) : logoutSuppressed ? (
           <>

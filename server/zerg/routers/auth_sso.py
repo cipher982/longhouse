@@ -43,9 +43,17 @@ _HANDOFF_RATE_WINDOW_SECONDS = 60
 _HANDOFF_RATE_MAX_ATTEMPTS = 20
 _NATIVE_HANDOFF_IP_MAX_ATTEMPTS = 60
 _NATIVE_HANDOFF_TENANT_MAX_ATTEMPTS = 300
+_NATIVE_REFRESH_IP_MAX_ATTEMPTS = 120
+_NATIVE_REVOKE_IP_MAX_ATTEMPTS = 300
 _HANDOFF_RATE_MAX_KEYS = 2048
 _HANDOFF_RATE_BUCKETS: OrderedDict[str, deque[float]] = OrderedDict()
 _HANDOFF_RATE_LOCK = Lock()
+
+
+def _set_no_store(response: Response) -> None:
+    response.headers["cache-control"] = "no-store"
+    response.headers["pragma"] = "no-cache"
+
 
 _MAX_NATIVE_REFRESH_TOKEN_LENGTH = 512
 
@@ -58,12 +66,14 @@ def _enforce_handoff_rate_limit(
     *,
     tenant: str,
     surface: str,
-    attempt_id: str,
+    attempt_id: str | None,
     client_ip: str | None = None,
 ) -> None:
     """Bound browser attempts and native credential abuse independently."""
-    checks = [(f"{surface}:{tenant}:{_rate_limit_digest(attempt_id)}", _HANDOFF_RATE_MAX_ATTEMPTS)]
-    if surface.startswith("native"):
+    checks: list[tuple[str, int]] = []
+    if attempt_id:
+        checks.append((f"{surface}:{tenant}:{_rate_limit_digest(attempt_id)}", _HANDOFF_RATE_MAX_ATTEMPTS))
+    if surface == "native":
         ip_key = (client_ip or "unknown").strip() or "unknown"
         checks.extend(
             [
@@ -71,6 +81,12 @@ def _enforce_handoff_rate_limit(
                 (f"native-tenant:{tenant}", _NATIVE_HANDOFF_TENANT_MAX_ATTEMPTS),
             ]
         )
+    elif surface == "native-refresh":
+        ip_key = (client_ip or "unknown").strip() or "unknown"
+        checks.append((f"native-refresh-ip:{tenant}:{_rate_limit_digest(ip_key)}", _NATIVE_REFRESH_IP_MAX_ATTEMPTS))
+    elif surface == "native-revoke":
+        ip_key = (client_ip or "unknown").strip() or "unknown"
+        checks.append((f"native-revoke-ip:{tenant}:{_rate_limit_digest(ip_key)}", _NATIVE_REVOKE_IP_MAX_ATTEMPTS))
 
     now = time.monotonic()
     window_start = now - _HANDOFF_RATE_WINDOW_SECONDS
@@ -561,7 +577,7 @@ async def accept_handoff_request(
 
 
 @router.post("/accept-native-handoff")
-async def accept_native_handoff(request: Request, body: NativeHandoffRequest):
+async def accept_native_handoff(request: Request, response: Response, body: NativeHandoffRequest):
     reject_cross_origin_form_post(request)
     settings = get_settings()
     control_plane_url = getattr(settings, "control_plane_url", None)
@@ -611,11 +627,12 @@ async def accept_native_handoff(request: Request, body: NativeHandoffRequest):
         await _best_effort_revoke_native_session(settings, refresh_token)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid runtime token")
 
+    _set_no_store(response)
     return normalized_payload
 
 
 @router.post("/refresh-native-session")
-async def refresh_native_session(request: Request, body: NativeRefreshRequest):
+async def refresh_native_session(request: Request, response: Response, body: NativeRefreshRequest):
     reject_cross_origin_form_post(request)
     refresh_token = body.refresh_token.strip()
     if not refresh_token:
@@ -627,18 +644,20 @@ async def refresh_native_session(request: Request, body: NativeRefreshRequest):
     _enforce_handoff_rate_limit(
         tenant=tenant,
         surface="native-refresh",
-        attempt_id="credential",
+        attempt_id=refresh_token,
         client_ip=get_client_ip(request),
     )
-    return await asyncio.to_thread(
+    payload = await asyncio.to_thread(
         _refresh_native_session_payload,
         settings=settings,
         refresh_token=refresh_token,
     )
+    _set_no_store(response)
+    return payload
 
 
 @router.post("/revoke-native-session")
-async def revoke_native_session(request: Request, body: NativeRevokeRequest):
+async def revoke_native_session(request: Request, response: Response, body: NativeRevokeRequest):
     reject_cross_origin_form_post(request)
     refresh_token = body.refresh_token.strip()
     if not refresh_token:
@@ -650,7 +669,7 @@ async def revoke_native_session(request: Request, body: NativeRevokeRequest):
     _enforce_handoff_rate_limit(
         tenant=tenant,
         surface="native-revoke",
-        attempt_id="credential",
+        attempt_id=refresh_token,
         client_ip=get_client_ip(request),
     )
     await asyncio.to_thread(
@@ -658,8 +677,9 @@ async def revoke_native_session(request: Request, body: NativeRevokeRequest):
         settings=settings,
         refresh_token=refresh_token,
         revoke_authority=body.revoke_authority,
-        strict=False,
+        strict=True,
     )
+    _set_no_store(response)
     return {"status": "ok"}
 
 

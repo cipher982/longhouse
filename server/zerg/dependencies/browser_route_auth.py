@@ -13,6 +13,7 @@ from zerg.config import get_settings
 from zerg.dependencies.auth import _auth_compat_db
 from zerg.dependencies.auth import _get_strategy
 from zerg.dependencies.browser_auth import get_current_browser_user
+from zerg.dependencies.form_post_origin import require_browser_auth_header
 
 
 def get_current_browser_route_user(
@@ -25,6 +26,8 @@ def get_current_browser_route_user(
 ):
     """Resolve the authenticated browser user for routes that also support SSE tokens."""
     if token:
+        if request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+            require_browser_auth_header(request)
         if getattr(get_settings(), "control_plane_url", None) and not token.startswith("zdt_"):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -35,6 +38,8 @@ def get_current_browser_route_user(
             return user
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
 
+    if request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+        require_browser_auth_header(request)
     return get_current_browser_user(request, db)
 
 

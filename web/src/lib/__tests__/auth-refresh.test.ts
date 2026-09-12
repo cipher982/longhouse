@@ -64,6 +64,9 @@ describe("fetchWithRefresh", () => {
       headers: { "Content-Type": "text/plain" },
       body: "one-shot-body",
     });
+    const initialRequest = fetchMock.mock.calls[0]?.[0];
+    expect(initialRequest).toBeInstanceOf(Request);
+    expect((initialRequest as Request).headers.get("X-Longhouse-Auth")).toBe("1");
 
     expect(response.status).toBe(204);
     expect(fetchMock).toHaveBeenCalledTimes(3);

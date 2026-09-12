@@ -218,6 +218,9 @@ export async function fetchWithRefresh(
       : new URL(input instanceof URL ? input.href : input, window.location.origin),
     init,
   );
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method) && !request.headers.has("X-Longhouse-Auth")) {
+    request.headers.set("X-Longhouse-Auth", "1");
+  }
   const response = await fetch(request.clone());
 
   if (response.status !== 401) {

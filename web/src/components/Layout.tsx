@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth, useAuthMethods } from "../lib/auth";
 import { buildLoginUrl } from "../lib/loginRedirect";
+import { clearLogoutBarrier } from "../lib/auth-refresh";
 import { requestNativeAuth } from "../lib/nativeAuthBridge";
 import { ConnectionStatus, ConnectionStatusIndicator } from "../lib/useWebSocket";
 import { useApiHealth } from "../lib/apiHealth";
@@ -95,11 +96,6 @@ function WelcomeHeader() {
     return target.toString();
   };
 
-  const tenantHandoffUrl = (returnTo: string): string => {
-    const target = new URL('/api/auth/start-handoff', window.location.origin);
-    target.searchParams.set('return_to', returnTo);
-    return target.toString();
-  };
 
   const handleLogout = async () => {
     const confirmed = await confirm({
@@ -131,12 +127,14 @@ function WelcomeHeader() {
     closeUserMenu();
     const completed = await logout(true);
     if (!completed) return;
-    const cpLogoutUrl = controlPlaneLogoutUrl(tenantHandoffUrl('/timeline'));
+    const returnTo = window.location.pathname + window.location.search + window.location.hash;
+    const cpLogoutUrl = controlPlaneLogoutUrl(returnTo);
     if (cpLogoutUrl) {
-      // The CP owns its same-origin logout confirmation and then returns to
-      // the tenant-owned handoff route. Never enter CP /auth/start directly:
-      // it cannot mint the tenant's CSRF cookie.
+      // Keep the refresh barrier and signed-out intent active through CP
+      // logout. The next explicit login clears both after handoff.
       window.location.assign(cpLogoutUrl);
+    } else {
+      clearLogoutBarrier();
     }
   };
 
@@ -152,11 +150,14 @@ function WelcomeHeader() {
     closeUserMenu();
     const completed = await logout(true);
     if (!completed) return;
-    const cpLogoutUrl = controlPlaneLogoutUrl(tenantHandoffUrl('/timeline'));
+    const returnTo = window.location.pathname + window.location.search + window.location.hash;
+    const cpLogoutUrl = controlPlaneLogoutUrl(returnTo);
     if (cpLogoutUrl) {
-      // CP logout is a deliberate same-origin POST confirmation. Once its
-      // cookie is cleared, the tenant starts a fresh, state-bound login.
+      // Keep the refresh barrier and signed-out intent active through CP
+      // logout. The next explicit login clears both after handoff.
       window.location.assign(cpLogoutUrl);
+    } else {
+      clearLogoutBarrier();
     }
   };
 
