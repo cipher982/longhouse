@@ -133,9 +133,9 @@ def main(argv: list[str] | None = None) -> int:
             "failure_code": "pi_console_tool_lifecycle_failed",
             "error": f"{type(exc).__name__}: {exc}",
         }
-        if args.evidence_root:
-            args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-            lifecycle.write_json(args.evidence_root / "result.json", result)
+        args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        result["artifact_manifest"] = artifact_manifest(args.evidence_root)
+        lifecycle.write_json(args.evidence_root / "result.json", result)
     print(json.dumps(result, sort_keys=True, default=str))
     return 0 if result.get("status") == "pass" else 1
 

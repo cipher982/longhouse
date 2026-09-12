@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from zerg.qa import pi_console_tool_producer as pi_console
 from zerg.qa import provider_console_lifecycle as lifecycle
 from zerg.qa.pi_console_tool_producer import REGISTRATION as PI_CONSOLE_REGISTRATION
 from zerg.qa.pi_console_tool_producer import pi_console_tool_assertions
@@ -74,6 +75,42 @@ def test_helm_auth_failure_is_not_hidden_as_a_convergence_timeout(monkeypatch) -
     with pytest.raises(helm._RuntimeHostHTTPError) as error:
         helm._wait_runtime_convergence("https://runtime.invalid", "fixture", "session", "native", "marker", timeout=1)
     assert error.value.status == 403
+
+
+def test_pi_console_main_failure_retains_partial_artifact_manifest(monkeypatch, tmp_path, capsys) -> None:
+    def fail(args):
+        args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        (args.evidence_root / "partial-receipt.json").write_text("{}\n", encoding="utf-8")
+        raise RuntimeError("synthetic qualification failure")
+
+    monkeypatch.setattr(pi_console, "run_pi_console_tool", fail)
+    result = pi_console.main(
+        [
+            "--variant",
+            pi_console._VARIANT,
+            "--evidence-root",
+            str(tmp_path / "evidence"),
+            "--repo-root",
+            str(tmp_path),
+            "--engine",
+            "/bin/true",
+            "--longhouse-cli",
+            "/bin/true",
+            "--provider-bin",
+            "/bin/true",
+            "--provider-version",
+            "0.0.0",
+            "--model",
+            "fixture-model",
+        ]
+    )
+
+    assert result == 1
+    payload = json.loads((tmp_path / "evidence" / "result.json").read_text(encoding="utf-8"))
+    assert payload["failure_code"] == "pi_console_tool_lifecycle_failed"
+    assert payload["error"] == "RuntimeError: synthetic qualification failure"
+    assert [entry["path"] for entry in payload["artifact_manifest"]] == ["partial-receipt.json"]
+    assert "synthetic qualification failure" in capsys.readouterr().out
 
 
 def test_pi_native_taxonomy_pairs_native_tool_call_and_result() -> None:
