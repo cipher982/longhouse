@@ -30,6 +30,18 @@ def _human(*, resumed: bool, run_id: str) -> dict:
             "factory_policy_hidden": True,
             "default_timeline_visible": False,
             "observed_within_seconds": 2.5,
+            "workspace_capabilities": {
+                "mode": "helm",
+                "ready": True,
+                "observed": {
+                    "live_control_available": True,
+                    "input_mode": "live",
+                    "can_send_input": True,
+                    "composer_enabled": True,
+                    "composer_disabled_reason": None,
+                    "control_label": "live",
+                },
+            },
         },
     }
 
@@ -59,7 +71,21 @@ def _observation() -> dict:
                 "launch_actor": "automation",
                 "launch_surface": "test",
             },
-            "canonical": {"default_timeline_visible": False},
+            "canonical": {
+                "default_timeline_visible": False,
+                "workspace_capabilities": {
+                    "mode": "helm",
+                    "ready": True,
+                    "observed": {
+                        "live_control_available": True,
+                        "input_mode": "live",
+                        "can_send_input": True,
+                        "composer_enabled": True,
+                        "composer_disabled_reason": None,
+                        "control_label": "live",
+                    },
+                },
+            },
         },
         "same_session_resumed": True,
         "new_run_on_resume": True,
@@ -83,6 +109,8 @@ def test_helm_launch_oracle_requires_complete_live_transaction():
         (("resumed", "registration", "resume_attempt_id"), None),
         (("automation", "registration", "launch_actor"), None),
         (("automation", "canonical", "default_timeline_visible"), True),
+        (("fresh", "canonical", "workspace_capabilities"), None),
+        (("fresh", "canonical", "workspace_capabilities", "observed", "input_mode"), "console"),
         (("cleanup", 0, "axes", "workspace_suggestion_absent"), False),
     ],
 )

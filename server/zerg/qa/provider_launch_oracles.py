@@ -33,6 +33,25 @@ def _human_launch_ok(observation: object, *, resumed: bool) -> bool:
         and canonical.get("observed_within_seconds") is not None
         and float(canonical["observed_within_seconds"]) <= 45.0
         and bool(registration.get("resume_attempt_id")) is resumed
+        and _helm_workspace_capability_ok(canonical)
+    )
+
+
+def _helm_workspace_capability_ok(canonical: Mapping[str, Any]) -> bool:
+    evidence = canonical.get("workspace_capabilities")
+    if not isinstance(evidence, Mapping):
+        return False
+    observed = evidence.get("observed")
+    return (
+        evidence.get("mode") == "helm"
+        and evidence.get("ready") is True
+        and isinstance(observed, Mapping)
+        and observed.get("live_control_available") is True
+        and observed.get("input_mode") == "live"
+        and observed.get("can_send_input") is True
+        and observed.get("composer_enabled") is True
+        and observed.get("composer_disabled_reason") is None
+        and observed.get("control_label") == "live"
     )
 
 
@@ -48,6 +67,7 @@ def _automation_launch_ok(observation: object) -> bool:
         and registration.get("launch_actor") == "automation"
         and registration.get("launch_surface") == "test"
         and canonical.get("default_timeline_visible") is False
+        and _helm_workspace_capability_ok(canonical)
     )
 
 

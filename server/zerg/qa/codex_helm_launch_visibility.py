@@ -24,6 +24,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -56,9 +57,9 @@ _EXECUTION_VARIANT = execution_variant_key(
 
 REGISTRATION = ProducerRegistration(
     producer_id="codex.helm_launch_visibility.v1",
-    producer_revision=10,
+    producer_revision=11,
     scenario_id=SCENARIO_ID,
-    scenario_revision=6,
+    scenario_revision=7,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("codex",),
     platforms=("linux",),
@@ -69,6 +70,7 @@ REGISTRATION = ProducerRegistration(
         "fresh_interactive_facade_registration",
         "resumed_interactive_facade_registration",
         "canonical_control_head",
+        "browser_workspace_capability_ready",
         "open_working_set_with_factory_isolation",
         "automation_hidden",
         "provenance_free_rejected",
@@ -248,6 +250,71 @@ def _runtime_request(args: argparse.Namespace, path: str, method: str, body: dic
     return runtime_host_request(args.api_url, args.agents_token, path, method, body)
 
 
+class BrowserWorkspaceError(RuntimeError):
+    """A browser-authenticated workspace read failed with an HTTP status."""
+
+    def __init__(self, status: int):
+        super().__init__(f"browser workspace returned HTTP {status}")
+        self.status = status
+
+
+def _browser_workspace(args: argparse.Namespace, session_id: str) -> dict[str, Any]:
+    """Read the same capability-bearing surface that Console clients use."""
+    endpoint = f"{args.api_url.rstrip('/')}/api/timeline/sessions/{urllib.parse.quote(session_id, safe='')}/workspace"
+    request = urllib.request.Request(
+        endpoint,
+        headers={
+            "Authorization": f"Bearer {args.agents_token}",
+            "Accept": "application/json",
+            "User-Agent": "LonghouseProviderFactory/1.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            payload = json.load(response)
+    except urllib.error.HTTPError as exc:
+        raise BrowserWorkspaceError(exc.code) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"browser workspace request failed: {type(exc.reason).__name__}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("browser workspace returned a non-object")
+    return payload
+
+
+def _helm_workspace_capability_evidence(workspace: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep the raw canonical engine-control facts, failing closed on gaps."""
+    session = workspace.get("session")
+    session = session if isinstance(session, Mapping) else {}
+    capabilities = session.get("capabilities")
+    capabilities = capabilities if isinstance(capabilities, Mapping) else {}
+    fields = (
+        "live_control_available",
+        "input_mode",
+        "can_send_input",
+        "composer_enabled",
+        "composer_disabled_reason",
+        "control_label",
+    )
+    observed = {field: capabilities.get(field) for field in fields}
+    missing_fields = [field for field in fields if field not in capabilities]
+    ready = (
+        not missing_fields
+        and observed["live_control_available"] is True
+        and observed["input_mode"] == "live"
+        and observed["can_send_input"] is True
+        and observed["composer_enabled"] is True
+        and observed["composer_disabled_reason"] is None
+        and observed["control_label"] == "live"
+    )
+    return {
+        "status": "pass" if ready else "fail",
+        "mode": "helm",
+        "observed": observed,
+        "missing_fields": missing_fields,
+        "ready": ready,
+    }
+
+
 def _set_facade_machine_label(isolation_root: Path, *, label: str, api_url: str) -> None:
     """Keep factory routing identity while avoiding its test-label classifier.
 
@@ -305,6 +372,26 @@ def _wait_canonical_launch(
         except RuntimeError:
             time.sleep(0.25)
             continue
+        try:
+            workspace_capabilities = _helm_workspace_capability_evidence(_browser_workspace(args, session_id))
+        except BrowserWorkspaceError as exc:
+            # Bearer auth is the browser boundary. Never turn an auth failure
+            # into a readiness timeout or a skipped capability claim.
+            if exc.status in {401, 403}:
+                raise
+            workspace_capabilities = {
+                "status": "error",
+                "mode": "helm",
+                "error": {"type": type(exc).__name__, "status": exc.status},
+                "ready": False,
+            }
+        except RuntimeError as exc:
+            workspace_capabilities = {
+                "status": "error",
+                "mode": "helm",
+                "error": {"type": type(exc).__name__},
+                "ready": False,
+            }
         shadow = diagnostic.get("shadow") if isinstance(diagnostic.get("shadow"), dict) else {}
         explain = diagnostic.get("explain") if isinstance(diagnostic.get("explain"), dict) else {}
         sources = explain.get("fact_sources") if isinstance(explain.get("fact_sources"), dict) else {}
@@ -321,6 +408,7 @@ def _wait_canonical_launch(
             "observed_within_seconds": round(time.monotonic() - launched_at, 3),
             "catalog_commit_seq": diagnostic.get("catalog_commit_seq"),
             "control_source": sources.get("control"),
+            "workspace_capabilities": workspace_capabilities,
         }
         ready = (
             last["mode"] == "helm"
@@ -330,6 +418,7 @@ def _wait_canonical_launch(
             and last["control_run_id"] == run_id
             and visible is expect_visible
             and (not expect_open or last["working_set"] == "open")
+            and workspace_capabilities["ready"] is True
         )
         if ready:
             return last

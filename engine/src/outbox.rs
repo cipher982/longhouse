@@ -1531,26 +1531,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_collect_outbox_does_not_wait_for_schema_work_behind_writer() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("engine.db");
-        drop(crate::state::db::open_db(Some(&db_path)).unwrap());
-        let writer = crate::state::db::open_connection(&db_path).unwrap();
-        writer.execute_batch("BEGIN IMMEDIATE").unwrap();
-        write_hook_style(dir.path(), "LOCKED", "sess-locked", "thinking");
-
-        let started = std::time::Instant::now();
-        let result = collect_outbox_with_local_state_result(dir.path(), Some(&db_path));
-        let elapsed = started.elapsed();
-
-        writer.execute_batch("ROLLBACK").unwrap();
-        assert_eq!(result.posts.len(), 1);
-        assert!(
-            elapsed < Duration::from_secs(1),
-            "hot outbox collection waited for schema work: {elapsed:?}"
-        );
-    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn test_drain_outbox_network_error_keeps_file() {

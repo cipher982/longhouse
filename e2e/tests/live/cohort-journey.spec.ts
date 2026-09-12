@@ -1,7 +1,17 @@
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import type { APIRequestContext, Locator, Page, Response } from "@playwright/test";
-import { test, expect, type HostedQaCohort } from "./fixtures";
+import type {
+  APIRequestContext,
+  Locator,
+  Page,
+  Response,
+} from "@playwright/test";
+import {
+  test,
+  expect,
+  type HostedQaCohort,
+  type HostedQaCohortSession,
+} from "./fixtures";
 import { waitForPageReady } from "../helpers/ready-signals";
 import {
   assertPrivacySafeArtifact,
@@ -44,14 +54,17 @@ type CohortInventory = { sessions: JourneySession[]; complete: boolean };
 
 const JOURNEY_COHORT = "isolated_synthetic_canary_v1";
 const JOURNEY_OUTPUT = resolve(
-  process.env.LONGHOUSE_JOURNEY_OUTPUT || "../artifacts/cohort-journey/cohort-journey.json",
+  process.env.LONGHOUSE_JOURNEY_OUTPUT ||
+    "../artifacts/cohort-journey/cohort-journey.json",
 );
 
 function roundMs(value: number): number {
   return Math.round(value * 10) / 10;
 }
 
-function parseServerTiming(headerValue: string | undefined): ServerTimingMetric[] {
+function parseServerTiming(
+  headerValue: string | undefined,
+): ServerTimingMetric[] {
   if (!headerValue) return [];
   return headerValue
     .split(",")
@@ -59,14 +72,22 @@ function parseServerTiming(headerValue: string | undefined): ServerTimingMetric[
     .filter(Boolean)
     .map((segment) => {
       const [name, ...params] = segment.split(";").map((part) => part.trim());
-      const duration = Number(params.find((part) => part.startsWith("dur="))?.slice(4));
-      return { name, duration_ms: Number.isFinite(duration) ? roundMs(duration) : 0 };
+      const duration = Number(
+        params.find((part) => part.startsWith("dur="))?.slice(4),
+      );
+      return {
+        name,
+        duration_ms: Number.isFinite(duration) ? roundMs(duration) : 0,
+      };
     })
     .filter((metric) => /^[a-z][a-z0-9_]{0,39}$/i.test(metric.name));
 }
 
 function createResponseTracker(page: Page) {
-  const responses = new Map<string, Array<{ status_family: string; server_timing: ServerTimingMetric[] }>>();
+  const responses = new Map<
+    string,
+    Array<{ status_family: string; server_timing: ServerTimingMetric[] }>
+  >();
   const listener = (response: Response) => {
     const routeClass = classifyApiResource(response.url());
     if (!routeClass) return;
@@ -83,7 +104,11 @@ function createResponseTracker(page: Page) {
     clear: () => responses.clear(),
     async summarize(): Promise<RouteSummary[]> {
       const resources = await page.evaluate(() =>
-        (performance.getEntriesByType("resource") as PerformanceResourceTiming[])
+        (
+          performance.getEntriesByType(
+            "resource",
+          ) as PerformanceResourceTiming[]
+        )
           .filter((entry) => entry.name.includes("/api/") && entry.duration > 0)
           .map((entry) => ({
             name: entry.name,
@@ -91,7 +116,9 @@ function createResponseTracker(page: Page) {
             transfer_bytes: entry.transferSize,
           })),
       );
-      const queues = new Map([...responses.entries()].map(([key, value]) => [key, [...value]]));
+      const queues = new Map(
+        [...responses.entries()].map(([key, value]) => [key, [...value]]),
+      );
       const summaries = new Map<string, RouteSummary>();
       for (const resource of resources) {
         const routeClass = classifyApiResource(resource.name);
@@ -106,10 +133,17 @@ function createResponseTracker(page: Page) {
           server_timing_max_ms: {},
         };
         summary.request_count += 1;
-        summary.transfer_bytes += Math.max(0, Math.round(resource.transfer_bytes));
-        summary.max_duration_ms = Math.max(summary.max_duration_ms, roundMs(resource.duration_ms));
+        summary.transfer_bytes += Math.max(
+          0,
+          Math.round(resource.transfer_bytes),
+        );
+        summary.max_duration_ms = Math.max(
+          summary.max_duration_ms,
+          roundMs(resource.duration_ms),
+        );
         const family = metadata?.status_family ?? "unknown";
-        summary.status_families[family] = (summary.status_families[family] ?? 0) + 1;
+        summary.status_families[family] =
+          (summary.status_families[family] ?? 0) + 1;
         for (const metric of metadata?.server_timing ?? []) {
           summary.server_timing_max_ms[metric.name] = Math.max(
             summary.server_timing_max_ms[metric.name] ?? 0,
@@ -118,7 +152,9 @@ function createResponseTracker(page: Page) {
         }
         summaries.set(routeClass, summary);
       }
-      return [...summaries.values()].sort((left, right) => left.route_class.localeCompare(right.route_class));
+      return [...summaries.values()].sort((left, right) =>
+        left.route_class.localeCompare(right.route_class),
+      );
     },
     dispose: () => page.off("response", listener),
   };
@@ -134,13 +170,19 @@ async function measurePhase(
 ): Promise<PhaseResult> {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     tracker.clear();
-    await page.evaluate(() => performance.clearResourceTimings()).catch(() => {});
+    await page
+      .evaluate(() => performance.clearResourceTimings())
+      .catch(() => {});
     const startedAt = Date.now();
     try {
       const result = await action();
       const readyMs = Date.now() - startedAt;
       const paintStartedAt = result.paintAfterEpochMs ?? startedAt;
-      const paintEpochMs = await waitForElementPaint(page, result.paintMarker, paintStartedAt);
+      const paintEpochMs = await waitForElementPaint(
+        page,
+        result.paintMarker,
+        paintStartedAt,
+      );
       const paintMs = paintEpochMs - paintStartedAt;
       if (result.resultCount <= 0) throw new Error("empty_result");
       return {
@@ -157,7 +199,8 @@ async function measurePhase(
       };
     } catch (error) {
       const failureCode = classifyJourneyFailure(error);
-      if (failureCode === "paint_evidence_unavailable" && attempt === 0) continue;
+      if (failureCode === "paint_evidence_unavailable" && attempt === 0)
+        continue;
       return {
         phase,
         cohort,
@@ -175,7 +218,9 @@ async function measurePhase(
   throw new Error("unreachable");
 }
 
-function responseFailure(response: Response | Awaited<ReturnType<APIRequestContext["get"]>>): Error {
+function responseFailure(
+  response: Response | Awaited<ReturnType<APIRequestContext["get"]>>,
+): Error {
   return new Error(`http_${Math.floor(response.status() / 100)}xx`);
 }
 
@@ -206,14 +251,19 @@ async function runAndWaitForSuccessfulResponse<T>(
     };
     page.on("response", listener);
     timer = setTimeout(() => {
-      const error = lastFailure ? responseFailure(lastFailure) : new Error("timeout");
+      const error = lastFailure
+        ? responseFailure(lastFailure)
+        : new Error("timeout");
       cleanup();
       reject(error);
     }, timeoutMs);
   });
 
   try {
-    const [actionResult, response] = await Promise.all([action(), responsePromise]);
+    const [actionResult, response] = await Promise.all([
+      action(),
+      responsePromise,
+    ]);
     return { response, actionResult };
   } finally {
     cleanup();
@@ -229,7 +279,11 @@ async function getWithRetry(
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       const response = await request.get(url);
-      if (response.ok() || (response.status() !== 429 && response.status() < 500)) return response;
+      if (
+        response.ok() ||
+        (response.status() !== 429 && response.status() < 500)
+      )
+        return response;
       if (attempt === attempts) return response;
     } catch (error) {
       lastError = error;
@@ -237,7 +291,9 @@ async function getWithRetry(
     }
     await new Promise((resolve) => setTimeout(resolve, attempt * 250));
   }
-  throw lastError instanceof Error ? lastError : new Error("http_retry_exhausted");
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("http_retry_exhausted");
 }
 
 function flattenTimelineCards(body: unknown): JourneySession[] {
@@ -252,30 +308,52 @@ function flattenTimelineCards(body: unknown): JourneySession[] {
     for (const candidate of [card.detail, card.head, card.root, card]) {
       if (!candidate || typeof candidate !== "object") continue;
       const session = candidate as Record<string, unknown>;
-      if (typeof session.id !== "string" || typeof session.started_at !== "string") continue;
+      if (
+        typeof session.id !== "string" ||
+        typeof session.started_at !== "string"
+      )
+        continue;
       result.push({
         id: session.id,
-        provider: typeof session.provider === "string" ? session.provider : null,
-        environment: typeof session.environment === "string" ? session.environment : null,
+        provider:
+          typeof session.provider === "string" ? session.provider : null,
+        environment:
+          typeof session.environment === "string" ? session.environment : null,
         started_at: session.started_at,
-        ended_at: typeof session.ended_at === "string" ? session.ended_at : null,
-        last_activity_at: typeof session.last_activity_at === "string" ? session.last_activity_at : null,
+        ended_at:
+          typeof session.ended_at === "string" ? session.ended_at : null,
+        last_activity_at:
+          typeof session.last_activity_at === "string"
+            ? session.last_activity_at
+            : null,
         timeline_anchor_at:
           typeof session.timeline_anchor_at === "string"
             ? session.timeline_anchor_at
             : typeof card.timeline_anchor_at === "string"
               ? card.timeline_anchor_at
               : null,
-        user_messages: typeof session.user_messages === "number" ? session.user_messages : 0,
-        assistant_messages: typeof session.assistant_messages === "number" ? session.assistant_messages : 0,
-        tool_calls: typeof session.tool_calls === "number" ? session.tool_calls : 0,
-        origin_kind: typeof session.origin_kind === "string" ? session.origin_kind : null,
+        user_messages:
+          typeof session.user_messages === "number" ? session.user_messages : 0,
+        assistant_messages:
+          typeof session.assistant_messages === "number"
+            ? session.assistant_messages
+            : 0,
+        tool_calls:
+          typeof session.tool_calls === "number" ? session.tool_calls : 0,
+        origin_kind:
+          typeof session.origin_kind === "string" ? session.origin_kind : null,
         hidden_from_default_timeline:
           typeof session.hidden_from_default_timeline === "boolean"
             ? session.hidden_from_default_timeline
             : null,
-        launch_actor: typeof session.launch_actor === "string" ? session.launch_actor : null,
-        launch_surface: typeof session.launch_surface === "string" ? session.launch_surface : null,
+        launch_actor:
+          typeof session.launch_actor === "string"
+            ? session.launch_actor
+            : null,
+        launch_surface:
+          typeof session.launch_surface === "string"
+            ? session.launch_surface
+            : null,
       });
     }
   }
@@ -301,30 +379,40 @@ async function fetchCohortInventory(
   if (!first.ok()) throw responseFailure(first);
   const firstBody = await first.json();
   const total = Number(firstBody?.total ?? 0);
-  const offsets = new Set<number>([0]);
-  if (total > 100) offsets.add(Math.max(0, total - 100));
-  if (total > 200) offsets.add(Math.max(0, Math.floor(total / 2) - 50));
+  // This inventory belongs to one five-session fixture, not sampled history.
   const sessions = flattenTimelineCards(firstBody);
-  let complete = true;
-  for (const offset of [...offsets].filter((value) => value > 0)) {
-    params.set("offset", String(offset));
-    const response = await getWithRetry(request, `${base}?${params}`);
-    if (!response.ok()) {
-      complete = false;
-      continue;
-    }
-    sessions.push(...flattenTimelineCards(await response.json()));
-  }
-  return { sessions, complete };
+  return { sessions, complete: sessions.length === total };
 }
 
-async function openReadableSession(page: Page, session: JourneySession | null): Promise<ActionResult> {
+async function openReadableSession(
+  page: Page,
+  session: JourneySession | null,
+  expected: HostedQaCohortSession,
+): Promise<ActionResult> {
   if (!session) throw new Error("missing_cohort");
-  await page.goto(`/timeline/${encodeURIComponent(session.id)}`, { waitUntil: "domcontentloaded" });
+  await page.goto(`/timeline/${encodeURIComponent(session.id)}`, {
+    waitUntil: "domcontentloaded",
+  });
   await waitForPageReady(page, { timeout: 25_000 });
   const rows = page.getByTestId("session-timeline-row");
-  await expect(rows.first()).toBeVisible({ timeout: 20_000 });
-  return { resultCount: await rows.count(), paintMarker: "longhouse-session-timeline-row" };
+  const list = page.getByTestId("session-timeline-list");
+  await expect(
+    list.getByText(expected.events.at(-1)!.content_text, { exact: true }),
+  ).toBeVisible({
+    timeout: 20_000,
+  });
+  if (expected.events.length <= 200) {
+    await expect(
+      list.getByText(expected.userText, { exact: true }),
+    ).toBeVisible();
+    await expect(
+      list.getByText(expected.assistantText, { exact: true }),
+    ).toBeVisible();
+  }
+  return {
+    resultCount: await rows.count(),
+    paintMarker: "longhouse-session-timeline-row",
+  };
 }
 
 async function loadedEntryCount(summary: Locator): Promise<number> {
@@ -338,23 +426,31 @@ async function loadedEntryCount(summary: Locator): Promise<number> {
 
 function ageBucket(session: JourneySession | null, nowMs: number): string {
   if (!session) return "unknown";
-  const anchor = Date.parse(session.timeline_anchor_at || session.last_activity_at || session.started_at);
+  const anchor = Date.parse(
+    session.timeline_anchor_at ||
+      session.last_activity_at ||
+      session.started_at,
+  );
   if (!Number.isFinite(anchor)) return "unknown";
-  return nowMs - anchor > 30 * 24 * 60 * 60 * 1000 ? "cold_31_90d" : "recent_0_30d";
+  return nowMs - anchor > 30 * 24 * 60 * 60 * 1000
+    ? "cold_31_90d"
+    : "recent_0_30d";
 }
 
 function writeArtifact(payload: unknown, fixtureValues: string[]): void {
   assertPrivacySafeArtifact(payload, fixtureValues);
   mkdirSync(dirname(JOURNEY_OUTPUT), { recursive: true });
   const temporary = `${JOURNEY_OUTPUT}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(payload)}\n`, { encoding: "utf8", mode: 0o600 });
+  writeFileSync(temporary, `${JSON.stringify(payload)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
   renameSync(temporary, JOURNEY_OUTPUT);
 }
 
 test("scheduled isolated synthetic canary cohort journey", async ({
   apiBaseUrl,
   context,
-  deviceToken,
   hostedQaCohort,
 }, testInfo) => {
   test.setTimeout(180_000);
@@ -368,16 +464,19 @@ test("scheduled isolated synthetic canary cohort journey", async ({
   let tracker: ReturnType<typeof createResponseTracker> | null = null;
 
   try {
-    const health = await getWithRetry(context.request, `${apiBaseUrl.replace(/\/$/, "")}/api/health`);
+    const health = await getWithRetry(
+      context.request,
+      `${apiBaseUrl.replace(/\/$/, "")}/api/health`,
+    );
     if (!health.ok()) throw responseFailure(health);
     const healthBody = await health.json();
     const candidateBuild = healthBody?.build;
     if (
-      !candidateBuild
-      || typeof candidateBuild.commit !== "string"
-      || typeof candidateBuild.version !== "string"
-      || typeof candidateBuild.channel !== "string"
-      || typeof candidateBuild.dirty !== "boolean"
+      !candidateBuild ||
+      typeof candidateBuild.commit !== "string" ||
+      typeof candidateBuild.version !== "string" ||
+      typeof candidateBuild.channel !== "string" ||
+      typeof candidateBuild.dirty !== "boolean"
     ) {
       throw new Error("build_identity");
     }
@@ -388,9 +487,13 @@ test("scheduled isolated synthetic canary cohort journey", async ({
       dirty: candidateBuild.dirty,
     };
 
-    const system = await getWithRetry(context.request, `${apiBaseUrl.replace(/\/$/, "")}/api/system/info`);
+    const system = await getWithRetry(
+      context.request,
+      `${apiBaseUrl.replace(/\/$/, "")}/api/system/info`,
+    );
     if (!system.ok()) throw responseFailure(system);
-    if ((await system.json())?.demo_mode === true) throw new Error("demo_target");
+    if ((await system.json())?.demo_mode === true)
+      throw new Error("demo_target");
   } catch (error) {
     preflightFailures.push(classifyJourneyFailure(error));
   }
@@ -410,7 +513,8 @@ test("scheduled isolated synthetic canary cohort journey", async ({
         hostedQaCohort.project,
       );
       inventory = inventoryResult.sessions;
-      if (!inventoryResult.complete) preflightFailures.push("inventory_incomplete");
+      if (!inventoryResult.complete)
+        preflightFailures.push("inventory_incomplete");
       if (inventory.length === 0) throw new Error("missing_cohort");
       cohorts = selectJourneyCohorts(
         inventory,
@@ -419,7 +523,8 @@ test("scheduled isolated synthetic canary cohort journey", async ({
         new Set(hostedQaCohort.ownedSessionIds),
       );
       if (Object.values(cohorts).every(Boolean)) break;
-      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 1_000));
+      if (attempt < 2)
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
     } catch (error) {
       preflightFailures.push(classifyJourneyFailure(error));
       break;
@@ -430,9 +535,9 @@ test("scheduled isolated synthetic canary cohort journey", async ({
     .filter((session): session is JourneySession => session !== null)
     .map((session) => session.id);
   if (
-    selectedIds.length !== hostedQaCohort.ownedSessionIds.length
-    || new Set(selectedIds).size !== selectedIds.length
-    || selectedIds.some((id) => !hostedQaCohort.ownedSessionIds.includes(id))
+    selectedIds.length !== hostedQaCohort.ownedSessionIds.length ||
+    new Set(selectedIds).size !== selectedIds.length ||
+    selectedIds.some((id) => !hostedQaCohort.ownedSessionIds.includes(id))
   ) {
     preflightFailures.push("unowned_cohort_selection");
   }
@@ -440,11 +545,11 @@ test("scheduled isolated synthetic canary cohort journey", async ({
     hostedQaCohort.ownedSessionIds.includes(candidate.id),
   )) {
     if (
-      session.environment !== "test"
-      || session.origin_kind !== "test_or_canary"
-      || session.hidden_from_default_timeline !== true
-      || session.launch_actor !== "automation"
-      || session.launch_surface !== "test"
+      session.environment !== "test" ||
+      session.origin_kind !== "test_or_canary" ||
+      session.hidden_from_default_timeline !== true ||
+      session.launch_actor !== "automation" ||
+      session.launch_surface !== "test"
     ) {
       preflightFailures.push("fixture_metadata");
     }
@@ -466,40 +571,51 @@ test("scheduled isolated synthetic canary cohort journey", async ({
     await route.fulfill({ response });
   });
   await page.route("**/api/timeline/recall**", async (route) => {
-    const requestUrl = new URL(route.request().url());
-    const diagnosticUrl = new URL(requestUrl);
-    diagnosticUrl.pathname = diagnosticUrl.pathname.replace(
-      "/api/timeline/recall",
-      "/api/agents/recall",
-    );
-    diagnosticUrl.searchParams.set("project", hostedQaCohort.project);
-    diagnosticUrl.searchParams.set("include_test", "true");
-    diagnosticUrl.searchParams.set("include_automation", "true");
-    const headers = { ...route.request().headers() };
-    if (deviceToken) headers["x-agents-token"] = deviceToken;
-    const response = await route.fetch({
-      url: diagnosticUrl.toString(),
-      headers,
-    });
+    const url = new URL(route.request().url());
+    if (url.pathname !== "/api/timeline/recall") {
+      await route.continue();
+      return;
+    }
+    url.searchParams.set("project", hostedQaCohort.project);
+    url.searchParams.set("include_test", "true");
+    url.searchParams.set("include_automation", "true");
+    const response = await route.fetch({ url: url.toString() });
     await route.fulfill({ response });
   });
   try {
-    phases.push(await measurePhase(page, tracker, "timeline_initial_load", "timeline", "all", async () => {
-      await page!.goto(
-        `/timeline?days_back=90&project=${encodeURIComponent(hostedQaCohort.project)}`,
-        { waitUntil: "domcontentloaded" },
-      );
-      await waitForPageReady(page!, { timeout: 25_000 });
-      const rows = page!.getByTestId("session-row");
-      await expect(rows.first()).toBeVisible({ timeout: 20_000 });
-      const visibleIds = await rows.evaluateAll((elements) =>
-        elements
-          .map((element) => element.getAttribute("data-session-id"))
-          .filter((id): id is string => Boolean(id)),
-      );
-      expect(visibleIds.every((id) => hostedQaCohort.ownedSessionIds.includes(id))).toBe(true);
-      return { resultCount: await rows.count(), paintMarker: "longhouse-session-row" };
-    }));
+    phases.push(
+      await measurePhase(
+        page,
+        tracker,
+        "timeline_initial_load",
+        "timeline",
+        "all",
+        async () => {
+          await page!.goto(
+            `/timeline?days_back=90&project=${encodeURIComponent(hostedQaCohort.project)}`,
+            { waitUntil: "domcontentloaded" },
+          );
+          await waitForPageReady(page!, { timeout: 25_000 });
+          const rows = page!.getByTestId("session-row");
+          await expect(rows).toHaveCount(
+            hostedQaCohort.ownedSessionIds.length,
+            { timeout: 20_000 },
+          );
+          const visibleIds = await rows.evaluateAll((elements) =>
+            elements
+              .map((element) => element.getAttribute("data-session-id"))
+              .filter((id): id is string => Boolean(id)),
+          );
+          expect(visibleIds.sort()).toEqual(
+            [...hostedQaCohort.ownedSessionIds].sort(),
+          );
+          return {
+            resultCount: await rows.count(),
+            paintMarker: "longhouse-session-row",
+          };
+        },
+      ),
+    );
 
     for (const [phase, cohort, session] of [
       ["active_recent_session", "active_recent", cohorts.active_recent],
@@ -507,108 +623,189 @@ test("scheduled isolated synthetic canary cohort journey", async ({
       ["cold_session", "cold_gt_30d", cohorts.cold_gt_30d],
       ["random_readable_session", "random_readable", cohorts.random_readable],
     ] as const) {
-      phases.push(await measurePhase(
-        page,
-        tracker,
-        phase,
-        cohort,
-        ageBucket(session, nowMs),
-        () => openReadableSession(page!, session),
-      ));
+      phases.push(
+        await measurePhase(
+          page,
+          tracker,
+          phase,
+          cohort,
+          ageBucket(session, nowMs),
+          () =>
+            openReadableSession(
+              page!,
+              session,
+              hostedQaCohort.sessions[cohort],
+            ),
+        ),
+      );
     }
 
-    phases.push(await measurePhase(
-      page,
-      tracker,
-      "older_projection_append",
-      "older_projection",
-      ageBucket(cohorts.older_projection, nowMs),
-      async () => {
-        await openReadableSession(page!, cohorts.older_projection);
-        const summary = page!.getByTestId("session-timeline-summary");
-        const before = await loadedEntryCount(summary);
-        const sentinel = page!.getByTestId("session-timeline-load-older");
-        if ((await sentinel.count()) === 0) throw new Error("missing_cohort");
-        // Use the browser's performance clock so buffered entries painted just
-        // before the append cannot satisfy the post-append evidence boundary.
-        const paintAfterEpochMs = await page!.evaluate(() => performance.timeOrigin + performance.now());
-        const list = page!.getByTestId("session-timeline-list");
-        // Cross the sentinel out of view before returning to the top. This
-        // models the real reader path and gives IntersectionObserver an
-        // actual boundary transition instead of re-requesting the initial
-        // already-intersecting state.
-        await list.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
-        await runAndWaitForSuccessfulResponse(page!, "session_projection", 25_000, () => (
-          list.evaluate((element) => element.scrollTo({ top: 0 }))
-        ));
-        await expect.poll(async () => loadedEntryCount(summary), { timeout: 20_000 }).toBeGreaterThan(before);
-        const after = await loadedEntryCount(summary);
-        if (after <= before) throw new Error("projection_not_appended");
-        return {
-          resultCount: after - before,
-          paintMarker: "longhouse-session-timeline-row",
-          paintAfterEpochMs,
-        };
-      },
-    ));
+    phases.push(
+      await measurePhase(
+        page,
+        tracker,
+        "older_projection_append",
+        "older_projection",
+        ageBucket(cohorts.older_projection, nowMs),
+        async () => {
+          const expected = hostedQaCohort.sessions.older_projection;
+          await openReadableSession(page!, cohorts.older_projection, expected);
+          const summary = page!.getByTestId("session-timeline-summary");
+          const before = await loadedEntryCount(summary);
+          const sentinel = page!.getByTestId("session-timeline-load-older");
+          if ((await sentinel.count()) === 0) throw new Error("missing_cohort");
+          // Use the browser's performance clock so buffered entries painted just
+          // before the append cannot satisfy the post-append evidence boundary.
+          const paintAfterEpochMs = await page!.evaluate(
+            () => performance.timeOrigin + performance.now(),
+          );
+          const list = page!.getByTestId("session-timeline-list");
+          // Cross the sentinel out of view before returning to the top. This
+          // models the real reader path and gives IntersectionObserver an
+          // actual boundary transition instead of re-requesting the initial
+          // already-intersecting state.
+          await list.evaluate((element) =>
+            element.scrollTo({ top: element.scrollHeight }),
+          );
+          await runAndWaitForSuccessfulResponse(
+            page!,
+            "session_projection",
+            25_000,
+            () => list.evaluate((element) => element.scrollTo({ top: 0 })),
+          );
+          await expect
+            .poll(async () => loadedEntryCount(summary), { timeout: 20_000 })
+            .toBe(expected.events.length);
+          const after = await loadedEntryCount(summary);
+          await expect(
+            list.getByText(expected.userText, { exact: true }),
+          ).toBeVisible();
+          await expect(
+            list.getByText(expected.assistantText, { exact: true }),
+          ).toBeVisible();
+          return {
+            resultCount: after - before,
+            paintMarker: "longhouse-session-timeline-row",
+            paintAfterEpochMs,
+          };
+        },
+      ),
+    );
 
-    phases.push(await measurePhase(page, tracker, "stable_lexical_search", "stable_lexical", "all", async () => {
-      if (!lexicalFixture) throw new Error("fixture_not_configured");
-      const params = new URLSearchParams({ days_back: "90", query: lexicalFixture });
-      const { response } = await runAndWaitForSuccessfulResponse(page!, "lexical_search", 25_000, () => (
-        page!.goto(`/timeline?${params.toString()}`, { waitUntil: "domcontentloaded" })
-      ));
-      await waitForPageReady(page!, { timeout: 25_000 });
-      const body = await response.json();
-      const total = Number(body?.total ?? 0);
-      if (total <= 0) throw new Error("empty_result");
-      expect(flattenTimelineCards(body).some((session) => session.id === cohorts.active_recent?.id)).toBe(true);
-      await expect(page!.getByTestId("session-row").first()).toBeVisible({ timeout: 20_000 });
-      return { resultCount: total, paintMarker: "longhouse-session-row" };
-    }));
+    phases.push(
+      await measurePhase(
+        page,
+        tracker,
+        "stable_lexical_search",
+        "stable_lexical",
+        "all",
+        async () => {
+          if (!lexicalFixture) throw new Error("fixture_not_configured");
+          const params = new URLSearchParams({
+            days_back: "90",
+            query: lexicalFixture,
+          });
+          const { response } = await runAndWaitForSuccessfulResponse(
+            page!,
+            "lexical_search",
+            25_000,
+            () =>
+              page!.goto(`/timeline?${params.toString()}`, {
+                waitUntil: "domcontentloaded",
+              }),
+          );
+          await waitForPageReady(page!, { timeout: 25_000 });
+          const body = await response.json();
+          const total = Number(body?.total ?? 0);
+          const expectedIds = [hostedQaCohort.sessions.active_recent.sessionId];
+          expect(total).toBe(expectedIds.length);
+          expect(
+            flattenTimelineCards(body)
+              .map((session) => session.id)
+              .sort(),
+          ).toEqual(expectedIds);
+          const rows = page!.getByTestId("session-row");
+          await expect(rows).toHaveCount(expectedIds.length, {
+            timeout: 20_000,
+          });
+          expect(
+            await rows.evaluateAll((elements) =>
+              elements
+                .map((element) => element.getAttribute("data-session-id"))
+                .sort(),
+            ),
+          ).toEqual(expectedIds);
+          return { resultCount: total, paintMarker: "longhouse-session-row" };
+        },
+      ),
+    );
 
-    phases.push(await measurePhase(page, tracker, "stable_recall", "stable_recall", "recent_0_90d", async () => {
-      if (!recallFixture) throw new Error("fixture_not_configured");
-      await page!.goto(
-        `/timeline?days_back=90&project=${encodeURIComponent(hostedQaCohort.project)}`,
-        { waitUntil: "domcontentloaded" },
-      );
-      await waitForPageReady(page!, { timeout: 25_000 });
-      await page!.getByTestId("recall-toggle").click();
-      const paintAfterEpochMs = Date.now();
-      const { response } = await runAndWaitForSuccessfulResponse(page!, "recall", 35_000, () => (
-        page!.getByTestId("recall-search-input").fill(recallFixture)
-      ));
-      const body = await response.json();
-      const total = Number(body?.total ?? 0);
-      if (total <= 0) throw new Error("empty_result");
-      expect(
-        (Array.isArray(body?.results) ? body.results : []).some(
-          (result: { session_id?: unknown }) => result.session_id === cohorts.cold_gt_30d?.id,
-        ),
-      ).toBe(true);
-      await expect(page!.getByTestId("recall-card").first()).toBeVisible({ timeout: 25_000 });
-      return {
-        resultCount: total,
-        paintMarker: "longhouse-recall-card",
-        paintAfterEpochMs,
-      };
-    }));
+    phases.push(
+      await measurePhase(
+        page,
+        tracker,
+        "stable_recall",
+        "stable_recall",
+        "recent_0_90d",
+        async () => {
+          if (!recallFixture) throw new Error("fixture_not_configured");
+          await page!.goto(
+            `/timeline?days_back=90&project=${encodeURIComponent(hostedQaCohort.project)}`,
+            { waitUntil: "domcontentloaded" },
+          );
+          await waitForPageReady(page!, { timeout: 25_000 });
+          await page!.getByTestId("recall-toggle").click();
+          const paintAfterEpochMs = Date.now();
+          const { response } = await runAndWaitForSuccessfulResponse(
+            page!,
+            "recall",
+            35_000,
+            () => page!.getByTestId("recall-search-input").fill(recallFixture),
+          );
+          const body = await response.json();
+          const total = Number(body?.total ?? 0);
+          if (total <= 0) throw new Error("empty_result");
+          expect(
+            (Array.isArray(body?.results) ? body.results : []).some(
+              (result: { session_id?: unknown }) =>
+                result.session_id === cohorts.cold_gt_30d?.id,
+            ),
+          ).toBe(true);
+          const expected = hostedQaCohort.sessions.cold_gt_30d;
+          const ownedCard = page!.getByTestId("recall-card").filter({
+            has: page!.locator(`a[href*="/timeline/${expected.sessionId}"]`),
+            hasText: expected.assistantText,
+          });
+          await expect(ownedCard).toBeVisible({ timeout: 25_000 });
+          return {
+            resultCount: total,
+            paintMarker: "longhouse-recall-card",
+            paintAfterEpochMs,
+          };
+        },
+      ),
+    );
   } finally {
     tracker.dispose();
     await page.close();
   }
 
-  const failedPhases = phases.filter((phase) => phase.outcome === "fail").map((phase) => phase.phase);
+  const failedPhases = phases
+    .filter((phase) => phase.outcome === "fail")
+    .map((phase) => phase.phase);
   const artifact = {
     schema_version: 1,
     generated_at: new Date().toISOString(),
     traffic_class: "synthetic",
     cohort_scope: "isolated_synthetic_canary",
     synthetic_cohort: JOURNEY_COHORT,
-    trigger: process.env.GITHUB_EVENT_NAME === "schedule" ? "schedule" : "operator",
+    trigger:
+      process.env.GITHUB_EVENT_NAME === "schedule" ? "schedule" : "operator",
     build,
-    outcome: preflightFailures.length === 0 && failedPhases.length === 0 ? "pass" : "fail",
+    outcome:
+      preflightFailures.length === 0 && failedPhases.length === 0
+        ? "pass"
+        : "fail",
     preflight_failure_codes: [...new Set(preflightFailures)].sort(),
     phases,
   };

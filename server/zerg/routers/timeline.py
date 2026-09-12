@@ -297,6 +297,7 @@ async def recall_timeline_sessions(
     project: Optional[str] = Query(None, description="Filter by project"),
     provider: Optional[str] = Query(None, description="Filter by provider"),
     include_test: bool = Query(False, description="Include test/e2e sessions"),
+    include_automation: bool = Query(False, description="Include automation sessions in otherwise default-hidden results"),
     since_days: int = Query(90, ge=1, le=365, description="Days to look back"),
     max_results: int = Query(5, ge=1, le=10, description="Max search-result cards"),
     mode: Literal["auto", "lexical", "semantic"] = Query(
@@ -319,7 +320,7 @@ async def recall_timeline_sessions(
         include_test=include_test,
         since_days=since_days,
         max_results=max_results,
-        include_automation=False,
+        include_automation=include_automation,
         mode=mode,
         _auth=current_user,
         _single=None,

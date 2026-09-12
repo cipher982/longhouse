@@ -133,43 +133,41 @@ pub fn oldest_undrained_epoch(
 /// a fully receipted prefix is just as safe to remove while its next position
 /// is preserved by the durable lane cursor.
 ///
-/// The cleanup is deliberately a bounded single statement. It selects at most
-/// `CURSOR_DRAIN_BATCH_RECORDS` eligible non-empty rows and at most
-/// `CURSOR_DRAIN_BATCH_BYTES` of payload, while allowing the first row through
-/// when that row alone exceeds the byte bound. The epoch-level safety predicate
-/// is applied before the batch limit, so retained empty rows and ineligible
-/// epochs cannot consume a batch without useful work being done later.
+/// The cleanup has an explicit read phase and a short mutation phase. The read
+/// phase selects at most `CURSOR_DRAIN_BATCH_RECORDS` eligible non-empty rows
+/// and at most `CURSOR_DRAIN_BATCH_BYTES` of payload without copying payloads;
+/// the first row is allowed through when it alone exceeds the byte bound. The
+/// statement is fully finalized before the mutation transaction starts, so a
+/// slow metadata scan never holds SQLite's writer. The mutation phase repeats
+/// the receipt predicate for each indexed row and enforces the byte bound again
+/// while allowing concurrent append, pending-envelope, and acknowledgement
+/// changes between the two phases to fence the cleanup safely.
 pub fn drain_receipted_cursor_records(conn: &Connection) -> Result<u64> {
     let max_records = i64::try_from(CURSOR_DRAIN_BATCH_RECORDS)
         .context("Cursor drain record limit exceeds SQLite INTEGER")?;
     let max_bytes = i64::try_from(CURSOR_DRAIN_BATCH_BYTES)
         .context("Cursor drain byte limit exceeds SQLite INTEGER")?;
-    let drained = conn.execute(
-        "WITH eligible_epochs AS (
-             SELECT epoch.source_epoch, durable.last_position
-             FROM source_epoch_registry AS epoch
-             JOIN source_epoch_lane_state AS durable
-               ON durable.source_epoch = epoch.source_epoch
-              AND durable.lane = 'durable'
-             WHERE NOT EXISTS (
-                   SELECT 1 FROM pending_source_envelope AS pending
-                   WHERE pending.source_epoch = epoch.source_epoch
-               )
-               AND NOT EXISTS (
-                   SELECT 1 FROM cursor_store_raw_record AS retained
-                   WHERE retained.source_epoch = epoch.source_epoch
-                     AND retained.source_position >= durable.last_position
-               )
-         ), eligible AS (
-             SELECT candidate.raw_rowid,
-                    ROW_NUMBER() OVER (
-                        ORDER BY candidate.source_epoch, candidate.source_position
-                    ) AS batch_position,
-                    SUM(candidate.record_bytes_len) OVER (
-                        ORDER BY candidate.source_epoch, candidate.source_position
-                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                    ) AS cumulative_bytes
-             FROM (
+    let candidates = {
+        // This is intentionally a standalone SELECT. Keep the statement and
+        // its rows alive only for discovery so no write transaction can start
+        // until SQLite has finished the potentially broad eligibility scan.
+        let mut statement = conn.prepare(
+            "WITH eligible_epochs AS (
+                 SELECT epoch.source_epoch
+                 FROM source_epoch_registry AS epoch
+                 JOIN source_epoch_lane_state AS durable
+                   ON durable.source_epoch = epoch.source_epoch
+                  AND durable.lane = 'durable'
+                 WHERE NOT EXISTS (
+                       SELECT 1 FROM pending_source_envelope AS pending
+                       WHERE pending.source_epoch = epoch.source_epoch
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1 FROM cursor_store_raw_record AS retained
+                       WHERE retained.source_epoch = epoch.source_epoch
+                         AND retained.source_position >= durable.last_position
+                   )
+             ), candidates AS (
                  SELECT raw.rowid AS raw_rowid,
                         raw.source_epoch,
                         raw.source_position,
@@ -180,18 +178,107 @@ pub fn drain_receipted_cursor_records(conn: &Connection) -> Result<u64> {
                  WHERE length(raw.record_bytes) > 0
                  ORDER BY raw.source_epoch, raw.source_position
                  LIMIT ?1
-             ) AS candidate
-         ), batch AS (
-             SELECT raw_rowid
-             FROM eligible
+             ), ranked AS (
+                 SELECT candidates.*,
+                        ROW_NUMBER() OVER (
+                            ORDER BY candidates.source_epoch, candidates.source_position
+                        ) AS batch_position,
+                        SUM(candidates.record_bytes_len) OVER (
+                            ORDER BY candidates.source_epoch, candidates.source_position
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                        ) AS cumulative_bytes
+                 FROM candidates
+             )
+             SELECT raw_rowid, source_epoch, source_position, record_bytes_len
+             FROM ranked
              WHERE batch_position = 1 OR cumulative_bytes <= ?2
-         )
-         UPDATE cursor_store_raw_record
+             ORDER BY source_epoch, source_position",
+        )?;
+        let rows = statement.query_map([max_records, max_bytes], |row| {
+            Ok(CursorDrainCandidate {
+                raw_rowid: row.get(0)?,
+                source_epoch: row.get(1)?,
+                source_position: row.get(2)?,
+                record_bytes_len: row.get(3)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    // Do not open a write transaction when discovery found no useful work.
+    if candidates.is_empty() {
+        return Ok(0);
+    }
+
+    let transaction = conn.unchecked_transaction()?;
+    let mut drained_records = 0_u64;
+    let mut drained_bytes = 0_u64;
+    let mut update = transaction.prepare(
+        "UPDATE cursor_store_raw_record
             SET record_bytes = X''
-          WHERE rowid IN (SELECT raw_rowid FROM batch)",
-        [max_records, max_bytes],
+          WHERE rowid = ?1
+            AND source_epoch = ?2
+            AND source_position = ?3
+            AND length(record_bytes) = ?4
+            AND length(record_bytes) > 0
+            AND NOT EXISTS (
+                SELECT 1 FROM pending_source_envelope AS pending
+                WHERE pending.source_epoch = cursor_store_raw_record.source_epoch
+            )
+            AND EXISTS (
+                SELECT 1
+                FROM source_epoch_lane_state AS durable
+                WHERE durable.source_epoch = cursor_store_raw_record.source_epoch
+                  AND durable.lane = 'durable'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM cursor_store_raw_record AS retained
+                      WHERE retained.source_epoch = cursor_store_raw_record.source_epoch
+                        AND retained.source_position >= durable.last_position
+                  )
+            )",
     )?;
-    u64::try_from(drained).context("drained Cursor record count is negative")
+    for candidate in candidates {
+        let record_bytes_len = u64::try_from(candidate.record_bytes_len)
+            .context("Cursor record length is negative")?;
+        // Enforce the byte bound at mutation time as well as during discovery.
+        // A single oversized first record is allowed so one large row cannot
+        // starve the cleanup forever.
+        if drained_records > 0
+            && drained_bytes
+                .checked_add(record_bytes_len)
+                .context("Cursor drain byte count overflow")?
+                > CURSOR_DRAIN_BATCH_BYTES
+        {
+            break;
+        }
+
+        let changed = update.execute(params![
+            candidate.raw_rowid,
+            candidate.source_epoch,
+            candidate.source_position,
+            candidate.record_bytes_len,
+        ])?;
+        if changed == 1 {
+            drained_records = drained_records
+                .checked_add(1)
+                .context("Cursor drain record count overflow")?;
+            drained_bytes = drained_bytes
+                .checked_add(record_bytes_len)
+                .context("Cursor drain byte count overflow")?;
+        }
+    }
+    drop(update);
+    transaction.commit()?;
+    Ok(drained_records)
+}
+
+#[derive(Debug)]
+struct CursorDrainCandidate {
+    raw_rowid: i64,
+    source_epoch: String,
+    source_position: i64,
+    record_bytes_len: i64,
 }
 
 pub fn cursor_record_hash(bytes: &[u8]) -> String {

@@ -15,7 +15,7 @@ import {
   normalizeToken,
   buildRuntimeTokenStorageState,
 } from "./fixtures";
-import type { APIRequestContext, Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { waitForPageReady } from "../helpers/ready-signals";
 
 // ---------------------------------------------------------------------------
@@ -106,6 +106,18 @@ async function scopeTimelineToOwnedProject(
     const response = await route.fetch({ url: url.toString() });
     await route.fulfill({ response });
   });
+  await page.route("**/api/timeline/recall**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname !== "/api/timeline/recall") {
+      await route.continue();
+      return;
+    }
+    url.searchParams.set("project", project);
+    url.searchParams.set("include_test", "true");
+    url.searchParams.set("include_automation", "true");
+    const response = await route.fetch({ url: url.toString() });
+    await route.fulfill({ response });
+  });
 }
 
 async function waitForLivePageReady(
@@ -117,57 +129,6 @@ async function waitForLivePageReady(
   await waitForPageReady(page, { timeout }).catch(async () => {
     await failWithScreenshot(page, testName, message);
   });
-}
-
-async function findEngineControlSessionIdViaAgentsApi(
-  request: APIRequestContext,
-): Promise<string | null> {
-  // runtime_display/capabilities live on the browser projection, not the
-  // machine surface.
-  const response = await request.get("/api/timeline/sessions?limit=25");
-  if (!response.ok()) {
-    return null;
-  }
-
-  const body = await response.json();
-  const cards = Array.isArray(body?.sessions) ? body.sessions : [];
-  const sessions = cards.map((card: any) => card?.detail).filter(Boolean);
-  for (const session of sessions) {
-    const controlPath = session?.runtime_display?.control_path;
-    const hostState = session?.runtime_display?.host_state;
-    const liveControlAvailable = session?.capabilities?.live_control_available;
-    if (
-      typeof session?.id === "string" &&
-      controlPath === "managed" &&
-      hostState === "online" &&
-      liveControlAvailable === true
-    ) {
-      return session.id;
-    }
-  }
-
-  return null;
-}
-
-async function findClosedSessionIdViaAgentsApi(
-  request: APIRequestContext,
-): Promise<string | null> {
-  const response = await request.get("/api/timeline/sessions?limit=100");
-  if (!response.ok()) {
-    return null;
-  }
-
-  const body = await response.json();
-  const cards = Array.isArray(body?.sessions) ? body.sessions : [];
-  const sessions = cards.map((card: any) => card?.detail).filter(Boolean);
-  for (const session of sessions) {
-    const lifecycle = session?.runtime_display?.lifecycle;
-    if (typeof session?.id === "string" && lifecycle === "closed") {
-      return session.id;
-    }
-  }
-
-  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -602,50 +563,13 @@ test("agents sessions API returns list", async ({ agentsRequest }) => {
   ).toBe(true);
 });
 
-test("managed engine-control session stays enabled in workspace projection", async ({
-  agentsRequest,
+test("owned closed-session projection never exposes live composer", async ({
   context,
+  hostedQaCohort,
 }) => {
   test.setTimeout(20_000);
 
-  const sessionId = await findEngineControlSessionIdViaAgentsApi(
-    agentsRequest,
-  ).catch(() => null);
-  if (!sessionId) {
-    test.skip(true, "No connected managed engine-control session available");
-    return;
-  }
-
-  const workspaceResponse = await context.request.get(
-    `/api/timeline/sessions/${sessionId}/workspace?limit=5`,
-  );
-  expect(
-    workspaceResponse.ok(),
-    `GET /api/timeline/sessions/${sessionId}/workspace returned ${workspaceResponse.status()}`,
-  ).toBe(true);
-
-  const workspace = await workspaceResponse.json();
-  const session = workspace?.session;
-  expect(session?.runtime_display?.control_path).toBe("managed");
-  expect(session?.runtime_display?.host_state).toBe("online");
-  expect(session?.capabilities?.live_control_available).toBe(true);
-  expect(session?.capabilities?.composer_enabled).toBe(true);
-  expect(session?.capabilities?.composer_disabled_reason ?? null).toBeNull();
-});
-
-test("closed session workspace projection never exposes live composer", async ({
-  agentsRequest,
-  context,
-}) => {
-  test.setTimeout(20_000);
-
-  const sessionId = await findClosedSessionIdViaAgentsApi(agentsRequest).catch(
-    () => null,
-  );
-  if (!sessionId) {
-    test.skip(true, "No closed session available to test composer gating");
-    return;
-  }
+  const sessionId = hostedQaCohort.sessions.recent_closed.sessionId;
 
   const workspaceResponse = await context.request.get(
     `/api/timeline/sessions/${sessionId}/workspace?limit=5`,
@@ -853,14 +777,14 @@ test("timeline search finds the owned fixture and has AI toggle", async ({
 });
 
 // ---------------------------------------------------------------------------
-// Test 7: Recall panel opens and renders search input
+// Test 7: Recall finds owned transcript content through browser authentication
 // ---------------------------------------------------------------------------
 
-test("recall panel opens and shows search input", async ({
+test("browser recall renders the owned transcript match", async ({
   context,
   hostedQaTranscript,
 }) => {
-  test.setTimeout(20_000);
+  test.setTimeout(45_000);
 
   const page = await context.newPage();
   await scopeTimelineToOwnedProject(page, hostedQaTranscript.project);
@@ -890,6 +814,23 @@ test("recall panel opens and shows search input", async ({
   const input = page.getByTestId("recall-search-input");
   await expect(input).toBeVisible();
   await expect(input).toBeEnabled();
+  const responsePromise = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return (
+      url.pathname === "/api/timeline/recall" &&
+      url.searchParams.get("query") === hostedQaTranscript.searchText
+    );
+  });
+  await input.fill(hostedQaTranscript.searchText);
+  const response = await responsePromise;
+  expect(response.ok(), `Browser recall returned ${response.status()}`).toBe(
+    true,
+  );
+  const ownedCard = page.getByTestId("recall-card").filter({
+    has: page.locator(`a[href*="/timeline/${hostedQaTranscript.sessionId}"]`),
+    hasText: hostedQaTranscript.assistantText,
+  });
+  await expect(ownedCard).toBeVisible({ timeout: 25_000 });
 
   await page.close();
 });

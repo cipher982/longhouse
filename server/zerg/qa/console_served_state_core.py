@@ -88,6 +88,12 @@ MARKER_WORDS = (
 WORKING_ACTIVITY = {"thinking", "executing"}
 WORKING_RUN_LIFECYCLE = {"starting", "running"}
 WORKING_PRESENTATION_KEYS = {"starting", "thinking", "executing", "stalled"}
+CONSOLE_CAPABILITY_FIELDS = (
+    "input_mode",
+    "can_start_turn",
+    "composer_enabled",
+    "composer_disabled_reason",
+)
 
 
 def console_providers() -> list[str]:
@@ -204,6 +210,35 @@ def settlement_state(workspace: dict, run_id: str) -> tuple[bool, dict]:
         and observed["working_set"] == "history"
     )
     return settled, observed
+
+
+def console_capability_evidence(workspace: Mapping[str, object]) -> dict[str, object]:
+    """Project only the browser capability facts this Console proof owns.
+
+    A missing capability field is different from a false field: both are
+    failures, but retaining the missing-field list makes an incomplete or
+    changed workspace response diagnosable without recording the whole payload.
+    """
+    session = workspace.get("session")
+    session = session if isinstance(session, Mapping) else {}
+    capabilities = session.get("capabilities")
+    capabilities = capabilities if isinstance(capabilities, Mapping) else {}
+    observed = {field: capabilities.get(field) for field in CONSOLE_CAPABILITY_FIELDS}
+    missing_fields = [field for field in CONSOLE_CAPABILITY_FIELDS if field not in capabilities]
+    ready = (
+        not missing_fields
+        and observed["input_mode"] == "console"
+        and observed["can_start_turn"] is True
+        and observed["composer_enabled"] is True
+        and observed["composer_disabled_reason"] is None
+    )
+    return {
+        "status": "pass" if ready else "fail",
+        "mode": "console",
+        "observed": observed,
+        "missing_fields": missing_fields,
+        "ready": ready,
+    }
 
 
 def event_text(event: Mapping[str, object]) -> str:
@@ -517,6 +552,7 @@ def _observe_watched_turn(
     produced_at: float | None = None
     settled_at: float | None = None
     samples: list[dict] = []
+    capability_samples: list[dict] = []
     report["workspace_samples"] = samples
     deadline = received_at + args.turn_timeout
     duplicate_seen = False
@@ -531,19 +567,39 @@ def _observe_watched_turn(
                 first_live = stamp - dispatched_at
 
         sample_started_at = time.monotonic()
-        workspace = client.served_workspace(session_id)
+        try:
+            workspace = client.served_workspace(session_id)
+        except ApiError as exc:
+            error = {"type": type(exc).__name__, "status": exc.status}
+            sample_received_at = time.monotonic()
+            sample = {
+                "request_started_at_s": sample_started_at,
+                "response_received_at_s": sample_received_at,
+                "workspace_error": error,
+            }
+            samples.append(sample)
+            capability_samples.append({"status": "error", "error": error})
+            if exc.status in {401, 403}:
+                report["workspace_auth_failure"] = error
+                break
+            time.sleep(1.0)
+            continue
         sample_received_at = time.monotonic()
+
         evidence = assistant_marker_evidence(workspace, session_id, marker)
+        capabilities = console_capability_evidence(workspace)
         settled, observed = settlement_state(workspace, run_id)
         transcript = ((workspace.get("session") or {}).get("session_state") or {}).get("transcript") or {}
         sample = {
             "request_started_at_s": sample_started_at,
             "response_received_at_s": sample_received_at,
             "assistant_marker": evidence,
+            "workspace_capability": capabilities,
             "served_state": observed,
             "transcript": transcript,
         }
         samples.append(sample)
+        capability_samples.append(capabilities)
         duplicate_seen = duplicate_seen or evidence["event_count"] > 1 or evidence["marker_count"] > 1
         if produced_at is None and evidence["exactly_once"] and sample_received_at <= deadline:
             produced_at = sample_received_at
@@ -569,6 +625,7 @@ def _observe_watched_turn(
             and not duplicate_seen
             and settled
             and transcript.get("convergence") == "current"
+            and capabilities["ready"] is True
         ):
             settled_at = sample_received_at
             timing["settled_at_s"] = settled_at
@@ -584,6 +641,15 @@ def _observe_watched_turn(
     report["duplicate_assistant_marker_seen"] = duplicate_seen
     report["served_state_after_reply"] = final.get("served_state")
     report["transcript"] = final.get("transcript")
+    final_capability = final.get("workspace_capability") or {}
+    report["workspace_capability"] = {
+        "status": "pass" if final_capability.get("ready") is True else "fail",
+        "mode": "console",
+        "observed": final_capability.get("observed"),
+        "missing_fields": final_capability.get("missing_fields", []),
+        "ready": final_capability.get("ready") is True,
+    }
+    report["workspace_capability_samples"] = capability_samples
     report["settle_latency_s"] = round(settled_at - produced_at, 3) if settled_at is not None and produced_at is not None else None
 
     buckets: dict[int, int] = {}
@@ -599,6 +665,10 @@ def _observe_watched_turn(
     failures: list[str] = []
     if first_live is None:
         failures.append("no live frame reached the served stream during the turn")
+    if report.get("workspace_auth_failure"):
+        failures.append(f"browser workspace authentication failed: {report['workspace_auth_failure']}")
+    if report["workspace_capability"]["ready"] is not True:
+        failures.append(f"browser Console capability did not converge: {report['workspace_capability']}")
     if report.get("terminal_failure"):
         failures.append(f"the current provider turn ended unsuccessfully: {report['terminal_failure']}")
     elif produced_at is None:

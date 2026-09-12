@@ -13825,6 +13825,8 @@ export interface operations {
                 provider?: string | null;
                 /** @description Include test/e2e sessions */
                 include_test?: boolean;
+                /** @description Include automation sessions in otherwise default-hidden results */
+                include_automation?: boolean;
                 /** @description Days to look back */
                 since_days?: number;
                 /** @description Max search-result cards */

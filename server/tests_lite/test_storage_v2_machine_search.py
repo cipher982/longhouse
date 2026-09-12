@@ -15,12 +15,10 @@ os.environ.setdefault("TESTING", "1")
 import zerg.database as zerg_database
 from zerg.routers import agents_search
 from zerg.routers import agents_sessions
-from zerg.routers import timeline
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.session_views import MachineSearchLaneFailure
 from zerg.services.session_views import MachineSessionResponse
 from zerg.services.session_views import RecallMatch
-from zerg.services.session_views import RecallResponse
 
 
 def _request(path: str) -> Request:
@@ -372,45 +370,6 @@ def test_recall_rejects_legacy_bulk_context_parameters_before_search():
     assert exc_info.value.status_code == 422
     assert exc_info.value.detail["code"] == "unknown_query_parameters"
     assert exc_info.value.detail["parameters"] == ["context_turns"]
-
-
-def test_browser_recall_delegates_to_requested_canonical_pipeline(monkeypatch):
-    observed = {}
-
-    async def canonical_recall(**kwargs):
-        observed.update(kwargs)
-        return RecallResponse(
-            results=[],
-            total=0,
-            lanes=["lexical", "dense"],
-            coverage={
-                "complete": True,
-                "lagging_sessions": 0,
-                "unpublished_sessions": 0,
-                "oldest_lag_seconds": None,
-            },
-        )
-
-    monkeypatch.setattr(timeline._search_router, "recall_sessions", canonical_recall)
-    response = asyncio.run(
-        timeline.recall_timeline_sessions(
-            request=_request("/api/timeline/recall"),
-            response=Response(),
-            query="database migration",
-            project=None,
-            provider=None,
-            include_test=False,
-            since_days=90,
-            max_results=5,
-            mode="lexical",
-            current_user=SimpleNamespace(owner_id=7),
-        )
-    )
-
-    assert response.lanes == ["lexical", "dense"]
-    assert observed["mode"] == "lexical"
-    assert observed["include_automation"] is False
-    assert observed["_auth"].owner_id == 7
 
 
 def test_semantic_session_search_overfetches_and_filters_hidden_autonomous_hits(monkeypatch):

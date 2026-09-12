@@ -943,7 +943,7 @@ import-smoke: ## @internal Fast import + CSS reference smoke (<5s)
 # ---------------------------------------------------------------------------
 # Production / QA
 # ---------------------------------------------------------------------------
-qa-live: ## Canonical post-deploy hosted QA, including continuation readiness (~60s)
+qa-live: ## Authenticated hosted browser smoke plus the separate binding audit
 	@$(MAKE) ensure-js-deps
 	@./scripts/qa/qa-live.sh
 	@python3 scripts/qa/provider-binding-convergence-canary.py

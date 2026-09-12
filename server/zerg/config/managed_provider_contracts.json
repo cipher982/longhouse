@@ -361,7 +361,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "aba5c5ba486ba8cce4c76850a3dbd71e3704ad1e2a87b59b7b1cfb3b4cff9fe1"
+              "oracle_digest": "e5d28a89f6d5b6b2650d7f857914cc0e3d34c2db818933aa41ce149f4b9432d0"
             }
           ]
         },
@@ -2280,7 +2280,7 @@
           "owner_action": "run the transcript census for antigravity and name the raw source"
         }
       },
-      "adapter_digest": "8cb2d887c02788e624392b3944221b1c30f79c71c4873216815a4d4eea12de45"
+      "adapter_digest": "f1ae00ed027b9bc9d117ac5b1377a7e6dc924afda5f557e79263e83b3802fbbc"
     },
     {
       "provider": "cursor",

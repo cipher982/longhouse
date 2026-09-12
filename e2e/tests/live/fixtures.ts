@@ -127,8 +127,8 @@ export async function waitForHealthy(
       }
     }
 
-    console.warn(
-      `[health] Timeout after ${attempt} attempts - proceeding anyway`,
+    throw new Error(
+      `[health] Readiness did not converge after ${attempt} attempts`,
     );
   } finally {
     await healthRequest.dispose().catch(() => {});
@@ -428,18 +428,14 @@ export const test = base.extend<LiveFixtures>({
 
   browserStorageState: [
     async ({ apiBaseUrl, playwright }, use) => {
-      const runtimeToken =
-        normalizeToken(process.env.SMOKE_RUNTIME_TOKEN) || readDeviceToken();
+      const runtimeToken = normalizeToken(process.env.SMOKE_RUNTIME_TOKEN);
       if (runtimeToken) {
         await waitForHealthy(playwright.request, apiBaseUrl);
         await use(buildRuntimeTokenStorageState(apiBaseUrl, runtimeToken));
         return;
       }
 
-      test.skip(
-        true,
-        "SMOKE_RUNTIME_TOKEN or LONGHOUSE_DEVICE_TOKEN not set; skipping live prod E2E",
-      );
+      throw new Error("The hosted QA runner must supply SMOKE_RUNTIME_TOKEN");
     },
     { scope: "worker" },
   ],
@@ -457,18 +453,14 @@ export const test = base.extend<LiveFixtures>({
         );
       }
 
-      const runtimeToken =
-        normalizeToken(process.env.SMOKE_RUNTIME_TOKEN) || readDeviceToken();
+      const runtimeToken = normalizeToken(process.env.SMOKE_RUNTIME_TOKEN);
       if (runtimeToken) {
         await waitForHealthy(playwright.request, apiBaseUrl);
         await use(runtimeToken);
         return;
       }
 
-      test.skip(
-        true,
-        "SMOKE_RUNTIME_TOKEN or LONGHOUSE_DEVICE_TOKEN not set; skipping live prod E2E",
-      );
+      throw new Error("The hosted QA runner must supply SMOKE_RUNTIME_TOKEN");
     },
     { scope: "worker" },
   ],

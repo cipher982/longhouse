@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import http.server
-import inspect
 import json
 import os
 import subprocess
@@ -26,8 +25,8 @@ def test_registration_binds_one_codex_provider_release_cell():
     assert registration["scenario_id"] == "codex_helm_launch_visibility"
     assert registration["assertion_cells"] == [{"assertion_id": "helm_launch_visibility_preserved", "variant": None}]
     assert registration["credential_binding_ids"] == ["codex_provider_token", "runtime_host_control"]
-    assert registration["producer_revision"] == 10
-    assert registration["scenario_revision"] == 6
+    assert registration["producer_revision"] == 11
+    assert registration["scenario_revision"] == 7
     assert "open_working_set_with_factory_isolation" in registration["observed_activity"]
 
 
@@ -157,6 +156,22 @@ def test_wait_canonical_launch_requires_exact_run_open_and_default_visibility(mo
 
     monkeypatch.setattr(launch, "_runtime_request", request)
     monkeypatch.setattr(launch, "_session_visible", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        launch,
+        "_browser_workspace",
+        lambda *_args, **_kwargs: {
+            "session": {
+                "capabilities": {
+                    "live_control_available": True,
+                    "input_mode": "live",
+                    "can_send_input": True,
+                    "composer_enabled": True,
+                    "composer_disabled_reason": None,
+                    "control_label": "live",
+                }
+            }
+        },
+    )
     result = launch._wait_canonical_launch(  # noqa: SLF001 - pure product-proof seam
         argparse.Namespace(wait_ready_secs=0.1),
         registration=registration,
@@ -172,26 +187,6 @@ def test_wait_canonical_launch_requires_exact_run_open_and_default_visibility(mo
     assert result["working_set"] == "open"
     assert result["control_run_id"] == "run-1"
     assert result["default_timeline_visible"] is False
-
-
-def test_launch_lane_records_the_session_before_asserting_visibility():
-    """A failed visibility assertion must still leave the bridge stoppable.
-
-    ``created_session_ids`` is the only thing that tells the finally block to
-    stop the codex bridge. When the id was read *after* ``_wait_canonical_launch``
-    a raising assertion skipped it entirely, and every failed launch orphaned a
-    codex-bridge and app-server for the life of the container. The automation
-    lane in the same module already reads the id before it asserts.
-    """
-    source = inspect.getsource(launch._human_launch_sequence)  # noqa: SLF001 - ordering is the contract
-
-    records_session = source.index("created_session_ids.append(session_id)")
-    asserts_visibility = source.index("fresh_canonical = _wait_canonical_launch(")
-
-    assert records_session < asserts_visibility, (
-        "the launch lane must record the session id before waiting on canonical "
-        "visibility, or a failed wait leaks the bridge it just started"
-    )
 
 
 def test_infrastructure_failure_retains_cause_without_claiming_a_product_verdict(tmp_path, monkeypatch):

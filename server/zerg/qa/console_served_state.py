@@ -47,13 +47,14 @@ from zerg.qa.resume_assurance import ProducerRegistration
 SCENARIO_ID = "console_served_state"
 ASSERTION_LIVE = "live_frames_reach_the_viewer_during_the_turn"
 ASSERTION_SETTLED = "served_state_settles_once_the_reply_is_served"
+ASSERTION_CAPABILITY = "browser_console_composer_is_ready"
 
 REGISTRATION = ProducerRegistration(
     producer_id="longhouse.console_served_state.v1",
-    producer_revision=5,
+    producer_revision=6,
     scenario_id=SCENARIO_ID,
-    scenario_revision=2,
-    assertion_cells=((ASSERTION_LIVE, None), (ASSERTION_SETTLED, None)),
+    scenario_revision=3,
+    assertion_cells=((ASSERTION_LIVE, None), (ASSERTION_SETTLED, None), (ASSERTION_CAPABILITY, None)),
     # The subject under test is Longhouse, not a provider release, so this
     # declares no provider subject. Stock Codex is an exact auxiliary vehicle:
     # the factory pins and mounts its release while the proof remains about the
@@ -70,6 +71,7 @@ REGISTRATION = ProducerRegistration(
         "live_frame_after_dispatch",
         "reply_served_to_the_viewer",
         "state_axis_settled",
+        "browser_console_composer_ready",
     ),
     acquisition_methods=("staged_release", "observed_install"),
     credential_binding_ids=("codex_provider_token", "runtime_host_control"),
@@ -148,6 +150,7 @@ def _failure_result(
         "assertions": {
             ASSERTION_LIVE: False,
             ASSERTION_SETTLED: False,
+            ASSERTION_CAPABILITY: False,
         },
         "error": f"{type(failure).__name__}: {failure}",
     }
@@ -258,7 +261,17 @@ def assertions_from_report(report: dict) -> dict[str, bool]:
         and evidence.get("marker_count") == 1
         and report.get("settle_latency_s") is not None
     )
-    return {ASSERTION_LIVE: live, ASSERTION_SETTLED: settled}
+    capability = report.get("workspace_capability") or {}
+    observed = capability.get("observed") if isinstance(capability, dict) else None
+    composer_ready = (
+        capability.get("ready") is True
+        and isinstance(observed, dict)
+        and observed.get("input_mode") == "console"
+        and observed.get("can_start_turn") is True
+        and observed.get("composer_enabled") is True
+        and observed.get("composer_disabled_reason") is None
+    )
+    return {ASSERTION_LIVE: live, ASSERTION_SETTLED: settled, ASSERTION_CAPABILITY: composer_ready}
 
 
 def run_console_served_state(

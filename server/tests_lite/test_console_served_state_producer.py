@@ -67,6 +67,7 @@ def test_a_clean_report_passes_both_assertions():
     assert producer.assertions_from_report(report) == {
         producer.ASSERTION_LIVE: True,
         producer.ASSERTION_SETTLED: True,
+        producer.ASSERTION_CAPABILITY: True,
     }
 
 
@@ -76,6 +77,12 @@ def test_the_wedge_fails_the_settlement_cell_only():
     assertions = producer.assertions_from_report(report)
     assert assertions[producer.ASSERTION_LIVE] is True
     assert assertions[producer.ASSERTION_SETTLED] is False
+
+
+def test_console_capability_assertion_rejects_helm_semantics():
+    report = _qualified_report()
+    report["workspace_capability"]["observed"]["input_mode"] = "live"
+    assert producer.assertions_from_report(report)[producer.ASSERTION_CAPABILITY] is False
 
 
 def test_no_live_frames_fails_the_delivery_cell():
@@ -223,6 +230,7 @@ def test_failure_result_retains_vehicle_identity_and_false_verdicts():
     assert result["assertions"] == {
         producer.ASSERTION_LIVE: False,
         producer.ASSERTION_SETTLED: False,
+        producer.ASSERTION_CAPABILITY: False,
     }
 
 
@@ -235,6 +243,18 @@ def _qualified_report():
         "assistant_reply_complete": True,
         "duplicate_assistant_marker_seen": False,
         "assistant_marker_after_settlement": {"exactly_once": True, "event_count": 1, "marker_count": 1},
+        "workspace_capability": {
+            "status": "pass",
+            "mode": "console",
+            "observed": {
+                "input_mode": "console",
+                "can_start_turn": True,
+                "composer_enabled": True,
+                "composer_disabled_reason": None,
+            },
+            "missing_fields": [],
+            "ready": True,
+        },
     }
 
 
@@ -265,13 +285,19 @@ def _workspace(events, *, lifecycle="ended", convergence="current", run_id="run-
             **projection,
         },
         "session": {
+            "capabilities": {
+                "input_mode": "console",
+                "can_start_turn": True,
+                "composer_enabled": True,
+                "composer_disabled_reason": None,
+            },
             "session_state": {
                 "run": {"id": run_id, "lifecycle": lifecycle},
                 "activity": {"state": "thinking" if working else "idle"},
                 "presentation": {"primary": {"key": "thinking" if working else "done"}},
                 "working_set": "active" if working else "history",
                 "transcript": {"convergence": convergence},
-            }
+            },
         },
     }
 
