@@ -442,6 +442,7 @@ struct ProjectionBuildResult {
     generation: u64,
     managed_observation_generation: u64,
     managed_scan_partial: bool,
+    managed_snapshot_complete: bool,
     unmanaged_snapshot_complete: bool,
     result: Result<(heartbeat::StatusFileProjection, SessionSnapshotState), String>,
     elapsed_ms: u64,
@@ -1712,6 +1713,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 }
                                 last_unmanaged_session_bindings = Some(bindings);
                             }
+                            Err(err) if !managed_observation_current => {
+                                tracing::debug!(
+                                    reason = result.reason,
+                                    "Discarded stale unmanaged binding refresh failure: {}",
+                                    err
+                                );
+                            }
                             Err(err) => {
                                 // Managed state files are authoritative for Helm ownership.
                                 // Optional Shadow process discovery must not suppress a newly
@@ -2125,6 +2133,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 == managed_observation_generation
                             && result.managed_scan_partial
                                 == last_projected_managed_scan_partial
+                            && result.managed_snapshot_complete
+                                == last_projected_managed_snapshot_complete
                             && result.unmanaged_snapshot_complete
                                 == last_projected_unmanaged_snapshot_complete;
                         match result.result {
@@ -2176,7 +2186,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 // core reconciliation marker running.
                                 managed_reconciliation =
                                     heartbeat::ProjectionReconciliation::idle();
-                            }
                             }
                             shipping_progress.observe_pending_work(
                                 heartbeat::payload_has_pending_work(&projection.payload)
@@ -2867,6 +2876,7 @@ fn maybe_start_projection_build(
             generation,
             managed_observation_generation,
             managed_scan_partial,
+            managed_snapshot_complete,
             unmanaged_snapshot_complete,
             result,
             elapsed_ms: started.elapsed().as_millis() as u64,
