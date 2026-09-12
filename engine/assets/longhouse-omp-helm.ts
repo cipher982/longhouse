@@ -32,6 +32,7 @@ export default function (pi: any) {
   let commandChain = Promise.resolve();
   let initialPromptRequested = false;
   let initialPromptDelivered = initialPromptDeliveredAtLaunch;
+  let lastAgentEndTerminal: boolean | undefined;
   const generationWaiters: Array<() => void> = [];
 
   const waitForGenerationChange = (previous: string) =>
@@ -118,6 +119,18 @@ export default function (pi: any) {
     if (typeof event.status === "string") compact.status = event.status.slice(0, MAX_METADATA_STRING_LENGTH);
     return compact;
   };
+
+  const agentEndIsTerminal = (event: Frame): boolean => {
+    for (const key of ["isTerminal", "willContinue"]) {
+      if (key in event && typeof event[key] !== "boolean") return false;
+    }
+    if (typeof event.isTerminal === "boolean") return event.isTerminal;
+    if (typeof event.willContinue === "boolean") return !event.willContinue;
+    return true;
+  };
+
+  const providerIsIdle = (ctx: any) => lastAgentEndTerminal ?? ctx.isIdle();
+
 
   const sendEvent = (kind: string, event: Frame, ctx: any) =>
     write({ kind, event: compactLifecycleEvent(kind, event), ...session(ctx) });
@@ -235,10 +248,10 @@ export default function (pi: any) {
       if (!authorityMatches) throw new Error("OMP Helm command authority is stale");
       if (["send", "steer"].includes(kind) && !text.trim()) throw new Error("OMP Helm input text must not be empty");
       if (kind === "send") {
-        if (ctx.isIdle()) await Promise.resolve(pi.sendUserMessage(text));
+        if (providerIsIdle(ctx)) await Promise.resolve(pi.sendUserMessage(text));
         else await Promise.resolve(pi.sendUserMessage(text, { deliverAs: "followUp" }));
       } else if (kind === "steer") {
-        if (ctx.isIdle()) throw new Error("OMP provider has no active turn to steer");
+        if (providerIsIdle(ctx)) throw new Error("OMP provider has no active turn to steer");
         await Promise.resolve(pi.sendUserMessage(text, { deliverAs: "steer" }));
       } else if (kind === "abort") {
         await Promise.resolve(ctx.abort());
@@ -247,12 +260,12 @@ export default function (pi: any) {
       } else {
         throw new Error(`unknown OMP Helm command: ${kind}`);
       }
-      reply = { ...reply, ok: true, status: ctx.isIdle() ? "idle" : "active" };
+      reply = { ...reply, ok: true, status: providerIsIdle(ctx) ? "idle" : "active" };
     } catch (error) {
       reply.error = {
         code: !authorityMatches
           ? "stale_channel"
-          : kind === "steer" && ctx.isIdle()
+          : kind === "steer" && providerIsIdle(ctx)
             ? "turn_ended"
             : "command_failed",
         message: error instanceof Error ? error.message : String(error),
@@ -281,6 +294,7 @@ export default function (pi: any) {
 
   pi.on("session_start", async (event: Frame, ctx: any) => {
     shuttingDown = false;
+    lastAgentEndTerminal = undefined;
     if (socket) close();
     await connectChannel(ctx);
     lifecycle("session_start", event, ctx);
@@ -298,12 +312,18 @@ export default function (pi: any) {
     const completed = await waitForReplacement("session_before_switch", event, ctx);
     return completed ? undefined : { cancel: true };
   });
-  pi.on("session_switch", async (event: Frame, ctx: any) => lifecycle("session_switch", event, ctx));
+  pi.on("session_switch", async (event: Frame, ctx: any) => {
+    lastAgentEndTerminal = undefined;
+    lifecycle("session_switch", event, ctx);
+  });
   pi.on("session_before_branch", async (event: Frame, ctx: any) => {
     const completed = await waitForReplacement("session_before_branch", event, ctx);
     return completed ? undefined : { cancel: true };
   });
-  pi.on("session_branch", async (event: Frame, ctx: any) => lifecycle("session_branch", event, ctx));
+  pi.on("session_branch", async (event: Frame, ctx: any) => {
+    lastAgentEndTerminal = undefined;
+    lifecycle("session_branch", event, ctx);
+  });
   pi.on("session_shutdown", async (event: Frame, ctx: any) => {
     shuttingDown = true;
     if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -311,13 +331,19 @@ export default function (pi: any) {
     close();
   });
   pi.on("title_change", async (event: Frame, ctx: any) => lifecycle("title_change", event, ctx));
-  pi.on("agent_start", async (event: Frame, ctx: any) => lifecycle("agent_start", event, ctx));
+  pi.on("agent_start", async (event: Frame, ctx: any) => {
+    lastAgentEndTerminal = false;
+    lifecycle("agent_start", event, ctx);
+  });
   pi.on("tool_execution_start", async (event: Frame, ctx: any) => lifecycle("tool_execution_start", event, ctx));
   pi.on("tool_execution_update", async (event: Frame, ctx: any) => lifecycle("tool_execution_update", event, ctx));
   pi.on("tool_execution_end", async (event: Frame, ctx: any) => lifecycle("tool_execution_end", event, ctx));
   pi.on("message_start", async (event: Frame, ctx: any) => lifecycle("message_start", event, ctx));
   pi.on("message_end", async (event: Frame, ctx: any) => lifecycle("message_end", event, ctx));
   pi.on("message_update", async (event: Frame, ctx: any) => lifecycle("message_update", event, ctx));
-  pi.on("agent_end", async (event: Frame, ctx: any) => lifecycle("agent_end", event, ctx));
+  pi.on("agent_end", async (event: Frame, ctx: any) => {
+    lastAgentEndTerminal = agentEndIsTerminal(event);
+    lifecycle("agent_end", event, ctx);
+  });
   pi.on("session_stop", async (event: Frame, ctx: any) => lifecycle("session_stop", event, ctx));
 }

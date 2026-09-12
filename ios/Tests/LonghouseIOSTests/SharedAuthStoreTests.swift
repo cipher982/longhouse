@@ -96,4 +96,58 @@ struct SharedAuthStoreTests {
         SharedAuthStore.clearRuntimeToken(for: serverURL)
         SharedAuthStore.clearNativeRefreshToken(for: serverURL)
     }
+
+    @Test
+    func staleHostedTokenGenerationCannotRestoreCredentials() throws {
+        guard SharedAuthStore.isAppGroupAvailable else {
+            return
+        }
+        let serverURL = "https://generation-test.longhouse.ai"
+        SharedAuthStore.clearRuntimeToken(for: serverURL)
+        let oldGeneration = SharedAuthStore.authGeneration(for: serverURL)
+        let currentGeneration = SharedAuthStore.advanceAuthGeneration(for: serverURL)
+
+        #expect(!SharedAuthStore.saveHostedTokens(
+            runtimeToken: "stale-runtime",
+            runtimeExpiresAt: nil,
+            refreshToken: "stale-refresh",
+            refreshExpiresAt: nil,
+            for: serverURL,
+            expectedGeneration: oldGeneration
+        ))
+        #expect(SharedAuthStore.runtimeToken(for: serverURL) == nil)
+        #expect(SharedAuthStore.nativeRefreshToken(for: serverURL) == nil)
+
+        #expect(SharedAuthStore.saveHostedTokens(
+            runtimeToken: "current-runtime",
+            runtimeExpiresAt: nil,
+            refreshToken: "current-refresh",
+            refreshExpiresAt: nil,
+            for: serverURL,
+            expectedGeneration: currentGeneration
+        ))
+        #expect(SharedAuthStore.runtimeToken(for: serverURL) == "current-runtime")
+        #expect(SharedAuthStore.nativeRefreshToken(for: serverURL) == "current-refresh")
+        SharedAuthStore.clearRuntimeToken(for: serverURL)
+    }
+
+    @Test
+    func pendingNativeRevocationsKeepFamiliesIndependent() throws {
+        guard SharedAuthStore.isAppGroupAvailable else {
+            return
+        }
+        let serverURL = "https://pending-revocations-test.longhouse.ai"
+        SharedAuthStore.clearPendingNativeRevocationToken(for: serverURL)
+
+        SharedAuthStore.savePendingNativeRevocationToken("family-a", for: serverURL)
+        SharedAuthStore.savePendingNativeRevocationToken("family-b", for: serverURL)
+        SharedAuthStore.savePendingNativeRevocationToken("family-a", for: serverURL)
+
+        #expect(SharedAuthStore.pendingNativeRevocationTokens(for: serverURL) == ["family-a", "family-b"])
+        SharedAuthStore.clearPendingNativeRevocationToken("family-a", for: serverURL)
+        #expect(SharedAuthStore.pendingNativeRevocationTokens(for: serverURL) == ["family-b"])
+
+        SharedAuthStore.clearPendingNativeRevocationToken("family-b", for: serverURL)
+        #expect(SharedAuthStore.pendingNativeRevocationTokens(for: serverURL).isEmpty)
+    }
 }

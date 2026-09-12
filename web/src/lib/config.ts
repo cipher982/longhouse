@@ -246,13 +246,11 @@ function loadConfig(): AppConfig {
 // Global configuration instance
 export const config: AppConfig = loadConfig();
 
-// Validation function to ensure required configuration is present
+// Validation function to ensure required configuration is present. Authentication
+// method availability is a backend contract (`/auth/methods`): self-hosted
+// password instances and hosted SSO do not require a Google client id.
 export function validateConfig(): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
-
-  if (config.appMode === 'production' && !config.googleClientId) {
-    errors.push('VITE_GOOGLE_CLIENT_ID is required for authentication');
-  }
 
   if (config.appMode !== 'demo' && !config.apiBaseUrl) {
     errors.push('API base URL is required');

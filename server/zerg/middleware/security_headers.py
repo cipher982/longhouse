@@ -20,12 +20,14 @@ from starlette.types import Send
 _CSP = "; ".join(
     (
         "default-src 'self'",
-        "script-src 'self'",
+        "script-src 'self' https://accounts.google.com/gsi/client",
         "style-src 'self' 'unsafe-inline'",
         "img-src 'self' data: blob:",
         "font-src 'self' data:",
-        # ws:/wss: covers the timeline stream on both self-host and hosted.
-        "connect-src 'self' ws: wss:",
+        # WebSocket streams and Google Identity Services use explicit
+        # provider origins; the page still cannot submit forms cross-origin.
+        "connect-src 'self' https://accounts.google.com/gsi/ ws: wss:",
+        "frame-src https://accounts.google.com/gsi/",
         "object-src 'none'",
         "base-uri 'self'",
         "form-action 'self'",

@@ -97,10 +97,10 @@ def _omp_state(
 
 def test_omp_qualification_producers_are_registered_on_their_own_contracts() -> None:
     assert CONSOLE_REGISTRATION.producer_id == "omp.console_lifecycle.v1"
-    assert CONSOLE_REGISTRATION.producer_revision == 7
+    assert CONSOLE_REGISTRATION.producer_revision == 8
     assert CONSOLE_REGISTRATION.providers == ("omp",)
     assert CONSOLE_REGISTRATION.scenario_id == "omp_console_lifecycle"
-    assert CONSOLE_REGISTRATION.scenario_revision == 7
+    assert CONSOLE_REGISTRATION.scenario_revision == 8
     assert "console_continuation_receipt" in CONSOLE_REGISTRATION.required_artifacts
     assert HELM_REGISTRATION.producer_id == "omp.helm_lifecycle.v1"
     assert HELM_REGISTRATION.producer_revision == 8
@@ -654,34 +654,34 @@ def test_omp_native_model_evidence_publishes_the_first_turn_event_window(tmp_pat
     }
 
 
-def test_omp_continuation_prompt_names_the_earlier_context_label_without_tool_or_marker_replay() -> None:
+def test_omp_continuation_prompt_keeps_context_and_marker_in_one_reply() -> None:
     prompt = _omp_continuation_prompt("OMP_RESUME_MARKER")
 
     assert '"Remember this context phrase:"' in prompt
     assert "earlier user message" in prompt
     assert "OMP_RESUME_MARKER" in prompt
-    assert "entire visible answer" in prompt
-    assert "Do not quote, mention, or reuse any earlier assistant answer" in prompt
-    assert "No explanation" in prompt
+    assert "followed by exactly OMP_RESUME_MARKER" in prompt
+    assert "and no other text" in prompt
+    assert "Use only this request's marker" not in prompt
 
 
 def test_omp_helm_marker_prompts_preserve_setup_instructions() -> None:
     marker = "OMP_HELM_MARKER"
 
     exact = omp_helm_lifecycle._exact_marker_prompt(marker)
-    assert "new turn" in exact
-    assert "entire visible answer" in exact
-    assert "Do not quote, mention, or reuse any earlier answer" in exact
-    assert marker in exact
+    assert "New machine-check request" in exact
+    assert "active marker" in exact
+    assert "exactly OMP_HELM_MARKER" in exact
+    assert "no other text" in exact
 
     setup = omp_helm_lifecycle._setup_marker_prompt(
         marker,
         setup="Use the bash tool to run `sleep 8`, then",
     )
     assert "`sleep 8`" in setup
-    assert setup.endswith("No explanation.")
+    assert setup.endswith("and no other text.")
     assert marker in setup
-    assert "entire visible answer" in setup
+    assert "active marker" in setup
 
     context = omp_helm_lifecycle._setup_marker_prompt(
         marker,
@@ -689,7 +689,7 @@ def test_omp_helm_marker_prompts_preserve_setup_instructions() -> None:
     )
     assert "Remember this context phrase: OMP_HELM_CONTEXT." in context
     assert marker in context
-    assert "Do not quote, mention, or reuse any earlier answer" in context
+    assert "active marker" in context
 
 
 def test_omp_helm_controls_use_runtime_agents_api(monkeypatch, tmp_path) -> None:
@@ -1451,12 +1451,31 @@ def test_omp_keeps_isolation_when_complete_source_retention_fails(tmp_path) -> N
         _remove_isolation_after_source_retention(
             isolation,
             source_retention_verified=False,
+            runtime_cleanup_verified=False,
             cleanup=cleanup,
         )
         is False
     )
     assert isolation.exists()
     assert cleanup["authoritative_source_evidence_retained"] is True
+
+
+def test_omp_keeps_isolation_when_owned_runtime_cleanup_is_unverified(tmp_path) -> None:
+    isolation = tmp_path / "isolation"
+    isolation.mkdir()
+    cleanup: dict[str, object] = {}
+
+    assert (
+        _remove_isolation_after_source_retention(
+            isolation,
+            source_retention_verified=True,
+            runtime_cleanup_verified=False,
+            cleanup=cleanup,
+        )
+        is False
+    )
+    assert isolation.exists()
+    assert cleanup["isolation_retention_reason"] == "owned runtime cleanup is incomplete"
 
 
 def test_omp_selected_assertion_status_ignores_unrelated_sibling_failures() -> None:
@@ -1491,12 +1510,16 @@ def test_omp_console_settlement_and_context_recall_are_required() -> None:
             "malformed_source": False,
         },
         "no_orphan_provider_processes": True,
+        "served_run_retired": True,
         "interrupt_contract_preserved": True,
         "post_interrupt_sendable": True,
         "canary_session_hidden": True,
     }
 
     assert omp_console_assertions(observation) == {CONSOLE_ASSERTION: True}
+    observation["served_run_retired"] = False
+    assert omp_console_assertions(observation)[CONSOLE_ASSERTION] is False
+    observation["served_run_retired"] = True
     observation["omp_continuation_context_recalled"] = False
     assert omp_console_assertions(observation)[CONSOLE_ASSERTION] is False
     observation["omp_continuation_context_recalled"] = True

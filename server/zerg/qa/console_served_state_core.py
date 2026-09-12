@@ -425,6 +425,111 @@ def armed_terminal_drop(session_id: str, enabled: bool):
         control.unlink(missing_ok=True)
 
 
+def _served_run_retirement(
+    api_url: str,
+    token: str,
+    client: Client,
+    session_id: str,
+    report: dict,
+) -> dict[str, object]:
+    """Prove the served run is terminal before retiring its session."""
+
+    run_id = str(report.get("run_id") or "").strip()
+    if not run_id:
+        return {
+            "retired": True,
+            "active_run_count": 0,
+            "session_id": session_id,
+            "expected_run_id": None,
+            "reason": "no_run_started",
+        }
+
+    termination: dict[str, object] | None = None
+    if report.get("verdict") != "green":
+        try:
+            termination = client.request("POST", f"/api/agents/sessions/{session_id}/terminate-live")
+        except Exception as exc:  # noqa: BLE001 - retirement evidence must survive cleanup failures
+            termination = {
+                "status": "fail",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    try:
+        # Reuse the same served-projection oracle as provider Console
+        # qualification. The synthetic claim carries only the run identity
+        # available to this surface; it is enough to prove the served run
+        # reached a terminal lifecycle without coupling this oracle to a
+        # provider-specific claim file.
+        from zerg.qa.provider_console_lifecycle import _wait_served_run_retirement
+
+        inventory = _wait_served_run_retirement(
+            api_url,
+            token,
+            session_id,
+            [{"state": "terminal", "session_id": session_id, "run_id": run_id}],
+        )
+    except Exception as exc:  # noqa: BLE001 - cleanup evidence must fail closed
+        inventory = {
+            "retired": False,
+            "active_run_count": None,
+            "session_id": session_id,
+            "expected_run_id": run_id,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    if termination is not None:
+        inventory["termination"] = termination
+    return inventory
+
+
+def _retire_session(
+    api_url: str,
+    token: str,
+    client: Client,
+    session_id: str | None,
+    *,
+    provider: str,
+    report: dict,
+) -> dict[str, object]:
+    """Retire one created QA session and retain every cleanup predicate."""
+
+    if not session_id:
+        return {
+            "status": "pass",
+            "session_id": None,
+            "hidden": True,
+            "archived": True,
+            "present_in_served_inventory": False,
+            "served_run_retired": True,
+            "served_run_inventory": {
+                "retired": True,
+                "active_run_count": 0,
+                "session_id": None,
+                "reason": "session_not_created",
+            },
+        }
+
+    served_run_inventory = _served_run_retirement(api_url, token, client, session_id, report)
+    from zerg.qa.live_session_toolkit import retire_qualification_session
+
+    receipt = retire_qualification_session(
+        api_url,
+        token,
+        session_id,
+        provider=provider,
+        project="console-served-state-e2e",
+    )
+    served_run_retired = (
+        served_run_inventory.get("retired") is True
+        and served_run_inventory.get("session_id") == session_id
+        and served_run_inventory.get("active_run_count") == 0
+    )
+    receipt["served_run_inventory"] = served_run_inventory
+    receipt["served_run_retired"] = served_run_retired
+    if not served_run_retired:
+        receipt["status"] = "fail"
+    return receipt
+
+
 def run(
     args: argparse.Namespace,
     *,
@@ -471,8 +576,27 @@ def run(
 
     if args.drop_terminal:
         report["terminal_dropped"] = True
-    with armed_terminal_drop(session_id, args.drop_terminal):
-        return _observe_turn(client, args, report, session_id, marker)
+    try:
+        with armed_terminal_drop(session_id, args.drop_terminal):
+            result = _observe_turn(client, args, report, session_id, marker)
+    except Exception as exc:  # noqa: BLE001 - return a typed failure with cleanup evidence
+        result = report
+        result.setdefault("failures", []).append(f"{type(exc).__name__}: {exc}")
+        result["verdict"] = "red"
+
+    cleanup = _retire_session(
+        api_url,
+        token,
+        client,
+        session_id,
+        provider=args.provider,
+        report=result,
+    )
+    result["cleanup_receipt"] = cleanup
+    if cleanup.get("status") != "pass":
+        result.setdefault("failures", []).append("qualification session cleanup did not satisfy its required contract")
+        result["verdict"] = "red"
+    return result
 
 
 def _observe_turn(

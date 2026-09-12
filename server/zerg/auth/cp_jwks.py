@@ -16,7 +16,10 @@ from jwt.algorithms import RSAAlgorithm
 from zerg.config import get_settings
 
 JWKS_CACHE_TTL_SECONDS = 300
-JWKS_STALE_IF_ERROR_SECONDS = 24 * 60 * 60
+# Runtime access tokens live for ten minutes. Stale JWKS beyond one token
+# lifetime plus skew makes key rotation fail closed while still tolerating a
+# short control-plane outage.
+JWKS_STALE_IF_ERROR_SECONDS = 15 * 60
 JWKS_CACHE_MAX_ENTRIES = 8
 JWKS_UNKNOWN_KID_BACKOFF_SECONDS = 5
 JWKS_UNKNOWN_KID_MAX_ENTRIES = 256
@@ -49,7 +52,7 @@ _jwks_cache: OrderedDict[str, tuple[float, dict[str, dict[str, Any]]]] = Ordered
 _jwks_cache_lock = Lock()
 _jwks_fetch_events: dict[str, Event] = {}
 _jwks_retry_after: dict[str, float] = {}
-_jwks_unknown_kid_retry_after: OrderedDict[tuple[str, str], float] = OrderedDict()
+_jwks_unknown_kid_retry_after: dict[str, float] = {}
 JWKS_FETCH_WAIT_SECONDS = 1.0
 JWKS_RETRY_BACKOFF_SECONDS = 5.0
 
@@ -156,23 +159,38 @@ def verify_runtime_token(token: str, *, audience: str) -> CPTokenClaims:
     jwk = keys.get(kid)
     if jwk is None:
         base = _control_plane_url()
-        unknown_key = (base, kid)
+        now = time.time()
         with _jwks_cache_lock:
-            retry_after = _jwks_unknown_kid_retry_after.get(unknown_key, 0.0)
-            if retry_after > time.time():
-                raise CPTokenError("Unknown CP token kid")
+            retry_after = _jwks_unknown_kid_retry_after.get(base, 0.0)
+        if retry_after > now:
+            # The issuer-wide backoff deliberately suppresses another network
+            # fetch. Treat that interval as temporary authority unavailability,
+            # not a definitive invalid credential: a legitimate key rotation
+            # may have landed during the backoff window.
+            raise CPAuthorityUnavailable("CP JWKS key refresh is temporarily rate-limited")
+
+        # Fetch before setting the issuer-wide backoff. A caller may present
+        # an unknown key id immediately before a legitimate CP key rotation;
+        # setting the backoff first would make that newly published key fail
+        # for the whole window. If the forced fetch still has no key, the
+        # issuer-wide backoff prevents arbitrary attacker-controlled kids from
+        # turning into one CP request each.
         keys = _fetch_jwks(force=True)
         jwk = keys.get(kid)
-        with _jwks_cache_lock:
-            if jwk is None:
-                _jwks_unknown_kid_retry_after[unknown_key] = time.time() + JWKS_UNKNOWN_KID_BACKOFF_SECONDS
-                _jwks_unknown_kid_retry_after.move_to_end(unknown_key)
-                while len(_jwks_unknown_kid_retry_after) > JWKS_UNKNOWN_KID_MAX_ENTRIES:
-                    _jwks_unknown_kid_retry_after.popitem(last=False)
-            else:
-                _jwks_unknown_kid_retry_after.pop(unknown_key, None)
+        if jwk is None:
+            with _jwks_cache_lock:
+                _jwks_unknown_kid_retry_after[base] = now + JWKS_UNKNOWN_KID_BACKOFF_SECONDS
+        else:
+            with _jwks_cache_lock:
+                _jwks_unknown_kid_retry_after.pop(base, None)
     if jwk is None:
-        raise CPTokenError("Unknown CP token kid")
+        # A forced refresh that still lacks the requested kid is not proof
+        # that this token is invalid: the issuer may be publishing a new key
+        # and the tenant may observe the rotation before JWKS propagation
+        # completes. Treat the bounded backoff as authority unavailability so
+        # callers preserve credentials instead of orphan-revoking a fresh
+        # session family.
+        raise CPAuthorityUnavailable("CP JWKS does not yet contain the requested signing key")
 
     issuer = _control_plane_url()
     try:
@@ -194,6 +212,7 @@ def verify_runtime_token(token: str, *, audience: str) -> CPTokenClaims:
                     "exp",
                     "jti",
                     "sid",
+                    "typ",
                 ]
             },
         )
@@ -201,6 +220,8 @@ def verify_runtime_token(token: str, *, audience: str) -> CPTokenClaims:
         raise CPTokenError("Invalid CP runtime token") from exc
     if payload.get("aud") != audience:
         raise CPTokenError("CP token audience is not exact")
+    if payload.get("typ") != "access":
+        raise CPTokenError("CP token type is not access")
 
     sub = str(payload.get("sub") or "")
     if not sub.isdecimal():

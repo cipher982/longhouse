@@ -889,73 +889,110 @@ struct LonghouseAPI: Sendable {
         }
     }
 
-    /// Refresh a hosted CP runtime bearer token via the Longhouse proxy.
+    /// Refresh a hosted CP session using the per-server native refresh token.
     ///
-    /// Native refresh tokens are preferred. The legacy bearer-refresh endpoint
-    /// remains as a migration path and can upgrade old installs by returning
-    /// native refresh fields. Persist refresh before access so a process crash
-    /// after response receipt does not strand the session on a consumed token.
-    func refreshRuntimeToken() async throws {
+    /// Access tokens are never refresh credentials. A native refresh request
+    /// carries only the rotating refresh token and requires a replacement
+    /// refresh token in the response.
+    func refreshHostedSession() async throws {
         try await Self.authRefreshCoordinator.run(key: baseURL.absoluteString) {
-            try await self.performRefreshRuntimeToken()
+            try await self.performRefreshHostedSession()
         }
     }
 
-    private func performRefreshRuntimeToken() async throws {
-        var request = URLRequest(url: baseURL.appendingPathComponent("/api/auth/refresh-runtime-token"))
-        var requestBody: [String: Any]?
-        if let refreshToken = SharedAuthStore.nativeRefreshToken(for: baseURL.absoluteString) {
-            request = URLRequest(url: baseURL.appendingPathComponent("/api/auth/refresh-native-session"))
-            request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-            requestBody = ["refresh_token": refreshToken]
+    private func performRefreshHostedSession() async throws {
+        let serverURL = baseURL.absoluteString
+        let generation = SharedAuthStore.authGeneration(for: serverURL)
+        guard let refreshToken = SharedAuthStore.nativeRefreshToken(for: serverURL) else {
+            SharedAuthStore.clearRuntimeToken(for: serverURL)
+            throw LonghouseAPIError.notAuthenticated
         }
+
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/auth/refresh-native-session"))
         request.httpMethod = "POST"
         request.timeoutInterval = 15
-        if let requestBody {
-            request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
-        }
+        request.httpShouldHandleCookies = false
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["refresh_token": refreshToken])
 
         let (data, httpResponse) = try await data(for: request, allowRetry: false)
         guard httpResponse.statusCode == 200 else {
             if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                Self.invalidateNativeSessionIfCurrent(serverURL: serverURL, generation: generation)
                 throw LonghouseAPIError.notAuthenticated
             }
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let token = json["runtime_token"] as? String else {
-            throw LonghouseAPIError.notAuthenticated
+              let token = (json["runtime_token"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !token.isEmpty,
+              let expiresIn = json["expires_in"] as? Int,
+              expiresIn > 0,
+              let nextRefreshToken = (json["refresh_token"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !nextRefreshToken.isEmpty,
+              let refreshExpiry = json["refresh_token_expires_at"] as? String,
+              let refreshExpiresAt = Self.parseServerDate(refreshExpiry),
+              refreshExpiresAt > Date() else {
+            // A malformed 200 is an upstream contract failure, not proof that
+            // the locally held refresh credential was rejected. Preserve the
+            // pair so a retry can recover after a deploy or transient proxy bug.
+            throw LonghouseAPIError.upstreamFailed
         }
-        let expiresIn = json["expires_in"] as? Int
-        let expiresAt = expiresIn.map { Date().addingTimeInterval(TimeInterval($0)) }
-        let refreshToken = (json["refresh_token"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if requestBody != nil && (refreshToken == nil || refreshToken?.isEmpty == true) {
-            // Native refresh rotates the refresh token every time. If a buggy or
-            // mid-deploy CP response omits the replacement, never keep the now-
-            // stale token; presenting it later can look like token reuse.
-            SharedAuthStore.clearNativeRefreshToken(for: baseURL.absoluteString)
-        }
-        let refreshExpiresAt = Self.parseServerDate(json["refresh_token_expires_at"] as? String)
-        SharedAuthStore.saveHostedTokens(
+
+        let expiresAt = Date().addingTimeInterval(TimeInterval(expiresIn))
+        guard SharedAuthStore.saveHostedTokens(
             runtimeToken: token,
             runtimeExpiresAt: expiresAt,
-            refreshToken: refreshToken,
+            refreshToken: nextRefreshToken,
             refreshExpiresAt: refreshExpiresAt,
-            for: baseURL.absoluteString
-        )
+            for: serverURL,
+            expectedGeneration: generation
+        ) else {
+            throw LonghouseAPIError.notAuthenticated
+        }
+    }
+
+    private nonisolated static func invalidateNativeSessionIfCurrent(
+        serverURL: String,
+        generation: String
+    ) {
+        guard SharedAuthStore.isAuthGenerationCurrent(generation, for: serverURL) else {
+            return
+        }
+        SharedAuthStore.advanceAuthGeneration(for: serverURL)
+        SharedAuthStore.clearRuntimeToken(for: serverURL)
+        SharedAuthStore.clearNativeRefreshToken(for: serverURL)
+    }
+
+    private func isNativeRefreshRequest(_ request: URLRequest) -> Bool {
+        request.url?.path == "/api/auth/refresh-native-session"
+    }
+
+    private func isCookieRefreshRequest(_ request: URLRequest) -> Bool {
+        request.url?.path == "/api/auth/refresh"
     }
 
     private func data(for request: URLRequest, allowRetry: Bool = true) async throws -> (Data, HTTPURLResponse) {
         var request = request
         request.timeoutInterval = 15
-        // Explicit cookie injection: widget extension runs in a separate process
-        // without shared HTTPCookieStorage, so it must read from the keychain.
-        let authorizationHeader = SharedAuthStore.authorizationHeader(for: baseURL.absoluteString)
-        if let authorizationHeader {
-            request.setValue(authorizationHeader, forHTTPHeaderField: "Authorization")
-        } else if let cookieHeader = SharedAuthStore.cookieHeader(for: baseURL.absoluteString) {
-            request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+        let isNativeRefresh = isNativeRefreshRequest(request)
+        if isNativeRefresh {
+            request.httpShouldHandleCookies = false
+        } else if isCookieRefreshRequest(request) {
+            if let cookieHeader = SharedAuthStore.cookieHeader(for: baseURL.absoluteString) {
+                request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+            }
+        } else {
+            // Explicit cookie injection: widget extension runs in a separate
+            // process without shared HTTPCookieStorage.
+            let authorizationHeader = SharedAuthStore.authorizationHeader(for: baseURL.absoluteString)
+            if let authorizationHeader {
+                request.setValue(authorizationHeader, forHTTPHeaderField: "Authorization")
+            } else if let cookieHeader = SharedAuthStore.cookieHeader(for: baseURL.absoluteString) {
+                request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+            }
         }
 
         let (data, response) = try await urlSession.data(for: request)
@@ -966,8 +1003,8 @@ struct LonghouseAPI: Sendable {
 
         if httpResponse.statusCode == 401 && allowRetry && allowsAuthRefresh {
             do {
-                if authorizationHeader != nil {
-                    try await refreshRuntimeToken()
+                if SharedAuthStore.authorizationHeader(for: baseURL.absoluteString) != nil {
+                    try await refreshHostedSession()
                 } else {
                     try await refreshSession()
                 }
@@ -983,6 +1020,7 @@ struct LonghouseAPI: Sendable {
         }
         return (data, httpResponse)
     }
+
 
     static func parseServerDate(_ rawValue: String?) -> Date? {
         guard let rawValue, !rawValue.isEmpty else { return nil }

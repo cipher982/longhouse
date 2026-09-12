@@ -6,7 +6,14 @@ import { toast } from 'react-hot-toast';
 import {
   beginLogoutBarrier,
   cancelRefresh,
+  clearLoginAttempt,
   clearLogoutBarrier,
+  consumeLoginAttempt,
+  consumeLoginReadySignal,
+  currentLoginAttemptGeneration,
+  isLogoutBarrierActive,
+  loginReadyGeneration,
+  markLoginAttempt,
   refreshAccessToken,
   RefreshUnavailableError,
 } from './auth-refresh';
@@ -27,11 +34,11 @@ interface User {
   prefs?: Record<string, unknown> | null;
   role?: string; // ADMIN or USER
 }
-
 interface TokenData {
   access_token: string;
   expires_in: number;
 }
+
 
 interface AuthContextType {
   user: User | null;
@@ -40,6 +47,7 @@ interface AuthContextType {
   authUnavailable: boolean;
   authRetryCount: number;
   login: (idToken: string) => Promise<TokenData>;
+  loginPassword: (password: string) => Promise<TokenData>;
   logout: (everywhere?: boolean) => Promise<boolean>;
   refreshAuth: () => Promise<void>;
 }
@@ -47,9 +55,9 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | null>(null);
 export const CURRENT_USER_QUERY_KEY = ['current-user'] as const;
 export const AUTH_METHODS_QUERY_KEY = ['auth-methods'] as const;
-const AUTH_CHANNEL_NAME = 'longhouse-auth-events';
-const LOGGED_OUT_SESSION_KEY = 'longhouse:logged-out';
 
+const LOGGED_OUT_SESSION_KEY = 'longhouse:logged-out';
+const AUTH_CHANNEL_NAME = 'longhouse-auth-events';
 export function hasLogoutIntent(): boolean {
   if (typeof window === 'undefined') return false;
   try {
@@ -77,7 +85,6 @@ export function clearLogoutIntent(): void {
     // Storage can be disabled; authenticated server state still wins.
   }
 }
-
 // Custom error class that includes HTTP status for retry logic
 class HttpError extends Error {
   status: number;
@@ -87,10 +94,58 @@ class HttpError extends Error {
     this.status = status;
   }
 }
+const AUTH_REQUEST_TIMEOUT_MS = 15_000;
+
+async function fetchAuth(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), AUTH_REQUEST_TIMEOUT_MS);
+  let onAbort: (() => void) | undefined;
+  if (init.signal) {
+    onAbort = () => controller.abort();
+    if (init.signal.aborted) controller.abort();
+    else init.signal.addEventListener('abort', onAbort, { once: true });
+  }
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new HttpError('Authentication service temporarily unavailable', 503);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    if (onAbort && init.signal) init.signal.removeEventListener('abort', onAbort);
+  }
+}
+async function withAuthBodyDeadline<T>(operation: () => Promise<T>): Promise<T> {
+  let timeout: number | undefined;
+  try {
+    return await Promise.race([
+      operation(),
+      new Promise<T>((_, reject) => {
+        timeout = window.setTimeout(
+          () => reject(new HttpError('Authentication service temporarily unavailable', 503)),
+          AUTH_REQUEST_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function readAuthJson<T>(response: Response): Promise<T> {
+  return withAuthBodyDeadline(() => response.json() as Promise<T>);
+}
+
+function readAuthText(response: Response): Promise<string> {
+  return withAuthBodyDeadline(() => response.text());
+}
+
 
 // API functions - all use credentials: 'include' for cookie auth
 async function loginWithGoogle(idToken: string): Promise<{ access_token: string; expires_in: number }> {
-  const response = await fetch(`${config.apiBaseUrl}/auth/google`, {
+  const response = await fetchAuth(`${config.apiBaseUrl}/auth/google`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -101,11 +156,28 @@ async function loginWithGoogle(idToken: string): Promise<{ access_token: string;
   });
 
   if (!response.ok) {
-    const error = await response.text();
+    const error = await readAuthText(response);
     throw new HttpError(error || 'Login failed', response.status);
   }
 
-  return response.json();
+  return readAuthJson<{ access_token: string; expires_in: number }>(response);
+}
+
+async function loginWithPassword(password: string): Promise<{ access_token: string; expires_in: number }> {
+  const response = await fetchAuth(`${config.apiBaseUrl}/auth/password`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Longhouse-Auth': '1',
+    },
+    credentials: 'include',
+    body: JSON.stringify({ password }),
+  });
+  if (!response.ok) {
+    const error = await readAuthText(response);
+    throw new HttpError(error || 'Login failed', response.status);
+  }
+  return readAuthJson<{ access_token: string; expires_in: number }>(response);
 }
 
 type AuthStatusResponse = {
@@ -114,22 +186,47 @@ type AuthStatusResponse = {
 };
 
 async function getCurrentUser(): Promise<User | null> {
-  // A deliberate local sign-out is authoritative until the user explicitly
-  // starts a new login. This prevents a failed remote revocation or a stale
-  // cookie from silently signing the browser back in.
+  const readyGeneration = loginReadyGeneration();
+  const attemptGeneration = readyGeneration ? currentLoginAttemptGeneration() : null;
+  const loginReady =
+    readyGeneration !== null &&
+    attemptGeneration !== null &&
+    readyGeneration === attemptGeneration &&
+    consumeLoginAttempt(readyGeneration) &&
+    consumeLoginReadySignal(readyGeneration);
+  if (loginReady) {
+    // A server-issued handoff marker clears a deliberate local sign-out
+    // barrier only when this tab has the same current-generation attempt.
+    clearLogoutBarrier();
+    clearLogoutIntent();
+  }
+  // A logout barrier is established before the network request starts. Do not
+  // let an in-flight status response repopulate the authenticated projection
+  // while local logout is still fencing refresh and cookie installation.
+  if (isLogoutBarrierActive()) {
+    return null;
+  }
   if (typeof window !== 'undefined' && hasLogoutIntent()) {
     return null;
   }
 
-  const response = await fetch(`${config.apiBaseUrl}/auth/status`, {
+  const response = await fetchAuth(`${config.apiBaseUrl}/auth/status`, {
     credentials: 'include',
   });
 
+  // Logout may have started while /status was in flight. The response is no
+  // longer authoritative for this tab; the barrier wins over stale server data.
+  if (isLogoutBarrierActive() || (typeof window !== 'undefined' && hasLogoutIntent())) {
+    return null;
+  }
   if (!response.ok) {
     throw new HttpError(`Failed to get auth status (${response.status})`, response.status);
   }
 
-  const data = (await response.json()) as AuthStatusResponse;
+  const data = await readAuthJson<AuthStatusResponse>(response);
+  if (isLogoutBarrierActive() || (typeof window !== 'undefined' && hasLogoutIntent())) {
+    return null;
+  }
   if (data.authenticated) {
     return data.user;
   }
@@ -145,24 +242,29 @@ async function getCurrentUser(): Promise<User | null> {
     }
     throw error;
   }
-  if (!refreshed) {
+  if (!refreshed || isLogoutBarrierActive() || (typeof window !== 'undefined' && hasLogoutIntent())) {
     return null;
   }
 
-  const retryResponse = await fetch(`${config.apiBaseUrl}/auth/status`, {
+  const retryResponse = await fetchAuth(`${config.apiBaseUrl}/auth/status`, {
     credentials: 'include',
   });
+  if (isLogoutBarrierActive() || (typeof window !== 'undefined' && hasLogoutIntent())) {
+    return null;
+  }
   if (!retryResponse.ok) {
     throw new HttpError(`Failed to get auth status (${retryResponse.status})`, retryResponse.status);
   }
-  const retryData = (await retryResponse.json()) as AuthStatusResponse;
+  const retryData = await readAuthJson<AuthStatusResponse>(retryResponse);
+  if (isLogoutBarrierActive() || (typeof window !== 'undefined' && hasLogoutIntent())) {
+    return null;
+  }
   return retryData.authenticated ? retryData.user : null;
 }
-
 async function logoutFromServer(everywhere = false): Promise<boolean> {
   try {
     const suffix = everywhere ? '?everywhere=1' : '';
-    const response = await fetch(`${config.apiBaseUrl}/auth/logout${suffix}`, {
+    const response = await fetchAuth(`${config.apiBaseUrl}/auth/logout${suffix}`, {
       method: 'POST',
       credentials: 'include', // Required to clear the cookie
       headers: { 'X-Longhouse-Auth': '1' },
@@ -192,6 +294,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       authUnavailable: false,
       authRetryCount: 0,
       login: async () => ({ access_token: '', expires_in: 0 }),
+      loginPassword: async () => ({ access_token: '', expires_in: 0 }),
       logout: async () => true,
       refreshAuth: async () => {},
     };
@@ -217,6 +320,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       authUnavailable: false,
       authRetryCount: 0,
       login: async () => ({ access_token: '', expires_in: 0 }),
+      loginPassword: async () => ({ access_token: '', expires_in: 0 }),
       logout: async () => true,
       refreshAuth: async () => {},
     };
@@ -298,13 +402,6 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     refetch,
   } = useCurrentUserQuery();
 
-  useEffect(() => {
-    if (!userData) return;
-    // A successful hosted handoff is a login too; it does not pass through
-    // loginMutation, so clear the prior signed-out intent here.
-    clearLogoutBarrier();
-    clearLogoutIntent();
-  }, [userData]);
 
 
   const loginMutation = useMutation({
@@ -318,8 +415,22 @@ function AuthProviderInner({ children }: AuthProviderProps) {
       toast.error(`Login failed: ${error.message}`);
     },
   });
+  const passwordLoginMutation = useMutation({
+    mutationFn: loginWithPassword,
+    onSuccess: async () => {
+      clearLogoutBarrier();
+      clearLogoutIntent();
+      await refetch();
+    },
+    onError: (error: Error) => {
+      toast.error(`Login failed: ${error.message}`);
+    },
+  });
   const login = async (idToken: string): Promise<TokenData> => {
     return loginMutation.mutateAsync(idToken);
+  };
+  const loginPassword = async (password: string): Promise<TokenData> => {
+    return passwordLoginMutation.mutateAsync(password);
   };
   const logout = async (everywhere = false): Promise<boolean> => {
     // Fence every tab before contacting the authority. Otherwise a refresh
@@ -327,10 +438,11 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     beginLogoutBarrier();
     const completed = await logoutFromServer(everywhere);
     if (!completed) {
-      // Keep the authenticated UI and retry path when the authority could not
-      // confirm revocation. The barrier must be cleared so normal requests can
-      // continue while the user retries.
-      clearLogoutBarrier();
+      // The server clears local cookies even when CP revocation is degraded.
+      // Drop this tab's authenticated projection too; the next explicit login
+      // can establish a fresh session after the authority recovers.
+      await clearLocalAuth();
+      notifyLogout();
       return false;
     }
     try {
@@ -355,6 +467,7 @@ function AuthProviderInner({ children }: AuthProviderProps) {
     authUnavailable: isServiceUnavailable(authError),
     authRetryCount,
     login,
+    loginPassword,
     logout,
     refreshAuth,
   };
@@ -385,13 +498,12 @@ export function useCurrentUserQuery() {
       return false;
     },
     retryDelay: (attemptIndex) => Math.min(1000 * Math.pow(2, attemptIndex), 10000),
-    staleTime: 5 * 60 * 1000,
   });
 }
-
 function NativeAuthHandoff({ returnTo }: { returnTo: string }) {
   useEffect(() => {
     clearLogoutIntent();
+    markLoginAttempt();
     requestNativeAuth(returnTo);
   }, [returnTo]);
 
@@ -454,13 +566,13 @@ export function useAuthMethods() {
 // falling back to local methods can strand hosted users on a login spinner or
 // send them down a disabled path.
 async function getAuthMethods(): Promise<AuthMethods> {
-  const response = await fetch(`${config.apiBaseUrl}/auth/methods`, {
+  const response = await fetchAuth(`${config.apiBaseUrl}/auth/methods`, {
     credentials: 'include',
   });
   if (!response.ok) {
     throw new HttpError(`Failed to discover authentication methods (${response.status})`, response.status);
   }
-  return response.json();
+  return readAuthJson<AuthMethods>(response);
 }
 
 // Auth guard component — redirects unauthenticated users to /login

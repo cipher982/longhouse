@@ -32,27 +32,6 @@ def _bearer_token(request: Request) -> str | None:
     return token or None
 
 
-def _device_token_bearer(request: Request) -> str | None:
-    """Return a `zdt_...` device token from the Authorization header, or None.
-
-    Browser routes deliberately reject generic JWT bearers in self-host — that's
-    the cookie boundary. Device tokens are a separate, owner-scoped credential
-    issued by the CLI; allowing them lets the local dev proxy drive the UI
-    without a browser cookie.
-    """
-    token = _bearer_token(request)
-    return token if token and token.startswith("zdt_") else None
-
-
-def _hosted_runtime_bearer(request: Request) -> str | None:
-    token = _bearer_token(request)
-    if not token or token.startswith("zdt_"):
-        return None
-    if not getattr(get_settings(), "control_plane_url", None):
-        return None
-    return token
-
-
 def _stamp_principal(request: Request, user):
     """Record who this request resolved to, for the access log.
 
@@ -69,15 +48,24 @@ def _stamp_principal(request: Request, user):
 
 
 def _get_browser_session_user(request: Request, db=None):
-    """Validate browser auth (cookie or device-token bearer) and return user."""
+    """Validate one explicit credential or the browser session cookie."""
     if auth_deps.AUTH_DISABLED:
         return _stamp_principal(request, auth_deps._get_strategy().get_current_user(request, db))
 
-    hosted_bearer = _hosted_runtime_bearer(request)
-    if hosted_bearer:
-        user = auth_deps._get_strategy().validate_ws_token(hosted_bearer, db)
-        if user is not None:
-            return _stamp_principal(request, user)
+    auth_header = request.headers.get("Authorization")
+    bearer = _bearer_token(request)
+    if auth_header is not None:
+        # An explicit credential is terminal. In particular, never turn a
+        # malformed or invalid device/JWT bearer into a valid cookie session.
+        if bearer is None:
+            return None
+        if bearer.startswith("zdt_"):
+            user = auth_deps._get_strategy().validate_ws_token(bearer, db)
+        elif getattr(get_settings(), "control_plane_url", None):
+            user = auth_deps._get_strategy().validate_ws_token(bearer, db)
+        else:
+            user = None
+        return _stamp_principal(request, user)
 
     session_token = request.cookies.get(SESSION_COOKIE_NAME)
     if session_token:
@@ -85,26 +73,22 @@ def _get_browser_session_user(request: Request, db=None):
         if user is not None:
             return _stamp_principal(request, user)
 
-    device_token = _device_token_bearer(request)
-    if device_token:
-        return _stamp_principal(request, auth_deps._get_strategy().validate_ws_token(device_token, db))
-
     return None
 
 
 def get_current_browser_user(request: Request, db=Depends(auth_deps._auth_compat_db)):
     """Return the authenticated browser user or raise **401**."""
     is_mutation = request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
-    bearer = _bearer_token(request)
-    if not auth_deps.AUTH_DISABLED and bearer is not None:
+    auth_header = request.headers.get("Authorization")
+    if not auth_deps.AUTH_DISABLED and auth_header is not None:
         user = _get_browser_session_user(request, db)
         if user is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or expired bearer token",
+                detail="Invalid or expired authorization credential",
             )
         return user
-    if is_mutation and bearer is None:
+    if is_mutation and auth_header is None:
         require_browser_auth_header(request)
     user = _get_browser_session_user(request, db)
     if user is None:

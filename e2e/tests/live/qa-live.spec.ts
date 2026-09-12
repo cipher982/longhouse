@@ -135,7 +135,7 @@ async function waitForLivePageReady(
 // Test 1: Auth + Timeline loads
 // ---------------------------------------------------------------------------
 
-test("auth + timeline loads the valid empty or populated state", async ({
+test("auth + timeline loads with session rows or an empty state", async ({
   context,
   frontendBaseUrl,
   apiBaseUrl,
@@ -216,13 +216,18 @@ test("auth + timeline loads the valid empty or populated state", async ({
     );
   }
 
-  // The isolated canary has no default-visible sessions. This is a valid
-  // consumer state; populated proof comes from the owned fixture tests below.
   const rowCount = await page.getByTestId("session-row").count();
-  expect(rowCount).toBe(0);
-  await expect(
-    page.getByRole("heading", { name: "Connect your first machine" }),
-  ).toBeVisible();
+  // A freshly reprovisioned canary is allowed to have no transcript rows. The
+  // rendered empty state proves auth, data readiness, and the timeline shell
+  // without coupling deploy QA to retained tenant data.
+  const emptyStateVisible = await page
+    .locator(".sessions-hero-empty")
+    .isVisible()
+    .catch(() => false);
+  expect(
+    rowCount > 0 || emptyStateVisible,
+    `Expected session rows or the guided empty state on /timeline, found ${rowCount} rows.`,
+  ).toBe(true);
 
   await page.close();
 });
@@ -231,7 +236,7 @@ test("auth + timeline loads the valid empty or populated state", async ({
 // Test 2: Removed routes resolve to timeline
 // ---------------------------------------------------------------------------
 
-test("removed loop login handoff resolves to timeline", async ({
+test("removed route auth fallback resolves to timeline", async ({
   browser,
   frontendBaseUrl,
 }) => {
@@ -242,7 +247,6 @@ test("removed loop login handoff resolves to timeline", async ({
     test.skip(true, "SMOKE_RUNTIME_TOKEN not set");
     return;
   }
-
   const baseOrigin = new URL(frontendBaseUrl).origin;
   const context = await browser.newContext({ baseURL: baseOrigin });
   const page = await context.newPage();

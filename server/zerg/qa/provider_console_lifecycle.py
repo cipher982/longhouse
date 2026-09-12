@@ -1494,10 +1494,10 @@ def _native_model(provider: str, model: str) -> str:
 
 def _omp_continuation_prompt(resume_marker: str) -> str:
     return (
-        "Machine check for this new turn. Recall the value labelled "
+        "New-turn continuation check. Recall the value labelled "
         '"Remember this context phrase:" from the earlier user message. '
-        f"Output that value followed by exactly {resume_marker} as the entire visible answer. "
-        "Do not quote, mention, or reuse any earlier assistant answer. No explanation."
+        f"Then reply with that value followed by exactly {resume_marker} "
+        "and no other text."
     )
 
 
@@ -1771,10 +1771,9 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
         message = f"Reply with exactly {marker} and nothing else."
         if provider in {"pi", "omp"}:
             message = (
-                f"Machine check for this new turn. Remember this context phrase: {context_marker}. "
-                f"Use the read tool to read {proof_path}. After the tool returns, output exactly "
-                f"{marker} as the entire visible answer. Do not quote, mention, or reuse any earlier "
-                "assistant answer. No explanation."
+                f"New machine-check request. Remember this context phrase: {context_marker}. "
+                f"Use the read tool to read {proof_path}. After the tool returns, reply with "
+                f"exactly {marker} and no other text."
             )
         request_id = f"console-release-{uuid4()}"
         first = _start_turn(

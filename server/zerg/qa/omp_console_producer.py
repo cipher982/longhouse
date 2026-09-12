@@ -31,9 +31,9 @@ SUPPORTED_VARIANT = lifecycle.SUPPORTED_VARIANT
 
 REGISTRATION = ProducerRegistration(
     producer_id="omp.console_lifecycle.v1",
-    producer_revision=7,
+    producer_revision=8,
     scenario_id=SCENARIO_ID,
-    scenario_revision=7,
+    scenario_revision=8,
     assertion_cells=((ASSERTION_ID, None),),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -68,7 +68,13 @@ REGISTRATION = ProducerRegistration(
         "provider_source_retention",
         "cleanup_receipt",
     ),
-    required_cleanup=("provider_process_dead", "process_group_dead", "no_orphan_provider_processes", "canary_session_hidden"),
+    required_cleanup=(
+        "provider_process_dead",
+        "process_group_dead",
+        "no_orphan_provider_processes",
+        "served_run_retired",
+        "canary_session_hidden",
+    ),
     implementation="server/zerg/qa/omp_console_producer.py",
     oracle_source="server/zerg/qa/omp_console_producer.py",
     oracle_entrypoint="omp_console_assertions",
@@ -617,6 +623,7 @@ def omp_console_assertions(observation: Mapping[str, object]) -> dict[str, bool]
                 observation.get("interrupt_contract_preserved") is True,
                 observation.get("post_interrupt_sendable") is True,
                 observation.get("no_orphan_provider_processes") is True,
+                observation.get("served_run_retired") is True,
                 observation.get("canary_session_hidden") is True,
             )
         )
@@ -636,10 +643,12 @@ def run_omp_console(args: argparse.Namespace) -> dict[str, object]:
     exact_retirement = _exact_session_retirement(session_retirement, session_id)
     cleanup["session_retirement_exact"] = exact_retirement
     cleanup["canary_session_hidden"] = exact_retirement
-    if not exact_retirement:
+    cleanup["served_run_retired"] = cleanup.get("served_run_retired") is True
+    if not exact_retirement or not cleanup["served_run_retired"]:
         cleanup["status"] = "fail"
     lifecycle.write_json(root / "cleanup-receipt.json", cleanup)
     observation["canary_session_hidden"] = exact_retirement
+    observation["served_run_retired"] = cleanup["served_run_retired"]
     settlement = _native_settlement(root)
     observation["omp_settlement"] = settlement
     observation.update(

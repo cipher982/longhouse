@@ -102,6 +102,43 @@ def test_vehicle_dispatch_binds_exact_binary_model_and_run(tmp_path):
     )
 
 
+def test_shared_oracle_fails_closed_when_served_run_is_not_retired(monkeypatch):
+    from zerg.qa import console_served_state_core as core
+    from zerg.qa import live_session_toolkit
+
+    monkeypatch.setattr(
+        core,
+        "_served_run_retirement",
+        lambda *_args, **_kwargs: {
+            "retired": False,
+            "active_run_count": None,
+            "session_id": "session-1",
+        },
+    )
+    monkeypatch.setattr(
+        live_session_toolkit,
+        "retire_qualification_session",
+        lambda *_args, **_kwargs: {
+            "status": "pass",
+            "hidden": True,
+            "archived": True,
+            "present_in_served_inventory": False,
+        },
+    )
+
+    receipt = core._retire_session(
+        "https://runtime.example",
+        "token",
+        object(),
+        "session-1",
+        provider="codex",
+        report={"run_id": "run-1"},
+    )
+
+    assert receipt["status"] == "fail"
+    assert receipt["served_run_retired"] is False
+
+
 def test_shared_oracle_waits_for_machine_adapter_registration(monkeypatch):
     from zerg.qa import console_served_state_core as core
 
@@ -145,6 +182,27 @@ def test_the_result_identity_carries_no_provider_but_still_names_the_vehicle(mon
     assert result["status"] == "pass"
 
 
+def test_result_status_fails_when_cleanup_receipt_fails(monkeypatch, tmp_path):
+    from zerg.qa import console_served_state_core as core
+
+    report = _qualified_report()
+    report["cleanup_receipt"] = {
+        "status": "fail",
+        "archived": False,
+        "present_in_served_inventory": True,
+        "served_run_retired": False,
+    }
+    monkeypatch.setattr(
+        core,
+        "run",
+        lambda args, **_kwargs: {**report, "provider": args.provider},
+    )
+
+    result = producer.run_console_served_state(tmp_path, provider="codex", device_id="d", cwd="/tmp/x")
+
+    assert result["status"] == "fail"
+
+
 def test_failure_result_retains_vehicle_identity_and_false_verdicts():
     result = producer._failure_result(
         model="gpt-5.6-sol",
@@ -184,6 +242,13 @@ def _qualified_report():
             },
             "missing_fields": [],
             "ready": True,
+        },
+        "cleanup_receipt": {
+            "status": "pass",
+            "hidden": True,
+            "archived": True,
+            "present_in_served_inventory": False,
+            "served_run_retired": True,
         },
     }
 

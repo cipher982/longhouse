@@ -1,14 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as loginRedirect from "../loginRedirect";
-import { fetchWithRefresh } from "../auth-refresh";
+import { beginLogoutBarrier, clearLogoutBarrier, fetchWithRefresh } from "../auth-refresh";
 
 describe("fetchWithRefresh", () => {
   beforeEach(() => {
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+    clearLogoutBarrier();
     vi.stubGlobal("fetch", vi.fn());
     window.history.replaceState({}, "", "/timeline/abc?view=compact#notes");
   });
 
   afterEach(() => {
+    clearLogoutBarrier();
+    window.localStorage.clear();
+    window.sessionStorage.clear();
     delete window.LonghouseNativeAuth;
     vi.restoreAllMocks();
   });
@@ -92,4 +98,15 @@ describe("fetchWithRefresh", () => {
     expect(replaceSpy).not.toHaveBeenCalled();
     expect(requestAuth).not.toHaveBeenCalled();
   });
+  it("does not start a refresh after logout fencing begins", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 401 }));
+
+    beginLogoutBarrier();
+    const response = await fetchWithRefresh("/api/users/me");
+
+    expect(response.status).toBe(401);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
 });

@@ -35,10 +35,15 @@ from zerg.auth.catalog_gateway import rotate_refresh
 from zerg.auth.client_ip import get_client_ip
 from zerg.auth.hosted import MAX_TENANT_LOGIN_ATTEMPTS
 from zerg.auth.hosted import TENANT_LOGIN_ATTEMPT_MAX_AGE
+from zerg.auth.hosted import TENANT_LOGIN_STATE_MAX_AGE
+from zerg.auth.hosted import hosted_cookie_origin_is_secure
+from zerg.auth.hosted import hosted_instance_id
+from zerg.auth.hosted import is_tenant_login_cookie_name
 from zerg.auth.hosted import new_tenant_login_state
 from zerg.auth.hosted import tenant_cookie_secure
 from zerg.auth.hosted import tenant_handoff_attempt_cookie_name
-from zerg.auth.hosted import tenant_login_cookie_prefix
+from zerg.auth.hosted import tenant_login_attempt_cookie_name
+from zerg.auth.hosted import tenant_login_ready_cookie_name
 from zerg.auth.redirects import normalize_local_return_to
 from zerg.auth.session_tokens import ACCESS_TOKEN_LIFETIME
 from zerg.auth.session_tokens import REFRESH_COOKIE_NAME
@@ -52,6 +57,7 @@ from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.dependencies.browser_auth import get_optional_browser_user
 from zerg.dependencies.form_post_origin import reject_cross_origin_form_post
 from zerg.dependencies.form_post_origin import require_browser_auth_header
+from zerg.routers.auth_sso import _enforce_handoff_rate_limit
 from zerg.routers.auth_sso import _hosted_refresh_cookie_max_age
 from zerg.routers.auth_sso import _refresh_native_session_payload
 from zerg.routers.auth_sso import _revoke_native_session_payload
@@ -472,6 +478,8 @@ async def logout(request: Request, response: Response, everywhere: bool = False)
     raw_rt = request.cookies.get(REFRESH_COOKIE_NAME)
     settings = get_settings()
     revocation_failed = False
+    revocation_rejected = False
+    authority_missing = False
     if raw_rt:
         try:
             if _control_plane_url(settings):
@@ -491,22 +499,55 @@ async def logout(request: Request, response: Response, everywhere: bool = False)
                     token_hash=refresh_tokens._hash_token(raw_rt),
                     now=datetime.now(timezone.utc),
                 )
+        except HTTPException as exc:
+            if everywhere and exc.status_code == status.HTTP_409_CONFLICT:
+                revocation_rejected = True
+                logger.warning("account-wide logout rejected because the session changed")
+            else:
+                revocation_failed = True
+                logger.warning("session revocation failed during logout", exc_info=True)
         except Exception:
-            # Keep both credentials so the browser can retry revocation. A
-            # transient control-plane failure must never become a false logout.
+            # Local logout is unconditional. Surface a degraded CP revoke so
+            # callers do not mistake an outage for a fully revoked session.
             revocation_failed = True
             logger.warning("session revocation failed during logout", exc_info=True)
+    elif everywhere:
+        authority_missing = True
+        logger.warning("account-wide logout requested without a refresh credential")
 
-    if revocation_failed:
-        failure = JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={"detail": {"code": "logout_revocation_unavailable"}},
-        )
-        _set_no_store(failure)
-        return failure
+    if authority_missing:
+        response.status_code = status.HTTP_401_UNAUTHORIZED
+        response.headers["x-longhouse-error-code"] = "missing_authority"
+    elif revocation_rejected:
+        response.status_code = status.HTTP_409_CONFLICT
+        response.headers["x-longhouse-error-code"] = "revocation_not_authorized"
+    elif revocation_failed:
+        logger.warning("session revocation degraded during logout")
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        response.headers["retry-after"] = "5"
 
     _clear_session_cookie(response)
     _clear_refresh_cookie(response)
+    cookie_secure = tenant_cookie_secure(settings)
+    # Keep the non-sensitive generation marker so a dashboard-originated
+    # handoff can prove it belongs after this logout. Login-state and
+    # handoff-attempt cookies are disposable and are cleared here.
+    for cookie_name in request.cookies:
+        if is_tenant_login_cookie_name(cookie_name, secure=cookie_secure) or cookie_name == tenant_handoff_attempt_cookie_name(
+            secure=cookie_secure
+        ):
+            response.delete_cookie(
+                cookie_name,
+                path="/",
+                secure=cookie_secure,
+                samesite="lax",
+            )
+    response.delete_cookie(
+        tenant_login_ready_cookie_name(secure=cookie_secure),
+        path="/",
+        secure=cookie_secure,
+        samesite="lax",
+    )
     _set_no_store(response)
 
 
@@ -530,10 +571,15 @@ async def refresh_session(request: Request, response: Response) -> RefreshOut | 
             )
         except HTTPException as exc:
             detail = exc.detail if isinstance(exc.detail, dict) else {}
-            if exc.status_code in {
-                status.HTTP_502_BAD_GATEWAY,
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-            } or detail.get("code") in {"cp_unavailable", "tenant_internal_auth_failed"}:
+            if detail.get("code") == "cp_contract_invalid":
+                # A malformed CP response is an authority/contract incident,
+                # not proof that the browser refresh family expired. Preserve
+                # cookies so the user can retry after the control plane recovers.
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail={"code": "cp_contract_invalid"},
+                ) from exc
+            if detail.get("code") in {"cp_unavailable", "tenant_internal_auth_failed"} or exc.status_code >= 500:
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail={"code": "cp_unavailable"},
@@ -789,7 +835,6 @@ def start_handoff(
     Self-host tenants (no CONTROL_PLANE_URL) get a redirect to the
     local `/login` React route instead, which renders the tenant's
     own login form.
-
     """
     settings = get_settings()
     control_plane_url = _control_plane_url(settings)
@@ -802,6 +847,12 @@ def start_handoff(
         redirect.headers["cache-control"] = "no-store"
         redirect.headers["referrer-policy"] = "no-referrer"
         return redirect
+    if not hosted_cookie_origin_is_secure(settings):
+        logger.error("hosted_auth_requires_https_public_origin")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "auth_misconfigured", "message": "Hosted authentication requires an HTTPS public origin."},
+        )
     cookie_secure = tenant_cookie_secure(settings)
     attempt_cookie_name = tenant_handoff_attempt_cookie_name(secure=cookie_secure)
     attempt_count = _handoff_attempt_count(
@@ -816,25 +867,56 @@ def start_handoff(
         redirect = RedirectResponse(f"/login?{query}", status_code=303)
         redirect.headers["cache-control"] = "no-store"
         redirect.headers["referrer-policy"] = "no-referrer"
+        redirect.delete_cookie(
+            attempt_cookie_name,
+            path="/",
+            httponly=True,
+            secure=cookie_secure,
+            samesite="lax",
+        )
         return redirect
     next_attempt = f"{attempt_count + 1}:{time.time()}"
 
-    # Derive the tenant from the request host if not explicitly given.
-    # This makes the React LoginPage simpler — it doesn't have to know
-    # its own subdomain.
-    resolved_tenant = (tenant or "").strip().lower()
-    if not resolved_tenant:
-        host = (request.url.hostname or "").lower()
-        # Strip the root domain suffix (longhouse.ai or localhost).
-        # The tenant subdomain is everything before the first dot.
-        if host.endswith(".longhouse.ai"):
-            resolved_tenant = host[: -len(".longhouse.ai")]
-        elif host.endswith(".localhost"):
-            resolved_tenant = host[: -len(".localhost")]
-        # else: leave empty; CP will reject unknown tenant.
-    tenant_state, login_cookie_name, login_cookie_secret = new_tenant_login_state(secure=cookie_secure)
-    existing_login_cookies = sorted(name for name in request.cookies if name.startswith(tenant_login_cookie_prefix(secure=cookie_secure)))
+    canonical_tenant = hosted_instance_id().strip().lower()
+    requested_tenant = (tenant or "").strip().lower()
+    if requested_tenant and requested_tenant != canonical_tenant:
+        logger.warning("hosted_auth_tenant_override_rejected")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tenant does not match this runtime",
+        )
     safe_return_to = normalize_local_return_to(return_to) or "/timeline"
+    try:
+        _enforce_handoff_rate_limit(
+            tenant=canonical_tenant,
+            surface="web",
+            attempt_id=None,
+            client_ip=get_client_ip(request),
+        )
+    except HTTPException as exc:
+        if exc.status_code != status.HTTP_429_TOO_MANY_REQUESTS:
+            raise
+        retry_after = (exc.headers or {}).get("Retry-After")
+        query = urllib.parse.urlencode({"return_to": safe_return_to, "auth_error": "rate_limited"})
+        redirect = RedirectResponse(f"/login?{query}", status_code=303)
+        redirect.headers["cache-control"] = "no-store"
+        redirect.headers["referrer-policy"] = "no-referrer"
+        if retry_after:
+            redirect.headers["retry-after"] = retry_after
+        return redirect
+    resolved_tenant = canonical_tenant
+    existing_login_cookies = sorted(name for name in request.cookies if is_tenant_login_cookie_name(name, secure=cookie_secure))
+    try:
+        tenant_state, login_cookie_name, login_cookie_secret = new_tenant_login_state(secure=cookie_secure)
+    except RuntimeError:
+        logger.error("hosted_auth_login_state_unavailable", exc_info=True)
+        query = urllib.parse.urlencode(
+            {"return_to": safe_return_to, "auth_error": "auth_misconfigured"},
+        )
+        redirect = RedirectResponse(f"/login?{query}", status_code=303)
+        redirect.headers["cache-control"] = "no-store"
+        redirect.headers["referrer-policy"] = "no-referrer"
+        return redirect
 
     cp_base = control_plane_url.rstrip("/")
     target = f"{cp_base}/auth/start"
@@ -858,7 +940,7 @@ def start_handoff(
     redirect.set_cookie(
         login_cookie_name,
         login_cookie_secret,
-        max_age=TENANT_LOGIN_ATTEMPT_MAX_AGE,
+        max_age=TENANT_LOGIN_STATE_MAX_AGE,
         path="/",
         httponly=True,
         secure=cookie_secure,
@@ -870,6 +952,16 @@ def start_handoff(
         max_age=_HANDOFF_ATTEMPT_MAX_AGE,
         path="/",
         httponly=True,
+        secure=cookie_secure,
+        samesite="lax",
+    )
+    login_attempt_marker = request.cookies.get(tenant_login_attempt_cookie_name(secure=cookie_secure)) or "1"
+    redirect.set_cookie(
+        tenant_login_attempt_cookie_name(secure=cookie_secure),
+        login_attempt_marker,
+        max_age=TENANT_LOGIN_ATTEMPT_MAX_AGE,
+        path="/",
+        httponly=False,
         secure=cookie_secure,
         samesite="lax",
     )

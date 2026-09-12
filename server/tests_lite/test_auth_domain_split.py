@@ -116,16 +116,28 @@ def test_browser_mutation_does_not_fallback_from_invalid_bearer_to_cookie():
             "server": ("tenant.longhouse.test", 443),
         }
     )
+    cookie_user = object()
+    validated_tokens: list[str] = []
 
+    def validate_ws_token(token, _db):
+        validated_tokens.append(token)
+        return cookie_user if token == "valid-cookie" else None
+
+    strategy = SimpleNamespace(validate_ws_token=validate_ws_token)
     with (
         patch.object(browser_auth.auth_deps, "AUTH_DISABLED", False),
-        patch.object(browser_auth, "_get_browser_session_user", return_value=None) as resolve,
+        patch.object(browser_auth.auth_deps, "_get_strategy", return_value=strategy),
+        patch.object(
+            browser_auth,
+            "get_settings",
+            return_value=SimpleNamespace(control_plane_url="https://control.longhouse.ai"),
+        ),
     ):
         with pytest.raises(HTTPException) as exc_info:
             browser_auth.get_current_browser_user(request, db=object())
 
     assert exc_info.value.status_code == 401
-    resolve.assert_called_once()
+    assert validated_tokens == ["invalid"]
 
 
 def test_browser_mutation_with_explicit_bearer_skips_cookie_csrf_guard():

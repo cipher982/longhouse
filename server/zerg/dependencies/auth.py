@@ -96,17 +96,19 @@ def get_current_user(request: Request, db=Depends(_auth_compat_db)):
     1. Authorization: Bearer <token> header
     2. longhouse_session cookie (browser auth)
     """
-    # Check for either bearer token or session cookie
-    has_bearer = "Authorization" in request.headers
+    # An explicit Authorization header is a terminal credential choice. Never
+    # silently authenticate with a cookie when that credential is malformed or
+    # invalid.
+    has_authorization = request.headers.get("Authorization") is not None
     has_cookie = SESSION_COOKIE_NAME in request.cookies
 
-    if not has_bearer and not has_cookie and not AUTH_DISABLED:
+    if not has_authorization and not has_cookie and not AUTH_DISABLED:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if not has_bearer and request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+    if not has_authorization and request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
         require_browser_auth_header(request)
     return _get_strategy().get_current_user(request, db)
 

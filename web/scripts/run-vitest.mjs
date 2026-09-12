@@ -40,6 +40,7 @@ if (shouldForceSingleThread) {
   vitestArgs.push("--poolOptions.threads.minWorkers=1");
   vitestArgs.push("--poolOptions.threads.maxWorkers=1");
   vitestArgs.push("--sequence.concurrent=false");
+  vitestArgs.push("--fileParallelism=false");
 }
 
 if (!hasRunFlag) {
