@@ -248,6 +248,8 @@ def attach_live_catalog_control(
     marks a vanished lease detached — inventing a run there produced a second,
     never-ending run that outlived the session and permanently unbound every
     activity and control fact from the durable latest run.
+    Observers may update the current owner, never transfer its run or connection
+    to another device. Only explicit launch/resume evidence selects a new owner.
     """
 
     now = observed_at or datetime.now(timezone.utc)
@@ -291,6 +293,10 @@ def attach_live_catalog_control(
         db.add(run)
         db.flush()
 
+    observing = run_id is None and not force_new_run
+    if observing and run.host_id not in (None, "", device_id):
+        return None
+
     contract = require_contract_for_provider(provider)
     if contract.control_plane is None:
         raise ValueError(f"Provider '{provider}' has no managed control plane")
@@ -302,6 +308,8 @@ def attach_live_catalog_control(
         )
         .first()
     )
+    if observing and connection is not None and connection.device_id not in (None, "", device_id):
+        return None
     if connection is None:
         connection = LiveSessionConnection(
             run_id=str(run.id),

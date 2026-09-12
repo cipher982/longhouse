@@ -1080,6 +1080,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut projection_build_pending = false;
     let mut projection_generation = 0_u64;
     let mut managed_observation_generation = 0_u64;
+    // Cached rebuilds cannot turn a failed observation into fresh evidence.
+    // Only a subsequent valid managed scan makes these inputs publishable.
+    let mut managed_observation_valid = false;
     // Budget-overrun reporting state: how many ticks were over since the last
     // report, the worst one seen, and when we last said anything.
     let mut projection_over_budget_ticks = 0_u64;
@@ -1355,7 +1358,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     previous_inventory_generation,
                                     snapshot.generation,
                                     last_unmanaged_session_bindings.is_some(),
-                                ) {
+                                ) && managed_observation_valid {
                                     projection_generation = projection_generation.saturating_add(1);
                                     let input = ProjectionBuildInput {
                                         generation: projection_generation,
@@ -1677,7 +1680,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 "Applying unmanaged result without replacing newer managed observations"
                             );
                         }
-                        if !stale {
+                        if !stale && managed_observation_valid {
                             match result.result {
                             Ok(bindings) => {
                                 if result.elapsed_ms > 1_000 {
@@ -1917,6 +1920,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             );
                         }
                         if !result.process_inventory_valid {
+                            managed_observation_valid = false;
                             projection_generation = projection_generation.saturating_add(1);
                             tracing::warn!(
                                 reason = result.reason,
@@ -1952,6 +1956,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             }
                             continue;
                         }
+                        managed_observation_valid = true;
                         let next_managed_observations =
                             ManagedObservationSnapshot::from_result(&result).current_only();
                         let managed_observations_changed = !next_managed_observations
@@ -2098,6 +2103,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                     }
                     Some(Err(err)) => {
+                        managed_observation_valid = false;
                         projection_generation = projection_generation.saturating_add(1);
                         tracing::warn!("Managed observation scan task failed: {}", err);
                         managed_reconciliation = heartbeat::ProjectionReconciliation::failed(
@@ -2128,7 +2134,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             projection_build_result = projection_build_tasks.join_next(), if !projection_build_tasks.is_empty() => {
                 match projection_build_result {
                     Some(Ok(result)) => {
-                        let is_current = result.generation == projection_generation
+                        let is_current = managed_observation_valid
+                            && result.generation == projection_generation
                             && result.managed_observation_generation
                                 == managed_observation_generation
                             && result.managed_scan_partial
@@ -2253,7 +2260,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     None => {}
                 }
 
-                if projection_build_pending {
+                if projection_build_pending && managed_observation_valid {
                     projection_build_pending = false;
                     let input = ProjectionBuildInput {
                         generation: projection_generation,
@@ -2291,7 +2298,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 // managed snapshot is empty, and projecting would ship a
                 // sessionless digest that the first real scan immediately
                 // replaces.
-                if last_status_projection.is_some() {
+                if last_status_projection.is_some() && managed_observation_valid {
                     let input = ProjectionBuildInput {
                         generation: projection_generation,
                         managed_observation_generation,

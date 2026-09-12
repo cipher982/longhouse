@@ -22,6 +22,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: phone-shot phone-deploy phone-logs sim-deploy sim-shot sim-logs simlab-run ios-ui-shot ios-previews
 .PHONY: validate-playwright-install
 .PHONY: test-engine-single build-health build-clean
+.PHONY: test-engine-projection-failure
 .PHONY: provider-interaction-probe
 .PHONY: test-cursor-console-product-e2e cursor-observed-install-qualification
 .PHONY: profile-ios-live-console
@@ -358,6 +359,11 @@ test-engine: ## Rust engine tests (~20s)
 	fi; \
 	rm -f "$$engine_test_log"
 	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse --test managed_teardown --test golden_parser_contract --test adversarial_parser --test coordination_mcp_handshake --test cursor_native_hooks
+	$(MAKE) test-engine-projection-failure ENGINE_BINARY="$$( $(CARGO_ARTIFACT) --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine )"
+
+test-engine-projection-failure: ## Failed-observation recovery through a real daemon (ENGINE_BINARY=path)
+	@test -n "$(ENGINE_BINARY)" || (echo "ENGINE_BINARY is required" >&2; exit 2)
+	uv run --no-project python scripts/tests/daemon-projection-failure.test.py --engine "$(ENGINE_BINARY)"
 
 test-engine-single: ## One exact Rust engine unit test (TEST=module::tests::name)
 	@test -n "$(TEST)" || (echo "TEST is required" >&2; exit 2)

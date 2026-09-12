@@ -1343,6 +1343,42 @@ def test_heartbeat_empty_resolved_sessions_does_not_detach_other_device_control(
     }
 
 
+@pytest.mark.parametrize("stale_report", ["attached", "omitted"])
+def test_heartbeat_old_device_cannot_change_current_session_control(live_catalog, live_catalog_client, stale_report):
+    session_id = uuid4()
+    _thread_id, run_id = _seed_open_run(session_id)
+    tokens = _enroll(live_catalog, DEVICE_ID, "old-device")
+    for device_id in ("old-device", DEVICE_ID):
+        response = live_catalog_client.post(
+            "/agents/heartbeat",
+            headers=tokens[device_id],
+            json={"version": "0.7.0", "daemon_pid": 42, "sessions": [_resolved_managed_session(session_id)]},
+        )
+        assert response.status_code == 204, response.text
+
+    current = _catalog_rows(LiveSessionConnection.__table__)
+    assert [(row["run_id"], row["device_id"], row["state"]) for row in current] == [(run_id, DEVICE_ID, "attached")]
+    response = live_catalog_client.post(
+        "/agents/heartbeat",
+        headers=tokens["old-device"],
+        json={
+            "version": "0.7.0",
+            "daemon_pid": 42,
+            "sessions": [_resolved_managed_session(session_id)] if stale_report == "attached" else [],
+            "machine_evidence": _managed_snapshot_evidence(complete=True),
+        },
+    )
+    assert response.status_code == 204, response.text
+    assert _catalog_rows(LiveSessionConnection.__table__) == current
+    assert {row["device_id"]: row["state"] for row in _leases()} == {
+        DEVICE_ID: "attached",
+        "old-device": "attached" if stale_report == "attached" else "missing",
+    }
+    run = _catalog_rows(LiveSessionRun.__table__)[0]
+    assert run["host_id"] == DEVICE_ID
+    assert run["ended_at"] is None
+
+
 def test_heartbeat_missing_managed_detach_can_be_disabled(live_catalog, live_catalog_client, monkeypatch):
     session_id = uuid4()
     headers = _headers(live_catalog)

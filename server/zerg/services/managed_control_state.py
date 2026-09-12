@@ -361,7 +361,7 @@ def upsert_live_control_leases(
         from zerg.services.live_catalog_launch import attach_live_catalog_control
 
         try:
-            attach_live_catalog_control(
+            connection = attach_live_catalog_control(
                 db,
                 session_id=session_id,
                 provider=provider,
@@ -370,7 +370,7 @@ def upsert_live_control_leases(
                 external_name=row.machine_id,
                 observed_at=seen_at,
             )
-            if control_state in {"online", "degraded"}:
+            if connection is not None and control_state in {"online", "degraded"}:
                 readiness = db.get(LiveLaunchReadiness, str(session_id))
                 if readiness is not None and readiness.state in {"pending", "dispatched"}:
                     update_live_launch_readiness_state(
