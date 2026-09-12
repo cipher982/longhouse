@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from collections.abc import AsyncIterator
 from concurrent.futures import ProcessPoolExecutor
@@ -11,8 +12,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from zerg.services.raw_object_workers import _WORKER_CANCEL_GRACE_SECONDS
 from zerg.services.raw_object_workers import _WORKER_CLOSE_TIMEOUT_SECONDS
+from zerg.services.raw_object_workers import _future_completed_normally
 from zerg.services.raw_object_workers import _OwnedProcessPool
 from zerg.services.raw_object_workers import storage_v2_root
 from zerg.storage_v2.render_objects import DecodedRenderObject
@@ -28,6 +29,9 @@ class RenderObjectWorkerError(RuntimeError):
 
 class RenderObjectWorkerBusy(RenderObjectWorkerError):
     pass
+
+
+logger = logging.getLogger(__name__)
 
 
 def _seal_in_worker(root: str, spec: RenderObjectSpec) -> SealedRenderObject:
@@ -99,12 +103,33 @@ class RenderObjectWorkerPool:
             loop.run_in_executor(self._user_read_pool.executor, _worker_ping),
         )
 
+    async def _retire_broken_executor(
+        self,
+        lane: str,
+        owner: _OwnedProcessPool,
+        executor: ProcessPoolExecutor,
+        slots: asyncio.Semaphore,
+        *,
+        queue_timeout_seconds: float,
+    ) -> None:
+        owner.defer_slot(executor, slots)
+        if not await owner.retire(executor):
+            raise RenderObjectWorkerBusy(f"render {lane} workers are unavailable while child cleanup is pending")
+        try:
+            async with asyncio.timeout(queue_timeout_seconds):
+                await slots.acquire()
+        except TimeoutError as exc:
+            raise RenderObjectWorkerBusy(f"render {lane} worker retry queue is full") from exc
+
     @asynccontextmanager
     async def admission(self, lane: str, *, queue_timeout_seconds: float = 0.25) -> AsyncIterator[None]:
         if self._closed:
             raise RenderObjectWorkerError("render worker pool is closed")
         if lane not in {"live", "repair"}:
             raise ValueError("render worker lane must be live or repair")
+        owner = self._pool_for_lane(lane)
+        if not await owner.recover():
+            raise RenderObjectWorkerBusy(f"render {lane} workers are unavailable while child cleanup is pending")
         slots = self._live_admission_slots if lane == "live" else self._repair_admission_slots
         try:
             async with asyncio.timeout(queue_timeout_seconds):
@@ -128,19 +153,29 @@ class RenderObjectWorkerPool:
             raise RenderObjectWorkerError("render worker pool is closed")
         if lane not in {"live", "repair"}:
             raise ValueError("render worker lane must be live or repair")
+        owner = self._pool_for_lane(lane)
+        if not await owner.recover():
+            raise RenderObjectWorkerBusy(f"render {lane} workers are unavailable while child cleanup is pending")
         slots = self._live_slots if lane == "live" else self._repair_slots
         try:
             async with asyncio.timeout(queue_timeout_seconds):
                 await slots.acquire()
         except TimeoutError as exc:
             raise RenderObjectWorkerBusy(f"render {lane} worker queue is full") from exc
-        return await self._seal_with_recovery(spec, lane=lane, timeout_seconds=operation_timeout_seconds, slots=slots)
+        return await self._seal_with_recovery(
+            spec,
+            lane=lane,
+            queue_timeout_seconds=queue_timeout_seconds,
+            timeout_seconds=operation_timeout_seconds,
+            slots=slots,
+        )
 
     async def _seal_with_recovery(
         self,
         spec: RenderObjectSpec,
         *,
         lane: str,
+        queue_timeout_seconds: float,
         timeout_seconds: float,
         slots: asyncio.Semaphore,
     ) -> SealedRenderObject:
@@ -154,23 +189,24 @@ class RenderObjectWorkerPool:
                     async with asyncio.timeout(timeout_seconds):
                         return await asyncio.shield(future)
                 except BrokenProcessPool:
-                    if attempt:
-                        await self._replace_executor(lane, executor)
-                        raise RenderObjectWorkerError(f"render {lane} worker pool crashed twice")
-                    await self._replace_executor(lane, executor)
-                except TimeoutError as exc:
                     release_slot = False
-                    self._schedule_abandoned(future, owner, executor, slots, grace_seconds=0.0)
-                    raise RenderObjectWorkerError(f"render {lane} object seal exceeded its deadline") from exc
-                except asyncio.CancelledError:
-                    release_slot = False
-                    self._schedule_abandoned(
-                        future,
+                    await self._retire_broken_executor(
+                        lane,
                         owner,
                         executor,
                         slots,
-                        grace_seconds=_WORKER_CANCEL_GRACE_SECONDS,
+                        queue_timeout_seconds=queue_timeout_seconds,
                     )
+                    release_slot = True
+                    if attempt:
+                        raise RenderObjectWorkerError(f"render {lane} worker pool crashed twice")
+                except TimeoutError as exc:
+                    release_slot = False
+                    self._schedule_abandoned(future, owner, executor, slots)
+                    raise RenderObjectWorkerError(f"render {lane} object seal exceeded its deadline") from exc
+                except asyncio.CancelledError:
+                    release_slot = False
+                    self._schedule_abandoned(future, owner, executor, slots)
                     raise
             raise AssertionError("unreachable")
         finally:
@@ -232,6 +268,8 @@ class RenderObjectWorkerPool:
         operation_timeout_seconds: float,
     ) -> DecodedRenderObject:
         owner = self._pool_for_lane(lane)
+        if not await owner.recover():
+            raise RenderObjectWorkerBusy(f"render {lane} workers are unavailable while child cleanup is pending")
         slots = self._user_read_slots if lane == "user" else self._repair_slots
         try:
             async with asyncio.timeout(queue_timeout_seconds):
@@ -253,23 +291,24 @@ class RenderObjectWorkerPool:
                     async with asyncio.timeout(operation_timeout_seconds):
                         return await asyncio.shield(future)
                 except BrokenProcessPool:
-                    if attempt:
-                        await self._replace_executor("user" if lane == "user" else "repair", executor)
-                        raise RenderObjectWorkerError(f"render {lane} reader pool crashed twice")
-                    await self._replace_executor("user" if lane == "user" else "repair", executor)
-                except TimeoutError as exc:
                     release_slot = False
-                    self._schedule_abandoned(future, owner, executor, slots, grace_seconds=0.0)
-                    raise RenderObjectWorkerError(f"render {lane} read exceeded its deadline") from exc
-                except asyncio.CancelledError:
-                    release_slot = False
-                    self._schedule_abandoned(
-                        future,
+                    await self._retire_broken_executor(
+                        "user" if lane == "user" else "repair",
                         owner,
                         executor,
                         slots,
-                        grace_seconds=_WORKER_CANCEL_GRACE_SECONDS,
+                        queue_timeout_seconds=queue_timeout_seconds,
                     )
+                    release_slot = True
+                    if attempt:
+                        raise RenderObjectWorkerError(f"render {lane} reader pool crashed twice")
+                except TimeoutError as exc:
+                    release_slot = False
+                    self._schedule_abandoned(future, owner, executor, slots)
+                    raise RenderObjectWorkerError(f"render {lane} read exceeded its deadline") from exc
+                except asyncio.CancelledError:
+                    release_slot = False
+                    self._schedule_abandoned(future, owner, executor, slots)
                     raise
             raise AssertionError("unreachable")
         finally:
@@ -282,42 +321,25 @@ class RenderObjectWorkerPool:
         owner: _OwnedProcessPool,
         executor: ProcessPoolExecutor,
         slots: asyncio.Semaphore,
-        *,
-        grace_seconds: float,
     ) -> None:
+        if _future_completed_normally(future):
+            slots.release()
+            return
+        owner.defer_slot(executor, slots)
+        future.add_done_callback(lambda completed: completed.exception() if not completed.cancelled() else None)
+
         async def drain() -> None:
-            release_slot = False
             try:
-                if not future.done():
-                    try:
-                        await asyncio.wait_for(asyncio.shield(future), timeout=grace_seconds)
-                    except TimeoutError:
-                        pass
-                    except BaseException:
-                        release_slot = True
-                if not future.done() and not release_slot:
-                    release_slot = await owner.retire(executor)
-                    if future.done():
-                        try:
-                            future.exception()
-                        except BaseException:
-                            pass
-                elif future.done():
-                    try:
-                        future.exception()
-                    except BaseException:
-                        pass
-                    release_slot = True
-            finally:
-                if release_slot:
-                    slots.release()
+                if not await owner.retire(executor):
+                    logger.warning("render abandoned worker cleanup remains unavailable")
+            except asyncio.CancelledError:
+                raise
+            except BaseException:
+                logger.exception("render abandoned worker cleanup failed")
 
         task = asyncio.create_task(drain())
         self._slot_drainers.add(task)
         task.add_done_callback(self._slot_drainers.discard)
-
-    async def _replace_executor(self, lane: str, broken: ProcessPoolExecutor) -> bool:
-        return await self._pool_for_lane(lane).retire(broken)
 
     async def close(self) -> None:
         if self._cleanup_complete:
