@@ -267,6 +267,8 @@ with tempfile.TemporaryDirectory(prefix="lh-ci-authority-") as directory:
         "qa/run-prod-e2e.sh",
         "qa/hosted-shipper-mixed-bench.sh",
         "qa/smoke-prod.sh",
+        "qa/qa-live.sh",
+        "qa/render-canary.sh",
     ):
         target = root / "scripts" / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -282,6 +284,25 @@ with tempfile.TemporaryDirectory(prefix="lh-ci-authority-") as directory:
         )
         assert ci.returncode != 93, (relative, ci.stderr)
         assert b"STALE_AUTHORITY_LOADED" not in ci.stderr, (relative, ci.stderr)
+
+    # Make runs before these scripts and must preserve the same authority.
+    (root / ".env").write_text("CONTROL_PLANE_URL=stale-checkout\n")
+    probe = root / "authority.mk"
+    probe.write_text('authority-probe:\n\t@printf "%s\\n" "$$CONTROL_PLANE_URL"\n')
+    command = [
+        "make", "--no-print-directory", "-f", str(scripts.parent / "Makefile"),
+        "-f", str(probe), "authority-probe",
+    ]
+    environment = {"PATH": os.environ["PATH"], "CONTROL_PLANE_URL": "workflow-authority"}
+    local = subprocess.run(
+        command, cwd=root, env=environment, capture_output=True, check=True, timeout=10
+    )
+    assert local.stdout.strip() == b"stale-checkout", local.stdout
+    ci = subprocess.run(
+        command, cwd=root, env={**environment, "CI": "true"},
+        capture_output=True, check=True, timeout=10,
+    )
+    assert ci.stdout.strip() == b"workflow-authority", ci.stdout
 PY
 
 echo "hosted-instance auth tests passed"

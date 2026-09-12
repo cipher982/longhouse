@@ -1,7 +1,10 @@
 # Longhouse
 
+# Local convenience only; a runner checkout must not replace CI authority.
+ifeq ($(CI),)
 -include .env
 export $(shell sed 's/=.*//' .env 2>/dev/null || true)
+endif
 
 CARGO_ENGINE := python3 scripts/build/cargo.py exec --
 CARGO_ARTIFACT := python3 scripts/build/cargo.py artifact
