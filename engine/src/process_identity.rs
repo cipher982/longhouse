@@ -121,7 +121,84 @@ pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
     Some(facts)
 }
 
-fn output_with_timeout(mut command: Command, timeout: Duration) -> Option<Output> {
+#[cfg(unix)]
+pub(crate) fn output_with_timeout(mut command: Command, timeout: Duration) -> Option<Output> {
+    use std::io::ErrorKind;
+    use std::os::fd::OwnedFd;
+    use std::os::unix::net::UnixStream;
+    use std::os::unix::process::CommandExt;
+
+    let (stdout, stdout_writer) = UnixStream::pair().ok()?;
+    let (stderr, stderr_writer) = UnixStream::pair().ok()?;
+    stdout.set_nonblocking(true).ok()?;
+    stderr.set_nonblocking(true).ok()?;
+    let mut child = command
+        .process_group(0)
+        .stdout(Stdio::from(OwnedFd::from(stdout_writer)))
+        .stderr(Stdio::from(OwnedFd::from(stderr_writer)))
+        .spawn()
+        .ok()?;
+    drop(command);
+
+    let result = (|| -> std::io::Result<Output> {
+        let deadline = Instant::now() + timeout;
+        let mut streams = [stdout, stderr];
+        let mut captured = [Vec::new(), Vec::new()];
+        let mut ended = [false; 2];
+        let mut buffer = [0_u8; 8192];
+        loop {
+            for index in 0..2 {
+                while !ended[index] {
+                    if Instant::now() >= deadline {
+                        return Err(ErrorKind::TimedOut.into());
+                    }
+                    match streams[index].read(&mut buffer) {
+                        Ok(0) => ended[index] = true,
+                        Ok(count) => {
+                            if captured[index].len() + count > 16 * 1024 * 1024 {
+                                return Err(ErrorKind::InvalidData.into());
+                            }
+                            captured[index].extend_from_slice(&buffer[..count]);
+                        }
+                        Err(error) if error.kind() == ErrorKind::WouldBlock => break,
+                        Err(error) if error.kind() == ErrorKind::Interrupted => continue,
+                        Err(error) => return Err(error),
+                    }
+                }
+            }
+            // Keep the leader unreaped while a descendant may hold either stream.
+            // Its owned process group can then be terminated safely at the deadline.
+            if ended == [true, true] {
+                if let Some(status) = child.try_wait()? {
+                    let [stdout, stderr] = captured;
+                    return Ok(Output {
+                        status,
+                        stdout,
+                        stderr,
+                    });
+                }
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(ErrorKind::TimedOut.into());
+            }
+            thread::sleep(remaining.min(Duration::from_millis(5)));
+        }
+    })();
+    if result.is_err() {
+        if let Ok(pgid) = i32::try_from(child.id()) {
+            unsafe {
+                libc::killpg(pgid, libc::SIGKILL);
+            }
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    result.ok()
+}
+
+#[cfg(not(unix))]
+pub(crate) fn output_with_timeout(mut command: Command, timeout: Duration) -> Option<Output> {
     // Lead a process group so the timeout can reach the whole tree. Without
     // this the helper is only bounded on platforms where the shell execs its
     // single command; see the kill path below.
@@ -411,10 +488,12 @@ mod tests {
     #[test]
     fn bounded_command_output_returns_successful_output() {
         let mut command = Command::new("sh");
-        command.args(["-c", "printf ready"]);
+        command.args(["-c", "printf ready; printf diagnostic >&2"]);
         let output = output_with_timeout(command, Duration::from_secs(1)).unwrap();
         assert!(output.status.success());
         assert_eq!(output.stdout, b"ready");
+        #[cfg(unix)]
+        assert_eq!(output.stderr, b"diagnostic");
     }
 
     #[test]
@@ -433,6 +512,16 @@ mod tests {
             "returned after {:?}, which is not bounded termination",
             started.elapsed()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_command_output_bounds_streams_after_leader_exit() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 1 & exit 0"]);
+        let started = Instant::now();
+        assert!(output_with_timeout(command, Duration::from_millis(100)).is_none());
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]
