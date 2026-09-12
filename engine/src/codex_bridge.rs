@@ -979,44 +979,8 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
 
     let run_id = config.run_id.unwrap_or_else(|| Uuid::new_v4().to_string());
     Uuid::parse_str(&run_id).context("invalid --run-id")?;
-    let mut state = BridgeStateFile {
-        schema_version: BRIDGE_STATE_SCHEMA_VERSION,
-        session_id: config.session_id.clone(),
-        run_id: Some(run_id),
-        connection_id: Some(Uuid::new_v4().to_string()),
-        lease_generation: Some(Uuid::new_v4().to_string()),
-        cwd: config.cwd.display().to_string(),
-        codex_bin: config.codex_bin.clone(),
-        launch_mode: Some(config.launch_mode.persisted_state_value().to_string()),
-        ws_url: None,
-        thread_id: resume_thread_id.clone(),
-        thread_path: resume_thread_path.clone(),
-        pid: 0,
-        bridge_process_start_time: None,
-        app_server_pid: None,
-        app_server_process_start_time: None,
-        app_server_pgid: None,
-        app_server_ws_url: None,
-        status: "starting".to_string(),
-        log_file: paths.log_file.display().to_string(),
-        active_turn_id: None,
-        last_turn_status: None,
-        last_error: None,
-        thread_subscription_status: Some(
-            if resume_thread_id.is_some() {
-                ThreadSubscriptionStatus::WaitingForTurn
-            } else {
-                ThreadSubscriptionStatus::WaitingForThread
-            }
-            .as_str()
-            .to_string(),
-        ),
-        thread_subscription_attempts: 0,
-        thread_subscription_last_error: None,
-        updated_at: Utc::now().to_rfc3339(),
-        ..Default::default()
-    };
-    write_state_file(&paths.state_file, &state)?;
+    let connection_id = Uuid::new_v4().to_string();
+    let lease_generation = Uuid::new_v4().to_string();
 
     let current_exe =
         std::env::current_exe().context("resolving current executable for codex-bridge start")?;
@@ -1051,21 +1015,11 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         .env(CODEX_BRIDGE_TOKEN_ENV, &config.api_token);
     child
         .arg("--run-id")
-        .arg(state.run_id.as_deref().expect("new bridge run id"))
+        .arg(&run_id)
         .arg("--connection-id")
-        .arg(
-            state
-                .connection_id
-                .as_deref()
-                .expect("new bridge connection id"),
-        )
+        .arg(&connection_id)
         .arg("--lease-generation")
-        .arg(
-            state
-                .lease_generation
-                .as_deref()
-                .expect("new bridge lease generation"),
-        );
+        .arg(&lease_generation);
     if let Some(longhouse_home) = config.longhouse_home.as_deref() {
         child.arg("--longhouse-home").arg(longhouse_home);
     }
@@ -1133,9 +1087,6 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
             current_exe.display()
         )
     })?;
-    state.pid = daemon.id();
-    state.updated_at = Utc::now().to_rfc3339();
-    write_state_file(&paths.state_file, &state)?;
 
     let deadline = Instant::now() + Duration::from_secs(config.start_timeout_secs.max(1));
     loop {
@@ -1152,6 +1103,13 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
             Ok(state) => state,
             Err(_) => continue,
         };
+        if state.pid != daemon.id()
+            || state.run_id.as_deref() != Some(run_id.as_str())
+            || state.connection_id.as_deref() != Some(connection_id.as_str())
+            || state.lease_generation.as_deref() != Some(lease_generation.as_str())
+        {
+            continue;
+        }
         if state.status == "ready" {
             let ws_url = state
                 .ws_url
@@ -1192,7 +1150,6 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     // are recycled; without this a later check could mistake an unrelated
     // process for a live owner and keep debris running forever.
     let owner_process_start_time = crate::turn_claims::process_start_time_for_pid(config.owner_pid);
-    crate::codex_attachments::cleanup_session_tmpdir(&config.session_id);
     let resume_thread_id = normalize_optional_string(config.resume_thread_id.clone());
     let resume_thread_path = normalize_optional_string(config.resume_thread_path.clone());
     validate_thread_start_contract(
@@ -1243,7 +1200,6 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         updated_at: Utc::now().to_rfc3339(),
         ..Default::default()
     };
-    write_state_file(&config.state_file, &initial_state)?;
 
     // Acquire an exclusive advisory lock on a sidecar file for the process
     // lifetime. The kernel releases the flock when this process exits (normal,
@@ -1251,7 +1207,12 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     // liveness test immune to PID reuse. A sidecar is used instead of the
     // state file itself because state writes go through atomic rename, which
     // would replace the inode and break the lock.
+    if let Some(parent) = config.state_file.parent() {
+        fs::create_dir_all(parent)?;
+    }
     acquire_bridge_lock(&bridge_lock_path(&config.state_file))?;
+    crate::codex_attachments::cleanup_session_tmpdir(&config.session_id);
+    write_state_file(&config.state_file, &initial_state)?;
 
     let mut client = spawn_app_server_client(&config).await?;
     let app_server_process_start_time = match client.child_pid {
@@ -2866,25 +2827,26 @@ fn write_state_file_inner(path: &Path, state: &BridgeStateFile, durable: bool) -
     }
     let mut next = state.clone();
     next.updated_at = Utc::now().to_rfc3339();
-    let tmp = path.with_extension("json.tmp");
+    // Terminal reconciliation may publish beside the exiting bridge. Each
+    // writer must own its temporary inode, not truncate or rename another's.
+    let tmp = path.with_extension(format!("json.{}.tmp", Uuid::new_v4()));
+    use std::io::Write as _;
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
     {
-        use std::io::Write as _;
-        // The state file carries `ws_auth_token`, the only credential guarding
-        // the app-server relay, so it is owner-readable only.
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options
-            .open(&tmp)
-            .with_context(|| format!("creating {}", tmp.display()))?;
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&tmp)
+        .with_context(|| format!("creating {}", tmp.display()))?;
+    let publication = (|| -> Result<()> {
+        // The relay credential must remain owner-readable only.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))
+            file.set_permissions(fs::Permissions::from_mode(0o600))
                 .with_context(|| format!("restricting {}", tmp.display()))?;
         }
         file.write_all(&serde_json::to_vec_pretty(&next)?)
@@ -2893,12 +2855,16 @@ fn write_state_file_inner(path: &Path, state: &BridgeStateFile, durable: bool) -
             file.sync_all()
                 .with_context(|| format!("syncing {}", tmp.display()))?;
         }
+        drop(file);
+        fs::rename(&tmp, path)
+            .with_context(|| format!("renaming {} -> {}", tmp.display(), path.display()))
+    })();
+    if publication.is_err() {
+        let _ = fs::remove_file(&tmp);
     }
-    fs::rename(&tmp, path)
-        .with_context(|| format!("renaming {} -> {}", tmp.display(), path.display()))?;
+    publication?;
     if durable {
-        // Also flush the directory entry, so the rename itself survives power
-        // loss rather than only the file contents.
+        // Also flush the directory entry so the rename survives power loss.
         if let Some(parent) = path.parent() {
             if let Ok(dir) = fs::File::open(parent) {
                 let _ = dir.sync_all();
@@ -6727,46 +6693,49 @@ mod tests {
     }
 
     #[test]
-    fn bridge_state_file_writes_schema_version() {
+    fn bridge_state_publication_keeps_complete_private_snapshots() {
         let temp = tempfile::tempdir().unwrap();
         let state_file = temp.path().join("state.json");
-        let state = BridgeStateFile {
-            schema_version: BRIDGE_STATE_SCHEMA_VERSION,
-            session_id: "session-123".to_string(),
-            run_id: Some("run-1".to_string()),
-            connection_id: Some("connection-1".to_string()),
-            lease_generation: Some("lease-1".to_string()),
-            cwd: temp.path().display().to_string(),
-            codex_bin: "codex".to_string(),
-            launch_mode: Some(LAUNCH_MODE_DETACHED_UI.to_string()),
-            ws_url: None,
-            thread_id: None,
-            thread_path: None,
-            pid: 42,
-            bridge_process_start_time: None,
-            app_server_pid: None,
-            app_server_process_start_time: None,
-            app_server_pgid: None,
-            app_server_ws_url: None,
-            status: "starting".to_string(),
-            log_file: temp.path().join("bridge.log").display().to_string(),
-            active_turn_id: None,
-            last_turn_status: None,
-            last_error: None,
-            thread_subscription_status: None,
-            thread_subscription_attempts: 0,
-            thread_subscription_last_error: None,
-            updated_at: Utc::now().to_rfc3339(),
-            ..Default::default()
-        };
+        let barrier = std::sync::Barrier::new(4);
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                let state_file = &state_file;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    let session_id = Uuid::new_v4().to_string();
+                    let state = BridgeStateFile {
+                        cwd: session_id.repeat(1024),
+                        session_id,
+                        ..Default::default()
+                    };
+                    barrier.wait();
+                    for _ in 0..100 {
+                        write_state_file(state_file, &state).unwrap();
+                        let observed = read_state_file(state_file).unwrap();
+                        assert_eq!(observed.cwd, observed.session_id.repeat(1024));
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            assert_eq!(
+                                fs::metadata(state_file).unwrap().permissions().mode() & 0o777,
+                                0o600
+                            );
+                        }
+                    }
+                });
+            }
+        });
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+    }
 
-        write_state_file(&state_file, &state).unwrap();
-        let raw: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
-
-        assert_eq!(raw["schema_version"], BRIDGE_STATE_SCHEMA_VERSION);
-        assert_eq!(raw["launch_mode"], LAUNCH_MODE_DETACHED_UI);
-        assert_eq!(raw["connection_id"], "connection-1");
-        assert_eq!(raw["lease_generation"], "lease-1");
+    #[test]
+    fn failed_bridge_state_publication_preserves_destination() {
+        let temp = tempfile::tempdir().unwrap();
+        let state_file = temp.path().join("state.json");
+        fs::create_dir(&state_file).unwrap();
+        assert!(write_state_file(&state_file, &BridgeStateFile::default()).is_err());
+        assert!(state_file.is_dir());
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
     }
 
     #[cfg(unix)]
