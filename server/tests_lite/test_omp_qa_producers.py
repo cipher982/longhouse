@@ -691,6 +691,7 @@ def test_omp_helm_marker_prompts_preserve_setup_instructions() -> None:
     assert marker in context
     assert "active marker" in context
 
+
 def test_omp_helm_controls_use_runtime_agents_api(monkeypatch, tmp_path) -> None:
     from zerg.qa.omp_helm_lifecycle import _run_engine
 
