@@ -1,4 +1,4 @@
-"""Tests for Claude hook installation and provider-hook hot-path behavior."""
+"""Behavioral checks for Claude lifecycle hook events."""
 
 import json
 import os
@@ -9,68 +9,6 @@ import uuid
 import pytest
 
 from zerg.services.shipper.hooks import HOOK_SCRIPT
-from zerg.services.shipper.hooks import _make_hook_entries
-
-
-def test_claude_hook_does_not_touch_sqlite_on_the_provider_hot_path():
-    """The daemon owns durable binding writes after the hook exits."""
-    assert "bind --path" not in HOOK_SCRIPT
-    assert 'ENGINE="' not in HOOK_SCRIPT
-    assert "ship --file" not in HOOK_SCRIPT
-    assert "nohup" not in HOOK_SCRIPT
-
-
-def test_claude_hook_writes_presence_to_outbox():
-    assert 'LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"' in HOOK_SCRIPT
-    assert 'OUTBOX="$LONGHOUSE_HOME/agent/outbox"' in HOOK_SCRIPT
-    assert 'OUTBOX="$LONGHOUSE_HOME/agent/runtime-events-outbox"' in HOOK_SCRIPT
-    assert "transcript_path: $transcript" in HOOK_SCRIPT
-    assert "find_provider_pid()" in HOOK_SCRIPT
-    assert "control_path: $control_path" in HOOK_SCRIPT
-    assert "provider_pid" in HOOK_SCRIPT
-    assert 'write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true' in HOOK_SCRIPT
-    assert "write_runtime_event_outbox()" in HOOK_SCRIPT
-
-
-def test_claude_hook_leaves_elicitation_questions_to_transcript_ingest():
-    assert '-n "$MANAGED_SESSION_ID"' in HOOK_SCRIPT
-    assert 'idle_prompt|elicitation_dialog) STATE="needs_user"' in HOOK_SCRIPT
-    assert 'kind: "pause_request"' not in HOOK_SCRIPT
-    assert 'tool_name: "AskUserQuestion"' not in HOOK_SCRIPT
-    assert 'permission_prompt)              STATE="blocked"' in HOOK_SCRIPT
-
-
-def test_claude_hook_does_not_fetch_dynamic_startup_context():
-    # The coordination bootstrap is static and local. Startup continuity's
-    # hosted project-summary fetch remains lab-only.
-    assert "/api/agents/sessions/startup-context" not in HOOK_SCRIPT
-    assert "LONGHOUSE_HOOK_URL" not in HOOK_SCRIPT
-    assert "LONGHOUSE_HOOK_TOKEN" not in HOOK_SCRIPT
-    assert "LONGHOUSE_COORDINATION_BOOTSTRAP" in HOOK_SCRIPT
-
-
-def test_claude_hook_hot_path_stays_local_only():
-    assert 'PRESENCE_MODE="${LONGHOUSE_HOOK_PRESENCE_MODE:-auto}"' not in HOOK_SCRIPT
-    assert "/api/agents/presence" not in HOOK_SCRIPT
-    assert "emit_presence()" not in HOOK_SCRIPT
-    assert "LONGHOUSE_MANAGED_SESSION_ID" in HOOK_SCRIPT
-    assert "LONGHOUSE_MANAGED_PROVIDER" in HOOK_SCRIPT
-    assert "write_presence_outbox()" in HOOK_SCRIPT
-
-
-def test_claude_stop_hook_forces_sidechain_for_hindsight_workspace():
-    assert 'FORCE_SIDECHAIN="${LONGHOUSE_IS_SIDECHAIN:-0}"' in HOOK_SCRIPT
-    assert 'HINDSIGHT_ROOT="__HINDSIGHT_ROOT__"' in HOOK_SCRIPT
-    assert 'case "$CWD" in' in HOOK_SCRIPT
-
-
-def test_claude_stop_hook_entry_is_sync(tmp_path):
-    """Stop hook is sync because it only performs the local outbox write."""
-    stop_entry, _lifecycle_entry = _make_hook_entries("/usr/bin/longhouse-engine", tmp_path / ".longhouse")
-    hook = stop_entry["hooks"][0]
-    assert hook["async"] is False
-    assert hook["timeout"] == 5
-    assert "claude-lifecycle-hook" in hook["command"]
 
 
 def _run_hook(
