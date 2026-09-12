@@ -126,7 +126,10 @@ def seal_render_object(root: Path, spec: RenderObjectSpec) -> SealedRenderObject
     final_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
 
     if final_path.exists():
-        existing = final_path.read_bytes()
+        with final_path.open("rb") as handle:
+            existing = handle.read(MAX_RENDER_COMPRESSED_BYTES + 1)
+        if len(existing) > MAX_RENDER_COMPRESSED_BYTES:
+            raise RenderObjectCorruptError(f"existing content-addressed render object exceeds 8 MiB: {relative_path}")
         if existing != compressed or hashlib.sha256(existing).hexdigest() != object_hash:
             raise RenderObjectCorruptError(f"existing content-addressed render object is corrupt: {relative_path}")
         reused = True
@@ -199,7 +202,8 @@ def read_render_object(root: Path, object_path: str, *, expected_object_hash: st
     if expected_object_hash not in relative_path.name:
         raise RenderObjectValidationError("render object path is not content-addressed")
     try:
-        compressed = path.read_bytes()
+        with path.open("rb") as handle:
+            compressed = handle.read(MAX_RENDER_COMPRESSED_BYTES + 1)
     except OSError as exc:
         raise RenderObjectCorruptError(f"render object is unreadable: {relative_path}") from exc
     if len(compressed) > MAX_RENDER_COMPRESSED_BYTES or hashlib.sha256(compressed).hexdigest() != expected_object_hash:

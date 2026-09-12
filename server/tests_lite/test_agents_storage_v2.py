@@ -340,6 +340,32 @@ def test_storage_v2_session_facts_accept_provider_conversation_identity():
     assert parsed["session_facts"]["provider_session_id"] == "provider-thread-new"
 
 
+def test_storage_v2_receipt_identity_mismatch_is_indeterminate():
+    receipt = {
+        "v": 2,
+        "envelope_id": "a" * 64,
+        "object_hash": "b" * 64,
+        "commit_seq": "1",
+        "raw_state": "durable",
+        "render_state": "ready",
+        "media_state": "complete",
+        "missing_media_hashes": [],
+    }
+
+    assert (
+        storage_router._validated_receipt(
+            receipt,
+            expected_envelope_id=receipt["envelope_id"],
+            expected_object_hash=receipt["object_hash"],
+        )
+        == receipt
+    )
+    with pytest.raises(storage_router.CatalogUnavailable, match="envelope identity"):
+        storage_router._validated_receipt(receipt, expected_envelope_id="c" * 64)
+    with pytest.raises(storage_router.CatalogUnavailable, match="object identity"):
+        storage_router._validated_receipt(receipt, expected_object_hash="d" * 64)
+
+
 @pytest.mark.asyncio
 async def test_storage_v2_render_reader_saturation_is_not_reported_as_corruption(monkeypatch):
     session_id = uuid4()
@@ -1432,7 +1458,7 @@ async def test_storage_v2_releases_live_admission_before_catalog_wait(monkeypatc
     monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: Catalog())
     monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: workers)
     monkeypatch.setattr(storage_router, "get_render_object_worker_pool", _ForbiddenRenderAdmission)
-    monkeypatch.setattr(storage_router, "_validated_receipt", lambda value: value)
+    monkeypatch.setattr(storage_router, "_validated_receipt", lambda value, **_kwargs: value)
     app = FastAPI()
     app.include_router(storage_router.router)
     app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="cinder", owner_id=1)

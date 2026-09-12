@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 from dataclasses import replace
 from datetime import UTC
 from datetime import datetime
@@ -15,6 +16,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
 from zerg.routers.agents_storage_v2 import _parse_render_spec
+from zerg.services.render_object_workers import RenderObjectWorkerError
 from zerg.services.render_object_workers import RenderObjectWorkerPool
 from zerg.services.storage_v2_semantics import SemanticRecoveryStats
 from zerg.services.storage_v2_semantics import StorageV2SemanticRecoveryError
@@ -27,7 +29,9 @@ from zerg.storage_v2.raw_objects import RawRecord
 from zerg.storage_v2.raw_objects import read_raw_object
 from zerg.storage_v2.raw_objects import seal_raw_object
 from zerg.storage_v2.render_objects import MAX_ORDER_TIME_US
+from zerg.storage_v2.render_objects import MAX_RENDER_COMPRESSED_BYTES
 from zerg.storage_v2.render_objects import MIN_ORDER_TIME_US
+from zerg.storage_v2.render_objects import RenderObjectCorruptError
 from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import RenderObjectValidationError
 from zerg.storage_v2.render_objects import RenderRecord
@@ -84,6 +88,22 @@ def test_render_object_is_deterministic_verified_and_summarized(tmp_path):
     assert sealed.first_user_message_preview == "Build it"
     decoded = read_render_object(tmp_path, sealed.object_path, expected_object_hash=sealed.object_hash)
     assert decoded.spec == spec
+
+
+def test_render_object_bounds_existing_corrupt_reads_before_allocation(tmp_path, monkeypatch):
+    sealed = seal_render_object(tmp_path, _spec())
+    path = tmp_path / sealed.object_path
+    path.write_bytes(b"x" * (MAX_RENDER_COMPRESSED_BYTES + 1))
+    monkeypatch.setattr(
+        type(path),
+        "read_bytes",
+        lambda *_args, **_kwargs: pytest.fail("render object read must be bounded"),
+    )
+
+    with pytest.raises(RenderObjectCorruptError, match="exceeds 8 MiB|compressed hash mismatch"):
+        read_render_object(tmp_path, sealed.object_path, expected_object_hash=sealed.object_hash)
+    with pytest.raises(RenderObjectCorruptError, match="exceeds 8 MiB"):
+        seal_render_object(tmp_path, _spec())
 
 
 def test_render_summary_counts_only_committed_prose_and_preserves_partial_records(tmp_path):
@@ -1240,6 +1260,30 @@ async def test_identical_user_reads_share_one_inflight_decode(tmp_path, monkeypa
         release.set()
         await asyncio.gather(*reads, return_exceptions=True)
         await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_stopped_render_repair_worker_does_not_block_live_ingest(tmp_path):
+    pool = RenderObjectWorkerPool(tmp_path, live_workers=1, repair_workers=1, user_read_workers=1, queue_multiplier=1)
+    stopped = None
+    try:
+        await pool.start()
+        stopped = next(iter(pool._repair_pool.executor._processes.values()))
+        os.kill(stopped.pid, signal.SIGSTOP)
+        with pytest.raises(RenderObjectWorkerError, match="deadline"):
+            await pool.seal(_spec(), lane="repair", operation_timeout_seconds=0.05)
+        live = await pool.seal(_spec(), lane="live")
+        assert (await pool.read(live.object_path, live.object_hash, lane="user")).spec == _spec()
+        await asyncio.to_thread(stopped.join, 3.0)
+        assert not stopped.is_alive()
+        assert (await pool.seal(_spec(), lane="repair")).object_hash == live.object_hash
+    finally:
+        try:
+            await asyncio.wait_for(pool.close(), timeout=5.0)
+        finally:
+            if stopped is not None and stopped.is_alive():
+                stopped.kill()
+                stopped.join(3.0)
 
 
 @pytest.mark.parametrize("order_time_us", [MIN_ORDER_TIME_US - 1, MAX_ORDER_TIME_US + 1])

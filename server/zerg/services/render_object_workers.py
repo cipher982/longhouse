@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import multiprocessing
 import os
 from collections.abc import AsyncIterator
 from concurrent.futures import ProcessPoolExecutor
@@ -12,6 +11,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+from zerg.services.raw_object_workers import _WORKER_CANCEL_GRACE_SECONDS
+from zerg.services.raw_object_workers import _WORKER_CLOSE_TIMEOUT_SECONDS
+from zerg.services.raw_object_workers import _OwnedProcessPool
 from zerg.services.raw_object_workers import storage_v2_root
 from zerg.storage_v2.render_objects import DecodedRenderObject
 from zerg.storage_v2.render_objects import RenderObjectSpec
@@ -70,26 +72,31 @@ class RenderObjectWorkerPool:
         self._user_read_slots = asyncio.Semaphore(user_read_workers * queue_multiplier)
         self._live_admission_slots = asyncio.Semaphore(live_workers * queue_multiplier)
         self._repair_admission_slots = asyncio.Semaphore(repair_workers * queue_multiplier)
-        self._live_executor = self._new_executor(live_workers)
-        self._repair_executor = self._new_executor(repair_workers)
-        self._user_read_executor = self._new_executor(user_read_workers)
-        self._replace_lock = asyncio.Lock()
+        self._live_pool = _OwnedProcessPool(live_workers)
+        self._repair_pool = _OwnedProcessPool(repair_workers)
+        self._user_read_pool = _OwnedProcessPool(user_read_workers)
         self._slot_drainers: set[asyncio.Task[None]] = set()
-        self._user_reads: dict[tuple[str, str, float, float], asyncio.Task[DecodedRenderObject]] = {}
+        self._user_reads: dict[tuple[str, str, str, float, float], asyncio.Task[DecodedRenderObject]] = {}
         self._closed = False
+        self._cleanup_complete = False
 
-    @staticmethod
-    def _new_executor(workers: int) -> ProcessPoolExecutor:
-        return ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context("spawn"))
+    def _pool_for_lane(self, lane: str) -> _OwnedProcessPool:
+        if lane == "live":
+            return self._live_pool
+        if lane in {"repair", "background"}:
+            return self._repair_pool
+        if lane == "user":
+            return self._user_read_pool
+        raise ValueError("render worker lane must be user, background, live, or repair")
 
     async def start(self) -> None:
         if self._closed:
             raise RenderObjectWorkerError("render worker pool is closed")
         loop = asyncio.get_running_loop()
         await asyncio.gather(
-            loop.run_in_executor(self._live_executor, _worker_ping),
-            loop.run_in_executor(self._repair_executor, _worker_ping),
-            loop.run_in_executor(self._user_read_executor, _worker_ping),
+            loop.run_in_executor(self._live_pool.executor, _worker_ping),
+            loop.run_in_executor(self._repair_pool.executor, _worker_ping),
+            loop.run_in_executor(self._user_read_pool.executor, _worker_ping),
         )
 
     @asynccontextmanager
@@ -140,22 +147,30 @@ class RenderObjectWorkerPool:
         release_slot = True
         try:
             for attempt in range(2):
-                executor = self._live_executor if lane == "live" else self._repair_executor
+                owner = self._pool_for_lane(lane)
+                executor = owner.executor
                 try:
                     future = asyncio.get_running_loop().run_in_executor(executor, _seal_in_worker, str(self.root), spec)
                     async with asyncio.timeout(timeout_seconds):
                         return await asyncio.shield(future)
                 except BrokenProcessPool:
                     if attempt:
+                        await self._replace_executor(lane, executor)
                         raise RenderObjectWorkerError(f"render {lane} worker pool crashed twice")
                     await self._replace_executor(lane, executor)
                 except TimeoutError as exc:
                     release_slot = False
-                    self._drain_slot_when_done(future, slots)
+                    self._schedule_abandoned(future, owner, executor, slots, grace_seconds=0.0)
                     raise RenderObjectWorkerError(f"render {lane} object seal exceeded its deadline") from exc
                 except asyncio.CancelledError:
                     release_slot = False
-                    self._drain_slot_when_done(future, slots)
+                    self._schedule_abandoned(
+                        future,
+                        owner,
+                        executor,
+                        slots,
+                        grace_seconds=_WORKER_CANCEL_GRACE_SECONDS,
+                    )
                     raise
             raise AssertionError("unreachable")
         finally:
@@ -176,7 +191,7 @@ class RenderObjectWorkerPool:
         if lane not in {"user", "background"}:
             raise ValueError("render read lane must be user or background")
         if lane == "user":
-            key = (object_path, expected_object_hash, queue_timeout_seconds, operation_timeout_seconds)
+            key = (lane, object_path, expected_object_hash, queue_timeout_seconds, operation_timeout_seconds)
             task = self._user_reads.get(key)
             if task is None:
                 task = asyncio.create_task(
@@ -216,6 +231,7 @@ class RenderObjectWorkerPool:
         queue_timeout_seconds: float,
         operation_timeout_seconds: float,
     ) -> DecodedRenderObject:
+        owner = self._pool_for_lane(lane)
         slots = self._user_read_slots if lane == "user" else self._repair_slots
         try:
             async with asyncio.timeout(queue_timeout_seconds):
@@ -225,7 +241,7 @@ class RenderObjectWorkerPool:
         release_slot = True
         try:
             for attempt in range(2):
-                executor = self._user_read_executor if lane == "user" else self._repair_executor
+                executor = owner.executor
                 try:
                     future = asyncio.get_running_loop().run_in_executor(
                         executor,
@@ -238,66 +254,95 @@ class RenderObjectWorkerPool:
                         return await asyncio.shield(future)
                 except BrokenProcessPool:
                     if attempt:
+                        await self._replace_executor("user" if lane == "user" else "repair", executor)
                         raise RenderObjectWorkerError(f"render {lane} reader pool crashed twice")
                     await self._replace_executor("user" if lane == "user" else "repair", executor)
                 except TimeoutError as exc:
                     release_slot = False
-                    self._drain_slot_when_done(future, slots)
+                    self._schedule_abandoned(future, owner, executor, slots, grace_seconds=0.0)
                     raise RenderObjectWorkerError(f"render {lane} read exceeded its deadline") from exc
                 except asyncio.CancelledError:
                     release_slot = False
-                    self._drain_slot_when_done(future, slots)
+                    self._schedule_abandoned(
+                        future,
+                        owner,
+                        executor,
+                        slots,
+                        grace_seconds=_WORKER_CANCEL_GRACE_SECONDS,
+                    )
                     raise
             raise AssertionError("unreachable")
         finally:
             if release_slot:
                 slots.release()
 
-    def _drain_slot_when_done(self, future: asyncio.Future[Any], slots: asyncio.Semaphore) -> None:
+    def _schedule_abandoned(
+        self,
+        future: asyncio.Future[Any],
+        owner: _OwnedProcessPool,
+        executor: ProcessPoolExecutor,
+        slots: asyncio.Semaphore,
+        *,
+        grace_seconds: float,
+    ) -> None:
         async def drain() -> None:
+            release_slot = False
             try:
-                await asyncio.shield(future)
-            except BaseException:
-                pass
+                if not future.done():
+                    try:
+                        await asyncio.wait_for(asyncio.shield(future), timeout=grace_seconds)
+                    except TimeoutError:
+                        pass
+                    except BaseException:
+                        release_slot = True
+                if not future.done() and not release_slot:
+                    release_slot = await owner.retire(executor)
+                    if future.done():
+                        try:
+                            future.exception()
+                        except BaseException:
+                            pass
+                elif future.done():
+                    try:
+                        future.exception()
+                    except BaseException:
+                        pass
+                    release_slot = True
             finally:
-                slots.release()
+                if release_slot:
+                    slots.release()
 
         task = asyncio.create_task(drain())
         self._slot_drainers.add(task)
         task.add_done_callback(self._slot_drainers.discard)
 
-    async def _replace_executor(self, lane: str, broken: ProcessPoolExecutor) -> None:
-        async with self._replace_lock:
-            if lane == "user":
-                if self._user_read_executor is not broken:
-                    return
-                old = self._user_read_executor
-                self._user_read_executor = self._new_executor(self.user_read_workers)
-            elif lane == "live":
-                if self._live_executor is not broken:
-                    return
-                old = self._live_executor
-                self._live_executor = self._new_executor(self.live_workers)
-            else:
-                if self._repair_executor is not broken:
-                    return
-                old = self._repair_executor
-                self._repair_executor = self._new_executor(self.repair_workers)
-            old.shutdown(wait=False, cancel_futures=True)
+    async def _replace_executor(self, lane: str, broken: ProcessPoolExecutor) -> bool:
+        return await self._pool_for_lane(lane).retire(broken)
 
     async def close(self) -> None:
-        if self._closed:
+        if self._cleanup_complete:
             return
         self._closed = True
+        for task in tuple(self._user_reads.values()):
+            task.cancel()
         if self._user_reads:
-            await asyncio.gather(*tuple(self._user_reads.values()), return_exceptions=True)
-        await asyncio.gather(
-            asyncio.to_thread(self._live_executor.shutdown, wait=True, cancel_futures=True),
-            asyncio.to_thread(self._repair_executor.shutdown, wait=True, cancel_futures=True),
-            asyncio.to_thread(self._user_read_executor.shutdown, wait=True, cancel_futures=True),
-        )
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*tuple(self._user_reads.values()), return_exceptions=True),
+                    timeout=_WORKER_CLOSE_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                pass
+        for task in tuple(self._slot_drainers):
+            task.cancel()
         if self._slot_drainers:
             await asyncio.gather(*tuple(self._slot_drainers), return_exceptions=True)
+        await asyncio.gather(
+            self._live_pool.close(),
+            self._repair_pool.close(),
+            self._user_read_pool.close(),
+        )
+        self._cleanup_complete = True
 
 
 _pool: RenderObjectWorkerPool | None = None
