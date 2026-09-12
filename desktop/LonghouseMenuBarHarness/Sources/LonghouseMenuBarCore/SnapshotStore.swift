@@ -348,6 +348,12 @@ public final class SnapshotStore: ObservableObject {
     }
 
     private func monitorLocalStatusIfNeeded(_ path: String?) {
+        guard source.supportsLiveMonitoring else {
+            localStatusMonitor?.stop()
+            localStatusMonitor = nil
+            localStatusPath = nil
+            return
+        }
         guard path != localStatusPath else { return }
         localStatusMonitor?.stop()
         localStatusMonitor = nil
@@ -394,6 +400,14 @@ public final class SnapshotStore: ObservableObject {
         _ connection: RealtimeConnectionSnapshot?,
         sessionIds: [String]
     ) {
+        guard source.supportsLiveMonitoring else {
+            realtimeTask?.cancel()
+            realtimeTask = nil
+            clearQueuedRealtimeEvents()
+            realtimeConnection = nil
+            realtimeSessionIds = []
+            return
+        }
         let normalizedSessionIds = Array(Set(sessionIds)).sorted()
         guard connection != realtimeConnection || normalizedSessionIds != realtimeSessionIds else { return }
         realtimeTask?.cancel()

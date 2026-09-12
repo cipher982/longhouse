@@ -2,7 +2,7 @@ name: Provider release weekly full columns
 
 on:
   schedule:
-    - cron: '37 8 * * 1'
+    - cron: "37 8 * * 1"
   workflow_dispatch: {}
 
 permissions:
@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
-          python-version: '3.12'
+          python-version: "3.12"
       - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
       - id: matrix
         run: |
@@ -38,15 +38,16 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
-          python-version: '3.12'
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+          python-version: "3.12"
       - name: Run unconditional provider column
-        run: make provider-release-proof-universal-smoke UNIVERSAL_PROVIDER=${{ matrix.provider }}
+        run: python3 scripts/qa/test-isolation.py \
+          --target provider-release-proof-universal-smoke \
+          --set "UNIVERSAL_PROVIDER=${{ matrix.provider }}"
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: provider-release-${{ matrix.provider }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .build/canaries/provider-release-proof-universal-smoke/**
+          path: artifacts/test-isolation/**/files/1/provider-release-proof-universal-smoke/**
           if-no-files-found: error
           retention-days: 14

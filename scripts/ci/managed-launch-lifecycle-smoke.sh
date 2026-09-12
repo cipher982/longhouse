@@ -22,6 +22,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
+if ! python3 "$ROOT_DIR/scripts/qa/test_boundary.py"; then
+  echo "managed lifecycle smoke requires an isolated worker; use make test-managed-launch-lifecycle" >&2
+  exit 2
+fi
 # Codex's per-session Unix socket must fit the platform SUN_LEN limit. Keep the
 # smoke root short so the test exercises lifecycle behavior rather than the
 # host's unusually long default macOS TMPDIR prefix.
@@ -129,6 +133,9 @@ stop_child() {
 
 cleanup() {
   local exit_status=$?
+  if [[ "$exit_status" != "0" && -z "$FAILURE_ARTIFACT_DIR" ]]; then
+    retain_failure_diagnostics "lifecycle smoke exited with status $exit_status"
+  fi
   stop_child "$FAULT_PROXY_PID" "fault proxy"
   stop_child "$CURSOR_CONTROL_PID" "cursor control"
   stop_child "$CLAUDE_CONTROL_PID" "claude control"
@@ -203,6 +210,7 @@ start_runtime_host() {
     BASE_URL="http://127.0.0.1:$PORT"
     (
       cd "$ROOT_DIR/server"
+      unset TESTING
       # Deliberately NOT TESTING=1: that forces live_catalog_enabled() false,
       # which short-circuits the coordination-token endpoint at its 503 guard
       # before the provider check and leaves the live store unused. A

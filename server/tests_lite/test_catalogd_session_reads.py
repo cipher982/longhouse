@@ -1869,7 +1869,9 @@ def test_maximum_timeline_page_fits_one_protocol_frame(daemon_paths):
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
     now = datetime.now(UTC)
-    oversized = "🚀" * 40_000
+    # Every response field truncates at <=8 KiB; exceed that largest bound
+    # without making SQLite write and re-read tens of megabytes of fixture data.
+    oversized = "🚀" * 2_049
     session_id = "ffffffff-1111-4111-8111-ffffffffffff"
     with engine.begin() as connection:
         _seed_session(connection, session_id=session_id, device_id="cinder", now=now)
@@ -1903,9 +1905,9 @@ def test_maximum_timeline_page_fits_one_protocol_frame(daemon_paths):
                             "id": oversized,
                             "header": oversized,
                             "question": oversized,
-                            "options": [{"label": oversized, "description": oversized, "value": oversized} for _ in range(20)],
+                            "options": [{"label": oversized, "description": oversized, "value": oversized} for _ in range(5)],
                         }
-                        for _ in range(20)
+                        for _ in range(4)
                     ],
                 },
             )

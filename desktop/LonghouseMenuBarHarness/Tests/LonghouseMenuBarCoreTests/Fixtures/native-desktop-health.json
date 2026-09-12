@@ -71,8 +71,8 @@
   },
   "realtime": {
     "machine_name": "example-machine",
-    "runtime_url": "https://example.longhouse.ai",
-    "token_path": "/example/.longhouse/machine/device-token"
+    "runtime_url": "https://fixture.invalid",
+    "token_path": "/tmp/longhouse-fixture-token"
   },
   "reasons": [],
   "schema_version": 1,

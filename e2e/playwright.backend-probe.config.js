@@ -2,46 +2,39 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
+import {
+  ensureTestRuntime,
+  parsePort,
+  randomPort,
+  safeChildEnvironment,
+  stripAmbientSecrets,
+} from "./test-runtime.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-function findDotEnv(startDir) {
-  let dir = startDir;
-  for (let i = 0; i < 8; i++) {
-    const candidate = path.join(dir, ".env");
-    if (fs.existsSync(candidate)) return candidate;
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return null;
-}
-
-function readEnvVarFromFile(envPath, key, fallback) {
-  if (!envPath) return fallback;
-  const content = fs.readFileSync(envPath, "utf8");
-  for (const rawLine of content.split("\n")) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const idx = line.indexOf("=");
-    if (idx <= 0) continue;
-    const k = line.slice(0, idx).trim();
-    if (k !== key) continue;
-    let v = line.slice(idx + 1).trim();
-    v = v.replace(/\s+#.*$/, "").trim();
-    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
-    return v || fallback;
-  }
-  return fallback;
-}
-
-const envPath = findDotEnv(__dirname);
-const BACKEND_PORT = Number.parseInt(process.env.BACKEND_PORT ?? readEnvVarFromFile(envPath, "BACKEND_PORT", "8001"), 10);
+const suppliedIsolatedRuntime = process.env.LONGHOUSE_TEST_ISOLATED === "1";
+stripAmbientSecrets();
+const runtime = ensureTestRuntime();
+const backendPort =
+  suppliedIsolatedRuntime && process.env.E2E_BACKEND_PORT
+    ? parsePort(process.env.E2E_BACKEND_PORT, "E2E_BACKEND_PORT")
+    : randomPort();
+process.env.E2E_BACKEND_PORT = String(backendPort);
+process.env.BACKEND_PORT = String(backendPort);
+const reportDir = path.join(runtime.artifactDir, "backend-probe");
+fs.mkdirSync(reportDir, { recursive: true });
 
 const cpuCount = Math.max(1, os.cpus()?.length ?? 0);
-const envWorkerCount = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10);
-const workerCount = Number.isFinite(envWorkerCount) && envWorkerCount > 0 ? envWorkerCount : (process.env.CI ? 4 : cpuCount);
+const envWorkerCount = Number.parseInt(
+  process.env.PLAYWRIGHT_WORKERS ?? "",
+  10,
+);
+const workerCount =
+  Number.isFinite(envWorkerCount) && envWorkerCount > 0
+    ? envWorkerCount
+    : process.env.CI
+      ? 4
+      : cpuCount;
 
 export default {
   testDir: "./probes",
@@ -50,17 +43,27 @@ export default {
   workers: workerCount,
   retries: 0,
   timeout: 30_000,
+  outputDir: path.join(reportDir, "test-results"),
   reporter: [
     ["line"],
-    ["json", { outputFile: "test-results/backend-probe-timeline.json" }],
+    [
+      "json",
+      { outputFile: path.join(reportDir, "backend-probe-timeline.json") },
+    ],
   ],
   webServer: [
     {
-      command: `BACKEND_PORT=${BACKEND_PORT} node spawn-test-backend.js`,
-      port: BACKEND_PORT,
+      command: "node spawn-test-backend.js",
+      url: `http://127.0.0.1:${backendPort}/api/health/db`,
+      port: backendPort,
       cwd: __dirname,
       reuseExistingServer: false,
       timeout: 60_000,
+      gracefulShutdown: { signal: "SIGTERM", timeout: 10_000 },
+      env: safeChildEnvironment({
+        BACKEND_PORT: String(backendPort),
+        E2E_BACKEND_PORT: String(backendPort),
+      }),
     },
   ],
 };

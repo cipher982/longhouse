@@ -52,7 +52,7 @@ import requests
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 BACKEND_DIR = Path(__file__).parent.parent.parent  # server
-REPO_ROOT = BACKEND_DIR.parent                     # repo root
+REPO_ROOT = BACKEND_DIR.parent  # repo root
 
 # Always use the repo-local binary so tests are coupled to the current source.
 _cargo_profile = os.environ.get("CARGO_PROFILE", "release")
@@ -72,8 +72,10 @@ _resolved_engine = subprocess.run(
     text=True,
     check=False,
 )
-ENGINE_BIN = Path(_resolved_engine.stdout.strip()) if _resolved_engine.returncode == 0 else (
-    REPO_ROOT / ".build" / "cargo-target" / _cargo_profile / "longhouse-engine"
+ENGINE_BIN = (
+    Path(_resolved_engine.stdout.strip())
+    if _resolved_engine.returncode == 0
+    else (REPO_ROOT / ".build" / "cargo-target" / _cargo_profile / "longhouse-engine")
 )
 
 # Fixture filenames.
@@ -117,7 +119,7 @@ def _wait_ready(url: str, proc: subprocess.Popen[str], timeout: float = 20.0) ->
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            r = requests.get(f"{url}/api/health", timeout=1)
+            r = requests.get(f"{url}/api/readyz", timeout=1)
             if r.status_code == 200:
                 return
         except requests.exceptions.RequestException:
@@ -169,24 +171,26 @@ def _ship(fixture: str, server: str | dict[str, str], provider: str, engine_db: 
         [
             str(ENGINE_BIN),
             "ship",
-            "--file", str(FIXTURES_DIR / fixture),
-            "--url", url,
-            "--token", token,
-            "--provider", provider,
-            "--db", str(engine_db),
-            "--machine-name", "shipper-e2e",
+            "--file",
+            str(FIXTURES_DIR / fixture),
+            "--url",
+            url,
+            "--token",
+            token,
+            "--provider",
+            provider,
+            "--db",
+            str(engine_db),
+            "--machine-name",
+            "shipper-e2e",
             "--json",
         ],
         capture_output=True,
         text=True,
         timeout=30,
     )
-    assert result.returncode == 0, (
-        f"longhouse-engine exited {result.returncode}\n"
-        f"stdout: {result.stdout}\n"
-        f"stderr: {result.stderr}"
-    )
-    summary = json.loads(result.stdout[result.stdout.find("{"):])
+    assert result.returncode == 0, f"longhouse-engine exited {result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    summary = json.loads(result.stdout[result.stdout.find("{") :])
     assert summary["status"] == "ok", summary
     return summary
 
@@ -354,7 +358,12 @@ def _ship_opencode_sqlite(server: str | dict[str, str], tmp_path: Path, engine_d
         home = tmp_path / "opencode-home"
     shutil.rmtree(home, ignore_errors=True)
     _create_opencode_db(home)
-    env = {**os.environ, "HOME": str(home)}
+    env = {
+        **os.environ,
+        "HOME": str(home),
+        "LONGHOUSE_HOME": str(home / ".longhouse"),
+        "XDG_DATA_HOME": str(home / ".local" / "share"),
+    }
     result = subprocess.run(
         [
             str(ENGINE_BIN),
@@ -376,11 +385,7 @@ def _ship_opencode_sqlite(server: str | dict[str, str], tmp_path: Path, engine_d
         timeout=30,
         env=env,
     )
-    assert result.returncode == 0, (
-        f"longhouse-engine exited {result.returncode}\n"
-        f"stdout: {result.stdout}\n"
-        f"stderr: {result.stderr}"
-    )
+    assert result.returncode == 0, f"longhouse-engine exited {result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}"
 
 
 def _get_session(server: str | dict[str, str], session_id: str) -> dict | None:
@@ -525,6 +530,7 @@ def _start_connect_daemon(
         **os.environ,
         "HOME": str(home),
         "CLAUDE_CONFIG_DIR": str(claude_root),
+        "CODEX_HOME": str(home / ".codex"),
         "LONGHOUSE_HOME": str(longhouse_home),
         "LONGHOUSE_LOG_DIR": str(log_dir),
     }
@@ -672,14 +678,23 @@ def server(tmp_path_factory):
             base64.urlsafe_b64encode(os.urandom(32)).decode(),
         ),
     }
+    # These requests exercise the real catalog, not the unit-test shortcut.
+    env.pop("TESTING", None)
 
     proc = subprocess.Popen(
         [
-            "uv", "run", "--extra", "dev",
-            "uvicorn", "zerg.main:app",
-            "--host", "127.0.0.1",
-            "--port", str(port),
-            "--log-level", "warning",
+            "uv",
+            "run",
+            "--extra",
+            "dev",
+            "uvicorn",
+            "zerg.main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--log-level",
+            "warning",
         ],
         cwd=BACKEND_DIR,
         env=env,
@@ -761,12 +776,10 @@ def test_connect_daemon_ships_claude_transcript_from_filesystem_watch(server, tm
 
         events = _wait_for_session_events(server, session_id, min_events=2)
         assert len(events) >= 2
-        assert "lane=\"live\"" in _read_engine_logs(log_dir)
+        assert 'lane="live"' in _read_engine_logs(log_dir)
     except Exception:
         daemon_output = _terminate_process(proc)
-        raise AssertionError(
-            f"daemon watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}"
-        ) from None
+        raise AssertionError(f"daemon watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}") from None
     finally:
         if proc.poll() is None:
             _terminate_process(proc)
@@ -916,9 +929,7 @@ def test_connect_daemon_ships_ask_user_answer_append_from_filesystem_watch(serve
         initial_bytes = transcript.stat().st_size
         initial_events = _wait_for_session_events(server, session_id, min_events=2)
         assert any(
-            e["role"] == "assistant"
-            and e.get("tool_name") == "AskUserQuestion"
-            and e.get("tool_call_id") == "toolu_ask_user"
+            e["role"] == "assistant" and e.get("tool_name") == "AskUserQuestion" and e.get("tool_call_id") == "toolu_ask_user"
             for e in initial_events
         ), initial_events
 
@@ -932,7 +943,8 @@ def test_connect_daemon_ships_ask_user_answer_append_from_filesystem_watch(serve
         events = _wait_for_session_events(server, session_id, min_events=3)
         ask_result = next(
             (
-                e for e in events
+                e
+                for e in events
                 if e["role"] == "tool"
                 and e.get("tool_call_id") == "toolu_ask_user"
                 and "Use dnd-kit" in (e.get("tool_output_text") or e.get("content_text") or "")
@@ -942,13 +954,11 @@ def test_connect_daemon_ships_ask_user_answer_append_from_filesystem_watch(serve
         assert ask_result is not None, events
 
         logs = _read_engine_logs(log_dir)
-        assert "lane=\"live\"" in logs
+        assert 'lane="live"' in logs
         assert f"bytes_shipped={final_bytes - initial_bytes}" in logs
     except Exception:
         daemon_output = _terminate_process(proc)
-        raise AssertionError(
-            f"daemon AskUserQuestion watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}"
-        ) from None
+        raise AssertionError(f"daemon AskUserQuestion watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}") from None
     finally:
         if proc.poll() is None:
             _terminate_process(proc)
@@ -997,19 +1007,14 @@ def test_connect_daemon_phase_signals_do_not_gate_filesystem_hot_lane(server, tm
             new_offset = transcript.stat().st_size
 
             events = _wait_for_session_events(server, session_id, min_events=index + 1)
-            assert any(
-                f"hot lane append while phase is {phase}" in (e.get("content_text") or "")
-                for e in events
-            ), events
+            assert any(f"hot lane append while phase is {phase}" in (e.get("content_text") or "") for e in events), events
 
             logs = _read_engine_logs(log_dir)
-            assert "lane=\"live\"" in logs
+            assert 'lane="live"' in logs
             assert f"bytes_shipped={new_offset - offset}" in logs
     except Exception:
         daemon_output = _terminate_process(proc)
-        raise AssertionError(
-            f"daemon phase matrix watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}"
-        ) from None
+        raise AssertionError(f"daemon phase matrix watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}") from None
     finally:
         if proc.poll() is None:
             _terminate_process(proc)
@@ -1062,7 +1067,8 @@ def test_connect_daemon_waits_for_complete_ask_user_answer_line(server, tmp_path
         final_bytes = transcript.stat().st_size
         events = _wait_for_session_events(server, session_id, min_events=3)
         ask_results = [
-            e for e in events
+            e
+            for e in events
             if e["role"] == "tool"
             and e.get("tool_call_id") == "toolu_ask_user"
             and "Use dnd-kit" in (e.get("tool_output_text") or e.get("content_text") or "")
@@ -1070,7 +1076,7 @@ def test_connect_daemon_waits_for_complete_ask_user_answer_line(server, tmp_path
         assert len(ask_results) == 1, events
 
         logs = _read_engine_logs(log_dir)
-        assert "lane=\"live\"" in logs
+        assert 'lane="live"' in logs
         assert f"bytes_shipped={final_bytes - initial_bytes}" in logs
     except Exception:
         daemon_output = _terminate_process(proc)
@@ -1117,14 +1123,12 @@ def test_connect_daemon_ships_codex_transcript_from_filesystem_watch(server, tmp
         assert [event["role"] for event in events[:2]] == ["user", "assistant"]
 
         logs = _read_engine_logs(log_dir)
-        assert "provider=\"codex\"" in logs
-        assert "lane=\"live\"" in logs
+        assert 'provider="codex"' in logs
+        assert 'lane="live"' in logs
         assert f"bytes_shipped={final_bytes}" in logs
     except Exception:
         daemon_output = _terminate_process(proc)
-        raise AssertionError(
-            f"daemon Codex watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}"
-        ) from None
+        raise AssertionError(f"daemon Codex watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}") from None
     finally:
         if proc.poll() is None:
             _terminate_process(proc)
@@ -1150,18 +1154,14 @@ class TestClaudeShipping:
         roles = [e["role"] for e in events]
         assert roles == ["user", "assistant"], f"Expected [user, assistant], got {roles}"
         user_content = events[0].get("content_text", "")
-        assert "agent" in user_content.lower() or "mcp" in user_content.lower(), (
-            f"Unexpected user content: {user_content!r}"
-        )
+        assert "agent" in user_content.lower() or "mcp" in user_content.lower(), f"Unexpected user content: {user_content!r}"
         assistant_content = events[1].get("content_text", "")
         assert assistant_content, "Assistant event must have non-empty content_text"
 
     def test_timestamps_are_monotonic(self, server, tmp_path):
         events = _get_events(server, CLAUDE_SESSION_ID)
         timestamps = [e.get("timestamp") for e in events if e.get("timestamp")]
-        assert timestamps == sorted(timestamps), (
-            f"Event timestamps not monotonically increasing: {timestamps}"
-        )
+        assert timestamps == sorted(timestamps), f"Event timestamps not monotonically increasing: {timestamps}"
 
     def test_session_metadata(self, server, tmp_path):
         # Phase 4 of docs/specs/session-liveness-honesty.md: the engine no
@@ -1178,9 +1178,7 @@ class TestClaudeShipping:
         events_before = _get_events(server, CLAUDE_SESSION_ID)
         _ship(CLAUDE_FIXTURE, server, "claude", tmp_path / "engine2.db")
         events_after = _get_events(server, CLAUDE_SESSION_ID)
-        assert len(events_after) == len(events_before), (
-            f"Re-ship created duplicates: {len(events_before)} → {len(events_after)}"
-        )
+        assert len(events_after) == len(events_before), f"Re-ship created duplicates: {len(events_before)} → {len(events_after)}"
 
 
 class TestClaudeNonTextToolResults:
@@ -1202,10 +1200,7 @@ class TestClaudeNonTextToolResults:
 
     def test_tool_call_id_pairing_survives_non_text_payloads(self, server, tmp_path):
         events = _get_events(server, CLAUDE_NON_TEXT_TOOL_RESULTS_SESSION_ID)
-        assistants = [
-            e for e in events
-            if e["role"] == "assistant" and e.get("tool_name")
-        ]
+        assistants = [e for e in events if e["role"] == "assistant" and e.get("tool_name")]
         tools = [e for e in events if e["role"] == "tool"]
 
         assistant_ids = {e.get("tool_call_id") for e in assistants if e.get("tool_call_id")}
@@ -1218,9 +1213,7 @@ class TestClaudeNonTextToolResults:
         events_before = _get_events(server, CLAUDE_NON_TEXT_TOOL_RESULTS_SESSION_ID)
         _ship(CLAUDE_NON_TEXT_TOOL_RESULTS_FIXTURE, server, "claude", tmp_path / "engine2.db")
         events_after = _get_events(server, CLAUDE_NON_TEXT_TOOL_RESULTS_SESSION_ID)
-        assert len(events_after) == len(events_before), (
-            f"Re-ship created duplicates: {len(events_before)} → {len(events_after)}"
-        )
+        assert len(events_after) == len(events_before), f"Re-ship created duplicates: {len(events_before)} → {len(events_after)}"
 
 
 # ---------------------------------------------------------------------------
@@ -1245,14 +1238,10 @@ class TestGeminiShipping:
         assert roles == ["user", "assistant"], f"Expected [user, assistant], got {roles}"
         # User message asks to reply with "gemini ok"
         user_content = events[0].get("content_text", "")
-        assert "gemini ok" in user_content.lower(), (
-            f"Expected 'gemini ok' in user content, got: {user_content!r}"
-        )
+        assert "gemini ok" in user_content.lower(), f"Expected 'gemini ok' in user content, got: {user_content!r}"
         # Assistant replied with exactly "gemini ok"
         assistant_content = events[1].get("content_text", "")
-        assert assistant_content.strip() == "gemini ok", (
-            f"Expected assistant content 'gemini ok', got: {assistant_content!r}"
-        )
+        assert assistant_content.strip() == "gemini ok", f"Expected assistant content 'gemini ok', got: {assistant_content!r}"
 
     def test_timestamps_are_monotonic(self, server, tmp_path):
         events = _get_events(server, ANTIGRAVITY_LEGACY_SESSION_ID)
@@ -1270,9 +1259,7 @@ class TestGeminiShipping:
         events_before = _get_events(server, ANTIGRAVITY_LEGACY_SESSION_ID)
         _ship(ANTIGRAVITY_LEGACY_FIXTURE, server, "antigravity", tmp_path / "engine2.db")
         events_after = _get_events(server, ANTIGRAVITY_LEGACY_SESSION_ID)
-        assert len(events_after) == len(events_before), (
-            f"Re-ship created duplicates: {len(events_before)} → {len(events_after)}"
-        )
+        assert len(events_after) == len(events_before), f"Re-ship created duplicates: {len(events_before)} → {len(events_after)}"
 
 
 # ---------------------------------------------------------------------------
@@ -1292,9 +1279,7 @@ class TestGeminiSchemaDrift:
         """String-content messages survive even when one uses object content."""
         _ship(ANTIGRAVITY_LEGACY_DRIFT_FIXTURE, server, "antigravity", tmp_path / "engine.db")
         session = _get_session(server, ANTIGRAVITY_LEGACY_DRIFT_SESSION_ID)
-        assert session is not None, (
-            "Schema-drift session not found. The parser may have dropped the entire session."
-        )
+        assert session is not None, "Schema-drift session not found. The parser may have dropped the entire session."
 
     def test_string_content_messages_preserved(self, server, tmp_path):
         events = _get_events(server, ANTIGRAVITY_LEGACY_DRIFT_SESSION_ID)
@@ -1307,9 +1292,7 @@ class TestGeminiSchemaDrift:
 
     def test_exact_content_of_string_messages(self, server, tmp_path):
         events = _get_events(server, ANTIGRAVITY_LEGACY_DRIFT_SESSION_ID)
-        user_contents = [
-            e.get("content_text", "") for e in events if e["role"] == "user"
-        ]
+        user_contents = [e.get("content_text", "") for e in events if e["role"] == "user"]
         assert any("valid string message" in c for c in user_contents), (
             f"Expected 'valid string message' in user events. Got: {user_contents}"
         )
@@ -1342,23 +1325,14 @@ class TestGeminiToolResults:
         assert len(events) == 6, f"Expected exactly 6 events, got {len(events)}"
 
         tool_results = [e for e in events if e["role"] == "tool"]
-        assert len(tool_results) == 2, (
-            f"Expected 2 Gemini tool result events, got {len(tool_results)}"
-        )
+        assert len(tool_results) == 2, f"Expected 2 Gemini tool result events, got {len(tool_results)}"
         outputs = [e.get("tool_output_text", "") for e in tool_results]
-        assert any("README content" in output for output in outputs), (
-            f"Expected README output in tool results. Got: {outputs}"
-        )
-        assert any("cancelled" in output.lower() for output in outputs), (
-            f"Expected cancelled/error output in tool results. Got: {outputs}"
-        )
+        assert any("README content" in output for output in outputs), f"Expected README output in tool results. Got: {outputs}"
+        assert any("cancelled" in output.lower() for output in outputs), f"Expected cancelled/error output in tool results. Got: {outputs}"
 
     def test_tool_call_id_pairing(self, server, tmp_path):
         events = _get_events(server, ANTIGRAVITY_LEGACY_TOOL_RESULTS_SESSION_ID)
-        assistants = [
-            e for e in events
-            if e["role"] == "assistant" and e.get("tool_name")
-        ]
+        assistants = [e for e in events if e["role"] == "assistant" and e.get("tool_name")]
         tools = [e for e in events if e["role"] == "tool"]
 
         assistant_ids = {e.get("tool_call_id") for e in assistants if e.get("tool_call_id")}
@@ -1372,9 +1346,7 @@ class TestGeminiToolResults:
         events_before = _get_events(server, ANTIGRAVITY_LEGACY_TOOL_RESULTS_SESSION_ID)
         _ship(ANTIGRAVITY_LEGACY_TOOL_RESULTS_FIXTURE, server, "antigravity", tmp_path / "engine2.db")
         events_after = _get_events(server, ANTIGRAVITY_LEGACY_TOOL_RESULTS_SESSION_ID)
-        assert len(events_after) == len(events_before), (
-            f"Re-ship created duplicates: {len(events_before)} → {len(events_after)}"
-        )
+        assert len(events_after) == len(events_before), f"Re-ship created duplicates: {len(events_before)} → {len(events_after)}"
 
 
 # ---------------------------------------------------------------------------
@@ -1398,13 +1370,9 @@ class TestCodexShipping:
         roles = [e["role"] for e in events]
         assert roles == ["user", "assistant"], f"Expected [user, assistant], got {roles}"
         user_content = events[0].get("content_text", "")
-        assert "1+1" in user_content, (
-            f"Expected '1+1' in user content, got: {user_content!r}"
-        )
+        assert "1+1" in user_content, f"Expected '1+1' in user content, got: {user_content!r}"
         assistant_content = events[1].get("content_text", "")
-        assert "2" in assistant_content, (
-            f"Expected '2' in assistant response, got: {assistant_content!r}"
-        )
+        assert "2" in assistant_content, f"Expected '2' in assistant response, got: {assistant_content!r}"
 
     def test_timestamps_are_monotonic(self, server, tmp_path):
         events = _get_events(server, CODEX_SESSION_ID)
@@ -1415,9 +1383,7 @@ class TestCodexShipping:
         events_before = _get_events(server, CODEX_SESSION_ID)
         _ship(CODEX_FIXTURE, server, "codex", tmp_path / "engine2.db")
         events_after = _get_events(server, CODEX_SESSION_ID)
-        assert len(events_after) == len(events_before), (
-            f"Re-ship created duplicates: {len(events_before)} → {len(events_after)}"
-        )
+        assert len(events_after) == len(events_before), f"Re-ship created duplicates: {len(events_before)} → {len(events_after)}"
 
 
 # ---------------------------------------------------------------------------
@@ -1462,9 +1428,7 @@ class TestOpenCodeSQLiteShipping:
         events_before = _get_events(server, OPENCODE_SESSION_ID)
         _ship_opencode_sqlite(server, tmp_path, tmp_path / "engine2.db")
         events_after = _get_events(server, OPENCODE_SESSION_ID)
-        assert len(events_after) == len(events_before), (
-            f"Re-ship created duplicates: {len(events_before)} → {len(events_after)}"
-        )
+        assert len(events_after) == len(events_before), f"Re-ship created duplicates: {len(events_before)} → {len(events_after)}"
 
 
 def test_full_ship_replays_pending_spool_even_without_new_files(server, tmp_path):
@@ -1484,7 +1448,12 @@ def test_full_ship_replays_pending_spool_even_without_new_files(server, tmp_path
         + "\n"
     )
     engine_db = tmp_path / "engine.db"
-    env = {**os.environ, "HOME": str(temp_home)}
+    env = {
+        **os.environ,
+        "HOME": str(temp_home),
+        "LONGHOUSE_HOME": str(temp_home / ".longhouse"),
+        "CLAUDE_CONFIG_DIR": str(temp_home / ".claude"),
+    }
 
     bind_result = subprocess.run(
         [
@@ -1504,9 +1473,7 @@ def test_full_ship_replays_pending_spool_even_without_new_files(server, tmp_path
         timeout=30,
         env=env,
     )
-    assert bind_result.returncode == 0, (
-        f"state initialization failed\nstdout: {bind_result.stdout}\nstderr: {bind_result.stderr}"
-    )
+    assert bind_result.returncode == 0, f"state initialization failed\nstdout: {bind_result.stdout}\nstderr: {bind_result.stderr}"
     with sqlite3.connect(engine_db) as conn:
         conn.execute(
             """INSERT INTO spool_queue (
@@ -1543,9 +1510,7 @@ def test_full_ship_replays_pending_spool_even_without_new_files(server, tmp_path
         timeout=30,
         env=env,
     )
-    assert replay_result.returncode == 0, (
-        f"spool replay run failed\nstdout: {replay_result.stdout}\nstderr: {replay_result.stderr}"
-    )
+    assert replay_result.returncode == 0, f"spool replay run failed\nstdout: {replay_result.stdout}\nstderr: {replay_result.stderr}"
 
     summary_start = replay_result.stdout.find("{")
     assert summary_start >= 0, f"expected JSON summary in stdout, got: {replay_result.stdout!r}"

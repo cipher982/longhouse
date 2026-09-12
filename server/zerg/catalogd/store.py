@@ -742,24 +742,22 @@ def _insert_provider_facts(
     if not provider_facts:
         return 0
     table = SessionProviderFact.__table__
-    inserted = 0
-    for fact in provider_facts:
-        result = connection.execute(
-            sqlite_insert(table)
-            .values(
-                session_id=session_id,
-                kind=str(fact["kind"]),
-                at=fact["at"],
-                source_epoch=source_epoch,
-                source_position=int(fact["source_position"]),
-                payload_json=json.dumps(fact["payload"], sort_keys=True, separators=(",", ":")),
-                commit_seq=commit_seq,
-                created_at=now,
-            )
-            .on_conflict_do_nothing(index_elements=["session_id", "source_epoch", "source_position", "kind"])
-        )
-        inserted += int(result.rowcount or 0)
-    return inserted
+    statement = sqlite_insert(table).on_conflict_do_nothing(index_elements=["session_id", "source_epoch", "source_position", "kind"])
+    rows = [
+        {
+            "session_id": session_id,
+            "kind": str(fact["kind"]),
+            "at": fact["at"],
+            "source_epoch": source_epoch,
+            "source_position": int(fact["source_position"]),
+            "payload_json": json.dumps(fact["payload"], sort_keys=True, separators=(",", ":")),
+            "commit_seq": commit_seq,
+            "created_at": now,
+        }
+        for fact in provider_facts
+    ]
+    result = connection.execute(statement, rows)
+    return int(result.rowcount or 0)
 
 
 class CatalogStore:

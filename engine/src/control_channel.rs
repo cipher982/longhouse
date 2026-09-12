@@ -3981,6 +3981,69 @@ mod tests {
         });
         assert_eq!(resolved_claude, "/provider/claude-4.5.0/claude-staged");
     }
+    #[test]
+    fn provider_readiness_snapshot_never_discovers_ambient_provider_clis() {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let empty_path = tempfile::tempdir().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let snapshot = temp_env::with_vars(
+            [
+                ("PATH", Some(empty_path.path().as_os_str())),
+                ("LONGHOUSE_CODEX_BIN", None::<&OsStr>),
+                ("LONGHOUSE_CLAUDE_BIN", None::<&OsStr>),
+                ("LONGHOUSE_OPENCODE_BIN", None::<&OsStr>),
+                ("LONGHOUSE_ANTIGRAVITY_BIN", None::<&OsStr>),
+                ("LONGHOUSE_CURSOR_BIN", None::<&OsStr>),
+                ("LONGHOUSE_PI_BIN", None::<&OsStr>),
+                ("LONGHOUSE_OMP_BIN", None::<&OsStr>),
+            ],
+            || runtime.block_on(provider_readiness_snapshot()),
+        );
+
+        let entries = snapshot.as_object().unwrap();
+        assert!(!entries.is_empty());
+        assert!(entries
+            .values()
+            .all(|entry| { entry.get("state").and_then(Value::as_str) == Some("cli_missing") }));
+    }
+
+    #[test]
+    fn provider_readiness_snapshot_runs_only_an_explicit_binary_override() {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let temp = tempfile::tempdir().unwrap();
+        let empty_path_entry = temp.path().join("empty");
+        let fake_codex = temp.path().join("codex");
+        write_test_executable(&fake_codex, "#!/bin/sh\nexit 0\n");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let snapshot = temp_env::with_vars(
+            [
+                ("PATH", Some(empty_path_entry.as_os_str())),
+                ("LONGHOUSE_CODEX_BIN", Some(fake_codex.as_os_str())),
+                ("LONGHOUSE_CLAUDE_BIN", None::<&OsStr>),
+                ("LONGHOUSE_OPENCODE_BIN", None::<&OsStr>),
+                ("LONGHOUSE_ANTIGRAVITY_BIN", None::<&OsStr>),
+                ("LONGHOUSE_CURSOR_BIN", None::<&OsStr>),
+                ("LONGHOUSE_PI_BIN", None::<&OsStr>),
+                ("LONGHOUSE_OMP_BIN", None::<&OsStr>),
+            ],
+            || runtime.block_on(provider_readiness_snapshot()),
+        );
+
+        assert_eq!(snapshot["codex"]["state"], "ready");
+        for provider in ["claude", "opencode", "antigravity", "cursor", "pi", "omp"] {
+            assert_eq!(snapshot[provider]["state"], "cli_missing", "{provider}");
+        }
+    }
 
     #[test]
     fn managed_provider_contract_manifest_includes_operation_evidence() {

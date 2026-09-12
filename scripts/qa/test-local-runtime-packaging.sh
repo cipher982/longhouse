@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ! python3 "$(dirname "${BASH_SOURCE[0]}")/../qa/test_boundary.py"; then
+  echo "Use make test-runtime-packaging-macos to package and launch inside a disposable hosted macOS VM." >&2
+  exit 2
+fi
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PACKAGE_PATH="$ROOT_DIR/desktop/LonghouseMenuBarHarness"
 ARTIFACT_DIR="$ROOT_DIR/artifacts/runtime-packaging"

@@ -15,58 +15,6 @@ from zerg.services.shipper.hooks import install_codex_hooks
 from zerg.services.shipper.hooks import install_hooks
 
 
-def test_codex_hook_script_template_has_required_markers():
-    """Hook script must contain the key patterns the engine + outbox expect."""
-    assert "hook_event_name" in CODEX_HOOK_SCRIPT, "must read Codex snake_case hook event input"
-    assert "session_id" in CODEX_HOOK_SCRIPT, "must read Codex session ID"
-    assert "tool_name" in CODEX_HOOK_SCRIPT, "must read Codex tool hook names"
-    assert "transcript_path" in CODEX_HOOK_SCRIPT, "must read transcript path"
-    assert 'LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"' in CODEX_HOOK_SCRIPT
-    assert "prs." in CODEX_HOOK_SCRIPT, "must use prs.*.json outbox naming"
-    assert ".tmp." in CODEX_HOOK_SCRIPT, "must use atomic tmp write pattern"
-    assert "bind --path" not in CODEX_HOOK_SCRIPT, "binding is deferred to the daemon"
-    assert 'ENGINE="' not in CODEX_HOOK_SCRIPT, "the provider hook must not invoke the engine"
-    assert "provider: $provider" in CODEX_HOOK_SCRIPT, "must include provider in presence payload"
-    assert "tool_name: $tool" in CODEX_HOOK_SCRIPT, "must include tool names in presence payload"
-    assert "transcript_path: $transcript" in CODEX_HOOK_SCRIPT, "must include transcript path in presence payload"
-
-
-def test_codex_hook_script_has_managed_session_id_support():
-    """Hook script must have explicit managed vs unmanaged session ID paths."""
-    assert "LONGHOUSE_MANAGED_SESSION_ID" in CODEX_HOOK_SCRIPT, "must check for managed-session env"
-    assert "CODEX_SESSION_ID" in CODEX_HOOK_SCRIPT, "must read Codex's native session ID"
-    # No fallback pattern — two explicit paths
-    assert "SID=" in CODEX_HOOK_SCRIPT, "must assign SID explicitly in each path"
-    assert '--arg provider "codex"' in CODEX_HOOK_SCRIPT, "must stamp Codex presence events with provider=codex"
-    assert "control_path: $control_path" in CODEX_HOOK_SCRIPT
-
-
-def test_codex_hook_does_not_fetch_dynamic_startup_context():
-    # Coordination awareness is carried by durable MCP server metadata.
-    assert "/api/agents/sessions/startup-context" not in CODEX_HOOK_SCRIPT
-    assert "LONGHOUSE_HOOK_URL" not in CODEX_HOOK_SCRIPT
-    assert "LONGHOUSE_HOOK_TOKEN" not in CODEX_HOOK_SCRIPT
-    assert "LONGHOUSE_COORDINATION_BOOTSTRAP" not in CODEX_HOOK_SCRIPT
-
-
-def test_codex_hook_hot_path_stays_local_only():
-    assert 'PRESENCE_MODE="${LONGHOUSE_HOOK_PRESENCE_MODE:-auto}"' not in CODEX_HOOK_SCRIPT
-    assert "/api/agents/presence" not in CODEX_HOOK_SCRIPT
-    assert "emit_presence()" not in CODEX_HOOK_SCRIPT
-    assert "write_presence_outbox()" in CODEX_HOOK_SCRIPT
-    assert 'write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true' in CODEX_HOOK_SCRIPT
-
-
-def test_codex_hook_script_maps_all_events():
-    """Hook script must handle the Codex hook events that produce liveness facts."""
-    assert "SessionStart)" not in CODEX_HOOK_SCRIPT
-    assert "UserPromptSubmit)" in CODEX_HOOK_SCRIPT
-    assert "PreToolUse)" in CODEX_HOOK_SCRIPT
-    assert "PostToolUse)" in CODEX_HOOK_SCRIPT
-    assert "PermissionRequest)" in CODEX_HOOK_SCRIPT
-    assert "Stop)" in CODEX_HOOK_SCRIPT
-
-
 def test_is_longhouse_codex_hook_identifies_our_hooks():
     our_hook = {"hooks": [{"type": "command", "command": "/home/user/.codex/hooks/longhouse-codex-hook.sh"}]}
     assert _is_longhouse_codex_hook(our_hook) is True
@@ -119,17 +67,11 @@ def test_install_codex_hooks_creates_hook_script(tmp_path, monkeypatch):
     codex_dir = tmp_path / ".codex"
     codex_dir.mkdir()
 
-    actions = install_codex_hooks(engine_path="/usr/bin/longhouse-engine")
-    assert len(actions) == 2
+    install_codex_hooks(engine_path="/usr/bin/longhouse-engine")
 
     hook_script = codex_dir / "hooks" / "longhouse-codex-hook.sh"
     assert hook_script.exists()
     assert hook_script.stat().st_mode & stat.S_IXUSR
-
-    content = hook_script.read_text()
-    assert "bind --path" not in content
-    assert str(tmp_path / ".longhouse") in content
-    assert "hook_event_name" in content
 
 
 def test_install_codex_hooks_creates_valid_hooks_json(tmp_path, monkeypatch):

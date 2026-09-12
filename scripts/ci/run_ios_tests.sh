@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ! python3 "$(dirname "${BASH_SOURCE[0]}")/../qa/test_boundary.py"; then
+  echo "Native tests run in a disposable hosted macOS VM. Use make test-ios." >&2
+  exit 2
+fi
+
 PROJECT_PATH="${PROJECT_PATH:-ios/XcodeHarness/LonghouseIOS.xcodeproj}"
 DESTINATION="${1:-${IOS_DESTINATION:-}}"
 

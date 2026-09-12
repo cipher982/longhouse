@@ -1,7 +1,10 @@
 import fs from "fs";
 import path from "path";
 
-const probeDir = path.resolve(process.cwd(), "test-results", "parallelism-probe");
+const probeDir = path.resolve(
+  process.env.E2E_ARTIFACT_DIR ?? path.join(process.cwd(), "test-results"),
+  "parallelism-probe",
+);
 
 function readJsonl(filePath) {
   const lines = fs.readFileSync(filePath, "utf8").split("\n").filter(Boolean);
@@ -18,7 +21,9 @@ const files = fs
   .filter((f) => f.endsWith(".jsonl"))
   .map((f) => path.join(probeDir, f));
 
-const events = files.flatMap(readJsonl).sort((a, b) => a.t - b.t || (a.type === "end" ? 1 : -1));
+const events = files
+  .flatMap(readJsonl)
+  .sort((a, b) => a.t - b.t || (a.type === "end" ? 1 : -1));
 
 const workerSet = new Set(events.map((e) => e.workerIndex));
 
@@ -39,7 +44,9 @@ const durationMs = firstT !== null && lastT !== null ? lastT - firstT : 0;
 
 console.log("Parallelism probe results");
 console.log("-------------------------");
-console.log(`Workers observed: ${workerSet.size} (${[...workerSet].sort((a, b) => a - b).join(", ")})`);
+console.log(
+  `Workers observed: ${workerSet.size} (${[...workerSet].sort((a, b) => a - b).join(", ")})`,
+);
 console.log(`Events: ${events.length}`);
 console.log(`Max concurrent tests (from events): ${maxActive}`);
 console.log(`Wall time (events span): ${(durationMs / 1000).toFixed(2)}s`);

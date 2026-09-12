@@ -1,15 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ! python3 "$(dirname "${BASH_SOURCE[0]}")/../qa/test_boundary.py"; then
+  echo "Native harnesses run in a disposable hosted macOS VM. Use make menubar-harness MODE=test." >&2
+  exit 2
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PKG_PATH="$ROOT/desktop/LonghouseMenuBarHarness"
 XCODE_HARNESS_PATH="$PKG_PATH/XcodeHarness"
-ARTIFACT_DIR="$ROOT/artifacts/menubar-harness"
+RUN_ID="${LONGHOUSE_MENUBAR_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+ARTIFACT_DIR="${LONGHOUSE_MENUBAR_ARTIFACT_DIR:-$ROOT/artifacts/menubar-harness/$RUN_ID}"
+BUILD_DIR="$ARTIFACT_DIR/swift-build"
+XCODE_PROJECT_DIR="$ARTIFACT_DIR/xcode-project"
+mkdir -p "$ARTIFACT_DIR" "$BUILD_DIR" "$XCODE_PROJECT_DIR"
+export LONGHOUSE_MENUBAR_ARTIFACT_DIR="$ARTIFACT_DIR"
+export LONGHOUSE_MENUBAR_RUN_ID="$RUN_ID"
 
 cmd="${1:-}"
 shift || true
-
-mkdir -p "$ARTIFACT_DIR"
 
 usage() {
   local fixture_names
@@ -73,12 +82,21 @@ PY
 }
 
 fixture_path() {
-  local name="$1"
-  echo "$PKG_PATH/Fixtures/${name}.json"
+  local name="${1:-}"
+  if [[ ! "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ || "$name" == *..* ]]; then
+    echo "invalid fixture name: $name" >&2
+    return 2
+  fi
+  local path="$PKG_PATH/Fixtures/${name}.json"
+  if [[ ! -f "$path" ]]; then
+    echo "unknown fixture: $name" >&2
+    return 2
+  fi
+  printf '%s\n' "$path"
 }
 
 raw_snapshot_exec() {
-  swift run --package-path "$PKG_PATH" LonghouseMenuBarHarnessSnapshot "$@"
+  swift run --package-path "$PKG_PATH" --scratch-path "$BUILD_DIR" LonghouseMenuBarHarnessSnapshot "$@"
 }
 
 capture_fixture_render() {
@@ -92,19 +110,68 @@ capture_fixture_render() {
   capture_window_render "$app_bin" "$input_json" "$output_png"
 }
 
+run_owned_swift_product() (
+  local product="$1"
+  shift
+  local pid=""
+  local pgid=""
+  local command_status=0
+
+  cleanup_swift_product() {
+    if [[ -n "$pid" ]]; then
+      stop_owned_process "$pid" "$pgid"
+      pid=""
+      pgid=""
+    fi
+  }
+  trap cleanup_swift_product EXIT
+  trap 'cleanup_swift_product; exit 143' INT TERM
+
+  start_owned_process swift run \
+    --package-path "$PKG_PATH" \
+    --scratch-path "$BUILD_DIR" \
+    "$product" "$@"
+  pid="$OWNED_PID"
+  pgid="$OWNED_PGID"
+  wait "$pid" || command_status=$?
+  cleanup_swift_product
+  trap - EXIT INT TERM
+  return "$command_status"
+)
+
 app_exec() {
-  swift run --package-path "$PKG_PATH" LonghouseMenuBarHarnessApp "$@"
+  run_owned_swift_product LonghouseMenuBarHarnessApp "$@"
 }
 
 menubar_exec() {
-  swift run --package-path "$PKG_PATH" LonghouseMenuBarHarnessMenuBar "$@"
+  run_owned_swift_product LonghouseMenuBarHarnessMenuBar "$@"
 }
 
 build_app_binary() {
-  "$ROOT/scripts/resolve-swift-product-path.sh" \
+  local build_log="$ARTIFACT_DIR/swift-build.log"
+  if ! swift build \
     --package-path "$PKG_PATH" \
-    --product LonghouseMenuBarHarnessApp \
-    --configuration debug
+    --scratch-path "$BUILD_DIR" \
+    --configuration debug \
+    --product LonghouseMenuBarHarnessApp >"$build_log" 2>&1; then
+    cat "$build_log" >&2
+    return 1
+  fi
+  local bin_dir
+  if ! bin_dir="$(swift build \
+    --package-path "$PKG_PATH" \
+    --scratch-path "$BUILD_DIR" \
+    --configuration debug \
+    --show-bin-path 2>>"$build_log")"; then
+    cat "$build_log" >&2
+    return 1
+  fi
+  local binary="$bin_dir/LonghouseMenuBarHarnessApp"
+  if [[ ! -x "$binary" ]]; then
+    echo "built app binary not found: $binary" >&2
+    return 1
+  fi
+  printf '%s\n' "$binary"
 }
 
 wait_for_window_id() {
@@ -197,6 +264,47 @@ if darkPercent < thresholdPercent {
 SWIFT
 }
 
+SELF_PGID="$(ps -o pgid= -p "$$" | tr -d ' ')"
+
+start_owned_process() {
+  local command="$1"
+  shift
+  python3 - "$command" "$@" <<'PY' &
+import os
+import sys
+
+os.setsid()
+os.execvp(sys.argv[1], sys.argv[1:])
+PY
+  OWNED_PID=$!
+  OWNED_PGID="$(ps -o pgid= -p "$OWNED_PID" | tr -d ' ')"
+  if [[ -z "$OWNED_PGID" || "$OWNED_PGID" == "$SELF_PGID" ]]; then
+    echo "failed to allocate an owned process group for $command" >&2
+    kill "$OWNED_PID" >/dev/null 2>&1 || true
+    wait "$OWNED_PID" >/dev/null 2>&1 || true
+    return 1
+  fi
+}
+
+stop_owned_process() {
+  local pid="${1:-}"
+  local pgid="${2:-}"
+  if [[ ! "$pid" =~ ^[0-9]+$ || ! "$pgid" =~ ^[0-9]+$ || "$pgid" == "$SELF_PGID" ]]; then
+    return 0
+  fi
+
+  local actual_pgid=""
+  actual_pgid="$(ps -o pgid= -p "$pid" | tr -d ' ')" || true
+  if [[ "$actual_pgid" == "$pgid" ]] || kill -0 -- "-$pgid" >/dev/null 2>&1; then
+    kill -TERM -- "-$pgid" >/dev/null 2>&1 || true
+    sleep 0.2
+    kill -KILL -- "-$pgid" >/dev/null 2>&1 || true
+  elif kill -0 "$pid" >/dev/null 2>&1; then
+    kill -TERM "$pid" >/dev/null 2>&1 || true
+  fi
+  wait "$pid" >/dev/null 2>&1 || true
+}
+
 capture_window_render() {
   local app_bin="$1"
   local input_json="$2"
@@ -208,17 +316,29 @@ capture_window_render() {
 # Same capture, but the caller supplies the app arguments. Trust-state renders
 # need a live source pointed at a broken health command, which --input cannot
 # express: a fixture always loads, so it can never produce a stale banner.
-capture_window_render_args() {
+capture_window_render_args() (
   local app_bin="$1"
   local output_png="$2"
   shift 2
   local pid=""
+  local pgid=""
   local capture_status=0
   local window_id=""
 
+  cleanup_capture() {
+    if [[ -n "$pid" ]]; then
+      stop_owned_process "$pid" "$pgid"
+      pid=""
+      pgid=""
+    fi
+  }
+  trap cleanup_capture EXIT
+  trap 'cleanup_capture; exit 143' INT TERM
+
   rm -f "$output_png"
-  "$app_bin" "$@" --quit-after 30 >/dev/null 2>&1 &
-  pid=$!
+  start_owned_process "$app_bin" "$@" --quit-after 30 >/dev/null 2>&1
+  pid="$OWNED_PID"
+  pgid="$OWNED_PGID"
 
   if window_id="$(wait_for_window_id "$pid" "Longhouse Desktop")"; then
     :
@@ -248,33 +368,56 @@ capture_window_render_args() {
     fi
   fi
 
-  if [[ -n "$pid" ]]; then
-    kill "$pid" >/dev/null 2>&1 || true
-    wait "$pid" >/dev/null 2>&1 || true
-  fi
-
+  cleanup_capture
+  trap - EXIT INT TERM
   if [[ $capture_status -ne 0 ]]; then
     return "$capture_status"
   fi
 
   echo "$output_png"
-}
+)
 
-xcode_ui_exec() {
-  local project_path="$XCODE_HARNESS_PATH/LonghouseMenuBarHarnessXcode.xcodeproj"
+xcode_ui_exec() (
+  local project_path="$XCODE_PROJECT_DIR/LonghouseMenuBarHarnessXcode.xcodeproj"
   local result_bundle="$ARTIFACT_DIR/LonghouseMenuBarWindowHost.xcresult"
   local log_path="$ARTIFACT_DIR/xcuitest.log"
+  local pid=""
+  local pgid=""
+  local command_status=0
   require_tool xcodegen
   require_tool xcodebuild
   remove_path "$result_bundle"
-  xcodegen --spec "$XCODE_HARNESS_PATH/project.yml" --project-root "$XCODE_HARNESS_PATH" >/dev/null
-  xcodebuild \
+  xcodegen \
+    --spec "$XCODE_HARNESS_PATH/project.yml" \
+    --project-root "$XCODE_HARNESS_PATH" \
+    --project "$XCODE_PROJECT_DIR" \
+    >/dev/null
+
+  cleanup_xcode() {
+    if [[ -n "$pid" ]]; then
+      stop_owned_process "$pid" "$pgid"
+      pid=""
+      pgid=""
+    fi
+  }
+  trap cleanup_xcode EXIT
+  trap 'cleanup_xcode; exit 143' INT TERM
+
+  start_owned_process xcodebuild \
     -project "$project_path" \
     -scheme LonghouseMenuBarWindowHost \
     -destination 'platform=macOS' \
+    -derivedDataPath "$ARTIFACT_DIR/derived-data" \
     -resultBundlePath "$result_bundle" \
-    test | tee "$log_path"
-}
+    test >"$log_path" 2>&1
+  pid="$OWNED_PID"
+  pgid="$OWNED_PGID"
+  wait "$pid" || command_status=$?
+  cat "$log_path"
+  cleanup_xcode
+  trap - EXIT INT TERM
+  return "$command_status"
+)
 
 SMOKE_ACTIONS="refresh,runDoctor,repairInstall,inspectStorageSource,openLogs,openLonghouse,copyDiagnostics"
 
@@ -339,9 +482,6 @@ run_smoke_shell() {
   verify_action_log "$log_path" "$label"
 }
 
-cleanup_harness_processes() {
-  pkill -f 'LonghouseMenuBarHarness(App|MenuBar)' >/dev/null 2>&1 || true
-}
 
 write_manifest() {
   python3 - "$ARTIFACT_DIR" <<'PY'
@@ -370,7 +510,7 @@ PY
 
 case "$cmd" in
   test)
-    swift test --package-path "$PKG_PATH"
+    swift test --package-path "$PKG_PATH" --scratch-path "$BUILD_DIR"
     ;;
   snapshot-fixture)
     fixture="${1:-}"
@@ -378,8 +518,9 @@ case "$cmd" in
       usage
       exit 2
     fi
+    fixture_file="$(fixture_path "$fixture")"
     output="${2:-$ARTIFACT_DIR/${fixture}.png}"
-    capture_fixture_render "$(fixture_path "$fixture")" "$output"
+    capture_fixture_render "$fixture_file" "$output"
     ;;
   snapshot-live)
     output="${1:-$ARTIFACT_DIR/live.png}"
@@ -395,8 +536,9 @@ case "$cmd" in
       usage
       exit 2
     fi
+    fixture_file="$(fixture_path "$fixture")"
     output="${2:-$ARTIFACT_DIR/${fixture}.png}"
-    raw_snapshot_exec --input "$(fixture_path "$fixture")" --output "$output"
+    raw_snapshot_exec --input "$fixture_file" --output "$output"
     echo "$output"
     ;;
   raw-snapshot-live)
@@ -413,9 +555,10 @@ case "$cmd" in
       usage
       exit 2
     fi
+    fixture_file="$(fixture_path "$fixture")"
     for variant in minimal telemetry-rail session-ribbon; do
       output="$ARTIFACT_DIR/${fixture}-${variant}.png"
-      raw_snapshot_exec --input "$(fixture_path "$fixture")" --output "$output" --header-variant "$variant"
+      raw_snapshot_exec --input "$fixture_file" --output "$output" --header-variant "$variant"
       echo "$output"
     done
     ;;
@@ -441,12 +584,10 @@ case "$cmd" in
     ;;
   smoke)
     fixture="${1:-healthy}"
-    cleanup_harness_processes
     run_smoke_shell "window" "$fixture" "$ARTIFACT_DIR/window-smoke-actions.jsonl" app_exec
     run_smoke_shell "menubar" "$fixture" "$ARTIFACT_DIR/menubar-smoke-actions.jsonl" menubar_exec
     ;;
   xcuitest)
-    cleanup_harness_processes
     xcode_ui_exec
     ;;
   full)
@@ -463,7 +604,8 @@ case "$cmd" in
       usage
       exit 2
     fi
-    app_exec --input "$(fixture_path "$fixture")" --action-log "$ARTIFACT_DIR/actions.jsonl"
+    fixture_file="$(fixture_path "$fixture")"
+    app_exec --input "$fixture_file" --action-log "$ARTIFACT_DIR/actions.jsonl"
     ;;
   window-live)
     app_exec --live --refresh-seconds 10 --action-log "$ARTIFACT_DIR/actions.jsonl"
@@ -474,7 +616,8 @@ case "$cmd" in
       usage
       exit 2
     fi
-    menubar_exec --input "$(fixture_path "$fixture")" --action-log "$ARTIFACT_DIR/actions.jsonl"
+    fixture_file="$(fixture_path "$fixture")"
+    menubar_exec --input "$fixture_file" --action-log "$ARTIFACT_DIR/actions.jsonl"
     ;;
   menubar-live)
     menubar_exec --live --refresh-seconds 10 --action-log "$ARTIFACT_DIR/actions.jsonl"

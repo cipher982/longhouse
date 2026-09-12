@@ -51,17 +51,50 @@ docs/       Specs and runbooks — see docs/README.md for an index
 
 Run the tier that matches your change — don't over-test:
 
-| Change in | Run |
-|-----------|-----|
-| `server/zerg/` (backend) | `make test` |
-| `web/` (frontend) | `make test-frontend` |
-| `engine/` (Rust agent) | `make test-engine` |
-| `runner/` | `make test-runner` |
-| UI / runtime behavior | `make test-e2e` |
-| Before pushing | `make test-ci` |
+| Change in                | Run                  |
+| ------------------------ | -------------------- |
+| `server/zerg/` (backend) | `make test`          |
+| `web/` (frontend)        | `make test-frontend` |
+| `engine/` (Rust agent)   | `make test-engine`   |
+| `runner/`                | `make test-runner`   |
+| UI / runtime behavior    | `make test-e2e`      |
+| Before pushing           | `make test-ci`       |
+
+Ordinary `test-*`, `validate-*`, `qa-*`, and onboarding-funnel targets run
+through the disposable portable test boundary. Local runs require Docker; the
+supervisor copies the current source into a container with no host mounts,
+ambient credentials, or external network access. Dependency preparation has
+network access and receives only the package manifests. Browser binaries come
+from the official Playwright image pinned to the version in `bun.lock`.
+Receipts and collected evidence go under `artifacts/test-isolation/<run-id>/`.
+Each run has its own container and private home. The container deadline survives
+a killed supervisor; the next run removes expired resources owned by that
+checkout without touching active runs or another checkout's resources.
+Do not provide provider credentials to fixture targets.
 
 Backend tests go in `server/tests_lite/` (per-test SQLite DBs, no shared
-conftest). For `ios/` changes, run the Xcode `Longhouse` scheme tests.
+conftest). For `ios/` changes, use the native CI lane described below.
+
+### Native test isolation
+
+Native iOS, macOS packaging, installer, and WebKit onboarding fixtures run
+only for an exact pushed SHA on a fresh standard GitHub-hosted macOS runner.
+CI invokes `python3 scripts/qa/native-test-bootstrap.py --target TARGET` with
+explicit `NATIVE_OPTIONS_JSON`; it creates a disposable home and records
+`$RUNNER_TEMP/native-isolation-evidence/`. There is no local native fallback and
+no self-hosted Mac or paid-runner substitute. Inspect the one-day CI artifact
+and its receipt when a native fixture fails.
+
+Fixture lanes never use real provider credentials. Live proofs require an
+explicit image through
+`scripts/qa/test-isolation.py --live --image IMAGE --target TARGET`.
+Authenticated proofs also require `--credentials FILE`, a private JSON file
+containing only the explicitly supported test credentials. Public settings use
+`--set KEY=VALUE`; neither lane imports the operator's environment.
+Private-input native proofs (`test-mobile-chat-replay` and
+`test-terminal-fidelity-ios`) are deliberately refused by public fixture CI.
+They require a separately authorized disposable macOS worker; never upload
+personal transcripts or tokens in workflow inputs.
 
 ### Session status and motion
 
@@ -77,16 +110,19 @@ then pass `CAPTURE=<private.json>` to the journey target or to
 `make capture-live-status-frames SURFACE=ledger`. Captures contain private session
 content; keep the generated frames, videos, and manifests local and untracked.
 Inspect the frames as well as the assertions, then stop the owned lab process.
-For native status layouts use `make ios-previews`; `make ios-ui-shot
-TEST=SessionChatUITests/testKeyboardFocusKeepsLatestTranscriptMessageVisible`
-also captures the real keyboard and composer.
+For native status layouts, use the native CI dispatcher rather than executing
+on the developer Mac:
+
+```bash
+make ios-previews
+make ios-ui-shot TEST=SessionChatUITests/testKeyboardFocusKeepsLatestTranscriptMessageVisible
+```
 
 ### Native pipeline recovery
 
-On macOS with Xcode and an iOS Simulator installed, `make simlab-run` exercises
-the real app against a scratch Runtime Host and Machine Agent. It covers live
-transcript arrival, malformed/split input, abandoned sends, app termination and
-reopen, and network loss/reconnection without relaunch. To run only recovery:
+`simlab-run` dispatches the clean pushed-SHA native job off the laptop; it
+does not run native code against the developer login. The helper assertions
+remain portable:
 
 ```bash
 make simlab-run SCENARIOS="interrupted-client-recovery client-network-recovery"
@@ -95,8 +131,8 @@ make test-ios-helper
 
 Each verdict requires the final synthetic source reply in the server projection
 and a matching client-render acknowledgement; server-only progress cannot pass.
-Screenshots, logs, projections, timings, and failure verdicts are retained under
-the unique scratch run linked from `artifacts/simlab/current/summary.json`.
+Screenshots, logs, projections, timings, and verdicts are retained in the native
+CI artifact and downloaded beneath the run's `artifacts/test-isolation/` directory.
 Inspect the screenshots as well as the verdict. The loopback relay models
 connection loss, not cellular hardware; app termination is not iOS background
 suspension. These are hidden Shadow imports, not real provider/Console command
@@ -109,25 +145,40 @@ verify its ID is absent from the served inventory, stop owned processes, close
 tabs/simulators, and remove scratch homes. Do not make proof cleanup depend on a
 downstream archive, backup, or ingest worker; those paths may be degraded while
 the proof remains valid.
+The operator commands below run only inside that separately provisioned worker,
+with its own isolated test environment and deliberately supplied credentials and
+private inputs. They are not commands to run under the developer's login.
 
-For real provider sessions, use `make test-console-served-state-e2e ARGS="--help"`
-to create explicit hidden proof sessions, then feed their actual assistant replies
-to the real-client checks:
+For real provider sessions, create the hidden proof sessions with the
+operator's authorized tooling, then dispatch the web proof explicitly through
+the live portable lane. The image, credential JSON, and public settings are
+required inputs; nothing is inferred from the developer's environment:
 
 ```bash
-make test-terminal-fidelity-web FIDELITY_CASES=/tmp/cases.json PLAYWRIGHT_BASE_URL=http://127.0.0.1:47200
-make test-terminal-fidelity-ios FIDELITY_CASES=/tmp/cases.json IOS_DESTINATION="platform=iOS Simulator,id=<uuid>"
+python3 scripts/qa/test-isolation.py \
+  --live --image IMAGE --credentials PRIVATE_CREDENTIALS.json \
+  --target test-terminal-fidelity-web \
+  --command make test-terminal-fidelity-web \
+  FIDELITY_CASES=/work/authorized/cases.json \
+  PLAYWRIGHT_BASE_URL=https://authorized-runtime.example
 ```
+
+The public dispatcher deliberately refuses `test-terminal-fidelity-ios`.
+That private-input native proof is available only to a separately authorized,
+disposable macOS worker whose owner provisions the private manifest, token, and
+simulator; it is not a `make` command for a developer checkout and must never
+run under the developer's login.
 
 The JSON manifest is an array of `{ "name": "...", "session_id": "...",
 "markers": ["SUMMIT_BLUE", "RIVER_GREEN"] }` objects. Markers are exact, distinct,
 whitespace-free final assistant replies, not text copied verbatim into a prompt.
 iOS additionally requires `source_path` and verifies its SHA-256 stays unchanged.
-Use only hidden/test sessions. Set the iOS target explicitly with
-`LONGHOUSE_FIDELITY_SERVER_URL` and `LONGHOUSE_FIDELITY_AUTH_TOKEN`.
-For web, start `make dev` first: its linked-runtime proxy supplies authentication.
-Alternatively use a scratch Runtime Host with auth disabled. The browser proof
-does not silently log in to an arbitrary protected hosted URL.
+Use only hidden/test sessions. The web dispatcher receives credentials solely
+from `PRIVATE_CREDENTIALS.json` and receives its explicit runtime URL and case
+manifest through the authorized command. A scratch Runtime Host with auth
+disabled is also valid; the browser proof never silently logs in to an
+arbitrary protected hosted URL. The separately authorized native worker owns
+the iOS server URL, token, source path, and simulator destination.
 These checks use real served data, not API mocks. They retain ordered-reply,
 cold-open/return, screenshots, and timing evidence under
 `artifacts/terminal-fidelity/`. iOS additionally verifies painted final text
@@ -135,32 +186,20 @@ and termination/reopen. Prefer short, distinct natural-word replies for optical
 checks; long machine identifiers can wrap ambiguously. A provider matrix failure
 must stay visible even when other providers pass. These checks complement
 simlab's connection-recovery scenarios; neither proves cellular-radio behavior.
-
-To run the complete local campaign without assembling a case manifest by hand:
-
-```bash
-make test-terminal-fidelity-gate ARGS="--server-url https://your-runtime.example --browser-url http://127.0.0.1:47200 --device-id your-machine --provider codex --cwd /path/to/workspace --ios-destination 'platform=iOS Simulator,id=<uuid>'"
-```
-
-Run on the provider-owning Mac after `make dev`. Repeat `--provider` for an
-explicit matrix. The command uses the existing machine token (or `--token-env
-NAME`), binds each successful Console proof to its original native source,
-runs web and iOS viewing, then both simlab recovery scenarios. Every requested
-provider remains in the verdict, including failures; unavailable prerequisites
-cannot silently skip a required stage. Logs, source hashes, individual proofs,
-and the final summary stay in a unique `artifacts/terminal-fidelity/gate-*`
-directory. This is an operator qualification, not a credential-dependent gate
-on every push. `make test-terminal-fidelity-gate-helper` checks its failure
-boundaries without a provider or simulator.
+There is no complete local terminal-fidelity campaign command. The public
+dispatcher can run the web proof only; it refuses the private native iOS proof.
+The separately authorized disposable worker may compose web, iOS, and simlab
+stages with an explicit provider matrix and `--token-env NAME`, retaining
+failures and all evidence under a unique
+`artifacts/terminal-fidelity/gate-*` directory. This is an operator
+qualification, not a credential-dependent gate on every push.
 
 Every run records what it exercised. A dogfood build and an installed release
 pass the same stages, so a green run says nothing on its own about the binaries
-a person can download. Add `--require-released-build` to refuse anything but a
-published release across the Runtime Host, CLI and engine:
-
-```bash
-make test-terminal-fidelity-gate ARGS="--require-released-build --server-url ... --device-id ... --provider codex --cwd ... --ios-destination '...'"
-```
+a person can download. The authorized worker may add
+`--require-released-build` to its gate invocation to refuse anything but a
+published release across the Runtime Host, CLI, and engine; that qualification
+is not available from a developer checkout.
 
 Use it after installing a release into a clean environment, to qualify the
 release itself rather than the working tree. A build counts as released only
@@ -170,7 +209,7 @@ itself. The check needs network access and refuses when it cannot reach the
 remote. Each summary ends with a receipt naming the
 product build identities, provider readiness and verdicts, which boundary
 failed, the retained evidence path, and the next supported command for that
-boundary. No current proof records a provider *version*, so the receipt reports
+boundary. No current proof records a provider _version_, so the receipt reports
 readiness rather than claiming a provider build it does not have.
 
 Historical indexing is a separate qualification from upload receipts. On the
@@ -197,10 +236,11 @@ latency budget unchanged and retain each run, including failures; don't call
 upload receipts proof of derived-index convergence.
 
 Launch Gate's remote installer checks upgrade from the preceding stable public
-release into the selected release. For a manual run, set
-`LONGHOUSE_NATIVE_SMOKE_REMOTE=1`, the exact expected version/commit,
-`LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG`, and
-`LONGHOUSE_NATIVE_SMOKE_ARTIFACT_DIR`, then run `make test-install`.
+release into the selected release. In the authorized native dispatcher, set
+`LONGHOUSE_NATIVE_SMOKE_REMOTE=1`, the exact expected version/commit, and
+`LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG`; the worker owns its evidence directory.
+The default unset mode remains the local-build smoke, and `make test-install`
+routes both modes through the hosted native worker.
 It verifies both distributed binaries and preserves prior enrollment,
 credential permissions, and native hook state in one disposable HOME.
 The app stays in that HOME's Applications directory; the smoke never loads
