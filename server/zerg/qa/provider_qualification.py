@@ -54,6 +54,11 @@ _PROFILES = {
         for provider, profile in conversation_reset_qualification.PROFILE_BY_PROVIDER.items()
     },
 }
+_IDENTITY_PROFILES = {
+    ("pi", pi_qualification.PROFILE): pi_qualification._PROFILE,
+    ("omp", omp_console_producer.PROFILE): omp_console_producer._PROFILE,
+    ("omp", omp_helm_lifecycle.PROFILE): omp_helm_lifecycle._PROFILE,
+}
 
 
 def _profile_key(request_path: Path) -> tuple[str, str]:
@@ -91,13 +96,18 @@ def main(argv: list[str] | None = None) -> int:
     if request_path is None:
         if not args.provider or not args.profile or args.provider_bin is None:
             parser.error("either --request or --provider/--profile/--provider-bin is required")
-        expected_profile = conversation_reset_qualification.PROFILE_BY_PROVIDER.get(args.provider)
-        if args.profile != expected_profile:
-            parser.error("local request construction currently supports conversation-reset profiles")
+        profile = _IDENTITY_PROFILES.get((args.provider, args.profile))
+        if profile is None:
+            expected_profile = conversation_reset_qualification.PROFILE_BY_PROVIDER.get(args.provider)
+            if args.profile != expected_profile:
+                parser.error("local request construction does not support this profile")
+            version_pattern = conversation_reset_qualification._VERSION_LINES[args.provider]  # noqa: SLF001
+        else:
+            version_pattern = profile.version_line
         binary = args.provider_bin.expanduser().resolve(strict=True)
         version_result = subprocess.run([str(binary), "--version"], text=True, capture_output=True, timeout=15, check=False)
-        version_line = version_result.stdout.strip().splitlines()[0] if version_result.stdout.strip() else ""
-        match = conversation_reset_qualification._VERSION_LINES[args.provider].search(version_line)  # noqa: SLF001
+        version_output = version_result.stdout.strip().splitlines()[0] if version_result.stdout.strip() else ""
+        match = version_pattern.search(version_output)
         if version_result.returncode != 0 or match is None:
             parser.error(f"provider version probe did not match {args.provider} grammar")
         expected_version = match.groupdict().get("version") or match.group(0)
