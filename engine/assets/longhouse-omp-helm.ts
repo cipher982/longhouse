@@ -32,7 +32,7 @@ export default function (pi: any) {
   let commandChain = Promise.resolve();
   let initialPromptRequested = false;
   let initialPromptDelivered = initialPromptDeliveredAtLaunch;
-  let lastAgentEndTerminal = true;
+  let lastAgentEndTerminal: boolean | undefined;
   const generationWaiters: Array<() => void> = [];
 
   const waitForGenerationChange = (previous: string) =>
@@ -120,7 +120,7 @@ export default function (pi: any) {
     return compact;
   };
 
-  const agentEndIsTerminal = (event: Frame) => {
+  const agentEndIsTerminal = (event: Frame): boolean => {
     for (const key of ["isTerminal", "willContinue"]) {
       if (key in event && typeof event[key] !== "boolean") return false;
     }
@@ -129,7 +129,8 @@ export default function (pi: any) {
     return true;
   };
 
-  const providerIsIdle = (ctx: any) => ctx.isIdle() || lastAgentEndTerminal;
+  const providerIsIdle = (ctx: any) => lastAgentEndTerminal ?? ctx.isIdle();
+
 
   const sendEvent = (kind: string, event: Frame, ctx: any) =>
     write({ kind, event: compactLifecycleEvent(kind, event), ...session(ctx) });
