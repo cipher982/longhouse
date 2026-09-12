@@ -719,6 +719,9 @@ pub fn build_omp_args(
     session_dir: &Path,
     session_file: &Path,
 ) -> Vec<String> {
+    let has_existing_session = std::fs::metadata(session_file)
+        .map(|metadata| metadata.len() > 0)
+        .unwrap_or(false);
     let mut args = vec![
         "--mode".into(),
         "json".into(),
@@ -727,6 +730,9 @@ pub fn build_omp_args(
         "--resume".into(),
         session_file.to_string_lossy().into_owned(),
     ];
+    if has_existing_session {
+        args.push("--continue".into());
+    }
     if let Some(profile) = profile.map(str::trim).filter(|value| !value.is_empty()) {
         args.extend(["--profile".into(), profile.into()]);
     }
@@ -1493,6 +1499,21 @@ mod tests {
             arg.as_str(),
             "--no-tools" | "--no-extensions" | "--no-skills"
         )));
+    }
+
+    #[test]
+    fn existing_omp_session_args_request_native_continuation() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_file = temp.path().join("session.jsonl");
+        std::fs::write(&session_file, b"{\"type\":\"session\"}\n").unwrap();
+        let args = build_omp_args(
+            "reply",
+            None,
+            None,
+            temp.path(),
+            &session_file,
+        );
+        assert!(args.iter().any(|arg| arg == "--continue"));
     }
 
     #[test]

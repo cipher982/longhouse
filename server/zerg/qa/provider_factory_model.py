@@ -143,7 +143,7 @@ DEPLOYED_RELEASE_LANE_PROFILES: dict[str, tuple[str, ...]] = {
     "opencode": ("opencode_server_contract_v1",),
     "antigravity": ("antigravity_hook_inbox_v1",),
     "cursor": ("cursor_observed_install_v1", "cursor_observed_install_grok_v1"),
-    "pi": ("pi_print_v1",),
+    "pi": ("pi_print_v1", "pi_console_tool_v1", "pi_helm_v1"),
     "omp": ("omp_print_v1", "omp_helm_v1"),
 }
 DEPLOYED_RELEASE_LANE_PROFILE: dict[str, str] = {provider: profiles[0] for provider, profiles in DEPLOYED_RELEASE_LANE_PROFILES.items()}
@@ -283,6 +283,24 @@ CREDENTIAL_REQUIREMENT_BY_PROFILE: dict[str, tuple[str, ...]] = {
     "cursor_observed_install_v1": ("CURSOR_API_KEY", "CURSOR_MODEL", "LONGHOUSE_CLI_BIN", "LONGHOUSE_ENGINE_BIN"),
     "cursor_observed_install_grok_v1": ("CURSOR_API_KEY", "CURSOR_MODEL", "LONGHOUSE_CLI_BIN", "LONGHOUSE_ENGINE_BIN"),
     "pi_print_v1": ("OPENROUTER_API_KEY", "LONGHOUSE_PI_LIVE", "LONGHOUSE_PI_QUALIFICATION_MODEL"),
+    "pi_console_tool_v1": (
+        "OPENROUTER_API_KEY",
+        "LONGHOUSE_PI_LIVE",
+        "LONGHOUSE_PI_QUALIFICATION_MODEL",
+        "LONGHOUSE_ENGINE_BIN",
+        "LONGHOUSE_CLI_BIN",
+        "LONGHOUSE_RUNTIME_API_URL",
+        "LONGHOUSE_RUNTIME_AGENTS_TOKEN",
+    ),
+    "pi_helm_v1": (
+        "OPENROUTER_API_KEY",
+        "LONGHOUSE_PI_LIVE",
+        "LONGHOUSE_PI_QUALIFICATION_MODEL",
+        "LONGHOUSE_ENGINE_BIN",
+        "LONGHOUSE_CLI_BIN",
+        "LONGHOUSE_RUNTIME_API_URL",
+        "LONGHOUSE_RUNTIME_AGENTS_TOKEN",
+    ),
     "omp_print_v1": (
         "OPENROUTER_API_KEY",
         "LONGHOUSE_OMP_LIVE",
