@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -375,3 +376,40 @@ def test_cursor_is_reachable_through_the_shared_qualification_dispatcher() -> No
     from zerg.qa.provider_qualification import _PROFILES
 
     assert ("cursor", cursor_release_identity.PROFILE) in _PROFILES
+
+
+def test_main_constructs_local_pi_semantic_request(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make's profile path must reach Pi's native semantic producer."""
+    binary = tmp_path / "pi"
+    binary.write_text(f"#!{sys.executable}\nprint('0.85.1')\n", encoding="utf-8")
+    binary.chmod(0o700)
+    output = tmp_path / "pi-output"
+    for name in ("OPENROUTER_API_KEY", "LONGHOUSE_PI_LIVE", "LONGHOUSE_PI_QUALIFICATION_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    real_run = subprocess.run
+
+    def run(command, *args, **kwargs):
+        if command[:3] == ["git", "rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(command, 0, stdout=TEST_SHA, stderr="")
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(provider_qualification.subprocess, "run", run)
+    result = provider_qualification.main(
+        [
+            "--provider",
+            "pi",
+            "--profile",
+            "pi_print_v1",
+            "--provider-bin",
+            str(binary),
+            "--output-root",
+            str(output),
+            "--json",
+        ]
+    )
+
+    assert result == 0
+    request = json.loads((tmp_path / "pi-output.request.json").read_text())
+    assert request["profile"] == "pi_print_v1"
+    assert request["expected_provider_version"] == "0.85.1"
+    assert json.loads((output / "coverage-manifest.json").read_text())["profile"] == "pi_print_v1"
