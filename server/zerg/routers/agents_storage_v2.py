@@ -71,6 +71,8 @@ from zerg.storage_v2.media_objects import MediaObjectCorruptError
 from zerg.storage_v2.media_objects import MediaObjectSpec
 from zerg.storage_v2.media_objects import MediaObjectValidationError
 from zerg.storage_v2.media_objects import media_object_relative_path
+from zerg.storage_v2.object_store import FilesystemImmutableObjectStore
+from zerg.storage_v2.object_store import ObjectStoreError
 from zerg.storage_v2.raw_objects import MAX_RECORD_BYTES
 from zerg.storage_v2.raw_objects import MAX_RECORDS
 from zerg.storage_v2.raw_objects import RawObjectCorruptError
@@ -793,6 +795,104 @@ def _validated_receipt(
     return receipt
 
 
+async def _dispose_rejected_sealed_objects(
+    catalogd,
+    *,
+    tenant_id: str,
+    session_id: UUID,
+    raw_workers: RawObjectWorkerPool,
+    render_workers: RenderObjectWorkerPool,
+    sealed,
+    sealed_render,
+) -> None:
+    """Remove only native bytes that the fenced catalog does not reference.
+
+    The session tombstone prevents a later native commit for this session. The
+    fenced manifest protects accepted objects and replays that reused their bytes.
+    """
+
+    candidates = [
+        ("raw", sealed.object_path, sealed.object_hash),
+    ]
+    if sealed_render is not None:
+        candidates.append(("render", sealed_render.object_path, sealed_render.object_hash))
+    unreferenced = set(candidates)
+    after_kind = None
+    after_key = None
+    try:
+        while True:
+            page = await catalogd.call(
+                "storage.session.purge_manifest.v2",
+                {
+                    "session_id": str(session_id),
+                    "after_kind": after_kind,
+                    "after_key": after_key,
+                    "limit": _RENDER_MANIFEST_LIMIT,
+                },
+                timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
+            )
+            manifest_tenant = page.get("tenant_id")
+            if page.get("deleted") is not True or (manifest_tenant is not None and manifest_tenant != tenant_id):
+                logger.warning("not disposing rejected storage objects: catalog purge fence is not authoritative")
+                return
+            rows = page.get("objects")
+            if not isinstance(rows, list):
+                logger.warning("not disposing rejected storage objects: catalog purge manifest is malformed")
+                return
+            if manifest_tenant is None and rows:
+                logger.warning("not disposing rejected storage objects: stored objects have no tenant identity")
+                return
+            for row in rows:
+                if not isinstance(row, dict):
+                    logger.warning("not disposing rejected storage objects: catalog purge row is malformed")
+                    return
+                kind = row.get("kind")
+                if kind not in {"raw", "render"}:
+                    continue
+                path = row.get("object_path")
+                object_hash = row.get("object_hash")
+                if not isinstance(path, str) or not isinstance(object_hash, str):
+                    logger.warning("not disposing rejected storage objects: catalog object reference is malformed")
+                    return
+                unreferenced.discard((kind, path, object_hash))
+            if not unreferenced:
+                return
+            has_more = page.get("has_more")
+            if has_more is False:
+                break
+            if has_more is not True or not rows:
+                logger.warning("not disposing rejected storage objects: catalog purge pagination is malformed")
+                return
+            last = rows[-1]
+            if not isinstance(last, dict) or not isinstance(last.get("kind"), str) or not isinstance(last.get("key"), str):
+                logger.warning("not disposing rejected storage objects: catalog purge cursor is malformed")
+                return
+            after_kind = last["kind"]
+            after_key = last["key"]
+    except (CatalogRemoteError, CatalogUnavailable) as exc:
+        logger.warning("not disposing rejected storage objects: catalog reference check failed: %s", exc)
+        return
+
+    stores = {
+        "raw": FilesystemImmutableObjectStore(raw_workers.root, tenant_id=tenant_id),
+        "render": FilesystemImmutableObjectStore(render_workers.root, tenant_id=tenant_id),
+    }
+    for kind, path, object_hash in candidates:
+        if (kind, path, object_hash) not in unreferenced:
+            continue
+        try:
+            await asyncio.to_thread(
+                stores[kind].delete_verified,
+                tenant_id=tenant_id,
+                key=path,
+                sha256=object_hash,
+            )
+        except (ObjectStoreError, OSError) as exc:
+            # A verified delete failure preserves the bytes; it must not turn a
+            # terminal catalog rejection into an acknowledgement or a guess.
+            logger.warning("could not dispose rejected %s object %s: %s", kind, path, exc)
+
+
 def _raise_catalog_error(exc: CatalogRemoteError) -> None:
     status_code = {
         "invalid_request": status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1165,6 +1265,8 @@ async def _commit_admitted_envelope(
 ) -> dict[str, object]:
     settings = get_settings()
     tenant_id = _canonical_text(settings.archive_primary_tenant_id, "tenant_id", 255)
+    sealed = None
+    sealed_render = None
     try:
         # Bound body decode separately from catalog work. A slow catalog commit
         # must not retain scarce live admission and make unrelated live tips
@@ -1252,7 +1354,6 @@ async def _commit_admitted_envelope(
                 raise
             if sealed.envelope_id != parsed["expected_envelope_id"]:
                 raise RawObjectWorkerError("sealed raw object identity changed after admission")
-            sealed_render = None
             if render_task is not None:
                 # A failed render seal must fail the whole commit. Committing
                 # the raw object alone would hand the engine a durable receipt
@@ -1394,6 +1495,16 @@ async def _commit_admitted_envelope(
             bus.publish(TOPIC_TIMELINE, payload)
         return committed_receipt
     except CatalogRemoteError as exc:
+        if exc.code == "session_deleted" and sealed is not None:
+            await _dispose_rejected_sealed_objects(
+                catalogd,
+                tenant_id=tenant_id,
+                session_id=spec.session_id,
+                raw_workers=raw_workers,
+                render_workers=render_workers,
+                sealed=sealed,
+                sealed_render=sealed_render,
+            )
         _raise_catalog_error(exc)
     except CatalogUnavailable as exc:
         raise _http_error(

@@ -25,6 +25,7 @@ os.environ.setdefault("TESTING", "1")
 import zerg.routers.agents_storage_v2 as storage_router
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
+from zerg.catalogd.client import CatalogUnavailable
 from zerg.catalogd.server import CatalogDaemon
 from zerg.config import get_settings
 from zerg.dependencies.agents_auth import require_single_tenant
@@ -1566,6 +1567,78 @@ async def _storage_v2_stack(monkeypatch, *, render_pool_factory, prefix: str):
         await catalog.close()
         await daemon.close()
         tempdir.cleanup()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("materialized_before_delete", [False, True])
+async def test_storage_v2_late_session_deleted_rejection_disposes_only_unreferenced_sealed_objects(monkeypatch, materialized_before_delete):
+    async with _storage_v2_stack(
+        monkeypatch,
+        render_pool_factory=_InlineRenderPool,
+        prefix="lh2-rejected-retention-",
+    ) as stack:
+        tenant_id = get_settings().archive_primary_tenant_id
+        first = _payload(tenant_id=tenant_id, machine_id="cinder", epoch=uuid4())
+        if materialized_before_delete:
+            committed = await stack.client.post(
+                "/agents/storage/v2/envelopes",
+                json=first,
+                headers={"X-Longhouse-Storage-Lane": "live"},
+            )
+            assert committed.status_code == 200, committed.text
+        accepted_paths = set(stack.object_root.rglob("*.zst"))
+        assert len(accepted_paths) == (2 if materialized_before_delete else 0)
+
+        await stack.catalog.call(
+            "storage.session.delete.v2",
+            {
+                "session_id": first["session_id"],
+                "deletion_id": str(uuid4()),
+                "reason": "test",
+                "deleted_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        late = _payload(tenant_id=tenant_id, machine_id="cinder", epoch=uuid4(), data=b"late\n")
+        rejected = await stack.client.post(
+            "/agents/storage/v2/envelopes",
+            json=late,
+            headers={"X-Longhouse-Storage-Lane": "live"},
+        )
+
+        assert rejected.status_code == 410, rejected.text
+        assert rejected.json()["detail"]["code"] == "session_deleted"
+        assert set(stack.object_root.rglob("*.zst")) == accepted_paths
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_ambiguous_catalog_commit_preserves_sealed_objects(monkeypatch):
+    async with _storage_v2_stack(
+        monkeypatch,
+        render_pool_factory=_InlineRenderPool,
+        prefix="lh2-rejected-ambiguous-",
+    ) as stack:
+        payload = _payload(
+            tenant_id=get_settings().archive_primary_tenant_id,
+            machine_id="cinder",
+            epoch=uuid4(),
+        )
+        catalog_call = stack.catalog.call
+
+        async def ambiguous_commit(method, *args, **kwargs):
+            if method == "storage.raw_object.commit.v2":
+                raise CatalogUnavailable("catalog commit outcome is unknown", outcome_unknown=True)
+            return await catalog_call(method, *args, **kwargs)
+
+        monkeypatch.setattr(stack.catalog, "call", ambiguous_commit)
+        response = await stack.client.post(
+            "/agents/storage/v2/envelopes",
+            json=payload,
+            headers={"X-Longhouse-Storage-Lane": "live"},
+        )
+
+        assert response.status_code == 503, response.text
+        assert response.json()["detail"]["code"] == "catalog_unavailable"
+        assert len(set(stack.object_root.rglob("*.zst"))) == 2
 
 
 @pytest.mark.asyncio
