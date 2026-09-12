@@ -3662,7 +3662,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "8d6fae8949fd409af9398c571866f1ec540c09cb8fe31027136826295cf1ec92"
+              "oracle_digest": "29bed1eb543340ad42ef9168215b5e2c5d00658ac8becaa79d38a0db1beebb93"
             }
           ]
         }
@@ -3725,7 +3725,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "fbd7a7e24bb06e43a0628c3547e289b28526a3d3a0e8a167de3c80413d46aff9"
+      "adapter_digest": "01ba0756051ea6a97506f69a60ae2f809beed11bb282da5f16a585916d2bc0e0"
     }
   ]
 }

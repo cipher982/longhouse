@@ -97,10 +97,10 @@ def _omp_state(
 
 def test_omp_qualification_producers_are_registered_on_their_own_contracts() -> None:
     assert CONSOLE_REGISTRATION.producer_id == "omp.console_lifecycle.v1"
-    assert CONSOLE_REGISTRATION.producer_revision == 7
+    assert CONSOLE_REGISTRATION.producer_revision == 8
     assert CONSOLE_REGISTRATION.providers == ("omp",)
     assert CONSOLE_REGISTRATION.scenario_id == "omp_console_lifecycle"
-    assert CONSOLE_REGISTRATION.scenario_revision == 7
+    assert CONSOLE_REGISTRATION.scenario_revision == 8
     assert "console_continuation_receipt" in CONSOLE_REGISTRATION.required_artifacts
     assert HELM_REGISTRATION.producer_id == "omp.helm_lifecycle.v1"
     assert HELM_REGISTRATION.producer_revision == 8
@@ -1491,12 +1491,16 @@ def test_omp_console_settlement_and_context_recall_are_required() -> None:
             "malformed_source": False,
         },
         "no_orphan_provider_processes": True,
+        "served_run_retired": True,
         "interrupt_contract_preserved": True,
         "post_interrupt_sendable": True,
         "canary_session_hidden": True,
     }
 
     assert omp_console_assertions(observation) == {CONSOLE_ASSERTION: True}
+    observation["served_run_retired"] = False
+    assert omp_console_assertions(observation)[CONSOLE_ASSERTION] is False
+    observation["served_run_retired"] = True
     observation["omp_continuation_context_recalled"] = False
     assert omp_console_assertions(observation)[CONSOLE_ASSERTION] is False
     observation["omp_continuation_context_recalled"] = True
