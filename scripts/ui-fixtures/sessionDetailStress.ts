@@ -686,6 +686,34 @@ export function buildSessionDetailStressFixture(): {
       ),
       tool_call_id: "head-tool-4",
     }),
+    // A successful action-tier command. Read-only searches classify as context
+    // and stay one-liners, so the collapsed output preview only appears on a
+    // command the salience rules call an action.
+    makeEvent(212, "assistant", "2026-04-15T15:20:40Z", {
+      tool_name: "exec_command",
+      tool_input_json: {
+        cmd: "make test-frontend",
+        i: "Running the frontend suite",
+      },
+      tool_call_id: "head-tool-5",
+    }),
+    makeEvent(213, "tool", "2026-04-15T15:20:44Z", {
+      tool_name: "exec_command",
+      tool_call_id: "head-tool-5",
+      tool_output_text: toolOutput(
+        0,
+        "4.1",
+        [
+          "bun run validate:types",
+          "tsc --noEmit --skipLibCheck",
+          "",
+          "bun run test -- --run",
+          "Test Files  12 passed (12)",
+          "Tests  214 passed (214)",
+          "Duration  3.42s",
+        ].join("\n"),
+      ),
+    }),
     makeEvent(212, "assistant", "2026-04-15T15:21:00Z", {
       content_text:
         "The failure is useful: the session page readiness flag only flips after both workspace and projection finish. I need to mock the projection and turn endpoints too.",
