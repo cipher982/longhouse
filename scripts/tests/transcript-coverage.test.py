@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+"""Boundaries for the provider-fidelity coverage instrument."""
+
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts" / "ops"))
+
+from managed_profiler import transcript_coverage as coverage  # noqa: E402
+
+OBSERVED_AT_MS = 1_789_308_600_000
+
+
+def write_transcript(records: list[dict]) -> Path:
+    handle = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False, encoding="utf-8")
+    for record in records:
+        handle.write(json.dumps(record) + "\n")
+    handle.close()
+    return Path(handle.name)
+
+
+def assistant(
+    record_id: str,
+    *,
+    timestamp: str = "2026-09-13T14:08:48.525Z",
+    thinking: str | None = None,
+    text: str | None = None,
+    calls: list[str] | None = None,
+) -> dict:
+    parts: list[dict] = []
+    if thinking is not None:
+        parts.append({"type": "thinking", "thinking": thinking})
+    if text is not None:
+        parts.append({"type": "text", "text": text})
+    for index, call_id in enumerate(calls or []):
+        parts.append({"type": "toolCall", "id": call_id, "name": "bash", "arguments": {"i": f"call {index}"}})
+    return {
+        "type": "message",
+        "id": record_id,
+        "timestamp": timestamp,
+        "message": {"role": "assistant", "content": parts},
+    }
+
+
+def tool_result(record_id: str, call_id: str, text: str, *, timestamp: str = "2026-09-13T14:08:49.000Z") -> dict:
+    return {
+        "type": "message",
+        "id": record_id,
+        "timestamp": timestamp,
+        "message": {
+            "role": "toolResult",
+            "toolCallId": call_id,
+            "toolName": "bash",
+            "content": [{"type": "text", "text": text}],
+        },
+    }
+
+
+def served_event(event_id: str, role: str, **fields: object) -> dict:
+    event = {"id": event_id, "role": role, "content_text": None, "tool_name": None, "tool_call_id": None}
+    event.update(fields)
+    return event
+
+
+class ExtractOmpTranscriptTests(unittest.TestCase):
+    """The extractor must mirror the engine's own event identity scheme."""
+
+    def test_keys_match_engine_part_suffixes(self) -> None:
+        path = write_transcript(
+            [
+                assistant("rec-a", thinking="reasoning one", text="first text", calls=["call-1"]),
+                tool_result("rec-b", "call-1", "output"),
+            ]
+        )
+        try:
+            events = coverage.extract_native_events("omp", path)
+        finally:
+            path.unlink()
+        keys = {(event.event_class, event.key) for event in events}
+        self.assertIn(("thinking", "rec-a-thinking-0"), keys)
+        # Block index 1 is a text part, so it carries the explicit suffix.
+        self.assertIn(("assistant_text", "rec-a-text-1"), keys)
+        self.assertIn(("tool_call", "call-1"), keys)
+        self.assertIn(("tool_result", "call-1"), keys)
+
+    def test_first_text_block_uses_the_bare_record_id(self) -> None:
+        path = write_transcript([assistant("rec-only-text", text="sole block")])
+        try:
+            events = coverage.extract_native_events("omp", path)
+        finally:
+            path.unlink()
+        self.assertEqual([(event.event_class, event.key) for event in events], [("assistant_text", "rec-only-text")])
+
+    def test_blank_and_malformed_records_are_ignored(self) -> None:
+        handle = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False, encoding="utf-8")
+        handle.write("\n")
+        handle.write("not json\n")
+        handle.write(json.dumps({"type": "title", "title": "ignored"}) + "\n")
+        handle.write(json.dumps({"type": "message", "id": "rec-empty", "message": {"role": "assistant", "content": []}}) + "\n")
+        handle.close()
+        path = Path(handle.name)
+        try:
+            self.assertEqual(coverage.extract_native_events("omp", path), [])
+        finally:
+            path.unlink()
+
+    def test_unknown_provider_is_rejected(self) -> None:
+        path = write_transcript([])
+        try:
+            with self.assertRaises(SystemExit):
+                coverage.extract_native_events("nonesuch", path)
+        finally:
+            path.unlink()
+
+
+class CoverageReportTests(unittest.TestCase):
+    def test_complete_parity_passes(self) -> None:
+        native = [
+            coverage.NativeEvent("thinking", "rec-a-thinking-0", OBSERVED_AT_MS - 5_000, 10),
+            coverage.NativeEvent("tool_call", "call-1", OBSERVED_AT_MS - 5_000, 0),
+            coverage.NativeEvent("tool_result", "call-1", OBSERVED_AT_MS - 4_000, 20),
+        ]
+        served = [
+            served_event("rec-a-thinking-0", "system"),
+            served_event("rec-a-tool-call-1", "assistant", tool_name="bash", tool_call_id="call-1"),
+            served_event("rec-b", "tool", tool_name="bash", tool_call_id="call-1", tool_output_text="output"),
+        ]
+        report = coverage.coverage_report(
+            native, served, provider="omp", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS
+        )
+        self.assertEqual(report["verdict"], "pass")
+        self.assertEqual(report["classes"]["thinking"]["coverage"], 1.0)
+        self.assertEqual(report["classes"]["tool_call"]["coverage"], 1.0)
+
+    def test_thinking_deleted_at_read_time_is_reported_as_a_class_gap(self) -> None:
+        """The 2026-09-13 defect: reasoning is stored but never served."""
+
+        native = [coverage.NativeEvent("thinking", f"rec-{i}-thinking-0", OBSERVED_AT_MS - 1_000, 100) for i in range(3)]
+        native.append(coverage.NativeEvent("tool_call", "call-1", OBSERVED_AT_MS - 1_000, 0))
+        served = [served_event("rec-0-tool-call-1", "assistant", tool_name="bash", tool_call_id="call-1")]
+        report = coverage.coverage_report(
+            native, served, provider="omp", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS
+        )
+        self.assertEqual(report["verdict"], "partial")
+        self.assertEqual(report["classes"]["thinking"]["provider"], 3)
+        self.assertEqual(report["classes"]["thinking"]["served"], 0)
+        self.assertEqual(report["classes"]["thinking"]["coverage"], 0.0)
+        self.assertIn("thinking", report["totals"]["incomplete_classes"])
+        self.assertEqual(report["classes"]["thinking"]["missing_chars"], 300)
+
+    def test_tool_events_join_on_provider_call_id_not_event_id_shape(self) -> None:
+        native = [coverage.NativeEvent("tool_result", "call_00_abc|fc_tmp_xyz", OBSERVED_AT_MS - 1_000, 5)]
+        served = [served_event("deadbeef", "tool", tool_name="bash", tool_call_id="call_00_abc|fc_tmp_xyz")]
+        report = coverage.coverage_report(
+            native, served, provider="omp", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS
+        )
+        self.assertEqual(report["classes"]["tool_result"]["coverage"], 1.0)
+
+    def test_stale_backlog_escalates_to_stalled(self) -> None:
+        native = [coverage.NativeEvent("tool_call", "call-1", OBSERVED_AT_MS - 500_000, 0)]
+        report = coverage.coverage_report(
+            native,
+            [],
+            provider="omp",
+            session_id="s",
+            transcript="/t",
+            observed_at_ms=OBSERVED_AT_MS,
+            stall_age_ms=60_000,
+        )
+        self.assertEqual(report["verdict"], "stalled")
+        self.assertEqual(report["oldest_unpropagated_age_ms"], 500_000)
+
+    def test_recent_gap_is_partial_not_stalled(self) -> None:
+        native = [coverage.NativeEvent("tool_call", "call-1", OBSERVED_AT_MS - 2_000, 0)]
+        report = coverage.coverage_report(
+            native,
+            [],
+            provider="omp",
+            session_id="s",
+            transcript="/t",
+            observed_at_ms=OBSERVED_AT_MS,
+            stall_age_ms=60_000,
+        )
+        self.assertEqual(report["verdict"], "missing")
+        self.assertEqual(report["oldest_unpropagated_age_ms"], 2_000)
+
+    def test_session_reported_ended_while_provider_alive_is_stalled(self) -> None:
+        native = [coverage.NativeEvent("tool_call", "call-1", OBSERVED_AT_MS - 1_000, 0)]
+        served = [served_event("rec-tool-call-1", "assistant", tool_name="bash", tool_call_id="call-1")]
+        report = coverage.coverage_report(
+            native,
+            served,
+            provider="omp",
+            session_id="s",
+            transcript="/t",
+            observed_at_ms=OBSERVED_AT_MS,
+            provider_alive=True,
+            served_ended_at="2026-09-13T14:27:06.632000Z",
+        )
+        self.assertEqual(report["classes"]["tool_call"]["coverage"], 1.0)
+        self.assertEqual(report["liveness"]["verdict"], "ended_while_alive")
+        self.assertEqual(report["verdict"], "stalled")
+
+    def test_liveness_is_unknown_without_evidence(self) -> None:
+        report = coverage.coverage_report(
+            [coverage.NativeEvent("user", "rec-1", OBSERVED_AT_MS, 4)],
+            [served_event("rec-1", "user", content_text="hi")],
+            provider="omp",
+            session_id="s",
+            transcript="/t",
+            observed_at_ms=OBSERVED_AT_MS,
+        )
+        self.assertEqual(report["liveness"]["verdict"], "unknown")
+        self.assertEqual(report["verdict"], "pass")
+
+    def test_empty_provider_transcript_is_empty_not_failed(self) -> None:
+        report = coverage.coverage_report(
+            [], [], provider="omp", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS
+        )
+        self.assertEqual(report["verdict"], "empty")
+
+    def test_unmapped_served_events_are_counted_not_silently_dropped(self) -> None:
+        report = coverage.coverage_report(
+            [coverage.NativeEvent("user", "rec-1", OBSERVED_AT_MS, 4)],
+            [served_event("rec-1", "user", content_text="hi"), {"id": "x", "role": "mystery"}],
+            provider="omp",
+            session_id="s",
+            transcript="/t",
+            observed_at_ms=OBSERVED_AT_MS,
+        )
+        self.assertEqual(report["totals"]["served_unmapped_events"], 1)
+
+    def test_text_report_names_every_class_and_the_missing_sample(self) -> None:
+        native = [coverage.NativeEvent("thinking", "rec-1-thinking-0", OBSERVED_AT_MS - 90_000, 42)]
+        report = coverage.coverage_report(
+            native, [], provider="omp", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS
+        )
+        text = coverage.render_text(report)
+        for name in coverage.EVENT_CLASSES:
+            self.assertIn(name, text)
+        self.assertIn("rec-1-thinking-0", text)
+        self.assertIn("STALLED", text)
+
+
+class ServedPayloadTests(unittest.TestCase):
+    def test_payload_shapes(self) -> None:
+        self.assertEqual(coverage.served_events_from_payload({"events": [{"id": "a"}]}), [{"id": "a"}])
+        self.assertEqual(coverage.served_events_from_payload([{"id": "a"}]), [{"id": "a"}])
+        self.assertEqual(coverage.served_events_from_payload({"events": "nope"}), [])
+        self.assertEqual(coverage.served_events_from_payload(None), [])
+
+
+def main() -> int:
+    result = unittest.main(module=__name__, exit=False, verbosity=2)
+    return 0 if result.result.wasSuccessful() else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

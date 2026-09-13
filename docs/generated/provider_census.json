@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 270,
+  "file_count": 271,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -528,7 +528,16 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "omp",
+        "opencode",
+        "pi"
+      ]
+    },
+    {
+      "path": "scripts/ops/managed_profiler/transcript_coverage.py",
+      "providers": [
+        "cursor",
+        "omp"
       ]
     },
     {

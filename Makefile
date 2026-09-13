@@ -306,6 +306,12 @@ test-terminal-fidelity-gate: ## Compose real Console, web, iOS and recovery proo
 test-terminal-fidelity-gate-helper: ## Focused fidelity composition and failure-retention boundaries
 	@uv run --project server python scripts/tests/terminal-fidelity-gate.test.py
 
+provider-fidelity-coverage: ## Provider→served content coverage for one session (ARGS="--provider omp --session <id> --transcript <path>")
+	@python3 scripts/ops/managed_profiler/transcript_coverage.py $(ARGS)
+
+test-provider-fidelity-coverage: ## Focused provider-fidelity coverage boundaries
+	@python3 scripts/tests/transcript-coverage.test.py
+
 historical-convergence-check: ## Read-only historical publication diagnosis or bounded --wait qualification
 	@cd server && uv run python -m zerg.cli.historical_convergence $(ARGS)
 

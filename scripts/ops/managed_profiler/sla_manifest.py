@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_MANIFEST_PATH = ROOT / "config" / "session-propagation-sla.toml"
 ALLOWED_STATUSES = {"required", "experimental", "undefined"}
 ALLOWED_CI_MODES = {"blocked", "gate", "report"}
-ALLOWED_PROVIDERS = {"all", "claude", "codex", "cursor", "opencode"}
+ALLOWED_PROVIDERS = {"all", "claude", "codex", "cursor", "omp", "opencode", "pi"}
 IMPLEMENTED_PROFILER_DRIVERS = {
     "managed_codex_cold_timeline",
     "managed_codex_warm_live",
