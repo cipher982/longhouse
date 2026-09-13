@@ -39,7 +39,7 @@ _TRUTHY_ENV = frozenset({"1", "true", "yes", "on"})
 _PUBLISH_AGGREGATES_SQL = """
     SELECT
         SUM(CASE WHEN e.role = 'user' AND e.title_eligible = 1
-                  AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_notification'))
+                  AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))
                  THEN 1 ELSE 0 END) AS user_messages,
         SUM(CASE WHEN e.role = 'assistant' AND e.tool_name IS NULL
                   AND (e.branch_kind IS NULL OR e.branch_kind NOT IN ('abandoned', 'reasoning'))
@@ -90,9 +90,9 @@ _ARCHIVE_SEARCH_SQL = """
       AND (? IS NULL OR e.order_time_us >= ?)
       AND (? IS NULL OR e.order_time_us < ?)
       AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
-      AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_system' OR e.role NOT IN ('user', 'system'))
+      AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
       AND (e.role != 'user' OR (e.title_eligible = 1
-           AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_notification'))))
+           AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
     ORDER BY events_fts.rank ASC
     LIMIT ?
 """
@@ -132,9 +132,9 @@ _ARCHIVE_BOUNDED_SEARCH_SQL = """
           AND (? IS NULL OR e.order_time_us >= ?)
           AND (? IS NULL OR e.order_time_us < ?)
           AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
-          AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_system' OR e.role NOT IN ('user', 'system'))
+          AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
           AND (e.role != 'user' OR (e.title_eligible = 1
-               AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_notification'))))
+               AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
         ORDER BY events_fts.rowid DESC
         LIMIT ?
     ), top AS (
@@ -183,9 +183,9 @@ _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL = """
           AND (? IS NULL OR e.order_time_us >= ?)
           AND (? IS NULL OR e.order_time_us < ?)
           AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
-          AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_system' OR e.role NOT IN ('user', 'system'))
+          AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
           AND (e.role != 'user' OR (e.title_eligible = 1
-               AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_notification'))))
+               AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
         ORDER BY events_fts.rowid DESC
         LIMIT ?
     ), top AS (
@@ -245,9 +245,9 @@ _SEARCHABLE_SEARCH_SQL = """
           AND (? IS NULL OR e.order_time_us >= ?)
           AND (? IS NULL OR e.order_time_us < ?)
           AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
-          AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_system' OR e.role NOT IN ('user', 'system'))
+          AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
           AND (e.role != 'user' OR (e.title_eligible = 1
-               AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_notification'))))
+               AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
         ORDER BY searchable_fts.rowid DESC
         LIMIT ?
     ), top AS (
@@ -301,9 +301,9 @@ _SEARCH_SQL = _ARCHIVE_SEARCH_SQL
 _CLEAN_RECALL_TURN_PREDICATE = """
       e.role IN ('user', 'assistant') AND e.content_text IS NOT NULL
       AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
-      AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_system' OR e.role NOT IN ('user', 'system'))
+      AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
       AND (e.role != 'user' OR (e.title_eligible = 1
-           AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_notification'))))
+           AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
 """
 
 _CONTEXT_TARGET_SQL = f"""
@@ -2064,17 +2064,17 @@ class SearchStore:
                        MIN(CASE
                            WHEN e.role IN ('user', 'assistant') AND e.content_text IS NOT NULL
                                 AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
-                                AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_system' OR e.role NOT IN ('user', 'system'))
+                                AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
                                 AND (e.role != 'user' OR (e.title_eligible = 1
-                                     AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_notification'))))
+                                     AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
                            THEN e.order_time_us
                        END) AS first_message_us,
                        SUM(CASE
                            WHEN e.role IN ('user', 'assistant') AND e.content_text IS NOT NULL
                                 AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
-                                AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_system' OR e.role NOT IN ('user', 'system'))
+                                AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
                                 AND (e.role != 'user' OR (e.title_eligible = 1
-                                     AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_notification'))))
+                                     AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
                            THEN 1 ELSE 0
                        END) AS message_count,
                        COUNT(*) AS day_event_count
@@ -2152,9 +2152,9 @@ class SearchStore:
               AND e.role IN ('user', 'assistant')
               AND e.content_text IS NOT NULL
               AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
-              AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_system' OR e.role NOT IN ('user', 'system'))
+              AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
               AND (e.role != 'user' OR (e.title_eligible = 1
-                   AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_notification'))))
+                   AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
               AND (? = 1 OR s.environment NOT IN ('test', 'e2e'))
               AND (COALESCE(s.hidden_from_default_timeline, 0) = 0
                    OR (? = 1 AND COALESCE(s.test_scope_visible, 0) = 1))

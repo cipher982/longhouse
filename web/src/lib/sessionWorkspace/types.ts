@@ -65,6 +65,7 @@ export type TimelineItem =
   | { kind: "seam"; seam: TimelineSeam }
   | { kind: "action"; action: TimelineAction }
   | { kind: "provider_notification"; event: AgentEvent }
+  | { kind: "reasoning"; event: AgentEvent }
   | { kind: "message"; event: AgentEvent }
   | { kind: "tool"; interaction: ToolInteraction }
   | { kind: "activity_group"; group: ActivityGroup };
@@ -72,6 +73,12 @@ export type TimelineItem =
 export type TimelineSelection =
   | {
       kind: "provider_notification";
+      key: string;
+      rowId: string;
+      event: AgentEvent;
+    }
+  | {
+      kind: "reasoning";
       key: string;
       rowId: string;
       event: AgentEvent;

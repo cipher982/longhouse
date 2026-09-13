@@ -16,6 +16,7 @@ from zerg.services.provider_interaction_semantics import INTERACTION_DURABLE_USE
 from zerg.services.provider_interaction_semantics import INTERACTION_LOCAL_CONTROL
 from zerg.services.provider_interaction_semantics import INTERACTION_LOCAL_CONTROL_OUTPUT
 from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_NOTIFICATION
+from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_REASONING
 from zerg.services.provider_interaction_semantics import INTERACTION_PROVIDER_SYSTEM
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
 from zerg.services.provider_interaction_semantics import claude_provider_system_record
@@ -25,6 +26,7 @@ from zerg.services.provider_interaction_semantics import codex_internal_context_
 from zerg.services.provider_interaction_semantics import codex_internal_context_record
 from zerg.services.provider_interaction_semantics import codex_provider_system_record
 from zerg.services.provider_interaction_semantics import interaction_context_key_parts
+from zerg.services.provider_interaction_semantics import provider_reasoning_content_candidate
 from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
 from zerg.services.provider_interaction_semantics import semantic_event_included
 from zerg.services.provider_interaction_semantics import semantic_projection_facts
@@ -916,3 +918,128 @@ def test_semantic_boundary_preserves_non_user_rows_and_drops_only_proven_control
     assert semantic_event_included("claude", role="user", content_text=command, raw_json=raw_command) is False
     assert semantic_event_included("claude", role="assistant", content_text=command) is True
     assert semantic_event_included("codex", role="user", content_text="/custom-command") is True
+
+
+def _omp_reasoning_raw(text: str = "We should check the docket first.") -> str:
+    """One OMP assistant record: reasoning plus the tool call it preceded."""
+
+    return json.dumps(
+        {
+            "type": "message",
+            "id": "rec-1",
+            "timestamp": "2026-09-13T14:08:48.525Z",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": text},
+                    {"type": "toolCall", "id": "call-1", "name": "read", "arguments": {"path": "a.md"}},
+                ],
+            },
+        }
+    )
+
+
+def test_provider_reasoning_row_reaches_the_semantic_projection() -> None:
+    """OMP and Pi publish reasoning as a system-role row that is real content."""
+
+    content = "Thinking:\nWe should check the docket first."
+    for provider in ("omp", "pi"):
+        classification = classify_provider_interaction(
+            provider,
+            role="system",
+            content_text=content,
+            raw_json=_omp_reasoning_raw(),
+        )
+        assert classification["interaction_kind"] == INTERACTION_PROVIDER_REASONING
+        assert classification["changes_provider_state"] is False
+        assert classification["starts_model_turn"] is False
+        assert classification["title_eligible"] is False
+
+    assert (
+        semantic_event_included(
+            "omp",
+            role="system",
+            content_text=content,
+            interaction_kind=INTERACTION_PROVIDER_REASONING,
+        )
+        is False
+    )
+    assert (
+        semantic_event_included(
+            "omp",
+            role="system",
+            content_text=content,
+            interaction_kind=INTERACTION_PROVIDER_REASONING,
+            include_reasoning=True,
+        )
+        is True
+    )
+
+
+def test_stored_provider_system_kind_cannot_demote_structural_reasoning() -> None:
+    """Already-sealed render rows carry the older, too-general kind."""
+
+    classification = classify_provider_interaction(
+        "omp",
+        role="system",
+        content_text="Thinking:\nreasoning",
+        raw_json=_omp_reasoning_raw(),
+        interaction_kind=INTERACTION_PROVIDER_SYSTEM,
+    )
+
+    assert classification["interaction_kind"] == INTERACTION_PROVIDER_REASONING
+
+
+def test_system_rows_without_a_reasoning_part_stay_provider_system() -> None:
+    """Lifecycle and custom rows must not become timeline content."""
+
+    lifecycle = json.dumps({"type": "custom", "id": "rec-2", "customType": "tool_execution_start", "data": {}})
+    compacted = json.dumps(
+        {"type": "message", "id": "rec-3", "message": {"role": "assistant", "content": [{"type": "text", "text": "compacted"}]}}
+    )
+
+    for content, raw in (("Tool started", lifecycle), ("Conversation compacted", compacted)):
+        classification = classify_provider_interaction("omp", role="system", content_text=content, raw_json=raw)
+        assert classification["interaction_kind"] == INTERACTION_PROVIDER_SYSTEM
+        assert semantic_event_included("omp", role="system", content_text=content, interaction_kind=INTERACTION_PROVIDER_SYSTEM) is False
+
+
+def test_reasoning_part_is_only_reasoning_on_a_system_role_row() -> None:
+    for provider in ("omp", "pi"):
+        assert (
+            classify_provider_interaction(
+                provider,
+                role="assistant",
+                content_text="I will read the file.",
+                raw_json=_omp_reasoning_raw(),
+            )["interaction_kind"]
+            != INTERACTION_PROVIDER_REASONING
+        )
+        assert (
+            classify_provider_interaction(
+                provider,
+                role="system",
+                content_text="Thinking:\nreasoning",
+                raw_json=_omp_reasoning_raw(),
+            )["interaction_kind"]
+            == INTERACTION_PROVIDER_REASONING
+        )
+
+    # Other providers keep their own contracts: a Claude system row is not
+    # reasoning just because it is a system row.
+    assert (
+        classify_provider_interaction(
+            "claude",
+            role="system",
+            content_text="Thinking:\nreasoning",
+            raw_json=_omp_reasoning_raw(),
+        )["interaction_kind"]
+        == INTERACTION_PROVIDER_SYSTEM
+    )
+
+
+def test_reasoning_selection_candidate_uses_the_engine_projection_prefix() -> None:
+    assert provider_reasoning_content_candidate("Thinking:\nreasoning") is True
+    assert provider_reasoning_content_candidate("reasoning") is False
+    assert provider_reasoning_content_candidate("") is False
+    assert provider_reasoning_content_candidate(None) is False

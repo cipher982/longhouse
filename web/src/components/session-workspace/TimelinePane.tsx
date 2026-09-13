@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import { EmptyState, Spinner } from "../ui";
 import { FunnelIcon } from "../icons";
+import { ReasoningRow } from "./ReasoningRow";
 import type {
   ActivityGroup,
   TimelineAction,
@@ -1195,6 +1196,9 @@ export function TimelinePane({
           item.seam.description.toLowerCase().includes(query)
         );
       }
+      if (item.kind === "reasoning") {
+        return item.event.content_text?.toLowerCase().includes(query) ?? false;
+      }
       if (item.kind === "message") {
         return item.event.content_text?.toLowerCase().includes(query);
       }
@@ -1405,6 +1409,15 @@ export function TimelinePane({
 
             if (item.kind === "action") {
               return <ActionRow key={item.action.key} action={item.action} />;
+            }
+            if (item.kind === "reasoning") {
+              return (
+                <ReasoningRow
+                  key={item.event.id}
+                  event={item.event}
+                  isSelected={timelineItemContainsSelection(item, selectedKey)}
+                />
+              );
             }
 
             if (item.kind === "provider_notification") {

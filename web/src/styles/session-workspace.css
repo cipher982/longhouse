@@ -1234,6 +1234,75 @@
   white-space: nowrap;
 }
 
+/* --- Provider reasoning: collapsed prose with an explicit expand affordance. --- */
+.tl-reasoning {
+  display: block;
+  max-width: var(--tl-tool-max);
+  margin-inline: auto;
+  width: 100%;
+  border-radius: var(--radius-md);
+}
+.tl-reasoning.is-selected {
+  background: rgba(212, 184, 122, 0.06);
+}
+.tl-reasoning.is-expanded {
+  background: rgba(18, 11, 9, 0.45);
+}
+.tl-reasoning__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 10px 4px 14px;
+  cursor: pointer;
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.tl-reasoning__head:hover {
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: var(--radius-md);
+}
+.tl-reasoning__chev {
+  color: var(--color-text-muted);
+  opacity: 0.6;
+  transition: transform var(--motion-duration-fast)
+    var(--motion-easing-standard);
+  display: inline-block;
+  flex-shrink: 0;
+}
+.tl-reasoning__chev.is-open {
+  transform: rotate(90deg);
+}
+.tl-reasoning__label {
+  color: var(--color-brand-primary);
+  font-weight: var(--font-weight-semibold);
+  flex-shrink: 0;
+}
+.tl-reasoning__summary {
+  flex: 1;
+  min-width: 0;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tl-reasoning__time {
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+.tl-reasoning__body {
+  margin: 2px 14px 8px 30px;
+  padding: 6px 10px 8px;
+  border-left: 2px solid rgba(123, 209, 151, 0.24);
+}
+
 /* --- Shared ---
      One centered conversation column. Everything — prose, tool rows,
      seams — lives inside a single column clamped to the tool width, so

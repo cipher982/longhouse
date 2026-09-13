@@ -56,6 +56,18 @@ const providerNotificationItem: TimelineItem = {
   },
 };
 
+const reasoningItem: TimelineItem = {
+  kind: "reasoning",
+  event: {
+    ...messageItem.event,
+    id: 6,
+    role: "system",
+    content_text: "Thinking:\nWe should check the docket first.",
+    interaction_kind: "provider_reasoning",
+    timestamp: "2026-03-19T16:48:30Z",
+  },
+};
+
 const mediaMessageItem: TimelineItem = {
   kind: "message",
   event: {
@@ -408,6 +420,22 @@ describe("TimelinePane", () => {
     expect(row).toHaveAttribute("data-row-kind", "provider-notification");
     expect(row).toHaveTextContent('Background command "Run the checks" completed (exit code 0)');
     expect(row).not.toHaveTextContent("<task-notification>");
+  });
+
+  it("renders reasoning without its wire prefix and keeps the body collapsed", () => {
+    renderPane([reasoningItem]);
+
+    const row = screen.getByTestId("session-timeline-reasoning");
+    expect(row).toHaveAttribute("data-row-kind", "reasoning");
+    expect(row).toHaveTextContent("We should check the docket first.");
+    expect(row).not.toHaveTextContent("Thinking:");
+    expect(screen.queryByTestId("session-timeline-reasoning-body")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand reasoning" }));
+    const body = screen.getByTestId("session-timeline-reasoning-body");
+    expect(body).toHaveTextContent("We should check the docket first.");
+    expect(body).not.toHaveTextContent("Thinking:");
+    expect(screen.getByRole("button", { name: "Collapse reasoning" })).toBeInTheDocument();
   });
 
   it("exposes copy-independent pagination counts", () => {

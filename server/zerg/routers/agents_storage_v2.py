@@ -2160,6 +2160,10 @@ async def _read_storage_v2_session_events_page_admitted(
                         role=record.role,
                         content_text=record.content_text,
                         interaction_kind=interaction_kind,
+                        # The session transcript is the surface that mirrors
+                        # the terminal, so model reasoning belongs here while
+                        # staying out of search, titles, and export.
+                        include_reasoning=True,
                     ):
                         continue
                     if claude_generation:

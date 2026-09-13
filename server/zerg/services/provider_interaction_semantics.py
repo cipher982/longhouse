@@ -20,11 +20,19 @@ INTERACTION_DURABLE_USER_MESSAGE = "durable_user_message"
 INTERACTION_LOCAL_CONTROL = "local_control"
 INTERACTION_LOCAL_CONTROL_OUTPUT = "local_control_output"
 INTERACTION_PROVIDER_SYSTEM = "provider_system"
+INTERACTION_PROVIDER_REASONING = "provider_reasoning"
 INTERACTION_PROVIDER_NOTIFICATION = "provider_notification"
 INTERACTION_CONVERSATION_BOUNDARY = "conversation_boundary"
 INTERACTION_UNKNOWN_USER_INPUT = "unknown_user_input"
 
 _TITLE_ELIGIBLE_KINDS = frozenset({INTERACTION_DURABLE_USER_MESSAGE, INTERACTION_UNKNOWN_USER_INPUT})
+
+# Providers that publish model reasoning as an assistant content part which
+# Longhouse normalizes to a system-role row. The engine projects that row's
+# content behind this marker (engine/src/pipeline/parser.rs); the marker is
+# selection evidence only, and the raw thinking part remains the authority.
+REASONING_PROJECTION_PREFIX = "Thinking:\n"
+REASONING_PART_PROVIDERS = frozenset({"omp", "pi"})
 
 
 def omp_agent_end_is_terminal(event: Mapping[str, Any]) -> bool:
@@ -56,6 +64,7 @@ VALID_INTERACTION_KINDS = frozenset(
         INTERACTION_LOCAL_CONTROL,
         INTERACTION_LOCAL_CONTROL_OUTPUT,
         INTERACTION_PROVIDER_SYSTEM,
+        INTERACTION_PROVIDER_REASONING,
         INTERACTION_PROVIDER_NOTIFICATION,
         INTERACTION_CONVERSATION_BOUNDARY,
         INTERACTION_UNKNOWN_USER_INPUT,
@@ -204,6 +213,42 @@ def codex_provider_system_candidate(content_text: str | None) -> bool:
     """Return whether a render value merits Codex raw-envelope recovery."""
 
     return _codex_provider_system_text(content_text)
+
+
+def provider_reasoning_content_candidate(content_text: str | None) -> bool:
+    """Return whether a render value may be a provider reasoning projection.
+
+    Selection runs before the raw companion is read, so it can only use the
+    projected text. The marker is the engine's own projection prefix.
+    """
+
+    return isinstance(content_text, str) and content_text.startswith(REASONING_PROJECTION_PREFIX)
+
+
+def provider_reasoning_record(provider: str | None, *, role: str | None, raw_json: Any) -> bool:
+    """Recognize a provider's model-reasoning row from its raw record.
+
+    OMP and Pi publish reasoning as an assistant ``thinking`` content part.
+    Longhouse normalizes that to a system-role row, which by role alone is
+    indistinguishable from provider scaffolding; the thinking part in the raw
+    record is the structural evidence, and projected text alone is
+    intentionally insufficient.
+    """
+
+    if str(provider or "").strip().lower() not in REASONING_PART_PROVIDERS:
+        return False
+    if str(role or "").strip().lower() != "system":
+        return False
+    raw = _raw_mapping(raw_json)
+    if raw is None:
+        return False
+    message = raw.get("message")
+    if not isinstance(message, Mapping):
+        return False
+    content = message.get("content")
+    if not isinstance(content, list):
+        return False
+    return any(isinstance(part, Mapping) and part.get("type") == "thinking" for part in content)
 
 
 def _raw_identifier(raw: Mapping[str, Any] | None, field: str) -> str | None:
@@ -783,8 +828,13 @@ def classify_provider_interaction(
     )
     codex_provider_system = normalized_provider == "codex" and codex_provider_system_record(raw)
     claude_provider_system = normalized_provider == "claude" and claude_provider_system_record(raw)
+    provider_reasoning = provider_reasoning_record(normalized_provider, role=normalized_role, raw_json=raw)
     if codex_provider_system or claude_provider_system:
         kind = INTERACTION_PROVIDER_SYSTEM
+        changes_provider_state = False
+        starts_model_turn = False
+    elif provider_reasoning:
+        kind = INTERACTION_PROVIDER_REASONING
         changes_provider_state = False
         starts_model_turn = False
     elif claude_task_notification:
@@ -815,7 +865,7 @@ def classify_provider_interaction(
     # ``interaction_kind`` is parser-owned normalized data. Never accept a
     # Longhouse semantic override from provider raw JSON: raw provider text is
     # evidence to classify, not an authority that can demote itself.
-    explicit_kind = None if codex_provider_system or claude_provider_system else interaction_kind
+    explicit_kind = None if codex_provider_system or claude_provider_system or provider_reasoning else interaction_kind
     if explicit_kind in _INTERACTION_KINDS:
         kind = str(explicit_kind)
         if kind in {INTERACTION_LOCAL_CONTROL, INTERACTION_CONVERSATION_BOUNDARY}:
@@ -940,6 +990,7 @@ def semantic_event_included(
     interaction_kind: str | None = None,
     title_eligible: bool | int | None = None,
     sequence_context: MutableMapping[str, Any] | None = None,
+    include_reasoning: bool = False,
 ) -> bool:
     """Whether a normalized event belongs in semantic projections.
 
@@ -947,10 +998,16 @@ def semantic_event_included(
     provider notifications. Provider-local records that are normalized as
     ``role=user`` are excluded only when the provider contract supplies
     positive evidence that they are local control rather than a prompt.
+
+    Model reasoning is user-visible in the terminal but is not conversational
+    content: search, titles, card previews, turn assembly, and export keep it
+    excluded. Only the timeline projection opts in with ``include_reasoning``.
     """
 
     if interaction_kind == INTERACTION_PROVIDER_NOTIFICATION:
         return False
+    if interaction_kind == INTERACTION_PROVIDER_REASONING:
+        return include_reasoning
     if interaction_kind == INTERACTION_PROVIDER_SYSTEM and str(role or "").strip().lower() in {"user", "system"}:
         return False
     normalized_provider = str(provider or "").strip().lower()

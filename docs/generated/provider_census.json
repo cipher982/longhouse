@@ -1285,7 +1285,9 @@
         "antigravity",
         "claude",
         "codex",
-        "opencode"
+        "omp",
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -2117,7 +2119,9 @@
       "path": "server/zerg/services/provider_interaction_semantics.py",
       "providers": [
         "claude",
-        "codex"
+        "codex",
+        "omp",
+        "pi"
       ]
     },
     {

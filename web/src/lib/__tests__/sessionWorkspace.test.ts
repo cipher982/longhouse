@@ -169,6 +169,84 @@ describe("buildTimelineModel", () => {
       event,
     });
   });
+
+  it("renders provider reasoning separately from other system events", () => {
+    const systemEvent = (
+      id: number,
+      interaction_kind: string,
+      content_text: string,
+    ): AgentEvent => ({
+      id,
+      role: "system",
+      content_text,
+      interaction_kind,
+      tool_name: null,
+      tool_input_json: null,
+      tool_output_text: null,
+      tool_call_id: null,
+      timestamp: `2026-03-22T22:${String(id).padStart(2, "0")}:00Z`,
+      in_active_context: true,
+    });
+    const explorationPair = (id: number, tool_name: string, tool_call_id: string): AgentEvent[] => [
+      {
+        id,
+        role: "assistant",
+        content_text: null,
+        tool_name,
+        tool_input_json: { path: "README.md" },
+        tool_output_text: null,
+        tool_call_id,
+        tool_call_state: "completed",
+        timestamp: `2026-03-22T21:${String(id).padStart(2, "0")}:00Z`,
+        in_active_context: true,
+      },
+      {
+        id: id + 1,
+        role: "tool",
+        content_text: null,
+        tool_name,
+        tool_input_json: null,
+        tool_output_text: `${tool_name} output`,
+        tool_call_id,
+        timestamp: `2026-03-22T21:${String(id + 1).padStart(2, "0")}:00Z`,
+        in_active_context: true,
+      },
+    ];
+    const reasoningEvent = systemEvent(
+      44,
+      "provider_reasoning",
+      "Thinking:\nWe should check the docket first.",
+    );
+    const notificationEvent = systemEvent(45, "provider_notification", "Command completed");
+    const providerSystemEvent = systemEvent(46, "provider_system", "Provider status");
+    const events = [
+      ...explorationPair(40, "Read", "read-1"),
+      ...explorationPair(42, "Grep", "grep-1"),
+      reasoningEvent,
+      notificationEvent,
+      providerSystemEvent,
+    ];
+
+    const model = buildTimelineModel(
+      events.map((event) => ({
+        kind: "event" as const,
+        session_id: "session-claude",
+        timestamp: event.timestamp,
+        event,
+      })),
+    );
+
+    expect(model.items.map((item) => item.kind)).toEqual([
+      "activity_group",
+      "reasoning",
+      "provider_notification",
+    ]);
+    expect(model.items.filter((item) => item.kind === "reasoning")).toHaveLength(1);
+    expect(model.activityGroups).toHaveLength(1);
+    expect(model.activityGroups[0]?.interactions.map((interaction) => interaction.toolName)).toEqual(["Read", "Grep"]);
+    expect(model.items).not.toEqual(expect.arrayContaining([{ kind: "message", event: reasoningEvent }]));
+    expect(model.eventIdToSelectionKey.get(reasoningEvent.id)).toBe("reasoning:44");
+  });
 });
 
 describe("projectionItemsWithTranscriptPreview", () => {
