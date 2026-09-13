@@ -39,6 +39,8 @@ export {
   getToolDuration,
   getToolExitCode,
   getToolInputRecord,
+  getToolIntentLabel,
+  getToolOutputPreview,
   getToolSummary,
   getToolTier,
   isAgentToolInteraction,

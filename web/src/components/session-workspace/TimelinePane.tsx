@@ -25,6 +25,8 @@ import {
   getInteractionDisplayInfo,
   getToolDuration,
   getToolExitCode,
+  getToolIntentLabel,
+  getToolOutputPreview,
   countTimelineItems,
   formatTranscriptSummary,
   getToolInputRecord,
@@ -515,13 +517,16 @@ function EditDiffView({ stat }: { stat: EditStat }) {
     </section>
   );
 }
-
-/** Bounded, click-free preview of a failed call's output. */
-function FailurePreview({ text }: { text: string }) {
+/** Bounded, click-free output preview of a collapsed tool call. */
+function ToolOutputPreview({ text, failed = false }: { text: string; failed?: boolean }) {
   return (
-    <div className="tl-failure-preview" data-testid="tool-failure-preview" role="note">
-      <span className="sr-only">Error output: </span>
-      <pre className="tl-failure-preview__text">{text}</pre>
+    <div
+      className={`tl-tool-preview${failed ? " tl-tool-preview--failure" : ""}`}
+      data-testid={failed ? "tool-failure-preview" : "tool-output-preview"}
+      role="note"
+    >
+      <span className="sr-only">{failed ? "Error output: " : "Tool output: "}</span>
+      <pre className="tl-tool-preview__text">{text}</pre>
     </div>
   );
 }
@@ -632,6 +637,7 @@ function ActionCard({
   renderMedia: boolean;
 }) {
   const info = getInteractionDisplayInfo(interaction);
+  const intent = getToolIntentLabel(interaction);
   const summary = getToolSummary(interaction);
   const exitCode = getToolExitCode(interaction);
   const duration = getToolDuration(interaction.callEvent, interaction.resultEvent);
@@ -650,6 +656,7 @@ function ActionCard({
   // as successes even though grouping had already rejected them.
   const failed = isToolInteractionFailed(interaction);
   const failurePreview = getFailurePreview(interaction);
+  const outputPreview = failed ? null : getToolOutputPreview(interaction);
   // Only edits get a diff stat: a non-edit input that happens to carry a path
   // must keep its normal summary.
   const editLabel = isEditInteraction(interaction) ? formatEditStat(getEditStat(interaction)) : null;
@@ -693,7 +700,9 @@ function ActionCard({
         </span>
         {info.mcpNamespace ? <span className="tl-action__ns">{info.mcpNamespace}</span> : null}
         <span className="tl-action__summary">
-          {editLabel ? (
+          {intent ? (
+            intent
+          ) : editLabel ? (
             <span className="tl-action__edit-stat" data-testid="tool-edit-stat">{editLabel}</span>
           ) : (
             summary || (dropped ? "dropped" : pending ? "running…" : "")
@@ -712,7 +721,8 @@ function ActionCard({
           <span className={`tl-action__chev${expanded ? " is-open" : ""}`} aria-hidden="true">›</span>
         </span>
       </button>
-      {!expanded && failurePreview ? <FailurePreview text={failurePreview} /> : null}
+      {!expanded && failurePreview ? <ToolOutputPreview text={failurePreview} failed /> : null}
+      {!expanded && !failurePreview && outputPreview ? <ToolOutputPreview text={outputPreview} /> : null}
       <SubagentNode interaction={interaction} />
       {expanded ? (
         <div id={detailId}>
@@ -903,6 +913,7 @@ function ActivityChip({
           ) : null}
           {visibleInteractions.map((interaction) => {
             const info = getInteractionDisplayInfo(interaction);
+            const intent = getToolIntentLabel(interaction);
             const sum = getToolSummary(interaction);
             const isOpen = expandedInteractionKeys.has(interaction.key);
             // Distinct per-child IDs so focus, deep links, and keyboard nav can
@@ -928,7 +939,7 @@ function ActivityChip({
                   <span className="tl-noise__item-label" style={{ color: info.color }}>
                     {info.displayName}
                   </span>
-                  <span className="tl-noise__item-summary">{editLabel || sum || "—"}</span>
+                  <span className="tl-noise__item-summary">{intent || editLabel || sum || "—"}</span>
                 </button>
                 {isOpen ? (
                   <div id={childDetailId}>

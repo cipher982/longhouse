@@ -2097,16 +2097,20 @@
   color: var(--color-text-secondary);
 }
 
-/* Bounded, click-free preview of a failed call's output (R4). */
-.tl-failure-preview {
+/* Bounded, click-free preview of tool output on a collapsed action row. */
+.tl-tool-preview {
   margin: 0 12px 10px 12px;
   border-radius: var(--radius-md);
-  border: 1px solid rgba(200, 80, 70, 0.28);
-  background: rgba(40, 12, 10, 0.45);
+  border: 1px solid rgba(158, 124, 90, 0.22);
+  background: rgba(8, 7, 6, 0.62);
   padding: 8px 10px;
   overflow-x: auto;
 }
-.tl-failure-preview__text {
+.tl-tool-preview--failure {
+  border-color: rgba(200, 80, 70, 0.28);
+  background: rgba(40, 12, 10, 0.45);
+}
+.tl-tool-preview__text {
   margin: 0;
   font-family: var(--font-family-mono);
   font-size: 11px;

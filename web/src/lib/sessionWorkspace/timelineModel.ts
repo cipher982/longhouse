@@ -142,10 +142,26 @@ export function isToolInteractionFailed(interaction: ToolInteraction): boolean {
   return hasStructuredFailure(interaction.resultEvent?.tool_output_text);
 }
 
-/** Bounds for the inline failure preview on a collapsed row. */
-const FAILURE_PREVIEW_HEAD_LINES = 2;
-const FAILURE_PREVIEW_TAIL_LINES = 8;
-const FAILURE_PREVIEW_MAX_CHARS = 4096;
+/** Bounds for inline tool output previews on collapsed rows. */
+const TOOL_OUTPUT_PREVIEW_HEAD_LINES = 2;
+const TOOL_OUTPUT_PREVIEW_TAIL_LINES = 8;
+const TOOL_OUTPUT_PREVIEW_MAX_CHARS = 4096;
+
+function boundToolOutputPreview(text: string): string {
+  const lines = text.split("\n");
+  let preview: string;
+  if (lines.length <= TOOL_OUTPUT_PREVIEW_HEAD_LINES + TOOL_OUTPUT_PREVIEW_TAIL_LINES + 1) {
+    preview = text;
+  } else {
+    const head = lines.slice(0, TOOL_OUTPUT_PREVIEW_HEAD_LINES);
+    const tail = lines.slice(-TOOL_OUTPUT_PREVIEW_TAIL_LINES);
+    const elided = lines.length - head.length - tail.length;
+    preview = [...head, `… ${elided} more lines …`, ...tail].join("\n");
+  }
+  return preview.length > TOOL_OUTPUT_PREVIEW_MAX_CHARS
+    ? `${preview.slice(0, TOOL_OUTPUT_PREVIEW_MAX_CHARS)}\n… truncated …`
+    : preview;
+}
 
 /**
  * A failed command's output is not re-derivable, so the collapsed row shows a
@@ -160,20 +176,31 @@ export function getFailurePreview(interaction: ToolInteraction): string | null {
   const parsed = parseLonghouseOutput(raw);
   const text = ((parsed ? parsed.output : raw) || "").trim();
   if (!text) return null;
+  return boundToolOutputPreview(text);
+}
 
-  const lines = text.split("\n");
-  let preview: string;
-  if (lines.length <= FAILURE_PREVIEW_HEAD_LINES + FAILURE_PREVIEW_TAIL_LINES + 1) {
-    preview = text;
-  } else {
-    const head = lines.slice(0, FAILURE_PREVIEW_HEAD_LINES);
-    const tail = lines.slice(-FAILURE_PREVIEW_TAIL_LINES);
-    const elided = lines.length - head.length - tail.length;
-    preview = [...head, `… ${elided} more lines …`, ...tail].join("\n");
+/** Successful tool output shown inline while the row remains collapsed. */
+export function getToolOutputPreview(interaction: ToolInteraction): string | null {
+  if (isToolInteractionFailed(interaction)) return null;
+  const raw = interaction.resultEvent?.tool_output_text;
+  if (!raw) return null;
+  const parsed = parseLonghouseOutput(raw);
+  const text = ((parsed ? parsed.output : raw) || "").trim();
+  if (!text) return null;
+  return boundToolOutputPreview(text);
+}
+
+/** Return the provider's human-readable intent, when one was supplied. */
+export function getToolIntentLabel(interaction: ToolInteraction): string | null {
+  const inputs = [interaction.callEvent?.tool_input_json, interaction.presentation?.tool_input_json];
+  for (const field of ["i", "intent"] as const) {
+    for (const input of inputs) {
+      const record = getToolInputRecord(input);
+      const value = record?.[field];
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
   }
-  return preview.length > FAILURE_PREVIEW_MAX_CHARS
-    ? `${preview.slice(0, FAILURE_PREVIEW_MAX_CHARS)}\n… truncated …`
-    : preview;
+  return null;
 }
 
 /** Completed, attributable calls may join a prose-bounded activity run. */
@@ -566,6 +593,8 @@ export function getToolDuration(callEvent: AgentEvent | null, resultEvent: Agent
  */
 export function getToolSummary(interaction: ToolInteraction): string {
   const { callEvent, resultEvent } = interaction;
+  const intent = getToolIntentLabel(interaction);
+  if (intent) return intent;
 
   if ((getShellSalience(interaction)?.aggregate ?? interactionAggregate(interaction)) === "wait") {
     return "";

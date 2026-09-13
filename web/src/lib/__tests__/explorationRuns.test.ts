@@ -135,6 +135,53 @@ describe("exploration run helpers", () => {
     }))).toBe("app.py + 1 file");
   });
 
+  it("prefers trimmed provider intent labels before legacy summaries", () => {
+    const withIntent = interaction({
+      toolName: "Bash",
+      key: "intent",
+      anchorId: 2,
+      callEvent: event({
+        id: 2,
+        role: "assistant",
+        timestamp: "2026-01-01T00:00:00Z",
+        tool_name: "Bash",
+        tool_input_json: {
+          command: "docker ps -a",
+          i: "  Listing running containers  ",
+          intent: "ignored fallback",
+        },
+      }),
+    });
+    expect(getToolSummary(withIntent)).toBe("Listing running containers");
+
+    const withFallbackIntent = interaction({
+      toolName: "Bash",
+      key: "intent-fallback",
+      anchorId: 3,
+      callEvent: event({
+        id: 3,
+        role: "assistant",
+        timestamp: "2026-01-01T00:00:00Z",
+        tool_name: "Bash",
+        tool_input_json: { command: "docker ps -a", i: "  ", intent: "  Inspecting containers  " },
+      }),
+    });
+    expect(getToolSummary(withFallbackIntent)).toBe("Inspecting containers");
+
+    expect(getToolSummary(interaction({
+      toolName: "Bash",
+      key: "no-intent",
+      anchorId: 4,
+      callEvent: event({
+        id: 4,
+        role: "assistant",
+        timestamp: "2026-01-01T00:00:00Z",
+        tool_name: "Bash",
+        tool_input_json: { command: "docker ps -a" },
+      }),
+    }))).toBe("docker ps -a");
+  });
+
   it("formats semantic verb counts in fixed order", () => {
     expect(
       formatActivitySummary([

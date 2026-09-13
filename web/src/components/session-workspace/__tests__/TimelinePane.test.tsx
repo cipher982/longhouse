@@ -817,6 +817,81 @@ describe("TimelinePane", () => {
     expect(preview.textContent).not.toContain("line 20");
   });
 
+  it("uses provider intent as the row summary and keeps the command in expanded input", () => {
+    const item = makeToolWithMediaItem();
+    if (item.kind !== "tool" || !item.interaction.callEvent) throw new Error("fixture");
+    item.interaction.callEvent.tool_input_json = {
+      command: "docker ps -a",
+      i: "Listing running containers",
+    };
+
+    renderPane([item]);
+
+    const row = screen.getByTestId("session-timeline-row");
+    expect(row).toHaveTextContent("Listing running containers");
+    expect(row).not.toHaveTextContent("docker ps -a");
+
+    fireEvent.click(screen.getByRole("button", { name: /Bash/ }));
+    expect(row).toHaveTextContent("docker ps -a");
+  });
+
+  it("shows a bounded successful output preview and the full output after expansion", () => {
+    const item = makeToolWithMediaItem();
+    if (item.kind !== "tool" || !item.interaction.resultEvent) throw new Error("fixture");
+    const output = Array.from({ length: 20 }, (_, index) => `output line ${index}`).join("\n");
+    item.interaction.resultEvent.tool_output_text = output;
+
+    renderPane([item]);
+
+    const row = screen.getByTestId("session-timeline-row");
+    const preview = screen.getByTestId("tool-output-preview");
+    expect(preview).toHaveTextContent("output line 0");
+    expect(preview).toHaveTextContent("output line 19");
+    expect(preview).toHaveTextContent("10 more lines");
+    expect(preview).not.toHaveTextContent("output line 10");
+
+    fireEvent.click(screen.getByRole("button", { name: /Bash/ }));
+    expect(row).toHaveTextContent("output line 10");
+    expect(screen.queryByTestId("tool-output-preview")).not.toBeInTheDocument();
+  });
+
+  it("keeps rows without intent or output on their existing collapsed path", () => {
+    const withNoIntent = makeToolWithMediaItem();
+    if (withNoIntent.kind !== "tool") throw new Error("fixture");
+    const firstRender = renderPane([withNoIntent]);
+    const row = screen.getByTestId("session-timeline-row");
+    expect(row).toHaveTextContent("capture");
+    firstRender.unmount();
+
+    const withNoOutput = makeToolWithMediaItem();
+    if (withNoOutput.kind !== "tool" || !withNoOutput.interaction.resultEvent) throw new Error("fixture");
+    withNoOutput.interaction.resultEvent.tool_output_text = null;
+    renderPane([withNoOutput]);
+    expect(screen.getByTestId("session-timeline-row")).toHaveTextContent("capture");
+    expect(screen.queryByTestId("tool-output-preview")).not.toBeInTheDocument();
+  });
+  it.each([["Read"], ["Grep"]])("does not preview output for %s tier rows", (toolName) => {
+    const item = makeToolWithMediaItem();
+    if (item.kind !== "tool" || !item.interaction.callEvent || !item.interaction.resultEvent) {
+      throw new Error("fixture");
+    }
+    item.interaction.toolName = toolName;
+    item.interaction.callEvent.tool_name = toolName;
+    item.interaction.callEvent.tool_input_json = { path: "README.md" };
+    item.interaction.resultEvent.tool_name = toolName;
+    item.interaction.resultEvent.tool_output_text = Array.from(
+      { length: 20 },
+      (_, index) => `output line ${index}`,
+    ).join("\n");
+
+    renderPane([item]);
+
+    const row = screen.getByTestId("session-timeline-row");
+    expect(row).toHaveAttribute("data-row-kind", "tool");
+    expect(screen.queryByTestId("tool-output-preview")).not.toBeInTheDocument();
+    expect(row).not.toHaveTextContent("output line 10");
+  });
+
   it("marks a structured failure as failed even without a parsed exit code", () => {
     renderPane([makeFailedToolItem("boom", false)]);
     const row = screen.getAllByTestId("session-timeline-row")[0];
