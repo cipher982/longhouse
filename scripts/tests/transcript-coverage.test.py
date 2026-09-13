@@ -83,7 +83,7 @@ class ExtractOmpTranscriptTests(unittest.TestCase):
         finally:
             path.unlink()
         keys = {(event.event_class, event.key) for event in events}
-        self.assertIn(("thinking", "rec-a-thinking-0"), keys)
+        self.assertIn(("thinking", "rec-a"), keys)
         # Block index 1 is a text part, so it carries the explicit suffix.
         self.assertIn(("assistant_text", "rec-a-text-1"), keys)
         self.assertIn(("tool_call", "call-1"), keys)
@@ -141,7 +141,7 @@ class CoverageReportTests(unittest.TestCase):
     def test_thinking_deleted_at_read_time_is_reported_as_a_class_gap(self) -> None:
         """The 2026-09-13 defect: reasoning is stored but never served."""
 
-        native = [coverage.NativeEvent("thinking", f"rec-{i}-thinking-0", OBSERVED_AT_MS - 1_000, 100) for i in range(3)]
+        native = [coverage.NativeEvent("thinking", f"rec-{i}", OBSERVED_AT_MS - 1_000, 100) for i in range(3)]
         native.append(coverage.NativeEvent("tool_call", "call-1", OBSERVED_AT_MS - 1_000, 0))
         served = [served_event("rec-0-tool-call-1", "assistant", tool_name="bash", tool_call_id="call-1")]
         report = coverage.coverage_report(
@@ -237,14 +237,14 @@ class CoverageReportTests(unittest.TestCase):
         self.assertEqual(report["totals"]["served_unmapped_events"], 1)
 
     def test_text_report_names_every_class_and_the_missing_sample(self) -> None:
-        native = [coverage.NativeEvent("thinking", "rec-1-thinking-0", OBSERVED_AT_MS - 90_000, 42)]
+        native = [coverage.NativeEvent("thinking", "rec-1", OBSERVED_AT_MS - 90_000, 42)]
         report = coverage.coverage_report(
             native, [], provider="omp", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS
         )
         text = coverage.render_text(report)
         for name in coverage.EVENT_CLASSES:
             self.assertIn(name, text)
-        self.assertIn("rec-1-thinking-0", text)
+        self.assertIn("rec-1", text)
         self.assertIn("STALLED", text)
 
 

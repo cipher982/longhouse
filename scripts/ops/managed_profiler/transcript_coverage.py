@@ -152,7 +152,10 @@ def extract_omp_transcript(path: Path) -> list[NativeEvent]:
                     text = part.get("thinking")
                     if not isinstance(text, str) or not text.strip():
                         continue
-                    key = f"{record_id}-thinking-{index}"
+                    # One reasoning part per record is the provider's shape, and
+                    # the engine keys that row by the bare record id. Later parts
+                    # of the same record carry an explicit suffix.
+                    key = record_id if index == 0 else f"{record_id}-thinking-{index}"
                     events.append(NativeEvent("thinking", key, timestamp_ms, len(text)))
                 elif kind == "toolCall":
                     call_id = part.get("id")
