@@ -455,3 +455,21 @@ truth_source = "none"
 required_observers = []
 metrics = []
 notes = "iOS is a first-class client, but iOS realtime SLA is not promised until web timeline tracking is boring."
+
+[[cases]]
+id = "managed_omp_helm_warm_live"
+status = "experimental"
+provider = "omp"
+control_path = "managed"
+topology = "hosted_runtime_host"
+profile = "omp"
+profile_class = "fidelity"
+profiler_driver = "managed_omp_helm_warm_live"
+launch = "longhouse omp"
+shutdown = "graceful close of the managed TUI"
+truth_source = "provider_transcript"
+required_observers = ["provider_transcript", "timeline_api", "client_render_beacon"]
+metrics = []
+ci_mode = "blocked"
+blocked_reason = "The OMP profiler driver is not implemented yet. Coverage and liveness are measured today by scripts/ops/managed_profiler/transcript_coverage.py, which is not wired into this manifest; latency metrics follow once the driver reuses the Cursor Helm PTY capture."
+notes = "Does the served OMP transcript carry everything the terminal showed? The 2026-09-13 incident served 22 of 62 tool calls and 0 of 36 reasoning blocks while reporting the session ended, and every existing latency metric passed. This case exists so that completeness is promised next to latency, not instead of it."
