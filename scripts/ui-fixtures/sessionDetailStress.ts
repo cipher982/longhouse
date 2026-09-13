@@ -546,7 +546,11 @@ export function buildSessionDetailStressFixture(): {
     }),
     makeEvent(103, "assistant", "2026-04-15T14:45:10Z", {
       tool_name: "exec_command",
-      tool_input_json: { cmd: "rg -n \"session-workspace|timeline-pane\" web/src" },
+      // The provider's own one-line intent; the row title comes from this.
+      tool_input_json: {
+        cmd: "rg -n \"session-workspace|timeline-pane\" web/src",
+        i: "Locating the timeline pane entry point",
+      },
       tool_call_id: "root-tool-1",
     }),
     makeEvent(104, "tool", "2026-04-15T14:45:11Z", {
@@ -554,7 +558,15 @@ export function buildSessionDetailStressFixture(): {
       tool_output_text: toolOutput(
         0,
         "1.1",
-        "web/src/pages/SessionDetailPage.tsx:24:import { SessionRuntimeStrip }\nweb/src/components/session-workspace/TimelinePane.tsx:587:export function TimelinePane",
+        [
+          "web/src/pages/SessionDetailPage.tsx:24:import { SessionRuntimeStrip }",
+          "web/src/components/session-workspace/TimelinePane.tsx:587:export function TimelinePane",
+          "web/src/components/session-workspace/TimelinePane.tsx:1401:  const rows = filteredItems.map((item) => {",
+          "web/src/components/session-workspace/TimelinePane.tsx:1443:    if (item.kind === \"activity_group\") {",
+          "web/src/lib/sessionWorkspace/timelineModel.ts:629:export function buildTimelineModel(",
+          "web/src/styles/session-workspace.css:1943:.tl-detail {",
+          "web/src/styles/session-workspace.css:2306:@media (max-width: 720px) { .tl-detail { max-height: none; } }",
+        ].join("\n"),
       ),
       tool_call_id: "root-tool-1",
     }),
@@ -594,6 +606,13 @@ export function buildSessionDetailStressFixture(): {
         "const PAGE_DEFINITIONS = {\n  timeline: { path: \"/timeline\" },\n  machines: { path: \"/runners\" },\n};",
       ),
       tool_call_id: "head-tool-2",
+    }),
+    // Model reasoning, served as interaction_kind=provider_reasoning with the
+    // engine's projection prefix (web/src/components/session-workspace/ReasoningRow.tsx).
+    makeEvent(2068, "system", "2026-04-15T15:18:05Z", {
+      interaction_kind: "provider_reasoning",
+      content_text:
+        "Thinking:\nThe capture harness renders the session-detail page from this fixture, so the frame I look at has to carry the reasoning row and the tool intent. Add both to the head lane rather than a new scene, then re-capture and read the PNG.",
     }),
     makeEvent(207, "assistant", "2026-04-15T15:18:15Z", {
       tool_name: "apply_patch",
