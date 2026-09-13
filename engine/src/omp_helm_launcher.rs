@@ -381,17 +381,24 @@ impl OmpHelmServer {
             )
         };
         if !replacement {
-            anyhow::ensure!(
-                source == previous_source,
-                // Name both paths: the degraded state file is the only place a
-                // later reader can learn what OMP reported versus what this
-                // launch bound.
-                "OMP native session source changed without a replacement fence: \
-                 launched={previous_source} reported={source}"
-            );
-        }
-        if !previous.is_empty() && previous != native_id && !replacement {
-            anyhow::bail!("OMP native session changed without a replacement fence");
+            // OMP rewrites its transcript and, when it compacts or switches,
+            // can report a different source or native id on a normal frame
+            // without the `session_before_switch` fence. This frame is already
+            // authenticated as this launch's extension connection under the
+            // current lease generation, so a changed source is the provider
+            // moving its own session. Refusing it marked a live session
+            // degraded with no recovery path, and the Runtime Host then closed
+            // a session whose terminal was still open.
+            if source != previous_source || (!previous.is_empty() && previous != native_id) {
+                tracing::info!(
+                    session_id = %session_id,
+                    launched_source = %previous_source,
+                    reported_source = %source,
+                    launched_native_id = %previous,
+                    reported_native_id = %native_id,
+                    "OMP reported a new native session without a switch fence; following it"
+                );
+            }
         }
         // Reserve the exact replacement path before waiting for OMP to finish
         // materializing its header. Discovery then keeps the path pending

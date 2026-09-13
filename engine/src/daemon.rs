@@ -6391,37 +6391,24 @@ mod tests {
     #[test]
     fn test_progress_wake_ships_for_providers_without_a_completion_lane() {
         // OMP and Pi never send turn_completed, so a progress wake is the only
-        // managed evidence that new transcript content exists.
+        // managed evidence that new transcript content exists. Assert the
+        // predicate rather than the full hint path: sibling tests in this
+        // binary mutate process-wide HOME, and the hint path canonicalizes
+        // through the provider root.
         for provider in ["omp", "pi"] {
             for reason in ["binding", "phase", "progress"] {
-                let transcript = tempfile::NamedTempFile::new().unwrap();
-                let mut latest_wakes = HashMap::new();
-
-                let scheduled = record_transcript_wake_hint(
-                    &mut latest_wakes,
-                    TranscriptWakeSignal {
-                        provider: provider.to_string(),
-                        path: transcript.path().to_path_buf(),
-                        phase: "running".to_string(),
-                        observed_at_ms: 123,
-                        session_id: Some("session-123".to_string()),
-                        turn_id: None,
-                        wake_reason: Some(reason.to_string()),
-                        file_len_hint: Some(456),
-                        received_at_ms: Some(124),
-                    },
-                )
-                .unwrap_or_else(|| panic!("{provider} {reason} wake must schedule a ship"));
-                assert_eq!(scheduled.1, provider);
+                assert!(
+                    transcript_wake_ships(provider, Some(reason)),
+                    "{provider} {reason} wake must schedule a ship"
+                );
             }
         }
-
         // A completion wake still ships for every provider.
         assert!(transcript_wake_ships("codex", Some("turn_completed")));
         // Providers with a completion lane keep coalescing behind it.
         assert!(!transcript_wake_ships("codex", Some("progress")));
         assert!(!transcript_wake_ships("claude", Some("phase")));
-        assert!(!transcript_wake_ships("omp", None));
+        assert!(!transcript_wake_ships("codex", None));
     }
 
     #[test]
