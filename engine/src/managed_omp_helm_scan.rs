@@ -54,6 +54,7 @@ struct OmpHelmStateFile {
     phase: Option<String>,
     tool_name: Option<String>,
     status: Option<String>,
+    terminal_state: Option<String>,
     #[serde(default)]
     ready: bool,
 }
@@ -109,8 +110,18 @@ pub(crate) fn collect_observations_from_paths(
             .map(PathBuf::from);
         let socket_present = socket_path.as_ref().is_some_and(|path| path.exists());
         let status = state.status.unwrap_or_else(|| "unknown".into());
-        let live =
-            status == "ready" && state.ready && launcher_alive && provider_alive && socket_present;
+        // A degraded control path is not a dead session. The provider process is
+        // still running and still writing its transcript, so reporting it as
+        // not-live drops the managed lease and the Runtime Host closes a session
+        // whose terminal is open — the "ended while alive" lie. Liveness comes
+        // from launch and process evidence; the control path reports itself
+        // through `status`, which the lease carries as `bridge_status`.
+        let run_over = status == "stopped"
+            || state
+                .terminal_state
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty());
+        let live = !run_over && launcher_alive && provider_alive && socket_present;
         observations.push(OmpHelmObservation {
             session_id,
             native_session_id: state
@@ -231,5 +242,99 @@ mod tests {
         let observations = collect_observations_from_paths(&[path], &facts);
         assert_eq!(observations.len(), 1);
         assert!(observations[0].live);
+    }
+
+    #[cfg(unix)]
+    fn launched_state(socket: &std::path::Path, status: &str, terminal_state: Option<&str>) -> serde_json::Value {
+        serde_json::json!({
+            "session_id": "session",
+            "native_session_id": "native",
+            "run_id": "run",
+            "connection_id": "connection",
+            "lease_generation": "generation",
+            "socket_path": socket,
+            "launcher_pid": 1111,
+            "launcher_process_start_time": "birth",
+            "provider_pid": 2222,
+            "provider_process_start_time": "birth",
+            "status": status,
+            "terminal_state": terminal_state,
+            "ready": status == "ready",
+            "started_at": "2026-09-09T00:00:00Z",
+            "updated_at": "2026-09-09T00:00:01Z"
+        })
+    }
+
+    #[cfg(unix)]
+    fn launched_facts() -> HashMap<u32, crate::process_identity::ProcessFact> {
+        use crate::process_identity::ProcessFact;
+
+        HashMap::from([
+            (
+                1111,
+                ProcessFact {
+                    pid: 1111,
+                    tty: "??".into(),
+                    stat: "S".into(),
+                    lstart: "birth".into(),
+                    command: "longhouse-engine omp-helm launch --cwd /tmp".into(),
+                    start_time: None,
+                },
+            ),
+            (
+                2222,
+                ProcessFact {
+                    pid: 2222,
+                    tty: "??".into(),
+                    stat: "S".into(),
+                    lstart: "birth".into(),
+                    command: "omp".into(),
+                    start_time: None,
+                },
+            ),
+        ])
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn degraded_control_path_with_a_running_provider_is_still_live() {
+        use std::os::unix::net::UnixListener;
+
+        // OMP rewrote its session file mid-turn and the launcher refused the
+        // unfenced identity change. The terminal is still open and still
+        // writing, so the session is live; the control path is what degraded.
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("channel.sock");
+        let _listener = UnixListener::bind(&socket).unwrap();
+        let state = launched_state(&socket, "degraded", None);
+        let path = dir.path().join("session.json");
+        fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+
+        let observations = collect_observations_from_paths(&[path], &launched_facts());
+
+        assert_eq!(observations.len(), 1);
+        assert!(
+            observations[0].live,
+            "a degraded control path must not read as a dead session"
+        );
+        assert_eq!(observations[0].status, "degraded");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_state_ends_liveness() {
+        use std::os::unix::net::UnixListener;
+
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("channel.sock");
+        let _listener = UnixListener::bind(&socket).unwrap();
+        let state = launched_state(&socket, "degraded", Some("session_ended"));
+        let path = dir.path().join("session.json");
+        fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+
+        let observations = collect_observations_from_paths(&[path], &launched_facts());
+
+        assert_eq!(observations.len(), 1);
+        assert!(!observations[0].live);
     }
 }

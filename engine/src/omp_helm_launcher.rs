@@ -383,7 +383,11 @@ impl OmpHelmServer {
         if !replacement {
             anyhow::ensure!(
                 source == previous_source,
-                "OMP native session source changed without a replacement fence"
+                // Name both paths: the degraded state file is the only place a
+                // later reader can learn what OMP reported versus what this
+                // launch bound.
+                "OMP native session source changed without a replacement fence: \
+                 launched={previous_source} reported={source}"
             );
         }
         if !previous.is_empty() && previous != native_id && !replacement {
