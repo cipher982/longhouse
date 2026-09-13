@@ -4653,6 +4653,23 @@ fn outbox_signal_mark(signal: &outbox::DrainedPresenceSignal) -> String {
     )
 }
 
+/// Whether a managed transcript wake is enough evidence to schedule a ship.
+///
+/// Most managed providers publish a completion wake, and waiting for it
+/// coalesces the many filesystem events a single turn produces. OMP and Pi
+/// never publish one: their managed channel reports ``binding``, ``phase``,
+/// and ``progress``. Requiring completion therefore left their transcripts to
+/// the filesystem watcher alone, and that watcher is bounded with
+/// drop-on-full — which left a live managed session 17 minutes and 650 KB
+/// behind its own terminal while its events were lost in the channel.
+///
+/// A provider with no completion lane ships on every wake instead. The
+/// shipper is a no-op when the lane is already current, so a redundant wake
+/// costs a scheduling pass, not a duplicate envelope.
+fn transcript_wake_ships(provider: &str, wake_reason: Option<&str>) -> bool {
+    wake_reason == Some("turn_completed") || matches!(provider, "omp" | "pi")
+}
+
 fn record_transcript_wake_hint(
     latest_transcript_wake_observed: &mut HashMap<PathBuf, i64>,
     mut signal: TranscriptWakeSignal,
@@ -4693,7 +4710,7 @@ fn record_transcript_wake_hint(
         );
         return None;
     }
-    let should_ship = signal.wake_reason.as_deref() == Some("turn_completed");
+    let should_ship = transcript_wake_ships(provider, signal.wake_reason.as_deref());
     tracing::debug!(
         provider,
         path = %signal.path.display(),
@@ -6369,6 +6386,42 @@ mod tests {
 
         assert_eq!(latest_wakes.get(transcript.path()), Some(&123));
         assert!(scheduled.is_none());
+    }
+
+    #[test]
+    fn test_progress_wake_ships_for_providers_without_a_completion_lane() {
+        // OMP and Pi never send turn_completed, so a progress wake is the only
+        // managed evidence that new transcript content exists.
+        for provider in ["omp", "pi"] {
+            for reason in ["binding", "phase", "progress"] {
+                let transcript = tempfile::NamedTempFile::new().unwrap();
+                let mut latest_wakes = HashMap::new();
+
+                let scheduled = record_transcript_wake_hint(
+                    &mut latest_wakes,
+                    TranscriptWakeSignal {
+                        provider: provider.to_string(),
+                        path: transcript.path().to_path_buf(),
+                        phase: "running".to_string(),
+                        observed_at_ms: 123,
+                        session_id: Some("session-123".to_string()),
+                        turn_id: None,
+                        wake_reason: Some(reason.to_string()),
+                        file_len_hint: Some(456),
+                        received_at_ms: Some(124),
+                    },
+                )
+                .unwrap_or_else(|| panic!("{provider} {reason} wake must schedule a ship"));
+                assert_eq!(scheduled.1, provider);
+            }
+        }
+
+        // A completion wake still ships for every provider.
+        assert!(transcript_wake_ships("codex", Some("turn_completed")));
+        // Providers with a completion lane keep coalescing behind it.
+        assert!(!transcript_wake_ships("codex", Some("progress")));
+        assert!(!transcript_wake_ships("claude", Some("phase")));
+        assert!(!transcript_wake_ships("omp", None));
     }
 
     #[test]
