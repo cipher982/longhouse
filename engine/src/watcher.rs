@@ -101,6 +101,7 @@ impl SessionWatcher {
                     // Bounded send. If the OS watcher floods, reconciliation
                     // scan repairs missed files.
                     let observed_at_ms = chrono::Utc::now().timestamp_millis();
+                    let display_path = path.display().to_string();
                     let watcher_event = WatcherEvent {
                         path,
                         observed_at_ms,
@@ -109,11 +110,20 @@ impl SessionWatcher {
                     if watcher_tx.try_send(watcher_event).is_err() {
                         let n =
                             dropped_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                        // Warn once per 1000 drops
+                        // Warn once per 1000 drops. This used to be an
+                        // ``eprintln!``, which put the only evidence of a
+                        // starved live lane on stderr in a rotating stdout log
+                        // where an operator reading the engine log could not see
+                        // it. A dropped event for a managed transcript is not
+                        // repaired reliably: the reconciliation scan that is
+                        // supposed to cover for it does not run while Live work
+                        // is pending, which is exactly the backlog state that
+                        // causes the flood.
                         if n % 1000 == 0 {
-                            eprintln!(
-                                "[engine] WARNING: watcher channel full, {} events dropped (reconciliation scan will repair)",
-                                n
+                            tracing::warn!(
+                                dropped_total = n,
+                                path = %display_path,
+                                "Watcher channel full; transcript events dropped (reconciliation scan repairs only when no Live work is pending)"
                             );
                         }
                     }
