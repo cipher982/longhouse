@@ -802,7 +802,7 @@ pub(crate) fn prepare_next_envelope_body_for_lane(
         anyhow::bail!("storage-v2 lane must be live or repair");
     }
     let maximum_batch_bytes = if lane == "live" {
-        LIVE_TARGET_BATCH_BYTES
+        live_catch_up_batch_bytes(live_lag_bytes(conn, provider, path))
     } else {
         BACKLOG_TARGET_BATCH_BYTES
     };
@@ -824,6 +824,38 @@ pub(crate) fn prepare_next_envelope_body_for_lane(
     Ok(Some((body, prepared)))
 }
 
+/// Live shipping is tuned for latency: a small batch keeps the newest content
+/// close to the client. That tuning becomes a trap once a path has fallen
+/// behind, because every scheduled turn then moves at most one live batch. On
+/// 2026-09-13 a live managed transcript drained at one 64 KiB batch per
+/// scheduled turn while its lane sat 117 minutes behind its own file, on an
+/// idle uplink.
+///
+/// A live lane that is behind may therefore use the backlog batch size and
+/// catch up in one pass.
+fn live_catch_up_batch_bytes(lag_bytes: u64) -> usize {
+    if lag_bytes > LIVE_TARGET_BATCH_BYTES as u64 {
+        BACKLOG_TARGET_BATCH_BYTES
+    } else {
+        LIVE_TARGET_BATCH_BYTES
+    }
+}
+
+/// Bytes between a source's durable lane and the end of its file.
+///
+/// Zero when the source has no active epoch yet, or when its file is unreadable.
+fn live_lag_bytes(conn: &Connection, provider: &str, path: &Path) -> u64 {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return 0;
+    };
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let Ok(Some(position)) = durable_lane_position(conn, provider, &canonical.to_string_lossy())
+    else {
+        return 0;
+    };
+    metadata.len().saturating_sub(position)
+}
+
 pub(crate) async fn ship_next_envelope(
     conn: &mut Connection,
     client: &ShipperClient,
@@ -835,7 +867,7 @@ pub(crate) async fn ship_next_envelope(
     request_timeout: Duration,
 ) -> Result<Option<StorageV2ShipOutcome>> {
     let maximum_batch_bytes = if lane == "live" {
-        LIVE_TARGET_BATCH_BYTES
+        live_catch_up_batch_bytes(live_lag_bytes(conn, provider, path))
     } else {
         BACKLOG_TARGET_BATCH_BYTES
     };
@@ -10372,5 +10404,35 @@ mod tests {
             pending_after.envelope_id, pending_before.envelope_id,
             "source conflict must retain the original retry identity"
         );
+    }
+
+    #[test]
+    fn a_behind_live_lane_may_use_the_backlog_batch_size() {
+        // At or under one live batch nothing changes, so the latency tuning
+        // that keeps the newest content close to the client still holds.
+        assert_eq!(live_catch_up_batch_bytes(0), LIVE_TARGET_BATCH_BYTES);
+        assert_eq!(
+            live_catch_up_batch_bytes(LIVE_TARGET_BATCH_BYTES as u64),
+            LIVE_TARGET_BATCH_BYTES
+        );
+        // Behind by more than one batch: catch up in one pass rather than one
+        // batch per scheduled turn.
+        assert_eq!(
+            live_catch_up_batch_bytes(LIVE_TARGET_BATCH_BYTES as u64 + 1),
+            BACKLOG_TARGET_BATCH_BYTES
+        );
+        assert!(BACKLOG_TARGET_BATCH_BYTES > LIVE_TARGET_BATCH_BYTES);
+    }
+
+    #[test]
+    fn live_lag_is_zero_without_an_active_epoch() {
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let conn = rusqlite::Connection::open(db.path()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(&path, vec![b'x'; 4096]).unwrap();
+
+        assert_eq!(live_lag_bytes(&conn, "omp", &path), 0);
+        assert_eq!(live_lag_bytes(&conn, "omp", &dir.path().join("missing.jsonl")), 0);
     }
 }
