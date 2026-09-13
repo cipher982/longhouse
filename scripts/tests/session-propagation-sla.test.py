@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import sys
 from pathlib import Path
@@ -257,6 +258,43 @@ def test_http_protocol_browser_error_is_transport_contamination() -> None:
     assert instance.transport_failure_classification("D1", "session-1", None) == "hosted_transport_degraded"
 
 
+def test_unimplemented_managed_driver_is_refused_not_passed() -> None:
+    """A selectable provider with no driver must not report an empty pass."""
+
+    assert profiler.IMPLEMENTED_MANAGED_DRIVERS == {"codex", "claude", "cursor"}
+
+    for provider in ("codex", "claude", "cursor"):
+        profiler.refuse_unimplemented_managed_driver(
+            argparse.Namespace(provider=provider, ownership="managed", skip_managed=False)
+        )
+    # A skipped or unmanaged run is not this guard's business.
+    profiler.refuse_unimplemented_managed_driver(
+        argparse.Namespace(provider="omp", ownership="managed", skip_managed=True)
+    )
+
+    try:
+        profiler.refuse_unimplemented_managed_driver(
+            argparse.Namespace(provider="omp", ownership="managed", skip_managed=False)
+        )
+    except SystemExit as exc:
+        assert "omp" in str(exc), exc
+        assert "ci_mode=blocked" in str(exc), exc
+    else:
+        raise AssertionError("an unimplemented managed driver must refuse to run")
+
+    # single_exit_code returns 0 for an empty run, which is exactly why the
+    # empty-result guard has to turn "nothing ran" into an error.
+    assert profiler.single_exit_code(errors=[], metrics=[], sla_status=None) == 0
+    assert (
+        profiler.single_exit_code(
+            errors=["no profiling driver ran for provider omp"],
+            metrics=[],
+            sla_status=None,
+        )
+        == 1
+    )
+
+
 if __name__ == "__main__":
     for test in (
         test_empty_shell_and_promotion_boundary,
@@ -265,6 +303,7 @@ if __name__ == "__main__":
         test_manifest_moves_legacy_metric_out_of_hard_targeting,
         test_batch_clean_metrics_exclude_classified_failures,
         test_http_protocol_browser_error_is_transport_contamination,
+        test_unimplemented_managed_driver_is_refused_not_passed,
     ):
         test()
     print("session propagation SLA tests passed")

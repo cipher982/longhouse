@@ -5391,7 +5391,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default="baseline",
         help="Profiler scenario to run. warm-live measures an already-open timeline; cold-timeline opens the browser after session truth exists.",
     )
-    parser.add_argument("--provider", choices=["claude", "codex", "cursor"], default="codex")
+    parser.add_argument("--provider", choices=["claude", "codex", "cursor", "omp"], default="codex")
     parser.add_argument("--ownership", choices=["managed", "unmanaged", "all"], default="all")
     parser.add_argument("--subdomain", default=os.environ.get("LONGHOUSE_DEFAULT_SUBDOMAIN", "demo"))
     parser.add_argument("--container")
@@ -5480,8 +5480,32 @@ def normalize_args(args: argparse.Namespace) -> None:
         args.skip_unmanaged = True
 
 
+IMPLEMENTED_MANAGED_DRIVERS = frozenset({"codex", "claude", "cursor"})
+
+
+def refuse_unimplemented_managed_driver(args: argparse.Namespace) -> None:
+    """Fail loudly rather than write an empty summary for a provider with no driver.
+
+    ``single_exit_code`` returns 0 when a run produced neither errors nor
+    metrics, so a provider that is selectable but unimplemented would report a
+    pass. OMP is selectable because its SLA case is registered; that case is
+    ``ci_mode = blocked`` precisely because this driver does not exist yet.
+    """
+
+    if args.skip_managed or args.ownership not in {"managed", "all"}:
+        return
+    if args.provider in IMPLEMENTED_MANAGED_DRIVERS:
+        return
+    raise SystemExit(
+        f"managed {args.provider} profiling driver is not implemented; the SLA manifest case "
+        f"managed_{args.provider}_helm_warm_live stays ci_mode=blocked until it lands. "
+        "Measure content parity today with scripts/ops/managed_profiler/transcript_coverage.py."
+    )
+
+
 def run_single(args: argparse.Namespace) -> tuple[int, Path]:
     normalize_args(args)
+    refuse_unimplemented_managed_driver(args)
     profiler = Profiler(args)
     profiler.observe(
         case_id="run",
@@ -5538,6 +5562,13 @@ def run_single(args: argparse.Namespace) -> tuple[int, Path]:
             source="harness",
             event="mismatch_detected",
             payload={"error": str(exc)},
+        )
+    if not results and not errors:
+        # A requested run that produced no driver result and no error is a
+        # failure, not an empty pass.
+        errors.append(
+            f"no profiling driver ran for provider {args.provider} "
+            f"(ownership={args.ownership}, skip_managed={args.skip_managed}, skip_unmanaged={args.skip_unmanaged})"
         )
     metrics = profiler.write_summary(results, errors)
     print(profiler.summary_path)

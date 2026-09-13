@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 271,
+  "file_count": 272,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -545,7 +545,8 @@
       "providers": [
         "claude",
         "codex",
-        "cursor"
+        "cursor",
+        "omp"
       ]
     },
     {
@@ -705,6 +706,15 @@
         "claude",
         "codex",
         "opencode"
+      ]
+    },
+    {
+      "path": "scripts/tests/session-propagation-sla.test.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "omp"
       ]
     },
     {
