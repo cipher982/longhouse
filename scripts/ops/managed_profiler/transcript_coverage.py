@@ -26,8 +26,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -380,6 +382,79 @@ def coverage_report(
     }
 
 
+def _percentile(values: list[int], fraction: float) -> int:
+    """Nearest-rank percentile over a non-empty sample."""
+
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, math.ceil(fraction * len(ordered)) - 1))
+    return ordered[index]
+
+
+def summarise_serve_latency(
+    native: list[NativeEvent],
+    first_seen: dict[tuple[str, str], int],
+    *,
+    window_started_at_ms: int,
+    baseline_keys: set[tuple[str, str]] | None = None,
+) -> dict[str, Any]:
+    """Per-class serve latency for records that arrived inside the window.
+
+    Latency is ``first_observed - provider_recorded_at``: how long after the
+    provider wrote a record a poll found it served. Only a record absent from
+    the first poll has a measurable arrival time; anything already served then
+    is pre-existing rather than instant.
+
+    Keys are (class, identity) pairs because a tool call and its result share
+    the provider's call id.
+
+    Two series are reported per class. ``p50``/``p95``/``max`` cover every
+    measurable arrival, which includes a lane draining backlog and therefore
+    measures queueing as well as the hop. ``fresh_*`` restrict to records the
+    provider wrote inside the window, which is the steady-state number. Both
+    are upper bounds with a resolution of the sampling interval.
+    """
+
+    baseline = baseline_keys or set()
+    by_class: dict[str, dict[str, Any]] = {}
+    for name in EVENT_CLASSES:
+        lags: list[int] = []
+        fresh_lags: list[int] = []
+        pre_existing = 0
+        never_seen = 0
+        for event in native:
+            if event.event_class != name:
+                continue
+            identity = (name, event.key)
+            if identity in baseline or event.timestamp_ms is None:
+                pre_existing += 1
+                continue
+            seen_at = first_seen.get(identity)
+            if seen_at is None:
+                never_seen += 1
+                continue
+            lag = max(0, seen_at - event.timestamp_ms)
+            lags.append(lag)
+            if event.timestamp_ms > window_started_at_ms:
+                fresh_lags.append(lag)
+        by_class[name] = {
+            "samples": len(lags),
+            "pre_existing": pre_existing,
+            "never_seen": never_seen,
+            "min_ms": min(lags) if lags else None,
+            "p50_ms": _percentile(lags, 0.5) if lags else None,
+            "p95_ms": _percentile(lags, 0.95) if lags else None,
+            "max_ms": max(lags) if lags else None,
+            "fresh_samples": len(fresh_lags),
+            "fresh_p50_ms": _percentile(fresh_lags, 0.5) if fresh_lags else None,
+            "fresh_p95_ms": _percentile(fresh_lags, 0.95) if fresh_lags else None,
+            "fresh_max_ms": max(fresh_lags) if fresh_lags else None,
+        }
+    return {
+        "window_started_at": datetime.fromtimestamp(window_started_at_ms / 1000, tz=timezone.utc).isoformat(),
+        "classes": by_class,
+    }
+
+
 def render_text(report: dict[str, Any]) -> str:
     lines = [
         f"provider={report['provider']} session={report['session_id'] or '-'} verdict={report['verdict'].upper()}",
@@ -410,6 +485,31 @@ def render_text(report: dict[str, Any]) -> str:
     for name in totals["incomplete_classes"]:
         sample = report["classes"][name]["missing_sample"]
         lines.append(f"missing[{name}] sample={sample}")
+    latency = report.get("latency")
+    if latency:
+        lines.append("")
+        lines.append(f"serve latency since {latency['window_started_at']} (provider record -> served):")
+        lines.append("all arrivals (includes backlog drain):")
+        lines.append(f"{'class':<16}{'samples':>8}{'p50_ms':>9}{'p95_ms':>9}{'max_ms':>9}{'never':>7}")
+        for name in EVENT_CLASSES:
+            entry = latency["classes"][name]
+            lines.append(
+                f"{name:<16}{entry['samples']:>8}"
+                f"{(entry['p50_ms'] if entry['p50_ms'] is not None else '-'):>9}"
+                f"{(entry['p95_ms'] if entry['p95_ms'] is not None else '-'):>9}"
+                f"{(entry['max_ms'] if entry['max_ms'] is not None else '-'):>9}"
+                f"{entry['never_seen']:>7}"
+            )
+        lines.append("records written inside the window (steady state):")
+        lines.append(f"{'class':<16}{'samples':>8}{'p50_ms':>9}{'p95_ms':>9}{'max_ms':>9}")
+        for name in EVENT_CLASSES:
+            entry = latency["classes"][name]
+            lines.append(
+                f"{name:<16}{entry['fresh_samples']:>8}"
+                f"{(entry['fresh_p50_ms'] if entry['fresh_p50_ms'] is not None else '-'):>9}"
+                f"{(entry['fresh_p95_ms'] if entry['fresh_p95_ms'] is not None else '-'):>9}"
+                f"{(entry['fresh_max_ms'] if entry['fresh_max_ms'] is not None else '-'):>9}"
+            )
     return "\n".join(lines)
 
 
@@ -442,6 +542,48 @@ def _observed_at_ms(value: str | None) -> int:
     return parsed
 
 
+def watch_served_events(
+    args: argparse.Namespace,
+    token: str,
+) -> tuple[
+    int,
+    dict[tuple[str, str], int],
+    set[tuple[str, str]],
+    list[dict[str, Any]],
+    list[NativeEvent],
+]:
+    """Poll the served projection, recording when each native record appears.
+
+    The transcript is re-read every poll so records the provider writes *during*
+    the window are measured too, not only the ones that already existed.
+    """
+
+    transcript = Path(args.transcript).expanduser()
+    first_seen: dict[tuple[str, str], int] = {}
+    baseline_keys: set[tuple[str, str]] = set()
+    started_at_ms = int(time.time() * 1000)
+    deadline = time.monotonic() + args.watch_seconds
+    served: list[dict[str, Any]] = []
+    native: list[NativeEvent] = []
+    first_poll = True
+    while True:
+        served = fetch_served_events(api_url=args.api_url, session_id=args.session, token=token)
+        native = extract_native_events(args.provider, transcript)
+        seen_at = int(time.time() * 1000)
+        for event in served:
+            classified = classify_served_event(event)
+            if classified is None:
+                continue
+            first_seen.setdefault(classified, seen_at)
+            if first_poll:
+                baseline_keys.add(classified)
+        first_poll = False
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(max(0.5, args.sample_interval))
+    return started_at_ms, first_seen, baseline_keys, served, native
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--provider", required=True, help="Provider whose transcript is being read (e.g. omp)")
@@ -460,6 +602,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stall-age-ms", type=int, default=DEFAULT_STALL_AGE_MS)
     parser.add_argument("--missing-sample", type=int, default=DEFAULT_MISSING_SAMPLE)
     parser.add_argument("--observed-at", default=None, help="ISO timestamp to evaluate ages against (default: now)")
+    parser.add_argument(
+        "--watch-seconds",
+        type=float,
+        default=0.0,
+        help="Poll the served projection for this long to measure per-class serve latency (0 = single snapshot)",
+    )
+    parser.add_argument("--sample-interval", type=float, default=5.0, help="Seconds between polls while watching")
     parser.add_argument("--output", default=None, help="Write the JSON report here")
     parser.add_argument("--json", action="store_true", help="Print the JSON report instead of the table")
     return parser
@@ -475,6 +624,9 @@ def main(argv: list[str] | None = None) -> int:
     served_event_count: int | None = None
     served_ended_at: str | None = None
 
+    first_seen: dict[tuple[str, str], int] = {}
+    baseline_keys: set[tuple[str, str]] = set()
+    window_started_at_ms: int | None = None
     if args.served_events:
         payload = json.loads(Path(args.served_events).expanduser().read_text(encoding="utf-8"))
         served = served_events_from_payload(payload)
@@ -483,7 +635,10 @@ def main(argv: list[str] | None = None) -> int:
         if not args.session:
             raise SystemExit("--session is required when reading the served projection from the API")
         token = _resolve_token(args)
-        served = fetch_served_events(api_url=args.api_url, session_id=args.session, token=token)
+        if args.watch_seconds > 0:
+            window_started_at_ms, first_seen, baseline_keys, served, native = watch_served_events(args, token)
+        else:
+            served = fetch_served_events(api_url=args.api_url, session_id=args.session, token=token)
         served_event_count = len(served)
         session = fetch_session(args.api_url, args.session, token)
         ended_at = session.get("ended_at")
@@ -502,6 +657,14 @@ def main(argv: list[str] | None = None) -> int:
         served_ended_at=served_ended_at,
         served_event_count=served_event_count,
     )
+
+    if window_started_at_ms is not None:
+        report["latency"] = summarise_serve_latency(
+            native,
+            first_seen,
+            window_started_at_ms=window_started_at_ms,
+            baseline_keys=baseline_keys,
+        )
 
     if args.output:
         output = Path(args.output).expanduser()

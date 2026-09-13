@@ -256,6 +256,98 @@ class ServedPayloadTests(unittest.TestCase):
         self.assertEqual(coverage.served_events_from_payload(None), [])
 
 
+
+
+class ServeLatencyTests(unittest.TestCase):
+    """Latency is served_at - provider_recorded_at, and only when both exist."""
+
+    def test_latency_is_measured_for_records_first_seen_inside_the_window(self) -> None:
+        window_start = OBSERVED_AT_MS
+        native = [
+            coverage.NativeEvent("tool_call", "call-1", window_start + 1_000, 0),
+            coverage.NativeEvent("tool_call", "call-2", window_start + 2_000, 0),
+            coverage.NativeEvent("thinking", "rec-1", window_start + 1_500, 10),
+        ]
+        first_seen = {
+            ("tool_call", "call-1"): window_start + 3_000,
+            ("tool_call", "call-2"): window_start + 10_000,
+            ("thinking", "rec-1"): window_start + 4_500,
+        }
+
+        report = coverage.summarise_serve_latency(native, first_seen, window_started_at_ms=window_start)
+
+        calls = report["classes"]["tool_call"]
+        self.assertEqual(calls["samples"], 2)
+        self.assertEqual(calls["min_ms"], 2_000)
+        self.assertEqual(calls["max_ms"], 8_000)
+        self.assertEqual(calls["p50_ms"], 2_000)
+        self.assertEqual(report["classes"]["thinking"]["p50_ms"], 3_000)
+
+    def test_a_call_and_its_result_are_measured_apart(self) -> None:
+        window_start = OBSERVED_AT_MS
+        native = [
+            coverage.NativeEvent("tool_call", "call-shared", window_start + 1_000, 0),
+            coverage.NativeEvent("tool_result", "call-shared", window_start + 1_000, 20),
+        ]
+        first_seen = {
+            ("tool_call", "call-shared"): window_start + 2_000,
+            ("tool_result", "call-shared"): window_start + 5_000,
+        }
+
+        report = coverage.summarise_serve_latency(native, first_seen, window_started_at_ms=window_start)
+
+        self.assertEqual(report["classes"]["tool_call"]["p50_ms"], 1_000)
+        self.assertEqual(report["classes"]["tool_result"]["p50_ms"], 4_000)
+
+    def test_records_already_present_are_not_counted_as_instant(self) -> None:
+        window_start = OBSERVED_AT_MS
+        native = [coverage.NativeEvent("tool_call", "call-old", window_start - 60_000, 0)]
+        # The first poll stamps every served key with its own clock; only the
+        # baseline set can tell that this key was already there.
+        first_seen = {("tool_call", "call-old"): window_start + 5}
+
+        report = coverage.summarise_serve_latency(
+            native,
+            first_seen,
+            window_started_at_ms=window_start,
+            baseline_keys={("tool_call", "call-old")},
+        )
+
+        entry = report["classes"]["tool_call"]
+        self.assertEqual(entry["samples"], 0)
+        self.assertEqual(entry["pre_existing"], 1)
+        self.assertIsNone(entry["p50_ms"])
+
+    def test_a_record_absent_from_the_first_poll_is_measured_even_if_old(self) -> None:
+        window_start = OBSERVED_AT_MS
+        # Written long before the window opened but not yet served: its arrival
+        # is exactly what the measurement is for.
+        native = [coverage.NativeEvent("tool_result", "call-late", window_start - 600_000, 10)]
+        first_seen = {("tool_result", "call-late"): window_start + 4_000}
+
+        report = coverage.summarise_serve_latency(native, first_seen, window_started_at_ms=window_start)
+
+        entry = report["classes"]["tool_result"]
+        self.assertEqual(entry["samples"], 1)
+        self.assertEqual(entry["p50_ms"], 604_000)
+        self.assertEqual(entry["pre_existing"], 0)
+
+    def test_records_that_never_arrived_are_counted_not_dropped(self) -> None:
+        window_start = OBSERVED_AT_MS
+        native = [coverage.NativeEvent("thinking", "rec-never", window_start + 1_000, 10)]
+
+        report = coverage.summarise_serve_latency(native, {}, window_started_at_ms=window_start)
+
+        entry = report["classes"]["thinking"]
+        self.assertEqual(entry["never_seen"], 1)
+        self.assertEqual(entry["samples"], 0)
+
+    def test_percentiles_use_nearest_rank(self) -> None:
+        self.assertEqual(coverage._percentile([10, 20, 30, 40], 0.5), 20)
+        self.assertEqual(coverage._percentile([10, 20, 30, 40], 0.95), 40)
+        self.assertEqual(coverage._percentile([7], 0.95), 7)
+
+
 def main() -> int:
     result = unittest.main(module=__name__, exit=False, verbosity=2)
     return 0 if result.result.wasSuccessful() else 1
