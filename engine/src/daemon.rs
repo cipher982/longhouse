@@ -1972,6 +1972,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 managed_observation_generation.saturating_add(1);
                         }
                         last_managed_observations = next_managed_observations;
+                        enqueue_starved_managed_transcripts(
+                            &conn,
+                            &mut scheduler,
+                            &mut deferred_retries,
+                            &last_managed_observations,
+                        );
                         pump_ready_local_work(
                             &mut scheduler,
                             &mut in_flight,
@@ -4742,6 +4748,110 @@ fn record_transcript_wake_hint(
             file_len_hint: signal.file_len_hint,
         },
     ))
+}
+
+/// A live transcript this far behind its own file is treated as starved.
+const STARVED_LIVE_TRANSCRIPT_BYTES: u64 = 256 * 1024;
+
+/// Re-drive a live managed transcript whose durable lane trails its file.
+///
+/// A live path is normally driven by the provider's wake channel and by
+/// filesystem events, and both can fail without a trace: the watcher channel
+/// drops events when it fills (one warning per thousand drops), the
+/// reconciliation scan that is supposed to repair that loss does not run while
+/// Live work is pending — the same backlog that causes the flood — and a
+/// managed launcher started before an engine restart never re-registers its
+/// wake lane, leaving filesystem events as the only trigger.
+///
+/// Measured on 2026-09-13: a live managed OMP transcript sat 64 KB and 110
+/// minutes behind a file that was still being written, on an uplink that is
+/// idle at 0.02% utilisation. That is not backpressure; the path was simply
+/// never scheduled.
+///
+/// This is the safety net that does not depend on any of those lanes. If a
+/// live managed session's file is ahead of the lane that feeds it, enqueue it
+/// at Live priority. The shipper is a no-op when the lane is current, so a
+/// redundant check costs one stat and one database read.
+fn enqueue_starved_managed_transcripts(
+    conn: &rusqlite::Connection,
+    scheduler: &mut PathScheduler,
+    deferred_retries: &mut HashMap<PathBuf, DeferredRetry>,
+    observations: &ManagedObservationSnapshot,
+) {
+    let candidates = observations
+        .omp
+        .iter()
+        .filter(|observation| observation.live)
+        .filter_map(|observation| {
+            observation
+                .session_file
+                .clone()
+                .map(|path| (path, "omp"))
+        })
+        .chain(
+            observations
+                .pi
+                .iter()
+                .filter(|observation| observation.live)
+                .filter_map(|observation| {
+                    observation
+                        .session_file
+                        .clone()
+                        .map(|path| (path, "pi"))
+                }),
+        );
+
+    for (path, provider) in candidates {
+        let Ok(metadata) = std::fs::metadata(&path) else {
+            continue;
+        };
+        let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        let canonical_text = canonical.to_string_lossy().to_string();
+        let position = match crate::storage_v2_shipper::durable_lane_position(
+            conn,
+            provider,
+            &canonical_text,
+        ) {
+            Ok(Some(position)) => position,
+            // A bound session with no lane yet has never shipped: losing its
+            // first envelope is the same failure, so start it from zero.
+            Ok(None) => {
+                let bound = crate::state::session_binding::SessionBinding::new(conn)
+                    .get_for_provider(&canonical_text, provider)
+                    .ok()
+                    .flatten();
+                if bound.is_none() {
+                    continue;
+                }
+                0
+            }
+            Err(_) => continue,
+        };
+        let lag_bytes = metadata.len().saturating_sub(position);
+        if lag_bytes < STARVED_LIVE_TRANSCRIPT_BYTES {
+            continue;
+        }
+        if !retry_admission_open(&path, deferred_retries) {
+            continue;
+        }
+        let observed_at_ms = now_ms();
+        tracing::warn!(
+            provider,
+            path = %path.display(),
+            lane_position = position,
+            file_bytes = metadata.len(),
+            lag_bytes,
+            "Live managed transcript is behind its file; re-driving from the safety net"
+        );
+        scheduler.enqueue_observed_window(
+            path,
+            provider,
+            WorkPriority::Live,
+            "starvation_redrive",
+            observed_at_ms,
+            observed_at_ms,
+        );
+    }
 }
 
 fn enqueue_transcript_wake_signal(
@@ -7657,5 +7767,120 @@ mod tests {
         let _ = std::process::Command::new("kill")
             .arg(caffeinate_pid.to_string())
             .status();
+    }
+
+    fn omp_observation(session_file: Option<PathBuf>, live: bool) -> managed_omp_helm_scan::OmpHelmObservation {
+        managed_omp_helm_scan::OmpHelmObservation {
+            session_id: "session-omp".to_string(),
+            native_session_id: Some("native-omp".to_string()),
+            run_id: Some("run-omp".to_string()),
+            connection_id: Some("connection-omp".to_string()),
+            lease_generation: Some("generation-omp".to_string()),
+            state_file: PathBuf::from("/nonexistent/state.json"),
+            session_file,
+            socket_path: None,
+            cwd: Some("/tmp".to_string()),
+            launcher_pid: Some(1),
+            launcher_process_start_time: Some("start".to_string()),
+            provider_pid: Some(2),
+            provider_process_start_time: Some("start".to_string()),
+            started_at: "2026-09-13T00:00:00Z".to_string(),
+            updated_at: "2026-09-13T00:00:01Z".to_string(),
+            phase: Some("running".to_string()),
+            tool_name: None,
+            status: "ready".to_string(),
+            launcher_alive: true,
+            provider_alive: true,
+            live,
+        }
+    }
+
+    #[test]
+    fn test_starved_live_transcript_is_re_driven_from_the_safety_net() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("omp-session.jsonl");
+        let bytes = (STARVED_LIVE_TRANSCRIPT_BYTES + 4096) as usize;
+        std::fs::write(&transcript, vec![b'x'; bytes]).unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let canonical = std::fs::canonicalize(&transcript).unwrap();
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .bind(&canonical.to_string_lossy(), "session-omp", "omp")
+            .unwrap();
+
+        let snapshot = ManagedObservationSnapshot {
+            omp: vec![omp_observation(Some(transcript.clone()), true)],
+            ..Default::default()
+        };
+        let mut scheduler = PathScheduler::new(4);
+
+        enqueue_starved_managed_transcripts(
+            &conn,
+            &mut scheduler,
+            &mut HashMap::new(),
+            &snapshot,
+        );
+
+        let launched = scheduler.pop_launchable().expect("a starved live transcript must be re-driven");
+        assert_eq!(launched.path, transcript);
+        assert_eq!(launched.provider, "omp");
+        assert_eq!(launched.priority, WorkPriority::Live);
+        assert_eq!(launched.observation.source, "starvation_redrive");
+    }
+
+    #[test]
+    fn test_current_lane_and_dead_sessions_are_not_re_driven() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("omp-session.jsonl");
+        let bytes = STARVED_LIVE_TRANSCRIPT_BYTES + 4096;
+        std::fs::write(&transcript, vec![b'x'; bytes as usize]).unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let mut conn = open_db(Some(db.path())).unwrap();
+        let canonical = std::fs::canonicalize(&transcript).unwrap();
+        let canonical_text = canonical.to_string_lossy().to_string();
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .bind(&canonical_text, "session-omp", "omp")
+            .unwrap();
+        let opaque = crate::storage_v2_shipper::opaque_source_id(&canonical_text);
+        crate::state::source_epoch::observe_file(
+            &mut conn,
+            "omp",
+            &opaque,
+            &canonical,
+            crate::state::source_epoch::SourceLane::Durable,
+            bytes,
+            None,
+            Some("session-omp"),
+            crate::state::source_epoch::SourceChangeHint::None,
+        )
+        .unwrap();
+
+        // The lane is current, so nothing to do.
+        let current = ManagedObservationSnapshot {
+            omp: vec![omp_observation(Some(transcript.clone()), true)],
+            ..Default::default()
+        };
+        let mut scheduler = PathScheduler::new(4);
+        enqueue_starved_managed_transcripts(&conn, &mut scheduler, &mut HashMap::new(), &current);
+        assert!(scheduler.pop_launchable().is_none(), "a current lane must not be re-driven");
+
+        // A session that is no longer live is the terminal's business, not this one.
+        let stopped = ManagedObservationSnapshot {
+            omp: vec![omp_observation(Some(transcript.clone()), false)],
+            ..Default::default()
+        };
+        let mut scheduler = PathScheduler::new(4);
+        enqueue_starved_managed_transcripts(&conn, &mut scheduler, &mut HashMap::new(), &stopped);
+        assert!(scheduler.pop_launchable().is_none(), "a stopped session must not be re-driven");
+
+        // An unbound path is not ours to schedule.
+        let unbound = ManagedObservationSnapshot {
+            omp: vec![omp_observation(Some(dir.path().join("stranger.jsonl")), true)],
+            ..Default::default()
+        };
+        std::fs::write(dir.path().join("stranger.jsonl"), vec![b'y'; bytes as usize]).unwrap();
+        let mut scheduler = PathScheduler::new(4);
+        enqueue_starved_managed_transcripts(&conn, &mut scheduler, &mut HashMap::new(), &unbound);
+        assert!(scheduler.pop_launchable().is_none(), "an unbound path must not be re-driven");
     }
 }

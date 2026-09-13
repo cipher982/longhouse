@@ -4882,7 +4882,28 @@ fn cursor_render_generation_id(session_id: &str) -> Uuid {
     )
 }
 
-fn opaque_source_id(path: &str) -> String {
+/// Durable lane position for a bound source path, without side effects.
+///
+/// Callers that need to know whether a live transcript is keeping up cannot
+/// afford `observe_file`, which may rotate epochs. This reads the active epoch
+/// and its durable position only.
+pub(crate) fn durable_lane_position(
+    conn: &Connection,
+    provider: &str,
+    canonical_path: &str,
+) -> Result<Option<u64>> {
+    let opaque = opaque_source_id(canonical_path);
+    let Some(epoch) = crate::state::source_epoch::active_source_epoch(conn, provider, &opaque)? else {
+        return Ok(None);
+    };
+    Ok(Some(crate::state::source_epoch::lane_position(
+        conn,
+        epoch,
+        crate::state::source_epoch::SourceLane::Durable,
+    )?))
+}
+
+pub(crate) fn opaque_source_id(path: &str) -> String {
     format!(
         "path-sha256:{}",
         hex_hash(Sha256::digest(path.as_bytes()).into())
