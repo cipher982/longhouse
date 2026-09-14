@@ -319,7 +319,9 @@
       "path": "engine/src/state/session_binding.rs",
       "providers": [
         "claude",
-        "cursor"
+        "cursor",
+        "omp",
+        "pi"
       ]
     },
     {

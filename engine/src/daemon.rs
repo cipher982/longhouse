@@ -4807,6 +4807,27 @@ fn enqueue_starved_managed_transcripts(
                 }),
         );
 
+    // A launch that is no longer live still owes whatever it wrote. Record that
+    // ownership ended without dropping the binding, so the reconciler keeps the
+    // path in its working set until the tail is shipped.
+    let retired = observations
+        .omp
+        .iter()
+        .filter(|observation| !observation.live)
+        .filter_map(|observation| observation.session_file.clone())
+        .chain(
+            observations
+                .pi
+                .iter()
+                .filter(|observation| !observation.live)
+                .filter_map(|observation| observation.session_file.clone()),
+        );
+    let bindings = crate::state::session_binding::SessionBinding::new(conn);
+    for path in retired {
+        let canonical = std::fs::canonicalize(&path).unwrap_or(path);
+        let _ = bindings.mark_exited(&canonical.to_string_lossy());
+    }
+
     for (path, provider) in candidates {
         let Ok(metadata) = std::fs::metadata(&path) else {
             continue;
@@ -7940,5 +7961,35 @@ mod tests {
             .pop_launchable()
             .expect("a stale lane with a small lag must be re-driven");
         assert_eq!(launched.observation.source, "starvation_redrive");
+    }
+
+    #[test]
+    fn a_retired_launch_keeps_its_binding_for_drain() {
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("omp-retired.jsonl");
+        std::fs::write(&transcript, b"{}\n").unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let canonical = std::fs::canonicalize(&transcript).unwrap();
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .bind(&canonical.to_string_lossy(), "session-omp", "omp")
+            .unwrap();
+
+        // The launcher is gone but the file it owned still has records to ship.
+        let snapshot = ManagedObservationSnapshot {
+            omp: vec![omp_observation(Some(transcript.clone()), false)],
+            ..Default::default()
+        };
+        let mut scheduler = PathScheduler::new(4);
+        enqueue_starved_managed_transcripts(&conn, &mut scheduler, &mut HashMap::new(), &snapshot);
+
+        let listed = crate::state::session_binding::SessionBinding::new(&conn)
+            .list_bindings()
+            .unwrap();
+        assert_eq!(listed.len(), 1, "an exited owner must not lose its binding");
+        assert_eq!(
+            listed[0].state,
+            crate::state::session_binding::BINDING_STATE_EXITED
+        );
     }
 }

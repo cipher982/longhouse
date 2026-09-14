@@ -393,6 +393,23 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
     if !session_binding_columns.contains("provider_session_id") {
         conn.execute_batch("ALTER TABLE session_binding ADD COLUMN provider_session_id TEXT;")?;
     }
+    // A binding is the durable statement that a transcript path belongs to a
+    // Longhouse session. It also has to say whether that ownership is still
+    // live, because a session that exits still owes its unshipped records: the
+    // replication debt outlives the owner. Without a state column the only
+    // choices are to forget an exited owner (and lose its tail) or to treat it
+    // as live forever.
+    if !session_binding_columns.contains("state") {
+        conn.execute_batch(
+            "ALTER TABLE session_binding ADD COLUMN state TEXT NOT NULL DEFAULT 'active';",
+        )?;
+    }
+    if !session_binding_columns.contains("bound_at") {
+        conn.execute_batch("ALTER TABLE session_binding ADD COLUMN bound_at TEXT;")?;
+    }
+    if !session_binding_columns.contains("last_seen_at") {
+        conn.execute_batch("ALTER TABLE session_binding ADD COLUMN last_seen_at TEXT;")?;
+    }
 
     let live_file_state_columns: std::collections::HashSet<String> = conn
         .prepare("PRAGMA table_info(live_file_state)")?
