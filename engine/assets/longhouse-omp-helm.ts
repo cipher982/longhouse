@@ -28,6 +28,9 @@ export default function (pi: any) {
   let connectionPromise: Promise<void> | undefined;
   let connectionId = "";
   let reconnectAttempts = 0;
+  let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
+  /// Far shorter than the launcher's 90s deadline, so silence is evidence.
+  const KEEPALIVE_INTERVAL_MS = 20000;
   let leaseGeneration = "";
   let commandChain = Promise.resolve();
   let initialPromptRequested = false;
@@ -191,7 +194,24 @@ export default function (pi: any) {
     const ownGeneration = ++generation;
     connectionPromise = new Promise<void>((resolve, reject) => {
       const candidate = connect(socketPath, () => {
-        candidate.write(`${JSON.stringify({ kind: "extension_hello", ...session(ctx) })}\n`);
+        // Advertise the keepalive so the launcher may hold this channel to a
+        // read deadline. Without the declaration a silent channel is
+        // indistinguishable from an idle provider, and the launcher keeps the
+        // unbounded read it has always used.
+        candidate.write(
+          `${JSON.stringify({ kind: "extension_hello", keepalive: true, ...session(ctx) })}\n`,
+        );
+        if (keepaliveTimer) clearInterval(keepaliveTimer);
+        keepaliveTimer = setInterval(() => {
+          if (shuttingDown || socket !== candidate) return;
+          try {
+            candidate.write(`${JSON.stringify({ kind: "extension_keepalive", ...session(ctx) })}\n`);
+          } catch {
+            // A failed write is the channel telling us it is gone; the read
+            // deadline on the launcher side is what turns that into a
+            // reconnect.
+          }
+        }, KEEPALIVE_INTERVAL_MS);
       });
       socket = candidate;
       const fail = (error: Error) => {
@@ -327,6 +347,7 @@ export default function (pi: any) {
   pi.on("session_shutdown", async (event: Frame, ctx: any) => {
     shuttingDown = true;
     if (reconnectTimer) clearTimeout(reconnectTimer);
+    if (keepaliveTimer) clearInterval(keepaliveTimer);
     lifecycle("session_shutdown", event, ctx);
     close();
   });

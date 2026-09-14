@@ -201,7 +201,16 @@ impl OmpHelmServer {
             return;
         };
         if frame.get("kind").and_then(Value::as_str) == Some("extension_hello") {
-            let _ = reader.get_mut().set_read_timeout(None);
+            // An unbounded read turns a silent channel into a permanent one: on
+            // 2026-09-13 both live sessions' state files froze for nine hours
+            // while the provider kept working, because a connected-but-silent
+            // endpoint never produced an error and so never reconnected. An
+            // extension that advertises a keepalive gets a deadline; one that
+            // does not keeps today's behaviour, so a running old extension is
+            // never disconnected by a newer launcher.
+            let _ = reader
+                .get_mut()
+                .set_read_timeout(extension_read_timeout(&frame));
             self.handle_extension(clone, reader, frame);
         } else {
             let response = self.handle_remote_command(frame);
@@ -1768,6 +1777,26 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     Ok(exit)
 }
 
+/// How long a keepalive-capable extension may be silent before the channel is
+/// treated as dead.
+///
+/// The extension sends a keepalive on an interval far shorter than this, so
+/// silence means the endpoint is gone rather than the provider being idle.
+const EXTENSION_SILENCE_DEADLINE: Duration = Duration::from_secs(90);
+
+/// The read deadline for an extension channel, from what the extension declared.
+///
+/// Only an extension that promises a keepalive may be held to one. Without that
+/// declaration the launcher cannot tell an idle provider from a dead channel,
+/// and guessing would disconnect healthy sessions.
+fn extension_read_timeout(hello: &Value) -> Option<Duration> {
+    if hello.get("keepalive").and_then(Value::as_bool) == Some(true) {
+        Some(EXTENSION_SILENCE_DEADLINE)
+    } else {
+        None
+    }
+}
+
 fn wake_transcript_shipper(state: &OmpHelmStateFile, source: &Path, native_id: &str, reason: &str) {
     let Ok(path) = crate::config::get_agent_transcript_wake_socket_path() else {
         return;
@@ -2248,5 +2277,24 @@ mod tests {
         assert!(verify_resume_owner(&facts, "launcher", Some(42), None, true).is_err());
         assert!(verify_resume_owner(&facts, "provider", Some(42), None, false).is_err());
         assert!(verify_resume_owner(&facts, "provider", None, None, false).is_ok());
+    }
+
+    #[test]
+    fn only_a_keepalive_capable_extension_gets_a_read_deadline() {
+        // An extension that does not promise a keepalive keeps the unbounded
+        // read: a launcher upgrade must never disconnect a running old
+        // extension, because silence is indistinguishable from an idle provider.
+        assert_eq!(extension_read_timeout(&serde_json::json!({})), None);
+        assert_eq!(
+            extension_read_timeout(&serde_json::json!({ "keepalive": false })),
+            None
+        );
+        assert_eq!(
+            extension_read_timeout(&serde_json::json!({ "keepalive": true })),
+            Some(EXTENSION_SILENCE_DEADLINE)
+        );
+        // The deadline must be comfortably longer than the extension's own
+        // interval, or a healthy channel would be reconnected on a timer.
+        assert!(EXTENSION_SILENCE_DEADLINE >= Duration::from_secs(60));
     }
 }
