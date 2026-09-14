@@ -1040,6 +1040,9 @@ reprovision: ## Reprovision hosted instance (SUBDOMAIN=$LONGHOUSE_DEFAULT_SUBDOM
 		curl -sf "https://$$LH_INSTANCE_SUBDOMAIN.longhouse.ai/api/health" | \
 			python3 -c "import sys,json; print(json.load(sys.stdin)[\"status\"])"'
 
+promote-dogfood: ## Promote a canary-verified runtime image to the dogfood instance (SHA=newest verified main)
+	@SUBDOMAIN="$(or $(SUBDOMAIN),$(LONGHOUSE_DEFAULT_SUBDOMAIN))" ./scripts/ops/promote-dogfood.sh $(SHA)
+
 deploy-status: ## Show deployed SHA + health for all surfaces
 	@./scripts/ops/deploy-status.sh
 
