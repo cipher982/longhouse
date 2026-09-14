@@ -4834,6 +4834,7 @@ fn enqueue_starved_managed_transcripts(
         };
         let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
         let canonical_text = canonical.to_string_lossy().to_string();
+        let mut never_shipped = false;
         let position = match crate::storage_v2_shipper::durable_lane_position(
             conn,
             provider,
@@ -4850,6 +4851,11 @@ fn enqueue_starved_managed_transcripts(
                 if bound.is_none() {
                     continue;
                 }
+                // A bound source with no epoch has never shipped at all. It has
+                // no lane and therefore no lane age, so both the byte threshold
+                // and the staleness check skip it: a small first message would
+                // wait forever for a size it will never reach.
+                never_shipped = true;
                 0
             }
             Err(_) => continue,
@@ -4858,7 +4864,7 @@ fn enqueue_starved_managed_transcripts(
         let lane_is_stale = lag_bytes > 0
             && crate::storage_v2_shipper::durable_lane_age_seconds(conn, provider, &canonical_text)
                 .is_some_and(|age| age >= STARVED_LIVE_TRANSCRIPT_STALE_SECONDS);
-        if lag_bytes < STARVED_LIVE_TRANSCRIPT_BYTES && !lane_is_stale {
+        if !never_shipped && lag_bytes < STARVED_LIVE_TRANSCRIPT_BYTES && !lane_is_stale {
             continue;
         }
         if !retry_admission_open(&path, deferred_retries) {
@@ -4872,6 +4878,7 @@ fn enqueue_starved_managed_transcripts(
             file_bytes = metadata.len(),
             lag_bytes,
             lane_is_stale,
+            never_shipped,
             "Live managed transcript is behind its file; re-driving from the safety net"
         );
         scheduler.enqueue_observed_window(
@@ -7913,6 +7920,34 @@ mod tests {
         let mut scheduler = PathScheduler::new(4);
         enqueue_starved_managed_transcripts(&conn, &mut scheduler, &mut HashMap::new(), &unbound);
         assert!(scheduler.pop_launchable().is_none(), "an unbound path must not be re-driven");
+    }
+
+    #[test]
+    fn test_a_bound_source_that_never_shipped_is_re_driven_whatever_its_size() {
+        // The first message of a bound session can be tiny. Without an epoch it
+        // has no lane and no lane age, so neither the byte threshold nor the
+        // staleness check would ever admit it.
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("omp-first.jsonl");
+        std::fs::write(&transcript, b"{\"type\":\"session\"}\n").unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let canonical = std::fs::canonicalize(&transcript).unwrap();
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .bind(&canonical.to_string_lossy(), "session-omp", "omp")
+            .unwrap();
+
+        let snapshot = ManagedObservationSnapshot {
+            omp: vec![omp_observation(Some(transcript.clone()), true)],
+            ..Default::default()
+        };
+        let mut scheduler = PathScheduler::new(4);
+        enqueue_starved_managed_transcripts(&conn, &mut scheduler, &mut HashMap::new(), &snapshot);
+
+        let launched = scheduler
+            .pop_launchable()
+            .expect("a bound source that never shipped must be driven regardless of size");
+        assert_eq!(launched.observation.source, "starvation_redrive");
     }
 
     #[test]
