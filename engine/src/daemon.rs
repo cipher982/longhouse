@@ -1551,7 +1551,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 let client = client.clone();
                                 let posts = result.presence.posts;
                                 let post_count = posts.len();
-                                outbox_post_tasks.spawn_local(async move {
+                                // spawn, not spawn_local: the wrapper only awaits
+                                // the worker task, and a local task is polled on
+                                // the LocalSet's driving thread. Multi-second work
+                                // there (a full reconciliation pass is 10-20s) then
+                                // holds this gate closed while the network is idle.
+                                outbox_post_tasks.spawn(async move {
                                     let join_started = Instant::now();
                                     let post_task = tokio::spawn(async move {
                                         let task_started = Instant::now();
@@ -1593,7 +1598,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 let client = client.clone();
                                 let runtime_posts = result.runtime_posts;
                                 let post_count = runtime_posts.len();
-                                runtime_outbox_post_tasks.spawn_local(async move {
+                                // spawn, not spawn_local: see the presence path
+                                // above. This is the live-transcript lane, so a
+                                // starved wrapper here shows up as minutes-stale
+                                // events on every client.
+                                runtime_outbox_post_tasks.spawn(async move {
                                     let join_started = Instant::now();
                                     let post_task = tokio::spawn(async move {
                                         let task_started = Instant::now();
