@@ -73,3 +73,34 @@ def test_canary_producer_events_match_runtime_event_schema():
     RuntimeEventIngest(**progress)
     # Also validate as a batch (the real wire call).
     RuntimeEventBatchIngest(events=[binding, progress])
+
+
+def test_engine_runtime_batch_limit_matches_the_server_cap():
+    """The machine agent's chunk size must not exceed what this model accepts.
+
+    They live in different languages, so nothing else keeps them in step. If the
+    engine chunked above the cap, every full batch would 422 and the outbox
+    would never drain - a live session would stop updating with no error on the
+    machine side.
+    """
+    import re
+
+    from annotated_types import MaxLen
+
+    repo_root = Path(__file__).resolve().parents[2]
+    engine_source = (repo_root / "engine" / "src" / "outbox.rs").read_text()
+    match = re.search(r"const RUNTIME_EVENT_BATCH_LIMIT: usize = (\d+);", engine_source)
+    assert match, "engine/src/outbox.rs no longer declares RUNTIME_EVENT_BATCH_LIMIT"
+    engine_limit = int(match.group(1))
+
+    field = RuntimeEventBatchIngest.model_fields["events"]
+    server_cap = next(
+        (meta.max_length for meta in field.metadata if isinstance(meta, MaxLen)),
+        None,
+    )
+    assert server_cap is not None, "RuntimeEventBatchIngest.events lost its max_length"
+
+    assert engine_limit == server_cap, (
+        f"engine chunks {engine_limit} runtime observations per POST but the server "
+        f"accepts at most {server_cap}; change both together"
+    )

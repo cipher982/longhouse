@@ -36,7 +36,12 @@ const STALE_SECS: u64 = 600; // 10 minutes
 const PRESENCE_POST_TIMEOUT: Duration = Duration::from_secs(3);
 const PRESENCE_POST_CONCURRENCY: usize = 8;
 const RUNTIME_EVENT_POST_TIMEOUT: Duration = Duration::from_secs(3);
-const RUNTIME_EVENT_BATCH_LIMIT: usize = 128;
+/// Matches RuntimeEventBatchIngest in server/zerg/services/session_runtime.py.
+/// Chunks post serially and a session's own order must hold, so the only lever
+/// on drain throughput is fewer round trips: at 128 a live session's backlog
+/// took dozens of them, which is what left a terminal signal queued minutes
+/// behind the session it ends.
+const RUNTIME_EVENT_BATCH_LIMIT: usize = 1024;
 const RUNTIME_EVENT_DEAD_LETTER_DIR: &str = "dead-letter";
 
 #[derive(Debug, Clone, Deserialize)]
