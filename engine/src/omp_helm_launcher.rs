@@ -42,6 +42,10 @@ const TRANSITION_RECONCILE_GRACE: Duration = Duration::from_secs(5);
 const MAX_FRAME_BYTES: usize = 512 * 1024;
 const MAX_PENDING_COMMANDS: usize = 64;
 const MAX_LIVE_TEXT_BYTES: usize = 16 * 1024;
+/// The daemon writes the agent DB continuously, and a source reservation is a
+/// launch-gap guard rather than a precondition, so give the open a real budget
+/// before deciding it is unavailable.
+const SOURCE_BINDING_BUSY_TIMEOUT: Duration = Duration::from_millis(2_000);
 
 const EXTENSION_ASSET: &str = include_str!("../assets/longhouse-omp-helm.ts");
 
@@ -1458,6 +1462,34 @@ fn run_provider(
     Ok(exit)
 }
 
+/// Reserve a source path before stock OMP materializes its header.
+///
+/// Discovery then keeps the path pending instead of minting a Shadow session in
+/// the transition window. The daemon writes the agent DB continuously, so a
+/// transient busy open must not end the launch: this is a launch-gap guard, not
+/// a precondition. The Codex launch path degrades the same way.
+fn reserve_source_degrading(
+    db_path: &Path,
+    path: &Path,
+    session_id: &str,
+    native_id: Option<&str>,
+) {
+    let conn = match crate::state::db::open_client_connection(db_path, SOURCE_BINDING_BUSY_TIMEOUT) {
+        Ok(conn) => conn,
+        Err(error) => {
+            eprintln!(
+                "Longhouse: OMP agent DB unavailable; continuing without a source reservation: {error:#}"
+            );
+            return;
+        }
+    };
+    if let Err(error) =
+        crate::omp_session::reserve_source_for_thread(&conn, path, session_id, native_id)
+    {
+        eprintln!("Longhouse: OMP source reservation failed; continuing: {error:#}");
+    }
+}
+
 pub fn launch(config: LaunchConfig) -> Result<i32> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         anyhow::bail!(
@@ -1493,14 +1525,17 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     // Claim the exact path before stock OMP can materialize its header. The
     // parser will keep the path pending until the native identity appears,
     // while the reservation prevents a launch-gap Shadow session.
-    let db_path = crate::config::get_agent_db_path()?;
-    let conn = crate::state::db::open_client_connection(&db_path, Duration::from_millis(500))?;
-    crate::omp_session::reserve_source_for_thread(
-        &conn,
-        &session_file,
-        &session_id,
-        (!native_id.is_empty()).then_some(native_id.as_str()),
-    )?;
+    match crate::config::get_agent_db_path() {
+        Ok(db_path) => reserve_source_degrading(
+            &db_path,
+            &session_file,
+            &session_id,
+            (!native_id.is_empty()).then_some(native_id.as_str()),
+        ),
+        Err(error) => {
+            eprintln!("Longhouse: OMP agent DB path unavailable; continuing: {error:#}")
+        }
+    }
     let (url, token, machine_name) = registration_credentials(&config)?;
     let resume_attempt_id = resume_state.as_ref().map(|_| Uuid::new_v4().to_string());
     let run_id = resume_attempt_id
@@ -2296,5 +2331,30 @@ mod tests {
         // The deadline must be comfortably longer than the extension's own
         // interval, or a healthy channel would be reconnected on a timer.
         assert!(EXTENSION_SILENCE_DEADLINE >= Duration::from_secs(60));
+    }
+
+    #[test]
+    fn source_reservation_still_lands_on_a_healthy_agent_db() {
+        // Degrading on a busy agent DB must not quietly retire the launch-gap
+        // guard: a healthy DB still records the reservation.
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("agent/longhouse-shipper.db");
+        let source = temp.path().join("session.jsonl");
+        std::fs::write(&source, "{}\n").unwrap();
+        let session_id = Uuid::new_v4().to_string();
+
+        reserve_source_degrading(&db_path, &source, &session_id, None);
+
+        let conn =
+            crate::state::db::open_client_connection(&db_path, Duration::from_millis(500)).unwrap();
+        let (bound_session, provider) = conn
+            .query_row(
+                "SELECT session_id, provider FROM session_binding",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(bound_session, session_id);
+        assert_eq!(provider, "omp");
     }
 }
