@@ -798,7 +798,7 @@ def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest
                 "--codex-run-managed-tui-attach",
                 "--codex-run-managed-live-send",
                 "--codex-api-url",
-                "http://longhouse.test",
+                "http://127.0.0.1:9",
                 "--codex-agents-token",
                 "secret-token",
             ],
@@ -814,7 +814,7 @@ def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest
         assert "--run-raw-fresh-remote" in codex_args
         assert "--run-managed-tui-attach" in codex_args
         assert "--run-managed-live-send" in codex_args
-        assert codex_args[codex_args.index("--api-url") + 1] == "http://longhouse.test"
+        assert codex_args[codex_args.index("--api-url") + 1] == "http://127.0.0.1:9"
         assert "--agents-token" not in codex_args
         assert codex_env["CODEX_AGENTS_TOKEN"] == "secret-token"
         assert payload["provider"] == "codex"
@@ -1080,7 +1080,7 @@ def test_codex_managed_live_send_preflight_redacts_credentials() -> None:
                 "--preflight-only",
                 "--codex-run-managed-live-send",
                 "--codex-api-url",
-                "http://longhouse.test",
+                "http://127.0.0.1:9",
                 "--codex-agents-token",
                 "secret-token",
             ],

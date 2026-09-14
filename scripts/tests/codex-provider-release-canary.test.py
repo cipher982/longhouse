@@ -466,7 +466,7 @@ def _run_canary(
         command.extend(
             [
                 "--api-url",
-                "http://longhouse.test",
+                "http://127.0.0.1:9",
                 "--agents-token",
                 "secret-token",
             ]
