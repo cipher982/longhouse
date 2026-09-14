@@ -40,6 +40,7 @@ from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
+from zerg.qa.runtime_target import require_disposable_runtime
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 
@@ -2281,6 +2282,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "fail", "failure_code": f"missing_required_argument:--{missing[0].replace('_', '-')}"}))
         return 2
     try:
+        require_disposable_runtime(args.api_url)
         result = run_pi_helm_lifecycle(args)
     except Exception as exc:  # noqa: BLE001 - retain a typed producer failure
         result = {

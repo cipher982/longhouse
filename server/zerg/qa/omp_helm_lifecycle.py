@@ -36,6 +36,7 @@ from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.pty_session import ProviderPtySession
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
+from zerg.qa.runtime_target import require_disposable_runtime
 from zerg.services.provider_capability_proof import AssertionOutcome
 from zerg.services.provider_capability_proof import EvidenceClass
 from zerg.services.provider_interaction_semantics import omp_agent_end_is_terminal
@@ -3023,6 +3024,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     args = _parser().parse_args(arguments)
     try:
+        require_disposable_runtime(args.api_url)
         result = run_omp_helm(args)
     except Exception as exc:  # noqa: BLE001 - preserve a typed harness failure
         result = {

@@ -34,6 +34,7 @@ from typing import Mapping
 
 from zerg.qa.codex_auth import login_with_api_key
 from zerg.qa.repo_root import default_repo_root
+from zerg.qa.runtime_target import require_disposable_runtime
 
 ACTIVE_THREAD_ERROR = "No active thread is available."
 PROVIDER_STATUS_SCHEMA_VERSION = 1
@@ -2317,6 +2318,7 @@ def run_codex_provider_release_canary(args: argparse.Namespace | Mapping[str, An
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    require_disposable_runtime(args.api_url or os.getenv(CODEX_API_URL_ENV))
     artifact = run_codex_provider_release_canary(args)
 
     if args.json:

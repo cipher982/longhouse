@@ -21,6 +21,7 @@ from uuid import uuid4
 
 import httpx
 
+from zerg.qa.runtime_target import require_disposable_runtime
 from zerg.services.longhouse_paths import get_managed_local_dir
 
 
@@ -699,6 +700,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_arg_parser().parse_args()
     try:
+        require_disposable_runtime(args.api_url)
         report = run_product_e2e(args)
     except Exception as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}, indent=2))
