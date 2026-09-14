@@ -33,8 +33,15 @@ export default function (pi: any) {
   const KEEPALIVE_INTERVAL_MS = 20000;
   let leaseGeneration = "";
   let commandChain = Promise.resolve();
-  let initialPromptRequested = false;
   let initialPromptDelivered = initialPromptDeliveredAtLaunch;
+  let initialPromptAttempts = 0;
+  /// The launcher grants only once the session is ready, and a session becomes
+  /// ready asynchronously. A single request therefore loses the prompt for good
+  /// when it lands first: the TUI comes up looking normal with no prompt in it.
+  /// Ask again until granted, bounded so a launcher that never grants cannot
+  /// spin forever. The retry needs no timer handle: it stops on delivery.
+  const INITIAL_PROMPT_RETRY_MS = 250;
+  const INITIAL_PROMPT_MAX_ATTEMPTS = 240;
   let lastAgentEndTerminal: boolean | undefined;
   const generationWaiters: Array<() => void> = [];
 
@@ -138,6 +145,22 @@ export default function (pi: any) {
   const sendEvent = (kind: string, event: Frame, ctx: any) =>
     write({ kind, event: compactLifecycleEvent(kind, event), ...session(ctx) });
 
+  /// Ask for the initial prompt until the launcher grants it.
+  ///
+  /// The grant requires a ready session, and a refusal is not informative: it
+  /// means "not yet". Without this the prompt is dropped silently for the life
+  /// of the session, because the launcher only answers the request it is sent.
+  ///
+  /// `ctx` stays `unknown` here: this file's provider context is untyped, and a
+  /// new signature is no place to widen that.
+  const requestInitialPrompt = (ctx: unknown) => {
+    if (initialPromptDelivered || !initialPrompt?.trim()) return;
+    if (initialPromptAttempts >= INITIAL_PROMPT_MAX_ATTEMPTS) return;
+    initialPromptAttempts += 1;
+    sendEvent("initial_prompt_request", { type: "initial_prompt_request" }, ctx);
+    setTimeout(() => requestInitialPrompt(ctx), INITIAL_PROMPT_RETRY_MS);
+  };
+
   const handleFrame = (frame: Frame, ctx: any, ownGeneration: number) => {
     if (ownGeneration !== generation) return;
     if (frame.kind === "extension_ready") {
@@ -160,6 +183,8 @@ export default function (pi: any) {
         initialPromptDelivered = true;
         void Promise.resolve(pi.sendUserMessage(initialPrompt)).catch(() => undefined);
       }
+      // A refusal only means "not ready yet". The retry chain already running
+      // from session_start will ask again; delivery clears it.
       return;
     }
     if (["send", "steer", "abort", "terminate"].includes(String(frame.kind))) {
@@ -318,10 +343,8 @@ export default function (pi: any) {
     if (socket) close();
     await connectChannel(ctx);
     lifecycle("session_start", event, ctx);
-    if (event.type === "session_start" && initialPrompt?.trim() && !initialPromptRequested) {
-      if (sendEvent("initial_prompt_request", { type: "initial_prompt_request" }, ctx)) {
-        initialPromptRequested = true;
-      }
+    if (event.type === "session_start" && initialPrompt?.trim()) {
+      requestInitialPrompt(ctx);
     }
     while (deferredCommands.length) {
       const command = deferredCommands.shift()!;
