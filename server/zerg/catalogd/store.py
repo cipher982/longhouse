@@ -2303,7 +2303,7 @@ class CatalogStore:
 
             lease_objects = [SimpleNamespace(**lease) for lease in managed_leases]
             touched: set[UUID] = set()
-            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            orm = Session(bind=connection, join_transaction_mode="rollback_only", expire_on_commit=False)
             try:
                 if lease_objects:
                     accepted_session_ids = upsert_live_control_leases(
@@ -2338,7 +2338,11 @@ class CatalogStore:
                             received_at=received_at,
                         )
                     )
-                orm.commit()
+                # The catalog connection owns the heartbeat transaction. Flush
+                # the ORM unit without releasing a nested savepoint so lease
+                # reconciliation, state projection, and the final stamp update
+                # commit together.
+                orm.flush()
             except BaseException:
                 orm.rollback()
                 raise
