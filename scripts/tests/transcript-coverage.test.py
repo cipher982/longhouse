@@ -162,7 +162,9 @@ class CoverageReportTests(unittest.TestCase):
         )
         self.assertEqual(report["classes"]["tool_result"]["coverage"], 1.0)
 
-    def test_stale_backlog_escalates_to_stalled(self) -> None:
+    def test_a_stale_backlog_is_a_gap_not_a_stall(self) -> None:
+        """A record that never arrived is a gap however old it is; stalling is
+        a property of the lane, which this snapshot cannot see."""
         native = [coverage.NativeEvent("tool_call", "call-1", OBSERVED_AT_MS - 500_000, 0)]
         report = coverage.coverage_report(
             native,
@@ -173,7 +175,7 @@ class CoverageReportTests(unittest.TestCase):
             observed_at_ms=OBSERVED_AT_MS,
             stall_age_ms=60_000,
         )
-        self.assertEqual(report["verdict"], "stalled")
+        self.assertEqual(report["verdict"], "gap")
         self.assertEqual(report["oldest_unpropagated_age_ms"], 500_000)
 
     def test_recent_gap_is_partial_not_stalled(self) -> None:
@@ -278,7 +280,7 @@ class CoverageReportTests(unittest.TestCase):
         for name in coverage.EVENT_CLASSES:
             self.assertIn(name, text)
         self.assertIn("rec-1", text)
-        self.assertIn("STALLED", text)
+        self.assertIn("GAP", text)
 
 
 class ServedPayloadTests(unittest.TestCase):

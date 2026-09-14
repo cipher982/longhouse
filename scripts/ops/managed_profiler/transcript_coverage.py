@@ -354,7 +354,15 @@ def coverage_report(
     else:
         liveness = "consistent"
 
-    stalled = oldest_age is not None and oldest_age >= stall_age_ms
+    # "Stalled" and "gap" are different failures and conflating them makes the
+    # verdict useless. A record that never arrived is a gap, however old it is —
+    # measured on 2026-09-14, a live session with a 14 KB lag and three
+    # shipments in eight minutes read as STALLED because one record from an
+    # earlier epoch boundary had never propagated. Stalling is a property of the
+    # lane, which this snapshot cannot see; it needs the watch mode's arrival
+    # stream. Here, old unpropagated records are a gap.
+    stalled = False
+    gapped = oldest_age is not None and oldest_age >= stall_age_ms
     lagging = [
         name
         for name in incomplete
@@ -364,6 +372,8 @@ def coverage_report(
         verdict = "empty"
     elif stalled:
         verdict = "stalled"
+    elif gapped:
+        verdict = "gap"
     elif served_total == 0:
         verdict = "missing"
     elif lagging:
@@ -593,7 +603,10 @@ def discover_managed_sessions(
     return discovered
 
 
-VERDICT_SEVERITY = {name: index for index, name in enumerate(("pass", "empty", "partial", "missing", "stalled"))}
+VERDICT_SEVERITY = {
+    name: index
+    for index, name in enumerate(("pass", "empty", "partial", "gap", "missing", "stalled"))
+}
 
 
 def worst_verdict(reports: list[dict[str, Any]]) -> str:
