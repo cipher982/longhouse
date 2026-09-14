@@ -1,6 +1,7 @@
 //! Parser-independent raw + parser-versioned render shipping for storage-v2.
 
 use std::collections::{HashMap, HashSet};
+use std::fs::File;
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -397,8 +398,10 @@ fn prepare_next_envelope_with_limit(
     }
     let session_id_override = durable_session_id.as_deref();
     let legacy_offset = validated_legacy_offset(conn, &path_text, &canonical_path)?;
-    let source_revision = if provider.eq_ignore_ascii_case("omp") {
-        omp_title_slot_revision(path)?
+    let source_revision = if provider.eq_ignore_ascii_case("omp")
+        || provider.eq_ignore_ascii_case("pi")
+    {
+        pi_lineage_source_revision(path)?
     } else if provider.eq_ignore_ascii_case("antigravity")
         || is_cursor_agent_transcript_path(provider, path)
     {
@@ -4978,8 +4981,45 @@ fn hash_file(path: &Path) -> Result<String> {
     Ok(hex_hash(Sha256::digest(bytes).into()))
 }
 
-fn omp_title_slot_revision(path: &Path) -> Result<Option<String>> {
-    crate::omp_session::title_slot_revision(path)
+/// Revision signal for a Pi-lineage JSONL archive (Pi and OMP).
+///
+/// The signal has one hard constraint: it must be **invariant under append**.
+/// A revision change ends the epoch and re-ships the file from the start, so a
+/// signal that moved on every appended message would re-upload the whole
+/// transcript on every message. It must still move when the provider *rewrites*
+/// the file in place, which OMP does at least for its title slot and may do for
+/// ordinary records.
+///
+/// Both are satisfied by hashing a bounded head: once a file is longer than the
+/// cut, an append never touches those bytes, while an in-place rewrite that
+/// preserves length has to change something in the head. A file shorter than
+/// the cut hashes its first complete line instead, which an append likewise
+/// cannot change, and reports no signal at all until that line exists.
+///
+/// Residual, stated rather than hidden: a same-size rewrite confined to the
+/// middle of a large file is not visible to this signal. Length still catches
+/// shrink and truncate-then-regrow, and the shipped envelope always carries the
+/// bytes it read, so the exposure is a rewrite we do not notice rather than
+/// bytes we mis-attribute.
+fn pi_lineage_source_revision(path: &Path) -> Result<Option<String>> {
+    const PREFIX_BYTES: usize = 4096;
+    let metadata = std::fs::metadata(path)
+        .with_context(|| format!("reading source revision: {}", path.display()))?;
+    let mut file =
+        File::open(path).with_context(|| format!("reading source revision: {}", path.display()))?;
+    let mut bytes = vec![0_u8; PREFIX_BYTES];
+    let read = file.read(&mut bytes)?;
+    let head = &bytes[..read];
+    let mut hasher = Sha256::new();
+    if metadata.len() > PREFIX_BYTES as u64 {
+        hasher.update(head);
+    } else {
+        let Some(end) = head.iter().position(|byte| *byte == b'\n') else {
+            return Ok(None);
+        };
+        hasher.update(&head[..=end]);
+    }
+    Ok(Some(hex_hash(hasher.finalize().into())))
 }
 
 /// Cursor's agent transcript JSONL is a live provider-owned projection rather
@@ -5071,63 +5111,6 @@ mod tests {
         assert_eq!(after.envelope.session.project.as_deref(), Some("proj"));
     }
 
-    #[test]
-    fn omp_shipper_title_slot_rewrite_opens_revision_epoch() {
-        const TITLE_SLOT_BYTES: usize = 256;
-        fn source(title: &str) -> Vec<u8> {
-            let mut title_line = serde_json::json!({"type": "title", "title": title})
-                .to_string()
-                .into_bytes();
-            title_line.resize(TITLE_SLOT_BYTES - 1, b' ');
-            title_line.push(b'\n');
-            title_line.extend_from_slice(
-                b"{\"type\":\"session\",\"id\":\"omp-title-test\",\"cwd\":\"/tmp/omp\"}\n",
-            );
-            title_line.extend_from_slice(
-                b"{\"type\":\"message\",\"id\":\"omp-message\",\"timestamp\":\"2026-09-09T00:00:00Z\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}}\n",
-            );
-            title_line
-        }
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("omp-title.jsonl");
-        fs::write(&path, source("title-a")).unwrap();
-        let first_bytes = fs::read(&path).unwrap();
-        assert_eq!(
-            first_bytes.iter().position(|byte| *byte == b'\n'),
-            Some(TITLE_SLOT_BYTES - 1)
-        );
-        let first_revision = omp_title_slot_revision(&path).unwrap().unwrap();
-        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
-
-        let first = prepare_next_envelope(&mut conn, &capabilities(), &path, "omp", None)
-            .unwrap()
-            .expect("initial OMP source should be shippable");
-        acknowledge_prepared(&mut conn, &first);
-
-        fs::write(&path, source("title-b")).unwrap();
-        let second_revision = omp_title_slot_revision(&path).unwrap().unwrap();
-        assert_ne!(first_revision, second_revision);
-        let second = prepare_next_envelope(&mut conn, &capabilities(), &path, "omp", None)
-            .unwrap()
-            .expect("same-size OMP title rewrite should be shippable");
-        let second_resolution =
-            source_epoch::resolution_for_epoch(&conn, second.source_epoch).unwrap();
-
-        assert_ne!(first.source_epoch, second.source_epoch);
-        assert_eq!(
-            first.envelope.session_id, second.envelope.session_id,
-            "title rewrites keep the OMP native identity on the same Longhouse session"
-        );
-        assert_eq!(
-            second_resolution.start_reason,
-            crate::state::source_epoch::EpochStartReason::RevisionChange
-        );
-        assert_eq!(
-            second_resolution.predecessor_epoch,
-            Some(first.source_epoch)
-        );
-    }
 
     #[test]
     fn omp_partial_header_is_fenced_before_shadow_source_epoch_creation() {
@@ -10464,5 +10447,58 @@ mod tests {
 
         assert_eq!(live_lag_bytes(&conn, "omp", &path), 0);
         assert_eq!(live_lag_bytes(&conn, "omp", &dir.path().join("missing.jsonl")), 0);
+    }
+
+    #[test]
+    fn a_pi_lineage_revision_ignores_appends_and_notices_rewrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let line = format!("{{\"type\":\"message\",\"pad\":\"{}\"}}\n", "x".repeat(200));
+        let mut body = String::new();
+        for _ in 0..40 {
+            body.push_str(&line);
+        }
+        std::fs::write(&path, &body).unwrap();
+        let before = pi_lineage_source_revision(&path).unwrap().unwrap();
+
+        // An appended message must not move the signal: a change here would
+        // re-ship the whole transcript on every message.
+        let mut appended = body.clone();
+        appended.push_str(&line);
+        std::fs::write(&path, &appended).unwrap();
+        assert_eq!(
+            pi_lineage_source_revision(&path).unwrap().unwrap(),
+            before,
+            "appending must not rotate the source epoch"
+        );
+
+        // Rewriting the head in place, same size, must move it.
+        let mut rewritten = appended.clone().into_bytes();
+        rewritten[0] = b'[';
+        std::fs::write(&path, &rewritten).unwrap();
+        assert_ne!(
+            pi_lineage_source_revision(&path).unwrap().unwrap(),
+            before,
+            "an in-place rewrite must rotate the source epoch"
+        );
+    }
+
+    #[test]
+    fn a_pi_lineage_revision_of_a_short_file_uses_its_first_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("short.jsonl");
+        std::fs::write(&path, "{\"type\":\"session\"}\n").unwrap();
+        let first = pi_lineage_source_revision(&path).unwrap();
+
+        std::fs::write(&path, "{\"type\":\"session\"}\n{\"type\":\"message\"}\n").unwrap();
+        assert_eq!(
+            pi_lineage_source_revision(&path).unwrap(),
+            first,
+            "a second line must not rotate the epoch either"
+        );
+
+        // No complete line yet: no signal, rather than a wrong one.
+        std::fs::write(&path, "{\"type\":\"sess").unwrap();
+        assert_eq!(pi_lineage_source_revision(&path).unwrap(), None);
     }
 }

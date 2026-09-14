@@ -107,7 +107,10 @@ pub fn open_client_connection(db_path: &Path, busy_timeout: Duration) -> Result<
              session_id TEXT NOT NULL,
              provider TEXT NOT NULL,
              updated_at TEXT NOT NULL,
-             provider_session_id TEXT
+             provider_session_id TEXT,
+             state TEXT NOT NULL DEFAULT 'active',
+             bound_at TEXT,
+             last_seen_at TEXT
          );",
     )?;
     Ok(conn)
@@ -180,7 +183,11 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             path TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
             provider TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            provider_session_id TEXT,
+            state TEXT NOT NULL DEFAULT 'active',
+            bound_at TEXT,
+            last_seen_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS live_file_state (

@@ -777,27 +777,6 @@ fn record_owner(
     Ok(())
 }
 
-/// Read only the fixed title slot used for OMP's in-place title rewrite. This
-/// keeps source-epoch detection bounded and never scans the transcript body.
-pub fn title_slot_revision(path: &Path) -> Result<Option<String>> {
-    let mut file =
-        File::open(path).with_context(|| format!("reading OMP title slot: {}", path.display()))?;
-    let mut bytes = vec![0_u8; OMP_TITLE_SLOT_BYTES];
-    let read = file.read(&mut bytes)?;
-    if read < OMP_TITLE_SLOT_BYTES || bytes[OMP_TITLE_SLOT_BYTES - 1] != b'\n' {
-        return Ok(None);
-    }
-    let Some(newline) = bytes.iter().position(|byte| *byte == b'\n') else {
-        return Ok(None);
-    };
-    let Ok(slot) = serde_json::from_slice::<Value>(&bytes[..newline]) else {
-        return Ok(None);
-    };
-    if slot.get("type").and_then(Value::as_str) != Some("title") {
-        return Ok(None);
-    }
-    Ok(Some(format!("{:x}", sha2::Sha256::digest(&bytes))))
-}
 
 #[cfg(test)]
 mod tests {
@@ -1238,18 +1217,4 @@ mod tests {
         assert!(roots.iter().any(|root| root == &pi_sessions));
     }
 
-    #[test]
-    fn title_slot_revision_reads_only_the_fixed_native_slot() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("session.jsonl");
-        let mut title = br#"{"type":"title","v":1,"title":"before"}"#.to_vec();
-        title.resize(OMP_TITLE_SLOT_BYTES - 1, b' ');
-        title.push(b'\n');
-        title.extend_from_slice(b"body that must not affect the title revision\n");
-        fs::write(&path, &title).unwrap();
-        let before = title_slot_revision(&path).unwrap().unwrap();
-        title[35] = b'a';
-        fs::write(&path, &title).unwrap();
-        assert_ne!(before, title_slot_revision(&path).unwrap().unwrap());
-    }
 }
