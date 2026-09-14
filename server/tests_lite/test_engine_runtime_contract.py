@@ -101,6 +101,5 @@ def test_engine_runtime_batch_limit_matches_the_server_cap():
     assert server_cap is not None, "RuntimeEventBatchIngest.events lost its max_length"
 
     assert engine_limit == server_cap, (
-        f"engine chunks {engine_limit} runtime observations per POST but the server "
-        f"accepts at most {server_cap}; change both together"
+        f"engine chunks {engine_limit} runtime observations per POST but the server accepts at most {server_cap}; change both together"
     )
