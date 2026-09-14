@@ -306,7 +306,7 @@ test-terminal-fidelity-gate: ## Compose real Console, web, iOS and recovery proo
 test-terminal-fidelity-gate-helper: ## Focused fidelity composition and failure-retention boundaries
 	@uv run --project server python scripts/tests/terminal-fidelity-gate.test.py
 
-provider-fidelity-coverage: ## Provider→served content coverage for one session (ARGS="--provider omp --session <id> --transcript <path>")
+provider-fidelity-coverage: ## Provider→served content coverage (ARGS="--all-live" sweeps every managed session, or --provider/--session/--transcript for one)
 	@python3 scripts/ops/managed_profiler/transcript_coverage.py $(ARGS)
 
 test-provider-fidelity-coverage: ## Focused provider-fidelity coverage boundaries

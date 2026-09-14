@@ -190,6 +190,38 @@ class CoverageReportTests(unittest.TestCase):
         self.assertEqual(report["verdict"], "missing")
         self.assertEqual(report["oldest_unpropagated_age_ms"], 2_000)
 
+    def test_a_run_boundary_never_makes_an_otherwise_healthy_session_stall(self) -> None:
+        """`ended_at` advances after every turn of a live interactive session."""
+
+        native = [coverage.NativeEvent("tool_call", "call-1", OBSERVED_AT_MS - 1_000, 0)]
+        served = [served_event("rec-tool-call-1", "assistant", tool_name="bash", tool_call_id="call-1")]
+        report = coverage.coverage_report(
+            native,
+            served,
+            provider="omp",
+            session_id="s",
+            transcript="/t",
+            observed_at_ms=OBSERVED_AT_MS,
+            provider_alive=True,
+            served_ended_at="2026-09-13T14:27:06.632000Z",
+        )
+        self.assertEqual(report["liveness"]["verdict"], "served_marked_ended")
+        self.assertEqual(report["verdict"], "pass")
+
+    def test_an_in_flight_tail_is_not_a_partial_gap(self) -> None:
+        native = [coverage.NativeEvent("tool_call", f"call-{i}", OBSERVED_AT_MS - 1_000, 0) for i in range(100)]
+        served = [
+            served_event(f"rec-tool-call-{i}", "assistant", tool_name="bash", tool_call_id=f"call-{i}")
+            for i in range(99)
+        ]
+        report = coverage.coverage_report(
+            native, served, provider="omp", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS
+        )
+        self.assertEqual(report["classes"]["tool_call"]["coverage"], 0.99)
+        self.assertEqual(report["verdict"], "pass")
+        self.assertIn("tool_call", report["totals"]["incomplete_classes"])
+        self.assertEqual(report["totals"]["lagging_classes"], [])
+
     def test_session_reported_ended_while_provider_alive_is_stalled(self) -> None:
         native = [coverage.NativeEvent("tool_call", "call-1", OBSERVED_AT_MS - 1_000, 0)]
         served = [served_event("rec-tool-call-1", "assistant", tool_name="bash", tool_call_id="call-1")]
@@ -204,8 +236,9 @@ class CoverageReportTests(unittest.TestCase):
             served_ended_at="2026-09-13T14:27:06.632000Z",
         )
         self.assertEqual(report["classes"]["tool_call"]["coverage"], 1.0)
-        self.assertEqual(report["liveness"]["verdict"], "ended_while_alive")
-        self.assertEqual(report["verdict"], "stalled")
+        self.assertEqual(report["liveness"]["verdict"], "served_marked_ended")
+        # The verdict comes from the gap, and this session has none.
+        self.assertEqual(report["verdict"], "pass")
 
     def test_liveness_is_unknown_without_evidence(self) -> None:
         report = coverage.coverage_report(
@@ -346,6 +379,67 @@ class ServeLatencyTests(unittest.TestCase):
         self.assertEqual(coverage._percentile([10, 20, 30, 40], 0.5), 20)
         self.assertEqual(coverage._percentile([10, 20, 30, 40], 0.95), 40)
         self.assertEqual(coverage._percentile([7], 0.95), 7)
+
+
+class ManagedDiscoveryTests(unittest.TestCase):
+    """The sweep finds launches from the Machine Agent's own state files."""
+
+    def _state(self, root: Path, provider_dir: str, name: str, payload: dict) -> None:
+        directory = root / provider_dir
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / name).write_text(json.dumps(payload), encoding="utf-8")
+
+    def test_live_launches_are_discovered_and_stopped_ones_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            transcript = root / "session.jsonl"
+            transcript.write_text("", encoding="utf-8")
+            self._state(root, "omp-helm", "live.json", {
+                "session_id": "s-live", "session_file": str(transcript), "status": "degraded",
+            })
+            self._state(root, "omp-helm", "stopped.json", {
+                "session_id": "s-stopped", "session_file": str(transcript), "status": "stopped",
+            })
+
+            discovered = coverage.discover_managed_sessions(root)
+
+            self.assertEqual([entry.session_id for entry in discovered], ["s-live"])
+            self.assertEqual(discovered[0].provider, "omp")
+            self.assertEqual(discovered[0].status, "degraded")
+
+            with_stopped = coverage.discover_managed_sessions(root, include_stopped=True)
+            self.assertEqual(sorted(entry.session_id for entry in with_stopped), ["s-live", "s-stopped"])
+
+    def test_launches_without_a_readable_transcript_are_not_claimed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._state(root, "omp-helm", "gone.json", {
+                "session_id": "s-gone", "session_file": str(root / "missing.jsonl"), "status": "ready",
+            })
+            self._state(root, "omp-helm", "nameless.json", {"session_file": "/tmp/x.jsonl"})
+
+            self.assertEqual(coverage.discover_managed_sessions(root), [])
+
+    def test_malformed_state_files_are_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            directory = root / "omp-helm"
+            directory.mkdir(parents=True)
+            (directory / "broken.json").write_text("{not json", encoding="utf-8")
+
+            self.assertEqual(coverage.discover_managed_sessions(root), [])
+
+    def test_a_missing_state_root_is_not_an_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(coverage.discover_managed_sessions(Path(tmp) / "absent"), [])
+
+
+class SweepVerdictTests(unittest.TestCase):
+    def test_the_worst_verdict_wins_and_unknown_ranks_highest(self) -> None:
+        self.assertEqual(coverage.worst_verdict([{"verdict": "pass"}, {"verdict": "partial"}]), "partial")
+        self.assertEqual(coverage.worst_verdict([{"verdict": "partial"}, {"verdict": "stalled"}]), "stalled")
+        self.assertEqual(coverage.worst_verdict([{"verdict": "pass"}, {"verdict": "empty"}]), "empty")
+        self.assertEqual(coverage.worst_verdict([{"verdict": "pass"}, {"verdict": "surprising"}]), "surprising")
 
 
 def main() -> int:

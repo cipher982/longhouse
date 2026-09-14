@@ -49,6 +49,10 @@ USER_AGENT = "longhouse-provider-fidelity-coverage/1"
 EVENT_CLASSES = ("user", "assistant_text", "thinking", "tool_call", "tool_result")
 
 DEFAULT_STALL_AGE_MS = 60_000
+# A class below this share of its provider records is a real gap, not an
+# in-flight tail. Sampling and the last few seconds of a live turn always leave
+# a handful of records that have not landed yet.
+DEFAULT_COVERAGE_FLOOR = 0.98
 DEFAULT_MISSING_SAMPLE = 5
 EVENTS_PAGE_LIMIT = 1000
 MAX_EVENT_PAGES = 20
@@ -299,6 +303,7 @@ def coverage_report(
     transcript: str | None,
     observed_at_ms: int,
     stall_age_ms: int = DEFAULT_STALL_AGE_MS,
+    coverage_floor: float = DEFAULT_COVERAGE_FLOOR,
     missing_sample: int = DEFAULT_MISSING_SAMPLE,
     provider_alive: bool | None = None,
     served_ended_at: str | None = None,
@@ -337,25 +342,34 @@ def coverage_report(
     )
     incomplete = [name for name in EVENT_CLASSES if by_class[name]["provider"] and by_class[name]["coverage"] not in (None, 1.0)]
 
+    # `ended_at` on an interactive managed session tracks the end of its last
+    # run, so it advances while the session is alive. It is reported as a
+    # signal, never as the verdict: only unpropagated age and coverage say
+    # whether content is actually being lost.
     ended_at_ms = _parse_timestamp_ms(served_ended_at)
     if provider_alive is None or ended_at_ms is None:
         liveness = "unknown"
     elif provider_alive:
-        liveness = "ended_while_alive"
+        liveness = "served_marked_ended"
     else:
         liveness = "consistent"
 
-    stalled = liveness == "ended_while_alive" or (oldest_age is not None and oldest_age >= stall_age_ms)
+    stalled = oldest_age is not None and oldest_age >= stall_age_ms
+    lagging = [
+        name
+        for name in incomplete
+        if (by_class[name]["coverage"] or 0.0) < coverage_floor
+    ]
     if provider_total == 0:
         verdict = "empty"
     elif stalled:
         verdict = "stalled"
     elif served_total == 0:
         verdict = "missing"
-    elif not incomplete:
-        verdict = "pass"
-    else:
+    elif lagging:
         verdict = "partial"
+    else:
+        verdict = "pass"
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -371,6 +385,7 @@ def coverage_report(
             "served_mapped_events": served_total,
             "served_unmapped_events": unmapped,
             "incomplete_classes": incomplete,
+        "lagging_classes": lagging,
         },
         "liveness": {
             "provider_alive": provider_alive,
@@ -518,6 +533,126 @@ def render_text(report: dict[str, Any]) -> str:
 # --------------------------------------------------------------------------
 
 
+MANAGED_STATE_DIRS = {
+    "omp": "omp-helm",
+    "pi": "pi-helm",
+}
+
+
+@dataclass(frozen=True)
+class ManagedSession:
+    provider: str
+    session_id: str
+    transcript: Path
+    status: str
+
+
+def discover_managed_sessions(
+    state_root: Path,
+    *,
+    include_stopped: bool = False,
+) -> list[ManagedSession]:
+    """Find managed sessions from the Machine Agent's launch state files.
+
+    Only providers whose launch state names a native transcript are discovered
+    (OMP and Pi today). Codex, Claude, Cursor, and OpenCode carry their session
+    paths elsewhere, so their live transcripts are not covered by this sweep —
+    a negative result here is not a claim about those providers.
+    """
+
+    discovered: list[ManagedSession] = []
+    for provider, state_dir in sorted(MANAGED_STATE_DIRS.items()):
+        directory = state_root / state_dir
+        if not directory.is_dir():
+            continue
+        for state_file in sorted(directory.glob("*.json")):
+            try:
+                state = json.loads(state_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(state, dict):
+                continue
+            session_id = str(state.get("session_id") or "").strip()
+            transcript_value = str(state.get("session_file") or "").strip()
+            status = str(state.get("status") or "").strip() or "unknown"
+            if not session_id or not transcript_value:
+                continue
+            if status == "stopped" and not include_stopped:
+                continue
+            transcript = Path(transcript_value)
+            if not transcript.is_file():
+                continue
+            discovered.append(
+                ManagedSession(
+                    provider=provider,
+                    session_id=session_id,
+                    transcript=transcript,
+                    status=status,
+                )
+            )
+    return discovered
+
+
+VERDICT_SEVERITY = {name: index for index, name in enumerate(("pass", "empty", "partial", "missing", "stalled"))}
+
+
+def worst_verdict(reports: list[dict[str, Any]]) -> str:
+    """The most severe verdict in a sweep; unknown verdicts rank highest."""
+
+    return max(
+        (str(report.get("verdict") or "unknown") for report in reports),
+        key=lambda name: VERDICT_SEVERITY.get(name, len(VERDICT_SEVERITY)),
+    )
+
+
+def run_all_live(args: argparse.Namespace) -> int:
+    """Sweep every discoverable managed session and report the worst verdict."""
+
+    sessions = discover_managed_sessions(
+        Path(args.state_root).expanduser(),
+        include_stopped=args.include_stopped,
+    )
+    if not sessions:
+        print(f"no managed sessions discovered under {args.state_root}")
+        return 0
+
+    token = _resolve_token(args)
+    reports: list[dict[str, Any]] = []
+    for discovered in sessions:
+        native = extract_native_events(discovered.provider, discovered.transcript)
+        served = fetch_served_events(api_url=args.api_url, session_id=discovered.session_id, token=token)
+        session = fetch_session(args.api_url, discovered.session_id, token)
+        ended_at = session.get("ended_at")
+        report = coverage_report(
+            native,
+            served,
+            provider=discovered.provider,
+            session_id=discovered.session_id,
+            transcript=str(discovered.transcript),
+            observed_at_ms=_observed_at_ms(args.observed_at),
+            stall_age_ms=args.stall_age_ms,
+            missing_sample=args.missing_sample,
+            provider_alive=discovered.status != "stopped",
+            served_ended_at=str(ended_at) if ended_at else None,
+            served_event_count=len(served),
+        )
+        report["launch_status"] = discovered.status
+        reports.append(report)
+        print(render_text(report))
+        print()
+
+    print(f"--- {len(reports)} managed session(s); worst verdict: {worst_verdict(reports).upper()}")
+    for report in reports:
+        print(f"{report['provider']:6} {report['session_id']}  status={report['launch_status']:9} verdict={report['verdict']}")
+
+    if args.output:
+        output = Path(args.output).expanduser()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps({"sessions": reports}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    return 0 if all(report["verdict"] in {"pass", "empty"} for report in reports) else 1
+
+
 def _resolve_token(args: argparse.Namespace) -> str:
     if args.token_env:
         token = os.environ.get(args.token_env)
@@ -586,9 +721,20 @@ def watch_served_events(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--provider", required=True, help="Provider whose transcript is being read (e.g. omp)")
-    parser.add_argument("--transcript", required=True, help="Path to the provider-native session transcript")
+    parser.add_argument("--provider", default=None, help="Provider whose transcript is being read (e.g. omp)")
+    parser.add_argument("--transcript", default=None, help="Path to the provider-native session transcript")
     parser.add_argument("--session", default=None, help="Longhouse session id (required for live API reads)")
+    parser.add_argument(
+        "--all-live",
+        action="store_true",
+        help="Sweep every managed session the Machine Agent has launch state for, instead of one session",
+    )
+    parser.add_argument(
+        "--state-root",
+        default=str(Path.home() / ".longhouse" / "managed-local"),
+        help="Launch state root used by --all-live",
+    )
+    parser.add_argument("--include-stopped", action="store_true", help="Include launches whose state says stopped")
     parser.add_argument("--served-events", default=None, help="Saved events payload instead of a live API read")
     parser.add_argument("--api-url", default=os.environ.get("LONGHOUSE_API_URL", "https://david010.longhouse.ai"))
     parser.add_argument("--token-env", default=None, help="Environment variable holding the device token")
@@ -616,6 +762,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.all_live:
+        return run_all_live(args)
+    if not args.provider or not args.transcript:
+        raise SystemExit("--provider and --transcript are required unless --all-live is given")
+    if not args.session:
+        raise SystemExit("--session is required when reading the served projection from the API")
     transcript = Path(args.transcript).expanduser()
     if not transcript.is_file():
         raise SystemExit(f"transcript not found: {transcript}")

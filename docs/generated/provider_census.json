@@ -537,7 +537,8 @@
       "path": "scripts/ops/managed_profiler/transcript_coverage.py",
       "providers": [
         "cursor",
-        "omp"
+        "omp",
+        "pi"
       ]
     },
     {
