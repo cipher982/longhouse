@@ -698,6 +698,22 @@ pub fn parse_session_file_with_provider(
     offset: u64,
     provider: Option<&str>,
 ) -> Result<ParseResult> {
+    parse_session_file_bounded(path, offset, None, provider)
+}
+
+/// Parse at most the bytes up to `end_limit` (exclusive), when given.
+///
+/// The shipper captures a bounded raw batch and then needs the rendered events
+/// for exactly that range. Parsing the whole remaining file instead made the two
+/// reads independent — unbounded work, and a rewrite between them could publish
+/// raw bytes from one version with events from another. Bounding the parse to
+/// the captured range means both halves describe the same bytes.
+pub fn parse_session_file_bounded(
+    path: &Path,
+    offset: u64,
+    end_limit: Option<u64>,
+    provider: Option<&str>,
+) -> Result<ParseResult> {
     let native_flavor = match provider.map(|value| value.to_ascii_lowercase()).as_deref() {
         Some("omp") => Some(NativeFlavor::Omp),
         Some("pi") => Some(NativeFlavor::Pi),
@@ -796,6 +812,7 @@ pub fn parse_session_file_with_provider(
         parse_mmap(
             path,
             offset,
+            end_limit,
             &session_id,
             cursor_order_anchor,
             native_flavor,
@@ -804,6 +821,7 @@ pub fn parse_session_file_with_provider(
         parse_buffered(
             path,
             offset,
+            end_limit,
             &session_id,
             cursor_order_anchor,
             native_flavor,
@@ -1628,6 +1646,7 @@ fn project_from_cwd_basename(cwd: &Path) -> Option<String> {
 fn parse_mmap(
     path: &Path,
     offset: u64,
+    end_limit: Option<u64>,
     session_id: &str,
     cursor_order_anchor: Option<DateTime<Utc>>,
     native_flavor: Option<NativeFlavor>,
@@ -1638,8 +1657,11 @@ fn parse_mmap(
     let mmap = unsafe { Mmap::map(&file) }
         .with_context(|| format!("Failed to mmap {}", path.display()))?;
 
-    let data = if (offset as usize) < mmap.len() {
-        &mmap[offset as usize..]
+    let limit = end_limit
+        .map(|value| value.min(mmap.len() as u64) as usize)
+        .unwrap_or(mmap.len());
+    let data = if (offset as usize) < limit.min(mmap.len()) {
+        &mmap[offset as usize..limit]
     } else {
         return Ok(ParseResult {
             events: Vec::new(),
@@ -1780,6 +1802,7 @@ fn parse_mmap(
 fn parse_buffered(
     path: &Path,
     offset: u64,
+    end_limit: Option<u64>,
     session_id: &str,
     cursor_order_anchor: Option<DateTime<Utc>>,
     native_flavor: Option<NativeFlavor>,
@@ -1810,6 +1833,9 @@ fn parse_buffered(
     let mut line = String::new();
 
     loop {
+        if end_limit.is_some_and(|limit| current_offset >= limit) {
+            break;
+        }
         line.clear();
         let bytes_read = match reader.read_line(&mut line) {
             Ok(n) => n,
@@ -8532,5 +8558,35 @@ mod tests {
         let result = parse_session_file(&path, 0).unwrap();
         assert!(result.metadata.workflow_run_id.is_none());
         assert!(result.metadata.attribution_agent.is_none());
+    }
+
+    #[test]
+    fn a_bounded_parse_stops_at_the_captured_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let mut body = String::new();
+        for index in 0..5 {
+            body.push_str(&format!(
+                "{{\"type\":\"user\",\"uuid\":\"u{index}\",\"timestamp\":\"2026-01-01T00:00:0{index}Z\",\"message\":{{\"content\":[{{\"type\":\"text\",\"text\":\"line {index}\"}}]}}}}\n"
+            ));
+        }
+        std::fs::write(&path, &body).unwrap();
+        let cut: u64 = body
+            .lines()
+            .take(3)
+            .map(|line| line.len() as u64 + 1)
+            .sum();
+
+        let bounded = parse_session_file_bounded(&path, 0, Some(cut), None).unwrap();
+        let full = parse_session_file(&path, 0).unwrap();
+
+        assert_eq!(
+            bounded.events.len(),
+            3,
+            "a bounded parse must stop at the captured range"
+        );
+        assert_eq!(full.events.len(), 5, "an unbounded parse still reads the file");
+        assert!(bounded.last_good_offset <= cut);
+        assert_eq!(full.last_good_offset, body.len() as u64);
     }
 }

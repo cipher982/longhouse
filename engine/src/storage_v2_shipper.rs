@@ -453,8 +453,16 @@ fn prepare_next_envelope_with_limit(
     else {
         return Ok(None);
     };
-    let mut parse_result =
-        parser::parse_session_file_with_provider(path, position, Some(provider))?;
+    // Parse exactly the captured range. Reading the whole remaining file made
+    // the raw batch and the rendered events two independent reads of a mutable
+    // file: unbounded work proportional to the file, and a rewrite between them
+    // could publish bytes from one version with events from another.
+    let mut parse_result = parser::parse_session_file_bounded(
+        path,
+        position,
+        Some(raw_batch.range_end),
+        Some(provider),
+    )?;
     if is_cursor_agent_transcript_path(provider, path)
         && parse_result.metadata.started_at.is_none()
         && parse_result.events.is_empty()
