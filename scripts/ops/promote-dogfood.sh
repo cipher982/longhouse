@@ -3,10 +3,12 @@
 #
 # Usage: scripts/ops/promote-dogfood.sh [SHA]
 #
-# SHA defaults to the newest main commit whose push-triggered "Deploy and
-# Verify" run succeeded; an explicit SHA must have such a run. The dogfood
-# instance is updated on purpose with an image that already passed the canary
-# pipeline -- never by an ordinary push, which only reaches demo and canary.
+# A commit is promotable when its push-triggered "Deploy and Verify" run
+# succeeded and ghcr.io/cipher982/longhouse-runtime:<sha> exists. A push that
+# changed no runtime files deploys the previous image as :latest and publishes
+# no image of its own, so it is not promotable. SHA defaults to the newest
+# promotable main commit. The dogfood instance is updated on purpose -- never
+# by an ordinary push, which only reaches demo and canary.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -15,6 +17,12 @@ IMAGE_REPO="ghcr.io/cipher982/longhouse-runtime"
 SUBDOMAIN="${SUBDOMAIN:-${LONGHOUSE_DEFAULT_SUBDOMAIN:-}}"
 SHA="${1:-}"
 
+for tool in gh docker curl; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "promote-dogfood needs '$tool' on PATH." >&2
+    exit 1
+  fi
+done
 if [[ -z "$SUBDOMAIN" ]]; then
   echo "Set SUBDOMAIN or LONGHOUSE_DEFAULT_SUBDOMAIN to the dogfood instance." >&2
   exit 1
@@ -24,19 +32,34 @@ if [[ "$(printf '%s' "$SUBDOMAIN" | tr '[:upper:]' '[:lower:]')" == "demo" ]]; t
   exit 1
 fi
 
+verified_push_shas() {
+  gh run list --repo "$REPO" --workflow "Deploy and Verify" --branch main --status success --limit 50 \
+    --json headSha,event --jq '.[] | select(.event == "push") | .headSha'
+}
+
+image_exists() {
+  docker manifest inspect "$IMAGE_REPO:$1" >/dev/null 2>&1
+}
+
 if [[ -z "$SHA" ]]; then
-  SHA="$(gh run list --repo "$REPO" --workflow "Deploy and Verify" --branch main --status success \
-    --limit 50 --json headSha,event --jq '[.[] | select(.event == "push")][0].headSha // ""')"
+  while read -r candidate; do
+    if [[ -n "$candidate" ]] && image_exists "$candidate"; then
+      SHA="$candidate"
+      break
+    fi
+  done < <(verified_push_shas)
   if [[ -z "$SHA" ]]; then
-    echo "No successful Deploy and Verify run on main to promote." >&2
+    echo "No promotable main commit: none has both a successful push Deploy and Verify and its own image." >&2
     exit 1
   fi
 else
   SHA="$(git -C "$ROOT" rev-parse --verify "${SHA}^{commit}" 2>/dev/null || printf '%s' "$SHA")"
-  verified="$(gh run list --repo "$REPO" --workflow "Deploy and Verify" --commit "$SHA" --status success \
-    --limit 5 --json headSha --jq 'length')"
-  if [[ "$verified" == "0" ]]; then
-    echo "Refusing $SHA: it has no successful Deploy and Verify run." >&2
+  if ! verified_push_shas | grep -qx "$SHA"; then
+    echo "Refusing $SHA: no successful push-triggered Deploy and Verify run among the last 50." >&2
+    exit 1
+  fi
+  if ! image_exists "$SHA"; then
+    echo "Refusing $SHA: $IMAGE_REPO:$SHA does not exist (that push changed no runtime files)." >&2
     exit 1
   fi
 fi
