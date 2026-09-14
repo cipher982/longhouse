@@ -33,8 +33,8 @@ from typing import Callable
 from typing import Mapping
 
 from zerg.qa.codex_auth import login_with_api_key
+from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.repo_root import default_repo_root
-from zerg.qa.runtime_target import require_disposable_runtime
 
 ACTIVE_THREAD_ERROR = "No active thread is available."
 PROVIDER_STATUS_SCHEMA_VERSION = 1

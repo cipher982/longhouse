@@ -21,7 +21,7 @@ from uuid import uuid4
 
 import httpx
 
-from zerg.qa.runtime_target import require_disposable_runtime
+from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.services.longhouse_paths import get_managed_local_dir
 
 

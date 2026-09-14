@@ -34,6 +34,7 @@ from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import TranscriptShipper
 from zerg.qa.live_session_toolkit import isolated_provider_home
+from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import retire_qualification_session
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.live_session_toolkit import write_json
@@ -1759,6 +1760,7 @@ def _run_live(provider: str, variant: str, args: argparse.Namespace, root: Path)
     token = str(os.environ.get(RUNTIME_AGENTS_TOKEN_ENV) or "").strip()
     if not api_url or not token:
         raise RuntimeError(f"{RUNTIME_API_URL_ENV} and {RUNTIME_AGENTS_TOKEN_ENV} are required")
+    require_disposable_runtime(api_url)
     observed_version, raw_version_output = _probe_version(provider, args.provider_bin)
     if observed_version != args.provider_version:
         raise RuntimeError(f"{provider} staged release version mismatch: expected {args.provider_version}, observed {observed_version}")

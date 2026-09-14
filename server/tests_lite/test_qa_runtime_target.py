@@ -1,7 +1,7 @@
 import pytest
 
-from zerg.qa.runtime_target import HOSTED_TARGET_ENV
-from zerg.qa.runtime_target import require_disposable_runtime
+from zerg.qa.live_session_toolkit import HOSTED_TARGET_ENV
+from zerg.qa.live_session_toolkit import require_disposable_runtime
 
 
 @pytest.mark.parametrize(
