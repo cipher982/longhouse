@@ -463,7 +463,6 @@ private func mockSession(
     .background(Color(.systemGroupedBackground))
     .preferredColorScheme(.dark)
 }
-#endif
 
 #Preview("Timeline shell — toolbar") {
     TimelineView()
@@ -610,3 +609,4 @@ private func mockSession(
     }
     .preferredColorScheme(.dark)
 }
+#endif
