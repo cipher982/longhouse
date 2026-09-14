@@ -43,10 +43,11 @@ from zerg.services.provider_interaction_semantics import omp_agent_end_is_termin
 SCENARIO_ID = "omp_helm_lifecycle"
 # Hosted ends a run only when it receives a terminal_signal runtime event, and
 # that event ships through the machine's outbox rather than straight from the
-# launcher. Measured retirement therefore trails the session's own end by more
-# than the 30s this used to wait: the run was `ended` minutes later, with every
-# other retirement condition already satisfied.
-RETIREMENT_EVIDENCE_TIMEOUT_SEC = 180.0
+# launcher. Measured from the local stop, retirement landed ~181s later: a 30s
+# deadline gave up on a condition that was still going to become true, and 180s
+# missed the same run by two seconds. The latency itself is the outbox drain and
+# is tracked separately; this budget just has to exceed it.
+RETIREMENT_EVIDENCE_TIMEOUT_SEC = 300.0
 ASSERTIONS = (
     "omp_helm_launch_registration",
     "omp_helm_send_idle",
