@@ -1,10 +1,9 @@
 name: Promote Dogfood
 
-# Pushes deploy demo and canary only. The dogfood instance takes the newest
-# canary-verified image once a day, or an explicit commit on demand.
+# Pushes deploy demo and canary only. The dogfood instance takes a
+# canary-verified image on demand: the canary does not run the owner's machines,
+# and a verified image has broken them before, so promotion stays deliberate.
 on:
-  schedule:
-    - cron: "0 8 * * *"
   workflow_dispatch:
     inputs:
       sha:
