@@ -1158,10 +1158,38 @@ pub fn prune_stale_quarantines(db_path: &Path) -> Result<QuarantinePruneReport> 
 
 pub const VACUUM_FREELIST_THRESHOLD_BYTES: u64 = 50 * 1024 * 1024; // 50 MB
 
+/// Bytes sitting free *inside* allocated pages.
+///
+/// `freelist_count` only sees whole pages returned to the file. The Cursor
+/// record drain empties `record_bytes` in place (`state/cursor_store_records.rs`,
+/// `SET record_bytes = X''`), which frees space inside pages rather than
+/// releasing them, so a table can hold hundreds of megabytes of interior free
+/// space while the freelist stays near the threshold — and the file never
+/// shrinks. dbstat is the only measure of it; a build without dbstat keeps the
+/// freelist-only rule rather than guessing.
+fn interior_unused_bytes(conn: &rusqlite::Connection) -> u64 {
+    conn.query_row("SELECT SUM(unused) FROM dbstat;", [], |row| {
+        row.get::<_, Option<i64>>(0)
+    })
+    .ok()
+    .flatten()
+    .unwrap_or(0)
+    .max(0) as u64
+}
+
+/// Bytes a VACUUM could return: file-level freelist plus interior free space.
+fn reclaimable_bytes(conn: &rusqlite::Connection, freelist_bytes: u64) -> u64 {
+    freelist_bytes.saturating_add(interior_unused_bytes(conn))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CompactionReport {
     pub freelist_bytes_before: u64,
     pub freelist_bytes_after: u64,
+    /// File size either side of the rebuild. The freelist delta understates the
+    /// reclaim whenever the space was interior, which is the common case here.
+    pub page_bytes_before: u64,
+    pub page_bytes_after: u64,
     pub wal_checkpoint_busy: bool,
 }
 
@@ -1186,9 +1214,13 @@ pub fn maybe_compact_database_with_threshold(
     let page_size: i64 = conn
         .query_row("PRAGMA page_size;", [], |row| row.get(0))
         .context("querying page_size")?;
+    let page_count: i64 = conn
+        .query_row("PRAGMA page_count;", [], |row| row.get(0))
+        .context("querying page_count")?;
 
     let freelist_bytes = (freelist_pages.max(0) as u64).saturating_mul(page_size.max(0) as u64);
-    if freelist_bytes < threshold_bytes {
+    let page_bytes_before = (page_count.max(0) as u64).saturating_mul(page_size.max(0) as u64);
+    if reclaimable_bytes(&conn, freelist_bytes) < threshold_bytes {
         return Ok(None);
     }
     conn.execute("VACUUM;", []).context("executing VACUUM")?;
@@ -1205,10 +1237,16 @@ pub fn maybe_compact_database_with_threshold(
         .unwrap_or(0);
     let freelist_bytes_after =
         (freelist_pages_after.max(0) as u64).saturating_mul(page_size.max(0) as u64);
+    let page_count_after: i64 = conn
+        .query_row("PRAGMA page_count;", [], |row| row.get(0))
+        .unwrap_or(0);
+    let page_bytes_after = (page_count_after.max(0) as u64).saturating_mul(page_size.max(0) as u64);
 
     Ok(Some(CompactionReport {
         freelist_bytes_before: freelist_bytes,
         freelist_bytes_after,
+        page_bytes_before,
+        page_bytes_after,
         wal_checkpoint_busy,
     }))
 }
@@ -1232,11 +1270,14 @@ pub fn run_daily_storage_maintenance(db_path: &Path) {
 
     match maybe_compact_database(db_path) {
         Ok(Some(report)) => {
+            // The freelist delta understates it when the space was interior.
             let reclaimed = report
-                .freelist_bytes_before
-                .saturating_sub(report.freelist_bytes_after);
+                .page_bytes_before
+                .saturating_sub(report.page_bytes_after);
             tracing::info!(
                 reclaimed_bytes = reclaimed,
+                page_bytes_before = report.page_bytes_before,
+                page_bytes_after = report.page_bytes_after,
                 wal_checkpoint_busy = report.wal_checkpoint_busy,
                 "Daily maintenance: compacted shipper database"
             );
@@ -2038,5 +2079,43 @@ mod tests {
         let report = report.unwrap();
         assert!(report.freelist_bytes_before > 0);
         assert!(report.freelist_bytes_after <= report.freelist_bytes_before);
+    }
+
+    #[test]
+    fn compaction_triggers_on_space_trapped_inside_pages() {
+        // The Cursor record drain empties payloads in place, which frees space
+        // inside leaf pages instead of releasing whole pages: the freelist stays
+        // small while the file stays large, so a freelist-only threshold never
+        // compacts it and the file never shrinks.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("interior.db");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch("CREATE TABLE t (b BLOB);").unwrap();
+        for _ in 0..600 {
+            conn.execute("INSERT INTO t VALUES (?1)", [vec![7_u8; 2_000]])
+                .unwrap();
+        }
+        conn.execute("UPDATE t SET b = X'';", []).unwrap();
+        drop(conn);
+
+        let conn = Connection::open(&db_path).unwrap();
+        let page_size: i64 = conn
+            .query_row("PRAGMA page_size;", [], |row| row.get(0))
+            .unwrap();
+        let freelist_pages: i64 = conn
+            .query_row("PRAGMA freelist_count;", [], |row| row.get(0))
+            .unwrap();
+        drop(conn);
+        let freelist_bytes = (freelist_pages.max(0) as u64) * (page_size.max(0) as u64);
+
+        let report = maybe_compact_database_with_threshold(&db_path, freelist_bytes + 1)
+            .unwrap()
+            .expect("interior free space must compact even when the freelist alone would not");
+        assert!(
+            report.page_bytes_after < report.page_bytes_before,
+            "the rebuild must shrink the file: {} -> {}",
+            report.page_bytes_before,
+            report.page_bytes_after
+        );
     }
 }
