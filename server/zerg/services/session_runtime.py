@@ -243,13 +243,17 @@ class RuntimeEventIngest(BaseModel):
         return self
 
 
+# Matches RUNTIME_EVENT_BATCH_LIMIT in the machine agent (engine/src/outbox.rs),
+# and bounds both this HTTP model and catalogd's session.runtime.apply.v2. At 128
+# a live session's backlog drained in dozens of serial round trips, so a terminal
+# signal queued behind it retired the run minutes after the session had ended.
+# The body stays far inside the wire cap: 1024 observations is under a megabyte
+# against a 48 MB limit.
+RUNTIME_EVENT_BATCH_LIMIT = 1024
+
+
 class RuntimeEventBatchIngest(BaseModel):
-    # Matches RUNTIME_EVENT_BATCH_LIMIT in the machine agent (engine/src/outbox.rs).
-    # At 128 a live session's backlog drained in dozens of serial round trips, so
-    # a terminal signal queued behind it retired the run minutes after the
-    # session had ended. The body stays far inside the wire cap: 1024 observations
-    # is under a megabyte against a 48 MB limit.
-    events: list[RuntimeEventIngest] = Field(..., min_length=1, max_length=1024)
+    events: list[RuntimeEventIngest] = Field(..., min_length=1, max_length=RUNTIME_EVENT_BATCH_LIMIT)
 
 
 class RuntimeEventBatchResult(BaseModel):
