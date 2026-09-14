@@ -108,20 +108,25 @@ pub(crate) fn collect_observations_from_paths(
             .socket_path
             .filter(|value| !value.trim().is_empty())
             .map(PathBuf::from);
-        let socket_present = socket_path.as_ref().is_some_and(|path| path.exists());
         let status = state.status.unwrap_or_else(|| "unknown".into());
         // A degraded control path is not a dead session. The provider process is
         // still running and still writing its transcript, so reporting it as
         // not-live drops the managed lease and the Runtime Host closes a session
-        // whose terminal is open — the "ended while alive" lie. Liveness comes
-        // from launch and process evidence; the control path reports itself
-        // through `status`, which the lease carries as `bridge_status`.
+        // whose terminal is open — the "ended while alive" lie.
+        //
+        // Liveness therefore rests on launch and process evidence only. The
+        // channel socket is control evidence, not liveness evidence: a launcher
+        // that has lost its socket can still have a live provider and a growing
+        // transcript (observed on 2026-09-13, where the socket was gone while
+        // both processes ran). Control availability is reported separately
+        // through `status`, which the lease carries as `bridge_status`, and a
+        // missing socket must not invent run termination.
         let run_over = status == "stopped"
             || state
                 .terminal_state
                 .as_deref()
                 .is_some_and(|value| !value.trim().is_empty());
-        let live = !run_over && launcher_alive && provider_alive && socket_present;
+        let live = !run_over && launcher_alive && provider_alive;
         observations.push(OmpHelmObservation {
             session_id,
             native_session_id: state
@@ -336,5 +341,25 @@ mod tests {
 
         assert_eq!(observations.len(), 1);
         assert!(!observations[0].live);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_lost_control_socket_does_not_end_liveness() {
+        // Observed on 2026-09-13: the launcher and provider were both alive and
+        // the transcript kept growing, but the channel socket was gone. Control
+        // is degraded, not the session.
+        let dir = tempfile::tempdir().unwrap();
+        let state = launched_state(&dir.path().join("missing.sock"), "degraded", None);
+        let path = dir.path().join("session.json");
+        fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+
+        let observations = collect_observations_from_paths(&[path], &launched_facts());
+
+        assert_eq!(observations.len(), 1);
+        assert!(
+            observations[0].live,
+            "a missing control socket is control evidence, not liveness evidence"
+        );
     }
 }
