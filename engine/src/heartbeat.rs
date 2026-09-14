@@ -221,16 +221,32 @@ impl ShippingProgressObservation {
         self.pending_work = pending_work;
     }
 
-    pub fn snapshot(&self, pending_work: bool, is_offline: bool, now: Instant) -> ShippingProgress {
+    pub fn snapshot(
+        &self,
+        pending_work: bool,
+        in_flight: bool,
+        is_offline: bool,
+        now: Instant,
+    ) -> ShippingProgress {
         let seconds_without_progress = if pending_work && !is_offline {
             now.saturating_duration_since(self.last_progress_at)
                 .as_secs()
         } else {
             0
         };
+        // Stalled means wedged: work is pending, **nothing is in flight**, and
+        // no completion has advanced the clock. Requiring the absence of
+        // in-flight work is what separates "wedged" from "slow". A backlog
+        // envelope is up to the backlog batch size, and on a real uplink one of
+        // those can legitimately take longer than this threshold; reporting
+        // that as "no useful progress" told the user to inspect a system that
+        // was shipping in coarse steps. Every in-flight request carries its own
+        // deadline, so a hung request still surfaces through the error paths
+        // rather than through this flag.
         ShippingProgress {
             pending_work,
             stalled: pending_work
+                && !in_flight
                 && !is_offline
                 && seconds_without_progress >= SHIPPING_PROGRESS_STALL_THRESHOLD_SECS,
             seconds_without_progress,
@@ -3877,8 +3893,18 @@ pub fn write_status_file(
 
     let monotonic_now = Instant::now();
     let pending_work = progress_observation.has_pending_work();
+    let in_flight = projection
+        .payload
+        .ship_scheduler
+        .as_ref()
+        .is_some_and(|scheduler| {
+            scheduler.in_flight_live > 0
+                || scheduler.in_flight_retry > 0
+                || scheduler.in_flight_scan > 0
+                || scheduler.in_flight_backlog > 0
+        });
     projection.payload.shipping_progress =
-        progress_observation.snapshot(pending_work, is_offline, monotonic_now);
+        progress_observation.snapshot(pending_work, in_flight, is_offline, monotonic_now);
 
     let now_utc = chrono::Utc::now();
     let now = now_utc.to_rfc3339();
@@ -3959,6 +3985,7 @@ pub fn refresh_existing_status_pulse(
         serde_json::to_value(reconciliation).unwrap_or(serde_json::Value::Null);
     status["shipping_progress"] = serde_json::to_value(progress_observation.snapshot(
         pending_work,
+        false,
         is_offline,
         monotonic_now,
     ))
@@ -4120,34 +4147,55 @@ mod tests {
     }
 
     #[test]
+    fn work_in_flight_is_progress_and_not_a_stall() {
+        let start = Instant::now();
+        let mut observation = ShippingProgressObservation::new(start);
+        observation.observe_pending_work(true, start);
+
+        // A backlog envelope is up to the backlog batch size and can take
+        // longer than the stall threshold to upload and acknowledge.
+        let uploading = observation.snapshot(true, true, false, start + Duration::from_secs(300));
+        assert!(uploading.pending_work);
+        assert!(
+            !uploading.stalled,
+            "an in-flight envelope older than the threshold is slow, not wedged"
+        );
+        assert_eq!(uploading.seconds_without_progress, 300);
+
+        // The same age with nothing in flight is a real stall.
+        let wedged = observation.snapshot(true, false, false, start + Duration::from_secs(300));
+        assert!(wedged.stalled);
+    }
+
+    #[test]
     fn shipping_progress_is_idle_aware_and_resets_on_progress_sleep_or_offline() {
         let start = Instant::now();
         let mut observation = ShippingProgressObservation::new(start);
         observation.observe_pending_work(true, start);
 
-        let within_budget = observation.snapshot(true, false, start + Duration::from_secs(54));
+        let within_budget = observation.snapshot(true, false, false, start + Duration::from_secs(54));
         assert!(within_budget.pending_work);
         assert!(!within_budget.stalled);
 
-        let stalled = observation.snapshot(true, false, start + Duration::from_secs(55));
+        let stalled = observation.snapshot(true, false, false, start + Duration::from_secs(55));
         assert!(stalled.stalled);
         assert_eq!(stalled.seconds_without_progress, 55);
 
         observation.record_progress(start + Duration::from_secs(56));
-        let recovered = observation.snapshot(true, false, start + Duration::from_secs(57));
+        let recovered = observation.snapshot(true, false, false, start + Duration::from_secs(57));
         assert!(!recovered.stalled);
         assert_eq!(recovered.seconds_without_progress, 1);
 
         observation.reset_after_sleep(start + Duration::from_secs(100));
-        let after_sleep = observation.snapshot(true, false, start + Duration::from_secs(101));
+        let after_sleep = observation.snapshot(true, false, false, start + Duration::from_secs(101));
         assert!(!after_sleep.stalled);
         assert_eq!(after_sleep.seconds_without_progress, 1);
 
-        let offline = observation.snapshot(true, true, start + Duration::from_secs(1_000));
+        let offline = observation.snapshot(true, false, true, start + Duration::from_secs(1_000));
         assert!(!offline.stalled);
         assert_eq!(offline.seconds_without_progress, 0);
 
-        let idle_again = observation.snapshot(false, false, start + Duration::from_secs(1_000));
+        let idle_again = observation.snapshot(false, false, false, start + Duration::from_secs(1_000));
         assert!(!idle_again.pending_work);
         assert!(!idle_again.stalled);
         assert_eq!(idle_again.seconds_without_progress, 0);
@@ -4220,7 +4268,7 @@ mod tests {
         // A later fresh projection may discover work outside the path queue.
         let later = Instant::now();
         observation.observe_pending_work(true, later);
-        let pending = observation.snapshot(observation.has_pending_work(), false, later);
+        let pending = observation.snapshot(observation.has_pending_work(), false, false, later);
         assert!(pending.pending_work);
         assert!(!pending.stalled);
         assert_eq!(pending.seconds_without_progress, 0);
