@@ -115,10 +115,10 @@ pub(crate) fn collect_observations_from_paths(
         // whose terminal is open — the "ended while alive" lie.
         //
         // Liveness therefore rests on launch and process evidence only. The
-        // channel socket is control evidence, not liveness evidence: a launcher
-        // that has lost its socket can still have a live provider and a growing
-        // transcript (observed on 2026-09-13, where the socket was gone while
-        // both processes ran). Control availability is reported separately
+        // channel socket is control evidence, not liveness evidence: control
+        // path, liveness model, and state are independent axes, and a session
+        // whose launcher cannot be reached still has a live provider and a
+        // growing transcript. Control availability is reported separately
         // through `status`, which the lease carries as `bridge_status`, and a
         // missing socket must not invent run termination.
         let run_over = status == "stopped"
@@ -346,9 +346,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_lost_control_socket_does_not_end_liveness() {
-        // Observed on 2026-09-13: the launcher and provider were both alive and
-        // the transcript kept growing, but the channel socket was gone. Control
-        // is degraded, not the session.
+        // A launcher and provider can both be alive with no reachable channel.
+        // Control is degraded, not the session.
         let dir = tempfile::tempdir().unwrap();
         let state = launched_state(&dir.path().join("missing.sock"), "degraded", None);
         let path = dir.path().join("session.json");
