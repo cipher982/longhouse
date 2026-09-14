@@ -40,6 +40,7 @@ from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import TranscriptShipper
 from zerg.qa.live_session_toolkit import isolated_provider_home
+from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.provider_console_lifecycle import _force_cleanup
 from zerg.qa.provider_console_lifecycle import _terminate_live_qualification_session
@@ -380,6 +381,7 @@ def main(argv: list[str] | None = None) -> int:
     result: dict[str, object] | None = None
     failure: Exception | None = None
     api_url = str(os.environ.get(RUNTIME_API_URL_ENV) or "").strip().rstrip("/")
+    require_disposable_runtime(api_url)
     token = str(os.environ.get(RUNTIME_AGENTS_TOKEN_ENV) or "").strip()
     environment: dict[str, str] = {}
     try:

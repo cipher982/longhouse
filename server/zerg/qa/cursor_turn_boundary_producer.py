@@ -50,6 +50,7 @@ from zerg.qa.live_session_toolkit import TranscriptShipper
 from zerg.qa.live_session_toolkit import bound_terminal_recordings
 from zerg.qa.live_session_toolkit import isolated_provider_home
 from zerg.qa.live_session_toolkit import qualification_secrets
+from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import secret_scan
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.live_session_toolkit import wait_pid_dead
@@ -348,6 +349,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     args = _parser().parse_args(arguments)
     args.api_url = os.environ.get(RUNTIME_API_URL_ENV, "")
+    require_disposable_runtime(args.api_url)
     args.agents_token = os.environ.get(RUNTIME_AGENTS_TOKEN_ENV, "")
     if not args.api_url or not args.agents_token:
         print(json.dumps({"status": "fail", "failure_code": "runtime_host_control_credentials_missing"}))

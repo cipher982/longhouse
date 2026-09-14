@@ -15,6 +15,7 @@ from urllib.parse import quote
 
 import httpx
 
+from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.resume_assurance import ProducerRegistration
 
@@ -103,6 +104,7 @@ def _workspace_paths(payload: object) -> list[str]:
 def run_live_workspace_suggestions_oracle(*, evidence_root: Path) -> dict[str, Any]:
     evidence_root.mkdir(parents=True, exist_ok=False)
     api_url = str(os.environ.get(RUNTIME_API_URL_ENV) or "").strip().rstrip("/")
+    require_disposable_runtime(api_url)
     token = str(os.environ.get(RUNTIME_AGENTS_TOKEN_ENV) or "").strip()
     if not api_url or not token:
         raise ValueError("live workspace assurance requires Runtime Host API URL and token")

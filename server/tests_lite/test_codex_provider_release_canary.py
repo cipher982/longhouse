@@ -16,7 +16,7 @@ def _args(tmp_path: Path) -> argparse.Namespace:
     return argparse.Namespace(
         engine=str(tmp_path / "longhouse-engine"),
         repo_root=tmp_path,
-        api_url="https://runtime.invalid",
+        api_url="http://127.0.0.1:9",
         agents_token="test-agents-token",
         model=None,
         bridge_start_timeout_secs=5,

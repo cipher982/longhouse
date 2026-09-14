@@ -1866,6 +1866,7 @@ def main_for(provider: str, argv: list[str] | None = None) -> int:
         return 0
     args = parser().parse_args(arguments)
     args.api_url = os.environ.get(live_session_toolkit.RUNTIME_API_URL_ENV, "")
+    live_session_toolkit.require_disposable_runtime(args.api_url)
     args.agents_token = os.environ.get(live_session_toolkit.RUNTIME_AGENTS_TOKEN_ENV, "")
     if not args.api_url or not args.agents_token:
         print(json.dumps({"status": "fail", "failure_code": "runtime_host_control_credentials_missing"}))

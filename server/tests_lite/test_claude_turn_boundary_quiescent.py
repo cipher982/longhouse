@@ -55,7 +55,7 @@ def _args(tmp_path: Path) -> argparse.Namespace:
         provider_bin=claude_bin,
         project="zerg",
         model=None,
-        api_url="https://runtime.invalid",
+        api_url="http://127.0.0.1:9",
         agents_token="test-agents-token",
         launch_timeout_secs=5,
         response_timeout_secs=5,
@@ -205,7 +205,7 @@ def test_main_serializes_result_and_exit_code(tmp_path: Path, monkeypatch: pytes
         executable.write_text("#!/bin/sh\n")
         executable.chmod(0o755)
 
-    monkeypatch.setenv("LONGHOUSE_RUNTIME_API_URL", "https://runtime.example")
+    monkeypatch.setenv("LONGHOUSE_RUNTIME_API_URL", "http://127.0.0.1:9")
     monkeypatch.setenv("LONGHOUSE_RUNTIME_AGENTS_TOKEN", "device-token")
     monkeypatch.setattr(m, "run_turn_boundary_scenario", lambda _args: {"status": "pass", "marker": "sentinel"})
 

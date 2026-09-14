@@ -205,7 +205,7 @@ def _args(tmp_path: Path) -> argparse.Namespace:
         longhouse_cli=tmp_path / "longhouse",
         provider_bin=tmp_path / "opencode",
         live_send_timeout_secs=5.0,
-        api_url="https://runtime.example",
+        api_url="http://127.0.0.1:9",
         agents_token="device-token",
     )
 
@@ -357,7 +357,7 @@ def test_main_requires_runtime_host_credentials(
 def test_main_requires_the_provider_binary_to_exist(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setenv(m.RUNTIME_API_URL_ENV, "https://runtime.example")
+    monkeypatch.setenv(m.RUNTIME_API_URL_ENV, "http://127.0.0.1:9")
     monkeypatch.setenv(m.RUNTIME_AGENTS_TOKEN_ENV, "device-token")
     engine = tmp_path / "engine"
     engine.write_bytes(b"")

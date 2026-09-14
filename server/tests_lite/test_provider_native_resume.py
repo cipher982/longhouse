@@ -75,7 +75,7 @@ def _args(tmp_path: Path) -> argparse.Namespace:
         engine=tmp_path / "engine",
         longhouse_cli=tmp_path / "longhouse",
         repo_root=tmp_path / "repo",
-        api_url="https://runtime.example",
+        api_url="http://127.0.0.1:9",
         agents_token="device-token",
         provider_bin=tmp_path / "provider",
     )
@@ -193,7 +193,7 @@ def test_transcript_shipper_keeps_runtime_token_out_of_engine_argv(
     home = tmp_path / "home"
     evidence = tmp_path / "retained" / "nested" / "evidence"
     args = argparse.Namespace(
-        api_url="https://runtime.example",
+        api_url="http://127.0.0.1:9",
         agents_token="device-token",
         engine=tmp_path / "longhouse-engine",
         repo_root=tmp_path,
@@ -274,7 +274,7 @@ def test_transcript_shipper_flush_reuses_enrolled_db_and_restarts_daemon(
     evidence = tmp_path / "evidence"
     evidence.mkdir()
     args = argparse.Namespace(
-        api_url="https://runtime.example",
+        api_url="http://127.0.0.1:9",
         agents_token="device-token",
         engine=tmp_path / "longhouse-engine",
         repo_root=tmp_path,
@@ -369,7 +369,7 @@ def test_transcript_shipper_retries_a_quarantined_source_epoch_once(
         receipt={},
         engine=tmp_path / "engine",
         repo_root=tmp_path,
-        api_url="https://runtime.example",
+        api_url="http://127.0.0.1:9",
         machine_name="machine-1",
         db_path=tmp_path / "shipper.db",
         engine_environment={},
@@ -424,7 +424,7 @@ def test_transcript_shipper_retries_storage_lane_backpressure_once(
         receipt={},
         engine=tmp_path / "engine",
         repo_root=tmp_path,
-        api_url="https://runtime.example",
+        api_url="http://127.0.0.1:9",
         machine_name="machine-1",
         db_path=tmp_path / "shipper.db",
         engine_environment={},
@@ -455,7 +455,7 @@ def test_transcript_shipper_retries_a_storage_capability_502_once(
                 stderr=(
                     "Error: storage-v2 capability request returned non-2xx\n\n"
                     "Caused by:\n    HTTP status server error (502 Bad Gateway) for url "
-                    "(https://runtime.example/api/agents/storage/v2/capabilities)"
+                    "(http://127.0.0.1:9/api/agents/storage/v2/capabilities)"
                 ),
             ),
             SimpleNamespace(
@@ -474,7 +474,7 @@ def test_transcript_shipper_retries_a_storage_capability_502_once(
         receipt={},
         engine=tmp_path / "engine",
         repo_root=tmp_path,
-        api_url="https://runtime.example",
+        api_url="http://127.0.0.1:9",
         machine_name="machine-1",
         db_path=tmp_path / "shipper.db",
         engine_environment={},
@@ -505,7 +505,7 @@ def test_transcript_shipper_retries_a_storage_capability_timeout_once(
                 stderr=(
                     "Error: storage-v2 capability request failed\n\n"
                     "Caused by:\n    0: error sending request for url "
-                    "(https://runtime.example/api/agents/storage/v2/capabilities)\n"
+                    "(http://127.0.0.1:9/api/agents/storage/v2/capabilities)\n"
                     "    1: operation timed out"
                 ),
             ),
@@ -525,7 +525,7 @@ def test_transcript_shipper_retries_a_storage_capability_timeout_once(
         receipt={},
         engine=tmp_path / "engine",
         repo_root=tmp_path,
-        api_url="https://runtime.example",
+        api_url="http://127.0.0.1:9",
         machine_name="machine-1",
         db_path=tmp_path / "shipper.db",
         engine_environment={},
@@ -573,7 +573,7 @@ def test_transcript_shipper_retries_catalog_read_lane_exhaustion_once(
         receipt={},
         engine=tmp_path / "engine",
         repo_root=tmp_path,
-        api_url="https://runtime.example",
+        api_url="http://127.0.0.1:9",
         machine_name="machine-1",
         db_path=tmp_path / "shipper.db",
         engine_environment={},
@@ -599,7 +599,7 @@ def test_transcript_shipper_retains_a_repeated_storage_capability_502(
     stderr = (
         "Error: storage-v2 capability request returned non-2xx\n"
         "HTTP status server error (502 Bad Gateway) for url "
-        "(https://runtime.example/api/agents/storage/v2/capabilities)"
+        "(http://127.0.0.1:9/api/agents/storage/v2/capabilities)"
     )
     calls = 0
 
@@ -616,7 +616,7 @@ def test_transcript_shipper_retains_a_repeated_storage_capability_502(
         receipt={},
         engine=tmp_path / "engine",
         repo_root=tmp_path,
-        api_url="https://runtime.example",
+        api_url="http://127.0.0.1:9",
         machine_name="machine-1",
         db_path=tmp_path / "shipper.db",
         engine_environment={},
@@ -674,7 +674,7 @@ def test_transcript_shipper_retries_mixed_backpressure_then_lineage_reconciliati
         receipt={},
         engine=tmp_path / "engine",
         repo_root=tmp_path,
-        api_url="https://runtime.example",
+        api_url="http://127.0.0.1:9",
         machine_name="machine-1",
         db_path=tmp_path / "shipper.db",
         engine_environment={},
@@ -720,7 +720,7 @@ def test_transcript_shipper_does_not_retry_the_same_typed_state_twice(
         receipt={},
         engine=tmp_path / "engine",
         repo_root=tmp_path,
-        api_url="https://runtime.example",
+        api_url="http://127.0.0.1:9",
         machine_name="machine-1",
         db_path=tmp_path / "shipper.db",
         engine_environment={},
@@ -766,7 +766,7 @@ def test_transcript_shipper_prefers_backpressure_when_stderr_has_both_signals(
         receipt={},
         engine=tmp_path / "engine",
         repo_root=tmp_path,
-        api_url="https://runtime.example",
+        api_url="http://127.0.0.1:9",
         machine_name="machine-1",
         db_path=tmp_path / "shipper.db",
         engine_environment={},
@@ -809,7 +809,7 @@ def test_transcript_shipper_caps_storage_lane_backpressure_delay(
         receipt={},
         engine=tmp_path / "engine",
         repo_root=tmp_path,
-        api_url="https://runtime.example",
+        api_url="http://127.0.0.1:9",
         machine_name="machine-1",
         db_path=tmp_path / "shipper.db",
         engine_environment={},
@@ -847,7 +847,7 @@ def test_transcript_shipper_does_not_retry_untyped_ship_failure(
         receipt={},
         engine=tmp_path / "engine",
         repo_root=tmp_path,
-        api_url="https://runtime.example",
+        api_url="http://127.0.0.1:9",
         machine_name="machine-1",
         db_path=tmp_path / "shipper.db",
         engine_environment={},
@@ -879,7 +879,7 @@ def test_wait_session_tail_retries_projection_404_but_preserves_auth_failures(
     monkeypatch.setattr(live_session_toolkit, "_api_json", projected_tail)
     monkeypatch.setattr(provider_native_resume.time, "sleep", lambda _seconds: None)
 
-    assert wait_session_tail("https://runtime.example", "device-token", "session-1") == {
+    assert wait_session_tail("http://127.0.0.1:9", "device-token", "session-1") == {
         "session_id": "session-1",
         "messages": [],
     }
@@ -888,10 +888,10 @@ def test_wait_session_tail_retries_projection_404_but_preserves_auth_failures(
     auth_error = live_session_toolkit._RuntimeHostHTTPError(401, "unauthorized")
     monkeypatch.setattr(live_session_toolkit, "_api_json", lambda *_args, **_kwargs: (_ for _ in ()).throw(auth_error))
     with pytest.raises(live_session_toolkit._RuntimeHostHTTPError):
-        wait_session_tail("https://runtime.example", "device-token", "session-1")
+        wait_session_tail("http://127.0.0.1:9", "device-token", "session-1")
 
     with pytest.raises(RuntimeError, match="did not project session"):
-        wait_session_tail("https://runtime.example", "device-token", "session-1", timeout=0)
+        wait_session_tail("http://127.0.0.1:9", "device-token", "session-1", timeout=0)
 
     missing = live_session_toolkit._RuntimeHostHTTPError(404, "session not found")
     monkeypatch.setattr(
@@ -902,7 +902,7 @@ def test_wait_session_tail_retries_projection_404_but_preserves_auth_failures(
 
     assert (
         wait_session_tail(
-            "https://runtime.example",
+            "http://127.0.0.1:9",
             "device-token",
             "session-1",
             timeout=0.01,
@@ -2360,7 +2360,7 @@ def test_codex_main_serializes_path_values_in_result_output(
         executable.chmod(0o755)
     result_path = tmp_path / "evidence"
 
-    monkeypatch.setenv("LONGHOUSE_RUNTIME_API_URL", "https://runtime.example")
+    monkeypatch.setenv("LONGHOUSE_RUNTIME_API_URL", "http://127.0.0.1:9")
     monkeypatch.setenv("LONGHOUSE_RUNTIME_AGENTS_TOKEN", "device-token")
     monkeypatch.setattr(
         codex_native_resume,
@@ -3501,7 +3501,7 @@ def test_response_correlation_returns_measured_facts_for_strict_provider(
     monkeypatch.setattr(live_session_toolkit, "_api_json", lambda *_args, **_kwargs: tail)
 
     observed_tail, correlation = wait_assistant_response_after_marker(
-        "https://runtime.example",
+        "http://127.0.0.1:9",
         "token",
         "session-1",
         marker,
@@ -3537,7 +3537,7 @@ def test_strict_response_correlation_rejects_unrelated_assistant_event(
     monkeypatch.setattr(provider_native_resume.time, "sleep", lambda _seconds: None)
 
     _observed_tail, correlation = wait_assistant_response_after_marker(
-        "https://runtime.example",
+        "http://127.0.0.1:9",
         "token",
         "session-1",
         "MARKER",
@@ -3566,7 +3566,7 @@ def test_claude_response_correlation_returns_false_facts_on_timeout(
     monkeypatch.setattr(provider_native_resume.time, "sleep", lambda _seconds: None)
 
     _tail, correlation = wait_assistant_response_after_marker(
-        "https://runtime.example",
+        "http://127.0.0.1:9",
         "token",
         "session-1",
         "MARKER",

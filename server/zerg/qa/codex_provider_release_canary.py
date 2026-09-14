@@ -2214,6 +2214,7 @@ def _coerce_args(args: argparse.Namespace | Mapping[str, Any]) -> argparse.Names
 
 def run_codex_provider_release_canary(args: argparse.Namespace | Mapping[str, Any]) -> dict[str, Any]:
     args = _coerce_args(args)
+    require_disposable_runtime(args.api_url)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     evidence_root = args.evidence_root or args.repo_root / ".build/canaries/codex" / timestamp
     evidence_root.mkdir(parents=True, exist_ok=True)
@@ -2318,7 +2319,6 @@ def run_codex_provider_release_canary(args: argparse.Namespace | Mapping[str, An
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    require_disposable_runtime(args.api_url or os.getenv(CODEX_API_URL_ENV))
     artifact = run_codex_provider_release_canary(args)
 
     if args.json:

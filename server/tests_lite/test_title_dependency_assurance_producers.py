@@ -45,7 +45,7 @@ def test_title_producer_results_have_aware_generation_time(tmp_path, monkeypatch
 
 
 def test_live_title_oracle_only_uses_runtime_host_authority(tmp_path, monkeypatch):
-    monkeypatch.setenv(oracles.RUNTIME_API_URL_ENV, "https://runtime.example")
+    monkeypatch.setenv(oracles.RUNTIME_API_URL_ENV, "http://127.0.0.1:9")
     monkeypatch.setenv(oracles.RUNTIME_AGENTS_TOKEN_ENV, "runtime-token")
     calls: list[str] = []
     session_id = "5ad7f89a-f51a-4937-bca8-4ffc05497574"

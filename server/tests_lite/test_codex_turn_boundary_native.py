@@ -22,7 +22,7 @@ def _args(tmp_path: Path) -> argparse.Namespace:
         engine=engine,
         codex_bin=codex_bin,
         repo_root=tmp_path,
-        api_url="https://runtime.invalid",
+        api_url="http://127.0.0.1:9",
         agents_token="test-agents-token",
         model=None,
         bridge_start_timeout_secs=5,
@@ -172,7 +172,7 @@ def test_main_serializes_result_and_exit_code(tmp_path: Path, monkeypatch: pytes
         executable.write_text("#!/bin/sh\n")
         executable.chmod(0o755)
 
-    monkeypatch.setenv("LONGHOUSE_RUNTIME_API_URL", "https://runtime.example")
+    monkeypatch.setenv("LONGHOUSE_RUNTIME_API_URL", "http://127.0.0.1:9")
     monkeypatch.setenv("LONGHOUSE_RUNTIME_AGENTS_TOKEN", "device-token")
     monkeypatch.setattr(m, "run_turn_boundary_quiescent", lambda _args: {"status": "pass", "marker": "sentinel"})
 

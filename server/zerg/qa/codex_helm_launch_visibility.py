@@ -35,6 +35,7 @@ from zerg.qa.claude_live_session_support import write_json
 from zerg.qa.codex_auth import login_with_api_key
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
+from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.provider_launch_oracles import ASSERTION_ID
 from zerg.qa.provider_launch_oracles import SCENARIO_ID
@@ -971,6 +972,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     args = _parser().parse_args(arguments)
     args.api_url = os.environ.get(RUNTIME_API_URL_ENV, "")
+    require_disposable_runtime(args.api_url)
     args.agents_token = os.environ.get(RUNTIME_AGENTS_TOKEN_ENV, "")
     args.script_bin = None
     args.timeout_bin = None

@@ -127,7 +127,7 @@ def test_shared_oracle_fails_closed_when_served_run_is_not_retired(monkeypatch):
     )
 
     receipt = core._retire_session(
-        "https://runtime.example",
+        "http://127.0.0.1:9",
         "token",
         object(),
         "session-1",
@@ -444,7 +444,7 @@ def test_exception_closes_the_watched_stream(observation, stage):
 
 
 def test_dispatch_failure_without_vehicle_claim_cannot_certify_cleanup(monkeypatch, tmp_path):
-    monkeypatch.setenv(producer.RUNTIME_API_URL_ENV, "http://runtime.invalid")
+    monkeypatch.setenv(producer.RUNTIME_API_URL_ENV, "http://127.0.0.1:9")
     monkeypatch.setenv(producer.RUNTIME_AGENTS_TOKEN_ENV, "not-a-credential")
     monkeypatch.setattr(producer, "isolated_provider_home", lambda: tmp_path / "home")
     monkeypatch.setattr(producer.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="codex-cli fixture"))

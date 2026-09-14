@@ -43,6 +43,7 @@ from zerg.qa.claude_live_session_support import write_json
 from zerg.qa.live_session_toolkit import RUNTIME_AGENTS_TOKEN_ENV
 from zerg.qa.live_session_toolkit import RUNTIME_API_URL_ENV
 from zerg.qa.live_session_toolkit import prepare_claude_profile
+from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.resume_assurance import ProducerRegistration
 from zerg.qa.resume_assurance import execution_variant_key
@@ -310,6 +311,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"status": "fail", "failure_code": f"missing_required_argument:--{required.replace('_', '-')}"}))
             return 2
     args.api_url = os.environ.get(RUNTIME_API_URL_ENV, "")
+    require_disposable_runtime(args.api_url)
     args.agents_token = os.environ.get(RUNTIME_AGENTS_TOKEN_ENV, "")
     if not args.api_url or not args.agents_token:
         print(json.dumps({"status": "fail", "failure_code": "runtime_host_control_credentials_missing"}))

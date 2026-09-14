@@ -10,11 +10,11 @@ from zerg.qa import workspace_suggestions_live_producer as producer
 
 
 def _response(status: int, payload: object) -> httpx.Response:
-    return httpx.Response(status, json=payload, request=httpx.Request("GET", "https://runtime.test"))
+    return httpx.Response(status, json=payload, request=httpx.Request("GET", "http://127.0.0.1:9"))
 
 
 def test_live_workspace_producer_accepts_responsive_human_only_projection(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv(producer.RUNTIME_API_URL_ENV, "https://runtime.test")
+    monkeypatch.setenv(producer.RUNTIME_API_URL_ENV, "http://127.0.0.1:9")
     monkeypatch.setenv(producer.RUNTIME_AGENTS_TOKEN_ENV, "runtime-token")
 
     def fake_get(url, **_kwargs):
@@ -39,7 +39,7 @@ def test_live_workspace_producer_accepts_responsive_human_only_projection(tmp_pa
 
 
 def test_live_workspace_producer_rejects_provider_proof_root(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv(producer.RUNTIME_API_URL_ENV, "https://runtime.test")
+    monkeypatch.setenv(producer.RUNTIME_API_URL_ENV, "http://127.0.0.1:9")
     monkeypatch.setenv(producer.RUNTIME_AGENTS_TOKEN_ENV, "runtime-token")
 
     def fake_get(url, **_kwargs):
@@ -75,7 +75,7 @@ def test_live_workspace_registration_is_a_providerless_product_cell() -> None:
 
 
 def test_live_workspace_producer_retries_transient_projection_failure(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv(producer.RUNTIME_API_URL_ENV, "https://runtime.test")
+    monkeypatch.setenv(producer.RUNTIME_API_URL_ENV, "http://127.0.0.1:9")
     monkeypatch.setenv(producer.RUNTIME_AGENTS_TOKEN_ENV, "runtime-token")
     monkeypatch.setattr(producer.time, "sleep", Mock())
     projection_attempts = 0
@@ -98,7 +98,7 @@ def test_live_workspace_producer_retries_transient_projection_failure(tmp_path, 
 
 
 def test_transient_projection_exhaustion_is_harness_failure_not_missing_coverage(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv(producer.RUNTIME_API_URL_ENV, "https://runtime.test")
+    monkeypatch.setenv(producer.RUNTIME_API_URL_ENV, "http://127.0.0.1:9")
     monkeypatch.setenv(producer.RUNTIME_AGENTS_TOKEN_ENV, "runtime-token")
     monkeypatch.setattr(producer.time, "sleep", Mock())
 
@@ -117,7 +117,7 @@ def test_transient_projection_exhaustion_is_harness_failure_not_missing_coverage
 
 
 def test_no_human_workspace_is_blocked_not_a_product_failure(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv(producer.RUNTIME_API_URL_ENV, "https://runtime.test")
+    monkeypatch.setenv(producer.RUNTIME_API_URL_ENV, "http://127.0.0.1:9")
     monkeypatch.setenv(producer.RUNTIME_AGENTS_TOKEN_ENV, "runtime-token")
 
     def fake_get(url, **_kwargs):
@@ -137,7 +137,7 @@ def test_no_human_workspace_is_blocked_not_a_product_failure(tmp_path, monkeypat
 
 
 def test_durable_workspace_projection_does_not_require_a_live_control_channel(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv(producer.RUNTIME_API_URL_ENV, "https://runtime.test")
+    monkeypatch.setenv(producer.RUNTIME_API_URL_ENV, "http://127.0.0.1:9")
     monkeypatch.setenv(producer.RUNTIME_AGENTS_TOKEN_ENV, "runtime-token")
 
     def fake_get(url, **_kwargs):

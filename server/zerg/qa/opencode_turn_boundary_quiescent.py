@@ -78,6 +78,7 @@ from zerg.qa.live_session_toolkit import launch_command
 from zerg.qa.live_session_toolkit import provider_process_pid
 from zerg.qa.live_session_toolkit import qualification_secrets
 from zerg.qa.live_session_toolkit import redact_state_for_evidence
+from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.live_session_toolkit import stop_session
 from zerg.qa.live_session_toolkit import wait_assistant_response_after_marker
@@ -491,6 +492,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     args = _parser().parse_args(arguments)
     args.api_url = os.environ.get(RUNTIME_API_URL_ENV, "")
+    require_disposable_runtime(args.api_url)
     args.agents_token = os.environ.get(RUNTIME_AGENTS_TOKEN_ENV, "")
     if not args.api_url or not args.agents_token:
         print(json.dumps({"status": "fail", "failure_code": "runtime_host_control_credentials_missing"}))
