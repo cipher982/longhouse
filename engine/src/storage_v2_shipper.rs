@@ -425,6 +425,12 @@ fn prepare_next_envelope_with_limit(
     if position >= source_len {
         return Ok(None);
     }
+    // The raw batch and the parsed events are separate reads of a file the
+    // provider may rewrite between them, which would publish raw bytes from one
+    // version with rendered events from another. Stamp the source here and
+    // re-check it after the parse; a change means this batch describes no single
+    // version, so decline it and let the next tick read a consistent one.
+    let source_stamp_before = source_stamp(path)?;
     let framing = if provider.eq_ignore_ascii_case("antigravity")
         && path
             .extension()
@@ -475,6 +481,13 @@ fn prepare_next_envelope_with_limit(
             return Ok(None);
         };
         raw_batch.range_end = last.range_end;
+    }
+    if source_stamp(path)? != source_stamp_before {
+        tracing::info!(
+            path = %path.display(),
+            "Source changed between the raw read and the parse; declining this batch"
+        );
+        return Ok(None);
     }
     let session_id = resolve_session_id(
         provider,
@@ -4973,6 +4986,24 @@ pub(crate) fn opaque_source_id(path: &str) -> String {
         "path-sha256:{}",
         hex_hash(Sha256::digest(path.as_bytes()).into())
     )
+}
+
+/// Cheap identity for the window between reading raw bytes and parsing them.
+///
+/// Length plus modification time, both from one stat. A rewrite that changes
+/// the file at all moves the timestamp, and nanosecond resolution makes a
+/// collision within the same stamp vanishingly unlikely; hashing the file
+/// instead would cost a full read on every envelope.
+fn source_stamp(path: &Path) -> Result<(u64, i128)> {
+    let metadata = std::fs::metadata(path)
+        .with_context(|| format!("stamping source: {}", path.display()))?;
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|value| value.as_nanos() as i128)
+        .unwrap_or(-1);
+    Ok((metadata.len(), modified))
 }
 
 fn hash_file(path: &Path) -> Result<String> {
@@ -10500,5 +10531,26 @@ mod tests {
         // No complete line yet: no signal, rather than a wrong one.
         std::fs::write(&path, "{\"type\":\"sess").unwrap();
         assert_eq!(pi_lineage_source_revision(&path).unwrap(), None);
+    }
+
+    #[test]
+    fn a_source_stamp_moves_when_the_file_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.jsonl");
+        std::fs::write(&path, b"{\"type\":\"session\"}\n").unwrap();
+
+        let first = source_stamp(&path).unwrap();
+        assert_eq!(source_stamp(&path).unwrap(), first, "an untouched file keeps its stamp");
+
+        std::fs::write(&path, b"{\"type\":\"session\"}\n{\"type\":\"message\"}\n").unwrap();
+        assert_ne!(source_stamp(&path).unwrap(), first, "an append moves the stamp");
+
+        // Same length, different bytes: the post-read re-check is what catches
+        // a provider rewriting the file between the raw read and the parse.
+        let rewritten = b"{\"type\":\"session\"}\n{\"type\":\"message\"}\n";
+        let mut mutated = rewritten.to_vec();
+        mutated[3] = b'X';
+        std::fs::write(&path, &mutated).unwrap();
+        assert_ne!(source_stamp(&path).unwrap(), first);
     }
 }
