@@ -181,7 +181,20 @@ export default function (pi: any) {
     if (frame.kind === "initial_prompt_grant") {
       if (frame.granted === true && initialPrompt?.trim() && !initialPromptDelivered) {
         initialPromptDelivered = true;
-        void Promise.resolve(pi.sendUserMessage(initialPrompt)).catch(() => undefined);
+        void Promise.resolve(pi.sendUserMessage(initialPrompt)).catch((error: unknown) => {
+          // Swallowing this hid a session that came up looking healthy with no
+          // prompt in it at all. The provider refuses the send for real reasons
+          // ("No model selected" on a fresh profile), and nothing downstream
+          // could tell that apart from a delivered prompt.
+          sendEvent(
+            "initial_prompt_failed",
+            {
+              type: "initial_prompt_failed",
+              message: error instanceof Error ? error.message : String(error),
+            },
+            ctx,
+          );
+        });
       }
       // A refusal only means "not ready yet". The retry chain already running
       // from session_start will ask again; delivery clears it.

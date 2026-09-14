@@ -631,6 +631,16 @@ impl OmpHelmServer {
                 self.record_activity(kind, &frame)
             }
             "session_shutdown" => self.disconnect_extension(connection_id),
+            "initial_prompt_failed" => {
+                // The launcher path has no tracing subscriber, so this has to be
+                // eprintln to reach the terminal running the session. A prompt
+                // that never arrived used to look exactly like one that did.
+                let message = frame
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown error");
+                eprintln!("Longhouse: OMP initial prompt was not delivered: {message}");
+            }
             _ => {}
         }
     }
