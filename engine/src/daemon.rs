@@ -4752,6 +4752,12 @@ fn record_transcript_wake_hint(
 
 /// A live transcript this far behind its own file is treated as starved.
 const STARVED_LIVE_TRANSCRIPT_BYTES: u64 = 256 * 1024;
+/// A live transcript whose lane has not moved for this long is starved too.
+///
+/// The byte threshold alone cannot serve a slow producer: a session writing a
+/// few bytes per second crosses any byte bound only after hours. Staleness
+/// catches that case at the timescale a user would notice.
+const STARVED_LIVE_TRANSCRIPT_STALE_SECONDS: i64 = 120;
 
 /// Re-drive a live managed transcript whose durable lane trails its file.
 ///
@@ -4828,7 +4834,10 @@ fn enqueue_starved_managed_transcripts(
             Err(_) => continue,
         };
         let lag_bytes = metadata.len().saturating_sub(position);
-        if lag_bytes < STARVED_LIVE_TRANSCRIPT_BYTES {
+        let lane_is_stale = lag_bytes > 0
+            && crate::storage_v2_shipper::durable_lane_age_seconds(conn, provider, &canonical_text)
+                .is_some_and(|age| age >= STARVED_LIVE_TRANSCRIPT_STALE_SECONDS);
+        if lag_bytes < STARVED_LIVE_TRANSCRIPT_BYTES && !lane_is_stale {
             continue;
         }
         if !retry_admission_open(&path, deferred_retries) {
@@ -4841,6 +4850,7 @@ fn enqueue_starved_managed_transcripts(
             lane_position = position,
             file_bytes = metadata.len(),
             lag_bytes,
+            lane_is_stale,
             "Live managed transcript is behind its file; re-driving from the safety net"
         );
         scheduler.enqueue_observed_window(
@@ -7882,5 +7892,53 @@ mod tests {
         let mut scheduler = PathScheduler::new(4);
         enqueue_starved_managed_transcripts(&conn, &mut scheduler, &mut HashMap::new(), &unbound);
         assert!(scheduler.pop_launchable().is_none(), "an unbound path must not be re-driven");
+    }
+
+    #[test]
+    fn test_a_stale_small_lag_is_re_driven_too() {
+        // A slow producer crosses any byte threshold only after hours, so a
+        // stale lane with a small lag must still be re-driven.
+        let dir = tempfile::tempdir().unwrap();
+        let transcript = dir.path().join("omp-slow.jsonl");
+        let bytes = (STARVED_LIVE_TRANSCRIPT_BYTES / 8) as usize;
+        std::fs::write(&transcript, vec![b'x'; bytes]).unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let mut conn = open_db(Some(db.path())).unwrap();
+        let canonical = std::fs::canonicalize(&transcript).unwrap();
+        let canonical_text = canonical.to_string_lossy().to_string();
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .bind(&canonical_text, "session-omp", "omp")
+            .unwrap();
+        let opaque = crate::storage_v2_shipper::opaque_source_id(&canonical_text);
+        let source_epoch = 0u64;
+        let resolution = crate::state::source_epoch::observe_file(
+            &mut conn,
+            "omp",
+            &opaque,
+            &canonical,
+            crate::state::source_epoch::SourceLane::Durable,
+            source_epoch,
+            None,
+            Some("session-omp"),
+            crate::state::source_epoch::SourceChangeHint::None,
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE source_epoch_lane_state SET updated_at = '2020-01-01T00:00:00+00:00' WHERE source_epoch = ?1",
+            rusqlite::params![resolution.source_epoch.to_string()],
+        )
+        .unwrap();
+
+        let snapshot = ManagedObservationSnapshot {
+            omp: vec![omp_observation(Some(transcript.clone()), true)],
+            ..Default::default()
+        };
+        let mut scheduler = PathScheduler::new(4);
+        enqueue_starved_managed_transcripts(&conn, &mut scheduler, &mut HashMap::new(), &snapshot);
+
+        let launched = scheduler
+            .pop_launchable()
+            .expect("a stale lane with a small lag must be re-driven");
+        assert_eq!(launched.observation.source, "starvation_redrive");
     }
 }

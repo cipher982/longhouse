@@ -856,6 +856,36 @@ fn live_lag_bytes(conn: &Connection, provider: &str, path: &Path) -> u64 {
     metadata.len().saturating_sub(position)
 }
 
+/// How long a source's durable lane has been sitting still, in seconds.
+///
+/// A byte threshold alone cannot serve a slow producer: a session writing a few
+/// bytes per second reaches any fixed threshold only after hours, so its
+/// unshipped records sit for exactly as long. Callers use this to re-drive on
+/// staleness as well as on size.
+pub(crate) fn durable_lane_age_seconds(
+    conn: &Connection,
+    provider: &str,
+    canonical_path: &str,
+) -> Option<i64> {
+    let epoch = crate::state::source_epoch::active_source_epoch(
+        conn,
+        provider,
+        &opaque_source_id(canonical_path),
+    )
+    .ok()
+    .flatten()?;
+    let updated_at: String = conn
+        .query_row(
+            "SELECT updated_at FROM source_epoch_lane_state WHERE source_epoch = ?1 AND lane = 'durable'",
+            rusqlite::params![epoch.to_string()],
+            |row| row.get(0),
+        )
+        .ok()?;
+    let parsed = chrono::DateTime::parse_from_rfc3339(&updated_at).ok()?;
+    let age = chrono::Utc::now().signed_duration_since(parsed.with_timezone(&chrono::Utc));
+    Some(age.num_seconds().max(0))
+}
+
 pub(crate) async fn ship_next_envelope(
     conn: &mut Connection,
     client: &ShipperClient,
