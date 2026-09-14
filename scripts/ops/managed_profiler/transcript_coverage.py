@@ -631,6 +631,7 @@ def run_all_live(args: argparse.Namespace) -> int:
             transcript=str(discovered.transcript),
             observed_at_ms=_observed_at_ms(args.observed_at),
             stall_age_ms=args.stall_age_ms,
+            coverage_floor=args.coverage_floor,
             missing_sample=args.missing_sample,
             provider_alive=discovered.status != "stopped",
             served_ended_at=str(ended_at) if ended_at else None,
@@ -746,6 +747,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--provider-alive", dest="provider_alive", action="store_true", default=None)
     parser.add_argument("--provider-stopped", dest="provider_alive", action="store_false")
     parser.add_argument("--stall-age-ms", type=int, default=DEFAULT_STALL_AGE_MS)
+    parser.add_argument(
+        "--coverage-floor",
+        type=float,
+        default=DEFAULT_COVERAGE_FLOOR,
+        help=(
+            "Share of a class's provider records the served projection must carry before it "
+            "counts as a gap rather than an in-flight tail (default: %(default)s)"
+        ),
+    )
     parser.add_argument("--missing-sample", type=int, default=DEFAULT_MISSING_SAMPLE)
     parser.add_argument("--observed-at", default=None, help="ISO timestamp to evaluate ages against (default: now)")
     parser.add_argument(
@@ -804,6 +814,7 @@ def main(argv: list[str] | None = None) -> int:
         transcript=str(transcript),
         observed_at_ms=_observed_at_ms(args.observed_at),
         stall_age_ms=args.stall_age_ms,
+        coverage_floor=args.coverage_floor,
         missing_sample=args.missing_sample,
         provider_alive=args.provider_alive,
         served_ended_at=served_ended_at,

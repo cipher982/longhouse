@@ -312,6 +312,10 @@ provider-fidelity-coverage: ## Provider→served content coverage (ARGS="--all-l
 test-provider-fidelity-coverage: ## Focused provider-fidelity coverage boundaries
 	@python3 scripts/tests/transcript-coverage.test.py
 
+fidelity-coverage-gate: ## Gate Pi/OMP transcript fidelity (ARGS="--all-live", --coverage-floor, --stall-age-ms)
+	@python3 scripts/ops/managed_profiler/transcript_coverage.py $(or $(ARGS),--all-live)
+	@echo "fidelity coverage gate passed"
+
 historical-convergence-check: ## Read-only historical publication diagnosis or bounded --wait qualification
 	@cd server && uv run python -m zerg.cli.historical_convergence $(ARGS)
 
