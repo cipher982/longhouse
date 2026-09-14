@@ -1084,6 +1084,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
+    require_disposable_runtime(args.api_url or os.environ.get("LONGHOUSE_RUNTIME_API_URL"))
     root = args.evidence_root.resolve()
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
     isolation = new_qualification_isolation_root("pi-helm")
@@ -2282,7 +2283,6 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "fail", "failure_code": f"missing_required_argument:--{missing[0].replace('_', '-')}"}))
         return 2
     try:
-        require_disposable_runtime(args.api_url)
         result = run_pi_helm_lifecycle(args)
     except Exception as exc:  # noqa: BLE001 - retain a typed producer failure
         result = {

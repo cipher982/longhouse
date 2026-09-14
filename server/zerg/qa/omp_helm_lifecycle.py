@@ -1728,6 +1728,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         raise RuntimeError("OMP Helm qualification requires explicit LONGHOUSE_OMP_LIVE opt-in")
     if not args.api_url or not args.agents_token:
         raise RuntimeError("OMP Helm qualification requires Runtime Host URL and token")
+    require_disposable_runtime(args.api_url)
     # Keep a failed isolation quarantine outside the sealed evidence tree. It
     # may contain the disposable machine token until owned processes are dead;
     # the evidence scanner must never have to choose between preserving it and
@@ -3024,7 +3025,6 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     args = _parser().parse_args(arguments)
     try:
-        require_disposable_runtime(args.api_url)
         result = run_omp_helm(args)
     except Exception as exc:  # noqa: BLE001 - preserve a typed harness failure
         result = {
