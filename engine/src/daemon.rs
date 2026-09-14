@@ -1254,7 +1254,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             continue;
                         }
                         let observed_at_ms = now_ms();
-                        tracing::info!(
+                        // Debug, not info: a source that stays behind is
+                        // re-decided every tick, and a persistent condition
+                        // logged per tick is how a log stops being readable.
+                        // Starvation stays visible through the coverage gate,
+                        // which reports per-class coverage and exit codes.
+                        tracing::debug!(
                             provider,
                             path = %target.path.display(),
                             lag_bytes = target.lag_bytes,
