@@ -17,6 +17,9 @@ from datetime import timezone
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import and_
+from sqlalchemy import or_
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 import zerg.database as database_module
@@ -26,6 +29,7 @@ from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveLaunchReadiness
+from zerg.models.live_store import LiveSession
 from zerg.services.live_launch_readiness import update_live_launch_readiness_state
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import control_plane_for_provider
@@ -409,9 +413,23 @@ def mark_missing_live_control_leases(
     if not normalized_device_id:
         return set()
     seen_at = normalize_utc(received_at) or _utc_now()
+    # A lease already marked missing needs absence re-applied only when its
+    # session was re-observed since. Re-applying it to every missing lease made
+    # each heartbeat rewrite every lease the device ever held: 6,851 for the
+    # factory machine, holding the catalog writer ~17s per heartbeat.
+    reobserved_session_ids = select(LiveSession.session_id).where(
+        LiveSession.device_id == normalized_device_id,
+        LiveSession.state.notin_(("missing", "ended")),
+    )
     query = db.query(LiveControlLease).filter(
         LiveControlLease.device_id == normalized_device_id,
-        LiveControlLease.state.in_(("attached", "degraded", "missing")),
+        or_(
+            LiveControlLease.state.in_(("attached", "degraded")),
+            and_(
+                LiveControlLease.state == "missing",
+                LiveControlLease.session_id.in_(reobserved_session_ids),
+            ),
+        ),
     )
     if seen_session_ids:
         query = query.filter(LiveControlLease.session_id.notin_(seen_session_ids))

@@ -1365,6 +1365,36 @@ def test_repeated_complete_omission_reconciles_late_runtime_observation(live_cat
     assert _catalog_rows(LiveSessionRun.__table__)[0]["ended_at"] is None
 
 
+def test_repeated_complete_omission_leaves_settled_missing_leases_untouched(live_catalog, live_catalog_client):
+    session_id = uuid4()
+    headers = _headers(live_catalog)
+    _seed_open_run(session_id)
+    attached = live_catalog_client.post(
+        "/agents/heartbeat",
+        headers=headers,
+        json={"version": "0.7.0", "daemon_pid": 42, "sessions": [_resolved_managed_session(session_id)]},
+    )
+    assert attached.status_code == 204, attached.text
+    omitted = {
+        "version": "0.7.0",
+        "daemon_pid": 42,
+        "sessions": [],
+        "machine_evidence": _managed_snapshot_evidence(complete=True),
+    }
+    first = live_catalog_client.post("/agents/heartbeat", headers=headers, json=omitted)
+    assert first.status_code == 204, first.text
+    [settled] = _catalog_rows(LiveControlLease.__table__)
+    assert settled["state"] == "missing"
+
+    omitted["machine_evidence"] = _managed_snapshot_evidence(complete=True)
+    second = live_catalog_client.post("/agents/heartbeat", headers=headers, json=omitted)
+    assert second.status_code == 204, second.text
+    [after] = _catalog_rows(LiveControlLease.__table__)
+    assert after["state"] == "missing"
+    assert after["heartbeat_at"] == settled["heartbeat_at"]
+    assert after["payload_json"] == settled["payload_json"]
+
+
 def test_heartbeat_empty_resolved_sessions_does_not_detach_other_device_control(live_catalog, live_catalog_client):
     """An empty snapshot speaks only for the device that sent it."""
 
