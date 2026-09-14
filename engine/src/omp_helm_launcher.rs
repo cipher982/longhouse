@@ -46,6 +46,10 @@ const MAX_LIVE_TEXT_BYTES: usize = 16 * 1024;
 /// launch-gap guard rather than a precondition, so give the open a real budget
 /// before deciding it is unavailable.
 const SOURCE_BINDING_BUSY_TIMEOUT: Duration = Duration::from_millis(2_000);
+/// Attempts and spacing for the *required* native identity binding: a busy DB
+/// must not become a permanently degraded session.
+const SOURCE_BINDING_ATTEMPTS: usize = 3;
+const SOURCE_BINDING_RETRY_DELAY: Duration = Duration::from_millis(250);
 
 const EXTENSION_ASSET: &str = include_str!("../assets/longhouse-omp-helm.ts");
 
@@ -417,7 +421,7 @@ impl OmpHelmServer {
         // materializing its header. Discovery then keeps the path pending
         // instead of minting a Shadow session in this transition window.
         let db_path = crate::config::get_agent_db_path()?;
-        let conn = crate::state::db::open_client_connection(&db_path, Duration::from_millis(500))?;
+        let conn = open_agent_binding_connection(&db_path)?;
         {
             let state = self.shared.lock().expect("OMP state mutex poisoned");
             identity_commit_authority_matches_locked(
@@ -1490,6 +1494,47 @@ fn reserve_source_degrading(
     }
 }
 
+/// Open the agent DB for a native identity binding.
+///
+/// The daemon writes this DB continuously, and the binding decides whether the
+/// session is usable at all, so a transient busy open must be retried rather
+/// than turned into a permanent `degraded` state. A lock held longer than every
+/// attempt is still an error: the binding genuinely cannot be proven then.
+fn open_agent_binding_connection(db_path: &Path) -> Result<rusqlite::Connection> {
+    open_agent_binding_connection_with(
+        db_path,
+        SOURCE_BINDING_BUSY_TIMEOUT,
+        SOURCE_BINDING_ATTEMPTS,
+        SOURCE_BINDING_RETRY_DELAY,
+    )
+}
+
+fn open_agent_binding_connection_with(
+    db_path: &Path,
+    busy_timeout: Duration,
+    attempts: usize,
+    retry_delay: Duration,
+) -> Result<rusqlite::Connection> {
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        match crate::state::db::open_client_connection(db_path, busy_timeout) {
+            Ok(conn) => return Ok(conn),
+            Err(error) => {
+                if attempt >= attempts {
+                    return Err(error);
+                }
+                // eprintln, not tracing: the launcher path has no subscriber, so
+                // a tracing event here would be invisible in the terminal.
+                eprintln!(
+                    "Longhouse: OMP agent DB busy; retrying the native identity binding ({attempt}/{attempts})"
+                );
+            }
+        }
+        thread::sleep(retry_delay);
+    }
+}
+
 pub fn launch(config: LaunchConfig) -> Result<i32> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         anyhow::bail!(
@@ -2356,5 +2401,52 @@ mod tests {
             .unwrap();
         assert_eq!(bound_session, session_id);
         assert_eq!(provider, "omp");
+    }
+
+    #[test]
+    fn identity_binding_retries_a_transiently_locked_agent_db() {
+        // A lock that outlives the busy timeout must be retried, not turned
+        // into a permanently degraded session.
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("agent/longhouse-shipper.db");
+        let holder =
+            crate::state::db::open_client_connection(&db_path, Duration::from_millis(500)).unwrap();
+        holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let releaser = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(200));
+            holder.execute_batch("ROLLBACK").unwrap();
+            holder
+        });
+
+        let opened = open_agent_binding_connection_with(
+            &db_path,
+            Duration::from_millis(20),
+            10,
+            Duration::from_millis(50),
+        );
+
+        let _holder = releaser.join().unwrap();
+        assert!(
+            opened.is_ok(),
+            "a transient lock must be retried to success: {:?}",
+            opened.err()
+        );
+    }
+
+    #[test]
+    fn identity_binding_gives_up_after_bounded_attempts() {
+        // An agent DB that can never open must return, not retry forever.
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("agent/longhouse-shipper.db");
+        std::fs::create_dir_all(&db_path).unwrap();
+
+        let opened = open_agent_binding_connection_with(
+            &db_path,
+            Duration::from_millis(20),
+            3,
+            Duration::from_millis(1),
+        );
+
+        assert!(opened.is_err(), "an unopenable agent DB must not succeed");
     }
 }
