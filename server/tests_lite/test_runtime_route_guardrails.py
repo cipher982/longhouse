@@ -74,6 +74,69 @@ def test_catalog_runtime_batch_uses_one_rpc_without_opening_sqlite(monkeypatch):
     asyncio.run(run_test())
 
 
+def test_full_machine_agent_batch_applies_in_ordered_catalog_chunks(monkeypatch):
+    """A 1024-observation agent batch must not reach catalogd as one apply.
+
+    catalogd caps one apply at CATALOG_RUNTIME_APPLY_LIMIT and its fact reducer at
+    MAX_REDUCER_FACTS. Sending a whole agent batch returned HTTP 500 on every
+    batch above the cap, and the machine agent retried it forever.
+    """
+    import zerg.routers.runtime as runtime_router
+    from zerg.catalogd.fact_reducer import MAX_REDUCER_FACTS
+    from zerg.services.session_runtime import CATALOG_RUNTIME_APPLY_LIMIT
+
+    assert CATALOG_RUNTIME_APPLY_LIMIT <= MAX_REDUCER_FACTS
+
+    async def run_test():
+        calls = []
+
+        class CatalogClient:
+            async def call(self, method, params, *, timeout_seconds):
+                calls.append([event["dedupe_key"] for event in params["events"]])
+                return {
+                    "accepted": len(params["events"]),
+                    "duplicates": 0,
+                    "updated_runtime_keys": ["codex:catalog-runtime"],
+                    "commit_seq": str(len(calls)),
+                }
+
+        monkeypatch.setattr(runtime_router, "get_catalogd_client", lambda: CatalogClient())
+        count = CATALOG_RUNTIME_APPLY_LIMIT * 2 + 7
+        payload = RuntimeEventBatchIngest(
+            events=[
+                {
+                    "runtime_key": "codex:catalog-runtime",
+                    "provider": "codex",
+                    "device_id": "cinder",
+                    "source": "codex_bridge",
+                    "kind": "phase_signal",
+                    "phase": "running",
+                    "occurred_at": "2026-07-12T07:00:00Z",
+                    "freshness_ms": 60_000,
+                    "dedupe_key": f"chunk-{index}",
+                    "payload": {},
+                }
+                for index in range(count)
+            ]
+        )
+        response = Response()
+        result = await runtime_router.ingest_runtime_observation_batch(
+            payload,
+            response,
+            None,
+            SimpleNamespace(device_id="cinder", id="token-1", owner_id=1),
+            None,
+        )
+
+        assert [len(chunk) for chunk in calls] == [CATALOG_RUNTIME_APPLY_LIMIT, CATALOG_RUNTIME_APPLY_LIMIT, 7]
+        assert [key for chunk in calls for key in chunk] == [f"chunk-{index}" for index in range(count)]
+        assert result.accepted == count
+        assert result.updated_runtime_keys == ["codex:catalog-runtime"]
+        assert response.headers["X-Catalog-Commit-Seq"] == "3"
+
+    asyncio.run(run_test())
+
+
 def test_presence_live_store_delegates_to_runtime_batch_without_archive_wait(monkeypatch):
     import zerg.routers.presence as presence_router
     import zerg.routers.runtime as runtime_router

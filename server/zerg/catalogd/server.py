@@ -1552,15 +1552,15 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", "session.runtime.apply.v2 has invalid parameters")
         from pydantic import ValidationError
 
-        from zerg.services.session_runtime import RUNTIME_EVENT_BATCH_LIMIT
+        from zerg.services.session_runtime import CATALOG_RUNTIME_APPLY_LIMIT
         from zerg.services.session_runtime import RuntimeEventIngest
 
         raw_events = request.params["events"]
-        if not isinstance(raw_events, list) or not 1 <= len(raw_events) <= RUNTIME_EVENT_BATCH_LIMIT:
+        if not isinstance(raw_events, list) or not 1 <= len(raw_events) <= CATALOG_RUNTIME_APPLY_LIMIT:
             return self._error(
                 request,
                 "invalid_request",
-                f"events must contain 1 through {RUNTIME_EVENT_BATCH_LIMIT} rows",
+                f"events must contain 1 through {CATALOG_RUNTIME_APPLY_LIMIT} rows",
             )
 
         try:

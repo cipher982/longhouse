@@ -251,6 +251,12 @@ class RuntimeEventIngest(BaseModel):
 # against a 48 MB limit.
 RUNTIME_EVENT_BATCH_LIMIT = 1024
 
+# Largest runtime batch one catalogd apply accepts. The HTTP route splits a
+# machine agent batch into applies of at most this size, in order, so each hold
+# of the single catalog writer stays short and every apply stays inside the fact
+# reducer's MAX_REDUCER_FACTS bound (one fact per observation) and the frame cap.
+CATALOG_RUNTIME_APPLY_LIMIT = 128
+
 
 class RuntimeEventBatchIngest(BaseModel):
     events: list[RuntimeEventIngest] = Field(..., min_length=1, max_length=RUNTIME_EVENT_BATCH_LIMIT)

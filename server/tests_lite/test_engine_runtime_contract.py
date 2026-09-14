@@ -18,36 +18,6 @@ FIXTURE = Path(__file__).parent / "fixtures" / "codex_bridge_runtime_events.json
 CONSOLE_FIXTURE = Path(__file__).parent / "fixtures" / "codex_console_runtime_events.json"
 
 
-def test_catalogd_accepts_a_full_engine_runtime_batch(tmp_path):
-    """catalogd must admit every batch the HTTP model admits.
-
-    The engine and the model moved to 1024 together, but catalogd kept its own
-    128 cap: every larger batch passed HTTP validation and then failed inside
-    catalogd as a non-retryable error, so the machine agent retried it forever
-    and a laptop's runtime observations stopped reaching the Runtime Host.
-    """
-    import asyncio
-
-    from zerg.catalogd.protocol import CatalogRpcRequest
-    from zerg.catalogd.server import CatalogDaemon
-    from zerg.services.session_runtime import RUNTIME_EVENT_BATCH_LIMIT
-
-    daemon = CatalogDaemon(database_path=tmp_path / "catalog.db", socket_path=tmp_path / "catalogd.sock")
-
-    def respond(count: int):
-        request = CatalogRpcRequest(
-            id="batch-limit",
-            method="session.runtime.apply.v2",
-            deadline_mono_ns="0",
-            params={"events": [{} for _ in range(count)]},
-        )
-        return asyncio.run(daemon._apply_session_runtime(request))  # noqa: SLF001
-
-    # Invalid rows get past the size check and fail validation, before the store.
-    assert respond(RUNTIME_EVENT_BATCH_LIMIT).error.message == "runtime event validation failed"
-    assert respond(RUNTIME_EVENT_BATCH_LIMIT + 1).error.message == (f"events must contain 1 through {RUNTIME_EVENT_BATCH_LIMIT} rows")
-
-
 def test_codex_bridge_runtime_events_fixture_deserializes():
     data = json.loads(FIXTURE.read_text())
     assert "events" in data
