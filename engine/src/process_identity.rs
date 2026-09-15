@@ -12,7 +12,11 @@ use chrono::DateTime;
 use chrono::Utc;
 
 pub const PID_REUSE_TOLERANCE_SECS: i64 = 120;
-const PROCESS_INVENTORY_TIMEOUT: Duration = Duration::from_secs(2);
+// A full `ps` inventory is cheap when idle but can take several seconds while
+// macOS is servicing hundreds of provider and helper processes. Treating a
+// two-second scheduling hiccup as an unavailable inventory makes the whole
+// local projection yellow even though the durable managed state is readable.
+const PROCESS_INVENTORY_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessFact {
