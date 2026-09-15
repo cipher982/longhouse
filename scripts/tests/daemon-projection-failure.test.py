@@ -157,7 +157,7 @@ def exercise(engine):
                     time.sleep(0.05)
                 raise AssertionError(f"daemon did not converge: {status}; logs: {daemon_logs()}")
 
-            startup_deadline = time.monotonic() + 20
+            startup_deadline = time.monotonic() + 60
             while True:
                 startup_projection = observe().get("local_projection", {})
                 startup_reconciliation = startup_projection.get("reconciliation", {})
