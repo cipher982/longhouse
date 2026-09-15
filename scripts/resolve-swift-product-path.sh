@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: resolve-swift-product-path.sh --package-path <path> --product <name> [--configuration <debug|release>] [--no-build]
+Usage: resolve-swift-product-path.sh --package-path <path> --product <name> [--configuration <debug|release>] [--scratch-path <path>] [--no-build]
 
 Builds a SwiftPM product by default and prints the resolved executable path.
 Falls back to searching under .build when `swift build --show-bin-path` points
@@ -14,6 +14,7 @@ EOF
 PACKAGE_PATH=""
 PRODUCT_NAME=""
 CONFIGURATION="release"
+SCRATCH_PATH=""
 BUILD_PRODUCT=1
 
 require_value() {
@@ -43,6 +44,11 @@ while [[ $# -gt 0 ]]; do
       CONFIGURATION="$2"
       shift 2
       ;;
+    --scratch-path)
+      require_value "$1" "${2:-}"
+      SCRATCH_PATH="$2"
+      shift 2
+      ;;
     --no-build)
       BUILD_PRODUCT=0
       shift
@@ -68,10 +74,14 @@ if [[ ! -d "$PACKAGE_PATH" ]]; then
   echo "Package path not found: $PACKAGE_PATH" >&2
   exit 1
 fi
+SWIFT_BUILD_ARGS=()
+if [[ -n "$SCRATCH_PATH" ]]; then
+  SWIFT_BUILD_ARGS+=(--scratch-path "$SCRATCH_PATH")
+fi
 
 if [[ "$BUILD_PRODUCT" == "1" ]]; then
   BUILD_LOG="$(mktemp -t resolve-swift-build.XXXXXX.log)"
-  if ! swift build --package-path "$PACKAGE_PATH" -c "$CONFIGURATION" --product "$PRODUCT_NAME" >"$BUILD_LOG" 2>&1; then
+  if ! swift build --package-path "$PACKAGE_PATH" "${SWIFT_BUILD_ARGS[@]}" -c "$CONFIGURATION" --product "$PRODUCT_NAME" >"$BUILD_LOG" 2>&1; then
     cat "$BUILD_LOG" >&2
     rm -f "$BUILD_LOG"
     exit 1
@@ -79,7 +89,7 @@ if [[ "$BUILD_PRODUCT" == "1" ]]; then
   rm -f "$BUILD_LOG"
 fi
 
-BIN_DIR="$(swift build --package-path "$PACKAGE_PATH" -c "$CONFIGURATION" --show-bin-path)"
+BIN_DIR="$(swift build --package-path "$PACKAGE_PATH" "${SWIFT_BUILD_ARGS[@]}" -c "$CONFIGURATION" --show-bin-path)"
 PRIMARY_CANDIDATE="$BIN_DIR/$PRODUCT_NAME"
 if [[ -x "$PRIMARY_CANDIDATE" ]]; then
   printf '%s\n' "$PRIMARY_CANDIDATE"
@@ -97,8 +107,12 @@ case "$CONFIGURATION" in
     CONFIGURATION_CAPITALIZED="$CONFIGURATION"
     ;;
 esac
+FALLBACK_ROOT="$PACKAGE_PATH/.build"
+if [[ -n "$SCRATCH_PATH" ]]; then
+  FALLBACK_ROOT="$SCRATCH_PATH"
+fi
 FALLBACK_CANDIDATE="$(
-  find "$PACKAGE_PATH/.build" -type f -perm -111 \
+  find "$FALLBACK_ROOT" -type f -perm -111 \
     \( -path "*/${CONFIGURATION}*/${PRODUCT_NAME}" -o -path "*/${CONFIGURATION_CAPITALIZED}*/${PRODUCT_NAME}" \) \
     2>/dev/null | sort | head -1
 )"
@@ -107,7 +121,7 @@ if [[ -n "$FALLBACK_CANDIDATE" ]]; then
   exit 0
 fi
 
-ANY_CANDIDATE="$(find "$PACKAGE_PATH/.build" -type f -name "$PRODUCT_NAME" -perm -111 2>/dev/null | sort | head -1)"
+ANY_CANDIDATE="$(find "$FALLBACK_ROOT" -type f -name "$PRODUCT_NAME" -perm -111 2>/dev/null | sort | head -1)"
 if [[ -n "$ANY_CANDIDATE" ]]; then
   printf '%s\n' "$ANY_CANDIDATE"
   exit 0

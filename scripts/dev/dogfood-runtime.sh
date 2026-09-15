@@ -19,6 +19,16 @@ MACHINE_NAME_OVERRIDE="${LONGHOUSE_DOGFOOD_MACHINE_NAME:-}"
 MENUBAR=1
 SKIP_ENGINE=0
 FULL_HEALTH="${LONGHOUSE_DOGFOOD_FULL_HEALTH:-0}"
+SWIFT_BUILD_DIR=""
+BUILT_APP_BUNDLE=""
+
+cleanup_dogfood_scratch() {
+  if [[ -n "$SWIFT_BUILD_DIR" && -d "$SWIFT_BUILD_DIR" ]]; then
+    rm -rf "$SWIFT_BUILD_DIR"
+  fi
+}
+
+trap cleanup_dogfood_scratch EXIT
 
 resolve_longhouse_home() {
   local provider_home="$1"
@@ -213,8 +223,9 @@ build_desktop_app_bundle() {
   (( MENUBAR == 1 )) || return 0
 
   require_cmd swift
-
   mkdir -p "$ARTIFACT_DIR"
+
+  local scratch_path="$1"
   local bundle_version
   local menubar_binary
   bundle_version="$(current_version)"
@@ -223,7 +234,8 @@ build_desktop_app_bundle() {
   menubar_binary="$("$ROOT_DIR/scripts/resolve-swift-product-path.sh" \
     --package-path "$DESKTOP_PACKAGE_PATH" \
     --product LonghouseMenuBarHarnessMenuBar \
-    --configuration release)"
+    --configuration release \
+    --scratch-path "$scratch_path")"
 
   "$ROOT_DIR/scripts/release/macos-package-app.sh" \
     --binary "$menubar_binary" \
@@ -236,7 +248,7 @@ build_desktop_app_bundle() {
     --icon-png "$ROOT_DIR/web/public/favicon-512.png" \
     --lsuielement true >/dev/null
 
-  printf '%s\n' "$ARTIFACT_DIR/Longhouse.app"
+  BUILT_APP_BUNDLE="$ARTIFACT_DIR/Longhouse.app"
 }
 
 run_repo_longhouse() {
@@ -310,7 +322,9 @@ run_refresh() {
   fi
 
   if [[ "$(uname -s)" == "Darwin" ]] && (( MENUBAR == 1 )); then
-    app_bundle="$(build_desktop_app_bundle)"
+    SWIFT_BUILD_DIR="$(mktemp -d -t longhouse-dogfood-swift.XXXXXX)"
+    build_desktop_app_bundle "$SWIFT_BUILD_DIR"
+    app_bundle="$BUILT_APP_BUNDLE"
   fi
 
   log "==> Refreshing installed local runtime from repo source"
