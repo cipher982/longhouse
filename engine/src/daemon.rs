@@ -2067,8 +2067,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 reason = result.reason,
                                 "Managed observation scan retained prior truth because process inventory failed"
                             );
-                            managed_reconciliation = heartbeat::ProjectionReconciliation::failed(
-                                result.reason,
+                            managed_reconciliation =
+                                heartbeat::ProjectionReconciliation::failed("process_inventory");
+                            managed_reconciliation.start(
+                                "process_inventory",
+                                chrono::Utc::now().to_rfc3339(),
                             );
                             heartbeat::refresh_existing_status_pulse(
                                 &managed_reconciliation,
