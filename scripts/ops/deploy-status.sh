@@ -4,8 +4,16 @@ set -euo pipefail
 
 # SSH alias for the runtime host (configured by scripts/ci/setup-deploy-ssh.sh)
 RUNTIME_HOST="${RUNTIME_HOST:-runtime-host}"
-CANARY_CONTAINER_NAME="${CANARY_CONTAINER_NAME:-longhouse-${LONGHOUSE_DEFAULT_SUBDOMAIN:-david010}}"
-CANARY_HEALTH_URL="${CANARY_HEALTH_URL:-https://${LONGHOUSE_DEFAULT_SUBDOMAIN:-david010}.longhouse.ai/api/health}"
+# The owner's dogfood instance (david010 by default). This row used to be
+# labelled "Canary", which made an agent read the owner's instance as the
+# canary and report the wrong thing; the label now says what it is.
+DOGFOOD_SUBDOMAIN="${LONGHOUSE_DEFAULT_SUBDOMAIN:-david010}"
+CANARY_CONTAINER_NAME="${CANARY_CONTAINER_NAME:-longhouse-${DOGFOOD_SUBDOMAIN}}"
+CANARY_HEALTH_URL="${CANARY_HEALTH_URL:-https://${DOGFOOD_SUBDOMAIN}.longhouse.ai/api/health}"
+# The real hosted canary lives behind its own control plane on another host,
+# so it is read from its health endpoint only.
+HOSTED_CANARY_SUBDOMAIN="${HOSTED_CANARY_SUBDOMAIN:-kernel-canary}"
+HOSTED_CANARY_HEALTH_URL="${HOSTED_CANARY_HEALTH_URL:-https://${HOSTED_CANARY_SUBDOMAIN}.longhouse.ai/api/health}"
 
 # --- Gather container state from zerg ----------------------------------------
 
@@ -97,6 +105,12 @@ if [[ "$canary_health_sha" != "-" ]]; then
     canary_sha="$canary_health_sha"
 fi
 
+hosted_canary_health=$(health_status "$HOSTED_CANARY_HEALTH_URL")
+hosted_canary_sha="-"
+if [[ "$hosted_canary_health" != "unreachable" ]]; then
+    hosted_canary_sha=$(health_sha "$HOSTED_CANARY_HEALTH_URL")
+fi
+
 # --- Local HEAD for comparison ------------------------------------------------
 
 local_sha=$(git rev-parse --short=10 HEAD 2>/dev/null || echo "-")
@@ -108,7 +122,8 @@ printf "%-20s %-12s %-10s %s\n" "Surface" "SHA" "Health" "Uptime"
 printf "%-20s %-12s %-10s %s\n" "-------" "---" "------" "------"
 printf "%-20s %-12s %-10s %s\n" "Demo runtime"    "$demo_sha"   "$demo_health"   "$demo_uptime"
 printf "%-20s %-12s %-10s %s\n" "Control plane"   "$cp_sha"     "$cp_health"     "$cp_uptime"
-printf "%-20s %-12s %-10s %s\n" "Canary"          "$canary_sha" "$canary_health" "$canary_uptime"
+printf "%-20s %-12s %-10s %s\n" "Dogfood $DOGFOOD_SUBDOMAIN" "$canary_sha" "$canary_health" "$canary_uptime"
+printf "%-20s %-12s %-10s %s\n" "Canary $HOSTED_CANARY_SUBDOMAIN" "$hosted_canary_sha" "$hosted_canary_health" "-"
 printf "%-20s %-12s\n"          "Local HEAD"       "$local_sha"
 printf "\n"
 
