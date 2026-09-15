@@ -755,7 +755,9 @@ async def test_workspace_reports_missing_bytes_as_missing_not_present(monkeypatc
         capabilities=SimpleNamespace(live_control_available=True),
         model_dump=lambda **_kwargs: {"id": str(session_id), "capabilities": {}},
     )
-    catalog = _MediaCatalog([_media_ref("a" * 64, envelope="env-a", ref_key=f"inline_data_url:40:{'e' * 64}:0", state="missing")])
+    catalog = _MediaCatalog(
+        [_media_ref("a" * 64, envelope="env-a", ref_key=f"inline_data_url:40:{'e' * 64}:0", state="missing")]
+    )
 
     async def read_page(**_kwargs):
         return {
