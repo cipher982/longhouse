@@ -11121,10 +11121,15 @@ class CatalogStore:
         observed_at = datetime.now(UTC)
         with _read_snapshot(self.engine) as connection:
             owned_session_ids = select(StorageSession.__table__.c.session_id).where(StorageSession.__table__.c.owner_id == owner_id)
+            # A derived preview is referenced by no session of its own, so a
+            # reader is authorized for it through the image that names it: the
+            # caller can already read that image, and the preview is that same
+            # evidence in smaller bytes.
+            preview_of = select(media.c.media_hash).where(media.c.thumb_hash == media_hash)
             authorized = connection.execute(
                 select(refs.c.id)
                 .where(
-                    refs.c.media_hash == media_hash,
+                    or_(refs.c.media_hash == media_hash, refs.c.media_hash.in_(preview_of)),
                     refs.c.state == "active",
                     refs.c.session_id.in_(owned_session_ids),
                     *([refs.c.session_id == str(session_id)] if session_id is not None else []),
