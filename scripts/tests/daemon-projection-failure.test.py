@@ -162,7 +162,8 @@ def exercise(engine):
                 startup_projection = observe().get("local_projection", {})
                 startup_reconciliation = startup_projection.get("reconciliation", {})
                 if (
-                    startup_reconciliation.get("state") == "failed"
+                    startup_reconciliation.get("state") in {"failed", "reconciling"}
+                    and startup_reconciliation.get("failure_reason")
                     and not startup_projection.get("last_reconciled_at")
                 ):
                     break
