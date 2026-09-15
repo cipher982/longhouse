@@ -26,16 +26,15 @@ interface TunerKnob {
 }
 
 const KNOBS: TunerKnob[] = [
-  { key: "rowFont", cssVar: "--inbox-row-font", label: "Row font", unit: "px", min: 11, max: 18, step: 0.5, defaultValue: 13 },
-  { key: "rowPadY", cssVar: "--inbox-row-pad-y", label: "Row pad y", unit: "px", min: 2, max: 14, step: 1, defaultValue: 2 },
-  { key: "rowMinH", cssVar: "--inbox-row-min-h", label: "Row height", unit: "px", min: 22, max: 48, step: 1, defaultValue: 29 },
-  { key: "repoFont", cssVar: "--inbox-repo-font", label: "Repo font", unit: "px", min: 14, max: 28, step: 1, defaultValue: 22 },
+  { key: "rowFont", cssVar: "--inbox-row-font", label: "Row font", unit: "px", min: 11, max: 18, step: 0.5, defaultValue: 13.5 },
+  { key: "rowMinH", cssVar: "--inbox-row-min-h", label: "Row height", unit: "px", min: 30, max: 56, step: 1, defaultValue: 42 },
+  { key: "repoFont", cssVar: "--inbox-repo-font", label: "Repo font", unit: "px", min: 11, max: 20, step: 0.5, defaultValue: 13.5 },
   { key: "repoPadY", cssVar: "--inbox-repo-pad-y", label: "Repo pad y", unit: "px", min: 4, max: 24, step: 1, defaultValue: 7 },
   { key: "metaFont", cssVar: "--inbox-meta-font", label: "Meta font", unit: "px", min: 10, max: 18, step: 0.5, defaultValue: 13 },
-  { key: "statusWidth", cssVar: "--inbox-status-width", label: "Status slot", unit: "ch", min: 10, max: 26, step: 1, defaultValue: 13 },
-  { key: "sourceWidth", cssVar: "--inbox-source-width", label: "Source slot", unit: "ch", min: 6, max: 22, step: 1, defaultValue: 12 },
-  { key: "timeWidth", cssVar: "--inbox-time-width", label: "Time slot", unit: "ch", min: 12, max: 24, step: 1, defaultValue: 16 },
-  { key: "titleMaxPct", cssVar: "--inbox-title-max", label: "Title max", unit: "%", min: 25, max: 75, step: 5, defaultValue: 50 },
+  { key: "activityWidth", cssVar: "--inbox-col-activity", label: "Activity col", unit: "px", min: 80, max: 220, step: 2, defaultValue: 132 },
+  { key: "modeWidth", cssVar: "--inbox-col-mode", label: "Mode col", unit: "px", min: 70, max: 180, step: 2, defaultValue: 120 },
+  { key: "sourceWidth", cssVar: "--inbox-col-source", label: "Source col", unit: "px", min: 80, max: 240, step: 2, defaultValue: 170 },
+  { key: "ageWidth", cssVar: "--inbox-col-age", label: "Age col", unit: "px", min: 60, max: 140, step: 2, defaultValue: 96 },
   { key: "groupGap", cssVar: "--inbox-group-gap", label: "Group gap", unit: "px", min: 0, max: 32, step: 2, defaultValue: 0 },
 ];
 

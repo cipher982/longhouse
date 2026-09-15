@@ -21,7 +21,6 @@ import {
   getSessionCardText,
   renderHighlightedText,
 } from "../../lib/sessionUtils";
-import { ProviderGlyph } from "../ProviderGlyph";
 import { getProviderLabel } from "../../lib/providers";
 
 const HOVER_PREFETCH_DELAY_MS = 180;
@@ -78,18 +77,29 @@ export function SessionRow({
   const text = getSessionCardText(session, { titleMaxChars: 96, subheadingMaxChars: 200 });
   const branch = getBranchLabel(session.git_branch);
   const provider = session.provider;
+  const machine = getMachineLabel(session.device_id);
   const control = getRowControlPresentation(session.session_state);
+  // Product noun for the mode hairline chip — Helm / Shadow / Console, the
+  // canonical three modes (see Longhouse ARCHITECTURE.md). Distinct from
+  // `control`, which is the finer-grained access capability (live control /
+  // reattach / observe only / search only) used for the chip's a11y title.
+  const modeChipLabel = getModeChipLabel(session.session_state.mode);
   const startedAtIso = thread.root?.started_at || session.started_at;
   // Unread rows label by result completion, not generic activity: the band is
   // "results waiting for you" and the row says what landed and when.
   const unreadOutcome = session.session_state.last_result_outcome;
   const unreadOutcomeLabel = unreadOutcome === "failed" ? "Failed" : unreadOutcome === "cancelled" ? "Cancelled" : "Finished";
+  const seenAtForTime = unread ? (session.session_state.last_result_at ?? null) : getTimelineSessionAnchor(session);
+  // Full "Updated 3m ago" / "Failed 40m ago" string — the verb prefix lives
+  // in the title/aria-label; the activity column already names the verb, so
+  // the visible age cell (an 84px-wide column) shows the bare relative time.
   const timeLabel = getRowTimeLabel({
-    seenAt: unread ? (session.session_state.last_result_at ?? null) : getTimelineSessionAnchor(session),
+    seenAt: seenAtForTime,
     seenAtPrefix: unread ? unreadOutcomeLabel : "Updated",
     startedAt: startedAtIso,
     relativeNowMs,
   });
+  const ageText = getRowAgeText({ seenAt: seenAtForTime, startedAt: startedAtIso, relativeNowMs });
 
   const statusTone = unread ? (unreadOutcome === "failed" ? "blocked" : "idle") : isClosed ? "closed" : (timelineStatus?.tone ?? "inactive");
   const statusLabel = unread ? unreadOutcomeLabel : isClosed ? "Closed" : (timelineStatus?.label ?? "");
@@ -214,6 +224,15 @@ export function SessionRow({
       }}
       onBlur={clearHover}
     >
+      <span className="inbox-row-lead" aria-hidden="false">
+        <span
+          className="inbox-row-status-dot"
+          data-tone={statusTone}
+          data-signal={signal}
+          aria-label={timelineSignalLabel(signal)}
+        />
+      </span>
+
       <div className="inbox-row-main">
         <div
           className="inbox-row-title"
@@ -236,42 +255,30 @@ export function SessionRow({
         )}
       </div>
 
-      <span className="inbox-row-status" aria-hidden="false">
-        <span
-          className="inbox-row-status-dot"
-          data-tone={statusTone}
-          data-signal={signal}
-          aria-label={timelineSignalLabel(signal)}
-        />
-        <span className="inbox-row-status-label">{statusLabel}</span>
-        <span
-          className="inbox-row-control inbox-row-control--status"
-          data-tone={control.tone}
-          data-testid="session-row-control-mobile"
-          title={control.title}
-          aria-label={control.title}
-        >
-          {control.label}
-        </span>
+      <span className="inbox-row-activity" data-tone={statusTone} data-signal={signal}>
+        {statusLabel}
       </span>
-      <span className="inbox-row-source">
+
+      <span className="inbox-row-mode">
         <span
-          className="inbox-row-control inbox-row-control--source"
-          data-tone={control.tone}
+          className="inbox-row-mode-chip"
           data-testid="session-row-control"
           title={control.title}
           aria-label={control.title}
         >
-          {control.label}
+          {modeChipLabel}
         </span>
-        <span className="inbox-row-provider" title={getProviderLabel(provider)}>
-          <ProviderGlyph provider={provider} size={18} />
-          <span className="inbox-row-provider-name">{getProviderLabel(provider)}</span>
+      </span>
+
+      <span className="inbox-row-source">
+        <span className="inbox-row-cartouche" title={getProviderLabel(provider)}>
+          {getProviderLabel(provider)}
         </span>
+        {machine ? <span className="inbox-row-machine" title={`on ${machine}`}>on {machine}</span> : null}
         {branch ? <span className="inbox-row-branch">{branch}</span> : null}
       </span>
       <span className="inbox-row-time">
-        <span className="inbox-row-time-text">{timeLabel}</span>
+        <span className="inbox-row-time-text" title={timeLabel}>{ageText}</span>
         <button
           type="button"
           className="inbox-row-hide-btn"
@@ -295,6 +302,21 @@ export function SessionRow({
       </span>
     </div>
   );
+}
+
+/** Helm / Shadow / Console — the product's canonical mode nouns, straight off
+ * the server's `session_state.mode`. Drives the timeline row's hairline chip. */
+function getModeChipLabel(mode: SessionStateFacts["mode"]): string {
+  switch (mode) {
+    case "helm":
+      return "Helm";
+    case "console":
+      return "Console";
+    case "shadow":
+      return "Shadow";
+    default:
+      return "Shadow";
+  }
 }
 
 export function getRowControlPresentation(facts: SessionStateFacts): RowControlPresentation {
@@ -383,6 +405,31 @@ export function getRowTimeLabel({
     return `Started ${formatRelativeTime(startedAt, relativeNowMs)}`;
   }
   return "";
+}
+
+/** Bare relative time for the age column ("3m ago", not "Updated 3m ago") —
+ * same timestamp selection as getRowTimeLabel, no verb prefix. The activity
+ * column already names the verb (finished / failed / using hub / …); the
+ * full prefixed string still goes on the age cell's title/aria for a11y. */
+export function getRowAgeText({
+  seenAt,
+  startedAt,
+  relativeNowMs,
+}: {
+  seenAt: string | null;
+  startedAt: string | null;
+  relativeNowMs: number;
+}): string {
+  const at = seenAt || startedAt;
+  return at ? formatRelativeTime(at, relativeNowMs) : "";
+}
+
+/** device_id is usually a bare hostname ("cinder"), but some sources prefix
+ * it ("device-cinder") — strip that prefix so the source column's machine
+ * label matches what a person actually calls the box. */
+function getMachineLabel(deviceId: string | null): string | null {
+  if (!deviceId) return null;
+  return deviceId.replace(/^device-/, "") || deviceId;
 }
 
 function isCardClosed(card: TimelineSessionCard): boolean {

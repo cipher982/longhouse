@@ -1,5 +1,23 @@
 /* Sessions Page Styles */
 
+/*
+ * Local Ember aliases (Phase 3 timeline restyle, control-plane/docs/specs/
+ * web-restyle-signal.md). tokens.css does not yet name the fire-ramp
+ * semantics used by the restyle spec (flame = running/live, ember =
+ * attention/blocked/failed, the "strong border" rule midpoint) — these alias
+ * the existing intent/border tokens, which already carry the right values
+ * (confirmed against artifacts/design-ref/hall.py's P['flame']/P['ember']/
+ * P['cool']/P['line2']), so the timeline and inbox reference one name for
+ * each rather than re-deriving them per rule. Scoped to :root because
+ * inbox.css (loaded after this file) also reads them.
+ */
+:root {
+  --tl-flame: var(--color-intent-warning); /* #F08A24 — running / live, breathing ember */
+  --tl-ember: var(--color-intent-error); /* #E4572E — attention / blocked / failed */
+  --tl-ash: var(--color-state-cool); /* #7C8790 — idle / ended, the one cold foil */
+  --tl-rule-strong: var(--color-border-primary); /* #463629 — hairline chips, fading rule midpoint */
+}
+
 @layer pages {
   /* ---------------------------------------------------------------------------
    * Page Container
@@ -50,14 +68,15 @@
     margin-bottom: var(--space-2);
   }
 
+  /* One muted sentence with a gold link — no box. Configuration hints are
+   * not warnings; a bordered/tinted banner overstated it. */
   .sessions-llm-hint {
     font-size: 13px;
     color: var(--text-secondary);
-    padding: 8px 12px;
-    background: color-mix(in srgb, var(--color-intent-warning) 8%, transparent);
-    border: 1px solid color-mix(in srgb, var(--color-intent-warning) 20%, transparent);
-    border-radius: var(--radius-sm, 4px);
-    margin-bottom: var(--space-2);
+    padding: 0;
+    background: none;
+    border: none;
+    margin-bottom: 0;
   }
 
   .sessions-llm-hint a {
@@ -107,16 +126,34 @@
     flex: 1;
   }
 
-  /* AI search toggle — icon + label pill next to the search input */
+  /* Well-colored search field with an inset hairline, not the default
+   * glass-1 input — this is the room's search well, not a form field. */
+  .sessions-search-input {
+    height: 38px;
+    background: var(--color-surface-well);
+    border: none;
+    box-shadow: inset 0 0 0 1px var(--color-border-primary);
+  }
+
+  .sessions-search-input:focus {
+    box-shadow: inset 0 0 0 1px var(--color-brand-primary), 0 0 15px rgba(201, 166, 107, 0.1);
+  }
+
+  /* AI search toggle — hairline secondary button, matching the Recall and
+   * filter buttons in the same row (Ember spec, Phase 3 §5): transparent,
+   * inset hairline in the strong border token, secondary text, 3px radius,
+   * 32px tall. */
   .sessions-ai-toggle {
     display: inline-flex;
     align-items: center;
     gap: var(--space-1);
-    padding: var(--space-1) var(--space-2);
+    height: 32px;
+    padding: 0 var(--space-3);
     background: transparent;
-    border: 1px solid var(--border-glass-1);
-    border-radius: var(--radius-md);
-    color: var(--color-text-muted);
+    border: none;
+    box-shadow: inset 0 0 0 1px var(--color-border-primary);
+    border-radius: 3px;
+    color: var(--color-text-secondary);
     cursor: pointer;
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
@@ -125,14 +162,13 @@
     flex-shrink: 0;
     transition:
       background var(--motion-duration-fast) var(--motion-easing-standard),
-      border-color var(--motion-duration-fast) var(--motion-easing-standard),
+      box-shadow var(--motion-duration-fast) var(--motion-easing-standard),
       color var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .sessions-ai-toggle:hover {
-    color: var(--color-text-secondary);
-    background: var(--surface-glass-2);
-    border-color: var(--border-glass-2);
+    color: var(--color-text-primary);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-border-primary) 70%, white 15%);
   }
 
   .sessions-ai-toggle:focus-visible {
@@ -142,7 +178,7 @@
 
   .sessions-ai-toggle--active {
     background: var(--color-brand-accent-subtle, rgba(255, 149, 0, 0.12));
-    border-color: var(--color-brand-accent);
+    box-shadow: inset 0 0 0 1px var(--color-brand-accent);
     color: var(--color-brand-accent);
   }
 
@@ -215,36 +251,41 @@
     margin-left: auto;
   }
 
+  /* Filter icon button — same hairline secondary treatment as Recall and
+   * the AI toggle. */
   .sessions-filter-toggle {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: var(--space-1);
-    padding: var(--space-2);
+    height: 32px;
+    padding: 0 var(--space-2-5);
     background: transparent;
-    border: 1px solid var(--border-glass-1);
-    border-radius: var(--radius-md);
+    border: none;
+    box-shadow: inset 0 0 0 1px var(--color-border-primary);
+    border-radius: 3px;
     color: var(--color-text-secondary);
     cursor: pointer;
     transition:
       background var(--motion-duration-fast) var(--motion-easing-standard),
-      border-color var(--motion-duration-fast) var(--motion-easing-standard),
+      box-shadow var(--motion-duration-fast) var(--motion-easing-standard),
       color var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .sessions-filter-toggle:hover {
-    border-color: var(--color-border-primary);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-border-primary) 70%, white 15%);
     color: var(--color-text-primary);
   }
 
   .sessions-filter-toggle--open {
     background: var(--surface-glass-2);
-    border-color: var(--color-border-primary);
+    box-shadow: inset 0 0 0 1px var(--color-brand-primary);
     color: var(--color-text-primary);
   }
 
-  /* Recall toggle has icon + text label */
+  /* Recall toggle has icon + text label; same button, wider for the label. */
   .sessions-recall-toggle {
-    padding: var(--space-1) var(--space-2);
+    padding: 0 var(--space-3);
     gap: var(--space-1);
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-medium);
@@ -510,7 +551,11 @@
       gap: var(--space-4);
     }
 
-    .sessions-llm-hint,
+    .sessions-llm-hint {
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
     .sessions-demo-banner,
     .sessions-stale-banner {
       margin-bottom: 0;

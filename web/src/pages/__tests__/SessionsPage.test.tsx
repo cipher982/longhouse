@@ -420,7 +420,7 @@ describe("SessionsPage", () => {
   it("does not render a redundant timeline page heading above the toolbar", async () => {
     renderSessionsPage("/timeline");
 
-    expect(await screen.findByPlaceholderText("Search sessions...")).toBeInTheDocument();
+    expect(await screen.findByPlaceholderText("Search sessions")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Timeline" })).not.toBeInTheDocument();
   });
 
@@ -484,12 +484,18 @@ describe("SessionsPage", () => {
 
     renderSessionsPage("/timeline");
 
+    // The visible chip reads the canonical product mode noun (Helm / Shadow),
+    // not the finer-grained access bucket (Live control / Reattach / Observe
+    // only / Search only) — that richer label now lives on the chip's title
+    // / aria-label only. live_control and reattach both resolve to a Helm
+    // (managed) session; observe_only and search_only both resolve to Shadow
+    // (unmanaged).
     const controlLabels = await screen.findAllByTestId("session-row-control");
     expect(controlLabels.map((node) => node.textContent)).toEqual([
-      "Live control",
-      "Reattach",
-      "Observe only",
-      "Search only",
+      "Helm",
+      "Helm",
+      "Shadow",
+      "Shadow",
     ]);
   });
 
@@ -635,7 +641,7 @@ describe("SessionsPage", () => {
 
     renderSessionsPage("/timeline");
 
-    await screen.findByPlaceholderText("Search sessions...");
+    await screen.findByPlaceholderText("Search sessions");
     // Machines is a nav item — no redundant header button
     expect(screen.queryByTestId("timeline-runner-action")).not.toBeInTheDocument();
   });
@@ -691,13 +697,18 @@ describe("SessionsPage", () => {
 
       renderSessionsPage("/timeline");
 
-      expect(screen.getByText("Updated Just now")).toBeInTheDocument();
+      // The age cell shows the bare relative time (the activity column
+      // already names the verb); the full "Updated …" string lives on its
+      // title for a11y/hover.
+      expect(screen.getByText("Just now")).toBeInTheDocument();
+      expect(screen.getByTitle("Updated Just now")).toBeInTheDocument();
 
       act(() => {
         vi.advanceTimersByTime(15_000);
       });
 
-      expect(screen.getByText("Updated 1m ago")).toBeInTheDocument();
+      expect(screen.getByText("1m ago")).toBeInTheDocument();
+      expect(screen.getByTitle("Updated 1m ago")).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }
@@ -785,7 +796,7 @@ describe("SessionsPage", () => {
   it("resets pagination immediately and debounces the query filter", async () => {
     renderSessionsPage("/timeline?limit=150");
 
-    const input = await screen.findByPlaceholderText("Search sessions...");
+    const input = await screen.findByPlaceholderText("Search sessions");
     fireEvent.change(input, { target: { value: "alpha" } });
 
     await waitFor(() => {
@@ -1081,9 +1092,9 @@ describe("SessionsPage", () => {
 
 
   it.each([
-    { anchor: "2026-09-05T11:59:00Z", label: "Updated 1m ago" },
-    { anchor: null, label: "Updated 3m ago" },
-  ])("dates an old approval by recent session activity (anchor: $anchor)", ({ anchor, label }) => {
+    { anchor: "2026-09-05T11:59:00Z", ageText: "1m ago" },
+    { anchor: null, ageText: "3m ago" },
+  ])("dates an old approval by recent session activity (anchor: $anchor)", ({ anchor, ageText }) => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-05T12:00:00Z"));
     const approvalState = makeSessionStateFacts({
@@ -1128,7 +1139,8 @@ describe("SessionsPage", () => {
 
     const row = within(screen.getByTestId("session-row"));
     expect(row.getByText("Needs approval")).toBeInTheDocument();
-    expect(row.getByText(label)).toBeInTheDocument();
+    expect(row.getByText(ageText)).toBeInTheDocument();
+    expect(row.getByTitle(`Updated ${ageText}`)).toBeInTheDocument();
     expect(row.queryByText(/Jul 20/)).not.toBeInTheDocument();
   });
 
@@ -1160,7 +1172,9 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(within(screen.getByTestId("session-row")).getByText("Finished 10m ago")).toBeInTheDocument();
+    const row = within(screen.getByTestId("session-row"));
+    expect(row.getByText("10m ago")).toBeInTheDocument();
+    expect(row.getByTitle("Finished 10m ago")).toBeInTheDocument();
   });
 
   it("toggles include_hidden through the filter popover and displays view all chip", async () => {

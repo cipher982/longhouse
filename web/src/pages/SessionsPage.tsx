@@ -338,7 +338,7 @@ export default function SessionsPage() {
         onClick={() => setLaunchModalOpen(true)}
         data-testid="sessions-start-session"
       >
-        Start session
+        Start a session
       </Button>
     </div>
   );
@@ -446,7 +446,7 @@ export default function SessionsPage() {
                   onClick={() => setLaunchModalOpen(true)}
                   data-testid="timeline-empty-start-session"
                 >
-                  Start session
+                  Start a session
                 </Button>
                 <Button
                   variant="secondary"
@@ -519,7 +519,7 @@ export default function SessionsPage() {
           <div className="sessions-search-row">
             <Input
               type="search"
-              placeholder="Search sessions..."
+              placeholder="Search sessions"
               value={searchQuery}
               onChange={(e) => handleSearchQueryChange(e.target.value)}
               className="sessions-search-input"
