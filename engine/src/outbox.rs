@@ -35,8 +35,13 @@ use crate::state::unmanaged_process_binding::{
 const STALE_SECS: u64 = 600; // 10 minutes
 const PRESENCE_POST_TIMEOUT: Duration = Duration::from_secs(3);
 const PRESENCE_POST_CONCURRENCY: usize = 8;
-const RUNTIME_EVENT_POST_TIMEOUT: Duration = Duration::from_secs(3);
+const RUNTIME_EVENT_POST_TIMEOUT: Duration = Duration::from_secs(20);
 /// Matches RuntimeEventBatchIngest in server/zerg/services/session_runtime.py.
+/// The route applies a 1024-event request in ordered 128-event catalogd
+/// chunks, each with a two-second queue budget. Three seconds allowed the
+/// server to commit successfully after the client had already retried the
+/// same durable files, so keep the HTTP deadline above the worst-case
+/// eight-apply path.
 /// Chunks post serially and a session's own order must hold, so the only lever
 /// on drain throughput is fewer round trips: at 128 a live session's backlog
 /// took dozens of them, which is what left a terminal signal queued minutes
@@ -799,6 +804,15 @@ mod tests {
 
     fn make_outbox() -> TempDir {
         tempfile::tempdir().expect("tempdir")
+    }
+
+    #[test]
+    fn runtime_event_post_deadline_covers_ordered_server_apply_budget() {
+        // The server accepts 1024 observations but applies them as eight
+        // ordered 128-event catalogd calls, each with a two-second queue
+        // budget. A shorter client deadline causes successful server commits
+        // to be replayed from the durable outbox.
+        assert!(RUNTIME_EVENT_POST_TIMEOUT >= Duration::from_secs(16));
     }
 
     #[test]
