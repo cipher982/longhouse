@@ -531,6 +531,8 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(presentation.promotion == .unavailable)
         #expect(presentation.headline == "Current local status unavailable")
+        #expect(presentation.facts.first(where: { $0.id == "local-agent" })?.value == "Running")
+        #expect(presentation.facts.first(where: { $0.id == "local-agent" })?.promotion == .unavailable)
     }
 
     @Test

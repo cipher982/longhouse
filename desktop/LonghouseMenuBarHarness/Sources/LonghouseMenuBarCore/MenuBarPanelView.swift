@@ -338,9 +338,13 @@ public struct MenuBarPanelView: View {
                 snapshot.suggestedActionIds?.contains("repair_machine") == true
                 && presentation.promotion == .repair
             )
+    }
+
+    private var shouldRetryLocalStatus: Bool {
+        snapshot.engineStatus?.fresh == false
             || snapshot.reasons.contains("engine_status_stale")
             || snapshot.reasons.contains("engine_projection_stale")
-        }
+    }
 
     private var displayHeadline: String {
         presentation.headline
@@ -460,6 +464,7 @@ public struct MenuBarPanelView: View {
             if presentation.promotion == .repair
                 || shouldOfferNativeRepair
                 || !projectionTrust.isCurrent
+                || shouldRetryLocalStatus
                 || snapshot.suggestedActionIds?.contains("inspect_transport") == true
                 || snapshot.suggestedActionIds?.contains("inspect_shipping") == true {
                 sectionDivider.padding(.horizontal, 4)
@@ -499,6 +504,9 @@ public struct MenuBarPanelView: View {
         }
         if !projectionTrust.isCurrent {
             return "The Runtime Host session view is unavailable. The local agent and durable upload facts remain separate; refresh to retry the remote view."
+        }
+        if shouldRetryLocalStatus {
+            return "The local agent is running, but its status evidence is stale. Refresh to retry; repair is not indicated."
         }
         if snapshot.storageBlockRequiresRepair {
             return "Local source evidence is retained. Inspect the exact block proof before retrying or discarding it."
@@ -922,6 +930,13 @@ public struct MenuBarPanelView: View {
                         perform(.refresh)
                     } label: {
                         Label("Retry session view", systemImage: "arrow.clockwise")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if shouldRetryLocalStatus {
+                    Button {
+                        perform(.refresh)
+                    } label: {
+                        Label("Retry local status", systemImage: "arrow.clockwise")
                             .frame(maxWidth: .infinity)
                     }
                 } else if snapshot.storageBlockRequiresRepair

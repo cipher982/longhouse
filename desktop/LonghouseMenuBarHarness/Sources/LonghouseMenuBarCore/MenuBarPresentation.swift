@@ -97,7 +97,7 @@ extension HealthSnapshot {
         let repairReasons: Set<String> = [
             "storage_v2_outbox_unreadable",
             "storage_v2_sources_unresolved",
-            "engine_status_missing", "engine_status_unreadable", "orphaned_managed_bridge",
+            "orphaned_managed_bridge",
             "managed_launch_recovery_unreadable",
             "service_stopped", "service_not_installed", "service_generation_mismatch",
             "service_artifact_mismatch",
@@ -134,7 +134,8 @@ extension HealthSnapshot {
         let hasDeadLetters = deadLetterCount > 0
         let nativeRedRequiresRepair = parsedSeverity == .red
             && rowLevelRedReasons.isDisjoint(with: reasons)
-
+            && !reasons.contains("engine_status_stale")
+            && !reasons.contains("engine_projection_stale")
         if nativeRedRequiresRepair
             || storageBlockRequiresRepair
             || !repairReasons.isDisjoint(with: reasons)
@@ -251,10 +252,9 @@ extension HealthSnapshot {
             reasons.contains("spool_dead") || reasons.contains("spool_dead_letters") ? 1 : 0
         )
         let hasDeadLetters = deadLetterCount > 0
-        // Native health intentionally has no service-manager block. A
-        // fresh engine pulse with a daemon pid is sufficient local-process
-        // evidence; otherwise the panel reports Unknown instead of inventing
-        // a service failure.
+        // Service-manager state is authoritative for process liveness when
+        // present. Engine freshness qualifies telemetry, not whether a
+        // running service should be called stopped.
         let localAgentRunning: Bool
         if localEvidenceUnavailable {
             localAgentRunning = false
@@ -264,7 +264,7 @@ extension HealthSnapshot {
             localAgentRunning = engineStatus?.fresh == true && engineStatus?.payload?.daemonPid != nil
         }
         let localValue: String
-        if localEvidenceUnavailable || engineStatus?.fresh == false {
+        if localEvidenceUnavailable {
             localValue = "Unknown"
         } else if service != nil {
             localValue = localAgentRunning ? "Running" : serviceStatusTitle
