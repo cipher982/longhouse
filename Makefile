@@ -1064,7 +1064,7 @@ release: ## Cut a stable release (usage: make release VERSION=v0.1.13)
 # Tools
 # ---------------------------------------------------------------------------
 ui-capture: ## Render a web page to PNG (PAGE=, SCENE=); fixture scenes need nothing running, Vite is started and stopped for you
-	@bunx tsx scripts/ui-capture.ts $(PAGE) $(if $(SCENE),--scene=$(SCENE),) $(if $(VIEWPORT),--viewport=$(VIEWPORT),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(ALL),--all,) $(if $(NO_TRACE),--no-trace,)
+	@bunx tsx scripts/ui-capture.ts $(PAGE) $(if $(SCENE),--scene=$(SCENE),) $(if $(VIEWPORT),--viewport=$(VIEWPORT),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(ALL),--all,) $(if $(NO_TRACE),--no-trace,) $(if $(PROBE),--probe=$(PROBE),)
 
 marketing-screenshots: ## Regenerate landing-page marketing screenshots (retina, realistic demo data). NAME=<entry> for one.
 	@./scripts/marketing-screenshots.sh $(NAME)

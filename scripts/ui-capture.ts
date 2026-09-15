@@ -14,7 +14,11 @@
  * nothing is listening on FRONTEND_URL. Demo-data scenes still need the backend.
  *
  * Usage:
- *   bunx tsx scripts/ui-capture.ts [page] [--scene=X] [--viewport=X] [--output=X] [--all] [--no-trace]
+ *   bunx tsx scripts/ui-capture.ts [page] [--scene=X] [--viewport=X] [--output=X] [--all] [--no-trace] [--probe=sel1,sel2]
+ *
+ * --probe writes <page>-probe.json with the bounding box and key computed
+ * styles of each selector (first match), so a layout can be measured, not
+ * just eyeballed.
  *
  * Examples:
  *   bunx tsx scripts/ui-capture.ts timeline
@@ -121,6 +125,7 @@ interface Options {
   all: boolean;
   viewportName: string;
   viewport: ViewportConfig;
+  probe: string[];
 }
 
 type A11yFormat = "json" | "yaml" | "none";
@@ -155,6 +160,7 @@ function parseArgs(): Options {
   const viewportArg = args.find((a) => a.startsWith("--viewport="))?.split("=")[1];
   const outputArg = args.find((a) => a.startsWith("--output="))?.split("=")[1];
   const noTrace = args.includes("--no-trace");
+  const probeArg = args.find((a) => a.startsWith("--probe="))?.slice("--probe=".length);
   const all = args.includes("--all");
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -170,6 +176,7 @@ function parseArgs(): Options {
     all,
     viewportName: viewportArg || "desktop",
     viewport: parsedViewport,
+    probe: probeArg ? probeArg.split(",").map((s) => s.trim()).filter(Boolean) : [],
   };
 }
 
@@ -562,6 +569,7 @@ async function captureBundle(
   baseUrl: string,
   scene: SceneName,
   frameName: string = pageName,
+  probe: string[] = [],
 ): Promise<CaptureResult> {
   const url = `${baseUrl}${PAGE_DEFINITIONS[pageName].path}`;
   console.log(`  Navigating to ${url}...`);
@@ -601,6 +609,24 @@ async function captureBundle(
   const screenshotPath = path.join(outputDir, `${frameName}.png`);
   await page.screenshot({ path: screenshotPath, fullPage: false });
   console.log(`  Screenshot: ${screenshotPath}`);
+
+  if (probe.length > 0) {
+    // Evaluated from a string so esbuild's keepNames helper is not injected.
+    const script = `((selectors) => selectors.map((sel) => {
+      const el = document.querySelector(sel);
+      if (!el) return { selector: sel, found: false };
+      const r = el.getBoundingClientRect();
+      const c = getComputedStyle(el);
+      const pick = ["display", "position", "flex", "flexGrow", "flexShrink", "flexBasis", "width", "maxWidth", "minWidth", "margin", "padding", "justifyContent", "alignItems", "alignSelf", "gap", "gridTemplateColumns"];
+      const styles = {};
+      for (const k of pick) styles[k] = c[k];
+      return { selector: sel, found: true, box: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }, className: String(el.className).slice(0, 120), styles };
+    }))(${JSON.stringify(probe)})`;
+    const probed = await page.evaluate(script);
+    const probePath = path.join(outputDir, `${frameName}-probe.json`);
+    writeFileSync(probePath, JSON.stringify({ viewport: page.viewportSize(), elements: probed }, null, 2));
+    console.log(`  Probe: ${probePath}`);
+  }
 
   // Capture accessibility snapshot
   let a11yPath: string | undefined;
@@ -824,6 +850,7 @@ async function main() {
           opts.baseUrl,
           opts.scene,
           frameName,
+          opts.probe,
         );
       } catch (error) {
         const { message, detail } = formatError(error);

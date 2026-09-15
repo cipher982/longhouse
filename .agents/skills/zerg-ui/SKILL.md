@@ -179,7 +179,11 @@ make qa-ui-workbench                                  # timeline + session fixtu
 make ui-capture                                       # demo data; needs the demo backend on :47300 (`make dev-demo`)
 make ui-capture ALL=1
 ```
-Then `Read` the PNG. Nothing needs to be running for a fixture scene: the
+Then `Read` the PNG. To measure instead of eyeball, add
+`PROBE='.selector-a,.selector-b'`: the capture also writes `<page>-probe.json`
+with each selector's bounding box and key computed styles (flex, width,
+margins), which is how to tell a rule is being overridden rather than
+guessing from a screenshot. Nothing needs to be running for a fixture scene: the
 capture starts Vite on :47200 when nothing is listening and stops it when
 done (it leaves a Vite that was already there alone). Output:
 `artifacts/ui-capture/<timestamp>/<page>.png`, `<page>-a11y.json|yml`,
