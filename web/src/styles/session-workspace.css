@@ -254,8 +254,10 @@
 }
 
 .session-workspace-header__name {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
+  font-family: var(--font-family-serif);
+  font-size: 23px;
+  font-weight: 600;
+  line-height: 1.1;
   color: var(--color-text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -284,12 +286,67 @@
 }
 
 .session-workspace-header__identity {
-  font-size: var(--font-size-xs);
+  font-size: 12px;
   line-height: 1.3;
   color: var(--color-text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* --- Header state: dot + sentence, right of the title --- */
+.session-state-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.session-ember-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex: none;
+  background: var(--color-intent-warning);
+  box-shadow:
+    0 0 0 3px rgba(240, 138, 36, 0.16),
+    0 0 10px rgba(240, 138, 36, 0.55);
+  animation: session-ember-breathe 2.8s ease-in-out infinite;
+}
+
+@keyframes session-ember-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-ember-dot {
+    animation: none;
+  }
+}
+
+.session-ember-dot--attention {
+  background: var(--color-intent-error);
+  box-shadow:
+    0 0 0 3px rgba(228, 87, 46, 0.16),
+    0 0 8px rgba(228, 87, 46, 0.4);
+  animation: none;
+}
+
+.session-cool-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex: none;
+  background: var(--color-state-cool);
 }
 
 .session-overflow-menu {
@@ -934,15 +991,10 @@
   color: var(--color-text-muted);
 }
 
-.timeline-pane__summary {
-  font-size: var(--font-size-xs);
-  color: rgba(196, 181, 160, 0.88);
-  white-space: nowrap;
-  padding: 3px 8px;
-  border-radius: 999px;
-  border: 1px solid rgba(158, 124, 90, 0.16);
-  background: rgba(18, 11, 9, 0.38);
-}
+/* Copy-independent pagination counts live on this node (.sr-only) for
+   tests and a11y; the visible sentence now carries the same information
+   under the title (see .session-workspace-header__identity), so this
+   stays in the DOM but out of view rather than doubling as a pill. */
 
 .timeline-pane__search {
   width: min(320px, 100%);
@@ -1247,24 +1299,28 @@
 }
 
 /* --- Provider reasoning: collapsed prose with an explicit expand affordance. --- */
+/* Etched glass: model reasoning reads as frosted parchment, never as
+   machine output — Inter, not mono, and never bordered like a tool block. */
 .tl-reasoning {
   display: block;
   max-width: var(--tl-tool-max);
-  margin-inline: auto;
+  margin: 4px auto;
   width: 100%;
-  border-radius: var(--radius-md);
+  border-radius: 2px;
+  background: rgba(246, 235, 214, 0.035);
+  box-shadow: inset 0 0 0 1px rgba(246, 235, 214, 0.06);
 }
 .tl-reasoning.is-selected {
-  background: rgba(212, 184, 122, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(212, 184, 122, 0.22);
 }
 .tl-reasoning.is-expanded {
-  background: rgba(18, 11, 9, 0.45);
+  background: rgba(246, 235, 214, 0.045);
 }
 .tl-reasoning__head {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  padding: 4px 10px 4px 14px;
+  padding: 8px 12px;
   cursor: pointer;
   min-width: 0;
   width: 100%;
@@ -1272,13 +1328,12 @@
   background: transparent;
   color: inherit;
   text-align: left;
-  font-family: var(--font-family-mono);
-  font-size: 12px;
-  line-height: 1.6;
+  font-family: var(--font-family-base);
+  font-size: 13.5px;
+  line-height: 1.5;
 }
 .tl-reasoning__head:hover {
-  background: rgba(255, 255, 255, 0.02);
-  border-radius: var(--radius-md);
+  background: rgba(246, 235, 214, 0.02);
 }
 .tl-reasoning__chev {
   color: var(--color-text-muted);
@@ -1292,14 +1347,14 @@
   transform: rotate(90deg);
 }
 .tl-reasoning__label {
-  color: var(--color-brand-primary);
+  color: var(--color-text-muted);
   font-weight: var(--font-weight-semibold);
   flex-shrink: 0;
 }
 .tl-reasoning__summary {
   flex: 1;
   min-width: 0;
-  color: var(--color-text-secondary);
+  color: var(--color-text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1309,10 +1364,16 @@
   color: var(--color-text-muted);
   font-size: 11px;
 }
-.tl-reasoning__body {
-  margin: 2px 14px 8px 30px;
-  padding: 6px 10px 8px;
-  border-left: 2px solid rgba(123, 209, 151, 0.24);
+.tl-reasoning__body,
+.tl-reasoning__body.tl-msg__body {
+  margin: 0;
+  padding: 0 12px 10px;
+  border-left: 0;
+  font-family: var(--font-family-base);
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  text-wrap: unset;
 }
 
 /* --- Shared ---
@@ -1326,12 +1387,38 @@
        - tool rows may run wider than prose (up to the column width) so
          bash commands and diffs don't wrap awkwardly. */
 .timeline-pane__list.timeline-events {
+  position: relative;
   gap: 2px;
   align-items: stretch;
   width: 100%;
   max-width: calc(var(--tl-tool-max) + 2 * var(--space-4));
   margin-inline: auto;
   padding-inline: var(--space-4);
+}
+/* The trace: one brass conductor down the transcript's edge, fading at
+   both ends. Tool rows branch off it (see .tl-action__head::before/after). */
+.timeline-pane__list.timeline-events::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--space-4) - var(--trace-inset, 8px));
+  top: 24px;
+  bottom: 24px;
+  width: 1px;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    rgba(233, 185, 73, 0.5) 12%,
+    rgba(233, 185, 73, 0.5) 88%,
+    transparent
+  );
+  pointer-events: none;
+}
+@media (max-width: 640px) {
+  .timeline-pane__list.timeline-events::before,
+  .tl-action__head::before,
+  .tl-action__head::after {
+    display: none;
+  }
 }
 
 :root {
@@ -1342,6 +1429,18 @@
   --tl-prose-max: 78ch;
   --tl-tool-max: 126ch;
   --tl-message-max: var(--tl-prose-max);
+}
+
+/* Session workspace: one 760px column, centered. The readout rail (Phase 4)
+   takes the remaining width; until then the column just sits centered. */
+.session-workspace-route--single-column {
+  --tl-prose-max: 760px;
+  --tl-tool-max: 760px;
+  --tl-message-max: var(--tl-prose-max);
+  /* Local instrument tokens for the trace (not in tokens.css — scoped here
+     per the Phase 2 restyle so they can be deleted in one commit later). */
+  --trace-gutter: var(--space-4);
+  --trace-inset: 8px;
 }
 
 .tl-chip {
@@ -1365,11 +1464,15 @@
   color: var(--color-intent-error);
   border-color: rgba(196, 80, 64, 0.35);
 }
+/* Running: flame text only, no chip container — the trace node already
+   carries the "live" glow, so this stays a plain word. */
 .tl-chip--pending {
-  color: rgba(224, 247, 255, 0.98);
-  border-color: rgba(56, 189, 248, 0.42);
-  background: rgba(20, 78, 102, 0.34);
-  box-shadow: 0 0 16px rgba(56, 189, 248, 0.12);
+  color: rgba(240, 138, 36, 0.85);
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  padding: 1px 0;
+  font-weight: var(--font-weight-medium);
 }
 
 /* --- Prose messages: no card, no border, just text. ---
@@ -1392,34 +1495,40 @@
   align-self: flex-end;
   width: auto;
   max-width: min(var(--tl-prose-max), 82%);
-  padding: var(--space-2) var(--space-3);
-  border-radius: 14px;
-  background: rgba(233, 211, 163, 0.07);
-  border: 1px solid rgba(233, 211, 163, 0.1);
 }
 .tl-msg__head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: 11px;
-  line-height: 1;
+  font-size: 12px;
+  line-height: 1.3;
+  margin-bottom: 2px;
 }
 .tl-msg__who {
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  font-weight: var(--font-weight-semibold);
-  color: rgba(181, 164, 142, 0.86);
+  font-family: var(--font-family-base);
+  font-size: 12px;
+  font-weight: var(--font-weight-medium);
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--color-text-muted);
 }
-.tl-msg--user .tl-msg__who {
-  color: rgba(233, 211, 163, 0.92);
-}
+/* Assistant turns carry no "AI" label in the transcript — the prose itself
+   (unindented, no ask styling) is the tell. Only the timestamp remains. */
 .tl-msg--assistant .tl-msg__who {
-  color: var(--color-brand-primary);
+  display: none;
 }
 .tl-msg__time {
   color: var(--color-text-muted);
-  font-family: var(--font-family-mono);
-  font-size: 11px;
+  font-family: var(--font-family-base);
+  font-size: 11.5px;
+}
+/* The ask: serif italic, no bubble — "You asked at …" is the label. */
+.tl-msg--user .tl-msg__body {
+  font-family: var(--font-family-serif);
+  font-style: italic;
+  font-size: 19px;
+  line-height: 1.4;
+  color: var(--color-text-primary);
 }
 .session-context-recap {
   padding: 8px 0 10px;
@@ -1438,16 +1547,36 @@
   line-height: 1.5;
 }
 .tl-turn-end {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-top: 8px;
+  max-width: var(--tl-tool-max);
+  margin-inline: auto;
   color: var(--color-text-muted);
-  font-family: var(--font-family-mono);
-  font-size: 11px;
+  font-family: var(--font-family-base);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+.tl-turn-end__icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--color-intent-success);
+}
+.tl-turn-end__text {
+  white-space: nowrap;
+}
+.tl-turn-end__rule {
+  flex: 1;
+  height: 1px;
+  min-width: 24px;
+  background: linear-gradient(90deg, var(--color-border-primary), transparent);
 }
 .tl-msg__body {
   color: rgba(250, 245, 236, 0.96);
-  line-height: 1.65;
-  font-size: 14.5px;
+  line-height: 1.6;
+  font-size: 15.5px;
+  text-wrap: pretty;
   word-break: break-word;
 }
 .tl-msg__body p {
@@ -1590,62 +1719,69 @@
 }
 
 /* --- Action cards: compact, single header line, accent stripe. --- */
+/* One-line tool row: hairline below, no left border, no inner box. Status
+   reads from the icon color, the chip, and the trace node — never a filled
+   or tinted row. */
 .tl-action {
   position: relative;
   display: block;
-  border-radius: var(--radius-md);
+  border-radius: 0;
   max-width: var(--tl-tool-max);
   margin-inline: auto;
   width: 100%;
-  border: 1px solid transparent;
-  background: rgba(18, 11, 9, 0.12);
-  transition:
-    background-color var(--motion-duration-fast) var(--motion-easing-standard),
-    border-color var(--motion-duration-fast) var(--motion-easing-standard),
-    box-shadow var(--motion-duration-fast) var(--motion-easing-standard);
+  border: 0;
+  background: transparent;
 }
-.tl-action:hover {
-  background: rgba(255, 255, 255, 0.035);
-  border-color: rgba(158, 124, 90, 0.14);
+.tl-action:hover .tl-action__head,
+.tl-action.is-selected .tl-action__head {
+  background: rgba(246, 235, 214, 0.035);
 }
-.tl-action.is-selected {
-  background: rgba(212, 184, 122, 0.08);
-  border-color: rgba(212, 184, 122, 0.24);
-}
-.tl-action.is-expanded {
-  background: rgba(18, 11, 9, 0.68);
-  border-color: rgba(158, 124, 90, 0.22);
-}
-.tl-action--pending {
-  border-color: rgba(56, 189, 248, 0.24);
-  background: linear-gradient(
-    90deg,
-    rgba(20, 78, 102, 0.22),
-    rgba(18, 11, 9, 0.18) 48%
-  );
-  box-shadow:
-    inset 0 0 0 1px rgba(56, 189, 248, 0.08),
-    0 0 24px rgba(56, 189, 248, 0.08);
-  animation: session-detail-active-row 2.2s ease-in-out infinite;
-}
-.tl-action--error,
-.tl-action--dropped {
-  border-color: rgba(196, 80, 64, 0.24);
-  background: rgba(70, 24, 20, 0.18);
+.tl-action.is-expanded .tl-action__head {
+  background: rgba(246, 235, 214, 0.045);
 }
 .tl-action__head {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 7px 10px 7px 14px;
+  height: 30px;
+  padding: 0 var(--space-2);
   min-width: 0;
   width: 100%;
   border: 0;
+  border-bottom: 1px solid rgba(70, 54, 41, 0.9);
   background: transparent;
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
+}
+/* The trace: a 16px branch off the transcript's brass conductor, with a
+   node at the joint — page-filled with a gold ring, or flame-filled and
+   glowing while the tool is running. */
+.tl-action__head::before {
+  content: "";
+  position: absolute;
+  left: calc(-1 * var(--trace-inset, 8px));
+  top: 50%;
+  width: var(--trace-inset, 8px);
+  height: 1px;
+  background: rgba(233, 185, 73, 0.5);
+}
+.tl-action__head::after {
+  content: "";
+  position: absolute;
+  left: calc(-1 * var(--trace-inset, 8px) - 2.5px);
+  top: calc(50% - 2.5px);
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--color-surface-page);
+  box-shadow: inset 0 0 0 1px rgba(233, 185, 73, 0.75);
+}
+.tl-action--pending .tl-action__head::after {
+  background: var(--color-intent-warning);
+  box-shadow: 0 0 6px rgba(240, 138, 36, 0.7);
 }
 .tl-action__chev {
   color: var(--color-text-muted);
@@ -1658,23 +1794,6 @@
 .tl-action__chev.is-open {
   transform: rotate(90deg);
 }
-.tl-action__accent {
-  position: absolute;
-  left: 0;
-  top: 6px;
-  bottom: 6px;
-  width: 3px;
-  border-radius: 2px;
-  opacity: 0.75;
-}
-.tl-action__accent[data-tone="error"] {
-  background: var(--color-intent-error) !important;
-  opacity: 1;
-}
-.tl-action__accent[data-tone="pending"] {
-  background: var(--color-intent-warning) !important;
-  opacity: 0.9;
-}
 .tl-action__icon {
   font-family: var(--font-family-mono);
   font-weight: var(--font-weight-bold);
@@ -1686,8 +1805,8 @@
 .tl-action__name {
   font-family: var(--font-family-mono);
   font-size: 12.5px;
-  font-weight: var(--font-weight-semibold);
-  color: rgba(250, 245, 236, 0.98);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
   flex-shrink: 0;
 }
 .tl-action__ns {
@@ -1702,9 +1821,9 @@
 .tl-action__summary {
   flex: 1;
   min-width: 0;
-  font-family: var(--font-family-mono);
-  font-size: 12px;
-  color: rgba(221, 209, 190, 0.86);
+  font-family: var(--font-family-base);
+  font-size: 13.5px;
+  color: var(--color-text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1716,7 +1835,7 @@
   flex-shrink: 0;
 }
 .tl-action__time {
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--color-text-muted);
   font-family: var(--font-family-mono);
 }
@@ -1833,13 +1952,10 @@
 .tl-context.is-expanded {
   background: rgba(18, 11, 9, 0.5);
 }
-.tl-context--pending {
-  background: rgba(20, 78, 102, 0.14);
-  box-shadow: inset 2px 0 0 rgba(56, 189, 248, 0.46);
-}
+.tl-context--pending,
 .tl-context--dropped {
-  background: rgba(70, 24, 20, 0.14);
-  box-shadow: inset 2px 0 0 rgba(196, 80, 64, 0.42);
+  background: transparent;
+  box-shadow: none;
 }
 .tl-context__head {
   display: flex;
@@ -2048,13 +2164,14 @@
 }
 .tl-code {
   margin: 0;
-  padding: 8px 10px;
-  border-radius: var(--radius-md);
-  background: rgba(8, 7, 6, 0.88);
-  border: 1px solid rgba(158, 124, 90, 0.22);
-  color: rgba(243, 234, 217, 0.92);
+  padding: 10px 12px;
+  border-radius: 2px;
+  background: var(--color-surface-well);
+  border: 0;
+  box-shadow: inset 0 0 0 1px rgba(158, 124, 90, 0.28);
+  color: var(--color-text-secondary);
   font-family: var(--font-family-mono);
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
@@ -2109,23 +2226,24 @@
   color: var(--color-text-secondary);
 }
 
-/* Bounded, click-free preview of tool output on a collapsed action row. */
+/* Bounded, click-free preview of tool output on a collapsed action row —
+   a soot well set into the row, darker than the page, no border box. */
 .tl-tool-preview {
-  margin: 0 12px 10px 12px;
-  border-radius: var(--radius-md);
-  border: 1px solid rgba(158, 124, 90, 0.22);
-  background: rgba(8, 7, 6, 0.62);
-  padding: 8px 10px;
+  margin: 4px 0 8px;
+  border-radius: 2px;
+  border: 0;
+  box-shadow: inset 0 0 0 1px rgba(158, 124, 90, 0.28);
+  background: var(--color-surface-well);
+  padding: 10px 12px;
   overflow-x: auto;
 }
 .tl-tool-preview--failure {
-  border-color: rgba(200, 80, 70, 0.28);
-  background: rgba(40, 12, 10, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(228, 87, 46, 0.28);
 }
 .tl-tool-preview__text {
   margin: 0;
   font-family: var(--font-family-mono);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
@@ -2145,25 +2263,6 @@
   max-height: 420px;
 }
 
-@keyframes session-detail-active-row {
-  0%,
-  100% {
-    box-shadow:
-      inset 0 0 0 1px rgba(56, 189, 248, 0.06),
-      0 0 18px rgba(56, 189, 248, 0.06);
-  }
-  50% {
-    box-shadow:
-      inset 0 0 0 1px rgba(56, 189, 248, 0.16),
-      0 0 28px rgba(56, 189, 248, 0.16);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .tl-action--pending {
-    animation: none;
-  }
-}
 .tl-diff__line {
   display: flex;
   gap: 6px;
@@ -2495,6 +2594,17 @@
 
   .timeline-pane__header-right {
     flex: 0 0 auto;
+    max-width: 46vw;
+  }
+
+  /* A long "Using <tool> for <duration>" sentence must not starve the
+     title of its space — cap and ellipsize it on narrow viewports. */
+  .session-state-line {
+    flex-shrink: 1;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .session-workspace-header__left {
@@ -2712,14 +2822,17 @@
 
 /* ===== Composer dock (bar layout) ===== */
 
+/* Unframed: the composer below is the one framed object on the page (its
+   own card, ring, leaf hairline and corner points — see session-chat.css).
+   This wrapper just holds the column width so the runtime strip and the
+   composer share the same centered column. */
 .session-control-dock--bar {
   width: min(100%, var(--tl-tool-max));
   gap: 0;
   padding: 0;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface-card);
-  box-shadow: var(--shadow-sm);
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .session-control-dock--bar .session-control-dock__composer {

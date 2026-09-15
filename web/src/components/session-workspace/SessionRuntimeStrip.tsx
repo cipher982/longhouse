@@ -25,6 +25,13 @@ interface SessionRuntimeStripProps {
   activityFeed?: SessionActivityFeed | null;
   /** Viewer subscription state from the existing workspace stream. */
   streamConnected?: boolean;
+  /**
+   * Icon-only mode for embedding in the composer's own head row: the
+   * headline/elapsed text is redundant with the composer's state line, so
+   * only the evidence-disclosure icon renders, as a popover anchored to
+   * itself rather than a block that pushes layout.
+   */
+  compact?: boolean;
 }
 
 const INITIAL_CONNECTION_GRACE_MS = 2_000;
@@ -357,6 +364,7 @@ export function SessionRuntimeStrip({
   testId,
   activityFeed = null,
   streamConnected = false,
+  compact = false,
 }: SessionRuntimeStripProps) {
   const closed = session.session_state.disposition.state === "closed";
   const nowMs = useWallClock(!closed, 1_000);
@@ -448,7 +456,7 @@ export function SessionRuntimeStrip({
   }, [notice]);
   return (
     <div
-      className="session-runtime-strip"
+      className={`session-runtime-strip${compact ? " session-runtime-strip--compact" : ""}`}
       data-testid={testId}
       data-strip-tone={
         state.tone === "working"
@@ -461,7 +469,7 @@ export function SessionRuntimeStrip({
     >
       <SessionLedger
         state={state}
-        surface="ledger"
+        surface={compact ? "composer" : "ledger"}
         notice={notice}
         activityFeed={state.connection === "recorded" ? null : activityFeed}
         testId="live-work-ribbon"

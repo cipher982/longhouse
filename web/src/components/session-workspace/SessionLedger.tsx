@@ -15,7 +15,7 @@ export type LedgerConnection =
   | "reconnecting"
   | "checking"
   | "recorded";
-export type LedgerSurface = "dock" | "ledger" | "island";
+export type LedgerSurface = "dock" | "ledger" | "island" | "composer";
 
 export interface LedgerReceiptMark {
   id: string;

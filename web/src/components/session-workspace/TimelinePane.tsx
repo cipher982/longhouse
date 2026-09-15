@@ -84,6 +84,9 @@ interface TimelinePaneProps {
   onVisibleSelectionChange?: (visibleKey: string | null) => void;
   /** Navigation / context content rendered at the start of the header bar. */
   headerLeft?: ReactNode;
+  /** Live/idle state readout (dot + sentence), rendered before the filter
+   *  and overflow icons at the far right of the header bar. */
+  headerState?: ReactNode;
   /** Actions rendered at the far right of the header bar. */
   headerRight?: ReactNode;
   dock?: ReactNode;
@@ -313,8 +316,16 @@ function TurnEndRow({ turnEnd }: { turnEnd: AgentEventTurnEnd | null | undefined
   const stopped = turnEnd.outcome === "aborted";
   return (
     <div className="tl-turn-end" data-testid="session-turn-end">
-      ✻ {stopped ? "Interrupted after" : "Worked for"} {formatTurnDuration(turnEnd.duration_ms)} ·{" "}
-      {stopped ? "stopped" : "done"} {formatTime(turnEnd.ended_at)}
+      <span className="tl-turn-end__icon" aria-hidden="true">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M2.5 6.3 5 8.8l4.5-5.6" />
+        </svg>
+      </span>
+      <span className="tl-turn-end__text">
+        {stopped ? "Interrupted after" : "Worked for"} {formatTurnDuration(turnEnd.duration_ms)} ·{" "}
+        {stopped ? "stopped" : "done"} {formatTime(turnEnd.ended_at)}
+      </span>
+      <span className="tl-turn-end__rule" aria-hidden="true" />
     </div>
   );
 }
@@ -351,13 +362,22 @@ function MessageRow({
       className={`tl-msg tl-msg--${event.role}`}
     >
       <div className="tl-msg__head">
-        <span
-          className="tl-msg__who"
-          {...{ elementtiming: "longhouse-session-timeline-row" }}
-        >
-          {isUser ? "You" : isAssistant ? "AI" : event.role}
-        </span>
-        <span className="tl-msg__time">{formatTime(event.timestamp)}</span>
+        {isUser ? (
+          <span
+            className="tl-msg__who"
+            {...{ elementtiming: "longhouse-session-timeline-row" }}
+          >
+            You asked at {formatTime(event.timestamp)}
+          </span>
+        ) : (
+          <span
+            className="tl-msg__time"
+            {...{ elementtiming: "longhouse-session-timeline-row" }}
+          >
+            {isAssistant ? "" : `${event.role} · `}
+            {formatTime(event.timestamp)}
+          </span>
+        )}
         {outside ? (
           <span className="tl-chip tl-chip--warning">outside active context</span>
         ) : null}
@@ -690,7 +710,6 @@ function ActionCard({
         aria-expanded={expanded}
         aria-controls={detailId}
       >
-        <span className="tl-action__accent" style={{ background: info.color }} data-tone={statusTone} />
         <span className="tl-action__icon" style={{ color: info.color }}>{info.icon}</span>
         <span
           className="tl-action__name"
@@ -1043,6 +1062,7 @@ export function TimelinePane({
   onSelectKey,
   onVisibleSelectionChange,
   headerLeft,
+  headerState,
   headerRight,
   dock = null,
   listRef,
@@ -1276,8 +1296,10 @@ export function TimelinePane({
         <div className="timeline-pane__header-main">
           {headerLeft}
           <div className="timeline-pane__title-group">
+            {/* Counts now live in the header's identity sentence; this stays
+                in the DOM (hidden) so pagination state is still testable. */}
             <div
-              className="timeline-pane__summary"
+              className="timeline-pane__summary sr-only"
               data-testid="session-timeline-summary"
               data-loaded-entries={loadedEntries}
               data-total-entries={totalEntries}
@@ -1285,6 +1307,9 @@ export function TimelinePane({
               {transcriptSummary}
             </div>
           </div>
+        </div>
+        <div className="timeline-pane__header-right">
+          {headerState}
           <button
             type="button"
             className={`timeline-pane__filter-toggle${showFilters ? " is-active" : ""}`}
@@ -1297,8 +1322,8 @@ export function TimelinePane({
               <span className="timeline-pane__filter-toggle-dot" />
             ) : null}
           </button>
+          {headerRight}
         </div>
-        {headerRight && <div className="timeline-pane__header-right">{headerRight}</div>}
       </div>
 
       {showFilters ? (

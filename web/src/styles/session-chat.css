@@ -278,25 +278,33 @@
 
 .session-chat-queued {
   padding: var(--space-2) var(--space-3);
-  background: rgba(96, 130, 200, 0.12);
-  border-bottom: 1px solid rgba(96, 130, 200, 0.28);
+  background: var(--color-surface-elevated);
+  border-bottom: 1px solid var(--color-border-primary);
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
   font-size: var(--font-size-sm);
 }
 
+/* Inside the composer card: a step on the surface ladder, not a full-bleed
+   banner — the frame (leaf hairline, corner points) already owns the
+   panel's edges. */
+.session-chat-composer--dock > .session-chat-queued {
+  border-bottom: 0;
+  border-radius: 2px;
+}
+
 .session-chat-queued--failed {
-  background: rgba(196, 80, 64, 0.14);
-  border-bottom-color: rgba(196, 80, 64, 0.32);
+  background: rgba(228, 87, 46, 0.1);
+  border-bottom-color: rgba(228, 87, 46, 0.28);
 }
 
 .session-chat-queued__label {
   font-weight: 600;
-  color: rgba(220, 230, 245, 0.95);
+  color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  text-transform: none;
+  letter-spacing: 0;
 }
 
 .session-chat-queued__list {
@@ -444,11 +452,99 @@
   background: rgba(18, 11, 9, 0.5);
 }
 
+/* The composer: the one framed object on the page. A flat card, a leaf
+   hairline on its top edge, four brass points at the corners, and a soft
+   flame glow underneath only while a turn is running. */
 .session-chat-composer--dock {
-  padding: 0;
+  position: relative;
+  padding: 14px 18px 16px;
   border-top: 0;
-  background: transparent;
-  gap: var(--space-1);
+  border-radius: 2px;
+  background: var(--color-surface-card);
+  box-shadow: inset 0 0 0 1px rgba(70, 54, 41, 0.9);
+  gap: var(--space-3);
+}
+
+.session-chat-composer--dock.session-chat-composer--running {
+  box-shadow:
+    inset 0 0 0 1px rgba(70, 54, 41, 0.9),
+    0 18px 50px -20px rgba(240, 138, 36, 0.35);
+}
+
+.session-chat-composer__leaf {
+  position: absolute;
+  top: -1px;
+  left: 8%;
+  right: 8%;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(233, 185, 73, 0.7) 30%,
+    var(--color-brand-primary-hover) 50%,
+    rgba(233, 185, 73, 0.7) 70%,
+    transparent
+  );
+  pointer-events: none;
+}
+
+.session-chat-composer__point {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(233, 185, 73, 0.85);
+  pointer-events: none;
+}
+.session-chat-composer__point--tl {
+  top: -2px;
+  left: -2px;
+}
+.session-chat-composer__point--tr {
+  top: -2px;
+  right: -2px;
+}
+.session-chat-composer__point--bl {
+  bottom: -2px;
+  left: -2px;
+}
+.session-chat-composer__point--br {
+  bottom: -2px;
+  right: -2px;
+}
+
+.session-chat-composer__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.session-chat-composer__head-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.session-chat-composer__head-label--idle {
+  color: var(--color-text-secondary);
+}
+.session-chat-composer__head-timer {
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+.session-chat-composer__head-detail {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+/* The evidence-disclosure icon (runtime strip, compact) — far right of the
+   head row, exactly where the mock's info glyph sits. */
+.session-chat-composer__head-accessory {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.session-chat-composer__head-accessory .session-runtime-strip {
+  width: auto;
 }
 
 .session-chat-composer-row {
@@ -520,24 +616,47 @@
   color: rgba(168, 148, 119, 0.66);
 }
 
+/* Input: the well color, an inset hairline — no card-within-a-card. */
+.session-chat-composer--dock .session-chat-composer-row textarea {
+  min-height: 38px;
+  border: 0;
+  border-radius: 2px;
+  background: var(--color-surface-well);
+  box-shadow: inset 0 0 0 1px rgba(70, 54, 41, 0.8);
+}
+
+.session-chat-composer--dock .session-chat-composer-row textarea:focus {
+  box-shadow: inset 0 0 0 1px rgba(233, 185, 73, 0.45);
+}
+
+/* Gold wash, never a solid fill — the shared recipe from the restyle spec. */
 .session-chat-composer--dock .session-chat-composer-row > .ui-button--primary:not(:disabled) {
-  border-color: rgba(212, 184, 122, 0.44);
-  background:
-    linear-gradient(180deg, rgba(226, 199, 139, 0.96), rgba(168, 132, 70, 0.96));
-  color: rgba(18, 11, 9, 0.96);
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.06),
-    0 10px 24px rgba(212, 184, 122, 0.16);
+  border-color: rgba(233, 185, 73, 0.45);
+  background: linear-gradient(180deg, rgba(233, 185, 73, 0.24), rgba(233, 185, 73, 0.1));
+  color: var(--color-brand-primary-hover);
+  box-shadow: inset 0 0 0 1px rgba(233, 185, 73, 0.45);
 }
 
 .session-chat-composer--dock .session-chat-composer-row > .ui-button--primary:not(:disabled):hover {
-  background:
-    linear-gradient(180deg, rgba(243, 220, 164, 1), rgba(189, 150, 80, 1));
+  background: linear-gradient(180deg, rgba(233, 185, 73, 0.32), rgba(233, 185, 73, 0.16));
 }
 
 .session-chat-composer--dock .session-chat-composer-row > .ui-button--secondary:not(:disabled) {
-  border-color: rgba(158, 124, 90, 0.28);
-  background: rgba(30, 22, 17, 0.88);
+  border-color: rgba(70, 54, 41, 0.9);
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+
+/* Stop: plain ember text, no fill — the composer is legible, the frame
+   carries the ornament. */
+.session-chat-composer--dock .session-chat-composer-row > .ui-button--danger:not(:disabled) {
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-intent-error);
+}
+
+.session-chat-composer--dock .session-chat-composer-row > .ui-button--danger:not(:disabled):hover {
+  background: rgba(228, 87, 46, 0.08);
 }
 
 .session-chat-actions {

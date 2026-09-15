@@ -13,6 +13,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type ReactNode,
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -35,6 +36,11 @@ import { useComposerAttachments } from "../lib/useComposerAttachments";
 import { Badge, Button } from "./ui";
 import { AttachmentTray } from "./AttachmentTray";
 import { ManagedLaunchHintCard } from "./session-workspace/ManagedLaunchHintCard";
+import {
+  formatClockTime,
+  formatElapsedClock,
+  getSessionHeaderState,
+} from "./session-workspace/sessionHeaderState";
 import { ProviderGlyph } from "./ProviderGlyph";
 import { getProviderLabel } from "../lib/providers";
 import { useWallClock } from "../hooks/useWallClock";
@@ -88,6 +94,12 @@ interface SessionChatProps {
    * user row with matching input identity arrives.
    */
   timelineItems?: TimelineItem[];
+  /**
+   * Rendered at the right of the composer's own head row (dock layout
+   * only) — the runtime strip's evidence-disclosure icon lives here now,
+   * not as a separate heading above the composer.
+   */
+  composerHeaderAccessory?: ReactNode;
 }
 
 export type SessionChatTarget = Pick<
@@ -141,6 +153,7 @@ export function SessionChat({
   canQueueNextInput = false,
   canSteerActiveTurn = false,
   timelineItems,
+  composerHeaderAccessory,
 }: SessionChatProps) {
   const activity = session.session_state.activity;
   const renderNowMs = Date.now();
@@ -661,6 +674,64 @@ export function SessionChat({
     ? "Send update reaches the active turn. Queue next waits for its boundary. Enter does not send while a turn is active."
     : "Queue next waits for the next turn boundary. Enter does not queue while a turn is active.";
 
+  // Composer header: ember + "Using <tool>" + a mono timer while a turn is
+  // active, ember + "Waiting for approval" when a provider question is
+  // pending, or a cool dot + "Idle" + when the last turn ended. Shares its
+  // tone read with the session header (sessionHeaderState.ts) so the two
+  // never disagree about live/attention/cool, but keeps its own mono clock
+  // timer rather than a word-based duration, matching the instrument
+  // panel's Nixie-style readout (Phase 4 wraps it in a capsule).
+  const composerState = getSessionHeaderState(session, activityNowMs);
+  const activityTool = activity.tool?.trim() || null;
+  const activityAnchorMs = Date.parse(activity.observed_at ?? "");
+  const composerElapsedSeconds =
+    composerState.tone === "live" && Number.isFinite(activityAnchorMs)
+      ? Math.max(0, Math.floor((activityNowMs - activityAnchorMs) / 1_000))
+      : null;
+  const composerUsingLabel = activityTool ? `Using ${activityTool}` : "Working";
+  const composerLastTurnMs = Date.parse(
+    session.session_state.last_result_at ?? activity.observed_at ?? "",
+  );
+  const composerIdleClock = formatClockTime(composerLastTurnMs);
+
+  // Dock layout: this renders inside the composer frame itself, between
+  // the head row and the input (see below) — one framed object, not a
+  // separate block floating above it. Non-dock (panel) layout keeps it
+  // above the composer, where it has always lived.
+  const queuedBanner =
+    isManagedLocal && activeQueuedInputs.length > 0 ? (
+      <div className="session-chat-queued" data-testid="session-chat-queued">
+        <div className="session-chat-queued__label">Queued, sends next</div>
+        <ul className="session-chat-queued__list">
+          {activeQueuedInputs.map((row) => (
+            <li
+              key={row.live_input_id ?? row.id ?? row.text}
+              className="session-chat-queued__item"
+            >
+              <span className="session-chat-queued__text">{row.text}</span>
+              <span
+                className={`session-chat-queued__status session-chat-queued__status--${row.status}`}
+              >
+                {row.status === "delivering"
+                  ? row.last_error || "Sending…"
+                  : "Queued"}
+              </span>
+              {row.status === "queued" ? (
+                <button
+                  type="button"
+                  className="session-chat-queued__cancel"
+                  onClick={() => void handleCancelQueuedInput(row)}
+                  aria-label="Cancel queued message"
+                >
+                  Cancel
+                </button>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      </div>
+    ) : null;
+
   return (
     <div
       className={`session-chat${isDock ? " session-chat--dock" : ""}`}
@@ -771,40 +842,7 @@ export function SessionChat({
         </div>
       ) : null}
 
-      {isManagedLocal && activeQueuedInputs.length > 0 ? (
-        <div className="session-chat-queued" data-testid="session-chat-queued">
-          <div className="session-chat-queued__label">
-            Queued (auto-sends next)
-          </div>
-          <ul className="session-chat-queued__list">
-            {activeQueuedInputs.map((row) => (
-              <li
-                key={row.live_input_id ?? row.id ?? row.text}
-                className="session-chat-queued__item"
-              >
-                <span className="session-chat-queued__text">{row.text}</span>
-                <span
-                  className={`session-chat-queued__status session-chat-queued__status--${row.status}`}
-                >
-                  {row.status === "delivering"
-                    ? row.last_error || "Sending…"
-                    : "Queued"}
-                </span>
-                {row.status === "queued" ? (
-                  <button
-                    type="button"
-                    className="session-chat-queued__cancel"
-                    onClick={() => void handleCancelQueuedInput(row)}
-                    aria-label="Cancel queued message"
-                  >
-                    Cancel
-                  </button>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
+      {!isDock ? queuedBanner : null}
 
       {isManagedLocal && failedInputs.length > 0 ? (
         <div
@@ -850,13 +888,60 @@ export function SessionChat({
       ) : null}
 
       <form
-        className={`session-chat-composer${isDock ? " session-chat-composer--dock" : ""}`}
+        className={`session-chat-composer${isDock ? " session-chat-composer--dock" : ""}${isDock && composerState.tone === "live" ? " session-chat-composer--running" : ""}`}
         onSubmit={handleSend}
         title={composerDisabledReason ?? undefined}
         onPaste={attachmentInputEnabled ? handleComposerPaste : undefined}
         onDrop={attachmentInputEnabled ? handleComposerDrop : undefined}
         onDragOver={attachmentInputEnabled ? handleComposerDragOver : undefined}
       >
+        {isDock ? (
+          <>
+            <span className="session-chat-composer__leaf" aria-hidden="true" />
+            <span className="session-chat-composer__point session-chat-composer__point--tl" aria-hidden="true" />
+            <span className="session-chat-composer__point session-chat-composer__point--tr" aria-hidden="true" />
+            <span className="session-chat-composer__point session-chat-composer__point--bl" aria-hidden="true" />
+            <span className="session-chat-composer__point session-chat-composer__point--br" aria-hidden="true" />
+          </>
+        ) : null}
+        {isDock && !showComposerUnavailableState ? (
+          <div className="session-chat-composer__head" data-testid="session-chat-composer-head">
+            {composerState.tone === "live" ? (
+              <>
+                <span className="session-ember-dot" aria-hidden="true" />
+                <span className="session-chat-composer__head-label">{composerUsingLabel}</span>
+                {composerElapsedSeconds != null ? (
+                  <span className="session-chat-composer__head-timer">
+                    {formatElapsedClock(composerElapsedSeconds)}
+                  </span>
+                ) : null}
+              </>
+            ) : composerState.tone === "attention" ? (
+              <>
+                <span className="session-ember-dot session-ember-dot--attention" aria-hidden="true" />
+                <span className="session-chat-composer__head-label">{composerState.text}</span>
+              </>
+            ) : (
+              <>
+                <span className="session-cool-dot" aria-hidden="true" />
+                <span className="session-chat-composer__head-label session-chat-composer__head-label--idle">
+                  Idle
+                </span>
+                {composerIdleClock ? (
+                  <span className="session-chat-composer__head-detail">
+                    the last turn ended at {composerIdleClock}
+                  </span>
+                ) : null}
+              </>
+            )}
+            {composerHeaderAccessory ? (
+              <span className="session-chat-composer__head-accessory">
+                {composerHeaderAccessory}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+        {isDock ? queuedBanner : null}
         {showComposerUnavailableState ? (
           managedLaunchSuggestion ? (
             <ManagedLaunchHintCard
@@ -940,6 +1025,7 @@ export function SessionChat({
                     type="button"
                     variant="danger"
                     size="sm"
+                    className="session-chat-btn session-chat-btn--stop"
                     aria-label={isInterrupting ? "Stopping" : "Stop"}
                     title="Interrupt the active turn"
                     onClick={() => void handleInterrupt()}
@@ -972,6 +1058,7 @@ export function SessionChat({
                     type="button"
                     variant="secondary"
                     size="sm"
+                    className="session-chat-btn session-chat-btn--queue"
                     onClick={() => void handleSecondaryQueue()}
                     disabled={
                       isComposerDisabled || !draft.trim() || isSubmitting
@@ -1000,6 +1087,7 @@ export function SessionChat({
                 <Button
                   type="submit"
                   variant="primary"
+                  className="session-chat-btn session-chat-btn--send"
                   aria-label={submitButtonLabel}
                   size="sm"
                   disabled={

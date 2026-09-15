@@ -1,0 +1,148 @@
+import { describe, expect, it } from "vitest";
+import {
+  buildSessionMetaSentence,
+  formatElapsedClock,
+  getSessionHeaderState,
+} from "../sessionHeaderState";
+import type { AgentSession } from "../../../services/api/agents";
+
+function session(overrides: {
+  disposition?: string;
+  pendingInteraction?: unknown;
+  activityState?: string;
+  tool?: string | null;
+  observedAt?: string | null;
+  primaryTone?: string | null;
+  primaryLabel?: string | null;
+  lastResultAt?: string | null;
+}): Pick<AgentSession, "session_state"> {
+  return {
+    session_state: {
+      disposition: { state: overrides.disposition ?? "open" },
+      pending_interaction: overrides.pendingInteraction ?? null,
+      activity: {
+        state: overrides.activityState ?? "quiescent",
+        tool: overrides.tool ?? null,
+        observed_at: overrides.observedAt ?? null,
+      },
+      presentation: {
+        primary:
+          overrides.primaryTone != null
+            ? { tone: overrides.primaryTone, label: overrides.primaryLabel ?? "" }
+            : null,
+      },
+      last_result_at: overrides.lastResultAt ?? null,
+    } as never,
+  };
+}
+
+describe("getSessionHeaderState", () => {
+  it("reads a real provider question as attention, not idle", () => {
+    const state = getSessionHeaderState(
+      session({ pendingInteraction: { id: "1" } }),
+      Date.now(),
+    );
+    expect(state).toEqual({ tone: "attention", text: "Waiting for approval" });
+  });
+
+  it("reads a blocked/stalled presentation tone as attention even when activity.state is quiescent", () => {
+    const state = getSessionHeaderState(
+      session({ primaryTone: "stalled", primaryLabel: "No progress for 31m" }),
+      Date.now(),
+    );
+    expect(state).toEqual({ tone: "attention", text: "No progress for 31m" });
+  });
+
+  it("reads an executing/thinking session as live, with a tool-named sentence", () => {
+    const now = Date.parse("2026-04-15T16:30:00Z");
+    const state = getSessionHeaderState(
+      session({
+        activityState: "executing",
+        tool: "hub",
+        observedAt: "2026-04-15T15:55:00Z",
+        primaryTone: "running",
+      }),
+      now,
+    );
+    expect(state.tone).toBe("live");
+    expect(state.text).toBe("Using hub for 35 minutes");
+  });
+
+  it("reads a closed session as cool/ended", () => {
+    const state = getSessionHeaderState(
+      session({ disposition: "closed", lastResultAt: "2026-04-15T16:12:00Z" }),
+      Date.now(),
+    );
+    expect(state.tone).toBe("cool");
+    expect(state.text).toMatch(/^Ended/);
+  });
+
+  it("reads an open, non-working session as idle", () => {
+    const state = getSessionHeaderState(
+      session({ lastResultAt: "2026-04-15T16:12:00Z" }),
+      Date.now(),
+    );
+    expect(state.tone).toBe("cool");
+    expect(state.text).toMatch(/^Idle since/);
+  });
+});
+
+describe("buildSessionMetaSentence", () => {
+  it("builds the full sentence from provider, project, host, and counts", () => {
+    expect(
+      buildSessionMetaSentence({
+        provider: "OMP",
+        project: "zerg",
+        host: "cinder",
+        messages: 57,
+        toolCalls: 334,
+      }),
+    ).toBe("OMP working in zerg on cinder, 57 messages and 334 tool calls so far");
+  });
+
+  it("drops missing parts gracefully instead of leaving stray punctuation", () => {
+    expect(
+      buildSessionMetaSentence({
+        provider: "OMP",
+        project: null,
+        host: null,
+        messages: 0,
+        toolCalls: 0,
+      }),
+    ).toBe("OMP working");
+  });
+
+  it("falls back to counts alone when nothing else is known", () => {
+    expect(
+      buildSessionMetaSentence({
+        provider: null,
+        project: null,
+        host: null,
+        messages: 3,
+        toolCalls: 0,
+      }),
+    ).toBe("3 messages so far");
+  });
+
+  it("returns null when there is nothing to say", () => {
+    expect(
+      buildSessionMetaSentence({
+        provider: null,
+        project: null,
+        host: null,
+        messages: 0,
+        toolCalls: 0,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("formatElapsedClock", () => {
+  it("formats minutes:seconds", () => {
+    expect(formatElapsedClock(35 * 60 + 37)).toBe("35:37");
+  });
+
+  it("formats hours:minutes:seconds past an hour", () => {
+    expect(formatElapsedClock(60 * 65 + 5)).toBe("1:05:05");
+  });
+});

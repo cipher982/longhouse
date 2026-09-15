@@ -91,9 +91,11 @@ vi.mock("../../components/SessionChat", () => ({
   SessionChat: ({
     composerDisabledReason,
     managedLaunchSuggestion,
+    composerHeaderAccessory,
   }: {
     composerDisabledReason?: string | null;
     managedLaunchSuggestion?: { command: string } | null;
+    composerHeaderAccessory?: React.ReactNode;
   }) => (
     <div
       data-testid="session-chat"
@@ -101,6 +103,7 @@ vi.mock("../../components/SessionChat", () => ({
       data-launch-command={managedLaunchSuggestion?.command ?? ""}
     >
       session-chat
+      {composerHeaderAccessory}
     </div>
   ),
 }));

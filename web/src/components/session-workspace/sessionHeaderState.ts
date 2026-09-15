@@ -1,0 +1,148 @@
+import type { AgentSession } from "../../services/api/agents";
+
+export type SessionHeaderStateTone = "live" | "attention" | "cool";
+
+export interface SessionHeaderStateInfo {
+  tone: SessionHeaderStateTone;
+  text: string;
+}
+
+function formatDurationWords(totalSeconds: number): string {
+  if (totalSeconds < 60) return "under a minute";
+  const minutes = Math.round(totalSeconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  const hourPart = `${hours} hour${hours === 1 ? "" : "s"}`;
+  return remainder === 0
+    ? hourPart
+    : `${hourPart} ${remainder} minute${remainder === 1 ? "" : "s"}`;
+}
+
+export function formatClockTime(ms: number): string | null {
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/** Composer timer readout: "35:37" (mm:ss), "1:05:12" past an hour. */
+export function formatElapsedClock(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(s / 3_600);
+  const minutes = Math.floor((s % 3_600) / 60);
+  const seconds = s % 60;
+  const ss = String(seconds).padStart(2, "0");
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${ss}`;
+  }
+  return `${minutes}:${ss}`;
+}
+
+/**
+ * The header's right-side state: a dot plus one sentence, replacing the
+ * bare runtime tone chip. Three shapes only — live (breathing ember),
+ * attention (a provider question is pending), and cool (idle or ended) —
+ * because that is all the header has room to say at a glance; the full
+ * evidence disclosure still lives in the runtime strip below.
+ */
+export function getSessionHeaderState(
+  session: Pick<AgentSession, "session_state">,
+  nowMs: number,
+): SessionHeaderStateInfo {
+  const facts = session.session_state;
+  // The route's own tone (`session-workspace-route--tone-<tone>`) already
+  // reads `presentation.primary.tone` as the authoritative live/attention
+  // signal — a session can be "blocked" or "stalled" with activity.state
+  // still "quiescent" underneath, so activity.state alone under-detects.
+  const primaryTone = facts.presentation.primary?.tone ?? null;
+  const closed = facts.disposition.state === "closed";
+  const pending =
+    !closed &&
+    (facts.pending_interaction != null ||
+      primaryTone === "blocked" ||
+      primaryTone === "stalled");
+  const working =
+    !closed &&
+    (primaryTone === "running" ||
+      primaryTone === "thinking" ||
+      primaryTone === "active" ||
+      facts.activity.state === "thinking" ||
+      facts.activity.state === "executing");
+
+  if (pending) {
+    // A real provider question always reads as "Waiting for approval";
+    // a blocked/stalled tone without one (e.g. "No progress for 31m")
+    // uses the server's own label so the wording never disagrees with
+    // the runtime strip right below it.
+    const label =
+      facts.pending_interaction != null
+        ? "Waiting for approval"
+        : facts.presentation.primary?.label?.trim() || "Needs attention";
+    return { tone: "attention", text: label };
+  }
+
+  if (working) {
+    const tool = facts.activity.tool?.trim();
+    const anchorMs = Date.parse(facts.activity.observed_at ?? "");
+    const elapsedSeconds = Number.isFinite(anchorMs)
+      ? Math.max(0, Math.floor((nowMs - anchorMs) / 1_000))
+      : null;
+    const using = tool ? `Using ${tool}` : "Working";
+    return {
+      tone: "live",
+      text:
+        elapsedSeconds != null
+          ? `${using} for ${formatDurationWords(elapsedSeconds)}`
+          : using,
+    };
+  }
+
+  const lastMs = Date.parse(
+    facts.last_result_at ?? facts.activity.observed_at ?? "",
+  );
+  const clock = formatClockTime(lastMs);
+  if (closed) {
+    return { tone: "cool", text: clock ? `Ended ${clock}` : "Ended" };
+  }
+  return { tone: "cool", text: clock ? `Idle since ${clock}` : "Idle" };
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * The header's identity line as one sentence — "OMP working in zerg on
+ * cinder, 57 messages and 334 tool calls so far" — instead of a dot-joined
+ * fragment list plus a separate "N messages · N tool calls loaded" pill.
+ */
+export function buildSessionMetaSentence({
+  provider,
+  project,
+  host,
+  messages,
+  toolCalls,
+}: {
+  provider: string | null;
+  project: string | null;
+  host: string | null;
+  messages: number;
+  toolCalls: number;
+}): string | null {
+  const parts: string[] = [];
+  if (provider) parts.push(provider);
+  parts.push("working");
+  if (project) parts.push(`in ${project}`);
+  if (host) parts.push(`on ${host}`);
+  let sentence = parts.length > 1 ? parts.join(" ") : provider ? provider : null;
+
+  const counts: string[] = [];
+  if (messages > 0) counts.push(plural(messages, "message"));
+  if (toolCalls > 0) counts.push(plural(toolCalls, "tool call"));
+  const countsText = counts.length > 0 ? `${counts.join(" and ")} so far` : null;
+
+  if (!sentence) return countsText;
+  return countsText ? `${sentence}, ${countsText}` : sentence;
+}

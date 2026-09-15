@@ -32,6 +32,11 @@ import {
   ResumeSessionModal,
 } from "../components/session-workspace/ResumeSessionModal";
 import { BranchSessionCard } from "../components/session-workspace/BranchSessionCard";
+import { SessionStateBadge } from "../components/session-workspace/SessionStateBadge";
+import {
+  buildSessionMetaSentence,
+  getSessionHeaderState,
+} from "../components/session-workspace/sessionHeaderState";
 import {
   isSessionClosed,
   resolveSessionRuntimeState,
@@ -55,7 +60,10 @@ import {
   type SessionResumeIntent,
 } from "../services/api/agents";
 import { ApiError, DEMO_READ_ONLY_MESSAGE } from "../services/api/base";
-import { getSessionInteractionCapabilities } from "../lib/sessionWorkspace";
+import {
+  countTimelineItems,
+  getSessionInteractionCapabilities,
+} from "../lib/sessionWorkspace";
 import "../styles/session-workspace.css";
 
 const GENERIC_HOME_LABELS = new Set([
@@ -113,6 +121,7 @@ function SessionDetailWorkspaceRoute({
     activityFeed,
   } = workspace;
   const nowMs = useWallClock(Boolean(session && !isSessionClosed(session)));
+  const transcriptCounts = useMemo(() => countTimelineItems(items), [items]);
 
   // Read-on-open acknowledgement for Console results; shared viewers never
   // acknowledge (console-unread-acknowledgement spec).
@@ -317,14 +326,17 @@ function SessionDetailWorkspaceRoute({
   const identityHost =
     displaySession.control?.source_runner_name?.trim() ||
     (homeLabel && !GENERIC_HOME_LABELS.has(homeLabel) ? homeLabel : null);
-  const identityLabel = [
-    interaction.providerLabel,
-    displaySession.project?.trim() || null,
-    identityHost,
-  ]
-    .filter((part): part is string => Boolean(part))
-    .join(" · ");
+  // One sentence instead of a dot-joined fragment list and a separate
+  // "N messages · N tool calls loaded" pill — same facts, read as prose.
+  const identityLabel = buildSessionMetaSentence({
+    provider: interaction.providerLabel || null,
+    project: displaySession.project?.trim() || null,
+    host: identityHost,
+    messages: transcriptCounts.messages,
+    toolCalls: transcriptCounts.toolCalls,
+  });
   const runtime = resolveSessionRuntimeState(displaySession);
+  const headerState = getSessionHeaderState(displaySession, nowMs);
   const resumeAvailable =
     isViewingHead &&
     branchSourceSession.session_state.control.actions.resume.state ===
@@ -577,6 +589,13 @@ function SessionDetailWorkspaceRoute({
           onSelectKey={selectKey}
           onVisibleSelectionChange={handleVisibleSelectionChange}
           headerLeft={headerLeft}
+          headerState={
+            <SessionStateBadge
+              tone={headerState.tone}
+              text={headerState.text}
+              testId="session-header-state"
+            />
+          }
           headerRight={headerRight}
           listRef={registerTimelineList}
           dock={
@@ -588,13 +607,6 @@ function SessionDetailWorkspaceRoute({
                 className="session-balanced-field"
                 data-testid="session-balanced-field"
               >
-                <SessionRuntimeStrip
-                  session={displaySession}
-                  interaction={interaction}
-                  testId="session-control-strip"
-                  activityFeed={activityFeed ?? null}
-                  streamConnected={streamConnected}
-                />
                 <div className="session-control-dock__composer">
                   {activePauseRequest ? (
                     <SessionPauseRequestPanel
@@ -623,6 +635,16 @@ function SessionDetailWorkspaceRoute({
                       displaySession.capabilities?.can_steer_active_turn,
                     )}
                     timelineItems={items}
+                    composerHeaderAccessory={
+                      <SessionRuntimeStrip
+                        session={displaySession}
+                        interaction={interaction}
+                        testId="session-control-strip"
+                        activityFeed={activityFeed ?? null}
+                        streamConnected={streamConnected}
+                        compact
+                      />
+                    }
                   />
                 </div>
               </div>
