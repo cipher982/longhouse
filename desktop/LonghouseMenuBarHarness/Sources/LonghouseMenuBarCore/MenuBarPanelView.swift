@@ -333,15 +333,21 @@ public struct MenuBarPanelView: View {
         guard !snapshot.isSetupRequired, !snapshot.isInstallLocationBlocked else {
             return false
         }
-        return !dataTrust.isCurrent
-            || (
-                snapshot.suggestedActionIds?.contains("repair_machine") == true
-                && presentation.promotion == .repair
-            )
+        // A failed or timed-out status command proves only that the producer
+        // could not refresh. It does not prove that the installed agent needs
+        // repair; stale snapshots can still contain an old repair suggestion.
+        // Repair is reserved for a current snapshot that explicitly says the
+        // configured machine is broken.
+        guard dataTrust.isCurrent else {
+            return false
+        }
+        return snapshot.suggestedActionIds?.contains("repair_machine") == true
+            && presentation.promotion == .repair
     }
 
     private var shouldRetryLocalStatus: Bool {
-        snapshot.engineStatus?.fresh == false
+        !dataTrust.isCurrent
+            || snapshot.engineStatus?.fresh == false
             || snapshot.reasons.contains("engine_status_stale")
             || snapshot.reasons.contains("engine_projection_stale")
     }
@@ -463,6 +469,7 @@ public struct MenuBarPanelView: View {
 
             if presentation.promotion == .repair
                 || shouldOfferNativeRepair
+                || !dataTrust.isCurrent
                 || !projectionTrust.isCurrent
                 || shouldRetryLocalStatus
                 || snapshot.suggestedActionIds?.contains("inspect_transport") == true
@@ -497,10 +504,9 @@ public struct MenuBarPanelView: View {
         )
         .accessibilityIdentifier("longhouse.session-discovery-warning")
     }
-
     private var repairGuidance: String {
-        if shouldOfferNativeRepair && !dataTrust.isCurrent {
-            return "Current local status evidence is unavailable. Repair the local agent without opening Terminal; last-known facts remain below."
+        if !dataTrust.isCurrent {
+            return "The local status check is unavailable. Refresh to retry; stale evidence does not indicate a repair."
         }
         if !projectionTrust.isCurrent {
             return "The Runtime Host session view is unavailable. The local agent and durable upload facts remain separate; refresh to retry the remote view."
@@ -918,11 +924,11 @@ public struct MenuBarPanelView: View {
     private var watchingActions: some View {
         VStack(spacing: 8) {
             Group {
-                if !dataTrust.isCurrent && shouldOfferNativeRepair {
+                if !dataTrust.isCurrent {
                     Button {
-                        perform(.repairInstall)
+                        perform(.refresh)
                     } label: {
-                        Label("Repair local agent", systemImage: "wrench.and.screwdriver")
+                        Label("Retry local status", systemImage: "arrow.clockwise")
                             .frame(maxWidth: .infinity)
                     }
                 } else if !projectionTrust.isCurrent {
