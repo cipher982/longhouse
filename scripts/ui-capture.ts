@@ -9,6 +9,10 @@
  * - Accessibility snapshot (JSON)
  * - Manifest.json with metadata
  *
+ * Nothing needs to be running first: fixture scenes answer every API call from
+ * Playwright routes, and the script starts Vite itself (and stops it) when
+ * nothing is listening on FRONTEND_URL. Demo-data scenes still need the backend.
+ *
  * Usage:
  *   bunx tsx scripts/ui-capture.ts [page] [--scene=X] [--viewport=X] [--output=X] [--all] [--no-trace]
  *
@@ -18,20 +22,25 @@
  *   bunx tsx scripts/ui-capture.ts timeline --scene=timeline-card-stress --viewport=mobile
  *   bunx tsx scripts/ui-capture.ts session-detail --scene=session-detail-stress
  *   bunx tsx scripts/ui-capture.ts session-detail --scene=session-resume
+ *   bunx tsx scripts/ui-capture.ts session-detail --scene=session-tones   # one PNG per composer tone
  *   bunx tsx scripts/ui-capture.ts machines
  *   bunx tsx scripts/ui-capture.ts --all
  */
 
 import { chromium, type BrowserContext, type Page } from "playwright";
-import { execSync } from "child_process";
+import { execSync, spawn } from "child_process";
 import { mkdirSync, writeFileSync } from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import {
   buildSessionDetailStressFixture,
   buildSessionResumeFixture,
   buildSessionStaleObservationFixture,
+  buildSessionToneFixture,
   SESSION_DETAIL_STRESS_NOW,
   SESSION_DETAIL_STRESS_SESSION_ID,
+  SESSION_TONES,
+  type SessionTone,
 } from "./ui-fixtures/sessionDetailStress";
 import { buildTimelineCardStressFixture } from "./ui-fixtures/timelineCardStress";
 
@@ -59,8 +68,16 @@ const SCENES = [
   "session-detail-stress",
   "session-resume",
   "session-stale-observation",
+  "session-tones",
 ] as const;
 type SceneName = (typeof SCENES)[number];
+
+const SESSION_DETAIL_SCENES: readonly SceneName[] = [
+  "session-detail-stress",
+  "session-resume",
+  "session-stale-observation",
+  "session-tones",
+];
 
 const VIEWPORT_PRESETS = {
   desktop: {
@@ -189,20 +206,19 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === "timeline-card-stress" ||
     scene === "session-detail-stress" ||
     scene === "session-resume" ||
-    scene === "session-stale-observation"
+    scene === "session-stale-observation" ||
+    scene === "session-tones"
   );
 }
 
 function validateOptions(opts: Options): void {
-  if (
-    opts.page === "session-detail" &&
-    !["session-detail-stress", "session-resume", "session-stale-observation"].includes(opts.scene)
-  ) {
-    throw new Error(
-      "session-detail requires --scene=session-detail-stress, --scene=session-resume or --scene=session-stale-observation.",
-    );
+  if (opts.page === "session-detail" && !SESSION_DETAIL_SCENES.includes(opts.scene)) {
+    throw new Error(`session-detail requires one of: ${SESSION_DETAIL_SCENES.map((s) => `--scene=${s}`).join(", ")}.`);
   }
-  if (opts.all && ["session-detail-stress", "session-resume", "session-stale-observation"].includes(opts.scene)) {
+  if (SESSION_DETAIL_SCENES.includes(opts.scene) && opts.page !== "session-detail") {
+    throw new Error(`--scene=${opts.scene} captures PAGE=session-detail only.`);
+  }
+  if (opts.all && SESSION_DETAIL_SCENES.includes(opts.scene)) {
     throw new Error("Session-detail scenes capture PAGE=session-detail only; omit ALL=1.");
   }
 }
@@ -297,20 +313,25 @@ async function installSceneMocks(
   context: BrowserContext,
   scene: SceneName,
   baseUrl: string,
+  tone: SessionTone = "running",
 ): Promise<void> {
   if (!sceneUsesMockApi(scene)) {
     return;
   }
 
   const appOrigin = new URL(baseUrl).origin;
+  // Tone scenes re-install per frame; drop the previous handler first.
+  await context.unroute(`${appOrigin}/api/**`);
 
-  if (["session-detail-stress", "session-resume", "session-stale-observation"].includes(scene)) {
+  if (SESSION_DETAIL_SCENES.includes(scene)) {
     const fixture =
       scene === "session-resume"
         ? buildSessionResumeFixture()
         : scene === "session-stale-observation"
           ? buildSessionStaleObservationFixture()
-          : buildSessionDetailStressFixture();
+          : scene === "session-tones"
+            ? buildSessionToneFixture(tone)
+            : buildSessionDetailStressFixture();
     const sessionBasePath = `/api/timeline/sessions/${fixture.session.id}`;
 
     await context.route(`${appOrigin}/api/**`, async (route) => {
@@ -515,7 +536,7 @@ async function installScenePageOverrides(page: Page, scene: SceneName, pageName:
     return;
   }
 
-  const fixtureNowIso = ["session-detail-stress", "session-resume", "session-stale-observation"].includes(scene)
+  const fixtureNowIso = SESSION_DETAIL_SCENES.includes(scene)
     ? SESSION_DETAIL_STRESS_NOW
     : "2026-04-15T16:12:00Z";
   await page.addInitScript((nowIso) => {
@@ -540,6 +561,7 @@ async function captureBundle(
   outputDir: string,
   baseUrl: string,
   scene: SceneName,
+  frameName: string = pageName,
 ): Promise<CaptureResult> {
   const url = `${baseUrl}${PAGE_DEFINITIONS[pageName].path}`;
   console.log(`  Navigating to ${url}...`);
@@ -576,7 +598,7 @@ async function captureBundle(
   }
 
   // Capture screenshot
-  const screenshotPath = path.join(outputDir, `${pageName}.png`);
+  const screenshotPath = path.join(outputDir, `${frameName}.png`);
   await page.screenshot({ path: screenshotPath, fullPage: false });
   console.log(`  Screenshot: ${screenshotPath}`);
 
@@ -589,12 +611,12 @@ async function captureBundle(
         ?.snapshot;
     if (typeof accessibilitySnapshot === "function") {
       const a11yTree = await accessibilitySnapshot();
-      a11yPath = path.join(outputDir, `${pageName}-a11y.json`);
+      a11yPath = path.join(outputDir, `${frameName}-a11y.json`);
       writeFileSync(a11yPath, JSON.stringify(a11yTree, null, 2));
       a11yFormat = "json";
     } else {
       const ariaSnapshot = await page.locator("body").ariaSnapshot();
-      a11yPath = path.join(outputDir, `${pageName}-a11y.yml`);
+      a11yPath = path.join(outputDir, `${frameName}-a11y.yml`);
       writeFileSync(a11yPath, `${ariaSnapshot.trimEnd()}\n`);
       a11yFormat = "yaml";
     }
@@ -605,6 +627,87 @@ async function captureBundle(
   }
 
   return { screenshotPath, a11yPath, a11yFormat };
+}
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+async function isServing(url: string): Promise<boolean> {
+  try {
+    const response = await fetch(url);
+    return response.status < 500;
+  } catch {
+    return false;
+  }
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Make sure something serves the web app at baseUrl. If nothing does and the
+ * host is local, start Vite in web/ on that port and return a function that
+ * stops it. If something already serves it, return a no-op: it is not ours.
+ */
+async function ensureFrontend(baseUrl: string): Promise<() => Promise<void>> {
+  if (await isServing(baseUrl)) {
+    console.log(`Frontend already serving at ${baseUrl} (not owned by this capture)`);
+    return async () => {};
+  }
+  const target = new URL(baseUrl);
+  if (!["localhost", "127.0.0.1", "[::1]"].includes(target.hostname)) {
+    throw new Error(`Nothing serves ${baseUrl} and it is not local; start it or change FRONTEND_URL.`);
+  }
+  const port = target.port || "80";
+  console.log(`Nothing listening at ${baseUrl}; starting Vite on :${port} for this capture...`);
+
+  const output: string[] = [];
+  const child = spawn("bunx", ["vite", "--port", port, "--strictPort", "--clearScreen", "false"], {
+    cwd: path.join(REPO_ROOT, "web"),
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
+  });
+  child.stdout?.on("data", (chunk) => output.push(String(chunk)));
+  child.stderr?.on("data", (chunk) => output.push(String(chunk)));
+
+  const stop = async () => {
+    if (child.exitCode !== null || child.signalCode !== null || child.pid == null) return;
+    try {
+      process.kill(-child.pid, "SIGTERM");
+    } catch {
+      /* already gone */
+    }
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline && child.exitCode === null && child.signalCode === null) {
+      await sleep(100);
+    }
+    if (child.exitCode === null && child.signalCode === null) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    }
+    console.log("Stopped the Vite server this capture started.");
+  };
+
+  const onSignal = () => {
+    void stop().finally(() => process.exit(130));
+  };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      throw new Error(`Vite exited before serving:\n${output.join("")}`);
+    }
+    if (await isServing(baseUrl)) {
+      console.log(`Vite ready at ${baseUrl}`);
+      return stop;
+    }
+    await sleep(250);
+  }
+  await stop();
+  throw new Error(`Vite did not start serving ${baseUrl} within 60s:\n${output.join("")}`);
 }
 
 function getGitInfo(): { sha: string; branch: string; dirty: boolean } {
@@ -625,16 +728,19 @@ async function main() {
   console.log("UI Capture - Debug Bundle Generator");
   console.log("====================================\n");
 
-  // Check if dev is running
   // Fixture-backed scenes answer every API call from Playwright routes, so
   // they need only the Vite server; the backend gate is for demo-data scenes.
-  const backendUp = sceneUsesMockApi(opts.scene) || (await checkDevRunning(opts.backendUrl));
-  if (!backendUp) {
-    console.error(`Dev server not running at ${opts.backendUrl}`);
-    console.error("Start with: make dev");
+  if (sceneUsesMockApi(opts.scene)) {
+    console.log(`Fixture scene "${opts.scene}": API answered by Playwright routes, no backend needed`);
+  } else if (await checkDevRunning(opts.backendUrl)) {
+    console.log(`Backend healthy at ${opts.backendUrl}`);
+  } else {
+    console.error(`Scene "${opts.scene}" needs the backend, and nothing answers at ${opts.backendUrl}/api/health`);
+    console.error("Start it with: make dev-demo   (or make dev, then re-run)");
     process.exit(1);
   }
-  console.log(`Backend healthy at ${opts.backendUrl}`);
+
+  const stopFrontend = await ensureFrontend(opts.baseUrl);
 
   const pagesToCapture = getPagesToCapture(opts);
 
@@ -699,22 +805,31 @@ async function main() {
     });
 
     console.log("\nCapturing pages...");
-    for (const pageName of pagesToCapture) {
-      console.log(`\n${pageName}:`);
+    // A tone scene renders the same page once per tone into its own frame.
+    const frames: Array<{ pageName: PageName; frameName: string; tone: SessionTone }> =
+      opts.scene === "session-tones"
+        ? SESSION_TONES.map((tone) => ({ pageName: "session-detail" as const, frameName: `session-detail-${tone}`, tone }))
+        : pagesToCapture.map((pageName) => ({ pageName, frameName: pageName, tone: "running" as const }));
+    for (const { pageName, frameName, tone } of frames) {
+      console.log(`\n${frameName}:`);
       try {
-        artifacts[pageName] = await captureBundle(
+        if (opts.scene === "session-tones") {
+          await installSceneMocks(context, opts.scene, opts.baseUrl, tone);
+        }
+        artifacts[frameName] = await captureBundle(
           context,
           page,
           pageName,
           outputDir,
           opts.baseUrl,
           opts.scene,
+          frameName,
         );
       } catch (error) {
         const { message, detail } = formatError(error);
-        errors.push(`[${pageName}] ${message}`);
+        errors.push(`[${frameName}] ${message}`);
         consoleLogs.push(`[CAPTURE_ERROR] ${detail}`);
-        artifacts[pageName] = { a11yFormat: "none", error: message };
+        artifacts[frameName] = { a11yFormat: "none", error: message };
       }
     }
   } catch (error) {
@@ -741,6 +856,7 @@ async function main() {
     if (browser) {
       await browser.close();
     }
+    await stopFrontend();
 
     const consoleLogPath = path.join(outputDir, "console.log");
     writeFileSync(consoleLogPath, consoleLogs.join("\n"));

@@ -938,3 +938,86 @@ export function buildSessionResumeFixture(): ReturnType<typeof buildSessionDetai
   fixture.turns = { turns: [], total: 0 };
   return fixture;
 }
+
+// One frame per composer/route tone. The route class
+// `session-workspace-route--tone-<tone>` and every energy-tinted surface
+// (composer, gutter rule, runtime strip) key off
+// `session_state.presentation.primary.tone`, so this is the fixture that lets
+// an agent see all of them side by side without a live session.
+export const SESSION_TONES = ["running", "thinking", "active", "idle", "stalled", "blocked", "closed"] as const;
+export type SessionTone = (typeof SESSION_TONES)[number];
+
+export function buildSessionToneFixture(tone: SessionTone): ReturnType<typeof buildSessionDetailStressFixture> {
+  const fixture = buildSessionDetailStressFixture();
+  const now = SESSION_DETAIL_STRESS_NOW;
+  const access = { key: "live_control", label: "Live control", tone: "live", observed_at: now };
+  const primary = (key: string, label: string) => ({ key, label, tone, observed_at: now });
+
+  switch (tone) {
+    case "running":
+      return fixture;
+    case "thinking":
+      fixture.session.session_state = makeSessionState({
+        activity: { state: "thinking", raw_kind: "thinking", tool: null, source: "managed_local_transport", observed_at: now, valid_until: "2026-04-15T16:26:35Z" },
+        presentation: { primary: primary("thinking", "Thinking"), access, transcript: null },
+      });
+      return fixture;
+    case "active":
+      fixture.session.session_state = makeSessionState({
+        activity: { state: "executing", raw_kind: "running", tool: "hub", source: "managed_local_transport", observed_at: now, valid_until: "2026-04-15T16:26:35Z" },
+        presentation: { primary: primary("executing", "Using hub"), access, transcript: null },
+      });
+      return fixture;
+    case "idle":
+      fixture.session.session_state = makeSessionState({
+        activity: { state: "quiescent", raw_kind: "idle", tool: null, source: "managed_local_transport", observed_at: now, valid_until: null },
+        presentation: { primary: primary("idle", "Idle"), access, transcript: null },
+      });
+      return fixture;
+    case "stalled":
+      fixture.session.session_state = makeSessionState({
+        activity: { state: "stalled", raw_kind: "running", tool: "exec_command", source: "managed_local_transport", observed_at: "2026-04-15T15:40:00Z", valid_until: "2026-04-15T15:55:00Z" },
+        presentation: { primary: primary("stalled", "No progress for 31m"), access, transcript: null },
+      });
+      return fixture;
+    case "blocked":
+      fixture.session.session_state = makeSessionState({
+        activity: { state: "quiescent", raw_kind: "waiting", tool: null, source: "managed_local_transport", observed_at: now, valid_until: null },
+        presentation: { primary: primary("blocked", "Waiting for approval"), access, transcript: null },
+      });
+      return fixture;
+    case "closed": {
+      const endedAt = "2026-04-15T16:12:00Z";
+      fixture.session.ended_at = endedAt;
+      fixture.session.status = "finished";
+      fixture.session.presence_state = null;
+      fixture.session.active_tool = null;
+      fixture.session.runtime_display = null;
+      fixture.session.runtime_facts = null;
+      fixture.session.session_state = makeSessionState({
+        disposition: { state: "closed", closed_at: endedAt, close_reason: "provider_exit" },
+        run: { lifecycle: "ended", started_at: "2026-04-15T15:15:00Z", ended_at: endedAt },
+        activity: { state: "quiescent", raw_kind: null, tool: null, observed_at: endedAt, valid_until: null },
+        control: {
+          ownership: "owned",
+          connection: "disconnected",
+          actions: {
+            send_input: { state: "unavailable", reason: "run_ended" },
+            interrupt: { state: "unavailable", reason: "run_ended" },
+            terminate: { state: "unavailable", reason: "run_ended" },
+            reattach: { state: "unavailable", reason: "run_ended" },
+            resume: { state: "available" },
+          },
+        },
+        host: { state: "online", observed_at: endedAt },
+        presentation: {
+          primary: { key: "ended", label: "Ended", tone, observed_at: endedAt },
+          access: { key: "resume_available", label: "Resume available", tone: "success", observed_at: endedAt },
+          transcript: null,
+        },
+      });
+      fixture.turns = { turns: [], total: 0 };
+      return fixture;
+    }
+  }
+}

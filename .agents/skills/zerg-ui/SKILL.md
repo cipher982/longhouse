@@ -20,7 +20,8 @@ shown to you. Use it.
 | iOS screen against real data | `make sim-deploy SESSION=<id>` then `make sim-shot LABEL=<name>` | ~3 min build, then seconds per shot | The real pipeline: hosted data, real fonts, real chrome |
 | iOS screen in a deterministic state | `make ios-ui-shot TEST=<Suite>/<test>` | ~2 min | A fixture-driven frame the UI test attaches, exported to PNG |
 | iOS ingest/recovery without a phone | `make simlab-run` | six real-client journeys | Scratch Runtime Host + Machine Agent + iOS app; client-render convergence and network recovery |
-| Web page or row | `make ui-capture PAGE=<page> SCENE=<scene>` | seconds once Vite runs | Playwright screenshot plus accessibility snapshot |
+| Web page or row | `make ui-capture PAGE=<page> SCENE=<scene>` | ~7s from cold, nothing needs to be running | Playwright screenshot plus accessibility snapshot |
+| Web composer in every live state | `make ui-capture PAGE=session-detail SCENE=session-tones` | ~7s, one PNG per tone | running, thinking, active, idle, stalled, blocked, closed side by side |
 
 Look at more than one when the change spans surfaces. The simulator shot
 proves the data path; the fixture shot proves the layout at a known state.
@@ -167,27 +168,32 @@ The App Store build is an Xcode build; state clearly when the phone needs one.
 
 ## Web
 
+Look first, then talk. For any styling, layout, or "make it look better"
+request, render the page before reasoning from CSS or a pasted screenshot:
+
 ```bash
-make dev                                              # Vite on :47200 against the linked Runtime Host
-make ui-capture PAGE=session-detail SCENE=session-detail-stress   # fixture scene, needs only Vite
+make ui-capture PAGE=session-detail SCENE=session-detail-stress   # the session chat, ~7s from cold
+make ui-capture PAGE=session-detail SCENE=session-tones            # composer in all seven live states
 make ui-capture PAGE=timeline SCENE=timeline-card-stress VIEWPORT=mobile
+make qa-ui-workbench                                  # timeline + session fixtures, desktop and mobile, one index.html
 make ui-capture                                       # demo data; needs the demo backend on :47300 (`make dev-demo`)
 make ui-capture ALL=1
-make qa-ui-workbench                                  # timeline + session fixtures, desktop and mobile, one index.html
 ```
-Output: `artifacts/ui-capture/<timestamp>/<page>.png`, `<page>-a11y.json|yml`,
+Then `Read` the PNG. Nothing needs to be running for a fixture scene: the
+capture starts Vite on :47200 when nothing is listening and stops it when
+done (it leaves a Vite that was already there alone). Output:
+`artifacts/ui-capture/<timestamp>/<page>.png`, `<page>-a11y.json|yml`,
 `console.log`, `manifest.json`, and `trace.zip` unless `NO_TRACE=1`.
 
-Fixture scenes (`session-detail-stress`, `session-resume`,
-`timeline-card-stress`) answer every API call from Playwright routes, so
-they run with Vite alone; add new served fields to
-`scripts/ui-fixtures/*.ts` so the capture exercises them. The session
-context pane is a drawer and is closed in captures; the timeline pane is
-what you see. Stop the stack with `make stop`.
+Fixture scenes answer every API call from Playwright routes; add new served
+fields to `scripts/ui-fixtures/*.ts` so the capture exercises them. The
+session context pane is a drawer and is closed in captures; the timeline
+pane is what you see. Only demo-data scenes need the backend.
 
-Scenes: `demo` (seeded sessions, default), `empty`, `onboarding-modal`,
-`missing-api-key`, `timeline-card-stress`, `session-detail-stress`,
-`session-resume`.
+Scenes: `session-detail-stress`, `session-tones`, `session-resume`,
+`session-stale-observation`, `timeline-card-stress` (fixture, nothing
+running); `demo` (seeded sessions, default), `empty`, `onboarding-modal`,
+`missing-api-key` (need `make dev-demo`).
 
 ## How to look
 - Open the PNG with `Read`. Compare it with the reference you are matching
