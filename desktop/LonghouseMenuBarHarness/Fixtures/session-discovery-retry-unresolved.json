@@ -77,10 +77,6 @@
       }
     }
   ],
-  "realtime": {
-    "runtime_url": "https://demo.longhouse.ai",
-    "machine_name": "cinder"
-  },
   "transport": {
     "status": "healthy",
     "status_reason": "healthy",

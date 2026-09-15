@@ -70,8 +70,13 @@ def exercise(engine):
         shim.mkdir()
         fail_inventory = root / "inventory-failed"
         fail_inventory.touch()
+        observed_inventory_failure = root / "inventory-failed.observed"
         ps = shim / "ps"
-        ps.write_text('#!/bin/sh\nif [ -e "$PROJECTION_TEST_FAILURE" ]; then exit 1; fi\nexec /bin/ps "$@"\n')
+        ps.write_text(
+            '#!/bin/sh\nif [ -e "$PROJECTION_TEST_FAILURE" ]; then\n'
+            '  if [ "$1" = "-axo" ]; then : > "$PROJECTION_TEST_FAILURE.observed"; fi\n'
+            '  exit 1\nfi\nexec /bin/ps "$@"\n'
+        )
         ps.chmod(0o700)
         # No ambient provider executable or credential authority: the daemon
         # otherwise prewarms an installed Codex worker in a separate group.
@@ -132,8 +137,12 @@ def exercise(engine):
             receipt["daemon_pid"] = child.pid
             print(json.dumps({"owned_pid": child.pid, "owned_root": str(root)}), flush=True)
 
+            def daemon_logs():
+                paths = [log_path, *sorted((root / "logs").glob("*"))]
+                return "\n".join(path.read_text(errors="replace") for path in paths if path.is_file())
+
             def observe():
-                assert child.poll() is None, f"daemon exited: {log_path.read_text()}"
+                assert child.poll() is None, f"daemon exited: {daemon_logs()}"
                 try:
                     return json.loads(status_path.read_text())
                 except FileNotFoundError:
@@ -146,15 +155,15 @@ def exercise(engine):
                     if predicate(status.get("local_projection", {})):
                         return status
                     time.sleep(0.05)
-                raise AssertionError(f"daemon did not converge: {status}; logs: {log_path.read_text()}")
+                raise AssertionError(f"daemon did not converge: {status}; logs: {daemon_logs()}")
 
             # Fail the initial full inventory before any continuation cache
             # exists. Recovery must finish on the next periodic observation,
             # not publish an invented empty set until the one-minute pass.
             startup_deadline = time.monotonic() + 20
-            while "process inventory failed" not in log_path.read_text():
+            while not observed_inventory_failure.exists():
                 observe()
-                assert time.monotonic() < startup_deadline, log_path.read_text()
+                assert time.monotonic() < startup_deadline, daemon_logs()
                 time.sleep(0.05)
             assert not observe().get("local_projection", {}).get("last_reconciled_at")
             fail_inventory.unlink()
