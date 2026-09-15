@@ -1,9 +1,9 @@
 .session-workspace-route {
-  --session-control-accent: rgba(158, 124, 90, 0.42);
-  --session-energy: rgba(212, 184, 122, 0.56);
-  --session-energy-border: rgba(212, 184, 122, 0.22);
-  --session-energy-soft: rgba(212, 184, 122, 0.1);
-  --session-energy-wash: rgba(50, 34, 20, 0.26);
+  --session-control-accent: rgba(233, 185, 73, 0.28);
+  --session-energy: rgba(233, 185, 73, 0.5);
+  --session-energy-border: rgba(233, 185, 73, 0.18);
+  --session-energy-soft: rgba(233, 185, 73, 0.04);
+  --session-energy-wash: rgba(233, 185, 73, 0.04);
   --session-mobile-gap: 6px;
   --session-mobile-inset: 8px;
   --session-mobile-control-size: 34px;
@@ -19,61 +19,73 @@
   overflow: hidden;
 }
 
+/* Managed/unmanaged control accent: gold at low alpha, never a solid wash. */
 .session-workspace-route--managed {
-  --session-control-accent: rgba(123, 209, 151, 0.72);
+  --session-control-accent: rgba(233, 185, 73, 0.42);
 }
 
 .session-workspace-route--unmanaged {
-  --session-control-accent: rgba(212, 168, 67, 0.74);
+  --session-control-accent: rgba(233, 185, 73, 0.3);
 }
 
+/* Fire ramp: running/active/thinking read as flame (live, in progress). */
 .session-workspace-route--tone-running {
-  --session-energy: rgba(56, 189, 248, 0.82);
-  --session-energy-border: rgba(56, 189, 248, 0.36);
-  --session-energy-soft: rgba(56, 189, 248, 0.13);
-  --session-energy-wash: rgba(15, 84, 108, 0.3);
+  --session-energy: rgba(240, 138, 36, 0.82);
+  --session-energy-border: rgba(240, 138, 36, 0.18);
+  --session-energy-soft: rgba(240, 138, 36, 0.04);
+  --session-energy-wash: rgba(240, 138, 36, 0.04);
 }
 
 .session-workspace-route--tone-active {
-  --session-energy: rgba(73, 196, 178, 0.66);
-  --session-energy-border: rgba(73, 196, 178, 0.24);
-  --session-energy-soft: rgba(73, 196, 178, 0.08);
-  --session-energy-wash: rgba(23, 82, 72, 0.18);
+  --session-energy: rgba(240, 138, 36, 0.66);
+  --session-energy-border: rgba(240, 138, 36, 0.16);
+  --session-energy-soft: rgba(240, 138, 36, 0.035);
+  --session-energy-wash: rgba(240, 138, 36, 0.035);
 }
 
 .session-workspace-route--tone-thinking {
-  --session-energy: rgba(251, 146, 60, 0.82);
-  --session-energy-border: rgba(251, 146, 60, 0.36);
-  --session-energy-soft: rgba(251, 146, 60, 0.13);
-  --session-energy-wash: rgba(92, 45, 18, 0.32);
+  --session-energy: rgba(240, 138, 36, 0.82);
+  --session-energy-border: rgba(240, 138, 36, 0.18);
+  --session-energy-soft: rgba(240, 138, 36, 0.04);
+  --session-energy-wash: rgba(240, 138, 36, 0.04);
 }
 
+/* Idle/closed/quiet/inactive cool to the one cold foil: cooled ash. */
 .session-workspace-route--tone-idle {
-  --session-energy: rgba(123, 209, 151, 0.64);
-  --session-energy-border: rgba(123, 209, 151, 0.22);
-  --session-energy-soft: rgba(123, 209, 151, 0.08);
-  --session-energy-wash: rgba(30, 78, 45, 0.18);
+  --session-energy: rgba(124, 135, 144, 0.64);
+  --session-energy-border: rgba(124, 135, 144, 0.18);
+  --session-energy-soft: rgba(124, 135, 144, 0.04);
+  --session-energy-wash: rgba(124, 135, 144, 0.04);
 }
 
+/* Blocked/attention/stop reads as ember. */
 .session-workspace-route--tone-blocked {
-  --session-energy: rgba(248, 113, 113, 0.82);
-  --session-energy-border: rgba(248, 113, 113, 0.38);
-  --session-energy-soft: rgba(248, 113, 113, 0.14);
-  --session-energy-wash: rgba(92, 28, 24, 0.34);
+  --session-energy: rgba(228, 87, 46, 0.82);
+  --session-energy-border: rgba(228, 87, 46, 0.18);
+  --session-energy-soft: rgba(228, 87, 46, 0.04);
+  --session-energy-wash: rgba(228, 87, 46, 0.04);
 }
 
 .session-workspace-route--tone-stalled {
-  --session-energy: rgba(245, 158, 11, 0.8);
-  --session-energy-border: rgba(245, 158, 11, 0.34);
-  --session-energy-soft: rgba(245, 158, 11, 0.13);
-  --session-energy-wash: rgba(92, 61, 16, 0.32);
+  --session-energy: rgba(240, 138, 36, 0.8);
+  --session-energy-border: rgba(240, 138, 36, 0.17);
+  --session-energy-soft: rgba(240, 138, 36, 0.04);
+  --session-energy-wash: rgba(240, 138, 36, 0.04);
 }
 
 .session-workspace-route--tone-closed {
-  --session-energy: rgba(155, 145, 132, 0.48);
-  --session-energy-border: rgba(155, 145, 132, 0.18);
-  --session-energy-soft: rgba(155, 145, 132, 0.06);
-  --session-energy-wash: rgba(55, 50, 44, 0.16);
+  --session-energy: rgba(124, 135, 144, 0.48);
+  --session-energy-border: rgba(124, 135, 144, 0.16);
+  --session-energy-soft: rgba(124, 135, 144, 0.04);
+  --session-energy-wash: rgba(124, 135, 144, 0.04);
+}
+
+.session-workspace-route--tone-quiet,
+.session-workspace-route--tone-inactive {
+  --session-energy: rgba(124, 135, 144, 0.48);
+  --session-energy-border: rgba(124, 135, 144, 0.16);
+  --session-energy-soft: rgba(124, 135, 144, 0.04);
+  --session-energy-wash: rgba(124, 135, 144, 0.04);
 }
 
 .session-workspace-route--empty {

@@ -27,7 +27,7 @@
     height: 100%;
     margin: 0;
     min-width: 320px; /* minimum supported viewport - horizontal scroll below this */
-    background-color: var(--color-void, #120B09);
+    background-color: var(--color-void, #0B0908);
   }
 
   /* The React root acts as the application grid */
@@ -46,33 +46,17 @@
   /* Ambient visuals (Static)
      Landing page has its own animated effects via data-fx-* attributes. */
 
-  /* Living Void Layer 1: Grid (static) */
-  #react-root[data-ui-effects="on"]::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background-image:
-      linear-gradient(rgba(201, 166, 107, 0.15) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(201, 166, 107, 0.15) 1px, transparent 1px);
-    background-size: 80px 80px;
-    pointer-events: none;
-    z-index: -1;
-    opacity: 0.5;
-    mask-image: radial-gradient(circle at 50% 40%, black 0%, black 40%, transparent 70%);
-  }
-
-  /* Living Void Layer 2: Nebula glow (static) */
+  /* Hall material: a paper grain tile at ~5% plus a radial hearth light from
+     the top edge, painted once behind the app. No grid lines, no nebula. */
   #react-root[data-ui-effects="on"]::after {
     content: "";
     position: absolute;
     inset: 0;
     background:
-      radial-gradient(ellipse at 25% 75%, rgba(201, 166, 107, 0.2), transparent 50%),
-      radial-gradient(ellipse at 75% 25%, rgba(201, 166, 107, 0.15), transparent 45%),
-      radial-gradient(ellipse at 50% 50%, rgba(196, 80, 64, 0.12), transparent 55%);
+      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.96 0 0 0 0 0.85 0 0 0 0 0.66 0 0 0 0.055 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>"),
+      radial-gradient(900px 420px at 50% -80px, rgba(96, 52, 22, 0.42), rgba(96, 52, 22, 0) 70%);
     pointer-events: none;
-    z-index: -2;
-    opacity: 0.6;
+    z-index: -1;
   }
 
   /* Place elements explicitly so order in DOM does not matter */
@@ -124,6 +108,6 @@
 
   .page-loader-spinner {
     border-color: var(--color-border-subtle, #333);
-    border-top-color: var(--color-brand-primary, #C9A66B);
+    border-top-color: var(--color-brand-primary, #E9B949);
   }
 }

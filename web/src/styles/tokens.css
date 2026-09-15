@@ -1,5 +1,5 @@
 /*
- * Design Tokens — Warm Gold
+ * Design Tokens — Ember
  * Single source of truth for colors, spacing, typography, etc.
  * Edit this file directly - no build step needed.
  */
@@ -10,22 +10,25 @@
 
 :root {
   /* Brand Colors */
-  --color-brand-primary: #C9A66B;
-  --color-brand-primary-hover: #B8923C;
-  --color-brand-secondary: #9e7c5a;
-  --color-brand-accent: #D4A843;
+  --color-brand-primary: #E9B949;
+  --color-brand-primary-hover: #F5D078;
+  --color-brand-secondary: #B98B4E;
+  --color-brand-accent: #E9B949;
 
   /* Warm Accent Colors */
-  --color-neon-secondary: #D4B87A;
-  --color-neon-cyan: #C9A66B;
+  --color-neon-secondary: #F5D078;
+  --color-neon-cyan: #E9B949;
 
   /* Intent/Semantic Colors */
-  --color-intent-success: #5D9B4A;
-  --color-intent-success-muted: rgba(93, 155, 74, 0.15);
-  --color-intent-warning: #D4A843;
-  --color-intent-warning-muted: rgba(212, 168, 67, 0.15);
-  --color-intent-error: #C45040;
-  --color-intent-error-muted: rgba(196, 80, 64, 0.15);
+  --color-intent-success: #B9C48A;
+  --color-intent-success-muted: rgba(185, 196, 138, 0.15);
+  --color-intent-warning: #F08A24;
+  --color-intent-warning-muted: rgba(240, 138, 36, 0.15);
+  --color-intent-error: #E4572E;
+  --color-intent-error-muted: rgba(228, 87, 46, 0.15);
+
+  /* Cool foil — the one cold accent: idle / ended state */
+  --color-state-cool: #7C8790;
 
   /* Provider Colors — real brand marks (not theme-harmonized).
      Claude terracotta happens to sit naturally in the warm-gold palette;
@@ -44,29 +47,30 @@
 
   /* Text Colors */
   /* WCAG AA requires 4.5:1 contrast ratio for normal text */
-  /* Against #120B09 (page bg): */
-  /* - #F3EAD9 = ~15:1 (primary - excellent) */
-  /* - #B5A48E = ~6.5:1 (secondary - WCAG AA compliant) */
-  /* - #8A7A64 = ~3.5:1 (muted - large text only, 18px+) */
-  --color-text-primary: #F3EAD9;
-  --color-text-secondary: #B5A48E;
-  --color-text-muted: #8A7A64;
-  --color-text-inverse: #120B09;
+  /* Against #0B0908 (page bg): */
+  /* - #F6EBD6 = parchment (primary - excellent) */
+  /* - #C4B096 = clay (secondary - WCAG AA compliant) */
+  /* - #8A7862 = muted (large text only, 18px+) */
+  --color-text-primary: #F6EBD6;
+  --color-text-secondary: #C4B096;
+  --color-text-muted: #8A7862;
+  --color-text-inverse: #0B0908;
 
   /* Border Colors */
-  --color-border-primary: #3d3428;
-  --color-border-subtle: #2a2418;
-  --color-border-muted: #231E16;
+  --color-border-primary: #463629;
+  --color-border-subtle: #2B211B;
+  --color-border-muted: #241C16;
 
   /* Legacy Background Colors */
-  --color-legacy-bg-dark: #1A1410;
-  --color-legacy-bg-darker: #120B09;
-  --color-legacy-bg-hover: #2a2418;
-  --color-legacy-bg-button: #2a2418;
-  --color-legacy-bg-button-hover: #3d3428;
+  --color-legacy-bg-dark: #171210;
+  --color-legacy-bg-darker: #0B0908;
+  --color-legacy-bg-hover: #241B16;
+  --color-legacy-bg-button: #241B16;
+  --color-legacy-bg-button-hover: #463629;
 
   /* Typography */
-  --font-family-display: 'General Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-family-serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  --font-family-display: var(--font-family-serif);
   --font-family-base: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-family-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
 
@@ -112,15 +116,15 @@
   --radius-full: 9999px;
 
   /* Shadows */
-  --shadow-sm: 0 2px 4px rgba(18, 11, 9, 0.3);
-  --shadow-lg: 0 8px 24px rgba(18, 11, 9, 0.5);
-  --shadow-xl: 0 16px 48px rgba(18, 11, 9, 0.6);
-  --shadow-glow: 0 0 15px rgba(201, 166, 107, 0.25);
+  --shadow-sm: 0 2px 4px rgba(11, 9, 8, 0.3);
+  --shadow-lg: 0 8px 24px rgba(11, 9, 8, 0.5);
+  --shadow-xl: 0 16px 48px rgba(11, 9, 8, 0.6);
+  --shadow-glow: 0 0 15px rgba(233, 185, 73, 0.25);
 
   /* Solid Surface Presets (replaces glass) */
-  --surface-glass-1: #1A1410;
-  --surface-glass-2: #211C15;
-  --border-glass-1: #231E16;
+  --surface-glass-1: #171210;
+  --surface-glass-2: #241B16;
+  --border-glass-1: #2B211B;
 
   /* Motion */
   --motion-duration-fast: 150ms;
@@ -140,16 +144,17 @@
 }
 
 /* =============================================================================
-   Theme: Warm Gold (Global)
+   Theme: Ember (Global)
    ============================================================================= */
 
 :root {
-  --color-void: #120B09;
-  --color-surface-page: #120B09;
-  --color-surface-section: rgba(18, 11, 9, 0.45);
-  --color-surface-card: #1A1410;
-  --color-surface-elevated: #211C15;
-  --color-surface-overlay: #1C1610;
+  --color-void: #0B0908;
+  --color-surface-page: #0B0908;
+  --color-surface-well: #070605;
+  --color-surface-section: rgba(11, 9, 8, 0.45);
+  --color-surface-card: #171210;
+  --color-surface-elevated: #241B16;
+  --color-surface-overlay: #1D1512;
   --color-surface-primary: var(--color-surface-card);
   --color-surface-secondary: var(--color-surface-section);
   --color-surface-tertiary: var(--color-surface-elevated);
