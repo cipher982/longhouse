@@ -2630,21 +2630,14 @@ fn pi_image_placeholder(value: &Value, result: bool) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|mime| !mime.trim().is_empty())
         .unwrap_or("image");
-    let reference_suffix = value
-        .get("data")
-        .and_then(Value::as_str)
-        .filter(|reference| reference.starts_with("blob:sha256:"))
-        .map(|reference| {
-            format!(
-                "; unsupported media reference: {}",
-                bounded_text(reference, 128)
-            )
-        })
-        .unwrap_or_default();
+    // The provider's own pointer (`blob:sha256:...`) stays in the raw line for
+    // the media lane. It is never row content: the terminal showed an image,
+    // not an internal reference, and a served row that quotes one is a leak of
+    // provider internals that no client can resolve.
     Some(if result {
-        format!("[image result: {mime}{reference_suffix}]")
+        format!("[image result: {mime}]")
     } else {
-        format!("[image attached: {mime}{reference_suffix}]")
+        format!("[image attached: {mime}]")
     })
 }
 
@@ -2717,6 +2710,53 @@ fn extract_pi_message_events(
     match role {
         "user" | "assistant" => {
             let blocks = pi_blocks(&message.content);
+            // One user message is one timeline row. Pi/OMP archives a pasted
+            // image as an extra `image` content block beside the text, and each
+            // block used to become its own user event — rendering the same
+            // prompt as two `you` bubbles. The image marker joins the message
+            // content here; the raw line keeps the provider pointer untouched
+            // for the media lane.
+            if role == "user" {
+                let mut parts: Vec<String> = Vec::new();
+                for block in &blocks {
+                    match block.get("type").and_then(Value::as_str).unwrap_or("") {
+                        "text" => {
+                            if let Some(text) = block.get("text").and_then(Value::as_str) {
+                                if !text.trim().is_empty() {
+                                    parts.push(text.to_string());
+                                }
+                            }
+                        }
+                        "image" => {
+                            if let Some(marker) = pi_image_placeholder(block, false) {
+                                parts.push(marker);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let content = parts.join("\n\n");
+                if !content.trim().is_empty() {
+                    push_pi_event(
+                        obj,
+                        session_id,
+                        timestamp,
+                        line_offset,
+                        raw_line,
+                        &mut first_raw_line,
+                        "",
+                        Role::User,
+                        Some(content),
+                        None,
+                        None,
+                        None,
+                        None,
+                        "pi_user",
+                        events,
+                    );
+                }
+                return;
+            }
             for (index, block) in blocks.into_iter().enumerate() {
                 let kind = block.get("type").and_then(Value::as_str).unwrap_or("");
                 match kind {
@@ -2740,11 +2780,7 @@ fn extract_pi_message_events(
                             raw_line,
                             &mut first_raw_line,
                             &suffix,
-                            if role == "user" {
-                                Role::User
-                            } else {
-                                Role::Assistant
-                            },
+                            Role::Assistant,
                             Some(text.to_string()),
                             None,
                             None,
@@ -2796,11 +2832,7 @@ fn extract_pi_message_events(
                             raw_line,
                             &mut first_raw_line,
                             &format!("image-{index}"),
-                            if role == "user" {
-                                Role::User
-                            } else {
-                                Role::Assistant
-                            },
+                            Role::Assistant,
                             Some(text),
                             None,
                             None,
@@ -5714,7 +5746,7 @@ mod tests {
     }
 
     #[test]
-    fn omp_projects_nested_model_identity_and_marks_blob_media_without_fabricating_bytes() {
+    fn omp_projects_nested_model_identity_and_keeps_blob_pointer_in_the_raw_line() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("native.jsonl");
         let cwd = dir.path().display().to_string();
@@ -5730,15 +5762,22 @@ mod tests {
         std::fs::write(&path, lines.join("\n") + "\n").unwrap();
 
         let result = parse_session_file_with_provider(&path, 0, Some("omp")).unwrap();
-        let user = result
+        let user_events: Vec<&ParsedEvent> = result
             .events
             .iter()
-            .find(|event| event.role == Role::User)
-            .unwrap();
-        assert!(user
-            .content_text
-            .as_deref()
-            .is_some_and(|text| text.contains("unsupported media reference: blob:sha256:")));
+            .filter(|event| event.role == Role::User)
+            .collect();
+        assert_eq!(
+            user_events.len(),
+            1,
+            "an image-only user message is exactly one row"
+        );
+        assert_eq!(
+            user_events[0].content_text.as_deref(),
+            Some("[image attached: image/png]")
+        );
+        // The provider pointer is not row content, but it is never lost: it
+        // stays in the raw line for the media lane.
         assert!(result
             .source_lines
             .iter()
@@ -5767,6 +5806,39 @@ mod tests {
             .provider_facts
             .iter()
             .any(|fact| fact.kind == "context.compaction" && fact.source_offset > 0));
+    }
+
+    #[test]
+    fn pi_user_message_with_text_and_image_is_one_row() {
+        // Reproduces the pasted-screenshot shape: one native user message with
+        // a text block and an image block. Both parts used to become separate
+        // user events, so the timeline showed the same prompt as two `you`
+        // bubbles, the second quoting an unresolvable provider blob pointer.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("native.jsonl");
+        let cwd = dir.path().display().to_string();
+        let header = format!(r#"{{"type":"session","id":"omp-native","cwd":"{cwd}"}}"#);
+        let line = r#"{"type":"message","id":"omp-user","message":{"role":"user","content":[{"type":"text","text":"look at this"},{"type":"image","data":"blob:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","mimeType":"image/webp"}]}}"#;
+        std::fs::write(&path, format!("{header}\n{line}\n")).unwrap();
+
+        let result = parse_session_file_with_provider(&path, 0, Some("omp")).unwrap();
+        let user_events: Vec<&ParsedEvent> = result
+            .events
+            .iter()
+            .filter(|event| event.role == Role::User)
+            .collect();
+        assert_eq!(user_events.len(), 1, "one message stays one row");
+        let content = user_events[0].content_text.as_deref().unwrap_or_default();
+        assert!(content.contains("look at this"));
+        assert!(content.contains("[image attached: image/webp]"));
+        assert!(
+            !content.contains("blob:sha256:"),
+            "provider pointer must not be row content"
+        );
+        assert!(
+            !content.contains("unsupported media reference"),
+            "the reference is supported; only transport is pending"
+        );
     }
 
     #[test]

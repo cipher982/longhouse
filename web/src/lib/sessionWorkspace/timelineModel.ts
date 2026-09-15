@@ -30,6 +30,36 @@ import { childrenForToolCall } from "./subagents";
 /** Latest completed activity calls shown when a run is expanded. */
 export const EXPLORATION_OVERFLOW_VISIBLE = 8;
 
+/**
+ * Pi/OMP store one user message as several content blocks, and the engine used
+ * to emit each block as its own user event — so a pasted screenshot rendered
+ * the same prompt as two `you` rows. A fragment keeps the parent's native id
+ * with a `-image-<n>` / `-text-<n>` suffix. Merging it back is what the
+ * terminal showed: one prompt, one row.
+ */
+const USER_MESSAGE_FRAGMENT = /^(?:image|text)-\d+$/;
+
+/**
+ * Rows written before the engine stopped quoting the provider pointer still
+ * carry it. It is not resolvable by any client, so the presentation drops the
+ * suffix and keeps the readable marker.
+ */
+const LEGACY_MEDIA_POINTER = /; unsupported media reference: blob:sha256:[0-9a-f]{64}/g;
+
+function isUserMessageFragment(baseId: AgentEventId, fragmentId: AgentEventId): boolean {
+  const prefix = `${baseId}-`;
+  const fragment = String(fragmentId);
+  return fragment.startsWith(prefix) && USER_MESSAGE_FRAGMENT.test(fragment.slice(prefix.length));
+}
+
+function joinMessageParts(previous: string | null | undefined, next: string | null | undefined): string {
+  const left = (previous ?? "").replace(LEGACY_MEDIA_POINTER, "").trim();
+  const right = (next ?? "").replace(LEGACY_MEDIA_POINTER, "").trim();
+  if (!left) return right;
+  if (!right) return left;
+  return `${left}\n\n${right}`;
+}
+
 type ActivityCategory = "search" | "read" | "list" | "view" | "edit" | "call" | "run" | "wait";
 
 const ACTIVITY_SUMMARY_ORDER: ActivityCategory[] = ["search", "read", "list", "view", "edit", "call", "run", "wait"];
@@ -766,6 +796,18 @@ export function buildTimelineModel(
     if (event.role === "tool" && absorbedResultIds.has(event.id)) continue;
 
     if (event.role === "user") {
+      const previous = items[items.length - 1];
+      if (previous?.kind === "message" && isUserMessageFragment(previous.event.id, event.id)) {
+        items[items.length - 1] = {
+          kind: "message",
+          event: {
+            ...previous.event,
+            content_text: joinMessageParts(previous.event.content_text, event.content_text),
+          },
+        };
+        eventIdToSelectionKey.set(event.id, `message:${previous.event.id}`);
+        continue;
+      }
       items.push({ kind: "message", event });
       continue;
     }

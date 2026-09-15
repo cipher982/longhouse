@@ -356,6 +356,12 @@ enum TimelineBuilder {
 
             switch event.role {
             case "user":
+                if case .user(let previous)? = raw.last, Self.isUserMessageFragment(base: previous.id, fragment: event.id) {
+                    raw[raw.count - 1] = .user(
+                        previous.withContentText(Self.joinMessageParts(previous.contentText, event.contentText))
+                    )
+                    continue
+                }
                 raw.append(.user(event))
 
             case "assistant":
@@ -460,6 +466,41 @@ enum TimelineBuilder {
 
         flushEvents()
         return out
+    }
+
+    /// Pi/OMP store one user message as several content blocks, and the engine
+    /// used to emit each block as its own user event — a pasted screenshot
+    /// rendered the same prompt as two `you` rows. A fragment keeps the
+    /// parent's native id with an `-image-<n>` / `-text-<n>` suffix. Merging it
+    /// back is what the terminal showed: one prompt, one row.
+    private static let userMessageFragmentKinds: Set<String> = ["image", "text"]
+
+    static func isUserMessageFragment(base: String, fragment: String) -> Bool {
+        let prefix = base + "-"
+        guard fragment.hasPrefix(prefix) else { return false }
+        let parts = fragment.dropFirst(prefix.count).split(separator: "-")
+        guard parts.count == 2, userMessageFragmentKinds.contains(String(parts[0])) else { return false }
+        return Int(parts[1]) != nil
+    }
+
+    static func joinMessageParts(_ previous: String?, _ next: String?) -> String {
+        // Rows written before the engine stopped quoting the provider pointer
+        // still carry it; no client can resolve it, so the presentation drops
+        // the suffix and keeps the readable marker.
+        func cleaned(_ text: String?) -> String {
+            (text ?? "")
+                .replacingOccurrences(
+                    of: "; unsupported media reference: blob:sha256:[0-9a-f]{64}",
+                    with: "",
+                    options: .regularExpression
+                )
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let left = cleaned(previous)
+        let right = cleaned(next)
+        if left.isEmpty { return right }
+        if right.isEmpty { return left }
+        return left + "\n\n" + right
     }
 
     /// Collapse runs of 2+ completed calls into one prose-bounded activity row.

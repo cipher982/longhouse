@@ -48,6 +48,52 @@ final class TimelineBuilderTests: XCTestCase {
         XCTAssertEqual(items[0].id, "provider-notification:42")
     }
 
+    func testUserMessageFragmentsMergeIntoOneRow() {
+        // Pi/OMP store a pasted screenshot as an extra content block; the
+        // engine used to emit it as its own `<native-id>-image-<n>` user event,
+        // so the timeline showed the same prompt as two `you` rows.
+        let items = TimelineBuilder.build(events: [
+            userEvent(id: "021e5c3d", text: "actually its pretty fast!"),
+            userEvent(
+                id: "021e5c3d-image-1",
+                text: "[image attached: image/webp; unsupported media reference: blob:sha256:bc83965f42b1c599dd6438eb1ff286e0ec467f0a66baae5327e31ca6d15aac2f]"
+            ),
+        ])
+
+        XCTAssertEqual(items.count, 1)
+        guard case .user(let merged) = items[0] else {
+            return XCTFail("expected one user row")
+        }
+        XCTAssertEqual(merged.id, "021e5c3d")
+        XCTAssertEqual(merged.contentText, "actually its pretty fast!\n\n[image attached: image/webp]")
+    }
+
+    func testDistinctUserTurnsStaySeparateRows() {
+        let items = TimelineBuilder.build(events: [
+            userEvent(id: "021e5c3d", text: "first prompt"),
+            userEvent(id: "af57f659", text: "second prompt"),
+        ])
+
+        XCTAssertEqual(items.count, 2)
+    }
+
+    private func userEvent(id: String, text: String?) -> SessionEvent {
+        SessionEvent(
+            id: id,
+            role: "user",
+            contentText: text,
+            toolName: nil,
+            toolInputJSON: nil,
+            toolOutputText: nil,
+            toolCallId: nil,
+            toolCallState: nil,
+            timestamp: "2026-09-14T22:14:00Z",
+            inActiveContext: true,
+            isHeadBranch: true,
+            inputOrigin: nil
+        )
+    }
+
     private func event(
         id: Int,
         role: String,

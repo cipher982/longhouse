@@ -170,6 +170,43 @@ describe("buildTimelineModel", () => {
     });
   });
 
+  it("renders one user turn as one row when the engine split its image block out", () => {
+    // The exact served shape from a pasted screenshot: the text part under the
+    // native message id, the image part under `<id>-image-1`, both `role: user`.
+    const userEvent = (id: string, content_text: string): AgentEvent => ({
+      id,
+      role: "user",
+      content_text,
+      interaction_kind: "durable_user_message",
+      tool_name: null,
+      tool_input_json: null,
+      tool_output_text: null,
+      tool_call_id: null,
+      timestamp: "2026-09-14T22:14:00Z",
+      in_active_context: true,
+    });
+    const text = userEvent("021e5c3d", "actually its pretty fast!");
+    // Stored before the engine stopped quoting the pointer, so the row also
+    // proves the presentation drops an unresolvable reference.
+    const image = userEvent(
+      "021e5c3d-image-1",
+      "[image attached: image/webp; unsupported media reference: blob:sha256:bc83965f42b1c599dd6438eb1ff286e0ec467f0a66baae5327e31ca6d15aac2f]",
+    );
+
+    const model = buildTimelineModel([
+      { kind: "event", session_id: "session-omp", timestamp: text.timestamp, event: text },
+      { kind: "event", session_id: "session-omp", timestamp: image.timestamp, event: image },
+    ]);
+
+    expect(model.items).toHaveLength(1);
+    const [item] = model.items;
+    if (!item || item.kind !== "message") throw new Error("Expected one user message row");
+    expect(item.event.id).toBe("021e5c3d");
+    expect(item.event.content_text).toBe("actually its pretty fast!\n\n[image attached: image/webp]");
+    // The fragment's id still resolves to the merged row for deep links.
+    expect(model.eventIdToSelectionKey.get("021e5c3d-image-1")).toBe("message:021e5c3d");
+  });
+
   it("renders provider reasoning separately from other system events", () => {
     const systemEvent = (
       id: number,
