@@ -23,6 +23,8 @@ from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.dependencies.browser_route_auth import get_current_browser_route_caller
 from zerg.models.agents import MediaObject
 from zerg.models.agents import SessionMediaRef
+from zerg.routers.agents_storage_v2 import read_storage_v2_media_bytes
+from zerg.routers.agents_storage_v2 import read_storage_v2_media_manifest
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import session_batch_snapshot
 from zerg.services.media_store import MAX_MEDIA_BYTES
@@ -346,37 +348,40 @@ async def head_media_blob(
 @browser_router.get("/{sha256}/blob")
 async def get_browser_media_blob(
     sha256: str,
-    db: Session = Depends(get_db),
     current_user: Caller = Depends(get_current_browser_route_caller),
-) -> StreamingResponse:
-    """Fetch a browser-visible media blob by sha256."""
+) -> Response:
+    """Fetch a browser-visible media blob by hash.
 
-    row = await _owner_row_or_404(db, sha256, _owner_id(current_user, field="id"))
-    return _stream_media_row(row)
+    The bytes come from the storage-v2 media store, which owns the live table
+    and verifies each object on read. The legacy agents models are not consulted:
+    their columns are not the ones the catalog writes, so they could never
+    resolve a hash the engine uploaded.
+    """
 
-
-@browser_router.get("/{sha256}/thumb")
-async def get_browser_media_thumbnail(
-    sha256: str,
-    db: Session = Depends(get_db),
-    current_user: Caller = Depends(get_current_browser_route_caller),
-) -> StreamingResponse:
-    """Fetch a derived thumbnail for a browser-visible media object."""
-
-    row = await _owner_row_or_404(db, sha256, _owner_id(current_user, field="id"))
-    if not row.thumbnail_sha256:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="media thumbnail not found")
-    thumb_row = _row_or_404(db, row.thumbnail_sha256)
-    return _stream_media_row(thumb_row)
+    canonical_hash, media, data = await read_storage_v2_media_bytes(
+        sha256,
+        owner_id=current_user.owner_id,
+    )
+    return Response(
+        content=data,
+        media_type=str(media["mime_type"]),
+        headers={"Content-Length": str(len(data)), "X-Media-Sha256": canonical_hash},
+    )
 
 
 @browser_router.head("/{sha256}")
 async def head_browser_media_blob(
     sha256: str,
-    db: Session = Depends(get_db),
     current_user: Caller = Depends(get_current_browser_route_caller),
 ) -> Response:
     """Cheap browser integrity probe for a visible media blob."""
 
-    row = await _owner_row_or_404(db, sha256, _owner_id(current_user, field="id"))
-    return _head_media_row(row)
+    canonical_hash, media = await read_storage_v2_media_manifest(
+        sha256,
+        owner_id=current_user.owner_id,
+    )
+    return Response(
+        status_code=status.HTTP_200_OK,
+        media_type=str(media["mime_type"]),
+        headers={"Content-Length": str(media["byte_size"]), "X-Media-Sha256": canonical_hash},
+    )

@@ -690,6 +690,10 @@ _SESSION_READ_LATEST_FACT_KINDS = ("session.recap", "session.title", "turn.usage
 # Two thousand turns is far beyond a real session; the bound exists so the
 # session read stays a bounded payload rather than a growing one.
 _SESSION_READ_TURN_FACT_LIMIT = 2_000
+# The busiest real session carries a few hundred screenshots; past that the
+# session read stops being a bounded payload. The workspace joins what is here
+# and simply has no ref for anything beyond it.
+_SESSION_READ_MEDIA_REF_LIMIT = 500
 
 
 def _session_read_provider_facts(connection: Connection, *, session_id: str) -> list[dict[str, Any]]:
@@ -727,6 +731,48 @@ def _input_receipt_rows(connection: Connection, *, session_id: str, limit: int =
         .all()
     )
     return [_input_receipt_dto(_RowReceipt(row)) for row in rows]
+
+
+def _session_read_media_refs(connection: Connection, *, session_id: str) -> list[dict[str, Any]]:
+    """Active media references for one session, from the coalesced session read.
+
+    A reference carries the provider source position of the line that mentioned
+    the media, and the engine stamps a render record with that same position, so
+    the workspace can place each image on the event that owns it. Bytes are never
+    in this payload; the client fetches the media blob route.
+    """
+    refs = SessionMediaRef.__table__
+    media = MediaObject.__table__
+    rows = (
+        connection.execute(
+            select(
+                refs.c.media_hash,
+                refs.c.envelope_id,
+                refs.c.ref_key,
+                media.c.state.label("media_state"),
+                media.c.mime_type,
+                media.c.byte_size,
+            )
+            .select_from(refs.outerjoin(media, media.c.media_hash == refs.c.media_hash))
+            .where(refs.c.session_id == session_id, refs.c.state == "active")
+            .order_by(refs.c.id.asc())
+            .limit(_SESSION_READ_MEDIA_REF_LIMIT)
+        )
+        .mappings()
+        .all()
+    )
+    return [_session_media_ref_dto(row) for row in rows]
+
+
+def _session_media_ref_dto(row) -> dict[str, Any]:
+    return {
+        "media_hash": str(row["media_hash"]),
+        "envelope_id": row["envelope_id"],
+        "ref_key": str(row["ref_key"]),
+        "media_state": row["media_state"],
+        "mime_type": row["mime_type"],
+        "byte_size": int(row["byte_size"]) if row["byte_size"] is not None else None,
+    }
 
 
 def _insert_provider_facts(
@@ -9014,6 +9060,9 @@ class CatalogStore:
                 # lane rejected them as separate calls.
                 "provider_facts": _session_read_provider_facts(connection, session_id=session_key) if found else [],
                 "input_receipts": _input_receipt_rows(connection, session_id=session_key) if found else [],
+                # Same rule for media: the workspace joins these onto events by
+                # (envelope_id, source_position), so they must arrive with the page.
+                "media_refs": _session_read_media_refs(connection, session_id=session_key) if found else [],
                 "commit_seq": str(_current_commit_seq(connection)),
                 "observed_at": observed_at.isoformat(),
             }

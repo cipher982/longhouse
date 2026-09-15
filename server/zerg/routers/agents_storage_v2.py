@@ -1092,7 +1092,7 @@ async def put_storage_v2_media(
     }
 
 
-async def _storage_v2_media_manifest(media_hash: str, *, owner_id: int) -> tuple[str, dict[str, object]]:
+async def read_storage_v2_media_manifest(media_hash: str, *, owner_id: int) -> tuple[str, dict[str, object]]:
     try:
         canonical_hash = _lower_hash(media_hash, "media_hash")
     except ValueError as exc:
@@ -1115,20 +1115,29 @@ async def _storage_v2_media_manifest(media_hash: str, *, owner_id: int) -> tuple
     return canonical_hash, media
 
 
-@router.get("/media/{media_hash}/blob")
-async def get_storage_v2_media(
-    media_hash: str,
-    auth: DeviceToken | object | None = Depends(verify_agents_caller),
-    _single: None = Depends(require_single_tenant),
-) -> Response:
-    canonical_hash, media = await _storage_v2_media_manifest(media_hash, owner_id=auth.owner_id)
+async def read_storage_v2_media_bytes(media_hash: str, *, owner_id: int) -> tuple[str, dict[str, object], bytes]:
+    """Read one verified media object from the storage-v2 store.
+
+    Both the machine caller and the browser read the same store, so the
+    verification and the failure vocabulary live here once.
+    """
+    canonical_hash, media = await read_storage_v2_media_manifest(media_hash, owner_id=owner_id)
     try:
         decoded = await get_raw_object_worker_pool().read_media(str(media["object_path"]), canonical_hash)
     except RawObjectWorkerBusy as exc:
         raise _http_error(status.HTTP_503_SERVICE_UNAVAILABLE, "storage_lane_busy", "Media read lane is full.") from exc
     except (KeyError, RawObjectWorkerError, MediaObjectCorruptError, MediaObjectValidationError) as exc:
         raise _http_error(status.HTTP_503_SERVICE_UNAVAILABLE, "media_read_failed", "Media object failed verification.") from exc
-    data = decoded.data
+    return canonical_hash, media, decoded.data
+
+
+@router.get("/media/{media_hash}/blob")
+async def get_storage_v2_media(
+    media_hash: str,
+    auth: DeviceToken | object | None = Depends(verify_agents_caller),
+    _single: None = Depends(require_single_tenant),
+) -> Response:
+    canonical_hash, media, data = await read_storage_v2_media_bytes(media_hash, owner_id=auth.owner_id)
     return Response(
         content=data,
         media_type=str(media["mime_type"]),
@@ -1142,7 +1151,7 @@ async def head_storage_v2_media(
     auth: DeviceToken | object | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> Response:
-    canonical_hash, media = await _storage_v2_media_manifest(media_hash, owner_id=auth.owner_id)
+    canonical_hash, media = await read_storage_v2_media_manifest(media_hash, owner_id=auth.owner_id)
     return Response(
         status_code=status.HTTP_200_OK,
         media_type=str(media["mime_type"]),
@@ -1692,6 +1701,11 @@ def _render_event_wire(
         "raw_locator": {
             "source_envelope_id": spec.source_envelope_id,
             "raw_record_ordinal": record.raw_record_ordinal,
+            # Media references are stamped with the same provider source
+            # position as the event parsed from that line, so the workspace needs
+            # both coordinates here to place an image on the row that owns it.
+            "source_position": record.source_position,
+            "event_subordinal": record.event_subordinal,
         },
     }
 

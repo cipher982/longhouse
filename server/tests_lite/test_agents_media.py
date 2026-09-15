@@ -28,6 +28,7 @@ from zerg.models.agents import SessionMediaRef
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
 from zerg.routers import agents_media
+from zerg.routers import agents_storage_v2
 
 
 def _setup_app(tmp_path, monkeypatch):
@@ -322,196 +323,83 @@ def test_media_upload_rejects_hash_mismatch(tmp_path, monkeypatch):
         cleanup()
 
 
-def test_browser_media_read_requires_session_ref(tmp_path, monkeypatch):
-    factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
+class _BrowserMediaCatalog:
+    """A catalog that answers the media manifest read the browser route needs."""
+
+    def __init__(self, result):
+        self._result = result
+
+    async def call(self, method, params, *, timeout_seconds=None):
+        assert method == "storage.media.read.v2"
+        return self._result
+
+
+def _browser_media_catalog(monkeypatch, result):
+    monkeypatch.setattr(agents_storage_v2, "get_catalogd_client", lambda: _BrowserMediaCatalog(result))
+
+
+def test_browser_media_read_denies_a_hash_the_store_does_not_authorize(tmp_path, monkeypatch):
+    """A hash the store will not authorize is not-found, never a partial answer."""
+
+    _factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
     client = TestClient(api_app)
-    payload = b"\x89PNG\r\nvisible-browser-media"
-    digest = hashlib.sha256(payload).hexdigest()
+    digest = hashlib.sha256(b"not-visible-to-this-owner").hexdigest()
+    _browser_media_catalog(monkeypatch, {"found": False})
 
     try:
-        uploaded = client.put(f"/agents/media/{digest}", content=payload, headers={"Content-Type": "image/png"})
-        assert uploaded.status_code == 200, uploaded.text
-
         denied = client.get(f"/media/{digest}/blob")
         assert denied.status_code == 404, denied.text
+        assert denied.json()["detail"]["code"] == "media_not_found"
+    finally:
+        cleanup()
 
-        session_id = uuid4()
-        with factory() as db:
-            _create_session(db, session_id)
 
-        claim = client.post(
-            "/agents/media/claims",
-            json={
-                "items": [
-                    {
-                        "sha256": digest,
-                        "mime_type": "image/png",
-                        "byte_size": len(payload),
-                        "session_id": str(session_id),
-                        "source_path": "/tmp/codex.jsonl",
-                        "source_offset": 9,
-                    }
-                ]
+def test_browser_media_read_streams_the_verified_storage_v2_object(tmp_path, monkeypatch):
+    """The browser reads the same store the engine uploaded to, bytes intact."""
+
+    _factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
+    client = TestClient(api_app)
+    payload = b"\x89PNG\r\nvisible-browser-media"
+    digest = "a" * 64
+    _browser_media_catalog(
+        monkeypatch,
+        {
+            "found": True,
+            "media": {
+                "media_hash": digest,
+                "state": "present",
+                "mime_type": "image/png",
+                "byte_size": len(payload),
+                "object_path": f"media/v2/sha256/aa/aa/{digest}.bin",
             },
-        )
-        assert claim.status_code == 200, claim.text
-        assert claim.json() == {"needed": [digest], "present": [], "rejected": []}
+        },
+    )
 
-        uploaded_for_owner = client.put(
-            f"/agents/media/{digest}",
-            content=payload,
-            headers={"Content-Type": "image/png", "X-Longhouse-Session-Id": str(session_id)},
-        )
-        assert uploaded_for_owner.status_code == 200, uploaded_for_owner.text
+    class _Pool:
+        async def read_media(self, object_path, media_hash):
+            assert media_hash == digest
+            return SimpleNamespace(data=payload)
+
+    monkeypatch.setattr(agents_storage_v2, "get_raw_object_worker_pool", lambda: _Pool())
+
+    try:
+        allowed = client.get(f"/media/{digest}/blob")
+        assert allowed.status_code == 200, allowed.text
+        assert allowed.content == payload
+        assert allowed.headers["content-type"].startswith("image/png")
+        assert allowed.headers["x-media-sha256"] == digest
 
         head = client.head(f"/media/{digest}")
         assert head.status_code == 200, head.text
         assert head.headers["content-length"] == str(len(payload))
-        assert head.headers["x-media-sha256"] == digest
-
-        fetched = client.get(f"/media/{digest}/blob")
-        assert fetched.status_code == 200, fetched.text
-        assert fetched.content == payload
-        assert fetched.headers["content-type"].startswith("image/png")
-        assert fetched.headers["x-media-sha256"] == digest
     finally:
         cleanup()
 
 
-def test_browser_media_read_requires_visible_device_owner(tmp_path, monkeypatch):
-    factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
-    client = TestClient(api_app)
-    payload = b"\x89PNG\r\nother-owner-media"
-    digest = hashlib.sha256(payload).hexdigest()
-    session_id = uuid4()
-
-    try:
-        uploaded = client.put(f"/agents/media/{digest}", content=payload, headers={"Content-Type": "image/png"})
-        assert uploaded.status_code == 200, uploaded.text
-
-        monkeypatch.setattr(
-            agents_media,
-            "session_batch_snapshot",
-            lambda session_ids, *, owner_id: {
-                "facts": [{"catalog": {"session_id": session_id}} for session_id in session_ids] if owner_id == 2 else []
-            },
-        )
-
-        with factory() as db:
-            db.add(User(id=1, email="owner@test.local"))
-            db.add(User(id=2, email="other@test.local"))
-            _create_session(db, session_id, device_id="other-device")
-            db.add(
-                DeviceToken(
-                    owner_id=2,
-                    device_id="other-device",
-                    token_hash=hashlib.sha256(b"other-token").hexdigest(),
-                )
-            )
-            db.commit()
-
-        api_app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(owner_id=2)
-        claim = client.post(
-            "/agents/media/claims",
-            json={
-                "items": [
-                    {
-                        "sha256": digest,
-                        "mime_type": "image/png",
-                        "byte_size": len(payload),
-                        "session_id": str(session_id),
-                        "source_path": "/tmp/codex.jsonl",
-                        "source_offset": 10,
-                    }
-                ]
-            },
-        )
-        assert claim.status_code == 200, claim.text
-        assert claim.json() == {"needed": [digest], "present": [], "rejected": []}
-        owner_upload = client.put(
-            f"/agents/media/{digest}",
-            content=payload,
-            headers={"Content-Type": "image/png", "X-Longhouse-Session-Id": str(session_id)},
-        )
-        assert owner_upload.status_code == 200, owner_upload.text
-
-        denied = client.get(f"/media/{digest}/blob")
-        assert denied.status_code == 404, denied.text
-
-        api_app.dependency_overrides[get_current_browser_route_user] = lambda: SimpleNamespace(id=2)
-        allowed = client.get(f"/media/{digest}/blob")
-        assert allowed.status_code == 200, allowed.text
-        assert allowed.content == payload
-    finally:
-        cleanup()
-
-
-def test_browser_media_thumbnail_streams_authorized_derivative(tmp_path, monkeypatch):
-    factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
-    client = TestClient(api_app)
-    session_id = uuid4()
-    payload = b"\x89PNG\r\noriginal-media"
-    digest = hashlib.sha256(payload).hexdigest()
-    thumb_payload = b"RIFFwebp-thumbnail"
-    thumb_digest = hashlib.sha256(thumb_payload).hexdigest()
-
-    try:
-        with factory() as db:
-            _create_session(db, session_id)
-
-        claim = client.post(
-            "/agents/media/claims",
-            json={
-                "items": [
-                    {
-                        "sha256": digest,
-                        "mime_type": "image/png",
-                        "byte_size": len(payload),
-                        "session_id": str(session_id),
-                        "source_path": "/tmp/codex.jsonl",
-                        "source_offset": 11,
-                    }
-                ]
-            },
-        )
-        assert claim.status_code == 200, claim.text
-
-        uploaded = client.put(f"/agents/media/{digest}", content=payload, headers={"Content-Type": "image/png"})
-        assert uploaded.status_code == 200, uploaded.text
-
-        missing_thumb = client.get(f"/media/{digest}/thumb")
-        assert missing_thumb.status_code == 404, missing_thumb.text
-        assert missing_thumb.json()["detail"] == "media thumbnail not found"
-
-        uploaded_thumb = client.put(
-            f"/agents/media/{thumb_digest}",
-            content=thumb_payload,
-            headers={"Content-Type": "image/webp"},
-        )
-        assert uploaded_thumb.status_code == 200, uploaded_thumb.text
-
-        with factory() as db:
-            row = db.query(MediaObject).filter(MediaObject.sha256 == digest).first()
-            assert row is not None
-            row.thumbnail_sha256 = thumb_digest
-            db.commit()
-
-        fetched = client.get(f"/media/{digest}/thumb")
-        assert fetched.status_code == 200, fetched.text
-        assert fetched.content == thumb_payload
-        assert fetched.headers["content-type"].startswith("image/webp")
-        assert fetched.headers["x-media-sha256"] == thumb_digest
-    finally:
-        cleanup()
-
-
-# Event media-ref projection is not covered here any more. Four tests used to
-# claim media against a session, seed archive `agent_events` rows, and read
-# `/agents/sessions/{id}/events` back to prove the refs bound by source
-# coordinate or by event_id. That read path is gone: the events route is served
-# from `build_storage_v2_workspace`, which reports `media_refs: []` for every
-# event. Media refs still travel on the storage-v2 ingest envelope and land in
-# catalogd; nothing projects them onto a served event yet.
+# Event media-ref projection is covered by the storage-v2 workspace tests
+# (`tests_lite/test_storage_v2_workspace.py`), where refs ride the session read
+# and are placed on the event that owns their source line. The legacy
+# claim/ref-by-event-id read path this file once exercised is gone.
 
 
 def test_media_upload_rejects_empty_and_unsupported_mime(tmp_path, monkeypatch):

@@ -603,3 +603,186 @@ async def test_empty_console_session_is_openable_before_archive_outbox_drains(mo
     assert closed is not None
     assert closed["session"]["capabilities"]["composer_enabled"] is False
     assert closed["session"]["capabilities"]["can_send_input"] is False
+
+
+class _MediaCatalog:
+    """A catalog that answers the session read and nothing else."""
+
+    def __init__(self, media_refs):
+        self.calls = 0
+        self._media_refs = media_refs
+
+    async def call(self, method, params, *, timeout_seconds=None):
+        self.calls += 1
+        assert method == "storage.session.read.v2", "media must ride the session read, not its own RPC"
+        assert timeout_seconds == 4.25
+        assert set(params) == {"session_id"}
+        return {
+            "found": True,
+            "commit_seq": "8",
+            "session": {"owner_id": "42", "updated_at": "2026-07-12T12:00:00Z"},
+            # The live catalog answers the coalesced read with all three
+            # provenance sets; a missing key is what makes the workspace fall
+            # back to separate RPCs.
+            "provider_facts": [],
+            "input_receipts": [],
+            "media_refs": self._media_refs,
+        }
+
+
+def _line_event(event_id: str, *, envelope: str, position: int, subordinal: int, role: str) -> dict:
+    return {
+        "event_id": event_id,
+        "cursor": event_id,
+        "timestamp": "2026-07-12T12:00:00+00:00",
+        "role": role,
+        "content_text": event_id,
+        "tool_name": "screenshot" if role == "tool" else None,
+        "tool_call_id": "call-1" if role == "tool" else None,
+        "tool_input_json": None,
+        "tool_output_text": None,
+        "branch_kind": None,
+        "raw_locator": {
+            "source_envelope_id": envelope,
+            "raw_record_ordinal": 0,
+            "source_position": position,
+            "event_subordinal": subordinal,
+        },
+    }
+
+
+def _media_ref(media_hash: str, *, envelope, ref_key: str, state: str = "present") -> dict:
+    return {
+        "media_hash": media_hash,
+        "envelope_id": envelope,
+        "ref_key": ref_key,
+        "media_state": state,
+        "mime_type": "image/png",
+        "byte_size": 4096,
+    }
+
+
+@pytest.mark.asyncio
+async def test_workspace_places_media_on_the_event_that_owns_the_line(monkeypatch):
+    """An image belongs to the line's first event, in the envelope the ref names.
+
+    A provider source line can carry several events, and two envelopes can carry
+    events at the same offset. Only the subordinal-zero event inside the ref's own
+    envelope owns the media; a ref whose owner is not on this page, or that the
+    legacy backfill never placed on a line, is served to nobody rather than
+    guessed onto a row.
+    """
+    session_id = uuid4()
+    session = SimpleNamespace(
+        provider="claude",
+        runtime_display=SimpleNamespace(lifecycle="open"),
+        capabilities=SimpleNamespace(live_control_available=True),
+        model_dump=lambda **_kwargs: {"id": str(session_id), "capabilities": {}},
+    )
+    owner_hash = "a" * 64
+    other_envelope_hash = "b" * 64
+    orphan_hash = "c" * 64
+    legacy_hash = "d" * 64
+    catalog = _MediaCatalog(
+        [
+            _media_ref(owner_hash, envelope="env-a", ref_key=f"inline_data_url:40:{'e' * 64}:0"),
+            _media_ref(other_envelope_hash, envelope="env-b", ref_key=f"inline_data_url:40:{'f' * 64}:0"),
+            _media_ref(orphan_hash, envelope="env-off-page", ref_key=f"inline_data_url:99:{'0' * 64}:0"),
+            _media_ref(legacy_hash, envelope=None, ref_key="legacy-ref:12"),
+        ]
+    )
+
+    async def read_page(**_kwargs):
+        return {
+            "generation_id": str(uuid4()),
+            "events": [
+                _line_event("owner", envelope="env-a", position=40, subordinal=0, role="tool"),
+                _line_event("sibling", envelope="env-a", position=40, subordinal=1, role="assistant"),
+                _line_event("same-offset-other-envelope", envelope="env-b", position=40, subordinal=0, role="user"),
+                _line_event("unrelated-line", envelope="env-a", position=41, subordinal=0, role="user"),
+            ],
+            "next_cursor": None,
+            "has_more": False,
+            "total": 4,
+        }
+
+    monkeypatch.setattr(workspace_module, "get_catalogd_client", lambda: catalog)
+    monkeypatch.setattr(
+        workspace_module,
+        "read_live_catalog_session",
+        lambda _session_id, **_kwargs: (session, None, "7"),
+    )
+    monkeypatch.setattr(workspace_module, "read_storage_v2_session_events_page", read_page)
+
+    result = await workspace_module.build_storage_v2_workspace(
+        session_id=session_id,
+        owner_id=42,
+        branch_mode="head",
+        limit=50,
+    )
+
+    assert result is not None
+    events = {item["event"]["id"]: item["event"] for item in result["projection"]["items"]}
+    assert events["owner"]["media_refs"] == [
+        {
+            "sha256": owner_hash,
+            "media_state": "present",
+            "mime_type": "image/png",
+            "byte_size": 4096,
+            "blob_url": f"/api/media/{owner_hash}/blob",
+            "thumb_url": None,
+            "source_path": None,
+            "source_offset": 40,
+            "json_pointer": None,
+            "original_kind": "inline_data_url",
+        }
+    ]
+    assert events["sibling"]["media_refs"] == []
+    assert events["same-offset-other-envelope"]["media_refs"] == [
+        {**events["owner"]["media_refs"][0], "sha256": other_envelope_hash, "blob_url": f"/api/media/{other_envelope_hash}/blob"}
+    ]
+    assert events["unrelated-line"]["media_refs"] == []
+    assert catalog.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_workspace_reports_missing_bytes_as_missing_not_present(monkeypatch):
+    """A reference whose object never landed must not claim its bytes are served."""
+    session_id = uuid4()
+    session = SimpleNamespace(
+        provider="claude",
+        runtime_display=SimpleNamespace(lifecycle="open"),
+        capabilities=SimpleNamespace(live_control_available=True),
+        model_dump=lambda **_kwargs: {"id": str(session_id), "capabilities": {}},
+    )
+    catalog = _MediaCatalog(
+        [_media_ref("a" * 64, envelope="env-a", ref_key=f"inline_data_url:40:{'e' * 64}:0", state="missing")]
+    )
+
+    async def read_page(**_kwargs):
+        return {
+            "generation_id": str(uuid4()),
+            "events": [_line_event("owner", envelope="env-a", position=40, subordinal=0, role="user")],
+            "next_cursor": None,
+            "has_more": False,
+            "total": 1,
+        }
+
+    monkeypatch.setattr(workspace_module, "get_catalogd_client", lambda: catalog)
+    monkeypatch.setattr(
+        workspace_module,
+        "read_live_catalog_session",
+        lambda _session_id, **_kwargs: (session, None, "7"),
+    )
+    monkeypatch.setattr(workspace_module, "read_storage_v2_session_events_page", read_page)
+
+    result = await workspace_module.build_storage_v2_workspace(
+        session_id=session_id,
+        owner_id=42,
+        branch_mode="head",
+        limit=50,
+    )
+
+    assert result is not None
+    refs = result["projection"]["items"][0]["event"]["media_refs"]
+    assert [ref["media_state"] for ref in refs] == ["missing"]

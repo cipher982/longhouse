@@ -32,6 +32,77 @@ from zerg.utils.server_timing import ServerTimingRecorder
 
 _SESSION_DETAIL_CATALOG_TIMEOUT_SECONDS = 4.25
 
+# Engine media references encode the provider source position of the line that
+# mentioned the image: `inline_data_url:{source_position}:{line_sha}:{index}`.
+_INLINE_MEDIA_REF_PREFIX = "inline_data_url:"
+_INLINE_MEDIA_REF_PARTS = 4
+
+
+def _media_ref_source_position(ref_key: object) -> int | None:
+    """The provider source position a media reference was stamped with, if known.
+
+    References written by the legacy backfill carry no position, and an image
+    that cannot be placed on a line cannot be placed on a row; it is left out of
+    the served projection rather than attached to a guess.
+    """
+    if not isinstance(ref_key, str) or not ref_key.startswith(_INLINE_MEDIA_REF_PREFIX):
+        return None
+    parts = ref_key.split(":")
+    if len(parts) != _INLINE_MEDIA_REF_PARTS:
+        return None
+    try:
+        return int(parts[1])
+    except ValueError:
+        return None
+
+
+def _served_media_ref(ref: dict[str, object], *, source_position: int) -> dict[str, object]:
+    """One media reference in the shape the clients already render."""
+    media_hash = str(ref.get("media_hash") or "")
+    return {
+        "sha256": media_hash,
+        "media_state": "present" if ref.get("media_state") == "present" else "missing",
+        "mime_type": ref.get("mime_type"),
+        "byte_size": ref.get("byte_size"),
+        "blob_url": f"/api/media/{media_hash}/blob",
+        "thumb_url": None,
+        "source_path": None,
+        "source_offset": source_position,
+        "json_pointer": None,
+        "original_kind": "inline_data_url",
+    }
+
+
+def _media_refs_by_owner(refs: list[dict[str, object]]) -> dict[tuple[str, int], list[dict[str, object]]]:
+    """Group session media refs by the event that owns each image.
+
+    A media reference is stamped with the provider source position of the line
+    that mentioned the image, which is the position the engine stamps on the
+    render record parsed from that same line. One line can carry several events,
+    so the subordinal-zero event owns the line's media; a sibling event shares
+    the line, not the image.
+    """
+    by_owner: dict[tuple[str, int], list[dict[str, object]]] = {}
+    for ref in refs:
+        if not isinstance(ref, dict):
+            continue
+        envelope_id = ref.get("envelope_id")
+        position = _media_ref_source_position(ref.get("ref_key"))
+        if not isinstance(envelope_id, str) or position is None:
+            continue
+        by_owner.setdefault((envelope_id, position), []).append(_served_media_ref(ref, source_position=position))
+    return by_owner
+
+
+def _media_refs_for_event(event: dict[str, object], by_owner: dict[tuple[str, int], list[dict[str, object]]]) -> list[dict[str, object]]:
+    """The media the event at this position owns, or nothing."""
+    if not by_owner:
+        return []
+    locator = event.get("raw_locator")
+    if not isinstance(locator, dict) or locator.get("event_subordinal") != 0:
+        return []
+    return by_owner.get((str(locator.get("source_envelope_id")), int(locator.get("source_position") or -1)), [])
+
 
 def _event_projection(
     event: dict[str, object],
@@ -43,6 +114,7 @@ def _event_projection(
     cursor_run_ended: bool,
     input_origin: dict[str, object] | None = None,
     turn_end: dict[str, object] | None = None,
+    media_refs: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     event_id = str(event["event_id"])
     tool_call_id = str(event["tool_call_id"]) if event.get("tool_call_id") else None
@@ -85,7 +157,7 @@ def _event_projection(
             "provisional_complete": False,
             "reconciled_event_id": None,
             "tool_call_state": tool_call_state,
-            "media_refs": [],
+            "media_refs": media_refs or [],
         },
         "action": None,
         "continued_from_session_id": None,
@@ -109,12 +181,14 @@ def _workspace_envelope(
     page: dict[str, object] | None,
     receipts: list[dict[str, object]],
     facts: list[dict[str, object]] | None = None,
+    media_refs: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Build one workspace shape; archive readiness only controls its event page."""
 
     control_only = storage is None
     input_origins = input_origins_by_event(receipts)
     facts = facts or []
+    media_by_owner = _media_refs_by_owner(media_refs or [])
     events = page.get("events") if page is not None else []
     if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The render projection is invalid.")
@@ -137,6 +211,7 @@ def _workspace_envelope(
             cursor_run_ended=cursor_run_ended,
             input_origin=input_origins.get(str(event["event_id"])),
             turn_end=turn_ends.get(str(event["event_id"])),
+            media_refs=_media_refs_for_event(event, media_by_owner),
         )
         for event in events
     ]
@@ -296,6 +371,9 @@ async def build_storage_v2_workspace(
                 session_input_receipts(catalogd, session_id),
                 session_provider_facts(catalogd, session_id),
             )
+        # Media rides the same coalesced session read as the facts above; a
+        # catalog that predates the key simply has no images to place.
+        media_refs = storage_result.get("media_refs")
         return _workspace_envelope(
             session_id=session_id,
             session=session,
@@ -307,6 +385,7 @@ async def build_storage_v2_workspace(
             page=page,
             receipts=receipts,
             facts=facts,
+            media_refs=media_refs if isinstance(media_refs, list) else [],
         )
     receipts, facts = await asyncio.gather(
         session_input_receipts(catalogd, session_id),
