@@ -11,11 +11,23 @@ use base64::{engine::general_purpose, Engine as _};
 use serde::Deserialize;
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
+use std::path::Path;
+use std::path::PathBuf;
 
 pub const INLINE_IMAGE_DATA_URL_REDACT_THRESHOLD_CHARS: usize = 512;
 
 const DATA_IMAGE_PREFIX: &str = "data:image/";
 const BASE64_MARKER: &str = ";base64,";
+/// Pi and OMP reference a pasted image by content digest instead of inlining it.
+const PI_BLOB_PREFIX: &str = "blob:sha256:";
+const SHA256_HEX_CHARS: usize = 64;
+/// The negotiated media ceiling the shipper enforces. Reading a larger blob
+/// only to have the uploader drop it would cost the parse the whole file, so a
+/// blob above this is refused before it is read.
+const MAX_BLOB_MEDIA_BYTES: u64 = 32 * 1024 * 1024;
+const SESSIONS_DIR_NAME: &str = "sessions";
+const BLOBS_DIR_NAME: &str = "blobs";
+const BLOB_EXTENSION_ALLOWLIST: [&str; 6] = ["png", "jpeg", "jpg", "webp", "gif", "bmp"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InlineImageRedaction {
@@ -52,20 +64,79 @@ fn image_redaction(
     original_chars: usize,
 ) -> Option<InlineImageRedaction> {
     let bytes = general_purpose::STANDARD.decode(data).ok()?;
+    Some(media_redaction(bytes, mime_type, original_chars))
+}
+
+/// One media object with the placeholder that stands in for its bytes.
+///
+/// Both lanes end here: an inline data URL the line carried, and a provider
+/// blob the line only pointed at. The placeholder is what a raw archive can be
+/// reconstructed from, so it must name the exact content digest.
+fn media_redaction(bytes: Vec<u8>, mime_type: &str, original_chars: usize) -> InlineImageRedaction {
     let sha256 = format!("{:x}", Sha256::digest(&bytes));
     let placeholder = format!(
-        "longhouse_media_ref:sha256={sha256};mime={mime_type};bytes={};original_chars={}",
-        bytes.len(),
-        original_chars
+        "longhouse_media_ref:sha256={sha256};mime={mime_type};bytes={};original_chars={original_chars}",
+        bytes.len()
     );
-    Some(InlineImageRedaction {
+    InlineImageRedaction {
         placeholder,
         mime_type: mime_type.to_string(),
         sha256,
         byte_size: bytes.len(),
         original_chars,
         bytes,
-    })
+    }
+}
+
+/// The content-addressed blob store the provider keeps beside its transcripts.
+///
+/// Pi and OMP write a pasted image to `blobs/<sha256>` and reference it from the
+/// transcript as `blob:sha256:<hash>`. The store is a sibling of the `sessions`
+/// directory the transcript lives under; a transcript with no such ancestor has
+/// no store to read, and a reference to it stays a reference.
+pub fn provider_blob_root(transcript: &Path) -> Option<PathBuf> {
+    let sessions = transcript.ancestors().find(|dir| {
+        dir.file_name()
+            .is_some_and(|name| name == SESSIONS_DIR_NAME)
+    })?;
+    Some(sessions.parent()?.join(BLOBS_DIR_NAME))
+}
+
+/// The bytes a `blob:sha256:` reference names, or nothing.
+///
+/// The digest is a filename the provider wrote, so the bytes are hashed and
+/// compared before they are trusted: a store that disagrees with its own name
+/// yields no media rather than bytes of unknown provenance. Symlinks, paths
+/// that leave the store, and oversized blobs are all refused.
+fn blob_media_bytes(blob_root: &Path, reference: &str, mime_type: &str) -> Option<Vec<u8>> {
+    let digest = reference.strip_prefix(PI_BLOB_PREFIX)?;
+    if digest.len() != SHA256_HEX_CHARS || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let expected = digest.to_ascii_lowercase();
+    let mut candidates = vec![blob_root.join(&expected)];
+    if let Some(subtype) = mime_type.strip_prefix("image/") {
+        // Only an exact, allowlisted extension: a store that names bytes after
+        // the mime type is tolerated, a caller-supplied path fragment is not.
+        if BLOB_EXTENSION_ALLOWLIST.contains(&subtype) {
+            candidates.push(blob_root.join(format!("{expected}.{subtype}")));
+        }
+    }
+    for candidate in candidates {
+        let Ok(metadata) = std::fs::symlink_metadata(&candidate) else {
+            continue;
+        };
+        if !metadata.file_type().is_file() || metadata.len() > MAX_BLOB_MEDIA_BYTES {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&candidate) else {
+            continue;
+        };
+        if format!("{:x}", Sha256::digest(&bytes)) == expected {
+            return Some(bytes);
+        }
+    }
+    None
 }
 
 #[derive(Deserialize)]
@@ -92,10 +163,16 @@ struct PiImageBlock<'a> {
     data: &'a RawValue,
 }
 
-fn pi_image_redactions(raw: &str) -> Vec<(usize, usize, String, InlineImageRedaction)> {
+fn pi_image_redactions(
+    raw: &str,
+    blob_root: Option<&Path>,
+) -> Vec<(usize, usize, String, InlineImageRedaction)> {
     if !raw.contains("\"mimeType\"") {
         return Vec::new();
     }
+    // A transcript that references a provider blob is the only shape that can
+    // produce one, and most lines carry no image at all.
+    let blob_root = blob_root.filter(|_| raw.contains(PI_BLOB_PREFIX));
     let Ok(envelope) = serde_json::from_str::<PiImageEnvelope<'_>>(raw) else {
         return Vec::new();
     };
@@ -134,7 +211,15 @@ fn pi_image_redactions(raw: &str) -> Vec<(usize, usize, String, InlineImageRedac
         } else {
             data
         };
-        let Some(redaction) = image_redaction(data, image.mime_type, data.len()) else {
+        // The provider kept the bytes in its own store, so the line carries a
+        // pointer instead of the image; only a digest that matches the bytes on
+        // disk becomes media, and an unresolvable one stays a pointer.
+        let redaction = match blob_root {
+            Some(root) => blob_media_bytes(root, data, image.mime_type)
+                .map(|bytes| media_redaction(bytes, image.mime_type, data.len())),
+            None => image_redaction(data, image.mime_type, data.len()),
+        };
+        let Some(redaction) = redaction else {
             continue;
         };
         let start = encoded.as_ptr() as usize - raw.as_ptr() as usize;
@@ -145,9 +230,9 @@ fn pi_image_redactions(raw: &str) -> Vec<(usize, usize, String, InlineImageRedac
     result
 }
 
-pub fn redact_inline_image_data_urls_with_media(raw: &str) -> RedactedJsonLine {
+pub fn redact_source_line_with_media(raw: &str, blob_root: Option<&Path>) -> RedactedJsonLine {
     let original_line_sha256 = format!("{:x}", Sha256::digest(raw.as_bytes()));
-    let mut replacements = pi_image_redactions(raw);
+    let mut replacements = pi_image_redactions(raw, blob_root);
     if replacements.is_empty() && !raw.contains(DATA_IMAGE_PREFIX) {
         return RedactedJsonLine {
             raw_line: raw.to_string(),
@@ -246,7 +331,7 @@ mod tests {
     fn redacts_data_url_inside_json_line_without_reordering_json() {
         let data = general_purpose::STANDARD.encode([3u8; 600]);
         let raw = format!(r#"{{"b":1,"image_url":"data:image/png;base64,{data}","a":2}}"#);
-        let redacted = redact_inline_image_data_urls_with_media(&raw);
+        let redacted = redact_source_line_with_media(&raw, None);
 
         assert_eq!(redacted.media.len(), 1);
         assert_eq!(redacted.media[0].bytes, vec![3u8; 600]);
@@ -266,7 +351,7 @@ mod tests {
         let raw = format!(
             r#"{{"type":"message","id":"tool-a","message":{{"role":"toolResult","content":[{{"type":"text","text":"image follows"}},{{"type":"image","data":"{data}","mimeType":"image/png"}}]}}}}"#
         );
-        let redacted = redact_inline_image_data_urls_with_media(&raw);
+        let redacted = redact_source_line_with_media(&raw, None);
         assert_eq!(redacted.media[0].bytes, vec![9u8; 600]);
         let rendered: serde_json::Value = serde_json::from_str(&redacted.raw_line).unwrap();
         assert_eq!(rendered["message"]["content"][0]["text"], "image follows");

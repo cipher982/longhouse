@@ -28,7 +28,9 @@ use uuid::Uuid;
 
 use crate::codex_source::parse_codex_subagent_source_str;
 use crate::console_prompt::strip_console_run_once_prompt;
-use crate::media_redaction::{redact_inline_image_data_urls_with_media, InlineImageRedaction};
+use crate::media_redaction::{
+    provider_blob_root, redact_source_line_with_media, InlineImageRedaction,
+};
 
 /// Threshold for switching from buffered read to mmap (1 MB).
 const MMAP_THRESHOLD: u64 = 1_048_576;
@@ -1218,7 +1220,7 @@ fn capture_text_source_lines(content: &str) -> (Vec<ParsedSourceLine>, Vec<Parse
     for chunk in content.split_inclusive('\n') {
         let trimmed = chunk.strip_suffix('\n').unwrap_or(chunk);
         let raw_line = trimmed.strip_suffix('\r').unwrap_or(trimmed);
-        let redacted = redact_inline_image_data_urls_with_media(raw_line);
+        let redacted = redact_source_line_with_media(raw_line, None);
         media_objects.extend(parsed_media_objects(
             offset,
             &redacted.original_line_sha256,
@@ -1692,6 +1694,14 @@ fn parse_mmap(
     let mut antigravity_pending = seed_antigravity_pending(path, offset);
     let mut codex_pending = CodexPending::default();
     let mut codex_facts = codex_fact_state_for(path, offset);
+    // Pi and OMP keep pasted images in a blob store beside their transcripts;
+    // only those providers can produce a reference worth resolving.
+    let blob_root = matches!(
+        native_flavor,
+        Some(NativeFlavor::Pi) | Some(NativeFlavor::Omp)
+    )
+    .then(|| provider_blob_root(path))
+    .flatten();
 
     let mut pos: usize = 0;
     while pos < data.len() {
@@ -1712,7 +1722,7 @@ fn parse_mmap(
         pos = line_end + 1;
 
         let redacted_line = if let Ok(line_str) = std::str::from_utf8(line_bytes) {
-            let redacted = redact_inline_image_data_urls_with_media(line_str);
+            let redacted = redact_source_line_with_media(line_str, blob_root.as_deref());
             media_objects.extend(parsed_media_objects(
                 line_offset,
                 &redacted.original_line_sha256,
@@ -1830,6 +1840,13 @@ fn parse_buffered(
     let mut antigravity_pending = seed_antigravity_pending(path, offset);
     let mut codex_pending = CodexPending::default();
     let mut codex_facts = codex_fact_state_for(path, offset);
+    // See parse_mmap: only the Pi lineage keeps a blob store beside its transcripts.
+    let blob_root = matches!(
+        native_flavor,
+        Some(NativeFlavor::Pi) | Some(NativeFlavor::Omp)
+    )
+    .then(|| provider_blob_root(path))
+    .flatten();
     let mut line = String::new();
 
     loop {
@@ -1863,7 +1880,7 @@ fn parse_buffered(
         let line_offset = current_offset;
         current_offset += bytes_read as u64;
 
-        let redacted = redact_inline_image_data_urls_with_media(&line);
+        let redacted = redact_source_line_with_media(&line, blob_root.as_deref());
         media_objects.extend(parsed_media_objects(
             line_offset,
             &redacted.original_line_sha256,
@@ -5809,6 +5826,93 @@ mod tests {
     }
 
     #[test]
+    fn pi_transcript_resolves_a_pasted_image_from_the_provider_blob_store() {
+        // A pasted screenshot is not in the transcript: the provider wrote the
+        // bytes to `blobs/<digest>` and referenced them by digest. The row must
+        // still render, and the raw line must keep a reconstructable reference
+        // instead of megabytes of nothing.
+        let dir = tempfile::tempdir().unwrap();
+        let blob_bytes = b"\x89PNG\r\nblob-backed image".to_vec();
+        let digest = format!("{:x}", Sha256::digest(&blob_bytes));
+        let blob_dir = dir.path().join("agent").join("blobs");
+        std::fs::create_dir_all(&blob_dir).unwrap();
+        std::fs::write(blob_dir.join(&digest), &blob_bytes).unwrap();
+
+        let session_dir = dir.path().join("agent").join("sessions").join("cwd");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let path = session_dir.join("session.jsonl");
+        let cwd = dir.path().display().to_string();
+        let header = format!(r#"{{"type":"session","id":"omp-native","cwd":"{cwd}"}}"#);
+        let line = format!(
+            r#"{{"type":"message","id":"omp-user","message":{{"role":"user","content":[{{"type":"text","text":"look at this"}},{{"type":"image","data":"blob:sha256:{digest}","mimeType":"image/png"}}]}}}}"#
+        );
+        std::fs::write(&path, format!("{header}\n{line}\n")).unwrap();
+
+        let result = parse_session_file_with_provider(&path, 0, Some("omp")).unwrap();
+
+        assert_eq!(
+            result.media_objects.len(),
+            1,
+            "the blob becomes one media object"
+        );
+        assert_eq!(result.media_objects[0].bytes, blob_bytes);
+        assert_eq!(result.media_objects[0].sha256, digest);
+        assert_eq!(result.media_objects[0].mime_type, "image/png");
+
+        let raw = &result.source_lines[1].raw_line;
+        assert!(
+            raw.contains("longhouse_media_ref:sha256="),
+            "raw line carries the placeholder"
+        );
+        assert!(
+            !raw.contains("blob:sha256:"),
+            "the provider pointer is replaced, not shipped"
+        );
+
+        let user_events: Vec<&ParsedEvent> = result
+            .events
+            .iter()
+            .filter(|event| event.role == Role::User)
+            .collect();
+        assert_eq!(user_events.len(), 1, "one message stays one row");
+        assert_eq!(
+            user_events[0].content_text.as_deref(),
+            Some("look at this\n\n[image attached: image/png]")
+        );
+    }
+
+    #[test]
+    fn pi_blob_reference_without_matching_bytes_emits_no_media() {
+        // The digest is a filename the provider wrote. A store that disagrees
+        // with its own name must not become evidence.
+        let dir = tempfile::tempdir().unwrap();
+        let digest = "a".repeat(64);
+        let blob_dir = dir.path().join("agent").join("blobs");
+        std::fs::create_dir_all(&blob_dir).unwrap();
+        std::fs::write(blob_dir.join(&digest), b"not the bytes you asked for").unwrap();
+
+        let session_dir = dir.path().join("agent").join("sessions").join("cwd");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let path = session_dir.join("session.jsonl");
+        let cwd = dir.path().display().to_string();
+        let header = format!(r#"{{"type":"session","id":"omp-native","cwd":"{cwd}"}}"#);
+        let line = format!(
+            r#"{{"type":"message","id":"omp-user","message":{{"role":"user","content":[{{"type":"image","data":"blob:sha256:{digest}","mimeType":"image/png"}}]}}}}"#
+        );
+        std::fs::write(&path, format!("{header}\n{line}\n")).unwrap();
+
+        let result = parse_session_file_with_provider(&path, 0, Some("omp")).unwrap();
+        assert!(
+            result.media_objects.is_empty(),
+            "unverified bytes are not media"
+        );
+        assert!(
+            result.source_lines[1].raw_line.contains("blob:sha256:"),
+            "an unresolvable pointer stays a pointer"
+        );
+    }
+
+    #[test]
     fn pi_user_message_with_text_and_image_is_one_row() {
         // Reproduces the pasted-screenshot shape: one native user message with
         // a text block and an image block. Both parts used to become separate
@@ -8643,11 +8747,7 @@ mod tests {
             ));
         }
         std::fs::write(&path, &body).unwrap();
-        let cut: u64 = body
-            .lines()
-            .take(3)
-            .map(|line| line.len() as u64 + 1)
-            .sum();
+        let cut: u64 = body.lines().take(3).map(|line| line.len() as u64 + 1).sum();
 
         let bounded = parse_session_file_bounded(&path, 0, Some(cut), None).unwrap();
         let full = parse_session_file(&path, 0).unwrap();
@@ -8657,7 +8757,11 @@ mod tests {
             3,
             "a bounded parse must stop at the captured range"
         );
-        assert_eq!(full.events.len(), 5, "an unbounded parse still reads the file");
+        assert_eq!(
+            full.events.len(),
+            5,
+            "an unbounded parse still reads the file"
+        );
         assert!(bounded.last_good_offset <= cut);
         assert_eq!(full.last_good_offset, body.len() as u64);
     }

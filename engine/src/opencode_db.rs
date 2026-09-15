@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use crate::config::get_longhouse_home;
 use crate::media_redaction::{
-    redact_inline_image_data_url, redact_inline_image_data_urls_with_media, InlineImageRedaction,
+    redact_inline_image_data_url, redact_source_line_with_media, InlineImageRedaction,
 };
 use crate::pipeline::parser::{
     ParseResult, ParsedEvent, ParsedMediaObject, ParsedSourceLine, Role, SessionMetadata,
@@ -485,7 +485,7 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
             "message": message_data.clone(),
             "part": source_part_data,
         }))?;
-        let redacted_source_raw = redact_inline_image_data_urls_with_media(&source_raw);
+        let redacted_source_raw = redact_source_line_with_media(&source_raw, None);
         part_media.extend(redacted_source_raw.media);
         media_objects.extend(parsed_media_objects_from_redactions(
             source_offset,
