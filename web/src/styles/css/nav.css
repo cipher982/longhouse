@@ -189,9 +189,9 @@
   width: 40px;
   height: 40px;
   border-radius: var(--radius-md);
-  background: #1E1812;
+  background: transparent;
   color: var(--color-text-secondary);
-  border: 1px solid var(--color-border-muted);
+  border: 1px solid transparent;
   align-items: center;
   justify-content: center;
   cursor: pointer;

@@ -16,7 +16,7 @@ export function SessionStateBadge({
   testId?: string;
 }) {
   return (
-    <span className="session-state-line" data-tone={tone} data-testid={testId}>
+    <span className="session-state-line" data-tone={tone} data-testid={testId} title={text}>
       <span
         className={
           tone === "live"
@@ -27,7 +27,7 @@ export function SessionStateBadge({
         }
         aria-hidden="true"
       />
-      {text}
+      <span className="session-state-line__text">{text}</span>
     </span>
   );
 }

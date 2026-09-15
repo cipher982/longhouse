@@ -2651,11 +2651,14 @@
   /* A long "Using <tool> for <duration>" sentence must not starve the
      title of its space — cap and ellipsize it on narrow viewports. */
   .session-state-line {
-    flex-shrink: 1;
+    flex-shrink: 0;
     min-width: 0;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  }
+
+  /* At phone width the dot alone carries the state; the sentence lives in
+     the title attribute and in the composer's own head row. */
+  .session-state-line__text {
+    display: none;
   }
 
   .session-workspace-header__left {

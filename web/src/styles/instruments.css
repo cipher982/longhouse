@@ -87,7 +87,8 @@
    off-screen, so it's dropped rather than crowding them. This file is
    unlayered (see the header comment) so this wins over anything a
    page stylesheet inside @layer pages tries to do to it. */
-@media (max-width: 560px) {
+@media (max-width: 640px) {
+  .instrument-sparkline,
   .instrument-sparkline-label {
     display: none;
   }
