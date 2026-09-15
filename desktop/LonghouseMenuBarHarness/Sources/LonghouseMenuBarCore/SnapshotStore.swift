@@ -378,13 +378,17 @@ public final class SnapshotStore: ObservableObject {
         monitor.start()
     }
 
-    private static func classificationChanged(
+    static func classificationChanged(
         from current: EngineStatusPayload?,
         to next: EngineStatusPayload?
     ) -> Bool {
         guard let next else { return false }
         let currentArchive = current?.archiveBacklog
         let nextArchive = next.archiveBacklog
+        let currentProjection = current?.localProjection
+        let nextProjection = next.localProjection
+        let currentReconciliation = currentProjection?.reconciliation
+        let nextReconciliation = nextProjection?.reconciliation
         return current?.isOffline != next.isOffline
             || (current?.spoolPendingCount ?? 0 > 0) != (next.spoolPendingCount ?? 0 > 0)
             || (current?.spoolDeadCount ?? 0 > 0) != (next.spoolDeadCount ?? 0 > 0)
@@ -394,6 +398,9 @@ public final class SnapshotStore: ObservableObject {
             || (currentArchive?.deadRanges ?? 0 > 0) != (nextArchive?.deadRanges ?? 0 > 0)
             || current?.shippingProgress?.pendingWork != next.shippingProgress?.pendingWork
             || current?.shippingProgress?.stalled != next.shippingProgress?.stalled
+            || currentReconciliation?.state != nextReconciliation?.state
+            || currentReconciliation?.failureReason != nextReconciliation?.failureReason
+            || currentProjection?.lastReconciledAt != nextProjection?.lastReconciledAt
     }
 
     private func connectRealtimeIfNeeded(
