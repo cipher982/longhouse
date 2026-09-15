@@ -761,9 +761,7 @@ def _session_read_media_refs(connection: Connection, *, session_id: str) -> list
                 thumb.c.state.label("thumb_state"),
             )
             .select_from(
-                refs.outerjoin(media, media.c.media_hash == refs.c.media_hash).outerjoin(
-                    thumb, thumb.c.media_hash == media.c.thumb_hash
-                )
+                refs.outerjoin(media, media.c.media_hash == refs.c.media_hash).outerjoin(thumb, thumb.c.media_hash == media.c.thumb_hash)
             )
             .where(refs.c.session_id == session_id, refs.c.state == "active")
             .order_by(refs.c.id.asc())
