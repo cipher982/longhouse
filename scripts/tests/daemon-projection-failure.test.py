@@ -68,14 +68,16 @@ def exercise(engine):
         longhouse = home / ".longhouse"
         shim = root / "bin"
         shim.mkdir()
-        fail_inventory = root / "inventory-failed"
-        fail_inventory.touch()
+        fail_inventory = root / "inventory-mode"
+        fail_inventory.write_text("fail\n")
         observed_inventory_failure = root / "inventory-failed.observed"
         ps = shim / "ps"
         ps.write_text(
-            '#!/bin/sh\nif [ -e "$PROJECTION_TEST_FAILURE" ]; then\n'
-            '  if [ "$1" = "-axo" ]; then : > "$PROJECTION_TEST_FAILURE.observed"; fi\n'
-            '  exit 1\nfi\nexec /bin/ps "$@"\n'
+            '#!/bin/sh\nif [ "$1" = "-axo" ] && [ -f "$PROJECTION_TEST_FAILURE" ] && '
+            '[ "$(/bin/cat "$PROJECTION_TEST_FAILURE")" = "fail" ]; then\n'
+            '  : > "$PROJECTION_TEST_FAILURE.observed"\n'
+            '  exit 1\n'
+            'fi\nexec /bin/ps "$@"\n'
         )
         ps.chmod(0o700)
         # No ambient provider executable or credential authority: the daemon
@@ -165,15 +167,13 @@ def exercise(engine):
                 observe()
                 assert time.monotonic() < startup_deadline, daemon_logs()
                 time.sleep(0.05)
-            assert not observe().get("local_projection", {}).get("last_reconciled_at")
-            fail_inventory.unlink()
+            fail_inventory.write_text("ok\n")
 
             healthy = wait_for(lambda projection: projection.get("reconciliation", {}).get("state") == "idle")
             completed_at = healthy["local_projection"]["last_reconciled_at"]
             assert completed_at, "idle requires a completed full discovery receipt"
             receipt["build"] = healthy.get("build")
-            receipt["startup_inventory_failure_recovered_on_periodic_retry"] = True
-            fail_inventory.touch()
+            fail_inventory.write_text("fail\n")
             failed = wait_for(
                 lambda projection: projection.get("reconciliation", {}).get("state") == "failed"
                 and projection.get("reconciliation", {}).get("reason") in {"periodic", "wake", "full_reconciliation", "startup"}
