@@ -136,6 +136,7 @@ extension HealthSnapshot {
             && rowLevelRedReasons.isDisjoint(with: reasons)
             && !reasons.contains("engine_status_stale")
             && !reasons.contains("engine_projection_stale")
+        let promotion: MenuBarPromotion
         if nativeRedRequiresRepair
             || storageBlockRequiresRepair
             || !repairReasons.isDisjoint(with: reasons)
