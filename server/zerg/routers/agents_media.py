@@ -23,6 +23,7 @@ from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.dependencies.browser_route_auth import get_current_browser_route_caller
 from zerg.models.agents import MediaObject
 from zerg.models.agents import SessionMediaRef
+from zerg.routers.agents_storage_v2 import media_blob_headers
 from zerg.routers.agents_storage_v2 import read_storage_v2_media_bytes
 from zerg.routers.agents_storage_v2 import read_storage_v2_media_manifest
 from zerg.services.catalog_read_gateway import CatalogReadError
@@ -365,7 +366,7 @@ async def get_browser_media_blob(
     return Response(
         content=data,
         media_type=str(media["mime_type"]),
-        headers={"Content-Length": str(len(data)), "X-Media-Sha256": canonical_hash},
+        headers=media_blob_headers(canonical_hash, len(data)),
     )
 
 
@@ -383,5 +384,5 @@ async def head_browser_media_blob(
     return Response(
         status_code=status.HTTP_200_OK,
         media_type=str(media["mime_type"]),
-        headers={"Content-Length": str(media["byte_size"]), "X-Media-Sha256": canonical_hash},
+        headers=media_blob_headers(canonical_hash, int(media["byte_size"])),
     )

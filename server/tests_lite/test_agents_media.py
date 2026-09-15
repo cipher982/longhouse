@@ -388,10 +388,15 @@ def test_browser_media_read_streams_the_verified_storage_v2_object(tmp_path, mon
         assert allowed.content == payload
         assert allowed.headers["content-type"].startswith("image/png")
         assert allowed.headers["x-media-sha256"] == digest
+        # Content-addressed bytes never change, so a client may keep them; the
+        # directive stays private because the route is owner-scoped.
+        assert allowed.headers["cache-control"] == "private, max-age=31536000, immutable"
+        assert allowed.headers["etag"] == f'"{digest}"'
 
         head = client.head(f"/media/{digest}")
         assert head.status_code == 200, head.text
         assert head.headers["content-length"] == str(len(payload))
+        assert head.headers["cache-control"] == "private, max-age=31536000, immutable"
     finally:
         cleanup()
 

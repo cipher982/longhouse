@@ -1095,6 +1095,22 @@ async def put_storage_v2_media(
     }
 
 
+def media_blob_headers(media_hash: str, byte_size: int) -> dict[str, str]:
+    """Response headers for one immutable, content-addressed blob.
+
+    The bytes behind a hash never change, so a client may keep them for as long
+    as it likes; without that, every timeline navigation refetches megabytes of
+    screenshots. ``private`` because the route is owner-scoped and a shared
+    cache must never hand one tenant's image to another.
+    """
+    return {
+        "Content-Length": str(byte_size),
+        "X-Media-Sha256": media_hash,
+        "ETag": f'"{media_hash}"',
+        "Cache-Control": "private, max-age=31536000, immutable",
+    }
+
+
 async def read_storage_v2_media_manifest(media_hash: str, *, owner_id: int) -> tuple[str, dict[str, object]]:
     try:
         canonical_hash = _lower_hash(media_hash, "media_hash")
@@ -1150,7 +1166,7 @@ async def get_storage_v2_media(
     return Response(
         content=data,
         media_type=str(media["mime_type"]),
-        headers={"Content-Length": str(len(data)), "X-Media-Sha256": canonical_hash},
+        headers=media_blob_headers(canonical_hash, len(data)),
     )
 
 
@@ -1164,7 +1180,7 @@ async def head_storage_v2_media(
     return Response(
         status_code=status.HTTP_200_OK,
         media_type=str(media["mime_type"]),
-        headers={"Content-Length": str(media["byte_size"]), "X-Media-Sha256": canonical_hash},
+        headers=media_blob_headers(canonical_hash, int(media["byte_size"])),
     )
 
 
