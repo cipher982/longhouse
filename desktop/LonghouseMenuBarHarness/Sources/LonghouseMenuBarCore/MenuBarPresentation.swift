@@ -118,7 +118,9 @@ extension HealthSnapshot {
         let sessionDiscoveryAttention = self.sessionDiscoveryAttention
         let localEvidenceUnavailable = !localEvidenceTrust.isCurrent
         let projectionUnavailable = !projectionTrust.isCurrent
-        // This producer red state is deliberately row-level: the engine has
+        let localStatusStale = engineStatus?.fresh == false
+            || reasons.contains("engine_status_stale")
+            || reasons.contains("engine_projection_stale")
         // preserved the session, but the phase contract is newer than this
         // client. Keep it visible in the session row without turning an
         // otherwise healthy local machine into a repair alarm. Discovery
@@ -204,6 +206,8 @@ extension HealthSnapshot {
             headline = "\(orphanBridgeCount) background process\(orphanBridgeCount == 1 ? "" : "es") need cleanup"
         case .inspect:
             headline = "Historical archive needs review"
+        case .unavailable where localStatusStale && !localEvidenceUnavailable:
+            headline = "Local status is stale"
         case .unavailable:
             headline = "Current local status unavailable"
         case .normal where openHelmCount > 0:

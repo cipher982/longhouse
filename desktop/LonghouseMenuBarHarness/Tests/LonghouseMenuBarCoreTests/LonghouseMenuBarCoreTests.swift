@@ -530,7 +530,7 @@ struct LonghouseMenuBarCoreTests {
         let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
 
         #expect(presentation.promotion == .unavailable)
-        #expect(presentation.headline == "Current local status unavailable")
+        #expect(presentation.headline == "Local status is stale")
         #expect(presentation.facts.first(where: { $0.id == "local-agent" })?.value == "Running")
         #expect(presentation.facts.first(where: { $0.id == "local-agent" })?.promotion == .unavailable)
     }
