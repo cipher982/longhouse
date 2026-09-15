@@ -124,8 +124,7 @@ extension HealthSnapshot {
         // otherwise healthy local machine into a repair alarm. Discovery
         // reconciliation is another independent evidence lane: a failed or
         // in-progress scan must not erase current upload or control facts.
-        let rowLevelRedReasons: Set<String> = ["managed_unknown_phase"]
-            .union(menuBarSessionDiscoveryReasons)
+        let rowLevelRedReasons = menuBarSessionDiscoveryReasons.union(["managed_unknown_phase"])
         let storageBlockRequiresRepair = self.storageBlockRequiresRepair
         let storageBlockIsRecovering = self.storageBlockIsRecovering
         let deadLetterCount = max(
@@ -134,7 +133,6 @@ extension HealthSnapshot {
         )
         let hasDeadLetters = deadLetterCount > 0
         let nativeRedRequiresRepair = parsedSeverity == .red
-            && !sessionDiscoveryAttention
             && rowLevelRedReasons.isDisjoint(with: reasons)
 
         let promotion: MenuBarPromotion
