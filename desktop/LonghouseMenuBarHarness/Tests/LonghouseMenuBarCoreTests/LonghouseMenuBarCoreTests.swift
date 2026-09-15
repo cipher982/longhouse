@@ -1090,6 +1090,50 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    @MainActor
+    func snapshotStoreRefreshesWhenReconciliationClassificationChanges() {
+        func payload(
+            state: String,
+            failureReason: String? = nil,
+            lastReconciledAt: String? = "2026-09-15T18:00:00Z"
+        ) -> EngineStatusPayload {
+            EngineStatusPayload(
+                version: "test",
+                daemonPid: 42,
+                lastShipAt: nil,
+                spoolPendingCount: 0,
+                spoolDeadCount: 0,
+                parseErrorCount1H: 0,
+                diskFreeBytes: nil,
+                isOffline: false,
+                localProjection: LocalProjectionStatus(
+                    version: 1,
+                    generatedAt: "2026-09-15T18:00:01Z",
+                    enginePulseAt: "2026-09-15T18:00:01Z",
+                    lastReconciledAt: lastReconciledAt,
+                    reconciliation: ProjectionReconciliationStatus(
+                        state: state,
+                        reason: state == "reconciling" ? "retry" : nil,
+                        startedAt: state == "reconciling" ? "2026-09-15T18:00:01Z" : nil,
+                        failureReason: failureReason
+                    )
+                ),
+                recentDeadLetters: nil,
+                lastUpdated: "2026-09-15T18:00:01Z"
+            )
+        }
+
+        let idle = payload(state: "idle")
+        let pulseOnly = payload(state: "idle")
+        let failedRetry = payload(state: "reconciling", failureReason: "unmanaged_binding")
+        let completed = payload(state: "idle", lastReconciledAt: "2026-09-15T18:01:00Z")
+
+        #expect(!SnapshotStore.classificationChanged(from: idle, to: pulseOnly))
+        #expect(SnapshotStore.classificationChanged(from: idle, to: failedRetry))
+        #expect(SnapshotStore.classificationChanged(from: failedRetry, to: completed))
+    }
+
+    @Test
     func statusItemSourceIconHasZeroPadding() throws {
         let iconURL = try #require(Bundle.module.url(forResource: "LonghouseMenuIcon", withExtension: "png"))
         let data = try Data(contentsOf: iconURL)
