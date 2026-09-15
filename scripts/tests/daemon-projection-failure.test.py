@@ -69,6 +69,7 @@ def exercise(engine):
         shim = root / "bin"
         shim.mkdir()
         fail_inventory = root / "inventory-failed"
+        fail_inventory.touch()
         ps = shim / "ps"
         ps.write_text('#!/bin/sh\nif [ -e "$PROJECTION_TEST_FAILURE" ]; then exit 1; fi\nexec /bin/ps "$@"\n')
         ps.chmod(0o700)
@@ -147,10 +148,22 @@ def exercise(engine):
                     time.sleep(0.05)
                 raise AssertionError(f"daemon did not converge: {status}; logs: {log_path.read_text()}")
 
+            # Fail the initial full inventory before any continuation cache
+            # exists. Recovery must finish on the next periodic observation,
+            # not publish an invented empty set until the one-minute pass.
+            startup_deadline = time.monotonic() + 20
+            while "process inventory failed" not in log_path.read_text():
+                observe()
+                assert time.monotonic() < startup_deadline, log_path.read_text()
+                time.sleep(0.05)
+            assert not observe().get("local_projection", {}).get("last_reconciled_at")
+            fail_inventory.unlink()
+
             healthy = wait_for(lambda projection: projection.get("reconciliation", {}).get("state") == "idle")
             completed_at = healthy["local_projection"]["last_reconciled_at"]
             assert completed_at, "idle requires a completed full discovery receipt"
             receipt["build"] = healthy.get("build")
+            receipt["startup_inventory_failure_recovered_on_periodic_retry"] = True
             fail_inventory.touch()
             failed = wait_for(
                 lambda projection: projection.get("reconciliation", {}).get("state") == "failed"

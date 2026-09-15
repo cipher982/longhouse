@@ -874,6 +874,11 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         if let reason = knownReasons.first(where: { reasons.contains($0) }) {
             return reason
         }
+        let projection = engineStatus?.payload?.localProjection
+        if let failure = projection?.reconciliation?.failureReason,
+           !failure.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "engine_reconciliation_failed"
+        }
 
         switch engineStatus?.payload?.localProjection?.reconciliation?.state?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -882,7 +887,9 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         case "failed":
             return "engine_reconciliation_failed"
         case "reconciling":
-            return "engine_reconciling"
+            // Freshness belongs to the producer's reason codes. A scheduled
+            // refresh does not invalidate its previous completed observation.
+            return projection?.lastReconciledAt?.isEmpty == false ? nil : "engine_reconciling"
         default:
             return nil
         }

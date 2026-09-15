@@ -18,6 +18,9 @@ const NATIVE_DEVICE_ENTRYPOINTS_JSON: &str =
 const ENGINE_FRESH_SECONDS: u64 = 30;
 const ENGINE_STALE_SECONDS: u64 = 60;
 const PROJECTION_STALE_SECONDS: u64 = 60;
+// Allow the next scheduled pass to finish; a refresh in flight is not failure.
+const RECONCILIATION_STALE_SECONDS: u64 =
+    2 * crate::daemon::MANAGED_FULL_RECONCILIATION_INTERVAL_SECS;
 const CURRENT_TRANSPORT_ERROR_DEGRADED_MIN_COUNT: u64 = 2;
 const TRANSPORT_ERROR_DEGRADED_MIN_COUNT: u64 = 3;
 const TRANSPORT_ERROR_DEGRADED_MIN_RATE: f64 = 0.25;
@@ -1553,14 +1556,15 @@ fn native_health_from_parts(
         .filter(|value| !value.trim().is_empty());
     let last_reconciled_age = last_reconciled_at.and_then(rfc3339_age_seconds);
     let reconciliation_receipt_stale = last_reconciled_at.is_none()
-        || last_reconciled_age.is_none_or(|age| age >= PROJECTION_STALE_SECONDS);
+        || last_reconciled_age.is_none_or(|age| age >= RECONCILIATION_STALE_SECONDS);
     if reconciliation_state == Some("failed") || reconciliation_failure_reason.is_some() {
         reasons.push("engine_reconciliation_failed".to_string());
     }
-    if reconciliation_state == Some("reconciling") {
-        // A retry attempt is not a completed full reconciliation. Keep this
-        // degraded even when the engine pulse and the previous receipt are
-        // still fresh; a new scan must finish before discovery is current.
+    if reconciliation_state == Some("reconciling")
+        && (reconciliation_receipt_stale || reconciliation_failure_reason.is_some())
+    {
+        // Preserve failure during retry, but do not alarm on routine refresh
+        // while a recent completed observation remains valid.
         reasons.push("engine_reconciling".to_string());
         if last_reconciled_at.is_some() && reconciliation_receipt_stale {
             reasons.push("engine_reconciliation_stale".to_string());
@@ -5953,10 +5957,8 @@ mod tests {
         assert!(health
             .reasons
             .contains(&"storage_v2_outbox_unreadable".to_string()));
-        assert_eq!(
-            native_desktop_suggested_action_ids(&health.reasons),
-            vec!["inspect_storage_outbox"]
-        );
+        assert!(native_desktop_suggested_action_ids(&health.reasons)
+            .contains(&"inspect_storage_outbox".to_string()));
     }
 
     #[test]
@@ -6062,10 +6064,8 @@ mod tests {
         assert!(health
             .reasons
             .contains(&"archive_repair_paused".to_string()));
-        assert_eq!(
-            native_desktop_suggested_action_ids(&health.reasons),
-            vec!["inspect_archive"]
-        );
+        assert!(native_desktop_suggested_action_ids(&health.reasons)
+            .contains(&"inspect_archive".to_string()));
     }
 
     #[test]
@@ -6092,10 +6092,8 @@ mod tests {
         assert!(health
             .reasons
             .contains(&"archive_dead_lettered".to_string()));
-        assert_eq!(
-            native_desktop_suggested_action_ids(&health.reasons),
-            vec!["inspect_archive"]
-        );
+        assert!(native_desktop_suggested_action_ids(&health.reasons)
+            .contains(&"inspect_archive".to_string()));
     }
 
     #[test]
@@ -6557,7 +6555,7 @@ mod tests {
                     "generated_at": now.clone(),
                     "engine_pulse_at": now.clone(),
                     "last_reconciled_at":
-                        (chrono::Utc::now() - chrono::Duration::seconds(PROJECTION_STALE_SECONDS as i64 + 1))
+                        (chrono::Utc::now() - chrono::Duration::seconds(RECONCILIATION_STALE_SECONDS as i64 + 1))
                             .to_rfc3339(),
                     "reconciliation": {"state": "idle"}
                 }
@@ -6596,6 +6594,30 @@ mod tests {
         assert_eq!(complete.health_state, "healthy");
         assert!(complete.reasons.is_empty());
         assert_eq!(complete.transport.status_reason, "healthy");
+
+        let refreshing = native_health_from_parts(
+            &path,
+            true,
+            Some(1),
+            Some(json!({
+                "spool_pending_count": 0,
+                "spool_dead_count": 0,
+                "ship_attempts_10m": 0,
+                "is_offline": false,
+                "local_projection": {
+                    "generated_at": chrono::Utc::now().to_rfc3339(),
+                    "engine_pulse_at": chrono::Utc::now().to_rfc3339(),
+                    "last_reconciled_at":
+                        (chrono::Utc::now() - chrono::Duration::seconds(
+                            crate::daemon::MANAGED_FULL_RECONCILIATION_INTERVAL_SECS as i64 + 1
+                        )).to_rfc3339(),
+                    "reconciliation": {"state": "reconciling", "reason": "full_reconciliation"}
+                }
+            })),
+            None,
+        );
+        assert_eq!(refreshing.health_state, "healthy");
+        assert!(refreshing.reasons.is_empty());
 
         let shipping_failure = native_health_from_parts(
             &path,

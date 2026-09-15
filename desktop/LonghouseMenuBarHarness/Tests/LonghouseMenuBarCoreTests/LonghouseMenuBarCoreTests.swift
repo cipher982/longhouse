@@ -470,6 +470,29 @@ struct LonghouseMenuBarCoreTests {
 
 
     @Test
+    func scheduledDiscoveryRefreshKeepsCompletedEvidenceCurrent() {
+        let snapshot = presentationSnapshot(
+            sessions: [],
+            localProjection: LocalProjectionStatus(
+                version: 10,
+                generatedAt: "1970-01-01T00:01:01Z",
+                enginePulseAt: "1970-01-01T00:01:01Z",
+                lastReconciledAt: "1970-01-01T00:00:00Z",
+                reconciliation: ProjectionReconciliationStatus(
+                    state: "reconciling",
+                    reason: "full_reconciliation",
+                    startedAt: "1970-01-01T00:01:00Z"
+                )
+            )
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 61))
+
+        #expect(snapshot.sessionDiscoveryAttention == false)
+        #expect(presentation.promotion == .normal)
+    }
+
+    @Test
     func freshNativeEngineCountsAsRunningWhenServiceEvidenceIsAbsent() {
         let snapshot = presentationSnapshot(sessions: [], serviceStatus: nil)
 

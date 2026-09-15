@@ -137,7 +137,7 @@ const LOCAL_STATUS_BUDGET_MS: u64 = LOCAL_STATUS_INTERVAL_SECS * 1000 / 4;
 /// removes the spam; reporting every tick did the opposite of both.
 const LOCAL_STATUS_BUDGET_REPORT_INTERVAL: Duration = Duration::from_secs(60);
 const MANAGED_OBSERVATION_INTERVAL_SECS: u64 = 5;
-const MANAGED_FULL_RECONCILIATION_INTERVAL_SECS: u64 = 60;
+pub(crate) const MANAGED_FULL_RECONCILIATION_INTERVAL_SECS: u64 = 60;
 const WAKE_GAP_THRESHOLD_SECS: u64 = 5;
 const MACHINE_PRESENCE_INTERVAL_SECS: u64 = 60;
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 60;
@@ -433,7 +433,7 @@ struct ProjectionBuildInput {
     machine_id: String,
     managed: ManagedObservationSnapshot,
     unmanaged: Vec<heartbeat::UnmanagedSessionBinding>,
-    continuation: Arc<[managed_resume_scan::ResumeContractObservation]>,
+    continuation: Option<Arc<[managed_resume_scan::ResumeContractObservation]>>,
     limiter: crate::scheduler::LimiterSnapshot,
     scheduler: crate::scheduler::SchedulerSnapshot,
     archive_repair_mode: ArchiveRepairMode,
@@ -1145,8 +1145,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut projection_worst_elapsed_ms = 0_u64;
     let mut projection_budget_reported_at: Option<Instant> = None;
     let mut last_full_reconciled_at: Option<String> = None;
-    let mut last_resume_contracts: Arc<[managed_resume_scan::ResumeContractObservation]> =
-        Arc::from([]);
+    let mut last_resume_contracts: Option<Arc<[managed_resume_scan::ResumeContractObservation]>> =
+        None;
     let mut last_projected_managed_observations = ManagedObservationSnapshot::default();
     let mut last_projected_managed_scan_partial = false;
     let mut last_projected_managed_snapshot_complete = false;
@@ -1974,7 +1974,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         && maybe_start_managed_observation_scan(
                             &mut managed_observation_scan_tasks,
                             "periodic",
-                            false,
+                            last_resume_contracts.is_none(),
                             &last_managed_observations,
                         )
                     {
@@ -2086,7 +2086,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                         managed_observation_valid = true;
                         if let Some(continuation) = &result.continuation {
-                            last_resume_contracts = continuation.clone();
+                            last_resume_contracts = Some(continuation.clone());
                         }
                         let next_managed_observations =
                             ManagedObservationSnapshot::from_result(&result).current_only();
@@ -2229,7 +2229,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             && maybe_start_managed_observation_scan(
                                 &mut managed_observation_scan_tasks,
                                 "periodic",
-                                false,
+                                last_resume_contracts.is_none(),
                                 &last_managed_observations,
                             )
                         {
@@ -2852,7 +2852,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 if maybe_start_managed_observation_scan(
                     &mut managed_observation_scan_tasks,
                     "periodic",
-                    false,
+                    last_resume_contracts.is_none(),
                     &last_managed_observations,
                 ) {
                     pending_periodic_observation = false;
@@ -2961,29 +2961,34 @@ fn maybe_start_projection_build(
     if !tasks.is_empty() {
         return false;
     }
+    let ProjectionBuildInput {
+        generation,
+        managed_observation_generation,
+        managed_scan_partial,
+        managed_snapshot_complete,
+        unmanaged_snapshot_complete,
+        db_path,
+        parse_tracker,
+        ship_stats,
+        is_offline,
+        last_ship_at,
+        machine_id,
+        managed,
+        unmanaged,
+        continuation,
+        limiter,
+        scheduler,
+        archive_repair_mode,
+        last_full_reconciled_at,
+        mut session_snapshot_state,
+    } = input;
+    // Unobserved continuation evidence is not an observed empty set. The
+    // periodic observer retries a full pass until the first cache exists.
+    let Some(continuation) = continuation else {
+        return false;
+    };
     tasks.spawn_blocking(move || {
         let started = Instant::now();
-        let ProjectionBuildInput {
-            generation,
-            managed_observation_generation,
-            managed_scan_partial,
-            managed_snapshot_complete,
-            unmanaged_snapshot_complete,
-            db_path,
-            parse_tracker,
-            ship_stats,
-            is_offline,
-            last_ship_at,
-            machine_id,
-            managed,
-            unmanaged,
-            continuation,
-            limiter,
-            scheduler,
-            archive_repair_mode,
-            last_full_reconciled_at,
-            mut session_snapshot_state,
-        } = input;
         let result = crate::state::db::open_connection(&db_path)
             .map_err(|error| error.to_string())
             .map(|conn| {
