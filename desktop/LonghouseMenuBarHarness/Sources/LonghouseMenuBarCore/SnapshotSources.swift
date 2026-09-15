@@ -111,7 +111,11 @@ public struct FixtureHealthSnapshotSource: HealthSnapshotSource {
 }
 
 public struct CLIHealthSnapshotSource: HealthSnapshotSource {
-    public static let defaultCommandTimeoutSeconds: TimeInterval = 3
+    /// Health is backed by the engine's atomic status file, but launchd and
+    /// macOS process pressure can still delay the CLI wrapper. Three seconds
+    /// turned a transient startup delay into an all-facts-unknown menu bar.
+    /// Keep the producer deadline bounded while allowing a normal cold start.
+    public static let defaultCommandTimeoutSeconds: TimeInterval = 10
 
     public let launchPath: String
     public let arguments: [String]

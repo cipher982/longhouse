@@ -3540,6 +3540,11 @@ struct LonghouseMenuBarCoreTests {
     /// Set `LONGHOUSE_HEALTH_BIN` to also run a specific binary end to end. That
     /// is opt-in because only the caller knows the binary is worth trusting.
     @Test
+    func defaultHealthCommandTimeoutAllowsColdStartJitter() {
+        #expect(CLIHealthSnapshotSource.defaultCommandTimeoutSeconds == 10)
+    }
+
+    @Test
     func nativeProducerOutputDecodesIntoHealthSnapshot() throws {
         let fixtureURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
