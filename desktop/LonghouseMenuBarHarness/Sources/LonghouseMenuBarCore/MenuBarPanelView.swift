@@ -613,7 +613,7 @@ public struct MenuBarPanelView: View {
                 // Absence of entries here is not evidence of a clean machine
                 // when nothing scanned for orphaned bridges.
                 PanelSection(title: "Cleanup") {
-                    Text("Orphaned bridge evidence is unavailable on this Mac.")
+                    Text("Orphaned bridge scanning is not provided by this local health source.")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(Color.secondary)
                 }
