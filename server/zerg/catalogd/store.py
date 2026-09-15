@@ -743,6 +743,11 @@ def _session_read_media_refs(connection: Connection, *, session_id: str) -> list
     """
     refs = SessionMediaRef.__table__
     media = MediaObject.__table__
+    # The preview rides the manifest as a hash, and only a preview the store
+    # still holds may be offered: an object can be retired independently of the
+    # image that points at it. Joining it here keeps that decision with the data
+    # rather than trusting whoever wrote the link.
+    thumb = media.alias("thumb")
     rows = (
         connection.execute(
             select(
@@ -753,8 +758,13 @@ def _session_read_media_refs(connection: Connection, *, session_id: str) -> list
                 media.c.mime_type,
                 media.c.byte_size,
                 media.c.thumb_hash,
+                thumb.c.state.label("thumb_state"),
             )
-            .select_from(refs.outerjoin(media, media.c.media_hash == refs.c.media_hash))
+            .select_from(
+                refs.outerjoin(media, media.c.media_hash == refs.c.media_hash).outerjoin(
+                    thumb, thumb.c.media_hash == media.c.thumb_hash
+                )
+            )
             .where(refs.c.session_id == session_id, refs.c.state == "active")
             .order_by(refs.c.id.asc())
             .limit(_SESSION_READ_MEDIA_REF_LIMIT)
@@ -773,7 +783,7 @@ def _session_media_ref_dto(row) -> dict[str, Any]:
         "media_state": row["media_state"],
         "mime_type": row["mime_type"],
         "byte_size": int(row["byte_size"]) if row["byte_size"] is not None else None,
-        "thumb_hash": row["thumb_hash"],
+        "thumb_hash": row["thumb_hash"] if row["thumb_state"] == "present" else None,
     }
 
 

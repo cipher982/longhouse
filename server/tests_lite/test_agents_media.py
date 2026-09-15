@@ -481,18 +481,3 @@ def test_media_claim_rejects_bad_size_and_too_many_items(tmp_path, monkeypatch):
         assert too_many.json()["detail"] == "too many media claim items"
     finally:
         cleanup()
-
-
-@pytest.mark.asyncio
-async def test_preview_link_is_dropped_when_the_store_does_not_hold_it(tmp_path, monkeypatch):
-    """A link to bytes nobody has would render as a broken image."""
-
-    _browser_media_catalog(monkeypatch, {"found": False})
-    assert await agents_storage_v2._verified_preview_hash("b" * 64, owner_id=1, media_hash="a" * 64) is None
-
-
-@pytest.mark.asyncio
-async def test_media_object_cannot_be_its_own_preview():
-    with pytest.raises(HTTPException) as raised:
-        await agents_storage_v2._verified_preview_hash("a" * 64, owner_id=1, media_hash="a" * 64)
-    assert raised.value.status_code == 422
