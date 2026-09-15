@@ -766,20 +766,23 @@ impl OmpHelmServer {
         let turn_id = live_turn_id(&current.run_id, live_turn_seq, live_message_seq);
         let publish_live = live_delta.is_some() || (turn_completed && !live_text.is_empty());
         drop(state);
-        let _ = self.persist_state();
-        if let Ok(conn) = crate::state::db::open_client_connection(
-            &crate::config::get_agent_db_path().unwrap_or_default(),
-            Duration::from_millis(250),
-        ) {
-            let signal = crate::state::session_phase::SessionPhaseSignal {
-                session_id: current.session_id.clone(),
-                provider: "omp".into(),
-                phase: phase.into(),
-                tool_name: tool.clone(),
-                source: OMP_HELM_TRANSPORT.into(),
-                observed_at: Utc::now(),
-            };
-            let _ = crate::state::session_phase::SessionPhaseStore::new(&conn).record(&signal);
+        let observed_at = Utc::now();
+        let db_path = crate::config::get_agent_db_path();
+        if let Ok(db_path) = db_path {
+            if let Err(error) = crate::hook_outbox::enqueue_local_phase(
+                &db_path,
+                &current.session_id,
+                "omp",
+                phase,
+                tool.as_deref(),
+                OMP_HELM_TRANSPORT,
+                &observed_at.to_rfc3339(),
+            ) {
+                eprintln!(
+                    "[omp-helm] enqueue local phase failed for {}: {error}",
+                    current.session_id
+                );
+            }
         }
         self.publish_phase(phase, tool);
         if publish_live {

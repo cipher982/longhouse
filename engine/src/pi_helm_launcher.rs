@@ -583,19 +583,21 @@ impl PiHelmServer {
 
     fn publish_phase(&self, phase: &str, tool_name: Option<String>) {
         let state = self.current_state();
+        let observed_at = Utc::now();
         if let Ok(db_path) = crate::config::get_agent_db_path() {
-            if let Ok(conn) =
-                crate::state::db::open_client_connection(&db_path, Duration::from_millis(250))
-            {
-                let signal = crate::state::session_phase::SessionPhaseSignal {
-                    session_id: state.session_id.clone(),
-                    provider: "pi".into(),
-                    phase: phase.into(),
-                    tool_name: tool_name.clone(),
-                    source: PI_HELM_TRANSPORT.into(),
-                    observed_at: Utc::now(),
-                };
-                let _ = crate::state::session_phase::SessionPhaseStore::new(&conn).record(&signal);
+            if let Err(error) = crate::hook_outbox::enqueue_local_phase(
+                &db_path,
+                &state.session_id,
+                "pi",
+                phase,
+                tool_name.as_deref(),
+                PI_HELM_TRANSPORT,
+                &observed_at.to_rfc3339(),
+            ) {
+                eprintln!(
+                    "[pi-helm] enqueue local phase failed for {}: {error}",
+                    state.session_id
+                );
             }
         }
         if let Ok(outbox) = crate::config::get_agent_runtime_events_outbox_dir() {

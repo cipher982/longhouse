@@ -233,7 +233,8 @@
       "path": "engine/src/outbox.rs",
       "providers": [
         "antigravity",
-        "claude"
+        "claude",
+        "codex"
       ]
     },
     {
