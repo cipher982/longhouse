@@ -70,12 +70,10 @@ def exercise(engine):
         shim.mkdir()
         fail_inventory = root / "inventory-mode"
         fail_inventory.write_text("fail\n")
-        observed_inventory_failure = root / "inventory-failed.observed"
         ps = shim / "ps"
         ps.write_text(
             '#!/bin/sh\nif [ "$1" = "-axo" ] && [ -f "$PROJECTION_TEST_FAILURE" ] && '
             '[ "$(/bin/cat "$PROJECTION_TEST_FAILURE")" = "fail" ]; then\n'
-            '  : > "$PROJECTION_TEST_FAILURE.observed"\n'
             '  exit 1\n'
             'fi\nexec /bin/ps "$@"\n'
         )
@@ -159,12 +157,15 @@ def exercise(engine):
                     time.sleep(0.05)
                 raise AssertionError(f"daemon did not converge: {status}; logs: {daemon_logs()}")
 
-            # Fail the initial full inventory before any continuation cache
-            # exists. Recovery must finish on the next periodic observation,
-            # not publish an invented empty set until the one-minute pass.
             startup_deadline = time.monotonic() + 20
-            while not observed_inventory_failure.exists():
-                observe()
+            while True:
+                startup_projection = observe().get("local_projection", {})
+                startup_reconciliation = startup_projection.get("reconciliation", {})
+                if (
+                    startup_reconciliation.get("state") == "failed"
+                    and not startup_projection.get("last_reconciled_at")
+                ):
+                    break
                 assert time.monotonic() < startup_deadline, daemon_logs()
                 time.sleep(0.05)
             fail_inventory.write_text("ok\n")
@@ -194,7 +195,7 @@ def exercise(engine):
                 assert projection["reconciliation"].get("failure_reason"), "failure lost its cause"
                 time.sleep(0.05)
             assert projection["engine_pulse_at"] != failed["local_projection"]["engine_pulse_at"], "failure stopped engine pulses"
-            fail_inventory.unlink()
+            fail_inventory.write_text("ok\n")
             recovered = wait_for(
                 lambda projection: projection.get("generated_at") != frozen
                 and projection.get("reconciliation", {}).get("state") == "idle"
