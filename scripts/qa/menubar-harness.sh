@@ -277,8 +277,16 @@ os.setsid()
 os.execvp(sys.argv[1], sys.argv[1:])
 PY
   OWNED_PID=$!
-  OWNED_PGID="$(ps -o pgid= -p "$OWNED_PID" | tr -d ' ')"
-  if [[ -z "$OWNED_PGID" || "$OWNED_PGID" == "$SELF_PGID" ]]; then
+  # Python has not necessarily reached setsid() when the shell returns from &.
+  # Wait for the child's own group instead of rejecting its inherited group.
+  local attempt
+  for attempt in $(seq 1 100); do
+    OWNED_PGID="$(ps -o pgid= -p "$OWNED_PID" | tr -d ' ')" || true
+    [[ "$OWNED_PGID" == "$OWNED_PID" ]] && break
+    kill -0 "$OWNED_PID" >/dev/null 2>&1 || break
+    sleep 0.01
+  done
+  if [[ "$OWNED_PGID" != "$OWNED_PID" || "$OWNED_PGID" == "$SELF_PGID" ]]; then
     echo "failed to allocate an owned process group for $command" >&2
     kill "$OWNED_PID" >/dev/null 2>&1 || true
     wait "$OWNED_PID" >/dev/null 2>&1 || true
@@ -336,7 +344,10 @@ capture_window_render_args() (
   trap 'cleanup_capture; exit 143' INT TERM
 
   rm -f "$output_png"
-  start_owned_process "$app_bin" "$@" --quit-after 30 >/dev/null 2>&1
+  if ! start_owned_process "$app_bin" "$@" --quit-after 30 >"$output_png.log" 2>&1; then
+    cat "$output_png.log" >&2
+    return 1
+  fi
   pid="$OWNED_PID"
   pgid="$OWNED_PGID"
 
