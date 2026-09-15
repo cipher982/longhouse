@@ -1,0 +1,156 @@
+/* =============================================================================
+   Instruments — Phase 4 of the web restyle
+   (control-plane/docs/specs/web-restyle-signal.md)
+
+   Self-contained on purpose: every value here is hardcoded (gold/flame rgba,
+   not --tl-flame/--tl-ash) rather than reading the timeline's local aliases
+   in sessions.css, which are scoped to pages that import that file and
+   aren't guaranteed to be loaded wherever an instrument renders. That keeps
+   this whole file — and its four components (Nixie, Sparkline, ReadoutRail,
+   plus the pure-data helpers in activityBuckets.ts/toolActivity.ts) —
+   deletable in one commit.
+
+   Four blocks, each independently deletable:
+     1. Nixie      — .instrument-nixie*
+     2. Sparkline   — .instrument-sparkline*
+     3. Readout rail — .instrument-readout-rail, .instrument-readout*
+   ============================================================================= */
+
+/* ---- 1. Nixie: live numerals ---- */
+
+.instrument-nixie {
+  display: inline-block;
+  font-family: var(--font-family-mono);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: #ffb25a;
+  text-shadow:
+    0 0 6px rgba(240, 138, 36, 0.7),
+    0 0 16px rgba(240, 138, 36, 0.3);
+  background: rgba(246, 235, 214, 0.045);
+  box-shadow: inset 0 0 0 1px rgba(233, 185, 73, 0.28);
+  padding: 1px 8px;
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.instrument-nixie--dim {
+  color: var(--color-text-secondary);
+  text-shadow: none;
+}
+
+.instrument-nixie--flicker {
+  animation: instrument-nixie-flicker 140ms ease-out;
+}
+
+@keyframes instrument-nixie-flicker {
+  0% {
+    opacity: 1;
+  }
+  45% {
+    opacity: 0.4;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .instrument-nixie--flicker {
+    animation: none;
+  }
+}
+
+/* ---- 2. Sparkline: inline activity trace ---- */
+
+.instrument-sparkline {
+  display: inline-flex;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.instrument-sparkline-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* The timeline toolbar (web/src/pages/SessionsPage.tsx) doesn't wrap at
+   narrow widths — below this, the label only pushes Clear/Recall/Filter
+   off-screen, so it's dropped rather than crowding them. This file is
+   unlayered (see the header comment) so this wins over anything a
+   page stylesheet inside @layer pages tries to do to it. */
+@media (max-width: 560px) {
+  .instrument-sparkline-label {
+    display: none;
+  }
+}
+
+/* ---- 3. Readout rail: glass column beside the transcript ---- */
+
+.instrument-readout-rail {
+  display: none;
+  flex: none;
+  flex-direction: column;
+  gap: 2px;
+  width: 200px;
+  padding: 6px 0;
+  margin-bottom: 18px;
+  background: rgba(246, 235, 214, 0.035);
+  box-shadow: inset 0 0 0 1px rgba(246, 235, 214, 0.06);
+  border-radius: 2px;
+}
+
+/* Matches the composer-width and body-layout breakpoint in
+   session-workspace.css (search "1180" there) — the two must move
+   together. */
+@media (min-width: 1180px) {
+  .instrument-readout-rail {
+    display: flex;
+  }
+}
+
+.instrument-readout {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.instrument-readout__key {
+  font-size: 11.5px;
+  color: var(--color-text-muted);
+}
+
+/* .instrument-readout is a column flex container with the initial
+   align-items: stretch, which blockifies the Nixie span and stretches it
+   to the rail's full width — the opposite of a capsule that hugs its
+   value, like the composer timer's Nixie gets for free in a row-direction
+   flex head. Opt back out to a content-sized capsule, left-aligned. */
+.instrument-readout .instrument-nixie {
+  display: inline-flex;
+  align-self: flex-start;
+  width: max-content;
+}
+
+.instrument-readout__bar {
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(246, 235, 214, 0.07);
+  overflow: hidden;
+}
+
+.instrument-readout__bar-fill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, rgba(240, 138, 36, 0.5), #ffb25a);
+  box-shadow: 0 0 6px rgba(240, 138, 36, 0.5);
+}

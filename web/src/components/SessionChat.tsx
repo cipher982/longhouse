@@ -36,6 +36,7 @@ import { useComposerAttachments } from "../lib/useComposerAttachments";
 import { Badge, Button } from "./ui";
 import { AttachmentTray } from "./AttachmentTray";
 import { ManagedLaunchHintCard } from "./session-workspace/ManagedLaunchHintCard";
+import { Nixie } from "./instruments/Nixie";
 import {
   formatClockTime,
   formatElapsedClock,
@@ -911,9 +912,7 @@ export function SessionChat({
                 <span className="session-ember-dot" aria-hidden="true" />
                 <span className="session-chat-composer__head-label">{composerUsingLabel}</span>
                 {composerElapsedSeconds != null ? (
-                  <span className="session-chat-composer__head-timer">
-                    {formatElapsedClock(composerElapsedSeconds)}
-                  </span>
+                  <Nixie value={formatElapsedClock(composerElapsedSeconds)} />
                 ) : null}
               </>
             ) : composerState.tone === "attention" ? (

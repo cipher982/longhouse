@@ -87,8 +87,15 @@ interface TimelinePaneProps {
   /** Live/idle state readout (dot + sentence), rendered before the filter
    *  and overflow icons at the far right of the header bar. */
   headerState?: ReactNode;
+  /** Activity sparkline, rendered just left of headerState (Phase 4
+   *  Instruments). Sparkline itself renders nothing when there's too little
+   *  data to draw, so this can always be passed unconditionally. */
+  headerSparkline?: ReactNode;
   /** Actions rendered at the far right of the header bar. */
   headerRight?: ReactNode;
+  /** Readout rail (Phase 4 Instruments), rendered beside the transcript on
+   *  wide viewports; CSS hides it below 1180px. */
+  rail?: ReactNode;
   dock?: ReactNode;
   listRef?: (node: HTMLDivElement | null) => void;
   renderMedia?: boolean;
@@ -1063,7 +1070,9 @@ export function TimelinePane({
   onVisibleSelectionChange,
   headerLeft,
   headerState,
+  headerSparkline,
   headerRight,
+  rail = null,
   dock = null,
   listRef,
   renderMedia = true,
@@ -1309,6 +1318,7 @@ export function TimelinePane({
           </div>
         </div>
         <div className="timeline-pane__header-right">
+          {headerSparkline}
           {headerState}
           <button
             type="button"
@@ -1391,14 +1401,15 @@ export function TimelinePane({
         </div>
       ) : null}
 
-      <div
-        ref={(node) => {
-          scrollContainerRef.current = node;
-          if (typeof listRef === "function") listRef(node);
-        }}
-        className="timeline-pane__list timeline-events"
-        data-testid="session-timeline-list"
-      >
+      <div className="timeline-pane__body">
+        <div
+          ref={(node) => {
+            scrollContainerRef.current = node;
+            if (typeof listRef === "function") listRef(node);
+          }}
+          className="timeline-pane__list timeline-events"
+          data-testid="session-timeline-list"
+        >
         {hasPreviousPage || isFetchingPreviousPage ? (
           <div
             ref={topSentinelRef}
@@ -1505,6 +1516,8 @@ export function TimelinePane({
             );
           })
         )}
+        </div>
+        {rail}
       </div>
 
       {unreadCount > 0 ? (

@@ -35,8 +35,17 @@ import { BranchSessionCard } from "../components/session-workspace/BranchSession
 import { SessionStateBadge } from "../components/session-workspace/SessionStateBadge";
 import {
   buildSessionMetaSentence,
+  buildSessionMetaSentenceParts,
   getSessionHeaderState,
 } from "../components/session-workspace/sessionHeaderState";
+import { Nixie } from "../components/instruments/Nixie";
+import { Sparkline } from "../components/instruments/Sparkline";
+import { ReadoutRail } from "../components/instruments/ReadoutRail";
+import {
+  bucketToolActivityByMinute,
+  countToolCallsThisTurn,
+  findRunningToolLabel,
+} from "../components/instruments/toolActivity";
 import {
   isSessionClosed,
   resolveSessionRuntimeState,
@@ -122,6 +131,19 @@ function SessionDetailWorkspaceRoute({
   } = workspace;
   const nowMs = useWallClock(Boolean(session && !isSessionClosed(session)));
   const transcriptCounts = useMemo(() => countTimelineItems(items), [items]);
+  // Phase 4 (Instruments): sparkline + readout-rail counts derived from
+  // `items`. Hoisted above the sessionLoading/!session early returns below
+  // (not alongside the rest of the rail wiring near workspaceClassName)
+  // because a hook may never run conditionally — those earlier returns
+  // would otherwise skip these useMemo calls on the loading render and
+  // trip "Rendered more hooks than during the previous render" once the
+  // session loads.
+  const headerActivityBuckets = useMemo(
+    () => bucketToolActivityByMinute(items, nowMs, 30),
+    [items, nowMs],
+  );
+  const toolCallsThisTurn = useMemo(() => countToolCallsThisTurn(items), [items]);
+  const waitingOnLabel = useMemo(() => findRunningToolLabel(items), [items]);
 
   // Read-on-open acknowledgement for Console results; shared viewers never
   // acknowledge (console-unread-acknowledgement spec).
@@ -337,6 +359,17 @@ function SessionDetailWorkspaceRoute({
   });
   const runtime = resolveSessionRuntimeState(displaySession);
   const headerState = getSessionHeaderState(displaySession, nowMs);
+  // Phase 4 (Instruments): "57 messages" stays plain text, "334 tool calls"
+  // renders as a Nixie, lit while the session is live. Null when there are
+  // no tool calls to highlight, in which case the plain identityLabel above
+  // renders unchanged.
+  const metaSentenceParts = buildSessionMetaSentenceParts({
+    provider: interaction.providerLabel || null,
+    project: displaySession.project?.trim() || null,
+    host: identityHost,
+    messages: transcriptCounts.messages,
+    toolCalls: transcriptCounts.toolCalls,
+  });
   const resumeAvailable =
     isViewingHead &&
     branchSourceSession.session_state.control.actions.resume.state ===
@@ -356,6 +389,24 @@ function SessionDetailWorkspaceRoute({
     isViewingHead &&
     branchSourceSession.session_state.run?.lifecycle === "ended" &&
     branchSourceSession.session_state.mode === "helm";
+  // Phase 4 (Instruments): "Turn" readout data — the sparkline/tool-call/
+  // waiting-on useMemos live above, before the early returns; this part is
+  // plain per-render arithmetic on `displaySession`, not a hook, so it's
+  // fine here.
+  const turnLive = headerState.tone === "live";
+  const activityForTurn = displaySession.session_state.activity;
+  const activityAnchorMs = Date.parse(activityForTurn.observed_at ?? "");
+  const turnElapsedSeconds =
+    turnLive && Number.isFinite(activityAnchorMs)
+      ? Math.max(0, Math.floor((nowMs - activityAnchorMs) / 1_000))
+      : null;
+  const lastTurnSeconds = displaySession.last_turn
+    ? Math.round(displaySession.last_turn.duration_ms / 1_000)
+    : null;
+  // While running: elapsed so far. Otherwise: the most recently finished
+  // turn's real duration, never a fabricated "since idle" value.
+  const turnSeconds = turnElapsedSeconds ?? lastTurnSeconds;
+
   const workspaceClassName = [
     "session-workspace-route",
     "session-workspace-route--single-column",
@@ -424,7 +475,16 @@ function SessionDetailWorkspaceRoute({
             data-testid="session-identity"
             title={identityLabel}
           >
-            {identityLabel}
+            {metaSentenceParts ? (
+              <>
+                {metaSentenceParts.before}
+                <Nixie value={metaSentenceParts.toolCalls} dim={headerState.tone !== "live"} />{" "}
+                {metaSentenceParts.toolCallsWord}
+                {metaSentenceParts.after}
+              </>
+            ) : (
+              identityLabel
+            )}
           </span>
         ) : null}
         {shouldShowSharedByPill ? (
@@ -589,6 +649,7 @@ function SessionDetailWorkspaceRoute({
           onSelectKey={selectKey}
           onVisibleSelectionChange={handleVisibleSelectionChange}
           headerLeft={headerLeft}
+          headerSparkline={<Sparkline data={headerActivityBuckets} live={turnLive} />}
           headerState={
             <SessionStateBadge
               tone={headerState.tone}
@@ -597,6 +658,17 @@ function SessionDetailWorkspaceRoute({
             />
           }
           headerRight={headerRight}
+          rail={
+            <ReadoutRail
+              turnSeconds={turnSeconds}
+              turnLive={turnLive}
+              contextTokens={displaySession.usage_latest?.context_tokens ?? null}
+              contextWindow={displaySession.usage_latest?.context_window ?? null}
+              toolCallsThisTurn={toolCallsThisTurn}
+              toolCallsLive={turnLive}
+              waitingOnLabel={waitingOnLabel}
+            />
+          }
           listRef={registerTimelineList}
           dock={
             <div

@@ -591,6 +591,13 @@
       gap: 6px;
     }
 
+    /* The activity sparkline (web/src/components/instruments/Sparkline.tsx,
+       styles/instruments.css) is hidden below 560px in that file's own
+       media query, not here: sessions.css lives inside @layer pages, and an
+       unlayered rule (instruments.css imports plain, no layer(...)) always
+       wins over a layered one regardless of specificity — a same-file
+       override here would never take effect. */
+
     .sessions-header-count {
       font-size: 12px;
     }

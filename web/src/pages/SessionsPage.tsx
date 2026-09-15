@@ -38,6 +38,8 @@ import { TimelineInbox } from "../components/sessions/TimelineInbox";
 import { InboxTuner } from "../components/sessions/InboxTuner";
 import { FilterChip, FilterPopover } from "../components/sessions/SessionsFilter";
 import LaunchSessionModal from "../components/LaunchSessionModal";
+import { Sparkline } from "../components/instruments/Sparkline";
+import { bucketTimestamps } from "../components/instruments/activityBuckets";
 import {
   type SortOrder,
   type SessionsUrlState,
@@ -264,6 +266,17 @@ export default function SessionsPage() {
   }, [timelineStreamBootstrapKey, timelineStreamEnabled]);
 
   const sessions = useMemo(() => data?.sessions || [], [data?.sessions]);
+  // Phase 4 (Instruments): activity sparkline beside search, bucketed from
+  // the loaded sessions' last_activity_at — no extra fetch.
+  const activityBuckets = useMemo(
+    () =>
+      bucketTimestamps(
+        sessions.map((card) => card.head.last_activity_at ?? card.detail.last_activity_at),
+        { nowMs: relativeNowMs, windowMinutes: 60, bucketMinutes: 5 },
+      ),
+    [sessions, relativeNowMs],
+  );
+  const hasActivitySparkline = activityBuckets.filter((value) => value > 0).length >= 2;
   const total = data?.total || 0;
   const hasRealSessions = data?.has_real_sessions ?? true;
   const groupedQueryMode = data?.query_grouping_mode === "grouped_results";
@@ -620,6 +633,17 @@ export default function SessionsPage() {
             <Button variant="ghost" size="sm" onClick={handleClearFilters} disabled={!hasFilters}>
               Clear
             </Button>
+            {hasActivitySparkline ? (
+              <span className="instrument-sparkline-label">
+                <Sparkline
+                  data={activityBuckets}
+                  width={120}
+                  height={20}
+                  live={activityBuckets[activityBuckets.length - 1] > 0}
+                />
+                activity, last hour
+              </span>
+            ) : null}
             <button
               type="button"
               className={`sessions-filter-toggle sessions-recall-toggle${recallOpen ? " sessions-filter-toggle--open" : ""}`}

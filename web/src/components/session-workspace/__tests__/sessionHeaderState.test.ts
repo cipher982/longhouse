@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildSessionMetaSentence,
+  buildSessionMetaSentenceParts,
   formatElapsedClock,
   getSessionHeaderState,
 } from "../sessionHeaderState";
@@ -134,6 +135,61 @@ describe("buildSessionMetaSentence", () => {
         toolCalls: 0,
       }),
     ).toBeNull();
+  });
+});
+
+describe("buildSessionMetaSentenceParts", () => {
+  it("splits the sentence around the tool-call count, joining back to the same text", () => {
+    const parts = buildSessionMetaSentenceParts({
+      provider: "OMP",
+      project: "zerg",
+      host: "cinder",
+      messages: 57,
+      toolCalls: 334,
+    });
+    expect(parts).not.toBeNull();
+    expect(`${parts!.before}334 ${parts!.toolCallsWord}${parts!.after}`).toBe(
+      "OMP working in zerg on cinder, 57 messages and 334 tool calls so far",
+    );
+  });
+
+  it("returns null when there are no tool calls to highlight", () => {
+    expect(
+      buildSessionMetaSentenceParts({
+        provider: "OMP",
+        project: "zerg",
+        host: "cinder",
+        messages: 57,
+        toolCalls: 0,
+      }),
+    ).toBeNull();
+  });
+
+  it("drops the messages clause and the leading sentence when neither is known", () => {
+    const parts = buildSessionMetaSentenceParts({
+      provider: null,
+      project: null,
+      host: null,
+      messages: 0,
+      toolCalls: 5,
+    });
+    expect(parts).toEqual({
+      before: "",
+      toolCalls: 5,
+      toolCallsWord: "tool calls",
+      after: " so far",
+    });
+  });
+
+  it("uses the singular word for exactly one tool call", () => {
+    const parts = buildSessionMetaSentenceParts({
+      provider: null,
+      project: null,
+      host: null,
+      messages: 0,
+      toolCalls: 1,
+    });
+    expect(parts?.toolCallsWord).toBe("tool call");
   });
 });
 

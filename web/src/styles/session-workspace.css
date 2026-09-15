@@ -1099,9 +1099,12 @@
     color var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
-.timeline-pane__filter:hover,
-.timeline-pane__status-chip:hover {
+.timeline-pane__filter:hover {
   border-color: rgba(212, 184, 122, 0.32);
+}
+
+.timeline-pane__status-chip:hover {
+  box-shadow: inset 0 0 0 1px rgba(212, 184, 122, 0.4);
 }
 
 .timeline-pane__filter.is-active {
@@ -1121,27 +1124,58 @@
   padding-bottom: var(--space-2);
 }
 
+/* Hairline chip, matching the timeline row's Helm/Shadow mode chip
+   (.inbox-row-mode-chip in styles/inbox.css) — no fill, a 1px inset border,
+   muted text, no tracking. */
 .timeline-pane__status-chip {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
   padding: 6px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(158, 124, 90, 0.16);
-  background: rgba(18, 11, 9, 0.58);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-xs);
+  border-radius: 3px;
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--color-border-primary);
+  color: var(--color-text-muted);
+  font-size: 12px;
+  letter-spacing: normal;
   cursor: pointer;
 }
 
 .timeline-pane__status-chip--warning {
-  border-color: rgba(212, 184, 122, 0.3);
+  box-shadow: inset 0 0 0 1px rgba(212, 184, 122, 0.4);
   color: rgba(233, 211, 163, 0.92);
+}
+
+/* Phase 4 (Instruments): row wrapper for the transcript list + the readout
+   rail (web/src/components/instruments/ReadoutRail.tsx), which sits beside
+   it on wide viewports. justify-content: center keeps the two as ONE
+   992px group (760 list + 32 gap + 200 rail) centered in the pane, on the
+   same axis as the composer below (.session-control-dock--bar's own
+   centering) — neither child may flex-grow to fill the row, or the rail
+   drifts to the far edge instead of sitting right next to the transcript.
+   align-items: flex-end pins the rail's bottom edge to the bottom of the
+   scrollable list, matching its own margin-bottom, the same effect the
+   static mock gets from a shrink-wrapped row. Delete this rule (and the
+   rail width bump on .session-control-dock--bar below) if the rail itself
+   is ever deleted. */
+.timeline-pane__body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  gap: var(--space-8);
 }
 
 .timeline-pane__list {
   min-height: 0;
-  flex: 1;
+  flex: 0 1 auto;
+  width: min(100%, var(--tl-tool-max));
+  min-width: 0;
+  /* .timeline-pane__body's align-items: flex-end bottom-aligns the rail to
+     content height; this child opts back into full-height stretch. */
+  align-self: stretch;
   overflow-y: auto;
   padding: var(--space-2) var(--space-4) var(--space-4);
   background:
@@ -1390,9 +1424,13 @@
   position: relative;
   gap: 2px;
   align-items: stretch;
-  width: 100%;
+  /* The list is one fixed column inside .timeline-pane__body (a centered
+     flex row with the readout rail); it must not grow or self-center, or
+     the rail gets pushed to the pane's far edge. */
+  flex: 0 1 auto;
+  width: min(100%, calc(var(--tl-tool-max) + 2 * var(--space-4)));
   max-width: calc(var(--tl-tool-max) + 2 * var(--space-4));
-  margin-inline: auto;
+  margin-inline: 0;
   padding-inline: var(--space-4);
 }
 /* The trace: one brass conductor down the transcript's edge, fading at
@@ -1407,8 +1445,8 @@
   background: linear-gradient(
     180deg,
     transparent,
-    rgba(233, 185, 73, 0.5) 12%,
-    rgba(233, 185, 73, 0.5) 88%,
+    rgba(233, 185, 73, 0.55) 10%,
+    rgba(233, 185, 73, 0.55) 90%,
     transparent
   );
   pointer-events: none;
@@ -1431,16 +1469,29 @@
   --tl-message-max: var(--tl-prose-max);
 }
 
-/* Session workspace: one 760px column, centered. The readout rail (Phase 4)
-   takes the remaining width; until then the column just sits centered. */
+/* Session workspace: one 760px column, centered. The readout rail
+   (web/src/components/instruments/ReadoutRail.tsx) takes the remaining
+   width on viewports >= 1180px (see .instrument-readout-rail's own media
+   query); below that the column just sits centered and the rail is hidden. */
 .session-workspace-route--single-column {
   --tl-prose-max: 760px;
   --tl-tool-max: 760px;
   --tl-message-max: var(--tl-prose-max);
+  /* Composer width when the rail is visible: transcript column + the same
+     32px gap as .timeline-pane__body (--space-8) + the rail's own 200px
+     (styles/instruments.css .instrument-readout-rail) = 992px total. Keep
+     these three numbers in sync. */
+  --tl-dock-max: calc(var(--tl-tool-max) + 2 * var(--space-4));
   /* Local instrument tokens for the trace (not in tokens.css — scoped here
      per the Phase 2 restyle so they can be deleted in one commit later). */
   --trace-gutter: var(--space-4);
   --trace-inset: 8px;
+}
+
+@media (min-width: 1180px) {
+  .session-workspace-route--single-column {
+    --tl-dock-max: calc(var(--tl-tool-max) + 2 * var(--space-4) + var(--space-8) + 200px);
+  }
 }
 
 .tl-chip {
@@ -2827,7 +2878,10 @@
    This wrapper just holds the column width so the runtime strip and the
    composer share the same centered column. */
 .session-control-dock--bar {
-  width: min(100%, var(--tl-tool-max));
+  /* --tl-dock-max widens to include the readout rail's width once it's
+     visible (>= 1180px) — see the media query above --tl-tool-max — so the
+     composer still reads as one frame spanning transcript + rail. */
+  width: min(100%, var(--tl-dock-max, var(--tl-tool-max)));
   gap: 0;
   padding: 0;
   border: 0;

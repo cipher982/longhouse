@@ -526,11 +526,6 @@
 .session-chat-composer__head-label--idle {
   color: var(--color-text-secondary);
 }
-.session-chat-composer__head-timer {
-  font-family: var(--font-family-mono);
-  font-size: 12px;
-  color: var(--color-text-muted);
-}
 .session-chat-composer__head-detail {
   font-size: 12px;
   color: var(--color-text-muted);
@@ -706,7 +701,6 @@
   color: rgba(243, 234, 217, 0.6);
   font-size: var(--font-size-sm);
   line-height: 1.45;
-  animation: session-chat-pending-pulse 1.6s ease-in-out infinite;
   word-break: break-word;
 }
 
@@ -725,11 +719,6 @@
   border: 2px solid rgba(181, 148, 83, 0.25);
   border-top-color: rgba(181, 148, 83, 0.75);
   animation: session-chat-spin 0.8s linear infinite;
-}
-
-@keyframes session-chat-pending-pulse {
-  0%, 100% { opacity: 0.55; }
-  50% { opacity: 0.85; }
 }
 
 @keyframes session-chat-spin {

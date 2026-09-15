@@ -18,6 +18,9 @@
 /* Components */
 @import url("./ui.css");
 @import url("./modal.css");
+/* Instruments (Phase 4 restyle) — self-contained, see the file header for
+   why it doesn't hang off session-workspace.css/sessions.css instead. */
+@import url("./instruments.css");
 
 /* Pages */
 @import url("./profile-admin.css");

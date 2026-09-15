@@ -146,3 +146,58 @@ export function buildSessionMetaSentence({
   if (!sentence) return countsText;
   return countsText ? `${sentence}, ${countsText}` : sentence;
 }
+
+export interface SessionMetaSentenceParts {
+  /** Text up to (not including) the tool-call count — already carries the
+   * right leading punctuation/conjunction. */
+  before: string;
+  toolCalls: number;
+  toolCallsWord: string;
+  /** Always " so far" — there is a count to trail once toolCalls > 0. */
+  after: string;
+}
+
+/**
+ * Phase 4 (Instruments, web-restyle-signal.md): "57 messages" stays plain
+ * text but "334 tool calls" renders as a live Nixie. Splits
+ * buildSessionMetaSentence's output around the tool-call count so the page
+ * can wrap just that number, rather than re-deriving the sentence text
+ * twice. Returns null when there are no tool calls to highlight — the
+ * caller falls back to the plain buildSessionMetaSentence() string.
+ */
+export function buildSessionMetaSentenceParts({
+  provider,
+  project,
+  host,
+  messages,
+  toolCalls,
+}: {
+  provider: string | null;
+  project: string | null;
+  host: string | null;
+  messages: number;
+  toolCalls: number;
+}): SessionMetaSentenceParts | null {
+  if (toolCalls <= 0) return null;
+
+  const parts: string[] = [];
+  if (provider) parts.push(provider);
+  parts.push("working");
+  if (project) parts.push(`in ${project}`);
+  if (host) parts.push(`on ${host}`);
+  const sentence = parts.length > 1 ? parts.join(" ") : provider ? provider : null;
+
+  let before = sentence ?? "";
+  if (messages > 0) {
+    before += `${sentence ? ", " : ""}${plural(messages, "message")} and `;
+  } else {
+    before += sentence ? ", " : "";
+  }
+
+  return {
+    before,
+    toolCalls,
+    toolCallsWord: toolCalls === 1 ? "tool call" : "tool calls",
+    after: " so far",
+  };
+}

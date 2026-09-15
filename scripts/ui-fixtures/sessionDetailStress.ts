@@ -3,6 +3,17 @@ export const SESSION_DETAIL_STRESS_NOW = "2026-04-15T16:12:00Z";
 
 const ROOT_SESSION_ID = "session-detail-root";
 
+// [hour, minute] pairs for the background-job wait polls below, spread over
+// the last ~28 minutes before SESSION_DETAIL_STRESS_NOW (16:12:00).
+const WAIT_POLL_TIMES: Array<[string, string]> = [
+  ["15", "44"],
+  ["15", "49"],
+  ["15", "54"],
+  ["15", "59"],
+  ["16", "04"],
+  ["16", "09"],
+];
+
 type JsonObject = Record<string, unknown>;
 
 type AgentSession = {
@@ -740,14 +751,19 @@ export function buildSessionDetailStressFixture(): {
       },
       tool_call_id: "head-tool-5",
     }),
-    ...Array.from({ length: 6 }, (_, index) => [
-      makeEvent(220 + index * 2, "assistant", `2026-04-15T16:12:${String(index * 2).padStart(2, "0")}Z`, {
+    // Spread across the last 30 minutes (not clustered at `now`) so the
+    // Phase 4 activity sparkline (web/src/components/instruments/
+    // toolActivity.ts) has more than one non-empty minute bucket to draw —
+    // otherwise every one of these polls lands in the same "now" bucket and
+    // Sparkline correctly renders nothing.
+    ...WAIT_POLL_TIMES.map(([hour, minute], index) => [
+      makeEvent(220 + index * 2, "assistant", `2026-04-15T${hour}:${minute}:00Z`, {
         tool_name: "exec",
         tool_input_json: `const r=await tools.write_stdin({session_id:87859,chars:"",yield_time_ms:30000}); text(r);`,
         tool_call_id: `head-wait-${index}`,
         tool_presentation: codexWaitPresentation(87859),
       }),
-      makeEvent(221 + index * 2, "tool", `2026-04-15T16:12:${String(index * 2 + 1).padStart(2, "0")}Z`, {
+      makeEvent(221 + index * 2, "tool", `2026-04-15T${hour}:${minute}:30Z`, {
         tool_name: "exec",
         tool_output_text: "Script still running",
         tool_call_id: `head-wait-${index}`,

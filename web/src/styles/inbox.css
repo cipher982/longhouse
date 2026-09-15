@@ -520,6 +520,20 @@
     color: var(--tl-ember);
   }
 
+  /* A live row's Nixie capsule (Phase 4 Instruments) is an inline-block, so
+   * the container's own overflow/text-overflow can't ellipsize it as a
+   * unit — the capsule needs to do its own truncation on the text inside
+   * it. No property here conflicts with instruments.css's unlayered base
+   * rule, so being inside @layer pages is fine. */
+  .inbox-row-activity .instrument-nixie {
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: middle;
+  }
+
   /* ---------- Mode column (Helm / Shadow / Console hairline chip) ---------- */
 
   .inbox-row-mode {

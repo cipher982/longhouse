@@ -14,6 +14,7 @@ import type { DraggableAttributes } from "@dnd-kit/core";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import { getTimelineSessionAnchor, type SessionStateFacts, type TimelineSessionCard } from "../../services/api/agents";
 import { isSessionClosed, resolveTimelineSignal, timelineSignalLabel } from "../../lib/sessionRuntime";
+import { Nixie } from "../instruments/Nixie";
 import {
   formatRelativeTime,
   getBranchLabel,
@@ -256,7 +257,7 @@ export function SessionRow({
       </div>
 
       <span className="inbox-row-activity" data-tone={statusTone} data-signal={signal}>
-        {statusLabel}
+        {signal === "working" ? <Nixie value={statusLabel} title={statusLabel} /> : statusLabel}
       </span>
 
       <span className="inbox-row-mode">
