@@ -1123,29 +1123,14 @@ export interface paths {
         };
         /**
          * Get Browser Media Blob
-         * @description Fetch a browser-visible media blob by sha256.
+         * @description Fetch a browser-visible media blob by hash.
+         *
+         *     The bytes come from the storage-v2 media store, which owns the live table
+         *     and verifies each object on read. The legacy agents models are not consulted:
+         *     their columns are not the ones the catalog writes, so they could never
+         *     resolve a hash the engine uploaded.
          */
         get: operations["get_browser_media_blob_media__sha256__blob_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/media/{sha256}/thumb": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Browser Media Thumbnail
-         * @description Fetch a derived thumbnail for a browser-visible media object.
-         */
-        get: operations["get_browser_media_thumbnail_media__sha256__thumb_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -12444,40 +12429,6 @@ export interface operations {
         };
     };
     get_browser_media_blob_media__sha256__blob_get: {
-        parameters: {
-            query?: {
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-            };
-            header?: never;
-            path: {
-                sha256: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_browser_media_thumbnail_media__sha256__thumb_get: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
