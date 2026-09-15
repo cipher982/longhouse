@@ -135,7 +135,6 @@ extension HealthSnapshot {
         let nativeRedRequiresRepair = parsedSeverity == .red
             && rowLevelRedReasons.isDisjoint(with: reasons)
 
-        let promotion: MenuBarPromotion
         if nativeRedRequiresRepair
             || storageBlockRequiresRepair
             || !repairReasons.isDisjoint(with: reasons)
@@ -144,12 +143,20 @@ extension HealthSnapshot {
             promotion = .repair
         } else if needsUser > 0 {
             promotion = .needsUser
-        } else if localEvidenceUnavailable || projectionUnavailable {
+        } else if localEvidenceUnavailable {
+            // The producer itself is not current. Do not reuse the
+            // Runtime Host projection warning for this case: all local
+            // facts are now explicitly last-known.
             promotion = .unavailable
         } else if !menuBarUnavailableReasons.isDisjoint(with: reasons)
             || engineStatus?.error != nil
             || engineStatus?.fresh == false {
             promotion = .unavailable
+        } else if projectionUnavailable {
+            // Runtime Host session projection is a separate evidence lane.
+            // Losing it must not make a healthy local Machine Agent look
+            // unavailable or offer a local-agent repair.
+            promotion = .inspect
         } else if storageBlockIsRecovering
                     || storageBlockProofUnknown
                     || degraded > 0
@@ -170,11 +177,13 @@ extension HealthSnapshot {
         case .repair where isSetupRequired:
             headline = "Finish setup on this Mac"
         case .repair where isInstallLocationBlocked:
-            headline = "Move Longhouse to Applications"
+            headline = "Move Longhouse.app to Applications"
         case .repair:
             headline = "Local shipping needs repair"
         case .needsUser:
             headline = "\(needsUser) session\(needsUser == 1 ? "" : "s") need\(needsUser == 1 ? "s" : "") you"
+        case .inspect where projectionUnavailable:
+            headline = "Remote session view unavailable"
         case .inspect where storageBlockIsRecovering:
             headline = "Source upload reconciliation pending for \(storageBlockedCount) source\(storageBlockedCount == 1 ? "" : "s")"
         case .inspect where storageBlockProofUnknown:
@@ -202,6 +211,7 @@ extension HealthSnapshot {
         case .normal:
             headline = "No sessions running"
         }
+
 
         var counts: [String] = []
         if working > 0 { counts.append("\(working) working") }

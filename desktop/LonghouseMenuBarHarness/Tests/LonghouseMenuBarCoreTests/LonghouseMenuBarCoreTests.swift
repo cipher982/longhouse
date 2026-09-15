@@ -567,6 +567,25 @@ struct LonghouseMenuBarCoreTests {
         #expect(facts.first(where: { $0.id == "transport" })?.value == "Unknown")
         #expect(facts.first(where: { $0.id == "transport" })?.detail?.contains("Runtime Host") == true)
     }
+    @Test
+    func expiredProjectionUsesInspectHeadlineWithoutLocalRepair() {
+        let snapshot = presentationSnapshot(sessions: [])
+        let projectionTrust = DataTrust.lastKnown(
+            LastKnownContext(lastSuccessAt: Date(timeIntervalSince1970: 0), failure: nil)
+        )
+
+        let presentation = snapshot.menuBarPresentation(
+            relativeTo: Date(timeIntervalSince1970: 60),
+            projectionTrust: projectionTrust
+        )
+
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.headline == "Remote session view unavailable")
+        #expect(presentation.facts.first(where: { $0.id == "local-agent" })?.value == "Running")
+        #expect(presentation.facts.first(where: { $0.id == "transport" })?.value == "Unknown")
+        #expect(presentation.facts.first(where: { $0.id == "transport" })?.detail?.contains("Runtime Host") == true)
+    }
+
 
     @Test
     func stalledShippingProgressIsNotRenderedAsClear() {

@@ -459,6 +459,7 @@ public struct MenuBarPanelView: View {
 
             if presentation.promotion == .repair
                 || shouldOfferNativeRepair
+                || !projectionTrust.isCurrent
                 || snapshot.suggestedActionIds?.contains("inspect_transport") == true
                 || snapshot.suggestedActionIds?.contains("inspect_shipping") == true {
                 sectionDivider.padding(.horizontal, 4)
@@ -495,6 +496,9 @@ public struct MenuBarPanelView: View {
     private var repairGuidance: String {
         if shouldOfferNativeRepair && !dataTrust.isCurrent {
             return "Current local status evidence is unavailable. Repair the local agent without opening Terminal; last-known facts remain below."
+        }
+        if !projectionTrust.isCurrent {
+            return "The Runtime Host session view is unavailable. The local agent and durable upload facts remain separate; refresh to retry the remote view."
         }
         if snapshot.storageBlockRequiresRepair {
             return "Local source evidence is retained. Inspect the exact block proof before retrying or discarding it."
@@ -911,6 +915,13 @@ public struct MenuBarPanelView: View {
                         perform(.repairInstall)
                     } label: {
                         Label("Repair local agent", systemImage: "wrench.and.screwdriver")
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if !projectionTrust.isCurrent {
+                    Button {
+                        perform(.refresh)
+                    } label: {
+                        Label("Retry session view", systemImage: "arrow.clockwise")
                             .frame(maxWidth: .infinity)
                     }
                 } else if snapshot.storageBlockRequiresRepair
