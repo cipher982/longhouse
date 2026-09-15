@@ -62,14 +62,9 @@ else
   echo "  ⚠ iconutil not found (macOS only), skipping .icns generation"
 fi
 
-echo "Generating social preview (1200x630)…"
-magick \
-  -size 1200x630 gradient:'#0072ff-#00c6ff' \
-  \( -size 1200x630 canvas:'#0a0a0f' -alpha set -channel A -evaluate set 30% +channel \) \
-  -compose over -composite \
-  \( "${PUBLIC_DIR}/favicon-512.png" -resize 320x320 \) -gravity West -geometry +120+0 -composite \
-  -gravity Northwest -font 'Helvetica-Bold' -pointsize 120 -fill '#ffffff' -annotate +500+200 'Longhouse' \
-  -gravity Northwest -font 'Helvetica' -pointsize 52 -fill '#e6f7ff' -annotate +500+320 'AI Agent Platform' \
-  "${PUBLIC_DIR}/og-image.png"
+# og-image.png is not generated here: it's a code-derived screenshot (real
+# timeline capture + wedge headline + master logo) built by
+# scripts/generate-og-image.mjs (repo root), not this ImageMagick gradient
+# plate. Run that script directly to regenerate it.
 
 echo "Done. Assets written to ${PUBLIC_DIR}"

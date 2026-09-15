@@ -117,6 +117,9 @@ function plural(count: number, noun: string): string {
  * The header's identity line as one sentence — "OMP working in zerg on
  * cinder, 57 messages and 334 tool calls so far" — instead of a dot-joined
  * fragment list plus a separate "N messages · N tool calls loaded" pill.
+ * "working" only applies while the header tone is live; an ended/idle
+ * session reads "OMP in zerg on cinder" instead of claiming it's still
+ * working.
  */
 export function buildSessionMetaSentence({
   provider,
@@ -124,16 +127,18 @@ export function buildSessionMetaSentence({
   host,
   messages,
   toolCalls,
+  tone,
 }: {
   provider: string | null;
   project: string | null;
   host: string | null;
   messages: number;
   toolCalls: number;
+  tone: SessionHeaderStateTone;
 }): string | null {
   const parts: string[] = [];
   if (provider) parts.push(provider);
-  parts.push("working");
+  if (tone === "live") parts.push("working");
   if (project) parts.push(`in ${project}`);
   if (host) parts.push(`on ${host}`);
   let sentence = parts.length > 1 ? parts.join(" ") : provider ? provider : null;
@@ -171,18 +176,20 @@ export function buildSessionMetaSentenceParts({
   host,
   messages,
   toolCalls,
+  tone,
 }: {
   provider: string | null;
   project: string | null;
   host: string | null;
   messages: number;
   toolCalls: number;
+  tone: SessionHeaderStateTone;
 }): SessionMetaSentenceParts | null {
   if (toolCalls <= 0) return null;
 
   const parts: string[] = [];
   if (provider) parts.push(provider);
-  parts.push("working");
+  if (tone === "live") parts.push("working");
   if (project) parts.push(`in ${project}`);
   if (host) parts.push(`on ${host}`);
   const sentence = parts.length > 1 ? parts.join(" ") : provider ? provider : null;

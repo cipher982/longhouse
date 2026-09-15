@@ -94,7 +94,8 @@ export function ReadoutRail({
       {waitingOnLabel ? (
         <div className="instrument-readout" data-testid="readout-waiting-on">
           <span className="instrument-readout__key">Waiting on</span>
-          <Nixie value={waitingOnLabel} />
+          {/* A tool label, not a live numeric value — no glow. */}
+          <Nixie value={waitingOnLabel} dim />
         </div>
       ) : null}
 

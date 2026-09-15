@@ -499,7 +499,39 @@ describe("SessionsPage", () => {
     ]);
   });
 
+  it("shows the Console mode chip and omits the chip entirely for an unknown mode", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            id: "session-console",
+            summary_title: "Console thread",
+            thread_root_session_id: "thread-console",
+            thread_head_session_id: "session-console",
+            session_state: makeSessionStateFacts({ mode: "console" }),
+          }),
+          makeTimelineCard({
+            id: "session-unknown-mode",
+            summary_title: "Unknown mode thread",
+            thread_root_session_id: "thread-unknown-mode",
+            thread_head_session_id: "session-unknown-mode",
+            session_state: makeSessionStateFacts({ mode: "unknown" }),
+          }),
+        ],
+        total: 2,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
 
+    renderSessionsPage("/timeline");
+
+    const rows = await screen.findAllByTestId("session-row");
+    expect(within(rows[0]).getByTestId("session-row-control").textContent).toBe("Console");
+    expect(within(rows[1]).queryByTestId("session-row-control")).not.toBeInTheDocument();
+  });
 
   it("disables timeline card hover transitions while the user is actively scrolling", async () => {
     vi.useFakeTimers();

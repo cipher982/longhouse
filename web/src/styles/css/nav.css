@@ -426,7 +426,7 @@
 
 .mobile-nav-user-email {
   font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -504,6 +504,14 @@
   .main-header h1 {
     font-size: var(--font-size-lg);
   }
+
+  /* Never let the machines/health sentence grow wide enough to push the
+     avatar off-screen on a phone. */
+  .nav-status {
+    max-width: 55vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 
 /* Narrow screens - tighter spacing */
@@ -574,7 +582,7 @@
   gap: 8px;
   font-size: 12px;
   font-family: var(--font-family-base);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   white-space: nowrap;
 }
 

@@ -23,14 +23,6 @@ vi.mock("../../lib/apiHealth", () => ({
   useApiHealth: () => null,
 }));
 
-vi.mock("../../lib/useWebSocket", () => ({
-  ConnectionStatus: {
-    CONNECTED: "connected",
-    ERROR: "error",
-  },
-  ConnectionStatusIndicator: () => <span data-testid="connection-status-indicator" />,
-}));
-
 vi.mock("../../hooks/useDocumentVisible", () => ({
   useDocumentVisible: () => false,
 }));

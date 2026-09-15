@@ -92,7 +92,7 @@
     font-family: var(--font-family-base);
     font-size: 12px;
     font-weight: 500;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     font-variant-numeric: tabular-nums;
     vertical-align: 2px;
   }
@@ -133,7 +133,7 @@
   }
 
   .inbox-section--history .inbox-repo[data-kind="automation"] .inbox-repo-description {
-    color: var(--text-muted);
+    color: var(--text-secondary);
   }
 
   .inbox-section--history .inbox-repo[data-kind="automation"] .inbox-row {
@@ -169,7 +169,7 @@
     font-family: var(--font-family-base);
     font-size: 12px;
     font-weight: 500;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     font-variant-numeric: tabular-nums;
     vertical-align: 2px;
   }
@@ -234,14 +234,14 @@
   }
 
   .inbox-repo-description {
-    color: var(--text-muted);
+    color: var(--text-secondary);
     font-size: var(--inbox-meta-font);
     font-weight: 400;
   }
 
   .inbox-repo-count {
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     font-variant-numeric: tabular-nums;
   }
 
@@ -379,7 +379,7 @@
     border-radius: 3px;
     background: none;
     box-shadow: inset 0 0 0 1px var(--tl-rule-strong);
-    color: var(--text-muted);
+    color: var(--text-secondary);
     margin-right: var(--space-2);
     flex-shrink: 0;
     line-height: 1.3;
@@ -605,7 +605,7 @@
     flex: 0 1 auto;
     font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
     font-size: 10px;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -683,10 +683,17 @@
 
   /* Legacy per-tone fallback — wins the cascade today (see note above), so
    * this is the block that actually paints the dot for real rows. Kept in
-   * lockstep with the data-signal rules above. */
-  .inbox-row-status-dot[data-tone="thinking"],
-  .inbox-row-status-dot[data-tone="active"],
-  .inbox-row-status-dot[data-tone="running"] {
+   * lockstep with the data-signal rules above.
+   *
+   * Gated on [data-signal="working"] too: a row's primary.tone can still
+   * read "running"/"active"/"thinking" after the row itself has gone quiet
+   * or finished (the signal axis reconciles faster than tone), and without
+   * this gate the equal-specificity, later-in-source tone selector would
+   * repaint the glow/breathe over a data-signal="quiet"/"closed" row.
+   * Nothing on a finished or quiet row may glow. */
+  .inbox-row-status-dot[data-tone="thinking"][data-signal="working"],
+  .inbox-row-status-dot[data-tone="active"][data-signal="working"],
+  .inbox-row-status-dot[data-tone="running"][data-signal="working"] {
     background: var(--tl-flame);
     box-shadow:
       0 0 0 3px color-mix(in srgb, var(--tl-flame) 16%, transparent),
@@ -709,7 +716,7 @@
 
   .inbox-row-time {
     grid-area: age;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     font-size: 12.5px;
     justify-self: end;
     text-align: right;

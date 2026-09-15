@@ -97,6 +97,7 @@ describe("buildSessionMetaSentence", () => {
         host: "cinder",
         messages: 57,
         toolCalls: 334,
+        tone: "live",
       }),
     ).toBe("OMP working in zerg on cinder, 57 messages and 334 tool calls so far");
   });
@@ -109,6 +110,7 @@ describe("buildSessionMetaSentence", () => {
         host: null,
         messages: 0,
         toolCalls: 0,
+        tone: "live",
       }),
     ).toBe("OMP working");
   });
@@ -121,6 +123,7 @@ describe("buildSessionMetaSentence", () => {
         host: null,
         messages: 3,
         toolCalls: 0,
+        tone: "live",
       }),
     ).toBe("3 messages so far");
   });
@@ -133,8 +136,35 @@ describe("buildSessionMetaSentence", () => {
         host: null,
         messages: 0,
         toolCalls: 0,
+        tone: "live",
       }),
     ).toBeNull();
+  });
+
+  it("drops \"working\" when the header tone is not live, so an ended session isn't claimed as still working", () => {
+    expect(
+      buildSessionMetaSentence({
+        provider: "OMP",
+        project: "zerg",
+        host: "cinder",
+        messages: 57,
+        toolCalls: 334,
+        tone: "cool",
+      }),
+    ).toBe("OMP in zerg on cinder, 57 messages and 334 tool calls so far");
+  });
+
+  it("drops \"working\" for the attention tone too", () => {
+    expect(
+      buildSessionMetaSentence({
+        provider: "OMP",
+        project: "zerg",
+        host: "cinder",
+        messages: 0,
+        toolCalls: 0,
+        tone: "attention",
+      }),
+    ).toBe("OMP in zerg on cinder");
   });
 });
 
@@ -146,6 +176,7 @@ describe("buildSessionMetaSentenceParts", () => {
       host: "cinder",
       messages: 57,
       toolCalls: 334,
+      tone: "live",
     });
     expect(parts).not.toBeNull();
     expect(`${parts!.before}334 ${parts!.toolCallsWord}${parts!.after}`).toBe(
@@ -161,6 +192,7 @@ describe("buildSessionMetaSentenceParts", () => {
         host: "cinder",
         messages: 57,
         toolCalls: 0,
+        tone: "live",
       }),
     ).toBeNull();
   });
@@ -172,6 +204,7 @@ describe("buildSessionMetaSentenceParts", () => {
       host: null,
       messages: 0,
       toolCalls: 5,
+      tone: "live",
     });
     expect(parts).toEqual({
       before: "",
@@ -188,8 +221,24 @@ describe("buildSessionMetaSentenceParts", () => {
       host: null,
       messages: 0,
       toolCalls: 1,
+      tone: "live",
     });
     expect(parts?.toolCallsWord).toBe("tool call");
+  });
+
+  it("drops \"working\" when the header tone is not live", () => {
+    const parts = buildSessionMetaSentenceParts({
+      provider: "OMP",
+      project: "zerg",
+      host: "cinder",
+      messages: 57,
+      toolCalls: 334,
+      tone: "cool",
+    });
+    expect(parts).not.toBeNull();
+    expect(`${parts!.before}334 ${parts!.toolCallsWord}${parts!.after}`).toBe(
+      "OMP in zerg on cinder, 57 messages and 334 tool calls so far",
+    );
   });
 });
 

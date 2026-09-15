@@ -266,7 +266,7 @@
 
 .session-workspace-header__meta {
   font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   white-space: nowrap;
 }
 
@@ -288,7 +288,7 @@
 .session-workspace-header__identity {
   font-size: 12px;
   line-height: 1.3;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -414,7 +414,7 @@
   border: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.08));
   font-size: var(--font-size-xs, 11px);
   line-height: 1.3;
-  color: var(--color-text-muted, rgba(255, 255, 255, 0.65));
+  color: var(--color-text-secondary));
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -426,7 +426,7 @@
   letter-spacing: 0.06em;
   font-weight: var(--font-weight-semibold, 600);
   font-size: 9.5px;
-  color: var(--color-text-muted, rgba(255, 255, 255, 0.5));
+  color: var(--color-text-secondary));
 }
 
 .session-shared-by-pill__name {
@@ -490,7 +490,7 @@
   font-size: var(--font-size-xs);
   text-transform: uppercase;
   letter-spacing: 0.09em;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
 }
 
 .session-context-title {
@@ -530,7 +530,7 @@
 
 .session-context-stats {
   font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   letter-spacing: 0.02em;
 }
 
@@ -582,7 +582,7 @@
 
 .session-pane-disclosure__meta {
   font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   white-space: nowrap;
 }
 
@@ -740,7 +740,7 @@
 .session-context-meta-label,
 .inspector-meta-item span {
   font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
@@ -814,7 +814,7 @@
 
 .session-context-thread-item-meta {
   font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
 }
 
 .session-context-thread-item-badges {
@@ -854,7 +854,7 @@
 .session-shadow-review__meta,
 .session-shadow-review__empty {
   font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   line-height: 1.5;
 }
 
@@ -988,7 +988,7 @@
 .event-inspector__subtitle {
   margin-top: var(--space-1);
   font-size: var(--font-size-sm);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
 }
 
 /* Copy-independent pagination counts live on this node (.sr-only) for
@@ -1115,7 +1115,7 @@
 
 .timeline-pane__match-count {
   font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   white-space: nowrap;
 }
 
@@ -1135,7 +1135,7 @@
   border-radius: 3px;
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--color-border-primary);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-size: 12px;
   letter-spacing: normal;
   cursor: pointer;
@@ -1257,11 +1257,11 @@
 .tl-seam__description {
   font-size: var(--font-size-xs);
   line-height: 1.45;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
 }
 .tl-seam__stamp {
   font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-family: var(--font-family-mono);
   white-space: nowrap;
   align-self: start;
@@ -1275,7 +1275,7 @@
   width: 100%;
   margin-inline: auto;
   padding: 6px 0;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-size: 12px;
 }
 .tl-system-action__rule {
@@ -1310,7 +1310,7 @@
   width: 100%;
   margin-inline: auto;
   padding: 2px 0;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-size: 12px;
 }
 .tl-provider-notification.is-selected {
@@ -1395,7 +1395,7 @@
 }
 .tl-reasoning__time {
   flex-shrink: 0;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-size: 11px;
 }
 .tl-reasoning__body,
@@ -1561,7 +1561,7 @@
   font-weight: var(--font-weight-medium);
   text-transform: none;
   letter-spacing: 0;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
 }
 /* Assistant turns carry no "AI" label in the transcript — the prose itself
    (unindented, no ask styling) is the tell. Only the timestamp remains. */
@@ -1569,7 +1569,7 @@
   display: none;
 }
 .tl-msg__time {
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-family: var(--font-family-base);
   font-size: 11.5px;
 }
@@ -1586,14 +1586,14 @@
   border-bottom: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.08));
 }
 .session-context-recap__label {
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-size: 11px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   margin-bottom: 4px;
 }
 .session-context-recap__text {
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-size: 13px;
   line-height: 1.5;
 }
@@ -1604,7 +1604,7 @@
   margin-top: 8px;
   max-width: var(--tl-tool-max);
   margin-inline: auto;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-family: var(--font-family-base);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
@@ -1746,7 +1746,7 @@
   padding: 8px 10px;
   border-radius: 7px;
   border: 1px dashed rgba(158, 124, 90, 0.28);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   background: rgba(12, 10, 8, 0.36);
   font-size: 12px;
 }
@@ -1863,7 +1863,7 @@
 .tl-action__ns {
   font-size: 10.5px;
   font-family: var(--font-family-mono);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   padding: 1px 5px;
   border-radius: 3px;
   background: rgba(255, 255, 255, 0.04);
@@ -1887,7 +1887,7 @@
 }
 .tl-action__time {
   font-size: 11.5px;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-family: var(--font-family-mono);
 }
 .tl-action--agent .tl-action__head {
@@ -1933,7 +1933,7 @@
 
 .tl-question p {
   margin: 0;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-size: 12px;
   line-height: 1.35;
 }
@@ -1984,7 +1984,7 @@
 }
 
 .tl-question__option-description {
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-size: 11px;
   line-height: 1.3;
 }
@@ -2053,7 +2053,7 @@
 }
 .tl-context__time {
   font-size: 11px;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
 }
 
 /* --- Noise chip: "Explored Read × 3, Grep × 2" --- */
@@ -2096,7 +2096,7 @@
   flex-shrink: 0;
 }
 .tl-noise__label {
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-weight: var(--font-weight-semibold);
   flex-shrink: 0;
 }
@@ -2110,7 +2110,7 @@
 }
 .tl-noise__count {
   font-size: 11px;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   padding: 0 6px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.04);
@@ -2138,7 +2138,7 @@
   padding: 2px 0;
   border: 0;
   background: transparent;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font: inherit;
   font-size: 11.5px;
   font-family: var(--font-family-mono);
@@ -2204,11 +2204,11 @@
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
 }
 .tl-detail__empty {
   font-size: 12px;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   padding: 6px 10px;
   border: 1px dashed rgba(158, 124, 90, 0.18);
   border-radius: var(--radius-md);
@@ -2395,7 +2395,7 @@
 
 .inspector-tool-list__meta {
   font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
 }
 
 .inspector-tool-list__icon {
@@ -2425,7 +2425,7 @@
   display: flex;
   gap: var(--space-2);
   font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-family: var(--font-family-mono);
 }
 
@@ -2453,7 +2453,7 @@
   padding: var(--space-3);
   border-radius: var(--radius-lg);
   border: 1px dashed rgba(158, 124, 90, 0.18);
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   background: rgba(18, 11, 9, 0.48);
 }
 
@@ -2522,7 +2522,7 @@
 
 .render-telemetry-panel__metrics dt,
 .render-telemetry-panel__diagnostics dt {
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-size: var(--font-size-xs);
   text-transform: uppercase;
 }
@@ -2944,7 +2944,7 @@
 
 .session-pause-panel p {
   margin: 0;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-size: 12px;
   line-height: 1.35;
 }
@@ -3035,7 +3035,7 @@
 
 .session-pause-option__description {
   overflow-wrap: anywhere;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
   font-size: 11px;
   line-height: 1.3;
 }
@@ -3152,6 +3152,15 @@
   }
   to {
     transform: translateX(0);
+  }
+}
+
+/* The drawer's fade/slide is decorative motion, not a loading indicator —
+ * it must be instant, not merely shorter. */
+@media (prefers-reduced-motion: reduce) {
+  .session-info-drawer__scrim,
+  .session-info-drawer__panel {
+    animation: none;
   }
 }
 

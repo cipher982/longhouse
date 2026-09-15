@@ -218,7 +218,7 @@
     border-radius: calc(var(--radius-md) - 2px);
     padding: 3px var(--space-2);
     background: transparent;
-    color: var(--color-text-muted);
+    color: var(--color-text-secondary);
     cursor: pointer;
     font-family: var(--font-family-base);
     font-size: var(--font-size-xs);
@@ -309,7 +309,7 @@
 
   .sessions-header-count {
     font-size: var(--font-size-sm);
-    color: var(--color-text-muted);
+    color: var(--color-text-secondary);
     font-weight: var(--font-weight-normal);
   }
 
@@ -400,7 +400,7 @@
   .filter-section-label {
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-semibold);
-    color: var(--color-text-muted);
+    color: var(--color-text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.06em;
   }
@@ -494,7 +494,7 @@
 
   .sessions-filter-toggle-desc {
     font-size: 11px;
-    color: var(--color-text-muted);
+    color: var(--color-text-secondary);
     line-height: 1.35;
   }
 
@@ -621,7 +621,7 @@
 
   .sessions-count {
     font-size: var(--font-size-sm);
-    color: var(--color-text-muted);
+    color: var(--color-text-secondary);
   }
 
   /* ---------------------------------------------------------------------------

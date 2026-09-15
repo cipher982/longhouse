@@ -261,14 +261,16 @@ export function SessionRow({
       </span>
 
       <span className="inbox-row-mode">
-        <span
-          className="inbox-row-mode-chip"
-          data-testid="session-row-control"
-          title={control.title}
-          aria-label={control.title}
-        >
-          {modeChipLabel}
-        </span>
+        {modeChipLabel ? (
+          <span
+            className="inbox-row-mode-chip"
+            data-testid="session-row-control"
+            title={control.title}
+            aria-label={control.title}
+          >
+            {modeChipLabel}
+          </span>
+        ) : null}
       </span>
 
       <span className="inbox-row-source">
@@ -306,8 +308,9 @@ export function SessionRow({
 }
 
 /** Helm / Shadow / Console — the product's canonical mode nouns, straight off
- * the server's `session_state.mode`. Drives the timeline row's hairline chip. */
-function getModeChipLabel(mode: SessionStateFacts["mode"]): string {
+ * the server's `session_state.mode`. Drives the timeline row's hairline chip.
+ * An unrecognized/unknown mode omits the chip entirely rather than guessing. */
+function getModeChipLabel(mode: SessionStateFacts["mode"]): string | null {
   switch (mode) {
     case "helm":
       return "Helm";
@@ -316,7 +319,7 @@ function getModeChipLabel(mode: SessionStateFacts["mode"]): string {
     case "shadow":
       return "Shadow";
     default:
-      return "Shadow";
+      return null;
   }
 }
 

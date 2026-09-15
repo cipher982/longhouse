@@ -528,7 +528,7 @@
 }
 .session-chat-composer__head-detail {
   font-size: 12px;
-  color: var(--color-text-muted);
+  color: var(--color-text-secondary);
 }
 /* The evidence-disclosure icon (runtime strip, compact) — far right of the
    head row, exactly where the mock's info glyph sits. */
@@ -593,7 +593,7 @@
     background-color 0.15s;
 }
 
-.session-chat-composer textarea:focus {
+.session-chat-composer textarea:focus-visible {
   outline: none;
   border-color: rgba(212, 184, 122, 0.58);
   box-shadow:
@@ -620,7 +620,7 @@
   box-shadow: inset 0 0 0 1px rgba(70, 54, 41, 0.8);
 }
 
-.session-chat-composer--dock .session-chat-composer-row textarea:focus {
+.session-chat-composer--dock .session-chat-composer-row textarea:focus-visible {
   box-shadow: inset 0 0 0 1px rgba(233, 185, 73, 0.45);
 }
 

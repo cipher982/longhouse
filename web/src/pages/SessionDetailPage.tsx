@@ -142,7 +142,12 @@ function SessionDetailWorkspaceRoute({
     () => bucketToolActivityByMinute(items, nowMs, 30),
     [items, nowMs],
   );
-  const toolCallsThisTurn = useMemo(() => countToolCallsThisTurn(items), [items]);
+  // null (not 0) when there are no tool calls this turn, so the readout
+  // rail omits the row entirely on an empty thread rather than showing "0".
+  const toolCallsThisTurn = useMemo(() => {
+    const count = countToolCallsThisTurn(items);
+    return count > 0 ? count : null;
+  }, [items]);
   const waitingOnLabel = useMemo(() => findRunningToolLabel(items), [items]);
 
   // Read-on-open acknowledgement for Console results; shared viewers never
@@ -348,17 +353,19 @@ function SessionDetailWorkspaceRoute({
   const identityHost =
     displaySession.control?.source_runner_name?.trim() ||
     (homeLabel && !GENERIC_HOME_LABELS.has(homeLabel) ? homeLabel : null);
+  const runtime = resolveSessionRuntimeState(displaySession);
+  const headerState = getSessionHeaderState(displaySession, nowMs);
   // One sentence instead of a dot-joined fragment list and a separate
   // "N messages · N tool calls loaded" pill — same facts, read as prose.
+  // "working" only appears while the header tone is live.
   const identityLabel = buildSessionMetaSentence({
     provider: interaction.providerLabel || null,
     project: displaySession.project?.trim() || null,
     host: identityHost,
     messages: transcriptCounts.messages,
     toolCalls: transcriptCounts.toolCalls,
+    tone: headerState.tone,
   });
-  const runtime = resolveSessionRuntimeState(displaySession);
-  const headerState = getSessionHeaderState(displaySession, nowMs);
   // Phase 4 (Instruments): "57 messages" stays plain text, "334 tool calls"
   // renders as a Nixie, lit while the session is live. Null when there are
   // no tool calls to highlight, in which case the plain identityLabel above
@@ -369,6 +376,7 @@ function SessionDetailWorkspaceRoute({
     host: identityHost,
     messages: transcriptCounts.messages,
     toolCalls: transcriptCounts.toolCalls,
+    tone: headerState.tone,
   });
   const resumeAvailable =
     isViewingHead &&

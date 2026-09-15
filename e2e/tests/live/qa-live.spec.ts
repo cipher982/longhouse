@@ -751,7 +751,7 @@ test("timeline search finds the owned fixture and has AI toggle", async ({
   await expect(toggle).toHaveAttribute("aria-pressed", "false");
 
   await page
-    .getByPlaceholder("Search sessions...")
+    .getByPlaceholder("Search sessions")
     .fill(hostedQaTranscript.searchText);
   const ownedRow = page.getByTestId("session-row").first();
   await expect(ownedRow).toBeVisible({

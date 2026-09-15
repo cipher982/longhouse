@@ -37,14 +37,20 @@ export function Sparkline({
 
   const max = Math.max(...data, 1);
   const n = data.length;
-  const step = n > 1 ? width / (n - 1) : width;
+  const dotRadius = 2.2;
+  // Inset the drawable x range by the live dot's radius on both ends so the
+  // dot (drawn at the last point) sits fully inside the viewBox instead of
+  // being half-clipped at cx = width.
+  const drawableWidth = Math.max(width - dotRadius * 2, 0);
+  const step = n > 1 ? drawableWidth / (n - 1) : drawableWidth;
   const points = data
     .map((value, index) => {
-      const x = index * step;
+      const x = dotRadius + index * step;
       const y = height - 2 - (value * (height - 4)) / max;
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     })
     .join(" ");
+  const lastX = dotRadius + (n - 1) * step;
   const lastY = height - 2 - (data[n - 1] * (height - 4)) / max;
 
   return (
@@ -59,7 +65,7 @@ export function Sparkline({
     >
       {title ? <title>{title}</title> : null}
       <polyline points={points} stroke={STROKE} strokeWidth={1} strokeLinejoin="round" />
-      {live ? <circle cx={width} cy={lastY} r={2.2} fill={LIVE_DOT} /> : null}
+      {live ? <circle cx={lastX} cy={lastY} r={dotRadius} fill={LIVE_DOT} /> : null}
     </svg>
   );
 }

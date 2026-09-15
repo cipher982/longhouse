@@ -424,7 +424,14 @@ function NavStatus() {
     runnerStatus && runnerStatus.total > 0
       ? `, ${runnerStatus.online} of ${runnerStatus.total} machines up`
       : "";
-  const title = apiError ? apiError.message : "API responding normally";
+  // Per-machine breakdown (name: status, one per line) lives on the title
+  // attribute — folded in from the old RunnerStatusIndicator tooltip, which
+  // this sentence replaced without carrying the detail forward.
+  const runnersTitle =
+    runnerStatus && runnerStatus.runners.length > 0
+      ? runnerStatus.runners.map((r) => `${r.name}: ${r.status}`).join("\n")
+      : null;
+  const title = apiError ? apiError.message : (runnersTitle ?? "API responding normally");
 
   return (
     <span className="nav-status" data-testid="nav-status" title={title} aria-live="polite">
