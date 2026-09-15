@@ -15997,7 +15997,9 @@ export interface operations {
     };
     put_storage_v2_media_agents_storage_v2_media__media_hash__put: {
         parameters: {
-            query?: never;
+            query?: {
+                thumb_sha256?: string | null;
+            };
             header?: never;
             path: {
                 media_hash: string;
