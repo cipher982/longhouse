@@ -158,17 +158,14 @@ def exercise(engine):
                 raise AssertionError(f"daemon did not converge: {status}; logs: {daemon_logs()}")
 
             startup_deadline = time.monotonic() + 60
-            while True:
-                startup_projection = observe().get("local_projection", {})
-                startup_reconciliation = startup_projection.get("reconciliation", {})
-                if (
-                    startup_reconciliation.get("state") in {"failed", "reconciling"}
-                    and startup_reconciliation.get("failure_reason")
-                    and not startup_projection.get("last_reconciled_at")
-                ):
-                    break
+            while 'reason="startup"' not in daemon_logs():
+                observe()
                 assert time.monotonic() < startup_deadline, daemon_logs()
                 time.sleep(0.05)
+            startup_status = observe()
+            startup_projection = startup_status.get("local_projection", {})
+            assert startup_projection.get("reconciliation", {}).get("state") != "idle"
+            assert not startup_projection.get("last_reconciled_at")
             fail_inventory.write_text("ok\n")
 
             healthy = wait_for(lambda projection: projection.get("reconciliation", {}).get("state") == "idle")
