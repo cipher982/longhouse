@@ -12,17 +12,19 @@
 //!
 //! Algorithm (macOS- and Linux-friendly via `ps` + `lsof`):
 //!
-//!   1. Enumerate recent transcript files under the existing provider
-//!      roots via `discovery::discover_all_files`, filtered by mtime.
-//!   2. Enumerate candidate provider-CLI processes with
+//!   1. Validate hook-resolved bindings first, then inspect open files for
+//!      unresolved live provider processes.
+//!   2. Discover only provider roots implicated by that open-file evidence
+//!      via `discovery::discover_all_files`, filtered by mtime.
+//!   3. Enumerate candidate provider-CLI processes with
 //!      `ps -axo pid=,lstart=,command=`. Filter by command basename
 //!      (`claude`, `codex`, `agy`, `opencode`, `pi`, `omp`) plus the stock
 //!      Node-backed launcher shapes (`node .../codex`, `node .../opencode`,
 //!      etc.) - never `longhouse-*` wrappers (those are managed sessions and
 //!      get their own lease surface).
-//!   3. For each candidate pid, ask `lsof -F n -p <pid>` which regular
+//!   4. For each candidate pid, ask `lsof -F n -p <pid>` which regular
 //!      files it has open, and look for transcript paths.
-//!   4. Emit one [`UnmanagedSessionBinding`] per `(provider,
+//!   5. Emit one [`UnmanagedSessionBinding`] per `(provider,
 //!      provider_session_id)` with `(pid, process_start_time)` as the
 //!      liveness identity.
 //!
@@ -164,16 +166,32 @@ fn collect_unmanaged_session_bindings_from_processes(
         return Ok(out);
     }
 
-    let transcripts = discover_recent_transcripts(now);
+    // Inspect live unresolved processes before touching any provider archive.
+    let evidence = collect_process_open_file_evidence(unresolved_processes, scanner, deadline)?;
+    if evidence.iter().all(|item| item.open_files.is_empty()) {
+        return Ok(out);
+    }
+
+    let providers = discovery::get_providers();
     if Instant::now() >= deadline {
         return Err(unmanaged_refresh_timeout());
     }
-    let fd_bindings = collect_from_transcripts_with_processes(
+    let relevant = relevant_provider_names(&evidence, &providers);
+    if Instant::now() >= deadline {
+        return Err(unmanaged_refresh_timeout());
+    }
+    if relevant.is_empty() {
+        return Ok(out);
+    }
+    let transcripts = discover_recent_transcripts(now, &providers, &relevant)?;
+    if Instant::now() >= deadline {
+        return Err(unmanaged_refresh_timeout());
+    }
+    let fd_bindings = collect_from_transcripts_with_open_files(
         machine_id,
         &transcripts,
-        scanner,
         now,
-        &unresolved_processes,
+        &evidence,
         deadline,
     )?;
     for binding in fd_bindings {
@@ -193,6 +211,67 @@ fn unresolved_unmanaged_processes(
                 && !excluded_managed_pids.contains(&process.pid)
         })
         .collect()
+}
+#[derive(Clone, Debug)]
+struct ProcessOpenFileEvidence {
+    process: ProcessInfo,
+    provider: &'static str,
+    open_files: Vec<PathBuf>,
+}
+
+fn collect_process_open_file_evidence(
+    processes: Vec<ProcessInfo>,
+    scanner: &dyn ProcessScanner,
+    deadline: Instant,
+) -> Result<Vec<ProcessOpenFileEvidence>, String> {
+    let mut evidence = Vec::with_capacity(processes.len());
+    for process in processes {
+        if Instant::now() >= deadline {
+            return Err(unmanaged_refresh_timeout());
+        }
+        let Some(provider) = is_provider_process(&process.command) else {
+            continue;
+        };
+        let open_files = scanner.list_open_files(process.pid)?;
+        if Instant::now() >= deadline {
+            return Err(unmanaged_refresh_timeout());
+        }
+        evidence.push(ProcessOpenFileEvidence {
+            process,
+            provider,
+            open_files,
+        });
+    }
+    Ok(evidence)
+}
+
+fn relevant_provider_names(
+    evidence: &[ProcessOpenFileEvidence],
+    providers: &[discovery::ProviderConfig],
+) -> HashSet<&'static str> {
+    let mut relevant = HashSet::new();
+    for item in evidence {
+        for path in &item.open_files {
+            if item.provider == "claude" && claude_task_session_id_from_path(path).is_some() {
+                relevant.insert("claude");
+            }
+
+            let matching = discovery::matching_provider_names_for_path(path, providers);
+            if !matching.contains(&item.provider) {
+                continue;
+            }
+            relevant.insert(item.provider);
+
+            // A path physically shared by Pi and OMP is intentionally
+            // ambiguous. Keep both names selected so discover_all_files can
+            // apply its canonical ambiguity guard.
+            if matching.contains(&"pi") && matching.contains(&"omp") {
+                relevant.insert("pi");
+                relevant.insert("omp");
+            }
+        }
+    }
+    relevant
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -448,10 +527,30 @@ fn canonicalize(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn discover_recent_transcripts(now: DateTime<Utc>) -> Vec<(PathBuf, &'static str)> {
-    let providers = discovery::get_providers();
+fn discover_recent_transcripts(
+    now: DateTime<Utc>,
+    providers: &[discovery::ProviderConfig],
+    relevant: &HashSet<&'static str>,
+) -> Result<Vec<(PathBuf, &'static str)>, String> {
+    let selected = providers
+        .iter()
+        .filter(|provider| relevant.contains(provider.name))
+        .cloned()
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let discovery_scan = discovery::discover_all_files_with_inventory(&selected);
+    if discovery_scan.inventory.scan_error_count > 0 {
+        return Err(format!(
+            "unmanaged transcript discovery incomplete: {} source walk errors",
+            discovery_scan.inventory.scan_error_count
+        ));
+    }
+
     let mut transcripts: Vec<(PathBuf, &'static str)> = Vec::new();
-    for (path, provider_name) in discovery::discover_all_files(&providers) {
+    for (path, provider_name) in discovery_scan.files {
         if let Ok(meta) = path.metadata() {
             if let Ok(mtime) = meta.modified() {
                 let mtime_utc = DateTime::<Utc>::from(mtime);
@@ -460,12 +559,8 @@ fn discover_recent_transcripts(now: DateTime<Utc>) -> Vec<(PathBuf, &'static str
                 }
             }
         }
-        if transcripts.len() >= MAX_BINDINGS * 4 {
-            break;
-        }
     }
-
-    transcripts
+    Ok(transcripts)
 }
 
 /// Test seam over already-discovered transcripts and injected process/fd truth.
@@ -507,6 +602,24 @@ fn collect_from_transcripts_with_processes(
         return Ok(Vec::new());
     }
 
+    let evidence = collect_process_open_file_evidence(processes.to_vec(), scanner, deadline)?;
+    collect_from_transcripts_with_open_files(machine_id, transcripts, now, &evidence, deadline)
+}
+
+fn collect_from_transcripts_with_open_files(
+    machine_id: &str,
+    transcripts: &[(PathBuf, &'static str)],
+    now: DateTime<Utc>,
+    evidence: &[ProcessOpenFileEvidence],
+    deadline: Instant,
+) -> Result<Vec<UnmanagedSessionBinding>, String> {
+    if Instant::now() >= deadline {
+        return Err(unmanaged_refresh_timeout());
+    }
+    if transcripts.is_empty() || evidence.is_empty() {
+        return Ok(Vec::new());
+    }
+
     // Pre-index transcripts by canonicalized path for fast fd lookup.
     let mut transcript_index: HashMap<PathBuf, (PathBuf, &'static str)> = HashMap::new();
     let mut transcript_by_session: HashMap<(String, String), PathBuf> = HashMap::new();
@@ -517,37 +630,26 @@ fn collect_from_transcripts_with_processes(
         }
     }
 
-    if processes.is_empty() {
-        return Ok(Vec::new());
-    }
-
     // If two processes claim the same transcript, prefer the newer one.
     let mut best_by_transcript: HashMap<PathBuf, (ProcessInfo, &'static str)> = HashMap::new();
 
-    for proc in processes {
+    for item in evidence {
         if Instant::now() >= deadline {
             return Err(unmanaged_refresh_timeout());
         }
-        let Some(provider) = is_provider_process(&proc.command) else {
-            continue;
-        };
-        let open_files = scanner.list_open_files(proc.pid)?;
-        if Instant::now() >= deadline {
-            return Err(unmanaged_refresh_timeout());
-        }
-        for open_path in open_files {
-            let canon = canonicalize(&open_path);
+        for open_path in &item.open_files {
+            let canon = canonicalize(open_path);
             let matched_transcript = transcript_index
                 .get(&canon)
-                .filter(|(_orig, file_provider)| *file_provider == provider)
+                .filter(|(_orig, file_provider)| *file_provider == item.provider)
                 .map(|(orig, _file_provider)| orig.clone())
                 .or_else(|| {
-                    if provider != "claude" {
+                    if item.provider != "claude" {
                         return None;
                     }
-                    let session_id = claude_task_session_id_from_path(&open_path)?;
+                    let session_id = claude_task_session_id_from_path(open_path)?;
                     transcript_by_session
-                        .get(&(provider.to_string(), session_id))
+                        .get(&(item.provider.to_string(), session_id))
                         .cloned()
                 });
             let Some(display_path) = matched_transcript else {
@@ -555,9 +657,9 @@ fn collect_from_transcripts_with_processes(
             };
             let display_canon = canonicalize(&display_path);
             match best_by_transcript.get(&display_canon) {
-                Some((existing, _)) if existing.start_time >= proc.start_time => continue,
+                Some((existing, _)) if existing.start_time >= item.process.start_time => continue,
                 _ => {
-                    best_by_transcript.insert(display_canon, (proc.clone(), provider));
+                    best_by_transcript.insert(display_canon, (item.process.clone(), item.provider));
                 }
             }
         }
@@ -597,10 +699,9 @@ fn collect_from_transcripts_with_processes(
             source_mtime: mtime.map(|m| m.to_rfc3339()),
             observed_at: now.to_rfc3339(),
         });
-
-        if bindings.len() >= MAX_BINDINGS {
-            break;
-        }
+    }
+    if bindings.len() > MAX_BINDINGS {
+        return Err("unmanaged binding discovery incomplete: cap reached".to_string());
     }
 
     Ok(bindings)
@@ -1112,6 +1213,47 @@ mod tests {
         )
         .unwrap();
         assert!(bindings.is_empty());
+    }
+
+    #[test]
+    fn optional_discovery_only_walks_provider_with_open_source_evidence() {
+        let now = Utc::now();
+        let tmp = tempfile::tempdir().unwrap();
+        let codex_root = tmp.path().join("codex");
+        let claude_root = tmp.path().join("claude");
+        std::fs::create_dir_all(&codex_root).unwrap();
+        std::fs::create_dir_all(&claude_root).unwrap();
+        let codex_transcript = codex_root.join("codex-session.jsonl");
+        let claude_transcript = claude_root.join("claude-session.jsonl");
+        std::fs::write(&codex_transcript, "{}\n").unwrap();
+        std::fs::write(&claude_transcript, "{}\n").unwrap();
+
+        let providers = vec![
+            discovery::ProviderConfig {
+                name: "claude",
+                root: claude_root,
+                extension: "jsonl",
+            },
+            discovery::ProviderConfig {
+                name: "codex",
+                root: codex_root,
+                extension: "jsonl",
+            },
+        ];
+        let evidence = vec![ProcessOpenFileEvidence {
+            process: proc_info(1234, "2026-04-27T10:00:00Z", "/usr/local/bin/codex"),
+            provider: "codex",
+            open_files: vec![codex_transcript.clone()],
+        }];
+
+        let relevant = relevant_provider_names(&evidence, &providers);
+        assert_eq!(relevant, HashSet::from(["codex"]));
+        let discovered = discover_recent_transcripts(now, &providers, &relevant).unwrap();
+        assert_eq!(discovered, vec![(codex_transcript, "codex")]);
+
+        // No relevant evidence must short-circuit before any provider walk.
+        let none = discover_recent_transcripts(now, &providers, &HashSet::new()).unwrap();
+        assert!(none.is_empty());
     }
 
     #[test]

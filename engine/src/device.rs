@@ -1067,6 +1067,8 @@ fn native_repair_blocking_reasons(health: &NativeLocalHealth) -> Vec<String> {
                 reason.as_str(),
                 "engine_projection_stale"
                     | "engine_reconciliation_failed"
+                    | "engine_reconciliation_stale"
+                    | "engine_reconciling"
                     | "storage_v2_outbox_unreadable"
                     | "storage_v2_sources_unresolved"
                     | "storage_v2_sources_proof_unknown"
@@ -1535,13 +1537,39 @@ fn native_health_from_parts(
     } else if exists && error.is_none() && effective_age_seconds.is_none() {
         reasons.push("engine_status_age_unknown".to_string());
     }
-    let reconciliation_state = local_projection
+    let reconciliation = local_projection
         .and_then(|value| value.get("reconciliation"))
-        .and_then(Value::as_object)
+        .and_then(Value::as_object);
+    let reconciliation_state = reconciliation
         .and_then(|value| value.get("state"))
         .and_then(Value::as_str);
-    if reconciliation_state == Some("failed") {
+    let reconciliation_failure_reason = reconciliation
+        .and_then(|value| value.get("failure_reason"))
+        .and_then(Value::as_str)
+        .filter(|reason| !reason.trim().is_empty());
+    let last_reconciled_at = local_projection
+        .and_then(|value| value.get("last_reconciled_at"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty());
+    let last_reconciled_age = last_reconciled_at.and_then(rfc3339_age_seconds);
+    let reconciliation_receipt_stale = last_reconciled_at.is_none()
+        || last_reconciled_age.is_none_or(|age| age >= PROJECTION_STALE_SECONDS);
+    if reconciliation_state == Some("failed") || reconciliation_failure_reason.is_some() {
         reasons.push("engine_reconciliation_failed".to_string());
+    }
+    if reconciliation_state == Some("reconciling") {
+        // A retry attempt is not a completed full reconciliation. Keep this
+        // degraded even when the engine pulse and the previous receipt are
+        // still fresh; a new scan must finish before discovery is current.
+        reasons.push("engine_reconciling".to_string());
+        if last_reconciled_at.is_some() && reconciliation_receipt_stale {
+            reasons.push("engine_reconciliation_stale".to_string());
+        }
+    } else if reconciliation_state != Some("failed") && reconciliation_receipt_stale {
+        // A pulse or projection refresh does not prove complete session
+        // discovery. The first startup attempt gets a more precise reason;
+        // an idle/unknown state with no current receipt is stale evidence.
+        reasons.push("engine_reconciliation_stale".to_string());
     }
     let projection_age = local_projection
         .and_then(|value| value.get("generated_at"))
@@ -1662,6 +1690,18 @@ fn native_health_from_parts(
         .any(|reason| reason == "managed_launch_recovery_exhausted")
     {
         "Managed session recovery needs attention"
+    } else if reasons
+        .iter()
+        .any(|reason| reason == "engine_reconciliation_failed")
+    {
+        "Session discovery failed"
+    } else if reasons.iter().any(|reason| reason == "engine_reconciling") {
+        "Session discovery is in progress"
+    } else if reasons
+        .iter()
+        .any(|reason| reason == "engine_reconciliation_stale")
+    {
+        "Session discovery is stale"
     } else if reasons
         .iter()
         .any(|reason| reason == "engine_projection_stale")
@@ -1873,9 +1913,6 @@ fn native_desktop_action_text(action_id: &str, reasons: &[String]) -> String {
         "inspect_transport" => {
             "Inspect transport and retry state with: longhouse local-health --json".to_string()
         }
-        "inspect_managed_session" => {
-            "Inspect the affected managed session and local recovery files.".to_string()
-        }
         "repair_machine"
             if reasons.iter().any(|reason| {
                 matches!(
@@ -1885,6 +1922,9 @@ fn native_desktop_action_text(action_id: &str, reasons: &[String]) -> String {
             }) =>
         {
             "Run: longhouse machine repair --repair-service --json".to_string()
+        }
+        "inspect_managed_session" => {
+            "Inspect the affected managed session and local recovery files.".to_string()
         }
         "repair_machine" => "Run: longhouse machine repair --json".to_string(),
         "free_disk_space" => {
@@ -2013,14 +2053,16 @@ fn native_desktop_suggested_action_ids(reasons: &[String]) -> Vec<String> {
             | "engine_status_unreadable"
             | "engine_status_stale"
             | "engine_projection_stale"
-            | "state_database_corrupt"
-            | "engine_reconciliation_failed" => "repair_machine",
+            | "state_database_corrupt" => "repair_machine",
             "engine_status_age_unknown"
             | "engine_status_aging"
             | "engine_status_sessions_invalid"
             | "engine_status_sessions_missing"
             | "state_database_locked"
             | "state_database_readonly"
+            | "engine_reconciliation_failed"
+            | "engine_reconciliation_stale"
+            | "engine_reconciling"
             | "state_database_unavailable" => "inspect_local_health",
             "storage_v2_sources_blocked"
             | "storage_v2_sources_unresolved"
@@ -3259,7 +3301,6 @@ fn engine_health_needs_repair(health: &NativeLocalHealth) -> bool {
                 | "engine_status_unreadable"
                 | "engine_status_stale"
                 | "engine_projection_stale"
-                | "engine_reconciliation_failed"
                 | "state_database_corrupt"
         )
     })
@@ -5822,6 +5863,7 @@ mod tests {
 
     #[test]
     fn native_local_health_reports_fresh_status_file() {
+        let now = chrono::Utc::now().to_rfc3339();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
         let health = native_health_from_parts(
@@ -5837,7 +5879,13 @@ mod tests {
                 "is_offline": false,
                 "managed_sessions": [{"session_id": "s1"}],
                 "control_channel": {"status": "connected"},
-                "build": {"commit_short": "abc123"}
+                "build": {"commit_short": "abc123"},
+                "local_projection": {
+                    "generated_at": now.clone(),
+                    "engine_pulse_at": now.clone(),
+                    "last_reconciled_at": now,
+                    "reconciliation": {"state": "idle"}
+                }
             })),
             None,
         );
@@ -5948,6 +5996,7 @@ mod tests {
 
     #[test]
     fn native_local_health_does_not_treat_malformed_storage_count_as_zero() {
+        let now = chrono::Utc::now().to_rfc3339();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
         let health = native_health_from_parts(
@@ -5959,7 +6008,13 @@ mod tests {
                     "blocked_source_count": 2.0,
                     "unresolved_blocked_source_count": 0
                 },
-                "ship_attempts_10m": 0
+                "ship_attempts_10m": 0,
+                "local_projection": {
+                    "generated_at": now.clone(),
+                    "engine_pulse_at": now.clone(),
+                    "last_reconciled_at": now,
+                    "reconciliation": {"state": "idle"}
+                }
             })),
             None,
         );
@@ -6415,6 +6470,161 @@ mod tests {
     }
 
     #[test]
+    fn native_reconciliation_failure_retry_and_completion_keep_discovery_truthful() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let now = chrono::Utc::now().to_rfc3339();
+        let failure = native_health_from_parts(
+            &path,
+            true,
+            Some(1),
+            Some(json!({
+                "spool_pending_count": 0,
+                "spool_dead_count": 0,
+                "ship_attempts_10m": 0,
+                "is_offline": false,
+                "local_projection": {
+                    "generated_at": now.clone(),
+                    "engine_pulse_at": now.clone(),
+                    "last_reconciled_at": "",
+                    "reconciliation": {
+                        "state": "failed",
+                        "reason": "process_inventory"
+                    }
+                }
+            })),
+            None,
+        );
+        assert_eq!(failure.health_state, "degraded");
+        assert!(failure
+            .reasons
+            .contains(&"engine_reconciliation_failed".to_string()));
+        assert_eq!(failure.transport.status_reason, "healthy");
+
+        let retry = native_health_from_parts(
+            &path,
+            true,
+            Some(1),
+            Some(json!({
+                "spool_pending_count": 0,
+                "spool_dead_count": 0,
+                "ship_attempts_10m": 0,
+                "is_offline": false,
+                "local_projection": {
+                    "generated_at": now.clone(),
+                    "engine_pulse_at": now.clone(),
+                    "last_reconciled_at": "",
+                    "reconciliation": {
+                        "state": "reconciling",
+                        "reason": "full_reconciliation",
+                        "failure_reason": "process_inventory"
+                    }
+                }
+            })),
+            None,
+        );
+        assert_eq!(retry.health_state, "degraded");
+        let retry_plan = native_repair_plan_from_parts(
+            retry.clone(),
+            NativeMachineStateStatus {
+                path: dir.path().join("machine/state.json").display().to_string(),
+                exists: true,
+                readable: true,
+                configured: true,
+                runtime_url_present: true,
+                machine_name_present: true,
+                error: None,
+            },
+            None,
+        );
+        assert_eq!(retry_plan.recommendation, "inspect_logs");
+        assert_eq!(
+            native_desktop_suggested_action_ids(&retry.reasons),
+            vec!["inspect_local_health"]
+        );
+        assert!(native_repair_blocking_reasons(&retry).contains(&"engine_reconciling".to_string()));
+
+        let stale = native_health_from_parts(
+            &path,
+            true,
+            Some(1),
+            Some(json!({
+                "spool_pending_count": 0,
+                "spool_dead_count": 0,
+                "ship_attempts_10m": 0,
+                "is_offline": false,
+                "local_projection": {
+                    "generated_at": now.clone(),
+                    "engine_pulse_at": now.clone(),
+                    "last_reconciled_at":
+                        (chrono::Utc::now() - chrono::Duration::seconds(PROJECTION_STALE_SECONDS as i64 + 1))
+                            .to_rfc3339(),
+                    "reconciliation": {"state": "idle"}
+                }
+            })),
+            None,
+        );
+        assert_eq!(stale.health_state, "degraded");
+        assert!(stale
+            .reasons
+            .contains(&"engine_reconciliation_stale".to_string()));
+
+        assert!(retry
+            .reasons
+            .contains(&"engine_reconciliation_failed".to_string()));
+        assert!(retry.reasons.contains(&"engine_reconciling".to_string()));
+        assert_eq!(retry.transport.status_reason, "healthy");
+
+        let complete = native_health_from_parts(
+            &path,
+            true,
+            Some(1),
+            Some(json!({
+                "spool_pending_count": 0,
+                "spool_dead_count": 0,
+                "ship_attempts_10m": 0,
+                "is_offline": false,
+                "local_projection": {
+                    "generated_at": now.clone(),
+                    "engine_pulse_at": now.clone(),
+                    "last_reconciled_at": now,
+                    "reconciliation": {"state": "idle"}
+                }
+            })),
+            None,
+        );
+        assert_eq!(complete.health_state, "healthy");
+        assert!(complete.reasons.is_empty());
+        assert_eq!(complete.transport.status_reason, "healthy");
+
+        let shipping_failure = native_health_from_parts(
+            &path,
+            true,
+            Some(1),
+            Some(json!({
+                "spool_pending_count": 0,
+                "spool_dead_count": 0,
+                "ship_attempts_10m": 4,
+                "ship_server_errors_10m": 3,
+                "last_ship_result": "server_error",
+                "is_offline": false,
+                "local_projection": {
+                    "generated_at": chrono::Utc::now().to_rfc3339(),
+                    "engine_pulse_at": chrono::Utc::now().to_rfc3339(),
+                    "last_reconciled_at": chrono::Utc::now().to_rfc3339(),
+                    "reconciliation": {"state": "idle"}
+                }
+            })),
+            None,
+        );
+        assert_eq!(shipping_failure.health_state, "degraded");
+        assert_eq!(shipping_failure.transport.status_reason, "server_errors");
+        assert!(shipping_failure
+            .reasons
+            .contains(&"server_errors".to_string()));
+    }
+
+    #[test]
     fn native_local_health_rejects_stale_projection_pulse_on_fresh_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
@@ -6509,6 +6719,7 @@ mod tests {
 
     #[test]
     fn native_local_health_ignores_recovered_server_error_rate() {
+        let now = chrono::Utc::now().to_rfc3339();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
         let health = native_health_from_parts(
@@ -6521,7 +6732,13 @@ mod tests {
                 "last_ship_result": "ok",
                 "spool_pending_count": 0,
                 "spool_dead_count": 0,
-                "is_offline": false
+                "is_offline": false,
+                "local_projection": {
+                    "generated_at": now.clone(),
+                    "engine_pulse_at": now.clone(),
+                    "last_reconciled_at": now,
+                    "reconciliation": {"state": "idle"}
+                }
             })),
             None,
         );
@@ -6683,6 +6900,7 @@ mod tests {
 
     #[test]
     fn native_repair_plan_reports_healthy_when_configured_and_fresh() {
+        let now = chrono::Utc::now().to_rfc3339();
         let dir = tempfile::tempdir().unwrap();
         let status_path = dir.path().join("agent").join("engine-status.json");
         let machine_path = dir.path().join("machine").join("state.json");
@@ -6695,7 +6913,13 @@ mod tests {
                     "spool_pending_count": 0,
                     "spool_dead_count": 0,
                     "is_offline": false,
-                    "ship_attempts_10m": 0
+                    "ship_attempts_10m": 0,
+                    "local_projection": {
+                        "generated_at": now.clone(),
+                        "engine_pulse_at": now.clone(),
+                        "last_reconciled_at": now,
+                        "reconciliation": {"state": "idle"}
+                    }
                 })),
                 None,
             ),
@@ -6906,6 +7130,7 @@ mod tests {
 
     #[test]
     fn native_repair_plan_uses_inspection_for_transport_only_failures() {
+        let now = chrono::Utc::now().to_rfc3339();
         let dir = tempfile::tempdir().unwrap();
         let status_path = dir.path().join("agent").join("engine-status.json");
         let machine_path = dir.path().join("machine").join("state.json");
@@ -6919,8 +7144,13 @@ mod tests {
                     "ship_server_errors_10m": 3,
                     "last_ship_result": "server_error",
                     "spool_pending_count": 0,
-                    "spool_dead_count": 0,
-                    "is_offline": false
+                    "is_offline": false,
+                    "local_projection": {
+                        "generated_at": now.clone(),
+                        "engine_pulse_at": now.clone(),
+                        "last_reconciled_at": now,
+                        "reconciliation": {"state": "idle"}
+                    }
                 })),
                 None,
             ),
@@ -6946,6 +7176,7 @@ mod tests {
 
     #[test]
     fn native_repair_plan_collects_from_state_root() {
+        let now = chrono::Utc::now().to_rfc3339();
         let dir = tempfile::tempdir().unwrap();
         let status_path = engine_status_path(Some(dir.path())).unwrap();
         let machine_path = machine_state_path(Some(dir.path())).unwrap();
@@ -6957,7 +7188,13 @@ mod tests {
                 "spool_pending_count": 0,
                 "spool_dead_count": 0,
                 "is_offline": false,
-                "ship_attempts_10m": 0
+                "ship_attempts_10m": 0,
+                "local_projection": {
+                    "generated_at": now.clone(),
+                    "engine_pulse_at": now.clone(),
+                    "last_reconciled_at": now,
+                    "reconciliation": {"state": "idle"}
+                }
             }))
             .unwrap(),
         )

@@ -1,6 +1,7 @@
 //! Local proof that an ended Helm session still has enough retained provider
 //! state to run its native cold-continuation command.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -8,6 +9,8 @@ use chrono::{DateTime, Duration, Utc};
 use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
+
+use crate::process_identity::ProcessFact;
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct ResumeContractObservation {
@@ -37,9 +40,22 @@ pub fn resume_contract_dirs(longhouse_home: &Path) -> [PathBuf; 6] {
     ]
 }
 
+/// Scan retained contracts using one coherent process inventory.
+///
+/// A failed inventory is deliberately passed through as `None`: an owner
+/// cannot be declared dead just because the identity probe was unavailable.
 pub fn scan_resume_contracts(
     longhouse_home: &Path,
     now: DateTime<Utc>,
+) -> Vec<ResumeContractObservation> {
+    let process_facts = crate::process_identity::try_collect_process_facts_by_pid();
+    scan_resume_contracts_with_process_facts(longhouse_home, now, process_facts.as_ref())
+}
+
+pub fn scan_resume_contracts_with_process_facts(
+    longhouse_home: &Path,
+    now: DateTime<Utc>,
+    process_facts: Option<&HashMap<u32, ProcessFact>>,
 ) -> Vec<ResumeContractObservation> {
     let mut observations = Vec::new();
     let validators: [(&str, Validator); 6] = [
@@ -50,11 +66,23 @@ pub fn scan_resume_contracts(
         ("pi", validate_pi),
         ("omp", validate_omp),
     ];
+    let mut context = ScanContext {
+        process_facts,
+        omp_resolved_binary: None,
+        omp_binary_hashes: HashMap::new(),
+    };
     for ((provider, validate), dir) in validators
         .into_iter()
         .zip(resume_contract_dirs(longhouse_home))
     {
-        scan_dir(&dir, provider, now, &mut observations, validate);
+        scan_dir(
+            &dir,
+            provider,
+            now,
+            &mut observations,
+            validate,
+            &mut context,
+        );
     }
     observations.sort_by(|left, right| {
         (&left.provider, &left.session_id).cmp(&(&right.provider, &right.session_id))
@@ -62,7 +90,37 @@ pub fn scan_resume_contracts(
     observations
 }
 
-type Validator = fn(&Path, &str, &Value) -> Result<(String, String), &'static str>;
+struct ScanContext<'a> {
+    process_facts: Option<&'a HashMap<u32, ProcessFact>>,
+    omp_resolved_binary: Option<Result<PathBuf, ()>>,
+    omp_binary_hashes: HashMap<PathBuf, Result<String, ()>>,
+}
+
+impl ScanContext<'_> {
+    fn omp_binary_identity(&mut self) -> Result<(PathBuf, String), &'static str> {
+        let current_binary = self
+            .omp_resolved_binary
+            .get_or_insert_with(|| {
+                crate::omp_helm_launcher::resolve_binary(None)
+                    .map(PathBuf::from)
+                    .map_err(|_| ())
+            })
+            .clone()
+            .map_err(|_| "provider_incompatible")?;
+        let binary_sha256 = self
+            .omp_binary_hashes
+            .entry(current_binary.clone())
+            .or_insert_with(|| {
+                crate::omp_helm_launcher::provider_binary_sha256(&current_binary).map_err(|_| ())
+            })
+            .clone()
+            .map_err(|_| "provider_incompatible")?;
+        Ok((current_binary, binary_sha256))
+    }
+}
+
+type Validator =
+    for<'a> fn(&Path, &str, &Value, &mut ScanContext<'a>) -> Result<(String, String), &'static str>;
 
 fn scan_dir(
     dir: &Path,
@@ -70,6 +128,7 @@ fn scan_dir(
     now: DateTime<Utc>,
     observations: &mut Vec<ResumeContractObservation>,
     validate: Validator,
+    context: &mut ScanContext<'_>,
 ) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
@@ -92,7 +151,7 @@ fn scan_dir(
         let validation = parsed
             .as_ref()
             .ok_or("contract_invalid")
-            .and_then(|value| validate(&path, session_id, value));
+            .and_then(|value| validate(&path, session_id, value, context));
         let (provider_session_id, cwd, contract_state, unavailable_reason) = match validation {
             Ok((provider_session_id, cwd)) => (
                 Some(provider_session_id),
@@ -121,6 +180,7 @@ fn validate_codex(
     path: &Path,
     session_id: &str,
     value: &Value,
+    _context: &mut ScanContext<'_>,
 ) -> Result<(String, String), &'static str> {
     validate_common(value, session_id, "codex", 2)?;
     let cwd = valid_directory(value.pointer("/workspace/canonical_cwd"))?;
@@ -150,6 +210,7 @@ fn validate_claude(
     _path: &Path,
     session_id: &str,
     value: &Value,
+    _context: &mut ScanContext<'_>,
 ) -> Result<(String, String), &'static str> {
     validate_common(value, session_id, "claude", 1)?;
     let cwd = valid_directory(value.pointer("/workspace/canonical_cwd"))?;
@@ -168,6 +229,7 @@ fn validate_cursor(
     _path: &Path,
     session_id: &str,
     value: &Value,
+    _context: &mut ScanContext<'_>,
 ) -> Result<(String, String), &'static str> {
     if value.get("schema_version").and_then(Value::as_u64) != Some(2)
         || value.get("provider").and_then(Value::as_str) != Some("cursor")
@@ -188,6 +250,7 @@ fn validate_opencode(
     _path: &Path,
     session_id: &str,
     value: &Value,
+    _context: &mut ScanContext<'_>,
 ) -> Result<(String, String), &'static str> {
     if value.get("schema_version").and_then(Value::as_u64) != Some(1)
         || value.get("provider").and_then(Value::as_str) != Some("opencode")
@@ -206,6 +269,7 @@ fn validate_pi(
     _path: &Path,
     session_id: &str,
     value: &Value,
+    _context: &mut ScanContext<'_>,
 ) -> Result<(String, String), &'static str> {
     validate_common(value, session_id, "pi", 1)?;
     let cwd = valid_directory(value.get("cwd"))?;
@@ -224,6 +288,7 @@ fn validate_omp(
     _path: &Path,
     session_id: &str,
     value: &Value,
+    context: &mut ScanContext<'_>,
 ) -> Result<(String, String), &'static str> {
     if value.get("schema_version").and_then(Value::as_u64) != Some(1)
         || value.get("provider").and_then(Value::as_str) != Some("omp")
@@ -237,17 +302,15 @@ fn validate_omp(
     }
     let cwd = valid_directory(value.get("cwd"))?;
     let retained_binary = nonempty(value.get("provider_binary")).ok_or("provider_incompatible")?;
-    let current_binary =
-        crate::omp_helm_launcher::resolve_binary(None).map_err(|_| "provider_incompatible")?;
+    let (current_binary, current_sha256) = context.omp_binary_identity()?;
     let expected_sha256 =
         nonempty(value.get("provider_binary_sha256")).ok_or("provider_incompatible")?;
-    crate::omp_helm_launcher::verify_resume_binary_identity(
-        Path::new(&retained_binary),
-        Path::new(&current_binary),
-        &expected_sha256,
-    )
-    .map_err(|_| "provider_incompatible")?;
-    validate_omp_owners(value)?;
+    if fs::canonicalize(&retained_binary).ok() != fs::canonicalize(&current_binary).ok()
+        || current_sha256 != expected_sha256
+    {
+        return Err("provider_incompatible");
+    }
+    validate_omp_owners(value, context.process_facts)?;
     let provider_session_id =
         nonempty(value.get("native_session_id")).ok_or("provider_state_missing")?;
     let session_file = nonempty(value.get("session_file")).ok_or("provider_state_missing")?;
@@ -260,7 +323,10 @@ fn validate_omp(
     Ok((provider_session_id, cwd))
 }
 
-fn validate_omp_owners(value: &Value) -> Result<(), &'static str> {
+fn validate_omp_owners(
+    value: &Value,
+    process_facts: Option<&HashMap<u32, ProcessFact>>,
+) -> Result<(), &'static str> {
     let mut owners = Vec::new();
     for (pid_key, birth_key) in [
         ("launcher_pid", "launcher_process_start_time"),
@@ -281,8 +347,9 @@ fn validate_omp_owners(value: &Value) -> Result<(), &'static str> {
     if owners.is_empty() {
         return Ok(());
     }
-    let facts =
-        crate::process_identity::try_collect_process_facts_by_pid().ok_or("owner_unverifiable")?;
+    let Some(facts) = process_facts else {
+        return Err("owner_unverifiable");
+    };
     for (pid, expected_start) in owners {
         if facts
             .get(&(pid as u32))
@@ -529,37 +596,103 @@ mod tests {
             "native_session_id": "native-omp",
             "session_file": session_file,
         });
-        write_contract(root.path(), "managed-local/omp-helm", session_id, contract);
+        write_contract(
+            root.path(),
+            "managed-local/omp-helm",
+            session_id,
+            contract.clone(),
+        );
+        let second_session_id = "77777777-7777-4777-8777-777777777777";
+        let second_session_file = root.path().join("second-session.jsonl");
+        fs::write(
+            &second_session_file,
+            format!(
+                "{{\"type\":\"session\",\"id\":\"native-omp-two\",\"cwd\":\"{}\"}}\n",
+                cwd.display()
+            ),
+        )
+        .unwrap();
+        let mut second_contract = contract;
+        second_contract["session_id"] = json!(second_session_id);
+        second_contract["native_session_id"] = json!("native-omp-two");
+        second_contract["session_file"] = json!(second_session_file);
+        write_contract(
+            root.path(),
+            "managed-local/omp-helm",
+            second_session_id,
+            second_contract,
+        );
 
         let valid = temp_env::with_var("LONGHOUSE_OMP_BIN", Some(binary.to_str().unwrap()), || {
             scan_resume_contracts(root.path(), Utc::now())
         });
-        assert_eq!(valid[0].contract_state, "valid");
+        assert_eq!(valid.len(), 2);
+        assert!(valid.iter().all(|item| item.contract_state == "valid"));
 
         let mismatch = temp_env::with_var(
             "LONGHOUSE_OMP_BIN",
             Some(other_binary.to_str().unwrap()),
             || scan_resume_contracts(root.path(), Utc::now()),
         );
-        assert_eq!(mismatch[0].contract_state, "invalid");
-        assert_eq!(
-            mismatch[0].unavailable_reason.as_deref(),
-            Some("provider_incompatible")
-        );
+        assert_eq!(mismatch.len(), 2);
+        assert!(mismatch.iter().all(|item| {
+            item.contract_state == "invalid"
+                && item.unavailable_reason.as_deref() == Some("provider_incompatible")
+        }));
+
+        fs::write(&binary, b"omp-binary-mutated").unwrap();
+        let mutated =
+            temp_env::with_var("LONGHOUSE_OMP_BIN", Some(binary.to_str().unwrap()), || {
+                scan_resume_contracts_with_process_facts(
+                    root.path(),
+                    Utc::now(),
+                    Some(&HashMap::new()),
+                )
+            });
+        assert_eq!(mutated.len(), 2);
+        assert!(mutated.iter().all(|item| {
+            item.contract_state == "invalid"
+                && item.unavailable_reason.as_deref() == Some("provider_incompatible")
+        }));
     }
 
     #[test]
     fn omp_resume_owner_with_incomplete_birth_identity_is_unavailable() {
         let pid = std::process::id();
         assert_eq!(
-            validate_omp_owners(&json!({"launcher_pid": pid})),
+            validate_omp_owners(&json!({"launcher_pid": pid}), None),
             Err("owner_unverifiable")
         );
         assert_eq!(
-            validate_omp_owners(&json!({
-                "provider_process_start_time": "Mon Jan  1 00:00:00 2024"
-            })),
+            validate_omp_owners(
+                &json!({
+                    "provider_process_start_time": "Mon Jan  1 00:00:00 2024"
+                }),
+                None,
+            ),
             Err("owner_unverifiable")
+        );
+
+        let birth = "Mon Jan  1 00:00:00 2024";
+        let owner = json!({
+            "launcher_pid": pid,
+            "launcher_process_start_time": birth,
+        });
+        assert_eq!(validate_omp_owners(&owner, None), Err("owner_unverifiable"));
+        let facts = HashMap::from([(
+            pid,
+            ProcessFact {
+                pid,
+                tty: "??".to_string(),
+                stat: "S".to_string(),
+                lstart: birth.to_string(),
+                command: "omp-helm".to_string(),
+                start_time: None,
+            },
+        )]);
+        assert_eq!(
+            validate_omp_owners(&owner, Some(&facts)),
+            Err("execution_owner_alive")
         );
     }
 

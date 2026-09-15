@@ -138,8 +138,8 @@ def exercise(engine):
                 except FileNotFoundError:
                     return {}
 
-            def wait_for(predicate):
-                deadline = time.monotonic() + 20
+            def wait_for(predicate, timeout=20):
+                deadline = time.monotonic() + timeout
                 while time.monotonic() < deadline:
                     status = observe()
                     if predicate(status.get("local_projection", {})):
@@ -148,6 +148,8 @@ def exercise(engine):
                 raise AssertionError(f"daemon did not converge: {status}; logs: {log_path.read_text()}")
 
             healthy = wait_for(lambda projection: projection.get("reconciliation", {}).get("state") == "idle")
+            completed_at = healthy["local_projection"]["last_reconciled_at"]
+            assert completed_at, "idle requires a completed full discovery receipt"
             receipt["build"] = healthy.get("build")
             fail_inventory.touch()
             failed = wait_for(
@@ -166,11 +168,16 @@ def exercise(engine):
                 projection = status["local_projection"]
                 assert projection["generated_at"] == frozen, f"cached phase rebuild re-aged failed observation: {projection}"
                 assert projection["reconciliation"]["state"] != "idle", f"cached phase rebuild erased observation failure: {projection}"
+                assert projection["last_reconciled_at"] == completed_at, "failure advanced completion receipt"
+                assert projection["reconciliation"].get("failure_reason"), "failure lost its cause"
                 time.sleep(0.05)
             assert projection["engine_pulse_at"] != failed["local_projection"]["engine_pulse_at"], "failure stopped engine pulses"
             fail_inventory.unlink()
             recovered = wait_for(
-                lambda projection: projection.get("generated_at") != frozen and projection.get("reconciliation", {}).get("state") == "idle"
+                lambda projection: projection.get("generated_at") != frozen
+                and projection.get("reconciliation", {}).get("state") == "idle"
+                and projection.get("last_reconciled_at", "") > completed_at,
+                timeout=90,
             )
             assert recovered["daemon_pid"] == child.pid, "recovery replaced the daemon"
             receipt["failure_preserved_during_phase_rebuild"] = True

@@ -334,11 +334,13 @@ public struct MenuBarPanelView: View {
             return false
         }
         return !dataTrust.isCurrent
-            || snapshot.suggestedActionIds?.contains("repair_machine") == true
+            || (
+                snapshot.suggestedActionIds?.contains("repair_machine") == true
+                && presentation.promotion == .repair
+            )
             || snapshot.reasons.contains("engine_status_stale")
             || snapshot.reasons.contains("engine_projection_stale")
-            || snapshot.reasons.contains("engine_reconciliation_failed")
-    }
+        }
 
     private var displayHeadline: String {
         presentation.headline
@@ -348,7 +350,6 @@ public struct MenuBarPanelView: View {
         HStack(alignment: .top, spacing: 12) {
             longhouseBrandEmblem(severity: presentation.promotion.iconSeverity)
                 .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Header.statusGlyph)
-
             VStack(alignment: .leading, spacing: 8) {
                 Text("LONGHOUSE")
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
@@ -416,6 +417,11 @@ public struct MenuBarPanelView: View {
 
     private var primarySurface: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if snapshot.sessionDiscoveryAttention {
+                sessionDiscoveryWarning
+                sectionDivider.padding(.horizontal, 4)
+            }
+
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 0) {
                     managedRuntimeSurface
@@ -465,6 +471,25 @@ public struct MenuBarPanelView: View {
                 watchingActions
             }
         }
+    }
+
+    private var sessionDiscoveryWarning: some View {
+        PanelSection(title: "Session discovery") {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.orange)
+                Text(snapshot.sessionDiscoveryWarningDetail ?? "Session discovery is incomplete; active sessions may be missing from this list.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.orange.opacity(0.12))
+        )
+        .accessibilityIdentifier("longhouse.session-discovery-warning")
     }
 
     private var repairGuidance: String {
@@ -560,6 +585,15 @@ public struct MenuBarPanelView: View {
                     Text("Session evidence is unavailable on this Mac.")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(Color.secondary)
+                }
+            } else if snapshot.currentManagedSessions.isEmpty && snapshot.sessionDiscoveryAttention {
+                // A current but incomplete scan cannot prove that no managed
+                // sessions exist. Keep the unknown portion explicit.
+                PanelSection(title: "Sessions") {
+                    Text("Session discovery is incomplete; active sessions may be missing from this list.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             } else if snapshot.currentManagedSessions.isEmpty {
                 PanelSection(title: "Sessions") {

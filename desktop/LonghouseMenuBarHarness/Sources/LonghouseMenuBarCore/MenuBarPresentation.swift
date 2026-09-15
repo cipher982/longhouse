@@ -1,12 +1,15 @@
 import SwiftUI
 private let menuBarUnavailableReasons: Set<String> = [
     "engine_status_missing", "engine_status_unreadable", "engine_status_stale",
-    "engine_projection_stale", "engine_reconciliation_failed",
+    "engine_projection_stale",
     "engine_offline", "transport_unavailable",
 ]
 private let menuBarTransportAttentionReasons: Set<String> = [
     "ship_stalled", "connect_errors", "server_errors", "rate_limited",
     "retryable_client_errors",
+]
+private let menuBarSessionDiscoveryReasons: Set<String> = [
+    "engine_reconciling", "engine_reconciliation_stale", "engine_reconciliation_failed",
 ]
 
 
@@ -94,7 +97,7 @@ extension HealthSnapshot {
         let repairReasons: Set<String> = [
             "storage_v2_outbox_unreadable",
             "storage_v2_sources_unresolved",
-            "engine_status_unreadable", "orphaned_managed_bridge",
+            "engine_status_missing", "engine_status_unreadable", "orphaned_managed_bridge",
             "managed_launch_recovery_unreadable",
             "service_stopped", "service_not_installed", "service_generation_mismatch",
             "service_artifact_mismatch",
@@ -112,15 +115,17 @@ extension HealthSnapshot {
         let transportAttentionReason = reasons.first {
             menuBarTransportAttentionReasons.contains($0)
         }
+        let sessionDiscoveryAttention = self.sessionDiscoveryAttention
         let localEvidenceUnavailable = !localEvidenceTrust.isCurrent
         let projectionUnavailable = !projectionTrust.isCurrent
         // This producer red state is deliberately row-level: the engine has
         // preserved the session, but the phase contract is newer than this
         // client. Keep it visible in the session row without turning an
-        // otherwise healthy local machine into a repair alarm. Every other
-        // native red state remains machine-wide repair unless a concrete
-        // repair reason already says so.
+        // otherwise healthy local machine into a repair alarm. Discovery
+        // reconciliation is another independent evidence lane: a failed or
+        // in-progress scan must not erase current upload or control facts.
         let rowLevelRedReasons: Set<String> = ["managed_unknown_phase"]
+            .union(menuBarSessionDiscoveryReasons)
         let storageBlockRequiresRepair = self.storageBlockRequiresRepair
         let storageBlockIsRecovering = self.storageBlockIsRecovering
         let deadLetterCount = max(
@@ -129,6 +134,7 @@ extension HealthSnapshot {
         )
         let hasDeadLetters = deadLetterCount > 0
         let nativeRedRequiresRepair = parsedSeverity == .red
+            && !sessionDiscoveryAttention
             && rowLevelRedReasons.isDisjoint(with: reasons)
 
         let promotion: MenuBarPromotion
@@ -142,12 +148,18 @@ extension HealthSnapshot {
             promotion = .needsUser
         } else if localEvidenceUnavailable || projectionUnavailable {
             promotion = .unavailable
-        } else if storageBlockIsRecovering || storageBlockProofUnknown || degraded > 0 || orphanBridgeCount > 0 || transportAttentionReason != nil || !inspectReasons.isDisjoint(with: reasons) {
-            promotion = .inspect
         } else if !menuBarUnavailableReasons.isDisjoint(with: reasons)
             || engineStatus?.error != nil
             || engineStatus?.fresh == false {
             promotion = .unavailable
+        } else if storageBlockIsRecovering
+                    || storageBlockProofUnknown
+                    || degraded > 0
+                    || orphanBridgeCount > 0
+                    || transportAttentionReason != nil
+                    || sessionDiscoveryAttention
+                    || !inspectReasons.isDisjoint(with: reasons) {
+            promotion = .inspect
         } else {
             promotion = .normal
         }
@@ -175,6 +187,8 @@ extension HealthSnapshot {
             headline = "Managed session recovery needs attention"
         case .inspect where transportAttentionReason != nil:
             headline = "Local upload needs attention"
+        case .inspect where sessionDiscoveryAttention:
+            headline = "Session discovery needs attention"
         case .inspect where degraded > 0:
             headline = "Remote control unavailable for \(degraded) session\(degraded == 1 ? "" : "s")"
         case .inspect where orphanBridgeCount > 0:
@@ -277,10 +291,9 @@ extension HealthSnapshot {
         let localEngineEvidenceUnavailable = localEvidenceUnavailable
             || engineStatus?.fresh == false
             || reasons.contains("engine_projection_stale")
-            || reasons.contains("engine_reconciliation_failed")
         if !hasEngineEvidence || localEngineEvidenceUnavailable {
             durableValue = "Unknown"
-            durablePromotion = reasons.contains("engine_reconciliation_failed") ? .repair : .unavailable
+            durablePromotion = .unavailable
         } else if reasons.contains("storage_v2_outbox_unreadable")
                     || engineStatus?.payload?.storageV2Outbox?.malformedCounter == true
                     || storageBlockProofUnknown {

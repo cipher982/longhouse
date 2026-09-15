@@ -399,6 +399,18 @@ pub fn provider_for_path(
     }
     matches.into_iter().next()
 }
+/// Return every configured provider whose existing source-path rules match a
+/// path, including names that are later rejected as canonically ambiguous.
+///
+/// Shadow's optional process scan uses this only to choose which provider
+/// roots may need traversal; final source discovery still applies the
+/// ambiguity and native-identity guards in `discover_all_files`.
+pub(crate) fn matching_provider_names_for_path(
+    path: &Path,
+    providers: &[ProviderConfig],
+) -> Vec<&'static str> {
+    matching_provider_names(path, providers)
+}
 
 /// Provider hook paths are hints, not permission to enroll a second transcript.
 /// Antigravity's transcript.jsonl truncates tool output and stringifies args.

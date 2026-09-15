@@ -516,6 +516,9 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         if managedNeedsAttention {
             return true
         }
+        if sessionDiscoveryAttention {
+            return true
+        }
         if isInstallLocationBlocked || isSetupRequired {
             return true
         }
@@ -857,6 +860,63 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
 
     public var currentManagedSessions: [ManagedSessionSnapshot] {
         managedSessions ?? []
+    }
+
+    /// The managed-session inventory is a separate evidence lane from engine
+    /// liveness and shipping. During a full scan, an empty inventory is not
+    /// proof that no sessions exist.
+    public var sessionDiscoveryAttentionReason: String? {
+        let knownReasons = [
+            "engine_reconciliation_failed",
+            "engine_reconciliation_stale",
+            "engine_reconciling",
+        ]
+        if let reason = knownReasons.first(where: { reasons.contains($0) }) {
+            return reason
+        }
+
+        switch engineStatus?.payload?.localProjection?.reconciliation?.state?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        {
+        case "failed":
+            return "engine_reconciliation_failed"
+        case "reconciling":
+            return "engine_reconciling"
+        default:
+            return nil
+        }
+    }
+
+    public var sessionDiscoveryAttention: Bool {
+        sessionDiscoveryAttentionReason != nil
+    }
+
+    /// Keep an unresolved producer failure visible even after a retry starts.
+    /// This is intentionally descriptive only: upload, transport, and control
+    /// facts retain their own independently observed values.
+    public var sessionDiscoveryWarningDetail: String? {
+        guard let reason = sessionDiscoveryAttentionReason else { return nil }
+        let failureReason = engineStatus?.payload?.localProjection?.reconciliation?.failureReason?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let unresolvedFailure = failureReason.flatMap { $0.isEmpty ? nil : $0 }
+
+        switch reason {
+        case "engine_reconciliation_failed":
+            if let unresolvedFailure {
+                return "Session discovery failed (\(Self.humanizeReason(unresolvedFailure))); active sessions may be missing from this list."
+            }
+            return "Session discovery failed; active sessions may be missing from this list."
+        case "engine_reconciliation_stale":
+            return "Complete session discovery is stale or has not completed; active sessions may be missing from this list."
+        case "engine_reconciling":
+            if let unresolvedFailure {
+                return "Session discovery is retrying after \(Self.humanizeReason(unresolvedFailure)); active sessions may be missing from this list."
+            }
+            return "Session discovery is still in progress; active sessions may be missing from this list."
+        default:
+            return nil
+        }
     }
 
     public var currentUnmanagedProcesses: [UnmanagedProcessSnapshot] {
@@ -1425,8 +1485,12 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             return "The engine status is stale"
         case "engine_projection_stale":
             return "The local status projection is stale"
+        case "engine_reconciling":
+            return "Session discovery is in progress"
+        case "engine_reconciliation_stale":
+            return "Session discovery is stale"
         case "engine_reconciliation_failed":
-            return "Local status reconciliation failed"
+            return "Session discovery failed"
         case "ship_stalled":
             return "Pending uploads have stopped making progress"
         default:
@@ -1742,7 +1806,20 @@ public struct ShippingProgressSnapshot: Codable, Equatable, Sendable {
 public struct ProjectionReconciliationStatus: Codable, Equatable, Sendable {
     public let state: String?
     public let reason: String?
+    public let failureReason: String?
     public let startedAt: String?
+
+    public init(
+        state: String?,
+        reason: String?,
+        startedAt: String?,
+        failureReason: String? = nil
+    ) {
+        self.state = state
+        self.reason = reason
+        self.failureReason = failureReason
+        self.startedAt = startedAt
+    }
 }
 
 public struct StorageV2OutboxStatus: Codable, Equatable, Sendable {

@@ -3741,6 +3741,9 @@ pub struct ProjectionReconciliation {
     pub reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub started_at: Option<String>,
+    /// A retry is not recovery. Cleared only by a completed full observation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
 }
 
 impl ProjectionReconciliation {
@@ -3749,22 +3752,29 @@ impl ProjectionReconciliation {
             state: "idle".to_string(),
             reason: None,
             started_at: None,
+            failure_reason: None,
         }
     }
 
     pub fn running(reason: impl Into<String>, started_at: impl Into<String>) -> Self {
-        Self {
-            state: "reconciling".to_string(),
-            reason: Some(reason.into()),
-            started_at: Some(started_at.into()),
-        }
+        let mut reconciliation = Self::idle();
+        reconciliation.start(reason, started_at);
+        reconciliation
+    }
+
+    pub fn start(&mut self, reason: impl Into<String>, started_at: impl Into<String>) {
+        self.state = "reconciling".to_string();
+        self.reason = Some(reason.into());
+        self.started_at = Some(started_at.into());
     }
 
     pub fn failed(reason: impl Into<String>) -> Self {
+        let reason = reason.into();
         Self {
             state: "failed".to_string(),
-            reason: Some(reason.into()),
+            reason: Some(reason.clone()),
             started_at: None,
+            failure_reason: Some(reason),
         }
     }
 }
@@ -4147,6 +4157,24 @@ mod tests {
     }
 
     #[test]
+    fn reconciliation_retry_preserves_failure_until_completion() {
+        let mut reconciliation = ProjectionReconciliation::failed("unmanaged_binding");
+        reconciliation.start("full_reconciliation", "2026-09-15T00:00:00Z");
+        assert_eq!(reconciliation.state, "reconciling");
+        assert_eq!(
+            reconciliation.failure_reason.as_deref(),
+            Some("unmanaged_binding")
+        );
+        reconciliation.start("wake", "2026-09-15T00:00:01Z");
+        assert_eq!(
+            reconciliation.failure_reason.as_deref(),
+            Some("unmanaged_binding")
+        );
+        reconciliation = ProjectionReconciliation::idle();
+        assert_eq!(reconciliation.failure_reason, None);
+    }
+
+    #[test]
     fn work_in_flight_is_progress_and_not_a_stall() {
         let start = Instant::now();
         let mut observation = ShippingProgressObservation::new(start);
@@ -4173,7 +4201,8 @@ mod tests {
         let mut observation = ShippingProgressObservation::new(start);
         observation.observe_pending_work(true, start);
 
-        let within_budget = observation.snapshot(true, false, false, start + Duration::from_secs(54));
+        let within_budget =
+            observation.snapshot(true, false, false, start + Duration::from_secs(54));
         assert!(within_budget.pending_work);
         assert!(!within_budget.stalled);
 
@@ -4187,7 +4216,8 @@ mod tests {
         assert_eq!(recovered.seconds_without_progress, 1);
 
         observation.reset_after_sleep(start + Duration::from_secs(100));
-        let after_sleep = observation.snapshot(true, false, false, start + Duration::from_secs(101));
+        let after_sleep =
+            observation.snapshot(true, false, false, start + Duration::from_secs(101));
         assert!(!after_sleep.stalled);
         assert_eq!(after_sleep.seconds_without_progress, 1);
 
@@ -4195,7 +4225,8 @@ mod tests {
         assert!(!offline.stalled);
         assert_eq!(offline.seconds_without_progress, 0);
 
-        let idle_again = observation.snapshot(false, false, false, start + Duration::from_secs(1_000));
+        let idle_again =
+            observation.snapshot(false, false, false, start + Duration::from_secs(1_000));
         assert!(!idle_again.pending_work);
         assert!(!idle_again.stalled);
         assert_eq!(idle_again.seconds_without_progress, 0);

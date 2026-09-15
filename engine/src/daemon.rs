@@ -15,6 +15,7 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context as _;
@@ -388,6 +389,7 @@ struct ManagedObservationScanResult {
     cursor_observations: Vec<managed_cursor_helm_scan::CursorHelmObservation>,
     pi_observations: Vec<managed_pi_helm_scan::PiHelmObservation>,
     omp_observations: Vec<managed_omp_helm_scan::OmpHelmObservation>,
+    continuation: Option<Arc<[managed_resume_scan::ResumeContractObservation]>>,
     /// Managed provider processes whose session is gone. Identified in the
     /// blocking scan, reaped by the async consumer.
     orphan_processes: Vec<crate::managed_process_janitor::OrphanProcess>,
@@ -431,6 +433,7 @@ struct ProjectionBuildInput {
     machine_id: String,
     managed: ManagedObservationSnapshot,
     unmanaged: Vec<heartbeat::UnmanagedSessionBinding>,
+    continuation: Arc<[managed_resume_scan::ResumeContractObservation]>,
     limiter: crate::scheduler::LimiterSnapshot,
     scheduler: crate::scheduler::SchedulerSnapshot,
     archive_repair_mode: ArchiveRepairMode,
@@ -870,18 +873,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // cost the user their local history with no local record of it. Retry
     // inside a bounded window first; a host that is genuinely gone still gets a
     // refusal rather than a shipping loop that drops history in silence.
-    let negotiated = match negotiate_storage_v2_with_retries(
-        &client,
-        &config.shipper_config.machine_name,
-    )
-    .await
-    {
-        Ok(negotiated) => negotiated,
-        Err(error) => {
-            record_startup_refusal("runtime_unavailable", &format!("{error:#}"));
-            return Err(error);
-        }
-    };
+    let negotiated =
+        match negotiate_storage_v2_with_retries(&client, &config.shipper_config.machine_name).await
+        {
+            Ok(negotiated) => negotiated,
+            Err(error) => {
+                record_startup_refusal("runtime_unavailable", &format!("{error:#}"));
+                return Err(error);
+            }
+        };
     let storage_v2 = match require_storage_v2_cutover(negotiated, &config.shipper_config.api_url) {
         Ok(capabilities) => {
             tracing::info!(
@@ -1145,6 +1145,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut projection_worst_elapsed_ms = 0_u64;
     let mut projection_budget_reported_at: Option<Instant> = None;
     let mut last_full_reconciled_at: Option<String> = None;
+    let mut last_resume_contracts: Arc<[managed_resume_scan::ResumeContractObservation]> =
+        Arc::from([]);
     let mut last_projected_managed_observations = ManagedObservationSnapshot::default();
     let mut last_projected_managed_scan_partial = false;
     let mut last_projected_managed_snapshot_complete = false;
@@ -1245,8 +1247,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         );
                     }
                     for target in result.targets {
-                        let Some(provider) =
-                            discovery::canonical_provider_name(&target.provider)
+                        let Some(provider) = discovery::canonical_provider_name(&target.provider)
                         else {
                             continue;
                         };
@@ -1281,14 +1282,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
         }
-        if reconcile_tasks.is_empty()
-            && last_reconcile_started_at.elapsed() >= RECONCILE_INTERVAL
-        {
+        if reconcile_tasks.is_empty() && last_reconcile_started_at.elapsed() >= RECONCILE_INTERVAL {
             last_reconcile_started_at = Instant::now();
-            maybe_start_reconcile_scan(
-                &mut reconcile_tasks,
-                config.shipper_config.db_path.clone(),
-            );
+            maybe_start_reconcile_scan(&mut reconcile_tasks, config.shipper_config.db_path.clone());
         }
 
         tokio::select! {
@@ -1501,6 +1497,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                         scheduler: scheduler.snapshot(),
                                         archive_repair_mode: config.archive_repair_mode,
                                         last_full_reconciled_at: last_full_reconciled_at.clone(),
+                                        continuation: last_resume_contracts.clone(),
                                         session_snapshot_state: session_snapshot_state.clone(),
                                     };
                                     if !maybe_start_projection_build(&mut projection_build_tasks, input) {
@@ -1909,6 +1906,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 scheduler: scheduler.snapshot(),
                                 archive_repair_mode: config.archive_repair_mode,
                                 last_full_reconciled_at: last_full_reconciled_at.clone(),
+                                continuation: last_resume_contracts.clone(),
                                 session_snapshot_state: session_snapshot_state.clone(),
                             };
                             if !maybe_start_projection_build(&mut projection_build_tasks, input) {
@@ -1955,7 +1953,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         )
                     {
                         pending_wake_reconciliation = false;
-                        managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+                        managed_reconciliation.start(
                             "wake",
                             chrono::Utc::now().to_rfc3339(),
                         );
@@ -1968,7 +1966,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         )
                     {
                         pending_full_reconciliation = false;
-                        managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+                        managed_reconciliation.start(
                             "full_reconciliation",
                             chrono::Utc::now().to_rfc3339(),
                         );
@@ -2087,6 +2085,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             continue;
                         }
                         managed_observation_valid = true;
+                        if let Some(continuation) = &result.continuation {
+                            last_resume_contracts = continuation.clone();
+                        }
                         let next_managed_observations =
                             ManagedObservationSnapshot::from_result(&result).current_only();
                         let managed_observations_changed = !next_managed_observations
@@ -2118,6 +2119,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &result.opencode_observations,
                             &result.cursor_observations,
                             &result.pi_observations,
+                            &result.omp_observations,
                         );
                         let should_refresh_unmanaged =
                             result.full_reconciliation || managed_observations_changed;
@@ -2184,6 +2186,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             scheduler: scheduler.snapshot(),
                             archive_repair_mode: config.archive_repair_mode,
                             last_full_reconciled_at: last_full_reconciled_at.clone(),
+                            continuation: last_resume_contracts.clone(),
                             session_snapshot_state: session_snapshot_state.clone(),
                         };
                         if !maybe_start_projection_build(&mut projection_build_tasks, input) {
@@ -2204,7 +2207,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             )
                         {
                             pending_wake_reconciliation = false;
-                            managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+                            managed_reconciliation.start(
                                 "wake",
                                 chrono::Utc::now().to_rfc3339(),
                             );
@@ -2218,7 +2221,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             )
                         {
                             pending_full_reconciliation = false;
-                            managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+                            managed_reconciliation.start(
                                 "full_reconciliation",
                                 chrono::Utc::now().to_rfc3339(),
                             );
@@ -2315,13 +2318,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             if result.managed_scan_partial {
                                 managed_reconciliation =
                                     heartbeat::ProjectionReconciliation::failed("provider_state_partial");
-                            } else if managed_observation_scan_tasks.is_empty()
+                            } else if result.managed_snapshot_complete
+                                && result.unmanaged_snapshot_complete
+                                && managed_observation_scan_tasks.is_empty()
+                                && unmanaged_binding_refresh_tasks.is_empty()
                                 && !unmanaged_binding_refresh_failed
                             {
-                                // A managed scan is authoritative for the core
-                                // projection. Optional Shadow discovery remains
-                                // incomplete evidence, not a reason to keep the
-                                // core reconciliation marker running.
+                                // Only a complete paired observation clears a failure.
+                                // A cached/managed-only projection is not recovery.
                                 managed_reconciliation =
                                     heartbeat::ProjectionReconciliation::idle();
                             }
@@ -2413,6 +2417,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         scheduler: scheduler.snapshot(),
                         archive_repair_mode: config.archive_repair_mode,
                         last_full_reconciled_at: last_full_reconciled_at.clone(),
+                        continuation: last_resume_contracts.clone(),
                         session_snapshot_state: session_snapshot_state.clone(),
                     };
                     let _ = maybe_start_projection_build(&mut projection_build_tasks, input);
@@ -2450,6 +2455,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         scheduler: scheduler.snapshot(),
                         archive_repair_mode: config.archive_repair_mode,
                         last_full_reconciled_at: last_full_reconciled_at.clone(),
+                        continuation: last_resume_contracts.clone(),
                         session_snapshot_state: session_snapshot_state.clone(),
                     };
                     if !maybe_start_projection_build(&mut projection_build_tasks, input) {
@@ -2547,7 +2553,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             true,
                             &last_managed_observations,
                         ) {
-                            managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+                            managed_reconciliation.start(
                                 "managed_state_discovery",
                                 chrono::Utc::now().to_rfc3339(),
                             );
@@ -2791,13 +2797,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         true,
                         &last_managed_observations,
                     ) {
-                        managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+                        managed_reconciliation.start(
                             "wake",
                             chrono::Utc::now().to_rfc3339(),
                         );
                     } else {
                         pending_wake_reconciliation = true;
-                        managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+                        managed_reconciliation.start(
                             "wake",
                             chrono::Utc::now().to_rfc3339(),
                         );
@@ -2829,13 +2835,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     true,
                     &last_managed_observations,
                 ) {
-                    managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+                    managed_reconciliation.start(
                         "full_reconciliation",
                         chrono::Utc::now().to_rfc3339(),
                     );
                 } else {
                     pending_full_reconciliation = true;
-                    managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+                    managed_reconciliation.start(
                         "full_reconciliation",
                         chrono::Utc::now().to_rfc3339(),
                     );
@@ -2971,6 +2977,7 @@ fn maybe_start_projection_build(
             machine_id,
             managed,
             unmanaged,
+            continuation,
             limiter,
             scheduler,
             archive_repair_mode,
@@ -2995,6 +3002,7 @@ fn maybe_start_projection_build(
                     &managed.pi,
                     &managed.omp,
                     &unmanaged,
+                    &continuation,
                     managed_snapshot_complete,
                     unmanaged_snapshot_complete,
                     Some(limiter),
@@ -3060,6 +3068,7 @@ fn build_local_status_projection(
         pi_observations,
         &[],
         unmanaged_session_bindings,
+        &[],
         managed_snapshot_complete,
         unmanaged_snapshot_complete,
         limiter_snapshot,
@@ -3085,6 +3094,7 @@ fn build_local_status_projection_with_omp(
     pi_observations: &[managed_pi_helm_scan::PiHelmObservation],
     omp_observations: &[managed_omp_helm_scan::OmpHelmObservation],
     unmanaged_session_bindings: &[heartbeat::UnmanagedSessionBinding],
+    continuation: &[managed_resume_scan::ResumeContractObservation],
     managed_snapshot_complete: bool,
     unmanaged_snapshot_complete: bool,
     limiter_snapshot: Option<crate::scheduler::LimiterSnapshot>,
@@ -3235,7 +3245,7 @@ fn build_local_status_projection_with_omp(
         managed_snapshot_complete,
         unmanaged_snapshot_complete,
         now,
-        None,
+        Some(continuation),
         current_evidence_rotation(),
     ));
     payload.sessions = heartbeat::resolved_sessions_from_observations_with_omp(
@@ -3930,6 +3940,7 @@ fn managed_process_pids_from_observations(
     opencode: &[managed_opencode_scan::OpenCodeServerObservation],
     cursor: &[managed_cursor_helm_scan::CursorHelmObservation],
     pi: &[managed_pi_helm_scan::PiHelmObservation],
+    omp: &[managed_omp_helm_scan::OmpHelmObservation],
 ) -> HashSet<u32> {
     let mut pids = HashSet::new();
     for observation in codex {
@@ -3960,8 +3971,18 @@ fn managed_process_pids_from_observations(
         }
     }
     for observation in pi {
-        if observation.live {
+        if observation.launcher_alive {
             pids.extend(observation.launcher_pid);
+        }
+        if observation.provider_alive {
+            pids.extend(observation.provider_pid);
+        }
+    }
+    for observation in omp {
+        if observation.launcher_alive {
+            pids.extend(observation.launcher_pid);
+        }
+        if observation.provider_alive {
             pids.extend(observation.provider_pid);
         }
     }
@@ -4237,6 +4258,21 @@ fn maybe_start_managed_observation_scan(
         // reads as dead, and the sweep would delete the launch provenance of
         // every running session older than the grace period.
         let mut orphan_processes = Vec::new();
+        // Retained contracts are discovered once per full pass, not by every
+        // phase-ledger projection or once per janitor consumer.
+        let continuation: Option<Arc<[managed_resume_scan::ResumeContractObservation]>> =
+            if full_reconciliation && process_inventory_valid {
+                crate::config::get_longhouse_home().ok().map(|home| {
+                    managed_resume_scan::scan_resume_contracts_with_process_facts(
+                        &home,
+                        chrono::Utc::now(),
+                        Some(&process_facts),
+                    )
+                    .into()
+                })
+            } else {
+                None
+            };
         if full_reconciliation && process_inventory_valid {
             if let Ok(home) = crate::config::get_longhouse_home() {
                 // Codex launch provenance remains useful after a run ends: a
@@ -4254,13 +4290,15 @@ fn maybe_start_managed_observation_scan(
                     .map(|observation| observation.session_id.clone())
                     .collect::<std::collections::HashSet<_>>();
                 retained_claude.extend(
-                    crate::managed_resume_scan::scan_resume_contracts(&home, chrono::Utc::now())
-                        .into_iter()
+                    continuation
+                        .as_deref()
+                        .unwrap_or(&[])
+                        .iter()
                         .filter(|observation| {
                             observation.provider == "claude"
                                 && observation.contract_state == "valid"
                         })
-                        .map(|observation| observation.session_id),
+                        .map(|observation| observation.session_id.clone()),
                 );
                 let now = std::time::SystemTime::now();
                 let swept = crate::managed_contract_janitor::sweep_orphan_contracts(
@@ -4303,15 +4341,15 @@ fn maybe_start_managed_observation_scan(
                 let mut retained_sessions = observed_sessions.clone();
                 retained_sessions.extend(retained_codex.iter().cloned());
                 retained_sessions.extend(retained_claude.iter().cloned());
-                // Resume contracts cover four providers, not just Claude
-                // (`managed_resume_scan.rs:29-54`). Folding in only Claude's
-                // made a live Codex, Cursor or OpenCode session known solely
-                // through its contract look orphaned.
+                // Retained contracts protect ended, resumable sessions from
+                // orphan classification even without an active observation.
                 retained_sessions.extend(
-                    crate::managed_resume_scan::scan_resume_contracts(&home, chrono::Utc::now())
-                        .into_iter()
+                    continuation
+                        .as_deref()
+                        .unwrap_or(&[])
+                        .iter()
                         .filter(|observation| observation.contract_state == "valid")
-                        .map(|observation| observation.session_id),
+                        .map(|observation| observation.session_id.clone()),
                 );
 
                 // Only *identify* here. This closure runs under
@@ -4340,6 +4378,7 @@ fn maybe_start_managed_observation_scan(
             cursor_observations,
             pi_observations,
             omp_observations,
+            continuation,
             process_inventory_ms,
             codex_elapsed_ms,
             antigravity_elapsed_ms,
@@ -4992,10 +5031,7 @@ const STARVED_LIVE_TRANSCRIPT_STALE_SECONDS: i64 = 120;
 /// Ownership ending must not cancel replication debt: the binding still says
 /// which session owns the file, so it stays in the reconciler's working set
 /// until its tail ships, instead of the debt dying with the process.
-fn mark_retired_bindings(
-    conn: &rusqlite::Connection,
-    observations: &ManagedObservationSnapshot,
-) {
+fn mark_retired_bindings(conn: &rusqlite::Connection, observations: &ManagedObservationSnapshot) {
     let retired = observations
         .omp
         .iter()
@@ -7930,7 +7966,10 @@ mod tests {
             .status();
     }
 
-    fn omp_observation(session_file: Option<PathBuf>, live: bool) -> managed_omp_helm_scan::OmpHelmObservation {
+    fn omp_observation(
+        session_file: Option<PathBuf>,
+        live: bool,
+    ) -> managed_omp_helm_scan::OmpHelmObservation {
         managed_omp_helm_scan::OmpHelmObservation {
             session_id: "session-omp".to_string(),
             native_session_id: Some("native-omp".to_string()),
@@ -7965,7 +8004,12 @@ mod tests {
             .collect()
     }
 
-    fn bound_source(dir: &std::path::Path, name: &str, bytes: usize, session: &str) -> (PathBuf, rusqlite::Connection, String) {
+    fn bound_source(
+        dir: &std::path::Path,
+        name: &str,
+        bytes: usize,
+        session: &str,
+    ) -> (PathBuf, rusqlite::Connection, String) {
         let transcript = dir.join(name);
         std::fs::write(&transcript, vec![b'x'; bytes]).unwrap();
         let db = tempfile::NamedTempFile::new().unwrap();
@@ -7981,7 +8025,8 @@ mod tests {
     #[test]
     fn a_bound_source_behind_its_lane_is_scheduled() {
         let dir = tempfile::tempdir().unwrap();
-        let (canonical, conn, _) = bound_source(dir.path(), "omp-big.jsonl", 300 * 1024, "session-omp");
+        let (canonical, conn, _) =
+            bound_source(dir.path(), "omp-big.jsonl", 300 * 1024, "session-omp");
         let mut conn = conn;
         let opaque = crate::storage_v2_shipper::opaque_source_id(&canonical.to_string_lossy());
         crate::state::source_epoch::observe_file(
@@ -8008,7 +8053,8 @@ mod tests {
     fn a_current_lane_is_not_scheduled() {
         let dir = tempfile::tempdir().unwrap();
         let bytes = 300 * 1024;
-        let (canonical, conn, _) = bound_source(dir.path(), "omp-current.jsonl", bytes, "session-omp");
+        let (canonical, conn, _) =
+            bound_source(dir.path(), "omp-current.jsonl", bytes, "session-omp");
         let mut conn = conn;
         let opaque = crate::storage_v2_shipper::opaque_source_id(&canonical.to_string_lossy());
         crate::state::source_epoch::observe_file(
@@ -8067,7 +8113,11 @@ mod tests {
 
         let targets = reconcile_targets_for(&conn);
 
-        assert_eq!(targets.len(), 1, "a stale lane with a small lag must be scheduled");
+        assert_eq!(
+            targets.len(),
+            1,
+            "a stale lane with a small lag must be scheduled"
+        );
         assert!(!targets[0].never_shipped);
     }
 

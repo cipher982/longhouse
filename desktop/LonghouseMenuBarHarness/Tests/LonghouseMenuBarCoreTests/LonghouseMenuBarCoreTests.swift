@@ -340,6 +340,134 @@ struct LonghouseMenuBarCoreTests {
         #expect(transport?.promotion == .inspect)
     }
 
+    @Test
+    func incompleteSessionDiscoveryKeepsIndependentHealthFactsCurrent() {
+        let control = SessionControlSnapshot(
+            ownership: "machine",
+            connection: "connected",
+            controlPlane: "live",
+            actions: SessionControlActionsSnapshot(
+                terminate: SessionActionSnapshot(state: "available", reason: nil),
+                reattach: SessionActionSnapshot(state: "available", reason: nil)
+            )
+        )
+        let snapshot = presentationSnapshot(
+            reasons: ["engine_reconciling"],
+            sessions: [presentationSession(phase: "idle", control: control)],
+            localProjection: LocalProjectionStatus(
+                version: 7,
+                generatedAt: "1970-01-01T00:00:00Z",
+                enginePulseAt: "1970-01-01T00:00:00Z",
+                lastReconciledAt: "1970-01-01T00:00:00Z",
+                reconciliation: ProjectionReconciliationStatus(
+                    state: "reconciling",
+                    reason: "startup",
+                    startedAt: "1970-01-01T00:00:00Z"
+                )
+            )
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(snapshot.sessionDiscoveryAttention == true)
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.facts.first(where: { $0.id == "local-agent" })?.value == "Running")
+        #expect(presentation.facts.first(where: { $0.id == "remote-control" })?.value == "Connected")
+        #expect(presentation.facts.first(where: { $0.id == "durable-upload" })?.value == "Clear")
+        #expect(presentation.facts.first(where: { $0.id == "transport" })?.value == "Connected")
+    }
+
+    @Test
+    func unresolvedDiscoveryRetryKeepsFailureReasonVisibleWithoutRepairPromotion() {
+        let snapshot = presentationSnapshot(
+            reasons: ["engine_reconciling"],
+            sessions: [],
+            localProjection: LocalProjectionStatus(
+                version: 8,
+                generatedAt: "1970-01-01T00:00:00Z",
+                enginePulseAt: "1970-01-01T00:00:01Z",
+                lastReconciledAt: "1970-01-01T00:00:00Z",
+                reconciliation: ProjectionReconciliationStatus(
+                    state: "reconciling",
+                    reason: "retry",
+                    startedAt: "1970-01-01T00:00:01Z",
+                    failureReason: "unmanaged_binding"
+                )
+            )
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 1))
+
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.facts.first(where: { $0.id == "durable-upload" })?.value == "Clear")
+        #expect(presentation.facts.first(where: { $0.id == "transport" })?.value == "Connected")
+    }
+
+    @Test
+    func discoveryWarningDoesNotOutrankRealTransportFailure() {
+        let snapshot = presentationSnapshot(
+            reasons: ["engine_reconciling", "connect_errors"],
+            sessions: []
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.facts.first(where: { $0.id == "transport" })?.value == "Retrying")
+        #expect(presentation.facts.first(where: { $0.id == "durable-upload" })?.value == "Clear")
+    }
+
+    @Test
+    func staleDiscoveryReceiptStillKeepsCurrentEngineFactsIndependent() {
+        let snapshot = presentationSnapshot(
+            reasons: ["engine_reconciliation_stale"],
+            sessions: [],
+            localProjection: LocalProjectionStatus(
+                version: 9,
+                generatedAt: "1970-01-01T00:00:00Z",
+                enginePulseAt: "1970-01-01T00:00:02Z",
+                lastReconciledAt: nil,
+                reconciliation: ProjectionReconciliationStatus(
+                    state: "idle",
+                    reason: nil,
+                    startedAt: nil
+                )
+            )
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 2))
+
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.facts.first(where: { $0.id == "durable-upload" })?.value == "Clear")
+        #expect(presentation.facts.first(where: { $0.id == "transport" })?.value == "Connected")
+    }
+
+    @Test
+    func failedReconciliationStateRemainsAVisibleDiscoveryFailure() {
+        let snapshot = presentationSnapshot(
+            sessions: [],
+            localProjection: LocalProjectionStatus(
+                version: 10,
+                generatedAt: "1970-01-01T00:00:00Z",
+                enginePulseAt: "1970-01-01T00:00:03Z",
+                lastReconciledAt: "1970-01-01T00:00:00Z",
+                reconciliation: ProjectionReconciliationStatus(
+                    state: "failed",
+                    reason: "unmanaged_binding",
+                    startedAt: nil,
+                    failureReason: "unmanaged_binding"
+                )
+            )
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 3))
+
+        #expect(snapshot.sessionDiscoveryAttentionReason == "engine_reconciliation_failed")
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.facts.first(where: { $0.id == "durable-upload" })?.value == "Clear")
+        #expect(presentation.facts.first(where: { $0.id == "transport" })?.value == "Connected")
+    }
+
 
     @Test
     func freshNativeEngineCountsAsRunningWhenServiceEvidenceIsAbsent() {
@@ -1003,6 +1131,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.restartPendingChipLabel == "RESTART PENDING")
         #expect(snapshot.needsMenuBarAttention == false)
     }
+
 
     @Test
     @MainActor
@@ -3420,9 +3549,8 @@ struct LonghouseMenuBarCoreTests {
         let snapshot = try source.load()
         #expect(snapshot.severity.isEmpty == false)
     }
-
     @Test
-    func malformedStorageCounterKeepsNativeEnvelopeDecodableAndInspectable() throws {
+    func malformedStorageCounterKeepsNativeEnvelopeInspectable() throws {
         let data = Data("""
         {
           "schema_version": 1,
@@ -3528,13 +3656,17 @@ private func makeHealthySnapshot(
     )
 }
 
-private func presentationSession(phase: String) -> ManagedSessionSnapshot {
+private func presentationSession(
+    phase: String,
+    control: SessionControlSnapshot? = nil
+) -> ManagedSessionSnapshot {
     ManagedSessionSnapshot(
         sessionId: UUID().uuidString, provider: "codex", workspaceLabel: "longhouse",
         timelineTitle: "Review menu bar state", branch: "main", state: "attached",
         phase: phase, lastActivityAt: "1970-01-01T00:00:00Z", bridgeStatus: "ready",
         bridgePid: 42, bridgeHeartbeatAt: "1970-01-01T00:00:00Z",
-        launchMode: "tui", uiAttached: true, uiPresence: "foreground_tui", reasonCodes: []
+        launchMode: "tui", uiAttached: true, uiPresence: "foreground_tui", reasonCodes: [],
+        authority: control == nil ? nil : "runtime_host", control: control
     )
 }
 
@@ -3550,6 +3682,7 @@ private func presentationSnapshot(
     suggestedActionIds: [String] = [],
     isOffline: Bool = false,
     engineFresh: Bool = true,
+    localProjection: LocalProjectionStatus? = nil,
     serviceStatus: String? = "running"
 ) -> HealthSnapshot {
     let resolvedStorageUnresolved = storageUnresolved ?? (
@@ -3578,7 +3711,7 @@ private func presentationSnapshot(
                     byteLimit: 1_073_741_824, error: nil
                 ),
                 parseErrorCount1H: 0, diskFreeBytes: nil,
-                isOffline: isOffline, shippingProgress: shippingProgress,
+                isOffline: isOffline, localProjection: localProjection, shippingProgress: shippingProgress,
                 recentDeadLetters: [], lastUpdated: "1970-01-01T00:00:00Z"
             ),
             error: nil

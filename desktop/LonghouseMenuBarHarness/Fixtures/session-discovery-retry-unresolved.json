@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "collected_at": "2026-09-14T10:05:00Z",
+  "health_state": "degraded",
+  "severity": "yellow",
+  "headline": "Session discovery needs attention",
+  "reasons": ["engine_reconciling"],
+  "suggested_actions": [],
+  "service": {
+    "platform": "macos",
+    "status": "running",
+    "service_name": "com.longhouse.shipper",
+    "log_path": "/Users/example/.longhouse/agent/logs/engine.log.*"
+  },
+  "engine_status": {
+    "path": "/Users/example/.longhouse/agent/engine-status.json",
+    "exists": true,
+    "fresh": true,
+    "age_seconds": 1,
+    "payload": {
+      "version": "0.1.0",
+      "daemon_pid": 24653,
+      "last_ship_at": "2026-09-14T10:04:58Z",
+      "spool_pending_count": 0,
+      "spool_dead_count": 0,
+      "is_offline": false,
+      "local_projection": {
+        "version": 13,
+        "generated_at": "2026-09-14T10:04:59Z",
+        "engine_pulse_at": "2026-09-14T10:05:00Z",
+        "last_reconciled_at": "2026-09-14T10:03:20Z",
+        "reconciliation": {
+          "state": "reconciling",
+          "reason": "retry",
+          "failure_reason": "unmanaged_binding",
+          "started_at": "2026-09-14T10:04:45Z"
+        }
+      },
+      "shipping_progress": {
+        "pending_work": false,
+        "stalled": false,
+        "seconds_without_progress": 0,
+        "observed_at": "2026-09-14T10:05:00Z"
+      },
+      "last_updated": "2026-09-14T10:05:00Z"
+    },
+    "error": null
+  },
+  "managed_sessions": [
+    {
+      "session_id": "session-known-during-retry",
+      "provider": "codex",
+      "workspace_label": "longhouse",
+      "timeline_title": "Review retry health",
+      "branch": "main",
+      "state": "attached",
+      "phase": "idle",
+      "last_activity_at": "2026-09-14T10:04:40Z",
+      "bridge_status": "running",
+      "bridge_pid": 27771,
+      "bridge_heartbeat_at": "2026-09-14T10:05:00Z",
+      "ui_presence": "foreground_tui",
+      "reason_codes": [],
+      "authority": "runtime_host",
+      "control": {
+        "ownership": "machine",
+        "connection": "connected",
+        "control_plane": "live",
+        "actions": {
+          "terminate": {"state": "available"},
+          "reattach": {"state": "available"}
+        }
+      },
+      "presentation": {
+        "primary": {"key": "idle", "label": "Idle", "tone": "neutral"},
+        "access": {"key": "live_control", "label": "Live control", "tone": "positive"}
+      }
+    }
+  ],
+  "realtime": {
+    "runtime_url": "https://demo.longhouse.ai",
+    "machine_name": "cinder"
+  },
+  "transport": {
+    "status": "healthy",
+    "status_reason": "healthy",
+    "status_summary": "Shipping healthy."
+  }
+}
