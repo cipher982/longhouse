@@ -905,8 +905,14 @@ export function SessionChat({
             <span className="session-chat-composer__point session-chat-composer__point--br" aria-hidden="true" />
           </>
         ) : null}
-        {isDock && !showComposerUnavailableState ? (
+        {isDock ? (
           <div className="session-chat-composer__head" data-testid="session-chat-composer-head">
+            {/* The runtime-evidence strip rides in this row, so the row must
+                exist even while the composer is unavailable (a pending
+                question, a disconnected control path); only the state label
+                yields to the unavailable notice below. */}
+            {showComposerUnavailableState ? null : (
+              <>
             {composerState.tone === "live" ? (
               <>
                 <span className="session-ember-dot" aria-hidden="true" />
@@ -931,6 +937,8 @@ export function SessionChat({
                     the last turn ended at {composerIdleClock}
                   </span>
                 ) : null}
+              </>
+            )}
               </>
             )}
             {composerHeaderAccessory ? (
