@@ -9,18 +9,19 @@ export default function DemoBanner() {
         position: 'sticky',
         top: 0,
         zIndex: 9999,
-        background: 'linear-gradient(90deg, #C9A66B, #D4B87A)',
-        color: '#120B09',
+        background: 'var(--color-surface-elevated)',
+        color: 'var(--color-text-secondary)',
+        boxShadow: 'inset 0 1px 0 rgba(233, 185, 73, 0.45), 0 1px 0 var(--color-border-subtle)',
         textAlign: 'center',
         padding: '8px 16px',
-        fontSize: '14px',
+        fontSize: '13.5px',
         fontWeight: 500,
       }}
     >
       You're viewing a shared read-only demo &mdash;{' '}
       <a
         href="https://longhouse.ai/#landing-install"
-        style={{ color: '#120B09', textDecoration: 'underline', fontWeight: 600 }}
+        style={{ color: 'var(--color-brand-primary)', textDecoration: 'underline', textUnderlineOffset: '2px', fontWeight: 600 }}
       >
         Sign up for free
       </a>
