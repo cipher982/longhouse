@@ -6,7 +6,6 @@ import { useAuth, useAuthMethods } from "../lib/auth";
 import { buildLoginUrl } from "../lib/loginRedirect";
 import { clearLogoutBarrier } from "../lib/auth-refresh";
 import { requestNativeAuth } from "../lib/nativeAuthBridge";
-import { ConnectionStatus, ConnectionStatusIndicator } from "../lib/useWebSocket";
 import { useApiHealth } from "../lib/apiHealth";
 import { useBodyScrollLock } from "../hooks/useBodyScrollLock";
 import { useClickOutside } from "../hooks/useClickOutside";
@@ -21,6 +20,28 @@ import { XIcon } from "./icons";
 import { getNavItems } from "./navigation/navItems";
 
 const RUNNER_STATUS_INITIAL_DELAY_MS = 2_500;
+
+type AvatarUser = { avatar_url?: string | null } | null | undefined;
+
+// A broken/unreachable avatar_url must never fall back to the browser's own
+// <img alt> rendering — that renders as overflowing text inside the small
+// circle. Track load failures per URL and fall back to initials instead.
+function AvatarContent({ user, initials, className }: { user: AvatarUser; initials: string; className?: string }) {
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const avatarUrl = user?.avatar_url ?? null;
+
+  if (avatarUrl && avatarUrl !== failedUrl) {
+    return (
+      <img
+        src={avatarUrl}
+        alt=""
+        className={className}
+        onError={() => setFailedUrl(avatarUrl)}
+      />
+    );
+  }
+  return <span>{initials}</span>;
+}
 
 function WelcomeHeader() {
   const { user, logout } = useAuth();
@@ -184,10 +205,7 @@ function WelcomeHeader() {
 
         <div className="header-brand">
           <a href="/timeline" className="brand-link" onClick={(e) => { e.preventDefault(); navigate('/timeline'); }}>
-            <div className="brand-logo-wrapper">
-              <SwarmLogo size={28} className="brand-logo" />
-              <div className="brand-logo-glow" aria-hidden="true" />
-            </div>
+            <SwarmLogo size={24} className="brand-logo" />
             <h1>Longhouse</h1>
           </a>
         </div>
@@ -216,6 +234,7 @@ function WelcomeHeader() {
       </nav>
 
       <div className="header-actions">
+        <NavStatus />
         <div className="user-menu-container" ref={userMenuRef}>
           <div
             className="avatar-badge"
@@ -230,15 +249,7 @@ function WelcomeHeader() {
             }}
             title="Account menu"
           >
-            {user?.avatar_url ? (
-              <img
-                src={user.avatar_url}
-                alt="User avatar"
-                className="avatar-img"
-              />
-            ) : (
-              <span>{userInitials}</span>
-            )}
+            <AvatarContent user={user} initials={userInitials} className="avatar-img" />
           </div>
           <div className={`user-dropdown ${userMenuOpen ? "" : "hidden"}`}>
             <button type="button" className="user-menu-item" onClick={handleOpenSettings}>
@@ -327,11 +338,7 @@ function WelcomeHeader() {
         <div className="mobile-nav-footer">
           <div className="mobile-nav-user">
             <div className="mobile-nav-avatar">
-              {user?.avatar_url ? (
-                <img src={user.avatar_url} alt="User avatar" />
-              ) : (
-                <span>{userInitials}</span>
-              )}
+              <AvatarContent user={user} initials={userInitials} />
             </div>
             <div className="mobile-nav-user-info">
               <span className="mobile-nav-user-name">{user.display_name || user.email}</span>
@@ -380,9 +387,13 @@ function WelcomeHeader() {
   );
 }
 
-function RunnerStatusIndicator() {
+// Folded into the nav's right cluster (was a separate footer status bar).
+// Same data sources as before: useApiHealth for API reachability, the
+// runnerStatus query for the machine count — just rendered as one sentence.
+function NavStatus() {
   const documentVisible = useDocumentVisible();
   const [queryEnabled, setQueryEnabled] = useState(false);
+  const apiError = useApiHealth();
 
   useEffect(() => {
     if (!documentVisible) {
@@ -407,58 +418,23 @@ function RunnerStatusIndicator() {
     retry: false, // Don't retry on failure - just show stale data
   });
 
-  if (!runnerStatus || runnerStatus.total === 0) {
-    return null; // Don't show anything if no runners configured
-  }
-
-  const allOnline = runnerStatus.online === runnerStatus.total;
-  const color = allOnline ? "#5D9B4A" : "#D4A843"; // olive or warm amber
-
-  return (
-    <span
-      style={{ display: "flex", alignItems: "center", gap: "4px", marginLeft: "8px", opacity: 0.7 }}
-      title={runnerStatus.runners.map((r) => `${r.name}: ${r.status}`).join("\n")}
-    >
-      <span
-        style={{
-          width: "6px",
-          height: "6px",
-          borderRadius: "50%",
-          backgroundColor: color,
-        }}
-      />
-      <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
-        Machines {runnerStatus.online}/{runnerStatus.total}
-      </span>
-    </span>
-  );
-}
-
-function InstanceHealthIndicator() {
-  const apiError = useApiHealth();
-  const connectionStatus = apiError ? ConnectionStatus.ERROR : ConnectionStatus.CONNECTED;
-  const label = apiError ? "API degraded" : "API healthy";
+  const healthy = !apiError;
+  const label = healthy ? "API healthy" : "API degraded";
+  const machinesLabel =
+    runnerStatus && runnerStatus.total > 0
+      ? `, ${runnerStatus.online} of ${runnerStatus.total} machines up`
+      : "";
   const title = apiError ? apiError.message : "API responding normally";
 
   return (
-    <span
-      style={{ display: "flex", alignItems: "center", gap: "4px", opacity: 0.85 }}
-      title={title}
-    >
-      <ConnectionStatusIndicator status={connectionStatus} showText={false} />
-      <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>{label}</span>
+    <span className="nav-status" data-testid="nav-status" title={title} aria-live="polite">
+      <span
+        className={clsx("nav-status-dot", { "nav-status-dot--error": !healthy })}
+        aria-hidden="true"
+      />
+      {label}
+      {machinesLabel}
     </span>
-  );
-}
-
-function StatusFooter() {
-  return (
-    <footer className="status-bar" data-testid="status-footer" aria-live="polite">
-      <div className="packet-counter" style={{ display: "flex", alignItems: "center" }}>
-        <InstanceHealthIndicator />
-        <RunnerStatusIndicator />
-      </div>
-    </footer>
   );
 }
 
@@ -474,7 +450,6 @@ export default function Layout({ children }: PropsWithChildren) {
       >
         {children}
       </div>
-      <StatusFooter />
     </>
   );
 }

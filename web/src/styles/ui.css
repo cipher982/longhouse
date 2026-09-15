@@ -31,17 +31,15 @@
     gap: var(--space-2);
     height: var(--component-button-height, 36px);
     padding: 0 var(--space-4);
-    border-radius: var(--radius-md);
+    border-radius: 3px;
     font-size: var(--font-size-sm);
     font-weight: var(--font-weight-medium);
     text-decoration: none;
     cursor: pointer;
     transition:
       background var(--motion-duration-fast) var(--motion-easing-standard),
-      border-color var(--motion-duration-fast) var(--motion-easing-standard),
       color var(--motion-duration-fast) var(--motion-easing-standard),
       box-shadow var(--motion-duration-fast) var(--motion-easing-standard),
-      transform var(--motion-duration-fast) var(--motion-easing-standard),
       opacity var(--motion-duration-fast) var(--motion-easing-standard);
     border: 1px solid transparent;
     white-space: nowrap;
@@ -51,7 +49,7 @@
   }
 
   .ui-button:focus-visible {
-    outline: 2px solid var(--color-brand-primary);
+    outline: 1px solid var(--color-brand-primary-hover);
     outline-offset: 2px;
   }
 
@@ -60,28 +58,35 @@
     cursor: not-allowed;
   }
 
-  /* Variants */
+  /* Variants — tinted washes, never solid bright fills. */
   .ui-button--primary {
-    background: var(--color-brand-primary);
-    color: var(--color-text-primary);
-    box-shadow: 0 0 0 rgba(201, 166, 107, 0);
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-brand-primary) 24%, transparent),
+      color-mix(in srgb, var(--color-brand-primary) 10%, transparent)
+    );
+    color: var(--color-brand-primary-hover);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-brand-primary) 45%, transparent);
   }
 
   .ui-button--primary:hover:not(:disabled) {
-    background: var(--color-brand-primary-hover);
-    box-shadow: 0 0 15px rgba(201, 166, 107, 0.3);
-    transform: translateY(-1px);
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-brand-primary) 32%, transparent),
+      color-mix(in srgb, var(--color-brand-primary) 14%, transparent)
+    );
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-brand-primary) 62%, transparent);
   }
 
   .ui-button--secondary {
-    background: var(--surface-glass-2);
-    border-color: var(--border-glass-1);
-    color: var(--color-text-primary);
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--color-border-primary);
+    color: var(--color-text-secondary);
   }
 
   .ui-button--secondary:hover:not(:disabled) {
-    background: #2a2318;
-    border-color: var(--color-brand-primary);
+    color: var(--color-text-primary);
+    box-shadow: inset 0 0 0 1px var(--color-brand-primary);
   }
 
   .ui-button--success {
@@ -91,9 +96,8 @@
   }
 
   .ui-button--success:hover:not(:disabled) {
-    background: var(--color-intent-success);
-    color: var(--color-text-primary);
-    box-shadow: 0 0 15px rgba(34, 197, 94, 0.3);
+    background: color-mix(in srgb, var(--color-intent-success) 26%, transparent);
+    color: var(--color-intent-success);
   }
 
   .ui-button--ghost {
@@ -106,15 +110,15 @@
     color: var(--color-text-primary);
   }
 
+  /* Destructive / quiet: ember text on transparent, never a filled chip. */
   .ui-button--danger {
-    background: var(--color-intent-error-muted);
-    border-color: rgba(239, 68, 68, 0.2);
+    background: transparent;
+    border-color: transparent;
     color: var(--color-intent-error);
   }
 
   .ui-button--danger:hover:not(:disabled) {
-    background: var(--color-intent-error);
-    color: var(--color-text-primary);
+    color: color-mix(in srgb, var(--color-intent-error) 85%, white 15%);
   }
 
   .ui-button--tertiary {

@@ -3,13 +3,12 @@
    ------------------------------------------------------------------ */
 
 .main-header {
-  padding: var(--space-4) var(--space-6);
+  padding: 0 28px;
   border-bottom: 1px solid var(--color-border-muted);
   display: grid;
   grid-template-columns: 1fr auto 1fr;
-  align-items: center;
-  height: 72px;
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.2) 0%, transparent 100%);
+  align-items: stretch;
+  height: 60px;
   position: relative;
   z-index: var(--z-toolbar);
 }
@@ -51,127 +50,68 @@
 .header-brand {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-}
-
-.brand-logo-wrapper {
-  position: relative;
-  width: 36px;
-  height: 36px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  gap: 10px;
 }
 
 .brand-logo {
-  width: 36px;
-  height: 36px;
+  width: 24px;
+  height: 24px;
   object-fit: contain;
-  position: relative;
-  z-index: 1;
+  flex-shrink: 0;
   transition: opacity var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
-.brand-logo-wrapper:hover .brand-logo {
-  opacity: 0.95;
-}
-
-.brand-logo-glow {
-  position: absolute;
-  inset: -4px;
-  background: radial-gradient(
-    circle,
-    rgba(201, 166, 107, 0.25) 0%,
-    transparent 70%
-  );
-  border-radius: 50%;
-  opacity: 0.35;
-  transition: opacity var(--motion-duration-fast) var(--motion-easing-standard);
-}
-
-#react-root[data-ui-effects="on"] .brand-logo-glow {
-  animation: logo-pulse 3s ease-in-out infinite;
-}
-
-@keyframes logo-pulse {
-  0%, 100% { opacity: 0.35; }
-  50% { opacity: 0.7; }
-}
-
-.brand-logo-wrapper:hover .brand-logo-glow {
-  opacity: 0.7;
-}
-
-/*
- * Timeline scrolling is a throughput-sensitive path. Pause decorative header
- * glow animations so the software renderer can spend its budget on the
- * moving content, not on unrelated chrome.
- */
-.react-root--scrolling .brand-logo-glow {
-  animation: none !important;
-  opacity: 0.35;
+.brand-link:hover .brand-logo {
+  opacity: 0.9;
 }
 
 .brand-link {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: 10px;
   text-decoration: none;
   color: inherit;
 }
 
 .main-header h1 {
   margin: 0;
-  font-size: var(--font-size-xl);
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  background: linear-gradient(
-    135deg,
-    var(--color-text-primary) 0%,
-    var(--color-text-secondary) 100%
-  );
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  text-shadow: 0 0 30px #261F18;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
+  font-family: var(--font-family-serif);
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  color: var(--color-text-primary);
 }
 
 .header-nav {
   grid-column: 2;
   display: flex;
-  align-items: center;
-  gap: var(--space-1);
+  align-items: stretch;
+  gap: 26px;
 }
 
 .nav-tab {
   position: relative;
   display: flex;
   align-items: center;
-  padding: var(--space-2) var(--space-3);
-  color: var(--color-text-muted);
+  padding: 0;
+  color: var(--color-text-secondary);
   text-decoration: none;
   background: transparent;
   border: none;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
-  letter-spacing: 0.01em;
-  border-radius: var(--radius-md);
-  transition:
-    background var(--motion-duration-normal) var(--motion-easing-standard),
-    color var(--motion-duration-normal) var(--motion-easing-standard);
+  transition: color var(--motion-duration-normal) var(--motion-easing-standard);
   cursor: pointer;
   font-family: var(--font-family-base);
 }
 
 .nav-tab:hover {
-  color: var(--color-text-secondary);
-  background: #1C1610;
+  color: var(--color-text-primary);
 }
 
 .nav-tab:focus-visible {
-  outline: 2px solid var(--color-brand-primary);
+  outline: 1px solid var(--color-brand-primary-hover);
   outline-offset: 2px;
 }
 
@@ -179,53 +119,30 @@
   color: var(--color-text-primary);
 }
 
+/* Hairline gradient underline — not a solid bar or a glow bar, one 1px
+   line that fades up to gold/glow and back down, sitting on the nav's
+   own bottom border. */
 .nav-tab-indicator {
   position: absolute;
+  left: 0;
+  right: 0;
   bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 60%;
-  height: 2px;
+  height: 1px;
   background: linear-gradient(
     90deg,
-    transparent 0%,
-    var(--color-brand-primary) 20%,
-    var(--color-neon-cyan) 50%,
-    var(--color-brand-primary) 80%,
-    transparent 100%
+    transparent,
+    var(--color-brand-primary) 25%,
+    var(--color-brand-primary-hover) 50%,
+    var(--color-brand-primary) 75%,
+    transparent
   );
-  border-radius: 1px;
-  box-shadow:
-    0 0 8px var(--color-brand-primary),
-    0 0 16px rgba(201, 166, 107, 0.40);
-  opacity: 0.9;
-  transition: opacity var(--motion-duration-fast) var(--motion-easing-standard);
-}
-
-#react-root[data-ui-effects="on"] .nav-tab-indicator {
-  animation: indicator-glow 2.4s ease-in-out infinite;
-}
-
-@keyframes indicator-glow {
-  0%, 100% { opacity: 0.65; }
-  50% { opacity: 1; }
-}
-
-.nav-tab:hover .nav-tab-indicator {
-  opacity: 1;
-}
-
-.react-root--scrolling .nav-tab-indicator {
-  animation: none !important;
-  opacity: 0.9;
-  box-shadow: none;
 }
 
 .header-actions {
   grid-column: 3;
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: 16px;
   justify-content: flex-end;
 }
 
@@ -481,7 +398,7 @@
   align-items: center;
   justify-content: center;
   font-weight: 600;
-  font-family: var(--font-family-display);
+  font-family: var(--font-family-base);
   overflow: hidden;
 }
 
@@ -619,16 +536,6 @@
     padding: 8px 10px;
   }
 
-  .brand-logo-wrapper,
-  .brand-logo {
-    width: 32px;
-    height: 32px;
-  }
-
-  .brand-logo-glow {
-    inset: -3px;
-  }
-
   .mobile-menu-toggle,
   .header-button.shelf-toggle {
     width: 34px;
@@ -660,19 +567,28 @@
   }
 }
 
-.status-bar {
-  background: var(--color-surface-section);
-  padding: 6px 24px;
-  font-size: var(--font-size-xs);
-  font-family: var(--font-family-mono);
-  color: var(--color-text-muted);
-  border-top: 1px solid var(--color-border-subtle);
-  display: flex;
+/* Nav status sentence (folded in from the old footer status bar) */
+.nav-status {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  z-index: var(--z-toolbar);
-  min-height: 28px;
-  padding-bottom: calc(6px + env(safe-area-inset-bottom));
+  gap: 8px;
+  font-size: 12px;
+  font-family: var(--font-family-base);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.nav-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex: none;
+  background: var(--color-intent-success);
+  opacity: 0.85;
+}
+
+.nav-status-dot--error {
+  background: var(--color-intent-error);
 }
 
 /* User menu / avatar (top-right) */
@@ -683,8 +599,8 @@
 }
 
 .avatar-badge {
-  width: 36px;
-  height: 36px;
+  width: 30px;
+  height: 30px;
   border-radius: var(--radius-full);
   background: var(--color-surface-elevated);
   color: var(--color-text-primary);
@@ -692,30 +608,28 @@
   align-items: center;
   justify-content: center;
   font-weight: 600;
-  font-family: var(--font-family-display);
+  font-family: var(--font-family-base);
   cursor: pointer;
-  font-size: var(--font-size-sm);
+  font-size: 12px;
   overflow: hidden;
   flex-shrink: 0;
-  border: 2px solid var(--color-border-subtle);
+  box-shadow: inset 0 0 0 1px var(--color-border-primary);
   transition:
-    border-color var(--motion-duration-fast) var(--motion-easing-standard),
     box-shadow var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
 .avatar-badge:hover {
-  border-color: var(--color-brand-primary);
-  box-shadow: var(--shadow-glow);
+  box-shadow: inset 0 0 0 1px var(--color-brand-primary), var(--shadow-glow);
 }
 
 .avatar-badge:focus-visible {
-  outline: 2px solid var(--color-brand-primary);
+  outline: 1px solid var(--color-brand-primary-hover);
   outline-offset: 2px;
 }
 
 .avatar-badge.small {
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   font-size: var(--font-size-xs);
 }
 
@@ -723,21 +637,6 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-}
-
-.status-bar .packet-counter {
-  font-family: var(--font-family-mono);
-  opacity: 0.7;
-  transition: opacity var(--motion-duration-fast) var(--motion-easing-standard);
-  min-width: 90px;
-  text-align: center;
-}
-
-.status-bar .packet-counter.flash {
-  opacity: 1;
-  background-color: #342d20;
-  border-radius: 3px;
-  padding: 1px 4px;
 }
 
 .user-dropdown {
