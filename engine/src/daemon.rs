@@ -1874,8 +1874,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 // so missing Shadow sessions remain unknown.
                                 pending_full_reconciliation = false;
                                 unmanaged_binding_refresh_failed = true;
-                                managed_reconciliation =
-                                    heartbeat::ProjectionReconciliation::failed("unmanaged_binding");
+                                // Shadow discovery is optional evidence. Keep the
+                                // retained managed projection usable and mark the
+                                // retry as in progress; a single lsof failure
+                                // must not turn local health into a failed
+                                // reconciliation or erase current sessions.
+                                managed_reconciliation.start(
+                                    "unmanaged_binding",
+                                    chrono::Utc::now().to_rfc3339(),
+                                );
                                 tracing::warn!(
                                     reason = result.reason,
                                     elapsed_ms = result.elapsed_ms,
@@ -1919,8 +1926,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             == Some((projection_generation, managed_observation_generation));
                         if refresh_is_current {
                             unmanaged_binding_refresh_failed = true;
-                            managed_reconciliation =
-                                heartbeat::ProjectionReconciliation::failed("unmanaged_binding");
+                            // This task only refreshes optional Shadow bindings.
+                            // Preserve the last coherent managed projection and
+                            // expose the retry as reconciling rather than making
+                            // the whole local session inventory failed.
+                            managed_reconciliation.start(
+                                "unmanaged_binding",
+                                chrono::Utc::now().to_rfc3339(),
+                            );
                             heartbeat::refresh_existing_status_pulse(
                                 &managed_reconciliation,
                                 &mut shipping_progress,

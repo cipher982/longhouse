@@ -6468,6 +6468,41 @@ mod tests {
     }
 
     #[test]
+    fn native_local_health_keeps_optional_unmanaged_retry_independent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let now = chrono::Utc::now().to_rfc3339();
+        let health = native_health_from_parts(
+            &path,
+            true,
+            Some(1),
+            Some(json!({
+                "spool_pending_count": 0,
+                "spool_dead_count": 0,
+                "ship_attempts_10m": 0,
+                "is_offline": false,
+                "local_projection": {
+                    "generated_at": now.clone(),
+                    "engine_pulse_at": now.clone(),
+                    "last_reconciled_at": now,
+                    "reconciliation": {
+                        "state": "reconciling",
+                        "reason": "unmanaged_binding"
+                    }
+                }
+            })),
+            None,
+        );
+
+        assert_eq!(health.health_state, "healthy");
+        assert!(health
+            .reasons
+            .iter()
+            .all(|reason| !reason.starts_with("engine_reconciliation")));
+        assert_eq!(health.transport.status_reason, "healthy");
+    }
+
+    #[test]
     fn native_reconciliation_failure_retry_and_completion_keep_discovery_truthful() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
