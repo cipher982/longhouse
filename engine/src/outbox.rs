@@ -67,6 +67,12 @@ struct PresenceOutboxPayload {
     provider_pid: Option<u32>,
     #[serde(default)]
     occurred_at: Option<String>,
+    /// Provider adapters use this for local-health-only phase evidence. It is
+    /// persisted by the daemon but never POSTed as machine presence.
+    #[serde(default)]
+    local_only: bool,
+    #[serde(default)]
+    phase_source: Option<String>,
 }
 
 #[derive(Debug)]
@@ -231,8 +237,12 @@ fn collect_outbox_impl(
     };
 
     let now = SystemTime::now();
-    // session_id → latest payload — newest observation per session wins
+    // session_id → latest ordinary presence observation — newest state wins
     let mut by_session: HashMap<String, PendingPresenceFile> = HashMap::new();
+    // Local phase observations are durable evidence for the engine's own
+    // health projection. Keep them separate: they must reach SQLite but never
+    // become hosted presence traffic.
+    let mut local_phase_by_session: HashMap<String, PendingPresenceFile> = HashMap::new();
     // Binding intents are durable until the daemon has persisted them. Do not
     // let presence coalescing discard an older managed observation whose
     // transcript path is the only durable identity we have.
@@ -318,6 +328,23 @@ fn collect_outbox_impl(
             observed_at,
         };
 
+        if next_file.payload.local_only {
+            match local_phase_by_session.get(&sid) {
+                Some(existing) => {
+                    if next_file.observed_at > existing.observed_at {
+                        let _ = std::fs::remove_file(&existing.path);
+                        local_phase_by_session.insert(sid, next_file);
+                    } else {
+                        let _ = std::fs::remove_file(&path);
+                    }
+                }
+                None => {
+                    local_phase_by_session.insert(sid, next_file);
+                }
+            }
+            continue;
+        }
+
         match by_session.get(&sid) {
             Some(existing) => {
                 if next_file.observed_at > existing.observed_at {
@@ -338,19 +365,20 @@ fn collect_outbox_impl(
     }
 
     let mut result = OutboxLocalDrainResult::default();
-    let local_phase_conn = if persist_local_state && !by_session.is_empty() {
-        match crate::state::db::resolve_db_path(db_path)
-            .and_then(|path| crate::state::db::open_connection(&path))
-        {
-            Ok(conn) => Some(conn),
-            Err(err) => {
-                warn!("opening local session phase DB failed: {err}");
-                None
+    let local_phase_conn =
+        if persist_local_state && (!by_session.is_empty() || !local_phase_by_session.is_empty()) {
+            match crate::state::db::resolve_db_path(db_path)
+                .and_then(|path| crate::state::db::open_connection(&path))
+            {
+                Ok(conn) => Some(conn),
+                Err(err) => {
+                    warn!("opening local session phase DB failed: {err}");
+                    None
+                }
             }
-        }
-    } else {
-        None
-    };
+        } else {
+            None
+        };
 
     let mut persisted_binding_paths = HashSet::new();
     if let Some(conn) = local_phase_conn.as_ref() {
@@ -361,6 +389,41 @@ fn collect_outbox_impl(
                 persisted_binding_paths.insert(path.clone());
             }
         }
+    }
+    let mut persisted_local_phase_paths = HashSet::new();
+    if let Some(conn) = local_phase_conn.as_ref() {
+        for pending in local_phase_by_session.values() {
+            let payload = &pending.payload;
+            let provider = normalize_provider(payload.provider.as_deref());
+            let source = payload
+                .phase_source
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| PhaseSource::for_hook_provider(provider).as_str());
+            let signal = SessionPhaseSignal {
+                session_id: payload.session_id.trim().to_string(),
+                provider: provider.to_string(),
+                phase: payload.state.trim().to_string(),
+                tool_name: payload.tool_name.clone(),
+                source: source.to_string(),
+                observed_at: pending.observed_at,
+            };
+            match SessionPhaseStore::new(conn).record(&signal) {
+                Ok(_) => {
+                    persisted_local_phase_paths.insert(pending.path.clone());
+                }
+                Err(err) => {
+                    warn!(
+                        "persisting local-only phase failed for session {}: {err}",
+                        signal.session_id
+                    );
+                }
+            }
+        }
+    }
+    for path in persisted_local_phase_paths {
+        let _ = std::fs::remove_file(path);
     }
 
     let selected_paths: HashSet<PathBuf> = by_session
@@ -1550,7 +1613,6 @@ mod tests {
         );
     }
 
-
     #[tokio::test(flavor = "current_thread")]
     async fn test_drain_outbox_network_error_keeps_file() {
         use crate::config::ShipperConfig;
@@ -1902,5 +1964,47 @@ mod tests {
         assert!(conn.prepare("SELECT 1 FROM managed_session_state").is_err());
 
         server.abort();
+    }
+    #[test]
+    fn local_only_phase_is_persisted_without_presence_post() {
+        let home = tempfile::tempdir().unwrap();
+        let agent_dir = home.path().join("agent");
+        let db_path = agent_dir.join("longhouse-shipper.db");
+        drop(crate::state::db::open_db(Some(&db_path)).unwrap());
+
+        crate::hook_outbox::enqueue_local_phase(
+            &db_path,
+            "sess-local-only",
+            "codex",
+            "finished",
+            None,
+            "codex_exec",
+            "2026-04-19T00:00:00+00:00",
+        )
+        .unwrap();
+
+        let result =
+            collect_outbox_with_local_state_result(&agent_dir.join("outbox"), Some(&db_path));
+        assert!(result.posts.is_empty());
+        assert!(result.signals.is_empty());
+
+        let conn = crate::state::db::open_db(Some(&db_path)).unwrap();
+        let row: (String, String, String) = conn
+            .query_row(
+                "SELECT phase, provider, source
+                 FROM session_phase_state
+                 WHERE session_id = 'sess-local-only'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            row,
+            ("finished".into(), "codex".into(), "codex_exec".into())
+        );
+        assert!(std::fs::read_dir(agent_dir.join("outbox"))
+            .unwrap()
+            .next()
+            .is_none());
     }
 }

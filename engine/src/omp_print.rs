@@ -1181,20 +1181,20 @@ impl OmpPrintSink {
         let Some(db_path) = self.local_db_path.as_deref() else {
             return;
         };
-        let Ok(conn) =
-            crate::state::db::open_client_connection(db_path, Duration::from_millis(250))
-        else {
-            return;
-        };
-        let signal = crate::state::session_phase::SessionPhaseSignal {
-            session_id: self.session_id.clone(),
-            provider: "omp".into(),
-            phase: phase.into(),
-            tool_name,
-            source: OMP_PRINT_ADAPTER.into(),
-            observed_at,
-        };
-        let _ = crate::state::session_phase::SessionPhaseStore::new(&conn).record(&signal);
+        if let Err(err) = crate::hook_outbox::enqueue_local_phase(
+            db_path,
+            &self.session_id,
+            "omp",
+            phase,
+            tool_name.as_deref(),
+            OMP_PRINT_ADAPTER,
+            &observed_at.to_rfc3339(),
+        ) {
+            eprintln!(
+                "[omp-print] enqueue local phase failed for {}: {err}",
+                self.session_id
+            );
+        }
     }
     async fn wake_transcript_shipper(&self) {
         let Ok(socket_path) = crate::config::get_agent_transcript_wake_socket_path() else {
@@ -1506,13 +1506,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let session_file = temp.path().join("session.jsonl");
         std::fs::write(&session_file, b"{\"type\":\"session\"}\n").unwrap();
-        let args = build_omp_args(
-            "reply",
-            None,
-            None,
-            temp.path(),
-            &session_file,
-        );
+        let args = build_omp_args("reply", None, None, temp.path(), &session_file);
         assert!(args.iter().any(|arg| arg == "--continue"));
     }
 

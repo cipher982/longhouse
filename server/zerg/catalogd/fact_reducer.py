@@ -991,8 +991,23 @@ def reduce_fact_batch_setwise(
 
     fold_finished_at = time.perf_counter()
     pruned_candidates = sorted(touched_candidates)
-    _prune_candidate_rows_setwise(connection, FactReceipt.__table__, pruned_candidates, MAX_RECEIPTS_PER_CANDIDATE)
-    _prune_candidate_rows_setwise(connection, FactConflict.__table__, pruned_candidates, MAX_CONFLICTS_PER_CANDIDATE)
+    pending_receipt_counts: dict[tuple[str, str, str, str], int] = {}
+    for row in pending_receipts:
+        candidate = tuple(row[column] for column in ("family", "subject_key", "source", "source_epoch"))
+        pending_receipt_counts[candidate] = pending_receipt_counts.get(candidate, 0) + 1
+    receipt_prune_candidates = [
+        candidate
+        for candidate in pruned_candidates
+        if len(dedupe_index.get(candidate, {})) + pending_receipt_counts.get(candidate, 0) > MAX_RECEIPTS_PER_CANDIDATE
+    ]
+    conflict_counts: dict[tuple[str, str, str, str], int] = {}
+    for candidate, position_marker, incoming_hash in known_conflicts:
+        conflict_counts[candidate] = conflict_counts.get(candidate, 0) + 1
+    conflict_prune_candidates = [
+        candidate for candidate in pruned_candidates if conflict_counts.get(candidate, 0) > MAX_CONFLICTS_PER_CANDIDATE
+    ]
+    _prune_candidate_rows_setwise(connection, FactReceipt.__table__, receipt_prune_candidates, MAX_RECEIPTS_PER_CANDIDATE)
+    _prune_candidate_rows_setwise(connection, FactConflict.__table__, conflict_prune_candidates, MAX_CONFLICTS_PER_CANDIDATE)
     candidate_pruned_at = time.perf_counter()
     for family in sorted({fact.family for fact in touched_candidates.values()}):
         # The family sweep is O(family size), not O(batch): it ranks every head

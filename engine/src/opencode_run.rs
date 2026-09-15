@@ -766,28 +766,17 @@ impl OpenCodeRunSink {
         let Some(db_path) = self.local_db_path.as_deref() else {
             return;
         };
-        let conn = match crate::state::db::open_client_connection(
-            Path::new(db_path),
-            Duration::from_millis(250),
+        if let Err(err) = crate::hook_outbox::enqueue_local_phase(
+            db_path,
+            &self.session_id,
+            "opencode",
+            phase,
+            tool_name.as_deref(),
+            OPENCODE_RUN_ADAPTER,
+            &observed_at.to_rfc3339(),
         ) {
-            Ok(conn) => conn,
-            Err(err) => {
-                eprintln!("[opencode-run] open local phase DB failed: {err}");
-                return;
-            }
-        };
-        let signal = crate::state::session_phase::SessionPhaseSignal {
-            session_id: self.session_id.clone(),
-            provider: "opencode".to_string(),
-            phase: phase.to_string(),
-            tool_name: tool_name.clone(),
-            source: OPENCODE_RUN_ADAPTER.to_string(),
-            observed_at,
-        };
-        if let Err(err) = crate::state::session_phase::SessionPhaseStore::new(&conn).record(&signal)
-        {
             eprintln!(
-                "[opencode-run] persist local phase failed for {}: {err}",
+                "[opencode-run] enqueue local phase failed for {}: {err}",
                 self.session_id
             );
         }

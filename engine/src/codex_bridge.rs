@@ -6294,30 +6294,17 @@ impl BridgeRuntimeSink {
         let Some(db_path) = self.local_db_path.as_deref() else {
             return;
         };
-
-        let conn = match crate::state::db::open_client_connection(
-            Path::new(db_path),
-            Duration::from_millis(250),
+        if let Err(err) = crate::hook_outbox::enqueue_local_phase(
+            db_path,
+            &self.session_id,
+            "codex",
+            phase,
+            tool_name.as_deref(),
+            BRIDGE_RUNTIME_SOURCE,
+            &observed_at.to_rfc3339(),
         ) {
-            Ok(conn) => conn,
-            Err(err) => {
-                eprintln!("[codex-bridge] open local phase DB failed: {err}");
-                return;
-            }
-        };
-
-        let signal = crate::state::session_phase::SessionPhaseSignal {
-            session_id: self.session_id.clone(),
-            provider: "codex".to_string(),
-            phase: phase.to_string(),
-            tool_name,
-            source: BRIDGE_RUNTIME_SOURCE.to_string(),
-            observed_at,
-        };
-        if let Err(err) = crate::state::session_phase::SessionPhaseStore::new(&conn).record(&signal)
-        {
             eprintln!(
-                "[codex-bridge] persist local phase failed for {}: {err}",
+                "[codex-bridge] enqueue local phase failed for {}: {err}",
                 self.session_id
             );
         }
@@ -8025,7 +8012,12 @@ mod tests {
         let observed_at = DateTime::parse_from_rfc3339("2026-04-19T00:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
+        crate::state::db::open_db(Some(&db_path)).unwrap();
         sink.persist_local_phase("running", Some("shell".to_string()), observed_at);
+        crate::outbox::collect_outbox_with_local_state_result(
+            &db_path.parent().unwrap().join("outbox"),
+            Some(&db_path),
+        );
 
         let conn = crate::state::db::open_db(Some(&db_path)).unwrap();
         let row: (String, Option<String>, String) = conn
@@ -8127,7 +8119,12 @@ mod tests {
             live_runtime_tx: None,
         };
 
+        crate::state::db::open_db(Some(&db_path)).unwrap();
         sink.persist_local_phase("finished", None, Utc::now());
+        crate::outbox::collect_outbox_with_local_state_result(
+            &db_path.parent().unwrap().join("outbox"),
+            Some(&db_path),
+        );
 
         let conn = crate::state::db::open_db(Some(&db_path)).unwrap();
         let row: (String, Option<String>, String) = conn
