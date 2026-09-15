@@ -4,7 +4,52 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use image::codecs::jpeg::JpegEncoder;
+use image::ImageEncoder;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+/// Longest edge of a derived preview. The timeline renders media in a grid cell
+/// a little over a hundred points wide, so this is generous even at 3x density.
+const PREVIEW_MAX_EDGE: u32 = 512;
+/// Below this the original is already cheap to fetch and is served as-is.
+const PREVIEW_SKIP_BYTES: usize = 64 * 1024;
+const PREVIEW_MIME_TYPE: &str = "image/jpeg";
+const PREVIEW_JPEG_QUALITY: u8 = 75;
+
+/// A small JPEG standing in for an oversized image.
+///
+/// Both clients show a preview in the row and link to the original, so the bytes
+/// fetched by default should be a fraction of a retina screenshot rather than
+/// the screenshot. Decoding is CPU work over a possibly multi-megabyte buffer,
+/// so it runs on the blocking pool, and anything already small enough to serve
+/// directly is left alone.
+async fn derive_preview(bytes: Vec<u8>) -> Option<Vec<u8>> {
+    if bytes.len() <= PREVIEW_SKIP_BYTES {
+        return None;
+    }
+    tokio::task::spawn_blocking(move || {
+        let decoded = image::load_from_memory(&bytes).ok()?;
+        if decoded.width().max(decoded.height()) <= PREVIEW_MAX_EDGE {
+            return None;
+        }
+        let preview = decoded.thumbnail(PREVIEW_MAX_EDGE, PREVIEW_MAX_EDGE);
+        let rgb = preview.to_rgb8();
+        let mut out = Vec::new();
+        JpegEncoder::new_with_quality(&mut out, PREVIEW_JPEG_QUALITY)
+            .write_image(
+                rgb.as_raw(),
+                rgb.width(),
+                rgb.height(),
+                image::ExtendedColorType::Rgb8,
+            )
+            .ok()?;
+        Some(out)
+    })
+    .await
+    .ok()
+    .flatten()
+}
 
 use crate::pipeline::parser::ParsedMediaObject;
 use crate::shipping::client::ShipperClient;
@@ -114,14 +159,22 @@ pub async fn ensure_storage_v2_media_uploaded(
         let media = by_sha
             .get(sha256.as_str())
             .with_context(|| format!("media claim requested unknown sha256 {sha256}"))?;
-        let path = capabilities
+        let lane_headers = vec![(STORAGE_V2_LANE_HEADER.to_string(), lane.to_string())];
+        // The preview is uploaded first: the object that points at it is only
+        // accepted with a link the store can already resolve.
+        let preview_hash =
+            upload_preview(client, capabilities, media, &lane_headers, request_timeout).await;
+        let mut path = capabilities
             .media_upload_path_template
             .replace("{sha256}", sha256);
+        if let Some(preview_hash) = preview_hash {
+            path = format!("{path}?thumb_sha256={preview_hash}");
+        }
         client
             .put_bytes_with_timeout(
                 &path,
                 &media.mime_type,
-                vec![(STORAGE_V2_LANE_HEADER.to_string(), lane.to_string())],
+                lane_headers,
                 media.bytes.clone(),
                 request_timeout,
             )
@@ -133,4 +186,121 @@ pub async fn ensure_storage_v2_media_uploaded(
         already_present: present.len(),
         uploaded: needed.len(),
     })
+}
+
+/// Upload this object's preview, if it is worth having one, and report its hash.
+///
+/// A preview is an optimization: when it cannot be produced or stored, the
+/// original is still uploaded and served, so nothing about fidelity depends on
+/// this succeeding.
+async fn upload_preview(
+    client: &ShipperClient,
+    capabilities: &StorageV2Capabilities,
+    media: &ParsedMediaObject,
+    lane_headers: &[(String, String)],
+    request_timeout: Option<Duration>,
+) -> Option<String> {
+    if !media.mime_type.starts_with("image/") {
+        return None;
+    }
+    let preview = derive_preview(media.bytes.clone()).await?;
+    let preview_hash = format!("{:x}", Sha256::digest(&preview));
+    let preview_path = capabilities
+        .media_upload_path_template
+        .replace("{sha256}", &preview_hash);
+    match client
+        .put_bytes_with_timeout(
+            &preview_path,
+            PREVIEW_MIME_TYPE,
+            lane_headers.to_vec(),
+            preview,
+            request_timeout,
+        )
+        .await
+    {
+        Ok(()) => Some(preview_hash),
+        Err(error) => {
+            tracing::debug!(media = %media.sha256, error = %error, "storage-v2 preview upload failed; serving the original");
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Deterministic, incompressible pixels so the encoded size tracks the
+    /// dimensions instead of collapsing to a few kilobytes.
+    fn noisy_png(width: u32, height: u32) -> Vec<u8> {
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut pixels = Vec::with_capacity((width * height * 3) as usize);
+        for _ in 0..(width * height) {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            pixels.push((state & 0xff) as u8);
+            pixels.push(((state >> 8) & 0xff) as u8);
+            pixels.push(((state >> 16) & 0xff) as u8);
+        }
+        let mut out = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut out)
+            .write_image(&pixels, width, height, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        out
+    }
+
+    #[tokio::test]
+    async fn derives_a_bounded_preview_for_an_oversized_screenshot() {
+        let original = noisy_png(1200, 900);
+        assert!(
+            original.len() > PREVIEW_SKIP_BYTES,
+            "the fixture must be big enough to be worth previewing"
+        );
+
+        let preview = derive_preview(original.clone()).await.expect("a preview");
+        assert!(
+            preview.len() < original.len() / 4,
+            "a preview must be a fraction of the original: {} vs {}",
+            preview.len(),
+            original.len()
+        );
+        let decoded = image::load_from_memory(&preview).expect("a decodable preview");
+        assert_eq!(decoded.width().max(decoded.height()), PREVIEW_MAX_EDGE);
+        assert_eq!(decoded.width(), PREVIEW_MAX_EDGE);
+        assert_eq!(decoded.height(), 384);
+    }
+
+    /// A smooth image: large in pixels, a few hundred bytes encoded, which is
+    /// exactly the case that needs no preview.
+    fn flat_png(width: u32, height: u32) -> Vec<u8> {
+        let pixels = vec![200u8; (width * height * 3) as usize];
+        let mut out = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut out)
+            .write_image(&pixels, width, height, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        out
+    }
+
+    #[tokio::test]
+    async fn leaves_an_image_that_is_already_small_enough_alone() {
+        let small = flat_png(2000, 1500);
+        assert!(small.len() <= PREVIEW_SKIP_BYTES, "fixture must be small");
+        assert!(derive_preview(small).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn does_not_preview_an_image_already_within_the_preview_edge() {
+        let compact = noisy_png(400, 400);
+        assert!(
+            compact.len() > PREVIEW_SKIP_BYTES,
+            "fixture must exceed the byte floor to exercise the dimension rule"
+        );
+        assert!(derive_preview(compact).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn refuses_bytes_it_cannot_decode() {
+        assert!(derive_preview(vec![0u8; 200_000]).await.is_none());
+    }
 }

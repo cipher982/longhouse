@@ -71,6 +71,10 @@ unicode-normalization = "0.1"
 
 # Hashing (attachment sha256 verify)
 sha2 = "0.10"
+# Preview derivation only: decode the provider's screenshots and re-encode a
+# small JPEG. Decode-only formats keep the binary from carrying encoders the
+# engine never uses.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 
 # Signal handling
 signal-hook = "0.3"

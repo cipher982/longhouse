@@ -752,6 +752,7 @@ def _session_read_media_refs(connection: Connection, *, session_id: str) -> list
                 media.c.state.label("media_state"),
                 media.c.mime_type,
                 media.c.byte_size,
+                media.c.thumb_hash,
             )
             .select_from(refs.outerjoin(media, media.c.media_hash == refs.c.media_hash))
             .where(refs.c.session_id == session_id, refs.c.state == "active")
@@ -772,6 +773,7 @@ def _session_media_ref_dto(row) -> dict[str, Any]:
         "media_state": row["media_state"],
         "mime_type": row["mime_type"],
         "byte_size": int(row["byte_size"]) if row["byte_size"] is not None else None,
+        "thumb_hash": row["thumb_hash"],
     }
 
 
@@ -10931,6 +10933,7 @@ class CatalogStore:
         object_path: str | None,
         session_refs: tuple[dict[str, Any], ...],
         observed_at: datetime,
+        thumb_hash: str | None = None,
     ) -> dict[str, Any]:
         media = MediaObject.__table__
         refs = SessionMediaRef.__table__
@@ -11010,6 +11013,7 @@ class CatalogStore:
                         existing["mime_type"] is None and mime_type is not None,
                         existing["byte_size"] is None and byte_size is not None,
                         existing["object_path"] is None and object_path is not None,
+                        existing["thumb_hash"] is None and thumb_hash is not None,
                     )
                 )
             if not object_changed and not new_refs:
@@ -11033,6 +11037,7 @@ class CatalogStore:
                         mime_type=mime_type,
                         byte_size=byte_size,
                         object_path=object_path,
+                        thumb_hash=thumb_hash,
                         commit_seq=commit_seq,
                         observed_at=observed_at,
                         verified_at=observed_at if state == "present" else None,
@@ -11047,6 +11052,7 @@ class CatalogStore:
                     .where(media.c.media_hash == media_hash)
                     .values(
                         state=state,
+                        thumb_hash=existing["thumb_hash"] or thumb_hash,
                         mime_type=existing["mime_type"] or mime_type,
                         byte_size=existing["byte_size"] if existing["byte_size"] is not None else byte_size,
                         object_path=object_path or existing["object_path"],
@@ -14250,6 +14256,7 @@ def _media_object_dto(row) -> dict[str, Any]:
         "mime_type": row["mime_type"],
         "byte_size": int(row["byte_size"]) if row["byte_size"] is not None else None,
         "object_path": row["object_path"],
+        "thumb_hash": row["thumb_hash"],
         "commit_seq": str(row["commit_seq"]),
         "observed_at": _encode_datetime(row["observed_at"]),
         "verified_at": _encode_datetime(row["verified_at"]),

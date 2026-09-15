@@ -651,7 +651,7 @@ def _line_event(event_id: str, *, envelope: str, position: int, subordinal: int,
     }
 
 
-def _media_ref(media_hash: str, *, envelope, ref_key: str, state: str = "present") -> dict:
+def _media_ref(media_hash: str, *, envelope, ref_key: str, state: str = "present", thumb_hash: str | None = None) -> dict:
     return {
         "media_hash": media_hash,
         "envelope_id": envelope,
@@ -659,6 +659,7 @@ def _media_ref(media_hash: str, *, envelope, ref_key: str, state: str = "present
         "media_state": state,
         "mime_type": "image/png",
         "byte_size": 4096,
+        "thumb_hash": thumb_hash,
     }
 
 
@@ -685,7 +686,12 @@ async def test_workspace_places_media_on_the_event_that_owns_the_line(monkeypatc
     legacy_hash = "d" * 64
     catalog = _MediaCatalog(
         [
-            _media_ref(owner_hash, envelope="env-a", ref_key=f"inline_data_url:40:{'e' * 64}:0"),
+            _media_ref(
+                owner_hash,
+                envelope="env-a",
+                ref_key=f"inline_data_url:40:{'e' * 64}:0",
+                thumb_hash="9" * 64,
+            ),
             _media_ref(other_envelope_hash, envelope="env-b", ref_key=f"inline_data_url:40:{'f' * 64}:0"),
             _media_ref(orphan_hash, envelope="env-off-page", ref_key=f"inline_data_url:99:{'0' * 64}:0"),
             _media_ref(legacy_hash, envelope=None, ref_key="legacy-ref:12"),
@@ -730,7 +736,9 @@ async def test_workspace_places_media_on_the_event_that_owns_the_line(monkeypatc
             "mime_type": "image/png",
             "byte_size": 4096,
             "blob_url": f"/api/media/{owner_hash}/blob",
-            "thumb_url": None,
+            # A derived preview is an ordinary content-addressed object, so it
+            # is offered through the same route.
+            "thumb_url": f"/api/media/{'9' * 64}/blob",
             "source_path": None,
             "source_offset": 40,
             "json_pointer": None,
@@ -739,7 +747,12 @@ async def test_workspace_places_media_on_the_event_that_owns_the_line(monkeypatc
     ]
     assert events["sibling"]["media_refs"] == []
     assert events["same-offset-other-envelope"]["media_refs"] == [
-        {**events["owner"]["media_refs"][0], "sha256": other_envelope_hash, "blob_url": f"/api/media/{other_envelope_hash}/blob"}
+        {
+            **events["owner"]["media_refs"][0],
+            "sha256": other_envelope_hash,
+            "blob_url": f"/api/media/{other_envelope_hash}/blob",
+            "thumb_url": None,
+        }
     ]
     assert events["unrelated-line"]["media_refs"] == []
     assert catalog.calls == 1

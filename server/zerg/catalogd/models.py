@@ -453,6 +453,10 @@ class MediaObject(CatalogBase):
     mime_type = Column(String(255), nullable=True)
     byte_size = Column(BigInteger, nullable=True)
     object_path = Column(Text, nullable=True)
+    # The derived preview of this object, itself a content-addressed media
+    # object. Nullable: an image small enough to serve as-is has no preview, and
+    # a non-image never has one.
+    thumb_hash = Column(String(64), nullable=True)
     commit_seq = Column(BigInteger, nullable=False)
     observed_at = Column(DateTime(timezone=True), nullable=False)
     verified_at = Column(DateTime(timezone=True), nullable=True)

@@ -995,6 +995,7 @@ async def claim_storage_v2_media(
 async def put_storage_v2_media(
     media_hash: str,
     request: Request,
+    thumb_sha256: str | None = None,
     auth: DeviceToken | object | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
@@ -1012,6 +1013,7 @@ async def put_storage_v2_media(
             "invalid_lane",
             "X-Longhouse-Storage-Lane must be live or repair.",
         )
+    thumb_hash = await _verified_preview_hash(thumb_sha256, owner_id=auth.owner_id, media_hash=canonical_hash)
     workers = get_raw_object_worker_pool()
     try:
         async with workers.admission(lane):
@@ -1042,6 +1044,7 @@ async def put_storage_v2_media(
                         "object_path": media_object_relative_path(canonical_hash).as_posix(),
                         "session_refs": [],
                         "observed_at": datetime.now(UTC).isoformat(),
+                        "thumb_hash": thumb_hash,
                     },
                     timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
                 )
@@ -1069,6 +1072,7 @@ async def put_storage_v2_media(
                 "object_path": sealed.object_path,
                 "session_refs": [],
                 "observed_at": datetime.now(UTC).isoformat(),
+                "thumb_hash": thumb_hash,
             },
             timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
         )
@@ -1093,6 +1097,38 @@ async def put_storage_v2_media(
         "created": result.get("created") is True,
         "commit_seq": result.get("commit_seq"),
     }
+
+
+async def _verified_preview_hash(
+    thumb_sha256: str | None,
+    *,
+    owner_id: int,
+    media_hash: str,
+) -> str | None:
+    """The preview this upload names, but only if the store really holds it.
+
+    The engine uploads a preview before the object that points at it, so a
+    missing one means the link is stale. Recording a link to bytes nobody has
+    would put a broken image in the timeline, so the object is served without a
+    preview instead.
+    """
+    if not thumb_sha256:
+        return None
+    try:
+        canonical_thumb = _lower_hash(thumb_sha256, "thumb_sha256")
+    except ValueError as exc:
+        raise _http_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid_media_object", str(exc)) from exc
+    if canonical_thumb == media_hash:
+        raise _http_error(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "invalid_media_object",
+            "a media object cannot be its own preview",
+        )
+    try:
+        await read_storage_v2_media_manifest(canonical_thumb, owner_id=owner_id)
+    except HTTPException:
+        return None
+    return canonical_thumb
 
 
 def media_blob_headers(media_hash: str, byte_size: int) -> dict[str, str]:

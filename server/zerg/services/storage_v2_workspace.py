@@ -59,13 +59,16 @@ def _media_ref_source_position(ref_key: object) -> int | None:
 def _served_media_ref(ref: dict[str, object], *, source_position: int) -> dict[str, object]:
     """One media reference in the shape the clients already render."""
     media_hash = str(ref.get("media_hash") or "")
+    thumb_hash = ref.get("thumb_hash")
     return {
         "sha256": media_hash,
         "media_state": "present" if ref.get("media_state") == "present" else "missing",
         "mime_type": ref.get("mime_type"),
         "byte_size": ref.get("byte_size"),
         "blob_url": f"/api/media/{media_hash}/blob",
-        "thumb_url": None,
+        # The preview is an ordinary content-addressed object, so it is served
+        # by the same route - and cached just as hard.
+        "thumb_url": f"/api/media/{thumb_hash}/blob" if isinstance(thumb_hash, str) and thumb_hash else None,
         "source_path": None,
         "source_offset": source_position,
         "json_pointer": None,

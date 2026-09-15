@@ -36,9 +36,10 @@ def _media_params(
     state: str,
     observed_at: datetime,
     session_id: str | None = None,
+    thumb_hash: str | None = None,
 ) -> dict:
     present = state == "present"
-    return {
+    params = {
         "media_hash": media_hash,
         "state": state,
         "mime_type": "image/png" if present else None,
@@ -47,6 +48,9 @@ def _media_params(
         "session_refs": ([{"session_id": session_id, "envelope_id": None, "ref_key": "inline:0"}] if session_id is not None else []),
         "observed_at": observed_at.isoformat(),
     }
+    if thumb_hash is not None:
+        params["thumb_hash"] = thumb_hash
+    return params
 
 
 @pytest.mark.asyncio
@@ -994,6 +998,70 @@ async def test_projector_state_cannot_resurrect_or_claim_tombstoned_session(daem
             {"projector": projector, "after_session_id": None, "limit": 100},
         )
         assert lag["states"] == []
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_media_manifest_records_the_derived_preview_and_survives_a_replay(daemon_paths):
+    """The preview link is part of the manifest, and a later commit keeps it."""
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    media_hash = "c" * 64
+    thumb_hash = "d" * 64
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        engine = create_catalog_engine(database_path)
+        with Session(engine) as db:
+            db.add(
+                StorageSession(
+                    session_id=session_id,
+                    tenant_id="default",
+                    owner_id="1",
+                    provider="codex",
+                    environment="test",
+                    machine_id="test",
+                    started_at=now,
+                    last_activity_at=now,
+                    raw_state="durable",
+                    render_state="ready",
+                    media_state="complete",
+                    commit_seq=0,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            db.commit()
+        engine.dispose()
+
+        with_preview = await client.call(
+            "storage.media.commit.v2",
+            _media_params(
+                media_hash=media_hash,
+                state="present",
+                observed_at=now,
+                session_id=session_id,
+                thumb_hash=thumb_hash,
+            ),
+        )
+        assert with_preview["media"]["thumb_hash"] == thumb_hash
+
+        # A retry without the optional field must not erase the link.
+        without = await client.call(
+            "storage.media.commit.v2",
+            _media_params(media_hash=media_hash, state="present", observed_at=now, session_id=session_id),
+        )
+        assert without["media"]["thumb_hash"] == thumb_hash
+
+        read = await client.call(
+            "storage.media.read.v2",
+            {"media_hash": media_hash, "session_id": None, "owner_id": "1", "limit": 1},
+        )
+        assert read["media"]["thumb_hash"] == thumb_hash
     finally:
         await client.close()
         await daemon.close()

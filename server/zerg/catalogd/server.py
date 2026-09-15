@@ -3427,7 +3427,9 @@ class CatalogDaemon:
 
     async def _commit_media_object(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         expected = {"media_hash", "state", "mime_type", "byte_size", "object_path", "session_refs", "observed_at"}
-        if set(request.params) != expected:
+        # `thumb_hash` is optional: an older engine simply has no preview to
+        # report, and a non-image object never has one.
+        if set(request.params) - {"thumb_hash"} != expected:
             return self._error(request, "invalid_request", "storage.media.commit.v2 has invalid parameters")
         params = dict(request.params)
         try:
@@ -4643,6 +4645,9 @@ def _validate_media_commit(params: dict) -> None:
     byte_size = params["byte_size"]
     if byte_size is not None and (type(byte_size) is not int or not 0 <= byte_size <= 64 * 1024 * 1024):
         raise ValueError("byte_size must be null or an integer from 0 through 67108864")
+    thumb_hash = params.get("thumb_hash")
+    if thumb_hash is not None and not _is_hash(thumb_hash):
+        raise ValueError("thumb_hash must be lowercase SHA-256 hex")
     object_path = params["object_path"]
     if object_path is not None:
         object_path = _canonical_storage_text(object_path, field="object_path", maximum_bytes=2_048)
