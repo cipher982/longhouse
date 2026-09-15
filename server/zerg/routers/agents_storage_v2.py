@@ -89,6 +89,9 @@ from zerg.storage_v2.render_objects import validate_render_object_spec
 from zerg.utils.server_timing import ServerTimingRecorder
 
 _SESSION_DETAIL_CATALOG_TIMEOUT_SECONDS = 4.25
+# A timeline page fetches many images at once, so this is an interactive read
+# with its own bound rather than the catalog's one-second default.
+_MEDIA_MANIFEST_CATALOG_TIMEOUT_SECONDS = 4.25
 _STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS = 10.0
 _SESSION_DETAIL_WORKER_QUEUE_TIMEOUT_SECONDS = 4.25
 
@@ -1104,6 +1107,12 @@ async def read_storage_v2_media_manifest(media_hash: str, *, owner_id: int) -> t
         result = await catalogd.call(
             "storage.media.read.v2",
             {"media_hash": canonical_hash, "session_id": None, "owner_id": str(owner_id), "limit": 1},
+            # A timeline renders many images at once, and the catalog's default
+            # one-second RPC deadline expires under ordinary write load: a real
+            # page then shows intermittent "media unavailable" for bytes that
+            # are present. This is an interactive read with its own bound, like
+            # the session-detail snapshot.
+            timeout_seconds=_MEDIA_MANIFEST_CATALOG_TIMEOUT_SECONDS,
         )
         media = result.get("media")
         if result.get("found") is not True or not isinstance(media, dict) or media.get("state") != "present":
