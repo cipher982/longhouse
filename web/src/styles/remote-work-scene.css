@@ -15,7 +15,7 @@
   .landing-remote-scene-player::before {
     position: absolute;
     inset: 8% 4% -8%;
-    background: radial-gradient(circle, rgba(143, 197, 172, 0.1), transparent 68%);
+    background: radial-gradient(circle, color-mix(in srgb, var(--color-intent-success) 10%, transparent), transparent 68%);
     content: "";
     filter: blur(30px);
   }
@@ -26,7 +26,7 @@
 
   .landing-remote-scene-note {
     margin: 14px 2px 0;
-    color: rgba(212, 199, 181, 0.48);
+    color: color-mix(in srgb, var(--color-text-secondary) 65%, transparent);
     font-family: var(--font-family-mono);
     font-size: 0.68rem;
     text-align: right;

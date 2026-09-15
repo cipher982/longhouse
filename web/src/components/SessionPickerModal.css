@@ -42,7 +42,7 @@
   .search-hint {
     position: absolute;
     right: var(--space-3);
-    color: var(--color-text-tertiary);
+    color: var(--color-text-muted);
     font-size: var(--font-size-xs);
     font-family: var(--font-family-mono);
     pointer-events: none;
@@ -71,7 +71,7 @@
   .filter-select:focus {
     outline: none;
     border-color: var(--color-brand-primary);
-    box-shadow: 0 0 0 2px var(--color-brand-primary-alpha);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-brand-primary) 25%, transparent);
   }
 
   /* Main Body - Split View */
@@ -113,7 +113,7 @@
 
   .empty-hint {
     font-size: var(--font-size-sm);
-    color: var(--color-text-tertiary);
+    color: var(--color-text-muted);
   }
 
   /* Session Item */
@@ -156,22 +156,22 @@
   }
 
   .provider-claude {
-    background: #d97706;
+    background: var(--color-provider-claude);
     color: white;
   }
 
   .provider-codex {
-    background: #4A8A3A;
-    color: #F3EAD9;
+    background: var(--color-provider-codex);
+    color: var(--color-text-inverse);
   }
 
   .provider-antigravity {
-    background: #D86F45;
-    color: #120B09;
+    background: var(--color-provider-antigravity);
+    color: white;
   }
 
   .provider-gemini {
-    background: #B8923C;
+    background: var(--color-brand-secondary);
     color: white;
   }
 
@@ -195,7 +195,7 @@
   }
 
   .session-separator {
-    color: var(--color-text-tertiary);
+    color: var(--color-text-muted);
   }
 
   .session-project {
@@ -249,7 +249,7 @@
   }
 
   .preview-user {
-    background: var(--color-brand-primary-alpha);
+    background: color-mix(in srgb, var(--color-brand-primary) 16%, transparent);
     align-self: flex-end;
     max-width: 85%;
   }
@@ -264,7 +264,6 @@
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-bold);
     color: var(--color-text-secondary);
-    text-transform: uppercase;
   }
 
   .preview-content {

@@ -102,15 +102,13 @@
     color: var(--color-text-muted);
     font-size: 0.72rem;
     font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
   }
 
   .launch-choice,
   .launch-session-card {
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--color-surface-raised) 84%, transparent);
+    background: color-mix(in srgb, var(--color-surface-elevated) 84%, transparent);
   }
 
   .launch-choice > summary {
@@ -213,8 +211,8 @@
 
   .launch-option-row:hover,
   .launch-option-row:focus-visible {
-    border-color: var(--color-border-default);
-    background: var(--color-surface-hover);
+    border-color: var(--color-border-primary);
+    background: var(--color-surface-elevated);
   }
 
   .launch-workspace-panel input { width: 100%; }
@@ -239,7 +237,7 @@
     padding: 0.45rem;
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--color-surface-raised) 84%, transparent);
+    background: color-mix(in srgb, var(--color-surface-elevated) 84%, transparent);
   }
 
   .launch-machine-group-label {
@@ -247,8 +245,6 @@
     color: var(--color-text-muted);
     font-size: 0.72rem;
     font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
   }
 
   .launch-machine-row {
@@ -273,8 +269,8 @@
   button.launch-machine-row:hover,
   button.launch-machine-row:focus-visible,
   .launch-machine-row.is-selected {
-    border-color: var(--color-border-default);
-    background: var(--color-surface-hover);
+    border-color: var(--color-border-primary);
+    background: var(--color-surface-elevated);
   }
 
   .launch-machine-row > span:last-child {
@@ -294,23 +290,23 @@
   }
 
   .launch-machine-status.is-ready {
-    border-color: #53b56d;
-    background: #53b56d;
+    border-color: var(--color-intent-success);
+    background: var(--color-intent-success);
   }
 
   .launch-machine-status.is-warning {
-    border-color: #d7a84a;
-    background: #d7a84a;
+    border-color: var(--color-intent-warning);
+    background: var(--color-intent-warning);
   }
 
   .launch-machine-status.is-offline {
-    border-color: var(--color-text-muted);
+    border-color: var(--color-state-cool, var(--color-text-muted));
     background: transparent;
   }
 
   .launch-machine-status.is-repair {
-    border-color: var(--color-danger, #d65b5b);
-    background: var(--color-danger, #d65b5b);
+    border-color: var(--color-intent-error);
+    background: var(--color-intent-error);
   }
 
   .launch-path-chip {

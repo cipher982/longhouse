@@ -4,9 +4,9 @@
   gap: var(--space-3);
   padding: var(--space-3);
   border-radius: var(--radius-lg);
-  border: 1px solid rgba(158, 124, 90, 0.18);
+  border: 1px solid color-mix(in srgb, var(--color-brand-secondary) 18%, transparent);
   background:
-    linear-gradient(180deg, rgba(30, 22, 17, 0.82), rgba(18, 11, 9, 0.74));
+    linear-gradient(180deg, color-mix(in srgb, var(--color-surface-elevated) 82%, transparent), color-mix(in srgb, var(--color-void) 74%, transparent));
   color: var(--color-text-secondary);
 }
 
@@ -49,9 +49,9 @@
   min-width: 0;
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
-  border: 1px solid rgba(158, 124, 90, 0.18);
-  background: rgba(12, 10, 8, 0.72);
-  color: rgba(243, 234, 217, 0.92);
+  border: 1px solid color-mix(in srgb, var(--color-brand-secondary) 18%, transparent);
+  background: color-mix(in srgb, var(--color-void) 72%, transparent);
+  color: color-mix(in srgb, var(--color-text-primary) 92%, transparent);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
   line-height: 1.45;

@@ -27,9 +27,9 @@
   body.marketing-mode .chat-main {
     background: linear-gradient(
       145deg,
-      #0a0f1e 0%,
-      #0f1729 50%,
-      #111827 100%
+      var(--color-void) 0%,
+      var(--color-surface-card) 50%,
+      var(--color-surface-elevated) 100%
     ) !important;
   }
 
@@ -39,35 +39,35 @@
     margin: 0 auto !important;
   }
 
-  /* User messages - blue glow */
+  /* User messages - gold wash */
   body.marketing-mode .user-message .message-content,
   body.marketing-mode .message-bubble.user {
-    background: linear-gradient(135deg, #1e40af 0%, #1e3a8a 100%) !important;
-    border: 1px solid #3b82f6 !important;
-    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3) !important;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--color-brand-primary) 24%, var(--color-surface-elevated)) 0%, color-mix(in srgb, var(--color-brand-secondary) 28%, var(--color-surface-card)) 100%) !important;
+    border: 1px solid var(--color-brand-primary) !important;
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--color-brand-primary) 30%, transparent) !important;
   }
 
-  /* Assistant messages - purple glow */
+  /* Assistant messages - ember glow */
   body.marketing-mode .assistant-message .message-content,
   body.marketing-mode .message-bubble.assistant {
-    background: linear-gradient(135deg, #4c1d95 0%, #5b21b6 100%) !important;
-    border: 1px solid #C9A66B !important;
-    box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3) !important;
+    background: linear-gradient(135deg, var(--color-surface-elevated) 0%, var(--color-surface-card) 100%) !important;
+    border: 1px solid var(--color-brand-secondary) !important;
+    box-shadow: 0 4px 12px color-mix(in srgb, var(--color-brand-secondary) 30%, transparent) !important;
   }
 
   /* Tool use indicators */
   body.marketing-mode .tool-use,
   body.marketing-mode .tool-result,
   body.marketing-mode .tool-indicator {
-    background: linear-gradient(135deg, #3D7A2F 0%, #4A8A3A 100%) !important;
-    border: 1px solid #5D9B4A !important;
-    box-shadow: 0 0 8px rgba(93, 155, 74, 0.4) !important;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--color-intent-success) 35%, var(--color-surface-elevated)) 0%, color-mix(in srgb, var(--color-intent-success) 45%, var(--color-surface-card)) 100%) !important;
+    border: 1px solid var(--color-intent-success) !important;
+    box-shadow: 0 0 8px color-mix(in srgb, var(--color-intent-success) 40%, transparent) !important;
   }
 
   /* Text clarity */
   body.marketing-mode .message-text,
   body.marketing-mode .message-content {
-    color: #f3f4f6 !important;
+    color: var(--color-text-primary) !important;
   }
 
   /* ============================================================================
@@ -76,40 +76,40 @@
 
   /* Enhance featured cards */
   body.marketing-mode .automation-card {
-    background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%) !important;
-    border: 2px solid #9e7c5a !important;
-    box-shadow: 0 8px 24px rgba(139, 92, 246, 0.4) !important;
+    background: linear-gradient(135deg, var(--color-surface-card) 0%, var(--color-surface-elevated) 100%) !important;
+    border: 2px solid var(--color-brand-secondary) !important;
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--color-brand-primary) 40%, transparent) !important;
   }
 
   /* Status indicators */
   body.marketing-mode .status-active,
   body.marketing-mode .status-badge.active,
   body.marketing-mode .badge-running {
-    background: #5D9B4A !important;
-    box-shadow: 0 0 12px rgba(93, 155, 74, 0.6) !important;
+    background: var(--color-intent-success) !important;
+    box-shadow: 0 0 12px color-mix(in srgb, var(--color-intent-success) 60%, transparent) !important;
   }
 
   body.marketing-mode .status-idle,
   body.marketing-mode .status-badge.idle,
   body.marketing-mode .badge-idle {
-    background: #6b7280 !important;
+    background: var(--color-state-cool) !important;
   }
 
   /* Boost automation overview background */
   body.marketing-mode .automations-page {
     background: linear-gradient(
       145deg,
-      #070b14 0%,
-      #0c1222 50%,
-      #111827 100%
+      var(--color-void) 0%,
+      var(--color-surface-card) 50%,
+      var(--color-surface-elevated) 100%
     ) !important;
   }
 
   /* Card titles pop */
   body.marketing-mode .card-title,
   body.marketing-mode .automation-name {
-    color: #f3f4f6 !important;
-    text-shadow: 0 0 8px #342d20 !important;
+    color: var(--color-text-primary) !important;
+    text-shadow: 0 0 8px color-mix(in srgb, var(--color-brand-secondary) 45%, transparent) !important;
   }
 
   /* ============================================================================
@@ -134,7 +134,7 @@
     width: 40px;
     height: 40px;
     border-radius: 50%;
-    background: rgba(201, 166, 107, 0.40);
+    background: color-mix(in srgb, var(--color-brand-secondary) 40%, transparent);
     pointer-events: none;
     animation: click-ripple 0.6s ease-out forwards;
     z-index: 99999;

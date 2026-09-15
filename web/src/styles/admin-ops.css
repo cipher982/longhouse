@@ -75,8 +75,6 @@
   .ops-admin-page .metric-title {
     margin: 0;
     font-size: 0.76rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
     color: color-mix(in srgb, var(--metric-accent) 70%, var(--color-text-secondary));
   }
 
@@ -132,8 +130,6 @@
 
   .ops-admin-page .info-label {
     font-size: 0.76rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
     color: var(--color-text-muted);
   }
 

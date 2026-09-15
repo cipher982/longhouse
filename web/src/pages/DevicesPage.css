@@ -40,8 +40,6 @@
   font-size: 0.8125rem;
   font-weight: 600;
   color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.025em;
 }
 
 .devices-table tbody tr:hover {
@@ -140,8 +138,6 @@
   font-size: 0.875rem;
   font-weight: 600;
   color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.025em;
 }
 
 .cli-instructions code {

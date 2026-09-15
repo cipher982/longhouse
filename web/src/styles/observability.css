@@ -89,8 +89,6 @@
   .observability-page .metric-title {
     margin: 0;
     font-size: 0.76rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
     color: color-mix(in srgb, var(--metric-accent) 70%, var(--color-text-secondary));
   }
 
@@ -129,8 +127,6 @@
     margin-bottom: var(--space-2);
     color: var(--color-text-muted);
     font-size: 0.74rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
   }
 
   .observability-panel__title {
@@ -205,8 +201,6 @@
   .observability-diagnosis-card__eyebrow {
     color: var(--color-text-muted);
     font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
   }
 
   .observability-diagnosis-card__title {
@@ -427,8 +421,9 @@
 
   .observability-machine-action {
     padding: 3px 8px;
-    border: 1px solid color-mix(in srgb, var(--color-intent-warning) 45%, var(--color-border-primary));
-    border-radius: 999px;
+    border: none;
+    border-radius: 3px;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-intent-warning) 45%, var(--color-border-primary));
     color: var(--color-text-primary);
     font-size: 0.76rem;
   }
@@ -490,8 +485,6 @@
   .observability-stat-label {
     color: var(--color-text-muted);
     font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
   }
 
   .observability-stat-value {

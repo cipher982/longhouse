@@ -117,7 +117,7 @@
   .form-input:focus {
     outline: none;
     border-color: var(--primary);
-    box-shadow: 0 0 0 2px rgba(201, 166, 107, 0.15);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-brand-primary) 15%, transparent);
   }
 
   .form-input.disabled {
@@ -149,7 +149,7 @@
     justify-content: space-between;
     align-items: center;
     padding: 8px 0;
-    border-bottom: 1px solid #261F18;
+    border-bottom: 1px solid var(--border-muted);
   }
 
   .info-label {
@@ -242,8 +242,6 @@
     font-size: 0.8rem;
     font-weight: 600;
     margin: 0;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
     color: var(--metric-accent);
   }
 
@@ -454,9 +452,9 @@
   .demo-empty-state {
     text-align: center;
     padding: 48px 24px;
-    background: linear-gradient(135deg, rgba(201, 166, 107, 0.05) 0%, rgba(139, 92, 246, 0.05) 100%);
+    background: linear-gradient(135deg, color-mix(in srgb, var(--color-brand-primary) 8%, transparent) 0%, transparent 100%);
     border-radius: 12px;
-    border: 1px dashed rgba(201, 166, 107, 0.3);
+    border: 1px dashed color-mix(in srgb, var(--color-brand-primary) 30%, transparent);
   }
 
   .demo-empty-state p {
@@ -476,8 +474,8 @@
     justify-content: space-between;
     align-items: center;
     padding: 20px 24px;
-    background: linear-gradient(135deg, #1A1410 0%, rgba(255, 255, 255, 0.01) 100%);
-    border: 1px solid #231E16;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--color-brand-primary) 6%, transparent) 0%, transparent 65%), var(--color-surface-card);
+    border: 1px solid var(--border-muted);
     border-radius: 12px;
     transition:
       background 0.2s ease,
@@ -485,8 +483,8 @@
   }
 
   .demo-account-card:hover {
-    border-color: rgba(201, 166, 107, 0.40);
-    background: linear-gradient(135deg, rgba(201, 166, 107, 0.08) 0%, rgba(139, 92, 246, 0.04) 100%);
+    border-color: color-mix(in srgb, var(--color-brand-primary) 40%, transparent);
+    background: linear-gradient(135deg, color-mix(in srgb, var(--color-brand-primary) 10%, transparent) 0%, transparent 65%), var(--color-surface-card);
   }
 
   .demo-account-info {
@@ -498,13 +496,13 @@
   .demo-account-name {
     font-weight: 600;
     font-size: 16px;
-    color: #F3EAD9;
+    color: var(--color-text-primary);
     display: block;
   }
 
   .demo-account-email {
     font-size: 13px;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--color-text-secondary);
     display: block;
     font-family: var(--font-mono, monospace);
   }
@@ -518,10 +516,10 @@
   .demo-add-button {
     width: 100%;
     background: transparent;
-    border: 2px dashed #2e271c;
+    border: 2px dashed var(--border-muted);
     border-radius: 12px;
     padding: 16px;
-    color: rgba(255, 255, 255, 0.4);
+    color: var(--color-text-muted);
     cursor: pointer;
     font-size: 14px;
     font-weight: 500;
@@ -533,9 +531,9 @@
   }
 
   .demo-add-button:hover:not(:disabled) {
-    border-color: rgba(201, 166, 107, 0.5);
-    color: rgba(201, 166, 107, 0.90);
-    background: rgba(201, 166, 107, 0.05);
+    border-color: color-mix(in srgb, var(--color-brand-primary) 50%, transparent);
+    color: color-mix(in srgb, var(--color-brand-primary) 90%, var(--color-text-primary));
+    background: color-mix(in srgb, var(--color-brand-primary) 5%, transparent);
   }
 
   .demo-add-button:disabled {
@@ -583,8 +581,6 @@
   .users-table th {
     font-size: 12px;
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
     color: var(--text-secondary);
     background: var(--dark-card);
     position: sticky;
@@ -608,7 +604,7 @@
   }
 
   .users-table .clickable-row:hover {
-    background: #1E1812;
+    background: var(--color-surface-elevated);
   }
 
   .users-table .user-cell {
@@ -634,20 +630,19 @@
   .role-badge {
     display: inline-block;
     padding: 2px 8px;
-    border-radius: 12px;
+    border-radius: 3px;
     font-size: 11px;
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
+    background: transparent;
   }
 
   .role-badge.role-admin {
-    background: color-mix(in srgb, var(--color-brand-secondary) 20%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-brand-secondary) 45%, var(--color-border-primary));
     color: var(--color-brand-secondary);
   }
 
   .role-badge.role-user {
-    background: color-mix(in srgb, var(--color-brand-primary) 20%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-brand-primary) 45%, var(--color-border-primary));
     color: var(--color-brand-primary);
   }
 
@@ -688,7 +683,7 @@
   }
 
   .admin-page-container .modal-close:hover {
-    background: #261F18;
+    background: var(--border-muted);
     color: var(--text);
   }
 
@@ -740,8 +735,6 @@
     display: block;
     font-size: 12px;
     color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
     margin-bottom: 4px;
   }
 
@@ -782,8 +775,6 @@
   .breakdown-table th {
     font-size: 11px;
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
     color: var(--text-secondary);
   }
 

@@ -161,8 +161,8 @@
     }
 
     .capability-chip--reported {
-      background: color-mix(in srgb, var(--color-intent-primary) 10%, transparent);
-      border-color: color-mix(in srgb, var(--color-intent-primary) 24%, transparent);
+      background: color-mix(in srgb, var(--color-brand-primary) 10%, transparent);
+      border-color: color-mix(in srgb, var(--color-brand-primary) 24%, transparent);
       color: var(--color-text-primary);
     }
 
@@ -319,8 +319,6 @@
 
     .doctor-check-status {
       font-size: 0.75rem;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
       color: var(--color-text-secondary);
     }
 
@@ -336,8 +334,8 @@
       gap: 0.875rem;
       padding: 1rem;
       border-radius: 8px;
-      background: color-mix(in srgb, var(--color-intent-primary) 6%, transparent);
-      border: 1px solid color-mix(in srgb, var(--color-intent-primary) 18%, transparent);
+      background: color-mix(in srgb, var(--color-brand-primary) 6%, transparent);
+      border: 1px solid color-mix(in srgb, var(--color-brand-primary) 18%, transparent);
     }
 
     .doctor-repair-header h3 {
@@ -365,7 +363,7 @@
 
     .doctor-mode-button--active {
       background: var(--color-surface-elevated);
-      border-color: var(--color-border-accent);
+      border-color: var(--color-brand-primary);
     }
 
     .doctor-repair-actions {
@@ -378,7 +376,7 @@
       margin: 0;
       padding: 1rem;
       border-radius: 8px;
-      background: var(--color-bg-canvas);
+      background: var(--color-surface-well);
       border: 1px solid var(--color-border-primary);
       overflow-x: auto;
       font-size: 0.875rem;

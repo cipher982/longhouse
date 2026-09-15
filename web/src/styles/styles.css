@@ -101,7 +101,7 @@
     margin-bottom: 15px;
     font-size: var(--font-size-md);
     appearance: none;
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23bdc3c7' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6,9 12,15 18,9'></polyline></svg>");
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238A7862' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6,9 12,15 18,9'></polyline></svg>");
     background-repeat: no-repeat;
     background-position: right 12px center;
     background-size: 18px;
@@ -111,7 +111,7 @@
   .modal-select:focus {
     outline: none;
     border-color: var(--color-brand-primary);
-    box-shadow: 0 0 5px rgb(100 255 218 / 50%);
+    box-shadow: 0 0 5px color-mix(in srgb, var(--color-brand-primary) 50%, transparent);
   }
 
   .modal-select option {

@@ -15,8 +15,6 @@
   font-weight: 600;
   color: var(--text-primary);
   margin: 0 0 0.25rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
 }
 
 .recall-panel-description {
@@ -53,7 +51,7 @@
 
 .recall-mode-option:hover,
 .recall-mode-option.is-active {
-  border-color: var(--border-default);
+  border-color: var(--border-color);
   background: var(--bg-secondary);
   color: var(--text-primary);
 }
@@ -88,7 +86,7 @@
 }
 
 .recall-card:hover {
-  border-color: var(--border-default);
+  border-color: var(--border-color);
 }
 
 .recall-card-header {
@@ -107,7 +105,7 @@
 }
 
 .recall-card-session-link:hover {
-  color: var(--accent-primary, var(--text-accent));
+  color: var(--accent-primary);
   text-decoration: underline;
 }
 
@@ -133,7 +131,7 @@
 }
 
 .recall-turn--match {
-  background: color-mix(in srgb, var(--accent-primary, #4ade80) 8%, transparent);
+  background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
   border-radius: 0.25rem;
   padding: 0.125rem 0.25rem;
   margin: 0 -0.25rem;
@@ -146,7 +144,7 @@
   flex-shrink: 0;
 }
 
-.recall-turn--user .recall-turn-role { color: var(--text-accent, #60a5fa); }
+.recall-turn--user .recall-turn-role { color: var(--accent-primary); }
 .recall-turn--assistant .recall-turn-role { color: var(--text-secondary); }
 
 .recall-turn-content {

@@ -102,11 +102,22 @@
   }
 
   .ui-confirm-dialog__button--default {
-    background: var(--color-brand-primary, #C9A66B);
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-brand-primary) 24%, transparent),
+      color-mix(in srgb, var(--color-brand-primary) 10%, transparent)
+    );
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-brand-primary) 45%, transparent);
+    color: var(--color-brand-primary-hover);
   }
 
   .ui-confirm-dialog__button--default:hover {
-    background: var(--color-brand-primary-hover, #B8923C);
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-brand-primary) 32%, transparent),
+      color-mix(in srgb, var(--color-brand-primary) 14%, transparent)
+    );
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-brand-primary) 62%, transparent);
   }
 
   .ui-confirm-dialog__button--warning {
