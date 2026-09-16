@@ -933,6 +933,7 @@ validate-sdk: ## @internal OpenAPI/SDK drift check
 	fi
 
 validate-ios-api: ## @internal iOS OpenAPI DTO drift check
+	@cd server && uv run python scripts/export_openapi.py >/dev/null
 	@python3 scripts/generate/ios_api_models.py --check
 
 validate-provider-brands: ## @internal Provider brand config drift check
