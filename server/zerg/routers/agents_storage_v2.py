@@ -997,6 +997,8 @@ async def put_storage_v2_media(
     request: Request,
     thumb_sha256: str | None = None,
     derived_from: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
     auth: DeviceToken | object | None = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
@@ -1022,6 +1024,13 @@ async def put_storage_v2_media(
     # A preview names the image it came from. The read requires the two to agree,
     # so a client cannot borrow someone else's preview by naming its hash.
     derived = _lower_hash(derived_from, "derived_from") if derived_from else None
+    for name, value in (("width", width), ("height", height)):
+        if value is not None and not 1 <= value <= 100_000:
+            raise _http_error(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "invalid_media_object",
+                f"{name} must be an integer from 1 through 100000",
+            )
     if thumb_hash == canonical_hash:
         raise _http_error(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1060,6 +1069,8 @@ async def put_storage_v2_media(
                         "observed_at": datetime.now(UTC).isoformat(),
                         "thumb_hash": thumb_hash,
                         "derived_from": derived,
+                        "width": width,
+                        "height": height,
                     },
                     timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
                 )
@@ -1089,6 +1100,8 @@ async def put_storage_v2_media(
                 "observed_at": datetime.now(UTC).isoformat(),
                 "thumb_hash": thumb_hash,
                 "derived_from": derived,
+                "width": width,
+                "height": height,
             },
             timeout_seconds=_STORAGE_COMMIT_CATALOG_TIMEOUT_SECONDS,
         )

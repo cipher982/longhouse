@@ -759,6 +759,8 @@ def _session_read_media_refs(connection: Connection, *, session_id: str) -> list
                 media.c.mime_type,
                 media.c.byte_size,
                 media.c.thumb_hash,
+                media.c.width,
+                media.c.height,
                 thumb.c.state.label("thumb_state"),
                 thumb.c.derived_from.label("thumb_derived_from"),
             )
@@ -789,6 +791,8 @@ def _session_media_ref_dto(row) -> dict[str, Any]:
             and row["thumb_derived_from"] == row["media_hash"]
             else None
         ),
+        "width": row["width"],
+        "height": row["height"],
     }
 
 
@@ -10957,6 +10961,8 @@ class CatalogStore:
         observed_at: datetime,
         thumb_hash: str | None = None,
         derived_from: str | None = None,
+        width: int | None = None,
+        height: int | None = None,
     ) -> dict[str, Any]:
         media = MediaObject.__table__
         refs = SessionMediaRef.__table__
@@ -11047,6 +11053,7 @@ class CatalogStore:
                         existing["object_path"] is None and object_path is not None,
                         existing["thumb_hash"] is None and thumb_hash is not None,
                         existing["derived_from"] is None and derived_from is not None,
+                        existing["width"] is None and width is not None,
                     )
                 )
             if not object_changed and not new_refs:
@@ -11072,6 +11079,8 @@ class CatalogStore:
                         object_path=object_path,
                         thumb_hash=thumb_hash,
                         derived_from=derived_from,
+                        width=width,
+                        height=height,
                         commit_seq=commit_seq,
                         observed_at=observed_at,
                         verified_at=observed_at if state == "present" else None,
@@ -11088,6 +11097,8 @@ class CatalogStore:
                         state=state,
                         thumb_hash=existing["thumb_hash"] or thumb_hash,
                         derived_from=existing["derived_from"] or derived_from,
+                        width=existing["width"] or width,
+                        height=existing["height"] or height,
                         mime_type=existing["mime_type"] or mime_type,
                         byte_size=existing["byte_size"] if existing["byte_size"] is not None else byte_size,
                         object_path=object_path or existing["object_path"],
@@ -14308,6 +14319,8 @@ def _media_object_dto(row) -> dict[str, Any]:
         "object_path": row["object_path"],
         "thumb_hash": row["thumb_hash"],
         "derived_from": row["derived_from"],
+        "width": row["width"],
+        "height": row["height"],
         "commit_seq": str(row["commit_seq"]),
         "observed_at": _encode_datetime(row["observed_at"]),
         "verified_at": _encode_datetime(row["verified_at"]),

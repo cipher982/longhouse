@@ -68,6 +68,15 @@ fn flatten_onto_white(image: &image::DynamicImage) -> image::RgbImage {
     rgb
 }
 
+/// The pixel size of an image, read from its header alone.
+fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()
+}
+
 /// A small JPEG standing in for an oversized image.
 ///
 /// Both clients show a preview in the row and link to the original, so the bytes
@@ -228,12 +237,27 @@ pub async fn ensure_storage_v2_media_uploaded(
         // accepted with a link the store can already resolve.
         let preview_hash =
             upload_preview(client, capabilities, media, &lane_headers, request_timeout).await;
-        let mut path = capabilities
+        let path = capabilities
             .media_upload_path_template
             .replace("{sha256}", sha256);
+        let mut query: Vec<String> = Vec::new();
         if let Some(preview_hash) = preview_hash {
-            path = format!("{path}?thumb_sha256={preview_hash}");
+            query.push(format!("thumb_sha256={preview_hash}"));
         }
+        if media.mime_type.starts_with("image/") {
+            // The pixel size lets the timeline reserve the row's layout before
+            // the bytes arrive; the header carries it, so this costs a read of
+            // a few dozen bytes rather than a decode.
+            if let Some((width, height)) = image_dimensions(&media.bytes) {
+                query.push(format!("width={width}"));
+                query.push(format!("height={height}"));
+            }
+        }
+        let path = if query.is_empty() {
+            path
+        } else {
+            format!("{path}?{}", query.join("&"))
+        };
         client
             .put_bytes_with_timeout(
                 &path,

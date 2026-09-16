@@ -1394,6 +1394,8 @@ class EventMediaRefResponse(UTCBaseModel):
     byte_size: Optional[int] = Field(None, description="Stored media byte size when present")
     blob_url: str = Field(..., description="Browser/API blob URL")
     thumb_url: Optional[str] = Field(None, description="Browser/API thumbnail URL when a thumbnail exists")
+    width: Optional[int] = Field(None, description="Intrinsic pixel width, so a row can reserve layout")
+    height: Optional[int] = Field(None, description="Intrinsic pixel height, so a row can reserve layout")
     source_path: Optional[str] = Field(None, description="Provider source path that contained the media reference")
     source_offset: Optional[int] = Field(None, description="Provider source byte offset for the media reference")
     json_pointer: Optional[str] = Field(None, description="JSON pointer to the redacted media field when known")

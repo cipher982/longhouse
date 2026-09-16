@@ -69,6 +69,9 @@ def _served_media_ref(ref: dict[str, object], *, source_position: int) -> dict[s
         # The preview is an ordinary content-addressed object, so it is served
         # by the same route - and cached just as hard.
         "thumb_url": f"/api/media/{thumb_hash}/blob" if isinstance(thumb_hash, str) and thumb_hash else None,
+        # Intrinsic size, so a row can reserve its layout before the bytes land.
+        "width": ref.get("width"),
+        "height": ref.get("height"),
         "source_path": None,
         "source_offset": source_position,
         "json_pointer": None,

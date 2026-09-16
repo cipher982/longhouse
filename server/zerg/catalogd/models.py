@@ -461,6 +461,10 @@ class MediaObject(CatalogBase):
     # only through a parent that names it *and* that it names back, so naming
     # someone else's bytes as your own preview grants nothing.
     derived_from = Column(String(64), nullable=True)
+    # Intrinsic pixel size, so a timeline can reserve a row's layout before the
+    # bytes arrive. Null for anything that is not an image.
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
     commit_seq = Column(BigInteger, nullable=False)
     observed_at = Column(DateTime(timezone=True), nullable=False)
     verified_at = Column(DateTime(timezone=True), nullable=True)

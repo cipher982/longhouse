@@ -3429,7 +3429,7 @@ class CatalogDaemon:
         expected = {"media_hash", "state", "mime_type", "byte_size", "object_path", "session_refs", "observed_at"}
         # `thumb_hash` is optional: an older engine simply has no preview to
         # report, and a non-image object never has one.
-        if set(request.params) - {"thumb_hash", "derived_from"} != expected:
+        if set(request.params) - {"thumb_hash", "derived_from", "width", "height"} != expected:
             return self._error(request, "invalid_request", "storage.media.commit.v2 has invalid parameters")
         params = dict(request.params)
         try:
@@ -4651,6 +4651,10 @@ def _validate_media_commit(params: dict) -> None:
     derived_from = params.get("derived_from")
     if derived_from is not None and not _is_hash(derived_from):
         raise ValueError("derived_from must be lowercase SHA-256 hex")
+    for field in ("width", "height"):
+        value = params.get(field)
+        if value is not None and (type(value) is not int or not 1 <= value <= 100_000):
+            raise ValueError(f"{field} must be null or an integer from 1 through 100000")
     object_path = params["object_path"]
     if object_path is not None:
         object_path = _canonical_storage_text(object_path, field="object_path", maximum_bytes=2_048)

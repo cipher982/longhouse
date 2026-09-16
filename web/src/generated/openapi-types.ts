@@ -4227,6 +4227,16 @@ export interface components {
              */
             thumb_url?: string | null;
             /**
+             * Width
+             * @description Intrinsic pixel width, so a row can reserve layout
+             */
+            width?: number | null;
+            /**
+             * Height
+             * @description Intrinsic pixel height, so a row can reserve layout
+             */
+            height?: number | null;
+            /**
              * Source Path
              * @description Provider source path that contained the media reference
              */
@@ -16190,6 +16200,8 @@ export interface operations {
             query?: {
                 thumb_sha256?: string | null;
                 derived_from?: string | null;
+                width?: number | null;
+                height?: number | null;
             };
             header?: never;
             path: {

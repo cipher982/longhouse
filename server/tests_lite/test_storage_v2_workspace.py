@@ -660,6 +660,8 @@ def _media_ref(media_hash: str, *, envelope, ref_key: str, state: str = "present
         "mime_type": "image/png",
         "byte_size": 4096,
         "thumb_hash": thumb_hash,
+        "width": 2880,
+        "height": 1800,
     }
 
 
@@ -739,6 +741,9 @@ async def test_workspace_places_media_on_the_event_that_owns_the_line(monkeypatc
             # A derived preview is an ordinary content-addressed object, so it
             # is offered through the same route.
             "thumb_url": f"/api/media/{'9' * 64}/blob",
+            # The row can reserve its layout before the bytes arrive.
+            "width": 2880,
+            "height": 1800,
             "source_path": None,
             "source_offset": 40,
             "json_pointer": None,
@@ -752,6 +757,8 @@ async def test_workspace_places_media_on_the_event_that_owns_the_line(monkeypatc
             "sha256": other_envelope_hash,
             "blob_url": f"/api/media/{other_envelope_hash}/blob",
             "thumb_url": None,
+            "width": 2880,
+            "height": 1800,
         }
     ]
     assert events["unrelated-line"]["media_refs"] == []

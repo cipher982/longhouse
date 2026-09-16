@@ -457,6 +457,8 @@ struct APIEventMediaRefResponse: Codable, Hashable, Sendable {
     let byteSize: Int?
     let blobUrl: String
     let thumbUrl: String?
+    let width: Int?
+    let height: Int?
     let sourcePath: String?
     let sourceOffset: Int?
     let jsonPointer: String?
