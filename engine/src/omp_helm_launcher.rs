@@ -2311,16 +2311,27 @@ mod tests {
                     "lease_generation": "generation"
                 })
             };
-            let read_json_files = |directory: &std::path::Path| -> Vec<serde_json::Value> {
+            let read_json_files = |directory: &std::path::Path| -> Vec<(std::path::PathBuf, serde_json::Value)> {
                 let Ok(entries) = fs::read_dir(directory) else {
                     return Vec::new();
                 };
                 entries
                     .flatten()
                     .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("json"))
-                    .filter_map(|entry| fs::read(entry.path()).ok())
-                    .filter_map(|bytes| serde_json::from_slice(&bytes).ok())
+                    .filter_map(|entry| {
+                        let path = entry.path();
+                        let value = serde_json::from_slice(&fs::read(&path).ok()?).ok()?;
+                        Some((path, value))
+                    })
                     .collect()
+            };
+            let new_json_file = |before: &[(std::path::PathBuf, serde_json::Value)],
+                                 after: &[(std::path::PathBuf, serde_json::Value)]| {
+                after
+                    .iter()
+                    .find(|(path, _)| !before.iter().any(|(before_path, _)| before_path == path))
+                    .map(|(_, value)| value.clone())
+                    .unwrap()
             };
             let persisted = || {
                 serde_json::from_slice::<serde_json::Value>(
@@ -2331,6 +2342,8 @@ mod tests {
             let local_outbox = longhouse_home.join("agent/outbox");
             let runtime_outbox = longhouse_home.join("agent/runtime-events-outbox");
 
+            let local_before = read_json_files(&local_outbox);
+            let runtime_before = read_json_files(&runtime_outbox);
             server.handle_extension_frame("connection", keepalive(false));
             let active = server.current_state();
             assert_eq!(active.phase, "thinking");
@@ -2341,14 +2354,18 @@ mod tests {
             assert_eq!(persisted_active["updated_at"], active.updated_at);
             let local_active = read_json_files(&local_outbox);
             let runtime_active = read_json_files(&runtime_outbox);
-            assert_eq!(local_active.last().unwrap()["state"], "thinking");
-            assert_eq!(runtime_active.last().unwrap()["kind"], "phase_signal");
-            assert_eq!(runtime_active.last().unwrap()["phase"], "thinking");
+            assert_eq!(new_json_file(&local_before, &local_active)["state"], "thinking");
+            assert_eq!(new_json_file(&runtime_before, &runtime_active)["kind"], "phase_signal");
+            assert_eq!(new_json_file(&runtime_before, &runtime_active)["phase"], "thinking");
 
             server.handle_extension_frame("connection", keepalive(false));
-            assert_eq!(read_json_files(&local_outbox).len(), local_active.len() + 1);
-            assert_eq!(read_json_files(&runtime_outbox).len(), runtime_active.len() + 1);
+            let local_active_again = read_json_files(&local_outbox);
+            let runtime_active_again = read_json_files(&runtime_outbox);
+            assert_eq!(local_active_again.len(), local_active.len() + 1);
+            assert_eq!(runtime_active_again.len(), runtime_active.len() + 1);
 
+            let local_before_idle = local_active_again.clone();
+            let runtime_before_idle = runtime_active_again.clone();
             server.handle_extension_frame("connection", keepalive(true));
             let idle = server.current_state();
             assert_eq!(idle.phase, "idle");
@@ -2359,9 +2376,9 @@ mod tests {
             assert_eq!(persisted_idle["updated_at"], idle.updated_at);
             let local_idle = read_json_files(&local_outbox);
             let runtime_idle = read_json_files(&runtime_outbox);
-            assert_eq!(local_idle.last().unwrap()["state"], "idle");
-            assert_eq!(runtime_idle.last().unwrap()["kind"], "phase_signal");
-            assert_eq!(runtime_idle.last().unwrap()["phase"], "idle");
+            assert_eq!(new_json_file(&local_before_idle, &local_idle)["state"], "idle");
+            assert_eq!(new_json_file(&runtime_before_idle, &runtime_idle)["kind"], "phase_signal");
+            assert_eq!(new_json_file(&runtime_before_idle, &runtime_idle)["phase"], "idle");
 
             server.handle_extension_frame("connection", keepalive(true));
             assert_eq!(read_json_files(&local_outbox).len(), local_idle.len() + 1);
