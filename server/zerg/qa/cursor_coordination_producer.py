@@ -330,6 +330,9 @@ def _cursor_profile_environment(home: Path) -> dict[str, str]:
     environment.update(
         {
             "HOME": str(home),
+            # A relocated HOME makes Cursor's default macOS Keychain store pop a
+            # "Keychain Not Found ... Reset To Defaults" dialog on the desktop.
+            "AGENT_CLI_CREDENTIAL_STORE": "file",
             "CLAUDE_CONFIG_DIR": str(home / ".claude"),
             "CURSOR_HOME": str(home / ".cursor"),
             "XDG_CONFIG_HOME": str(home / ".config"),

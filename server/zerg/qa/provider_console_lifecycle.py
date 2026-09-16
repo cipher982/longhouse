@@ -175,6 +175,9 @@ def _scenario_id(provider: str) -> str:
 def _provider_environment(provider: str, args: argparse.Namespace, home: Path) -> dict[str, str]:
     environment = dict(os.environ)
     environment["HOME"] = str(home)
+    # A relocated HOME makes Cursor's default macOS Keychain store pop a
+    # "Keychain Not Found ... Reset To Defaults" dialog on the desktop.
+    environment["AGENT_CLI_CREDENTIAL_STORE"] = "file"
     environment["LONGHOUSE_ENGINE_BIN"] = str(args.engine)
     environment["LONGHOUSE_ORIGIN_KIND"] = "test_or_canary"
     environment["LONGHOUSE_LAUNCH_ACTOR"] = "automation"

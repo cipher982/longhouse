@@ -163,6 +163,10 @@ Hard Codex contract:
 - Antigravity's source is `.system_generated/logs/transcript_full.jsonl`.
   The shorter `transcript.jsonl` truncates tool output and stringifies arguments;
   never ingest both as independent sources or prefer the lossy sibling.
+- Any `cursor-agent` run with a relocated `HOME` (scratch profile, producer,
+  experiment) must set `AGENT_CLI_CREDENTIAL_STORE=file`. Otherwise Cursor asks
+  macOS Keychain and pops "Keychain Not Found ... Reset To Defaults" on David's
+  desktop, repeatedly; that button can wipe his login keychain.
 
 ## Workflows
 
