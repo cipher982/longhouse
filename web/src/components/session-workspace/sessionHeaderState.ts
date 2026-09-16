@@ -109,7 +109,7 @@ export function getSessionHeaderState(
     };
   }
 
-  if (facts.activity.state === "unknown") {
+  if (!closed && facts.activity.state === "unknown") {
     return { tone: "unknown", text: "Activity uncertain" };
   }
 

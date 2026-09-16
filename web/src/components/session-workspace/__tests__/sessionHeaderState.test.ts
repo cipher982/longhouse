@@ -91,6 +91,19 @@ describe("getSessionHeaderState", () => {
     expect(state.text).toMatch(/^Ended/);
   });
 
+  it("keeps a closed session ended when activity evidence has expired", () => {
+    const now = Date.parse("2026-04-15T16:30:00Z");
+    const state = getSessionHeaderState(
+      session({
+        disposition: "closed",
+        activityState: "unknown",
+        lastResultAt: "2026-04-15T16:12:00Z",
+      }),
+      now,
+    );
+    expect(state).toEqual({ tone: "cool", text: "Ended 4:12 PM" });
+  });
+
   it("reads an open, non-working session as idle", () => {
     const state = getSessionHeaderState(
       session({ lastResultAt: "2026-04-15T16:12:00Z" }),

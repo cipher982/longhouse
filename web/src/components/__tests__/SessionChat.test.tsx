@@ -677,13 +677,22 @@ describe("SessionChat", () => {
     await user.type(screen.getByRole("textbox"), "first unresolved");
     await user.click(screen.getByRole("button", { name: /send/i }));
     await waitFor(() =>
-      expect(screen.getByText("first unresolved")).toBeInTheDocument(),
+      expect(
+        screen.getByText("first unresolved", {
+          selector: "span.session-chat-pending-message__text",
+        }),
+      ).toBeInTheDocument(),
     );
+    await user.clear(screen.getByRole("textbox"));
 
     await user.type(screen.getByRole("textbox"), "second unresolved");
     await user.click(screen.getByRole("button", { name: /send/i }));
     await waitFor(() =>
-      expect(screen.getByText("second unresolved")).toBeInTheDocument(),
+      expect(
+        screen.getByText("second unresolved", {
+          selector: "span.session-chat-pending-message__text",
+        }),
+      ).toBeInTheDocument(),
     );
     expect(requestIds).toHaveLength(2);
     expect(requestIds[0]).not.toBe(requestIds[1]);

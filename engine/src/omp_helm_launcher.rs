@@ -859,26 +859,52 @@ impl OmpHelmServer {
         }
     }
 
-    /// Keep the served phase fresh during provider silence, while preserving
-    /// OMP's own idle decision. The extension channel is not itself activity:
-    /// it carries the provider's `isIdle()` result so a quiet active turn
-    /// becomes running, and a turn that ended without a final lifecycle frame
-    /// becomes idle.
+    /// Refresh canonical activity evidence from the extension without
+    /// manufacturing a lifecycle event. Keepalive observations are frequent:
+    /// they must preserve an active tool/phase, refresh already-idle evidence,
+    /// and never revive a terminal launcher.
     fn record_keepalive(&self, provider_idle: bool) {
-        if provider_idle {
-            let current = self.current_state();
-            if matches!(current.phase.as_str(), "running" | "thinking") {
-                self.record_activity(
-                    "agent_end",
-                    &json!({"event": {"type": "agent_end", "isTerminal": true}}),
+        let (phase, tool) = {
+            let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+            if state.state.status == "stopped" || state.state.terminal_state.is_some() {
+                return;
+            }
+            let phase = if provider_idle {
+                "idle"
+            } else if state.state.phase == "thinking" {
+                "thinking"
+            } else {
+                "running"
+            };
+            let tool = if provider_idle {
+                None
+            } else {
+                state.state.tool_name.clone()
+            };
+            state.state.phase = phase.into();
+            state.state.tool_name = tool.clone();
+            state.state.updated_at = Utc::now().to_rfc3339();
+            (phase, tool)
+        };
+        let _ = self.persist_state();
+        if let Ok(db_path) = crate::config::get_agent_db_path() {
+            let state = self.current_state();
+            if let Err(error) = crate::hook_outbox::enqueue_local_phase(
+                &db_path,
+                &state.session_id,
+                "omp",
+                phase,
+                tool.as_deref(),
+                OMP_HELM_TRANSPORT,
+                &state.updated_at,
+            ) {
+                eprintln!(
+                    "[omp-helm] enqueue keepalive phase failed for {}: {error}",
+                    state.session_id
                 );
             }
-        } else {
-            self.record_activity(
-                "activity",
-                &json!({"event": {"type": "extension_keepalive"}}),
-            );
         }
+        self.publish_phase(phase, tool);
     }
 
     fn publish_binding(&self, source: &Path, native_id: &str, replacement: bool) -> Result<()> {
@@ -2254,15 +2280,18 @@ mod tests {
     }
 
     #[test]
-    fn extension_keepalive_refreshes_silent_activity_without_reviving_stopped_state() {
+    fn extension_keepalive_refreshes_activity_without_losing_detail_or_reviving_stopped_state() {
         let temp = tempfile::tempdir().unwrap();
         let longhouse_home = temp.path().join("longhouse");
         let socket_dir = temp.path().join("socket");
         let socket_path = socket_dir.join("channel.sock");
         let state_path = temp.path().join("state.json");
+        let mut initial = state();
+        initial.phase = "thinking".into();
+        initial.tool_name = Some("shell".into());
 
         temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
-            let server = OmpHelmServer::start(state(), socket_path, socket_dir, state_path).unwrap();
+            let server = OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
             let (sender, _receiver) = mpsc::channel();
             {
                 let mut shared = server.shared.lock().unwrap();
@@ -2283,10 +2312,33 @@ mod tests {
             };
 
             server.handle_extension_frame("connection", keepalive(false));
-            assert_eq!(server.current_state().phase, "running");
+            let active = server.current_state();
+            assert_eq!(active.phase, "thinking");
+            assert_eq!(active.tool_name.as_deref(), Some("shell"));
 
             server.handle_extension_frame("connection", keepalive(true));
-            assert_eq!(server.current_state().phase, "idle");
+            let idle = server.current_state();
+            assert_eq!(idle.phase, "idle");
+            assert_eq!(idle.tool_name, None);
+
+            {
+                let mut shared = server.shared.lock().unwrap();
+                shared.state.updated_at = "2000-01-01T00:00:00+00:00".into();
+            }
+            server.handle_extension_frame("connection", keepalive(true));
+            let refreshed = server.current_state();
+            assert_eq!(refreshed.phase, "idle");
+            assert_ne!(refreshed.updated_at, "2000-01-01T00:00:00+00:00");
+
+            {
+                let mut shared = server.shared.lock().unwrap();
+                shared.state.phase = "unknown".into();
+                shared.state.tool_name = Some("stale".into());
+            }
+            server.handle_extension_frame("connection", keepalive(true));
+            let unknown = server.current_state();
+            assert_eq!(unknown.phase, "idle");
+            assert_eq!(unknown.tool_name, None);
 
             server.mark_stopped(None, "provider_exit").unwrap();
             server.handle_extension_frame("connection", keepalive(false));

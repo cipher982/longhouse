@@ -139,7 +139,12 @@ export default function (pi: any) {
     return true;
   };
 
-  const providerIsIdle = (ctx: any) => lastAgentEndTerminal ?? ctx.isIdle();
+  // OMP's `agent_end` is not always followed by an idle provider: a
+  // continuation/retry can begin immediately. Sample the live context on
+  // every keepalive, but preserve an explicit terminal OMP event because its
+  // event shape is the provider-specific settlement signal.
+  const providerIsIdle = (ctx: any) =>
+    lastAgentEndTerminal === true || Boolean(ctx.isIdle());
 
 
   const sendEvent = (kind: string, event: Frame, ctx: any) =>
@@ -395,7 +400,7 @@ export default function (pi: any) {
   });
   pi.on("title_change", async (event: Frame, ctx: any) => lifecycle("title_change", event, ctx));
   pi.on("agent_start", async (event: Frame, ctx: any) => {
-    lastAgentEndTerminal = false;
+    lastAgentEndTerminal = undefined;
     lifecycle("agent_start", event, ctx);
   });
   pi.on("tool_execution_start", async (event: Frame, ctx: any) => lifecycle("tool_execution_start", event, ctx));
