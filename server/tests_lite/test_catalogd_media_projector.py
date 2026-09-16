@@ -17,7 +17,27 @@ from zerg.catalogd.models import StorageSession
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
+from zerg.catalogd.store import _session_media_ref_dto
 from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
+
+
+def test_session_media_refs_hide_legacy_unlinked_previews():
+    base = {
+        "media_hash": "a" * 64,
+        "envelope_id": None,
+        "ref_key": "inline:0",
+        "media_state": "present",
+        "mime_type": "image/jpeg",
+        "byte_size": 123,
+        "thumb_hash": "b" * 64,
+        "thumb_state": "present",
+        "thumb_derived_from": None,
+        "width": 100,
+        "height": 100,
+    }
+    assert _session_media_ref_dto(base)["thumb_hash"] is None
+    base["thumb_derived_from"] = base["media_hash"]
+    assert _session_media_ref_dto(base)["thumb_hash"] == "b" * 64
 
 
 @pytest.fixture

@@ -209,7 +209,7 @@ struct BugReportSheet: View {
             statusMessage = "Sent to Console. The agent has the screenshot and diagnostics."
         } catch {
             if case let LonghouseAPIError.structured(_, errorCode, _) = error,
-               errorCode != "turn_start_outcome_unknown" {
+               !["turn_start_outcome_unknown", "turn_start_ambiguous"].contains(errorCode) {
                 clientRequestID = "ios-report-\(UUID().uuidString)"
                 saveHandoffForRetry()
             }
@@ -238,31 +238,17 @@ struct BugReportSheet: View {
     }
 
     private func reportFiles() -> [BugReportUploadFile] {
-        var files = additionalFiles
-        if let screenshotData, let jpeg = preparedJPEG(from: screenshotData) {
-            files.insert(BugReportUploadFile(filename: "captured-screen.jpg", mimeType: "image/jpeg", data: jpeg), at: 0)
+        var files = additionalFiles.compactMap { file -> BugReportUploadFile? in
+            guard let compressed = try? ImageCompression.compress(file.data) else { return nil }
+            return BugReportUploadFile(filename: file.filename, mimeType: compressed.mimeType, data: compressed.data)
+        }
+        if let screenshotData, let compressed = try? ImageCompression.compress(screenshotData) {
+            files.insert(
+                BugReportUploadFile(filename: "captured-screen.jpg", mimeType: compressed.mimeType, data: compressed.data),
+                at: 0
+            )
         }
         return Array(files.prefix(4))
-    }
-
-    private func preparedJPEG(from data: Data) -> Data? {
-        guard let image = UIImage(data: data) else { return nil }
-        let maxDimension: CGFloat = 1600
-        let scale = min(1, maxDimension / max(image.size.width, image.size.height))
-        let size = CGSize(width: max(1, image.size.width * scale), height: max(1, image.size.height * scale))
-        let renderer = UIGraphicsImageRenderer(size: size)
-        let resized = renderer.image { _ in
-            image.draw(in: CGRect(origin: .zero, size: size))
-        }
-        var quality: CGFloat = 0.78
-        var best: Data?
-        while quality >= 0.38 {
-            guard let jpeg = resized.jpegData(compressionQuality: quality) else { break }
-            best = jpeg
-            if jpeg.count <= 1_800_000 { return jpeg }
-            quality -= 0.1
-        }
-        return best
     }
 
     private func loadPhotos(_ items: [PhotosPickerItem]) async {
@@ -270,14 +256,21 @@ struct BugReportSheet: View {
         var loaded: [BugReportUploadFile] = []
         for (index, item) in items.prefix(4).enumerated() {
             guard let data = try? await item.loadTransferable(type: Data.self),
-                  let jpeg = preparedJPEG(from: data)
+                  let compressed = try? ImageCompression.compress(data)
             else { continue }
-            loaded.append(BugReportUploadFile(filename: "photo-\(index).jpg", mimeType: "image/jpeg", data: jpeg))
+            loaded.append(
+                BugReportUploadFile(
+                    filename: "photo-\(index).jpg",
+                    mimeType: compressed.mimeType,
+                    data: compressed.data
+                )
+            )
         }
         additionalFiles = Array(loaded.prefix(max(0, 4 - (screenshotData == nil ? 0 : 1))))
         photoItems = []
         saveDraft()
     }
+
 
     private func restoreDraft() {
         guard let draft = BugReportLocalStore.loadDraft(),
@@ -287,9 +280,8 @@ struct BugReportSheet: View {
         if description.isEmpty { description = draft.description }
         if screenshotData == nil { screenshotData = draft.screenshotData }
         if additionalFiles.isEmpty {
-            additionalFiles = draft.additionalImages.enumerated().compactMap {
-                guard let jpeg = preparedJPEG(from: $0.element) else { return nil }
-                return BugReportUploadFile(filename: "saved-photo-\($0.offset).jpg", mimeType: "image/jpeg", data: jpeg)
+            additionalFiles = draft.additionalImages.enumerated().map {
+                BugReportUploadFile(filename: "saved-photo-\($0.offset).jpg", mimeType: "image/jpeg", data: $0.element)
             }
         }
         if let handoff = BugReportLocalStore.loadHandoff(), handoff.serverURL == appState.serverURL, handoff.sessionID.isEmpty == false {
@@ -311,15 +303,23 @@ struct BugReportSheet: View {
     }
 
     private func saveDraft() {
-        guard let draft = makeDraft() else { return }
         draftSaveTask?.cancel()
+        guard let draft = makeDraft() else {
+            BugReportLocalStore.clearDraft()
+            draftSaveTask = nil
+            return
+        }
         draftSaveTask = nil
         BugReportLocalStore.saveDraft(draft)
     }
 
     private func scheduleDraftSave() {
-        guard let draft = makeDraft() else { return }
         draftSaveTask?.cancel()
+        guard let draft = makeDraft() else {
+            BugReportLocalStore.clearDraft()
+            draftSaveTask = nil
+            return
+        }
         draftSaveTask = Task {
             try? await Task.sleep(nanoseconds: 350_000_000)
             guard !Task.isCancelled else { return }

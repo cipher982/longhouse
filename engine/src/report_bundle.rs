@@ -122,6 +122,19 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+struct StagingDirectoryGuard {
+    path: PathBuf,
+    published: bool,
+}
+
+impl Drop for StagingDirectoryGuard {
+    fn drop(&mut self) {
+        if !self.published {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
 /// Materialize one immutable report into the selected Console workspace.
 pub async fn stage_bug_report(
     client: &Client,
@@ -159,59 +172,61 @@ pub async fn stage_bug_report(
     let temporary_dir = report_dir.with_extension(format!("staging-{}", Uuid::new_v4()));
     fs::create_dir_all(&temporary_dir)
         .with_context(|| format!("creating {}", temporary_dir.display()))?;
-    let result = async {
-        let manifest_bytes = serde_json::to_vec_pretty(&serde_json::json!({
-            "schema_version": manifest.schema_version,
-            "report_id": manifest.report_id,
-            "files": manifest.files.iter().map(|file| serde_json::json!({
-                "name": file.name,
-                "mime_type": file.mime_type,
-                "byte_size": file.byte_size,
-                "sha256": file.sha256,
-                "kind": file.kind,
-            })).collect::<Vec<_>>(),
-        }))?;
-        write_private(&temporary_dir.join("manifest.json"), &manifest_bytes)?;
+    let mut staging = StagingDirectoryGuard {
+        path: temporary_dir,
+        published: false,
+    };
 
-        let file_bytes = try_join_all(manifest.files.iter().map(|file| {
-            let report_id = normalized_report_id.clone();
-            async move {
-                let bytes = client
-                    .get(resolve_url(api_url, &report_id, Some(&file.name)))
-                    .header("X-Agents-Token", api_token)
-                    .timeout(FETCH_TIMEOUT)
-                    .send()
-                    .await
-                    .with_context(|| format!("report_stage_failed: file request {}", file.name))?
-                    .error_for_status()
-                    .with_context(|| format!("report_stage_failed: file response {}", file.name))?
-                    .bytes()
-                    .await
-                    .with_context(|| format!("report_stage_failed: file body {}", file.name))?;
-                if bytes.len() as u64 != file.byte_size {
-                    bail!("report_stage_failed: size mismatch for {}", file.name);
-                }
-                let actual = format!("{:x}", Sha256::digest(&bytes));
-                if actual != file.sha256.to_ascii_lowercase() {
-                    bail!("report_stage_failed: sha256 mismatch for {}", file.name);
-                }
-                Ok::<_, anyhow::Error>((file.name.clone(), bytes))
+    let manifest_bytes = serde_json::to_vec_pretty(&serde_json::json!({
+        "schema_version": manifest.schema_version,
+        "report_id": manifest.report_id,
+        "files": manifest.files.iter().map(|file| serde_json::json!({
+            "name": file.name,
+            "mime_type": file.mime_type,
+            "byte_size": file.byte_size,
+            "sha256": file.sha256,
+            "kind": file.kind,
+        })).collect::<Vec<_>>(),
+    }))?;
+    write_private(&staging.path.join("manifest.json"), &manifest_bytes)?;
+
+    let file_bytes = try_join_all(manifest.files.iter().map(|file| {
+        let report_id = normalized_report_id.clone();
+        async move {
+            let bytes = client
+                .get(resolve_url(api_url, &report_id, Some(&file.name)))
+                .header("X-Agents-Token", api_token)
+                .timeout(FETCH_TIMEOUT)
+                .send()
+                .await
+                .with_context(|| format!("report_stage_failed: file request {}", file.name))?
+                .error_for_status()
+                .with_context(|| format!("report_stage_failed: file response {}", file.name))?
+                .bytes()
+                .await
+                .with_context(|| format!("report_stage_failed: file body {}", file.name))?;
+            if bytes.len() as u64 != file.byte_size {
+                bail!("report_stage_failed: size mismatch for {}", file.name);
             }
-        }))
-        .await?;
-
-        for (name, bytes) in file_bytes {
-            write_private(&temporary_dir.join(&name), &bytes)?;
+            let actual = format!("{:x}", Sha256::digest(&bytes));
+            if actual != file.sha256.to_ascii_lowercase() {
+                bail!("report_stage_failed: sha256 mismatch for {}", file.name);
+            }
+            Ok::<_, anyhow::Error>((file.name.clone(), bytes))
         }
-        fs::rename(&temporary_dir, &report_dir)
-            .with_context(|| format!("publishing {}", report_dir.display()))?;
-        Ok::<_, anyhow::Error>(())
+    }))
+    .await?;
+
+    for (name, bytes) in file_bytes {
+        write_private(&staging.path.join(&name), &bytes)?;
     }
-    .await;
-    if result.is_err() {
-        let _ = fs::remove_dir_all(&temporary_dir);
+    match fs::rename(&staging.path, &report_dir) {
+        Ok(()) => staging.published = true,
+        Err(_error) if report_dir.is_dir() => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("publishing {}", report_dir.display()));
+        }
     }
-    result?;
     Ok(report_dir)
 }
 
