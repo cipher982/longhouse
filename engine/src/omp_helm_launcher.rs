@@ -840,7 +840,7 @@ impl OmpHelmServer {
         let turn_id = live_turn_id(&current.run_id, live_turn_seq, live_message_seq);
         let publish_live = live_delta.is_some() || (turn_completed && !live_text.is_empty());
         drop(state);
-        let _ = self.persist_state();
+        let _ = self.persist_state_snapshot(&current);
         let observed_at = Utc::now();
         let db_path = crate::config::get_agent_db_path();
         if let Ok(db_path) = db_path {
@@ -859,7 +859,7 @@ impl OmpHelmServer {
                 );
             }
         }
-        self.publish_phase(phase, tool);
+        self.publish_phase_snapshot(&current, phase, tool.as_deref());
         if publish_live {
             self.publish_live_text(
                 &current,
