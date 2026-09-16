@@ -216,6 +216,12 @@ final class AppState: ObservableObject {
         SharedAuthStore.clearManagedCookies(for: url)
         SharedAuthStore.removeSharedCookieStorage(for: url)
         SharedAuthStore.saveRuntimeToken(token, for: url)
+        // restoreSession accepts a runtime token only as half of a complete
+        // credential pair, so a launch seeded with the token alone resolved to
+        // unauthenticated and rendered nothing. The harness seeds this pair
+        // against a scratch runtime that accepts the token by itself, and no
+        // refresh is scheduled because no expiry is stored.
+        SharedAuthStore.saveNativeRefreshToken(token, for: url)
         logger.info("headless credentials adopted server=\(url, privacy: .public)")
         #endif
     }
