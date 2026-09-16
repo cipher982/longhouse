@@ -1,3 +1,4 @@
+import Foundation
 import UIKit
 
 @MainActor
@@ -18,5 +19,28 @@ enum BugReportScreenCapture {
     static func previewImage(from data: Data?) -> UIImage? {
         guard let data else { return nil }
         return UIImage(data: data)
+    }
+}
+
+@MainActor
+enum BugReportContext {
+    static func timeline(serverURL: String) -> Data {
+        let diagnostics = ClientDiagnosticsReporter.shared.snapshotEntries(sessionId: nil, limit: 100).map {
+            var entry: [String: Any] = [
+                "at_ms": $0.at_ms,
+                "stage": $0.stage,
+            ]
+            if let detail = $0.detail { entry["detail"] = detail }
+            if let sessionID = $0.session_id { entry["session_id"] = sessionID }
+            return entry
+        }
+        let context: [String: Any] = [
+            "surface": "timeline",
+            "server_url": serverURL,
+            "captured_at": ISO8601DateFormatter().string(from: Date()),
+            "diagnostics": diagnostics,
+            "app_build": (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "unknown",
+        ]
+        return (try? JSONSerialization.data(withJSONObject: context, options: [.sortedKeys])) ?? Data("{}".utf8)
     }
 }

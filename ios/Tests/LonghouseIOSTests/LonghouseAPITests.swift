@@ -615,6 +615,21 @@ struct LonghouseAPITests {
 
         #expect(LonghouseAPI.parseStructuredError(statusCode: 409, data: data) == nil)
     }
+    @Test
+    @MainActor
+    func timelineBugReportContextCarriesSurfaceWithoutSession() throws {
+        let context = try #require(
+            JSONSerialization.jsonObject(
+                with: BugReportContext.timeline(serverURL: "https://demo.longhouse.ai")
+            ) as? [String: Any]
+        )
+
+        #expect(context["surface"] as? String == "timeline")
+        #expect(context["server_url"] as? String == "https://demo.longhouse.ai")
+        #expect(context["source_session_id"] == nil)
+        #expect(context["diagnostics"] is [Any])
+    }
+
 }
 
 private final class APIRequestCapture: @unchecked Sendable {
