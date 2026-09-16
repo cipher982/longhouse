@@ -18,4 +18,12 @@ describe("Nixie", () => {
     render(<Nixie value={57} dim />);
     expect(screen.getByText("57")).toHaveClass("instrument-nixie--dim");
   });
+
+  it("keeps a clock steady when its value updates", () => {
+    const { rerender } = render(<Nixie value="35:37" flickerOnChange={false} />);
+
+    rerender(<Nixie value="35:38" flickerOnChange={false} />);
+
+    expect(screen.getByText("35:38")).not.toHaveClass("instrument-nixie--flicker");
+  });
 });

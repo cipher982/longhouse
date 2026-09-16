@@ -927,7 +927,10 @@ export function SessionChat({
                 <span className="session-ember-dot" aria-hidden="true" />
                 <span className="session-chat-composer__head-label">{composerUsingLabel}</span>
                 {composerElapsedSeconds != null ? (
-                  <Nixie value={formatElapsedClock(composerElapsedSeconds)} />
+                  <Nixie
+                    value={formatElapsedClock(composerElapsedSeconds)}
+                    flickerOnChange={false}
+                  />
                 ) : null}
               </>
             ) : composerState.tone === "attention" ? (

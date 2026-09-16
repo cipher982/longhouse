@@ -58,7 +58,11 @@ export function ReadoutRail({
       {turnSeconds != null ? (
         <div className="instrument-readout" data-testid="readout-turn">
           <span className="instrument-readout__key">Turn</span>
-          <Nixie value={formatElapsedClock(turnSeconds)} dim={!turnLive} />
+          <Nixie
+            value={formatElapsedClock(turnSeconds)}
+            dim={!turnLive}
+            flickerOnChange={false}
+          />
         </div>
       ) : null}
 
