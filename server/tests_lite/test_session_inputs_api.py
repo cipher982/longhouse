@@ -592,9 +592,7 @@ def test_live_receipt_replay_exposes_provider_handoff_ambiguity():
     assert _live_receipt_outcome(receipt("delivered")) == "sent"
     assert _live_receipt_outcome(receipt("queued")) == "queued"
     assert _live_receipt_outcome(receipt("delivering")) == "unknown"
-    assert _live_receipt_outcome(
-        receipt("failed", '{"code":"delivery_unknown","message":"handoff was ambiguous"}')
-    ) == "unknown"
+    assert _live_receipt_outcome(receipt("failed", '{"code":"delivery_unknown","message":"handoff was ambiguous"}')) == "unknown"
     assert _live_receipt_outcome(receipt("failed", '{"code":"provider_rejected"}')) == "queued"
 
 
