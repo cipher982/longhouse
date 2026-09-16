@@ -429,6 +429,7 @@ def run_codex_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
     root = args.evidence_root.resolve()
     root.mkdir(parents=True, exist_ok=False)
     provider_receipt = {
+        "provider": "codex",
         "path": str(args.codex_bin),
         "sha256": sha256_file(args.codex_bin),
         "version": bridge_canary._run([str(args.codex_bin), "--version"], timeout=30).stdout.strip(),
@@ -468,7 +469,7 @@ def run_codex_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
     finally:
         records = session.records() if session.session_id else []
         if records:
-            (root / "provider-rollout.jsonl").write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
+            write_json(root / "provider-rollout.json", records)
         if session.session_id and session.isolation_root:
             write_json(root / "final-bridge-state.json", redact_state_for_evidence(session.state()))
             observations["terminate"] = _phase_terminate(session)
