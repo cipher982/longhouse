@@ -214,10 +214,11 @@ def _add_lossless_demo_source_lines(db, *, anchor: datetime) -> None:
 
 
 def _object_root() -> Path:
-    override = os.getenv("LONGHOUSE_STORAGE_V2_ROOT")
-    if override:
-        return Path(override).expanduser().resolve()
-    return Path(__file__).resolve().parents[3] / "data" / "objects-v2"
+    # The runtime reads transcripts from the same root; a separate default here
+    # put a container's demo objects where the server never looks.
+    from zerg.services.raw_object_workers import storage_v2_root
+
+    return storage_v2_root().resolve()
 
 
 def _initialize_live_catalog(live_path: Path, *, owner_email: str) -> None:

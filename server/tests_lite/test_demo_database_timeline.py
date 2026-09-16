@@ -33,3 +33,28 @@ def test_demo_database_sessions_show_on_default_timeline(tmp_path, monkeypatch):
         engine.dispose()
 
     assert page["total"] > 0
+
+
+def test_demo_mode_serve_builds_corpus_only_where_no_database_exists(tmp_path, monkeypatch):
+    from zerg.cli import serve
+
+    built: list[str] = []
+    monkeypatch.setattr(serve, "_build_demo_db", lambda path: built.append(str(path)))
+
+    fresh = tmp_path / "fresh" / "longhouse.db"
+    serve._ensure_demo_corpus(f"sqlite:///{fresh}")
+    assert built == [str(fresh)]
+
+    existing = tmp_path / "existing.db"
+    existing.write_bytes(b"")
+    serve._ensure_demo_corpus(f"sqlite:///{existing}")
+    serve._ensure_demo_corpus("postgresql://example/db")
+    assert built == [str(fresh)]
+
+
+def test_demo_mode_requested_follows_demo_mode_env(monkeypatch):
+    from zerg.cli import serve
+
+    monkeypatch.delenv("APP_MODE", raising=False)
+    monkeypatch.setenv("DEMO_MODE", "1")
+    assert serve._demo_mode_requested() is True
