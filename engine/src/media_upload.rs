@@ -16,6 +16,19 @@ const PREVIEW_MAX_EDGE: u32 = 512;
 const PREVIEW_SKIP_BYTES: usize = 64 * 1024;
 const PREVIEW_MIME_TYPE: &str = "image/jpeg";
 const PREVIEW_JPEG_QUALITY: u8 = 75;
+/// A transfer floor for sizing a body's deadline. The shipping timeout is sized
+/// for a small JSON envelope; a multi-megabyte screenshot on a slow link would
+/// expire mid-upload and retry the whole body.
+const MIN_UPLOAD_BYTES_PER_SECOND: u64 = 256 * 1024;
+
+/// The deadline a body of this size can actually be sent in.
+fn upload_timeout(base: Option<Duration>, byte_size: usize) -> Option<Duration> {
+    let base = base?;
+    let transfer_seconds = (byte_size as u64)
+        .div_ceil(MIN_UPLOAD_BYTES_PER_SECOND)
+        .max(1);
+    Some(base + Duration::from_secs(transfer_seconds))
+}
 
 /// A preview plus the source's pixel size, which the timeline needs to reserve
 /// layout before the bytes arrive.
@@ -227,7 +240,7 @@ pub async fn ensure_storage_v2_media_uploaded(
                 &media.mime_type,
                 lane_headers,
                 media.bytes.clone(),
-                request_timeout,
+                upload_timeout(request_timeout, media.byte_size),
             )
             .await
             .with_context(|| format!("uploading storage-v2 media {sha256}"))?;
@@ -259,6 +272,7 @@ async fn upload_preview(
     let preview_path = capabilities
         .media_upload_path_template
         .replace("{sha256}", &preview_hash);
+    let preview_timeout = upload_timeout(request_timeout, preview.bytes.len());
     match client
         .put_bytes_with_timeout(
             // The preview names the image it came from; the read requires the
@@ -267,7 +281,7 @@ async fn upload_preview(
             PREVIEW_MIME_TYPE,
             lane_headers.to_vec(),
             preview.bytes,
-            request_timeout,
+            preview_timeout,
         )
         .await
     {
@@ -314,6 +328,19 @@ mod tests {
             .write_image(pixels, width, height, image::ExtendedColorType::Rgb8)
             .unwrap();
         out
+    }
+
+    #[test]
+    fn a_deadline_grows_with_the_body_it_has_to_carry() {
+        let base = Some(Duration::from_secs(15));
+        assert_eq!(upload_timeout(None, 19_000_000), None);
+        // A body too small to matter still gets the base plus a second.
+        assert_eq!(upload_timeout(base, 0), Some(Duration::from_secs(16)));
+        // A 19 MB screenshot at the floor rate needs far more than the base.
+        assert_eq!(
+            upload_timeout(base, 19 * 1024 * 1024),
+            Some(Duration::from_secs(15 + 76))
+        );
     }
 
     #[tokio::test]
