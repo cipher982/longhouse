@@ -4,11 +4,13 @@ import type { AgentSessionProjectionResponse } from "../../../services/api/agent
 /**
  * A warm sandbox that exists before anyone looks at it.
  *
- * The split matters: creating the sandbox is boring plumbing and happens
- * invisibly on the first sign of a real human, but LAUNCHING Claude is the
- * part worth watching, so it waits for the UI and then types itself out on
- * screen. Hiding that behind a spinner turned the wait into dead time; showing
- * it turns the wait into the demo.
+ * Everything before the visitor's own instruction is plumbing: create the
+ * sandbox, open a clean shell, launch Claude Code. All of it starts on the
+ * first sign of a real human near the demo and runs without waiting for the
+ * UI, because every second of it used to be dead air a visitor sat through
+ * before they were allowed to press Send (11-16s measured on longhouse.ai,
+ * 2026-09-16). The launch still lands in the terminal's scrollback, so
+ * nothing on screen is staged.
  */
 
 /**
@@ -50,6 +52,7 @@ export class LiveSession {
   private buffer: Uint8Array[] = [];
   private sink: ((chunk: Uint8Array) => void) | null = null;
   private watchers = new Set<() => void>();
+  private outputWaiters = new Set<() => void>();
   private decoder = new TextDecoder();
   private cols = 0;
   private rows = 0;
@@ -110,6 +113,7 @@ export class LiveSession {
 
       if (this.sink) this.sink(chunk);
       else this.buffer.push(chunk);
+      for (const waiter of this.outputWaiters) waiter();
 
       if (this.state === "launching" && signalOf(this.transcript).includes("bypasspermissionson")) {
         this.state = "ready";
@@ -138,42 +142,66 @@ export class LiveSession {
   }
 
   /**
-   * Drop to the demo user and clear the screen, all before anyone is looking.
-   * `su` into a PTY without job control prints "cannot set terminal process
-   * group" noise, which is plumbing nobody should read — so it happens during
-   * warm-up and the buffer is discarded, leaving a clean demo@ prompt as the
-   * first thing the visitor ever sees.
+   * Resolve once the transcript satisfies `ready`, or after `timeoutMs` as a
+   * floor so a missed signal slows the demo down instead of hanging it.
+   */
+  private waitForOutput(ready: (transcript: string) => boolean, timeoutMs: number): Promise<void> {
+    return new Promise((resolve) => {
+      const done = () => {
+        this.outputWaiters.delete(check);
+        window.clearTimeout(timer);
+        resolve();
+      };
+      const check = () => {
+        if (ready(this.transcript)) done();
+      };
+      const timer = window.setTimeout(done, timeoutMs);
+      this.outputWaiters.add(check);
+      check();
+    });
+  }
+
+  /**
+   * Drop to the demo user and clear the screen, then launch Claude. `su` into
+   * a PTY without job control prints "cannot set terminal process group"
+   * noise, which is plumbing nobody should read, so that output is discarded
+   * and the kept screen starts at a clean demo@ prompt.
    */
   private async openCleanShell(): Promise<void> {
+    const promptAfter = (mark: number) => (transcript: string) =>
+      // ESC is intentional: strip real terminal escape sequences off the PTY.
+      // eslint-disable-next-line no-control-regex
+      /\$\s*$/.test(transcript.slice(mark).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, ""));
+
+    let mark = this.transcript.length;
     this.send("su -p demo -s /bin/bash\r");
-    await new Promise((resolve) => setTimeout(resolve, 700));
-    this.send(`${CLAUDE_ALIAS}\r`);
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    this.send("cd /demo-repo && clear\r");
-    // Wait out the echo AND the clear before discarding, or a stray fragment
-    // of the word "clear" survives the wipe and shows up glued to the prompt.
-    await new Promise((resolve) => setTimeout(resolve, 900));
+    await this.waitForOutput(promptAfter(mark), 1500);
+
+    mark = this.transcript.length;
+    this.send(`${CLAUDE_ALIAS}; cd /demo-repo && clear\r`);
+    // Wait for the clear's escape AND the prompt after it, or a stray
+    // fragment of the word "clear" survives the wipe.
+    await this.waitForOutput(
+      (transcript) => {
+        const after = transcript.slice(mark);
+        const cleared = after.lastIndexOf("\x1b[2J");
+        return cleared >= 0 && promptAfter(mark + cleared)(transcript);
+      },
+      1500,
+    );
     this.buffer = [];
     this.transcript = "";
     this.state = "shell";
     this.notify();
+    await this.launch();
   }
 
-  /** Type a line the way a person does, so the visitor can read it. */
-  async type(text: string, msPerChar = 28): Promise<void> {
-    for (const char of text) {
-      this.send(char);
-      await new Promise((resolve) => setTimeout(resolve, msPerChar));
-    }
-    this.send("\r");
-  }
-
-  /** Start Claude on screen — this is the part worth watching. */
+  /** Start Claude Code. Sent as one line: nobody is watching yet. */
   async launch(): Promise<void> {
     if (this.state !== "shell") return;
     this.state = "launching";
     this.notify();
-    await this.type(CLAUDE_COMMAND);
+    this.send(`${CLAUDE_COMMAND}\r`);
   }
 
   /**

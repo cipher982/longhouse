@@ -46,6 +46,6 @@ describe("SteerPlayground", () => {
 
     expect(screen.getByRole("heading", { name: "Send the next move." })).toBeInTheDocument();
     expect(screen.getByText("Real Claude Code")).toBeInTheDocument();
-    expect(screen.getByText("Tap to connect")).toBeInTheDocument();
+    expect(screen.getByText("Sandbox starts when you scroll here")).toBeInTheDocument();
   });
 });

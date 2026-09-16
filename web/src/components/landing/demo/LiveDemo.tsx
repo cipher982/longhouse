@@ -25,14 +25,17 @@ function signalOf(raw: string): string {
   );
 }
 
-function phoneState(active: boolean, phase: Phase): {
+function phoneState(active: boolean, phase: Phase, queued: boolean): {
   label: string;
   detail?: string;
   tone: PhoneRuntimeTone;
 } {
-  if (!active) return { label: "Live demo", detail: "Tap to connect", tone: "waiting" };
-  if (phase === "connecting") return { label: "Connecting", detail: "Opening sandbox", tone: "starting" };
-  if (phase === "starting") return { label: "Starting", detail: "Claude Code", tone: "starting" };
+  if (!active) return { label: "Idle", detail: "Sandbox starts when you scroll here", tone: "waiting" };
+  if (queued && (phase === "connecting" || phase === "starting")) {
+    return { label: "Sent", detail: "Delivers when Claude Code is up", tone: "starting" };
+  }
+  if (phase === "connecting") return { label: "Live sandbox", detail: "Starting Claude Code", tone: "starting" };
+  if (phase === "starting") return { label: "Live sandbox", detail: "Starting Claude Code", tone: "starting" };
   if (phase === "ready") return { label: "Ready", detail: "Waiting for input", tone: "ready" };
   if (phase === "running") return { label: "Working", detail: "On demo-repo", tone: "working" };
   if (phase === "done") return { label: "Complete", detail: "Task finished", tone: "done" };
@@ -115,12 +118,11 @@ export function LiveDemo({ active }: { active: boolean }) {
 
     const sync = () => {
       attachOnce();
-      if (session.state === "shell") {
+      if (
+        (session.state === "shell" || session.state === "launching") &&
+        phaseRef.current === "connecting"
+      ) {
         applyFit();
-        setPhase("starting");
-        void session.launch();
-      }
-      if (session.state === "launching" && phaseRef.current === "connecting") {
         setPhase("starting");
       }
       if (
@@ -194,9 +196,18 @@ export function LiveDemo({ active }: { active: boolean }) {
     };
   }, [markDone, phase, sent]);
 
-  const run = useCallback(() => {
+  // The instruction reaches the PTY only once Claude's composer is up; until
+  // then it waits here so the visitor never has to wait to press Send.
+  const deliver = useCallback(() => {
     const session = sessionRef.current;
-    if (!session || phaseRef.current !== "ready" || sentRef.current) return;
+    const instruction = submittedInstructionRef.current;
+    if (!session || !instruction || phaseRef.current !== "ready") return;
+    setPhase("running");
+    session.send(instruction);
+  }, [setPhase]);
+
+  const run = useCallback(() => {
+    if (!sessionRef.current || sentRef.current || phaseRef.current === "failed") return;
     const instruction = draft.trim();
     if (!instruction) return;
     sentRef.current = true;
@@ -204,11 +215,14 @@ export function LiveDemo({ active }: { active: boolean }) {
     setSubmittedInstruction(instruction);
     setDraft("");
     setSent(true);
-    setPhase("running");
-    session.send(instruction);
-  }, [draft, setPhase]);
+    deliver();
+  }, [deliver, draft]);
 
-  const runtime = phoneState(active, phase);
+  useEffect(() => {
+    if (phase === "ready" && sentRef.current) deliver();
+  }, [deliver, phase]);
+
+  const runtime = phoneState(active, phase, sent);
 
   return (
     <>
@@ -224,7 +238,7 @@ export function LiveDemo({ active }: { active: boolean }) {
           runtimeLabel={runtime.label}
           runtimeDetail={runtime.detail}
           runtimeTone={runtime.tone}
-          sendEnabled={active && phase === "ready"}
+          sendEnabled={active && phase !== "failed"}
           sent={sent}
           working={phase === "running"}
           machineName="sandbox"
@@ -247,12 +261,8 @@ export function LiveDemo({ active }: { active: boolean }) {
           <div className="hero-live-terminal" ref={mountRef} />
           {(!active || phase === "connecting") && (
             <div className="hero-live-cover">
-              {active && <span className="hero-live-spinner" aria-hidden="true" />}
-              <span>
-                {active
-                  ? "Opening a disposable Linux sandbox…"
-                  : "Tap the phone to start a live Claude Code session."}
-              </span>
+              <span className="hero-live-spinner" aria-hidden="true" />
+              <span>Starting a disposable Linux sandbox…</span>
             </div>
           )}
         </div>

@@ -30,9 +30,12 @@ const emptyProjection = {
   branch_mode: "head" as const,
 };
 
+let fakeState: LiveSession["state"] = "ready";
+let fakeWatchers: Array<() => void> = [];
+
 function makeFakeSession(): LiveSession {
-  return {
-    state: "ready",
+  const session = {
+    state: fakeState,
     failure: null,
     transcript: "",
     send: vi.fn(),
@@ -40,10 +43,14 @@ function makeFakeSession(): LiveSession {
     detach: vi.fn(),
     resize: vi.fn(),
     launch: vi.fn(),
-    onChange: vi.fn(() => () => {}),
+    onChange: vi.fn((watcher: () => void) => {
+      fakeWatchers.push(watcher);
+      return () => {};
+    }),
     events: vi.fn(async () => emptyProjection),
     close: vi.fn(),
-  } as unknown as LiveSession;
+  };
+  return session as unknown as LiveSession;
 }
 
 vi.mock("../liveSession", () => ({
@@ -78,6 +85,8 @@ describe("LiveDemo composer", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+    fakeState = "ready";
+    fakeWatchers = [];
   });
 
   it("clears the composer exactly once and sends once", async () => {
@@ -123,5 +132,29 @@ describe("LiveDemo composer", () => {
     const fake = (await import("../liveSession")).prewarmLiveSession as ReturnType<typeof vi.fn>;
     const session = fake.mock.results.at(-1)?.value as LiveSession;
     expect(session.send).not.toHaveBeenCalled();
+  });
+
+  it("lets the visitor send while Claude is starting and delivers once it is up", async () => {
+    fakeState = "launching";
+    render(<LiveDemo active />);
+
+    const send = screen.getByRole("button", { name: "Send" });
+    expect(send).toBeEnabled();
+    await act(async () => {
+      fireEvent.click(send);
+    });
+
+    const fake = (await import("../liveSession")).prewarmLiveSession as ReturnType<typeof vi.fn>;
+    const session = fake.mock.results.at(-1)?.value as LiveSession;
+    expect(session.send).not.toHaveBeenCalled();
+    expect(screen.getByText(DEFAULT_INSTRUCTION)).toBeInTheDocument();
+    expect(screen.getByText("Delivers when Claude Code is up")).toBeInTheDocument();
+
+    await act(async () => {
+      (session as { state: string }).state = "ready";
+      for (const watcher of fakeWatchers) watcher();
+    });
+    expect(session.send).toHaveBeenCalledTimes(1);
+    expect(session.send).toHaveBeenCalledWith(DEFAULT_INSTRUCTION);
   });
 });
