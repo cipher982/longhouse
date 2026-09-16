@@ -608,6 +608,10 @@ def parse_deploy_status(output: str) -> dict[str, SurfaceInfo]:
         if len(parts) < 2:
             continue
         surface = parts[0]
+        if surface.startswith("Canary "):
+            # deploy-status includes the hosted canary subdomain in the
+            # display label; verification addresses the canonical surface.
+            surface = CANARY_SURFACE
         if surface == "Local HEAD":
             continue
         if len(parts) < 3:
