@@ -56,6 +56,8 @@ struct LaunchSessionSheet: View {
     @State private var cwd: String = ""
     @State private var workspaceSelectionSource: WorkspaceSelectionSource = .implicitDefault
     @State private var displayName: String = ""
+    @State private var sessionId = UUID().uuidString
+    @State private var threadId = UUID().uuidString
     private let logger = Logger(subsystem: "ai.longhouse.ios", category: "LaunchSession")
     init(
         previewMachines: [MachineDirectoryEntry]? = nil,
@@ -411,7 +413,9 @@ struct LaunchSessionSheet: View {
                 deviceId: selectedDeviceId,
                 provider: selectedProvider,
                 cwd: normalizedCwd,
-                displayName: trimmedDisplayName.isEmpty ? nil : trimmedDisplayName
+                displayName: trimmedDisplayName.isEmpty ? nil : trimmedDisplayName,
+                sessionId: sessionId,
+                threadId: threadId
             )
             onLaunchSelection?(
                 ConsoleLaunchSelection(

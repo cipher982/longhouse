@@ -30,6 +30,31 @@ MAX_REPORT_CONTEXT_BYTES = 128 * 1024
 _REPORT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
+def _report_error(code: str, message: str, status_code: int) -> HTTPException:
+    return HTTPException(status_code=status_code, detail={"code": code, "message": message})
+
+
+def _bundle_from_manifest(report_id: str, *, owner_id: int) -> BugReportBundle:
+    payload = read_manifest(report_id, owner_id=owner_id)
+    files = tuple(
+        BugReportFile(
+            name=str(item["name"]),
+            mime_type=str(item["mime_type"]),
+            byte_size=int(item["byte_size"]),
+            sha256=str(item["sha256"]),
+            kind=str(item["kind"]),
+        )
+        for item in payload.get("files", [])
+    )
+    return BugReportBundle(
+        report_id=str(payload["report_id"]),
+        owner_id=int(payload["owner_id"]),
+        created_at=str(payload["created_at"]),
+        source_session_id=payload.get("source_session_id"),
+        files=files,
+    )
+
+
 @dataclass(frozen=True)
 class BugReportUpload:
     filename: str
@@ -85,12 +110,16 @@ def _write_private(path: Path, data: bytes) -> None:
 
 def _validate_description(description: str) -> str:
     if not isinstance(description, str):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="description is required")
+        raise _report_error("report_description_required", "A bug description is required.", status.HTTP_400_BAD_REQUEST)
     value = description.strip()
     if not value:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="description is required")
+        raise _report_error("report_description_required", "A bug description is required.", status.HTTP_400_BAD_REQUEST)
     if len(value) > MAX_REPORT_DESCRIPTION_CHARS:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="description is too long")
+        raise _report_error(
+            "report_description_too_long",
+            "The bug description is too long.",
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        )
     return value
 
 
@@ -98,28 +127,54 @@ def _validate_context(context_json: str) -> bytes:
     try:
         parsed = json.loads(context_json or "{}")
     except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="context_json must be valid JSON") from exc
+        raise _report_error("report_context_invalid", "The report context is invalid.", status.HTTP_400_BAD_REQUEST) from exc
     if not isinstance(parsed, dict):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="context_json must be an object")
+        raise _report_error("report_context_invalid", "The report context is invalid.", status.HTTP_400_BAD_REQUEST)
     encoded = json.dumps(parsed, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     if len(encoded) > MAX_REPORT_CONTEXT_BYTES:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="context_json is too large")
+        raise _report_error(
+            "report_context_too_large",
+            "The report context is too large.",
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        )
     return encoded
 
 
 def _validate_uploads(uploads: list[BugReportUpload]) -> None:
     if len(uploads) > MAX_REPORT_FILES:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"too many report images (max {MAX_REPORT_FILES})")
+        raise _report_error(
+            "report_too_many_files",
+            f"Too many report images (maximum {MAX_REPORT_FILES}).",
+            status.HTTP_400_BAD_REQUEST,
+        )
     total = 0
     for upload in uploads:
         mime_type = upload.mime_type.split(";", 1)[0].strip().lower()
         if mime_type not in ALLOWED_REPORT_MIME_TYPES:
-            raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=f"unsupported report image type: {mime_type}")
-        if not upload.data or len(upload.data) > MAX_REPORT_FILE_BYTES:
-            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="report image is empty or too large")
+            raise _report_error(
+                "report_unsupported_media",
+                f"Unsupported report image type: {mime_type}.",
+                status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            )
+        if not upload.data:
+            raise _report_error(
+                "report_image_empty",
+                "An attached image is empty.",
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            )
+        if len(upload.data) > MAX_REPORT_FILE_BYTES:
+            raise _report_error(
+                "report_image_too_large",
+                "An attached image is too large.",
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            )
         total += len(upload.data)
     if total > MAX_REPORT_TOTAL_BYTES:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="bug report is too large")
+        raise _report_error(
+            "report_too_large",
+            "The bug report is too large.",
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+        )
 
 
 def create_bug_report(
@@ -129,18 +184,31 @@ def create_bug_report(
     context_json: str,
     source_session_id: str | None,
     uploads: list[BugReportUpload],
+    client_report_id: str | None = None,
 ) -> BugReportBundle:
-    """Validate and atomically publish one immutable report bundle."""
+    """Validate and atomically publish one immutable, replayable bundle."""
 
     clean_description = _validate_description(description)
     context_bytes = _validate_context(context_json)
     _validate_uploads(uploads)
     if len(clean_description.encode("utf-8")) + len(context_bytes) + sum(len(upload.data) for upload in uploads) > MAX_REPORT_TOTAL_BYTES:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="bug report is too large")
-    report_id = str(uuid4())
-    created_at = datetime.now(timezone.utc).isoformat()
+        raise _report_error("report_too_large", "The bug report is too large.", status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+    if client_report_id:
+        try:
+            report_id = str(UUID(client_report_id))
+        except (TypeError, ValueError) as exc:
+            raise _report_error("report_id_invalid", "The report could not be identified.", status.HTTP_400_BAD_REQUEST) from exc
+    else:
+        report_id = str(uuid4())
     root = bug_report_root()
     root.mkdir(parents=True, exist_ok=True)
+    final_dir = root / report_id
+    if final_dir.exists():
+        try:
+            return _bundle_from_manifest(report_id, owner_id=owner_id)
+        except FileNotFoundError as exc:
+            raise _report_error("report_id_conflict", "The report could not be reused.", status.HTTP_409_CONFLICT) from exc
+    created_at = datetime.now(timezone.utc).isoformat()
     try:
         root.chmod(0o700)
     except OSError:
@@ -181,8 +249,11 @@ def create_bug_report(
         }
         manifest_bytes = (json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
         _write_private(temporary_dir / "manifest.json", manifest_bytes)
-        final_dir = root / report_id
-        os.replace(temporary_dir, final_dir)
+        try:
+            os.replace(temporary_dir, final_dir)
+        except FileExistsError:
+            shutil.rmtree(temporary_dir, ignore_errors=True)
+            return _bundle_from_manifest(report_id, owner_id=owner_id)
     except BaseException:
         shutil.rmtree(temporary_dir, ignore_errors=True)
         raise

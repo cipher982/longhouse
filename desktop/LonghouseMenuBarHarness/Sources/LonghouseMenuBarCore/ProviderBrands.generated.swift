@@ -44,16 +44,27 @@ public enum ProviderBrands {
         let key = raw == "gemini" ? "antigravity" : raw
         switch key {
         case "claude": return claude
+        case "claude-code": return claude
         case "antigravity": return antigravity
         case "gemini": return antigravity
+        case "agy": return antigravity
+        case "google-antigravity": return antigravity
         case "codex": return codex
         case "openai": return codex
+        case "codex-cli": return codex
+        case "openai-codex": return codex
         case "opencode": return opencode
+        case "open-code": return opencode
         case "cursor": return cursor
+        case "cursor-agent": return cursor
         case "zai": return zai
         case "z.ai": return zai
         case "pi": return pi
+        case "pi-agent": return pi
         case "omp": return omp
+        case "oh-my-pi": return omp
+        case "oh my pi": return omp
+        case "ohmypi": return omp
         default: return defaultConfig
         }
     }

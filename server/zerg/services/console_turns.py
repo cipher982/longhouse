@@ -223,6 +223,11 @@ async def enqueue_catalog_console_turn(
         raise ConsoleTurnUnavailable("session_not_found", "Console session was not found")
     if result.get("idempotency_conflict") is True:
         raise ConsoleTurnConflict("client_request_id was reused with different text")
+    if result.get("report_conflict") is True:
+        raise ConsoleTurnUnavailable(
+            "report_in_progress",
+            "This report is already being handled by another Console session.",
+        )
     if result.get("unavailable"):
         raise ConsoleTurnUnavailable(str(result["unavailable"]), "Console execution target is unavailable")
     turn = dict(result.get("turn") or {})

@@ -15,6 +15,7 @@ struct BugReportSheet: View {
     private enum FailureAction: Equatable {
         case retryHandoff
         case chooseAgent
+        case reportInProgress
     }
 
     @State private var description = ""
@@ -22,6 +23,7 @@ struct BugReportSheet: View {
     @State private var additionalFiles: [BugReportUploadFile] = []
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var reportID: String?
+    @State private var clientReportID = UUID().uuidString
     @State private var targetSessionID: String?
     @State private var clientRequestID: String?
     @State private var showingLaunchPicker = false
@@ -124,6 +126,7 @@ struct BugReportSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }
+                        .disabled(isUploading || isSending)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     if isUploading || isSending {
@@ -133,7 +136,7 @@ struct BugReportSheet: View {
                             .disabled(!canUpload)
                     } else if targetSessionID == nil {
                         Button("Choose agent") { showingLaunchPicker = true }
-                    } else if didSend {
+                    } else if failureAction == .reportInProgress {
                         Button("Done") { dismiss() }
                     } else if failureAction == .chooseAgent {
                         Button("Choose agent") { showingLaunchPicker = true }
@@ -197,7 +200,8 @@ struct BugReportSheet: View {
                 description: description,
                 contextJSON: initialContextJSON,
                 sourceSessionID: sourceSessionID,
-                files: reportFiles()
+                clientReportID: clientReportID,
+                files: try reportFiles()
             )
             reportID = response.reportId
             statusMessage = "Report saved. Choose the machine and workspace to repair it."
@@ -252,12 +256,17 @@ struct BugReportSheet: View {
             BugReportLocalStore.clearHandoff()
             didSend = true
             statusMessage = "Sent to Console. The agent has the screenshot and diagnostics."
-            dismiss()
             onSent?(sessionID)
         } catch {
             saveHandoffForRetry()
-            failureAction = isRetryableHandoffError(error) ? .retryHandoff : .chooseAgent
-            errorMessage = (error as? LocalizedError)?.errorDescription ?? "The report was saved, but the agent could not be started."
+            if let apiError = error as? LonghouseAPIError, apiError.structuredCode == "report_in_progress" {
+                failureAction = .reportInProgress
+                statusMessage = "This report is already being handled. Open Timeline to follow it."
+                errorMessage = nil
+            } else {
+                failureAction = isRetryableHandoffError(error) ? .retryHandoff : .chooseAgent
+                errorMessage = (error as? LocalizedError)?.errorDescription ?? "The report was saved, but the agent could not be started."
+            }
         }
     }
 
@@ -291,23 +300,35 @@ struct BugReportSheet: View {
             return apiError.isRetryableReportHandoff
         }
         guard let urlError = error as? URLError else { return false }
-        switch urlError.code {
-        case .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
-             .networkConnectionLost, .notConnectedToInternet, .timedOut:
-            return true
-        default:
-            return false
-        }
+        return [
+            .timedOut,
+            .cannotFindHost,
+            .cannotConnectToHost,
+            .networkConnectionLost,
+            .notConnectedToInternet
+        ].contains(urlError.code)
     }
 
-    private func reportFiles() -> [BugReportUploadFile] {
-        var files = additionalFiles.compactMap { file -> BugReportUploadFile? in
-            guard let compressed = try? ImageCompression.compress(file.data) else { return nil }
-            return BugReportUploadFile(filename: file.filename, mimeType: compressed.mimeType, data: compressed.data)
+    private func reportFiles() throws -> [BugReportUploadFile] {
+        var files: [BugReportUploadFile] = []
+        for file in additionalFiles {
+            let compressed = try ImageCompression.compress(file.data)
+            files.append(
+                BugReportUploadFile(
+                    filename: file.filename,
+                    mimeType: compressed.mimeType,
+                    data: compressed.data
+                )
+            )
         }
-        if let screenshotData, let compressed = try? ImageCompression.compress(screenshotData) {
+        if let screenshotData {
+            let compressed = try ImageCompression.compress(screenshotData)
             files.insert(
-                BugReportUploadFile(filename: "captured-screen.jpg", mimeType: compressed.mimeType, data: compressed.data),
+                BugReportUploadFile(
+                    filename: "captured-screen.jpg",
+                    mimeType: compressed.mimeType,
+                    data: compressed.data
+                ),
                 at: 0
             )
         }
@@ -317,20 +338,28 @@ struct BugReportSheet: View {
     private func loadPhotos(_ items: [PhotosPickerItem]) async {
         guard !items.isEmpty else { return }
         var loaded: [BugReportUploadFile] = []
+        var failed = false
         for (index, item) in items.prefix(4).enumerated() {
-            guard let data = try? await item.loadTransferable(type: Data.self),
-                  let compressed = try? ImageCompression.compress(data)
-            else { continue }
-            loaded.append(
-                BugReportUploadFile(
-                    filename: "photo-\(index).jpg",
-                    mimeType: compressed.mimeType,
-                    data: compressed.data
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else {
+                    failed = true
+                    continue
+                }
+                let compressed = try ImageCompression.compress(data)
+                loaded.append(
+                    BugReportUploadFile(
+                        filename: "photo-\(index).jpg",
+                        mimeType: compressed.mimeType,
+                        data: compressed.data
+                    )
                 )
-            )
+            } catch {
+                failed = true
+            }
         }
         additionalFiles = Array(loaded.prefix(max(0, 4 - (screenshotData == nil ? 0 : 1))))
         photoItems = []
+        errorMessage = failed ? "Some selected images could not be attached. Try choosing them again." : nil
         saveDraft()
     }
 
@@ -340,6 +369,7 @@ struct BugReportSheet: View {
               draft.serverURL == appState.serverURL,
               draft.sourceSessionID == sourceSessionID
         else { return }
+        clientReportID = draft.clientReportID ?? clientReportID
         if description.isEmpty { description = draft.description }
         if screenshotData == nil { screenshotData = draft.screenshotData }
         if additionalFiles.isEmpty {
@@ -362,6 +392,7 @@ struct BugReportSheet: View {
         return BugReportDraft(
             serverURL: appState.serverURL,
             sourceSessionID: sourceSessionID,
+            clientReportID: clientReportID,
             description: description,
             screenshotData: screenshotData,
             additionalImages: additionalFiles.map(\.data)

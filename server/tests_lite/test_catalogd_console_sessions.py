@@ -164,6 +164,56 @@ def test_console_replay_precedes_active_owner_guard(tmp_path):
     assert replay["turn"]["turn_id"] == first["turn"]["turn_id"]
 
 
+
+def test_console_report_is_single_flight_across_request_ids(tmp_path):
+    engine = create_catalog_engine(tmp_path / "catalog-report-single-flight.db")
+    initialize_catalog_schema(engine)
+    store = CatalogStore(engine)
+    with Session(engine) as db:
+        db.add(LiveUser(id=1, email="owner@example.com", is_active=True))
+        db.commit()
+    session_id = uuid4()
+    thread_id = uuid4()
+    store.create_console_session(
+        data={
+            "session_id": str(session_id),
+            "thread_id": str(thread_id),
+            "owner_id": 1,
+            "provider": "claude",
+            "device_id": "cinder",
+            "cwd": "/tmp/longhouse",
+            "project": "longhouse",
+            "provider_config": {},
+            "started_at": datetime.now(UTC),
+        }
+    )
+    report_id = uuid4()
+    first = store.enqueue_console_turn(
+        data={
+            "session_id": str(session_id),
+            "owner_id": 1,
+            "message": "investigate the report",
+            "client_request_id": "report-handoff-1",
+            "report_id": str(report_id),
+            "created_at": datetime.now(UTC),
+        }
+    )
+
+    replay = store.enqueue_console_turn(
+        data={
+            "session_id": str(session_id),
+            "owner_id": 1,
+            "message": "investigate the report",
+            "client_request_id": "report-handoff-2",
+            "report_id": str(report_id),
+            "created_at": datetime.now(UTC),
+        }
+    )
+
+    assert replay["created"] is False
+    assert replay["report_conflict"] is True
+    assert replay["turn"]["turn_id"] == first["turn"]["turn_id"]
+
 def test_pi_console_continuation_forwards_exact_native_source_file(tmp_path):
     engine = create_catalog_engine(tmp_path / "catalog-pi-continuation.db")
     initialize_catalog_schema(engine)

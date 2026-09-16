@@ -608,6 +608,7 @@ struct LonghouseAPI: Sendable {
         description: String,
         contextJSON: Data,
         sourceSessionID: String?,
+        clientReportID: String,
         files: [BugReportUploadFile]
     ) async throws -> BugReportUploadResponse {
         let boundary = "Boundary-\(UUID().uuidString)"
@@ -624,6 +625,7 @@ struct LonghouseAPI: Sendable {
             name: "context_json",
             value: String(data: contextJSON, encoding: .utf8) ?? "{}"
         )
+        Self.appendMultipartField(&body, boundary: boundary, name: "client_report_id", value: clientReportID)
         if let sourceSessionID, !sourceSessionID.isEmpty {
             Self.appendMultipartField(&body, boundary: boundary, name: "source_session_id", value: sourceSessionID)
         }
@@ -1384,7 +1386,9 @@ extension LonghouseAPI {
         deviceId: String,
         provider: String,
         cwd: String,
-        displayName: String? = nil
+        displayName: String? = nil,
+        sessionId: String? = nil,
+        threadId: String? = nil
     ) async throws -> ConsoleSessionCreateResponse {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/sessions/console"))
         request.httpMethod = "POST"
@@ -1396,6 +1400,8 @@ extension LonghouseAPI {
             "cwd": cwd,
             "launch_surface": "ios",
         ]
+        if let sessionId, !sessionId.isEmpty { body["session_id"] = sessionId }
+        if let threadId, !threadId.isEmpty { body["thread_id"] = threadId }
         if let displayName, !displayName.isEmpty { body["display_name"] = displayName }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, httpResponse) = try await data(for: request)
@@ -1456,6 +1462,10 @@ enum LonghouseAPIError: Error {
         case .requestFailed, .notAuthenticated, .conflict, .upstreamFailed:
             return false
         }
+    }
+    var structuredCode: String? {
+        guard case .structured(_, let code, _) = self else { return nil }
+        return code
     }
 }
 

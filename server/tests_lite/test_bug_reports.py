@@ -1,5 +1,6 @@
 import json
 
+from uuid import uuid4
 import pytest
 
 from zerg.services.bug_reports import BugReportUpload
@@ -28,9 +29,32 @@ def test_bug_report_is_atomically_published_and_owner_scoped(tmp_path, monkeypat
         read_manifest(bundle.report_id, owner_id=8)
 
 
+
+
+def test_bug_report_reuses_client_report_id_after_replay(tmp_path, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_BUG_REPORT_ROOT", str(tmp_path / "reports"))
+    client_report_id = str(uuid4())
+    first = create_bug_report(
+        owner_id=7,
+        description="The first upload.",
+        context_json="{}",
+        source_session_id=None,
+        uploads=[],
+        client_report_id=client_report_id,
+    )
+    replay = create_bug_report(
+        owner_id=7,
+        description="The first upload.",
+        context_json="{}",
+        source_session_id=None,
+        uploads=[],
+        client_report_id=client_report_id,
+    )
+
+    assert replay == first
 def test_bug_report_rejects_unbounded_or_untrusted_images(tmp_path, monkeypatch):
     monkeypatch.setenv("LONGHOUSE_BUG_REPORT_ROOT", str(tmp_path / "reports"))
-    with pytest.raises(Exception, match="unsupported report image type"):
+    with pytest.raises(Exception, match="Unsupported report image type"):
         create_bug_report(
             owner_id=7,
             description="bad image",

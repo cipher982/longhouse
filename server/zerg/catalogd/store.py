@@ -4009,6 +4009,44 @@ class CatalogStore:
                         "idempotency_conflict": not exact,
                         "turn": replay_turn if exact else None,
                     }
+                if report_id is not None:
+                    existing_report_turn = (
+                        orm.query(LiveConsoleTurn)
+                        .join(LiveSessionInputReceipt, LiveSessionInputReceipt.id == LiveConsoleTurn.receipt_id)
+                        .filter(
+                            LiveSessionInputReceipt.owner_id == data["owner_id"],
+                            LiveConsoleTurn.report_id == report_id,
+                            LiveConsoleTurn.state.in_(("queued", "starting", "active", "draining")),
+                        )
+                        .order_by(LiveConsoleTurn.created_at.asc())
+                        .first()
+                    )
+                    if existing_report_turn is not None:
+                        existing_receipt = orm.get(LiveSessionInputReceipt, existing_report_turn.receipt_id)
+                        existing_thread = orm.get(LiveSessionThread, existing_report_turn.thread_id)
+                        existing_dto = _live_console_turn_dto(
+                            existing_report_turn,
+                            message=existing_receipt.text if existing_receipt is not None else None,
+                            client_request_id=existing_receipt.client_request_id if existing_receipt is not None else None,
+                            provider_config=existing_thread.provider_config_json if existing_thread is not None else None,
+                            resume_session_file=(
+                                _live_thread_source_path(
+                                    orm,
+                                    thread_id=existing_report_turn.thread_id,
+                                    provider=existing_report_turn.provider,
+                                )
+                                if existing_thread is not None
+                                else None
+                            ),
+                            error_code=_receipt_error_code(existing_receipt),
+                        )
+                        orm.rollback()
+                        return {
+                            "found": True,
+                            "created": False,
+                            "report_conflict": True,
+                            "turn": existing_dto,
+                        }
                 execution_owner = (
                     orm.query(LiveSessionRun.id)
                     .join(LiveSessionConnection, LiveSessionConnection.run_id == LiveSessionRun.id)

@@ -19,18 +19,15 @@
  },
  "providers": {
   "claude": {
+   "aliases": ["claude-code"],
    "brand": "#D97757"
   },
   "antigravity": {
-   "aliases": [
-    "gemini"
-   ],
+   "aliases": ["gemini", "agy", "google-antigravity"],
    "brand": "#4F87ED"
   },
   "codex": {
-   "aliases": [
-    "openai"
-   ],
+   "aliases": ["openai", "codex-cli", "openai-codex"],
    "alias_display_names": {
     "openai": "OpenAI"
    },
@@ -51,6 +48,7 @@
    }
   },
   "opencode": {
+   "aliases": ["open-code"],
    "brand": "#C9C4C4",
    "glyph_style": "template",
    "mark_color": "#85D1FA",
@@ -68,6 +66,7 @@
    }
   },
   "cursor": {
+   "aliases": ["cursor-agent"],
    "brand": "#14120B",
    "glyph_style": "template",
    "mark_color": "#EDECEC",
@@ -84,17 +83,17 @@
    }
   },
   "zai": {
-   "aliases": [
-    "z.ai"
-   ],
+   "aliases": ["z.ai"],
    "display_name": "Z.ai",
    "marketing_name": "Z.ai",
    "brand": "#B06E8A"
   },
   "pi": {
+   "aliases": ["pi-agent"],
    "brand": "#A855F7"
   },
   "omp": {
+   "aliases": ["oh-my-pi", "oh my pi", "ohmypi"],
    "brand": "#F97316"
   }
  }

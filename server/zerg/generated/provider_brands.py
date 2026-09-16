@@ -2,15 +2,26 @@
 # Run: python3 scripts/generate/provider_brands.py
 
 PROVIDER_DISPLAY_NAMES: dict[str, str] = {
+    "agy": "Antigravity",
     "antigravity": "Antigravity",
     "claude": "Claude",
+    "claude-code": "Claude",
     "codex": "Codex",
+    "codex-cli": "Codex",
     "cursor": "Cursor",
+    "cursor-agent": "Cursor",
     "gemini": "Antigravity",
+    "google-antigravity": "Antigravity",
+    "oh my pi": "OMP",
+    "oh-my-pi": "OMP",
+    "ohmypi": "OMP",
     "omp": "OMP",
+    "open-code": "OpenCode",
     "openai": "OpenAI",
+    "openai-codex": "Codex",
     "opencode": "OpenCode",
     "pi": "Pi",
+    "pi-agent": "Pi",
     "z.ai": "Z.ai",
     "zai": "Z.ai"
 }

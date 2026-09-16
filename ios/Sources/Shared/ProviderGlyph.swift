@@ -199,9 +199,26 @@ public struct ProviderGlyph: View {
 
     private var key: String {
         let raw = (provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if raw == "gemini" { return "antigravity" }
-        if raw == "z.ai" { return "zai" }
-        return raw
+        switch raw {
+        case "gemini", "agy", "google-antigravity":
+            return "antigravity"
+        case "z.ai":
+            return "zai"
+        case "openai", "codex-cli", "openai-codex":
+            return "codex"
+        case "claude-code":
+            return "claude"
+        case "open-code":
+            return "opencode"
+        case "cursor-agent":
+            return "cursor"
+        case "pi-agent":
+            return "pi"
+        case "oh-my-pi", "oh my pi", "ohmypi":
+            return "omp"
+        default:
+            return raw
+        }
     }
 
     private var assetName: String? {

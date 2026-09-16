@@ -72,6 +72,7 @@ async def upload_bug_report(
     description: str = Form(...),
     context_json: str = Form("{}"),
     source_session_id: str | None = Form(None),
+    client_report_id: str | None = Form(None),
     files: list[UploadFile] = File(default=[]),
     caller: Caller = Depends(get_current_browser_route_caller),
     db: Session | None = Depends(no_request_db),
@@ -89,12 +90,18 @@ async def upload_bug_report(
         _load_session_for_continuation(db, normalized_source_session_id, owner_id=owner_id)
 
     if len(files) > MAX_REPORT_FILES:
-        raise HTTPException(status_code=413, detail="too many report images")
+        raise HTTPException(
+            status_code=413,
+            detail={"code": "report_too_many_files", "message": f"Too many report images (maximum {MAX_REPORT_FILES})."},
+        )
     uploads: list[BugReportUpload] = []
     for upload in files:
         data = await upload.read(MAX_REPORT_FILE_BYTES + 1)
         if len(data) > MAX_REPORT_FILE_BYTES:
-            raise HTTPException(status_code=413, detail="report image is too large")
+            raise HTTPException(
+                status_code=413,
+                detail={"code": "report_image_too_large", "message": "An attached image is too large."},
+            )
         uploads.append(
             BugReportUpload(
                 filename=upload.filename or "image",
@@ -108,6 +115,7 @@ async def upload_bug_report(
         context_json=context_json,
         source_session_id=normalized_source_session_id,
         uploads=uploads,
+        client_report_id=client_report_id,
     )
     return _response_from_bundle(bundle)
 

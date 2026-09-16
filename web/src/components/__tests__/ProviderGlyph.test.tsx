@@ -39,6 +39,12 @@ describe("ProviderGlyph", () => {
     expect(screen.getByRole("img", { name: "OMP" })).toBeInTheDocument();
     expect(hasFallbackMark(container)).toBe(false);
   });
+  it.each(["oh-my-pi", "oh my pi", "ohmypi", "cursor-agent", "agy"])("brands provider aliases: %s", (provider) => {
+    const { container } = render(<ProviderGlyph provider={provider} />);
+
+    expect(screen.getByRole("img")).toBeInTheDocument();
+    expect(hasFallbackMark(container)).toBe(false);
+  });
 
   it("normalizes provider ids for other web surfaces", () => {
     expect(canonicalProvider(" Gemini ")).toBe("antigravity");

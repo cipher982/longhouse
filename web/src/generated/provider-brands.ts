@@ -35,7 +35,7 @@ const PROVIDER_BRANDS: Record<string, ProviderBrandConfig> = {
     chipStrokeColor: null,
     chipStrokeWidth: 0.5,
     cornerRadiusFactor: 0.28,
-    aliases: [],
+    aliases: ["claude-code"],
   },
   "antigravity": {
     displayName: "Antigravity",
@@ -51,7 +51,7 @@ const PROVIDER_BRANDS: Record<string, ProviderBrandConfig> = {
     chipStrokeColor: null,
     chipStrokeWidth: 0.5,
     cornerRadiusFactor: 0.28,
-    aliases: ["gemini"],
+    aliases: ["gemini", "agy", "google-antigravity"],
   },
   "codex": {
     displayName: "Codex",
@@ -67,7 +67,7 @@ const PROVIDER_BRANDS: Record<string, ProviderBrandConfig> = {
     chipStrokeColor: "#FFFFFF52",
     chipStrokeWidth: 0.5,
     cornerRadiusFactor: 0.5,
-    aliases: ["openai"],
+    aliases: ["openai", "codex-cli", "openai-codex"],
   },
   "opencode": {
     displayName: "OpenCode",
@@ -83,7 +83,7 @@ const PROVIDER_BRANDS: Record<string, ProviderBrandConfig> = {
     chipStrokeColor: "#66BDEB73",
     chipStrokeWidth: 0.5,
     cornerRadiusFactor: 0.18,
-    aliases: [],
+    aliases: ["open-code"],
   },
   "cursor": {
     displayName: "Cursor",
@@ -99,7 +99,7 @@ const PROVIDER_BRANDS: Record<string, ProviderBrandConfig> = {
     chipStrokeColor: "#FFFFFF47",
     chipStrokeWidth: 0.5,
     cornerRadiusFactor: 0.28,
-    aliases: [],
+    aliases: ["cursor-agent"],
   },
   "zai": {
     displayName: "Z.ai",
@@ -131,7 +131,7 @@ const PROVIDER_BRANDS: Record<string, ProviderBrandConfig> = {
     chipStrokeColor: null,
     chipStrokeWidth: 0.5,
     cornerRadiusFactor: 0.28,
-    aliases: [],
+    aliases: ["pi-agent"],
   },
   "omp": {
     displayName: "OMP",
@@ -147,28 +147,50 @@ const PROVIDER_BRANDS: Record<string, ProviderBrandConfig> = {
     chipStrokeColor: null,
     chipStrokeWidth: 0.5,
     cornerRadiusFactor: 0.28,
-    aliases: [],
+    aliases: ["oh-my-pi", "oh my pi", "ohmypi"],
   },
 };
 
 const PROVIDER_ALIASES: Record<string, string> = {
+  "claude-code": "claude",
   "gemini": "antigravity",
+  "agy": "antigravity",
+  "google-antigravity": "antigravity",
   "openai": "codex",
+  "codex-cli": "codex",
+  "openai-codex": "codex",
+  "open-code": "opencode",
+  "cursor-agent": "cursor",
   "z.ai": "zai",
+  "pi-agent": "pi",
+  "oh-my-pi": "omp",
+  "oh my pi": "omp",
+  "ohmypi": "omp",
 };
 
 const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   "claude": "Claude",
+  "claude-code": "Claude",
   "antigravity": "Antigravity",
   "gemini": "Antigravity",
+  "agy": "Antigravity",
+  "google-antigravity": "Antigravity",
   "codex": "Codex",
   "openai": "OpenAI",
+  "codex-cli": "Codex",
+  "openai-codex": "Codex",
   "opencode": "OpenCode",
+  "open-code": "OpenCode",
   "cursor": "Cursor",
+  "cursor-agent": "Cursor",
   "zai": "Z.ai",
   "z.ai": "Z.ai",
   "pi": "Pi",
+  "pi-agent": "Pi",
   "omp": "OMP",
+  "oh-my-pi": "OMP",
+  "oh my pi": "OMP",
+  "ohmypi": "OMP",
 };
 
 const DEFAULT_CONFIG: ProviderBrandConfig = {

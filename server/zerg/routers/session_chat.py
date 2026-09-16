@@ -124,6 +124,8 @@ class ConsoleSessionCreateRequest(BaseModel):
     project: str | None = None
     display_name: str | None = None
     launch_surface: str = "web"
+    session_id: UUID | None = None
+    thread_id: UUID | None = None
 
 
 class ConsoleSessionCreateResponse(BaseModel):
@@ -1251,6 +1253,8 @@ async def create_console_session_endpoint(
             project=body.project,
             display_name=body.display_name,
             launch_surface=body.launch_surface,
+            session_id=body.session_id,
+            thread_id=body.thread_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
