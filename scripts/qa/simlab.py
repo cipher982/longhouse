@@ -25,12 +25,14 @@ from __future__ import annotations
 import argparse
 import atexit
 import base64
+import hashlib
 import json
 import os
 import re
 import secrets
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -39,6 +41,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from subprocess import Popen
@@ -59,6 +62,7 @@ MODES = {
     "split-lines": "write each line in two chunks with a pause between them",
     "malformed": "inject a non-JSON line and an unknown-type entry mid-turn",
     "abandon-resend": "the user sends, escapes, and resends: two sibling user entries",
+    "image": "the first user turn carries a pasted screenshot, as the provider stores it",
 }
 
 
@@ -490,6 +494,22 @@ def cmd_down(_: argparse.Namespace) -> None:
 # --------------------------------------------------------------------------
 
 
+def png_bytes(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
+    """A minimal, valid PNG of one flat colour, built without an image library.
+
+    Deliberately large in pixels and tiny on disk: that is the shape a heavily
+    compressed screenshot has, and the shape a preview rule keyed on encoded
+    size gets wrong.
+    """
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+    raw = b"".join(b"\x00" + bytes(rgb) * width for _ in range(height))
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
+
+
 class Transcript:
     """Builds Claude Code JSONL entries with correct parent links."""
 
@@ -517,6 +537,30 @@ class Transcript:
     def user(self, text: str, parent: str | None = "chain", seconds: float = 2.0) -> dict:
         entry = self._base("user", self.last_uuid if parent == "chain" else parent, seconds)
         entry["message"] = {"role": "user", "content": text}
+        self.last_uuid = entry["uuid"]
+        return entry
+
+    def user_with_image(self, text: str, image: bytes, mime: str = "image/png", seconds: float = 2.0) -> dict:
+        """A user turn carrying a pasted image, in the provider's own shape.
+
+        Claude nests the picture under `source` and writes plain base64 with no
+        `data:` URL - the shape a data-URL scan cannot see.
+        """
+        entry = self._base("user", self.last_uuid, seconds)
+        entry["message"] = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": text},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": mime,
+                        "data": base64.b64encode(image).decode("ascii"),
+                    },
+                },
+            ],
+        }
         self.last_uuid = entry["uuid"]
         return entry
 
@@ -575,6 +619,13 @@ def synthetic_turns(transcript: Transcript, turns: int, modes: set[str]) -> list
             entries.append(transcript.user(ABANDONED_TEXT, seconds=3.0))
             # Escape-and-resend: a sibling of the first send, same parent.
             entries.append(transcript.user(RESENT_TEXT, parent=anchor, seconds=14.0))
+        elif "image" in modes and offset == 0:
+            entries.append(
+                transcript.user_with_image(
+                    "Here is the screenshot of the failing run.",
+                    png_bytes(900, 600, (200, 120, 40)),
+                )
+            )
         else:
             entries.append(transcript.user(prompt))
         entries.append(transcript.assistant_text(f"Looking at turn {turn} now. I'll list the tree first."))
@@ -1185,6 +1236,45 @@ def scenario_network_recovery(state: dict, deploy: bool) -> dict:
     return verdict(state, scenario, "10m", False, None, 3)
 
 
+def served_media_digests(state: dict) -> list[str]:
+    """Every image the served projection shows, by content hash."""
+
+    if not state.get("session_id"):
+        return []
+    projection = server_projection(state, state["session_id"])
+    digests: list[str] = []
+    for item in (projection.get("projection") or {}).get("items", []):
+        event = item.get("event") or {}
+        for ref in event.get("media_refs") or []:
+            digest = ref.get("sha256")
+            if isinstance(digest, str) and digest:
+                digests.append(digest)
+    return digests
+
+
+def scenario_image_fidelity(state: dict, deploy: bool) -> dict:
+    """A pasted screenshot must reach the served timeline, byte for byte."""
+
+    image = png_bytes(900, 600, (200, 120, 40))
+    state["image_digest"] = hashlib.sha256(image).hexdigest()
+    play(state, turns=1, cadence_ms=150, modes={"image"}, session_id=None, append=False)
+    sim(state, deploy)
+    settle(state, 1, "settle_image_fidelity")
+    envelope = verdict(state, "image-fidelity", "1m", False, None, 1)
+    digests = served_media_digests(state)
+    matched = state["image_digest"] in digests
+    envelope["checks"].append(
+        {
+            "id": "served_image_matches_source",
+            "status": "pass" if matched else "fail",
+            "detail": f"source={state['image_digest'][:12]} served={len(digests)} refs",
+        }
+    )
+    if not matched:
+        envelope["status"] = "fail"
+    return save_verdict(state, "image-fidelity", envelope)
+
+
 SCENARIOS = {
     "open-imported-session": scenario_open_imported,
     "live-turns-into-open-session": scenario_live_turns,
@@ -1192,6 +1282,7 @@ SCENARIOS = {
     "hostile-transcript": scenario_hostile_transcript,
     "interrupted-client-recovery": scenario_interrupted_client,
     "client-network-recovery": scenario_network_recovery,
+    "image-fidelity": scenario_image_fidelity,
 }
 
 
