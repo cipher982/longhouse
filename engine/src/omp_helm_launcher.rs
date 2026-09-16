@@ -123,6 +123,10 @@ struct SharedState {
     extension_sender: Option<mpsc::Sender<Value>>,
     extension_connection_id: Option<String>,
     pending: HashMap<String, mpsc::Sender<Value>>,
+    /// Request id of an in-flight terminate. Native OMP `ctx.shutdown()` exits
+    /// the process before it writes a command_result, so the channel closing is
+    /// that command's success, not its failure.
+    pending_terminate: Option<String>,
     live_assistant_text: String,
     live_text_seq: u64,
     live_turn_seq: u64,
@@ -157,6 +161,7 @@ impl OmpHelmServer {
                 extension_sender: None,
                 extension_connection_id: None,
                 pending: HashMap::new(),
+                pending_terminate: None,
                 live_assistant_text: String::new(),
                 live_text_seq: 0,
                 live_turn_seq: 0,
@@ -334,6 +339,7 @@ impl OmpHelmServer {
         if state.extension_connection_id.as_deref() != Some(connection_id) {
             return;
         }
+        settle_pending_terminate_locked(&mut state);
         fail_pending_locked(&mut state, "OMP extension channel disconnected");
         state.extension_sender = None;
         state.extension_connection_id = None;
@@ -1021,6 +1027,7 @@ impl OmpHelmServer {
                 // Arm local group ownership before asking native OMP to drain so
                 // a lost acknowledgement cannot leave the provider unowned.
                 self.terminate_requested.store(true, Ordering::Release);
+                state.pending_terminate = Some(request_id.clone());
             }
             if extension.send(command).is_err() {
                 state.pending.remove(&request_id);
@@ -1064,6 +1071,7 @@ impl OmpHelmServer {
     fn shutdown(&self) {
         self.stop.store(true, Ordering::Release);
         let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+        settle_pending_terminate_locked(&mut state);
         fail_pending_locked(&mut state, "OMP Helm server is shutting down");
         state.extension_sender = None;
         state.extension_connection_id = None;
@@ -1205,6 +1213,21 @@ fn is_terminal_agent_end(event: Option<&Value>) -> bool {
                 .map(|value| !value)
         })
         .unwrap_or(true)
+}
+
+fn settle_pending_terminate_locked(state: &mut SharedState) {
+    let Some(request_id) = state.pending_terminate.take() else {
+        return;
+    };
+    if let Some(sender) = state.pending.remove(&request_id) {
+        let _ = sender.send(json!({
+            "kind": "command_result",
+            "request_id": request_id,
+            "ok": true,
+            "status": "stopped",
+            "native_session_id": state.state.native_session_id,
+        }));
+    }
 }
 
 fn fail_pending_locked(state: &mut SharedState, message: &str) {
@@ -2126,12 +2149,45 @@ mod tests {
     }
 
     #[test]
+    fn channel_loss_settles_an_in_flight_terminate_as_success() {
+        let (terminate_tx, terminate_rx) = mpsc::channel();
+        let (send_tx, send_rx) = mpsc::channel();
+        let mut shared = SharedState {
+            state: state(),
+            extension_sender: None,
+            extension_connection_id: None,
+            pending: HashMap::from([
+                ("terminate-1".to_string(), terminate_tx),
+                ("send-1".to_string(), send_tx),
+            ]),
+            pending_terminate: Some("terminate-1".into()),
+            live_assistant_text: String::new(),
+            live_text_seq: 0,
+            live_turn_seq: 0,
+            live_message_seq: 0,
+        };
+
+        settle_pending_terminate_locked(&mut shared);
+        fail_pending_locked(&mut shared, "OMP Helm server is shutting down");
+
+        let terminate = terminate_rx.recv().unwrap();
+        assert_eq!(terminate["ok"], json!(true));
+        assert_eq!(terminate["status"], json!("stopped"));
+        let send = send_rx.recv().unwrap();
+        assert_eq!(send["ok"], json!(false));
+        assert_eq!(send["error"]["code"], json!("stale_channel"));
+        assert!(shared.pending.is_empty());
+        assert!(shared.pending_terminate.is_none());
+    }
+
+    #[test]
     fn stale_generation_cannot_authorize_remote_control() {
         let shared = SharedState {
             state: state(),
             extension_sender: Some(mpsc::channel().0),
             extension_connection_id: Some("connection".into()),
             pending: HashMap::new(),
+            pending_terminate: None,
             live_assistant_text: String::new(),
             live_text_seq: 0,
             live_turn_seq: 0,
@@ -2416,6 +2472,7 @@ mod tests {
             extension_sender: None,
             extension_connection_id: None,
             pending: HashMap::from([(String::from("request"), sender)]),
+            pending_terminate: None,
             live_assistant_text: String::new(),
             live_text_seq: 0,
             live_turn_seq: 0,

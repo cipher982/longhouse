@@ -2168,13 +2168,11 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         observation["abort_native"] = abort_evidence["channel_ack_bound"] and abort_evidence["channel_source_bound"]
         observation["abort_evidence"] = abort_evidence
 
-        _record_retirement_claim_terminal(
-            str(args.api_url),
-            str(args.agents_token),
-            retirement_claims,
-            session_id=current_session_id,
-            run_id=str(current_state.get("run_id") or ""),
-        )
+        # No retirement wait here. Abort ends the turn, not the run: the managed
+        # run is keyed to the launch (provisional_run_id(session_id)) and `/new`
+        # keeps it, so the served run correctly stays `running` until terminate.
+        # Waiting for it to retire at this point failed every cell from
+        # ba27894b9 onward; the terminate below proves this same run retired.
         first.submit_line("/new")
         replaced_state = _wait_state(
             longhouse_home,
@@ -2253,15 +2251,18 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             }
         )
         replacement_offset = _read_source_size(current_session_file)
+        # Pi's wording. The two-part "Then\n\nNew machine-check request" frame
+        # read as a prompt injection to the qualification model, which refused
+        # it or went exploring the workspace instead of replying.
+        replacement_prompt = (
+            f"Remember this context phrase: {context_phrase}. Do not read any file for it. Then reply with exactly {replacement_marker}."
+        )
         replacement = _run_engine(
             args.engine,
             "send",
             current_session_id,
             env,
-            text=_setup_marker_prompt(
-                replacement_marker,
-                setup=f"Remember this context phrase: {context_phrase}. Then",
-            ),
+            text=replacement_prompt,
         )
         replacement_row = _wait_native_marker(
             current_session_file,
@@ -2293,10 +2294,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         replacement_evidence.update({"observation_scope": "replacement", "source_generation": "replacement"})
         controls["replacement"] = {
             "action_label": "replacement_send",
-            "prompt": _setup_marker_prompt(
-                replacement_marker,
-                setup=f"Remember this context phrase: {context_phrase}. Then",
-            ),
+            "prompt": replacement_prompt,
             "state": dict(replaced_state),
             "command": replacement,
             "marker_row": replacement_row,
