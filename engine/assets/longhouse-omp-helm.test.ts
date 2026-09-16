@@ -1,6 +1,23 @@
 import { describe, expect, it } from "bun:test";
 
-import { ompProviderIsIdle } from "./longhouse-omp-helm";
+const identityKeys = [
+  "LONGHOUSE_OMP_HELM_CHANNEL_PATH",
+  "LONGHOUSE_OMP_HELM_CHANNEL_TOKEN",
+  "LONGHOUSE_MANAGED_SESSION_ID",
+] as const;
+const previousIdentity = Object.fromEntries(identityKeys.map((key) => [key, process.env[key]]));
+Object.assign(process.env, {
+  LONGHOUSE_OMP_HELM_CHANNEL_PATH: "/tmp/omp-helm-test.sock",
+  LONGHOUSE_OMP_HELM_CHANNEL_TOKEN: "omp-helm-test-token",
+  LONGHOUSE_MANAGED_SESSION_ID: "omp-helm-test-session",
+});
+// Dynamic import is intentional: the extension validates launch-scoped identity at module load.
+const { ompProviderIsIdle } = await import("./longhouse-omp-helm");
+for (const key of identityKeys) {
+  const value = previousIdentity[key];
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
 
 describe("ompProviderIsIdle", () => {
   it("uses the live context before any agent_end evidence exists", () => {

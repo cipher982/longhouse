@@ -2286,6 +2286,7 @@ mod tests {
         let socket_dir = temp.path().join("socket");
         let socket_path = socket_dir.join("channel.sock");
         let state_path = temp.path().join("state.json");
+        let persisted_state_path = state_path.clone();
         let mut initial = state();
         initial.phase = "thinking".into();
         initial.tool_name = Some("shell".into());
@@ -2310,16 +2311,61 @@ mod tests {
                     "lease_generation": "generation"
                 })
             };
+            let read_json_files = |directory: &std::path::Path| -> Vec<serde_json::Value> {
+                let Ok(entries) = fs::read_dir(directory) else {
+                    return Vec::new();
+                };
+                entries
+                    .flatten()
+                    .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("json"))
+                    .filter_map(|entry| fs::read(entry.path()).ok())
+                    .filter_map(|bytes| serde_json::from_slice(&bytes).ok())
+                    .collect()
+            };
+            let persisted = || {
+                serde_json::from_slice::<serde_json::Value>(
+                    &fs::read(&persisted_state_path).unwrap(),
+                )
+                .unwrap()
+            };
+            let local_outbox = longhouse_home.join("agent/outbox");
+            let runtime_outbox = longhouse_home.join("agent/runtime-events-outbox");
 
             server.handle_extension_frame("connection", keepalive(false));
             let active = server.current_state();
             assert_eq!(active.phase, "thinking");
             assert_eq!(active.tool_name.as_deref(), Some("shell"));
+            let persisted_active = persisted();
+            assert_eq!(persisted_active["phase"], "thinking");
+            assert_eq!(persisted_active["tool_name"], "shell");
+            assert_eq!(persisted_active["updated_at"], active.updated_at);
+            let local_active = read_json_files(&local_outbox);
+            let runtime_active = read_json_files(&runtime_outbox);
+            assert_eq!(local_active.last().unwrap()["state"], "thinking");
+            assert_eq!(runtime_active.last().unwrap()["kind"], "phase_signal");
+            assert_eq!(runtime_active.last().unwrap()["phase"], "thinking");
+
+            server.handle_extension_frame("connection", keepalive(false));
+            assert_eq!(read_json_files(&local_outbox).len(), local_active.len() + 1);
+            assert_eq!(read_json_files(&runtime_outbox).len(), runtime_active.len() + 1);
 
             server.handle_extension_frame("connection", keepalive(true));
             let idle = server.current_state();
             assert_eq!(idle.phase, "idle");
             assert_eq!(idle.tool_name, None);
+            let persisted_idle = persisted();
+            assert_eq!(persisted_idle["phase"], "idle");
+            assert_eq!(persisted_idle["tool_name"], serde_json::Value::Null);
+            assert_eq!(persisted_idle["updated_at"], idle.updated_at);
+            let local_idle = read_json_files(&local_outbox);
+            let runtime_idle = read_json_files(&runtime_outbox);
+            assert_eq!(local_idle.last().unwrap()["state"], "idle");
+            assert_eq!(runtime_idle.last().unwrap()["kind"], "phase_signal");
+            assert_eq!(runtime_idle.last().unwrap()["phase"], "idle");
+
+            server.handle_extension_frame("connection", keepalive(true));
+            assert_eq!(read_json_files(&local_outbox).len(), local_idle.len() + 1);
+            assert_eq!(read_json_files(&runtime_outbox).len(), runtime_idle.len() + 1);
 
             {
                 let mut shared = server.shared.lock().unwrap();
@@ -2329,6 +2375,7 @@ mod tests {
             let refreshed = server.current_state();
             assert_eq!(refreshed.phase, "idle");
             assert_ne!(refreshed.updated_at, "2000-01-01T00:00:00+00:00");
+            assert_eq!(persisted()["updated_at"], refreshed.updated_at);
 
             {
                 let mut shared = server.shared.lock().unwrap();
@@ -2339,13 +2386,19 @@ mod tests {
             let unknown = server.current_state();
             assert_eq!(unknown.phase, "idle");
             assert_eq!(unknown.tool_name, None);
+            assert_eq!(persisted()["phase"], "idle");
+            assert_eq!(persisted()["tool_name"], serde_json::Value::Null);
 
             server.mark_stopped(None, "provider_exit").unwrap();
+            let stopped_runtime_count = read_json_files(&runtime_outbox).len();
+            let stopped_local_count = read_json_files(&local_outbox).len();
             server.handle_extension_frame("connection", keepalive(false));
             let stopped = server.current_state();
             assert_eq!(stopped.status, "stopped");
             assert_eq!(stopped.phase, "idle");
             assert!(stopped.terminal_state.is_some());
+            assert_eq!(read_json_files(&runtime_outbox).len(), stopped_runtime_count);
+            assert_eq!(read_json_files(&local_outbox).len(), stopped_local_count);
             server.shutdown();
         });
     }
