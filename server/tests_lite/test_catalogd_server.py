@@ -1060,7 +1060,6 @@ async def test_writer_queue_rejects_work_beyond_admission_bound(daemon_paths):
         await daemon.close()
 
 
-
 @pytest.mark.asyncio
 async def test_writer_admission_close_fences_late_work(daemon_paths):
     database_path, socket_path = daemon_paths
@@ -1094,6 +1093,7 @@ async def test_writer_admission_close_fences_late_work(daemon_paths):
             await blocked
         await client.close()
         await daemon.close()
+
 
 def test_writer_drops_expired_work_before_mutation(daemon_paths):
     database_path, socket_path = daemon_paths
