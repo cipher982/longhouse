@@ -30,6 +30,7 @@ RUN bun install
 # Copy frontend source
 COPY web/ ./web/
 COPY video/src/ ./video/src/
+COPY video/scripts/ ./video/scripts/
 WORKDIR /app/web
 
 # Build for production (same-origin mode - no cross-origin API URLs needed)
