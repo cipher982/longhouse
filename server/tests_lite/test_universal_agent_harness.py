@@ -2431,7 +2431,7 @@ def test_claude_interrupt_cancel_uses_channel_control_canary(tmp_path: Path, mon
     raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
     assert "claude_channel_control" in raw_events
     assert "steer from provider control canary" in raw_events
-    assert "SIGINT" in raw_events
+    assert "turn-stop request" in raw_events
     session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
     assert session["provider_session_id"] == "claude-channel-control-session"
     assert session["operation_statuses"]["interrupt"]["level"] == "live_no_token"

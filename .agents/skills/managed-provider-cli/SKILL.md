@@ -26,6 +26,13 @@ sessions.
   control operations. Steer uses `claude-channel send --meta intent=steer` and
   Runtime Host must gate explicit `intent=steer` on a fresh active runtime
   phase; idle channel injection is not steer.
+- Never SIGINT a Claude Helm process: Claude Code treats SIGINT as shutdown and
+  the session ends. Interrupt records `<session>.interrupt.json` beside the
+  channel state, terminates the foreground Bash tool's process group, and the
+  lifecycle hook returns `continue: false` (plus a PreToolUse deny) until the
+  turn ends. Terminate is SIGTERM then SIGKILL on the recorded Claude pid.
+- Live Claude Helm proofs run on Linux (`claude.helm_lifecycle.v1`); on macOS a
+  relocated HOME risks Keychain prompts on David's desktop.
 - Helm creation is terminal-originated through `longhouse claude`; the Machine
   Agent has no remote Helm-originating launch command.
 - Longhouse's channel is a private MCP server, not an Anthropic allowlisted

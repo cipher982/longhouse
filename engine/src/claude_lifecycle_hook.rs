@@ -61,6 +61,14 @@ fn run_inner() -> anyhow::Result<()> {
     let Some(session_id) = session_id else {
         return Ok(());
     };
+    // Turn control runs before observability, which may fail and return early.
+    if let Some(managed) = managed_session_id.as_deref() {
+        if let Some(output) =
+            crate::claude_channel_control::lifecycle_hook_turn_control(managed, &event, &input)
+        {
+            println!("{output}");
+        }
+    }
     let cwd = string(&input, "cwd");
     let transcript_path = string(&input, "transcript_path");
     if event == "SessionStart" {

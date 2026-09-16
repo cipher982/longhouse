@@ -433,7 +433,7 @@ def test_claude_channel_canary_uses_native_channel_module() -> None:
         # The canary verifies the marker before deliberately deleting its
         # scratch work root. The retained artifact records that proof outcome,
         # not a promise that an ephemeral marker path remains readable.
-        assert Path(claude["interrupt_marker"]).name == "claude-interrupted.txt"
+        assert Path(claude["interrupt_marker"]).name.endswith(".interrupt.json")
         assert payload["work_root_retained"] is False
 
 

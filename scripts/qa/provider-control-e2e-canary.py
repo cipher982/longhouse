@@ -517,7 +517,10 @@ def _interrupt(args):
     pid = int(state.get("claude_pid") or 0)
     if pid <= 0:
         raise RuntimeError("state is missing claude_pid")
-    os.kill(pid, signal.SIGINT)
+    # Claude Code shuts down on SIGINT; the engine records a turn-stop request
+    # that its lifecycle hook turns into continue=false at the next tool boundary.
+    path = _state_path(session_id, state_root)
+    path.with_name(path.stem + ".interrupt.json").write_text(json.dumps({"requested_at": time.time()}), encoding="utf-8")
     print(json.dumps({"ok": True, "pid": pid}))
 
 
@@ -725,11 +728,16 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
                 "claude-channel interrupt failed",
                 evidence=_command_evidence(interrupt),
             )
-        fake_claude.wait(timeout=5.0)
-        if interrupt_marker.read_text(encoding="utf-8").strip() != "sigint":
+        interrupt_marker = state_root / "sessions" / f"{uuid.UUID(session_id)}.interrupt.json"
+        if not interrupt_marker.is_file():
             return _fail(
                 "claude_interrupt_marker_missing",
-                "fake Claude process did not receive SIGINT",
+                "claude-channel interrupt did not record a turn-stop request",
+            )
+        if fake_claude.poll() is not None:
+            return _fail(
+                "claude_interrupt_ended_session",
+                "claude-channel interrupt ended the Claude process instead of its turn",
             )
 
         return _status(

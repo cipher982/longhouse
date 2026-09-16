@@ -1140,6 +1140,61 @@
               ],
               "max_age_seconds": 604800,
               "oracle_digest": "138a9e04b758d5c1324ec1727a39d169d85b20ce88f5ba1d8499ce6eb355d058"
+            },
+            {
+              "id": "claude_helm_launch_registration",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "4b4bc0cc860ae44b37290e1df407a8658a7fa80cc3494de9183836b076ac8a3d"
+            },
+            {
+              "id": "claude_helm_send_idle",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "4b4bc0cc860ae44b37290e1df407a8658a7fa80cc3494de9183836b076ac8a3d"
+            },
+            {
+              "id": "claude_helm_steer_active",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "4b4bc0cc860ae44b37290e1df407a8658a7fa80cc3494de9183836b076ac8a3d"
+            },
+            {
+              "id": "claude_helm_abort_native",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "4b4bc0cc860ae44b37290e1df407a8658a7fa80cc3494de9183836b076ac8a3d"
+            },
+            {
+              "id": "claude_helm_terminate_owned",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "4b4bc0cc860ae44b37290e1df407a8658a7fa80cc3494de9183836b076ac8a3d"
             }
           ]
         },
@@ -1323,19 +1378,19 @@
           "disposition": "implemented",
           "required_assertions": [
             {
-              "id": "claude_cli_channel_contract_preserved",
-              "scenario_id": "claude_real_print",
-              "oracle_source": "server/zerg/qa/provider_release_semantic_oracles.py",
+              "id": "claude_helm_launch_registration",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
               "minimum_scenario_revision": 1,
               "acceptable_evidence": [
-                "live_no_token"
+                "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "138a9e04b758d5c1324ec1727a39d169d85b20ce88f5ba1d8499ce6eb355d058"
+              "oracle_digest": "4b4bc0cc860ae44b37290e1df407a8658a7fa80cc3494de9183836b076ac8a3d"
             }
           ],
-          "level": "live_no_token",
-          "source": "factory assertions: claude_cli_channel_contract_preserved"
+          "level": "live_token",
+          "source": "factory assertions: claude_helm_launch_registration"
         },
         "run_once": {
           "level": "none",
@@ -1351,24 +1406,58 @@
           "owner_action": "claude launch, restart, reattach, and send against one session id"
         },
         "send_input": {
-          "level": "hermetic",
-          "source": "scripts/qa/provider-control-e2e-canary.py Claude channel send delivery; provider-response prompt proof belongs to release canaries",
           "disposition": "implemented",
-          "owner_action": "claude live-token send transcript canary",
-          "blocker": "budget"
+          "required_assertions": [
+            {
+              "id": "claude_helm_send_idle",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "4b4bc0cc860ae44b37290e1df407a8658a7fa80cc3494de9183836b076ac8a3d"
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: claude_helm_send_idle"
         },
         "interrupt": {
-          "level": "hermetic",
-          "source": "scripts/qa/provider-control-e2e-canary.py Claude channel interrupt sends SIGINT",
           "disposition": "implemented",
-          "owner_action": "claude live interrupt canary"
+          "required_assertions": [
+            {
+              "id": "claude_helm_abort_native",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "4b4bc0cc860ae44b37290e1df407a8658a7fa80cc3494de9183836b076ac8a3d"
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: claude_helm_abort_native"
         },
         "steer_active_turn": {
-          "level": "live_token",
-          "source": "make managed-claude-poc delayed intent=steer transcript assertion",
           "disposition": "implemented",
-          "owner_action": "scheduled claude steer live-token canary",
-          "blocker": "budget"
+          "required_assertions": [
+            {
+              "id": "claude_helm_steer_active",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "4b4bc0cc860ae44b37290e1df407a8658a7fa80cc3494de9183836b076ac8a3d"
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: claude_helm_steer_active"
         },
         "answer_pause": {
           "level": "hermetic",
@@ -1378,10 +1467,22 @@
           "blocker": "budget"
         },
         "terminate": {
-          "level": "hermetic",
-          "source": "Claude channel/process control tests",
           "disposition": "implemented",
-          "owner_action": "claude live Helm graceful process cleanup canary"
+          "required_assertions": [
+            {
+              "id": "claude_helm_terminate_owned",
+              "scenario_id": "claude_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "4b4bc0cc860ae44b37290e1df407a8658a7fa80cc3494de9183836b076ac8a3d"
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: claude_helm_terminate_owned"
         },
         "tail_output": {
           "level": "hermetic",
@@ -1412,6 +1513,7 @@
         "claude.send",
         "claude.interrupt",
         "claude.steer",
+        "claude.terminate",
         "claude.answer_pause",
         "claude.turn_start",
         "claude.turn_interrupt"

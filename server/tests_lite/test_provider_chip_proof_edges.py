@@ -27,11 +27,6 @@ UNPROVEN_RUNTIME_CLAIMS = frozenset(
     {
         ("antigravity", "launch_local"),
         ("antigravity", "send_input"),
-        ("claude", "launch_local"),
-        ("claude", "send_input"),
-        ("claude", "interrupt"),
-        ("claude", "terminate"),
-        ("claude", "steer_active_turn"),
     }
 )
 
