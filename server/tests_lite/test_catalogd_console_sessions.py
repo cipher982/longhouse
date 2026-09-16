@@ -596,6 +596,7 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path, monkeypatch):
         }
     )
     assert failed["turn"]["state"] == "failed"
+    assert failed["turn"]["error_code"] == "turn_start_ambiguous"
     with Session(engine) as db:
         failed_turn = db.get(LiveConsoleTurn, settled["next_turn"]["turn_id"])
         failed_run = db.get(LiveSessionRun, settled["next_turn"]["run_id"])

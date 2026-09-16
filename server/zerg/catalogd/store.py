@@ -4151,6 +4151,7 @@ class CatalogStore:
                         message=receipt.text if receipt is not None else None,
                         client_request_id=receipt.client_request_id if receipt is not None else None,
                         provider_config=thread.provider_config_json if thread is not None else None,
+                        error_code=_receipt_error_code(receipt),
                         resume_session_file=(
                             _live_thread_source_path(orm, thread_id=thread.id, provider=turn.provider) if thread is not None else None
                         ),
@@ -4172,6 +4173,7 @@ class CatalogStore:
                         result = _live_console_turn_dto(
                             turn,
                             client_request_id=receipt.client_request_id if receipt is not None else None,
+                            error_code=_receipt_error_code(receipt),
                             resume_session_file=(
                                 _live_thread_source_path(orm, thread_id=thread.id, provider=turn.provider) if thread is not None else None
                             ),
@@ -4208,6 +4210,7 @@ class CatalogStore:
                             message=next_receipt.text if next_receipt is not None else None,
                             client_request_id=next_receipt.client_request_id if next_receipt is not None else None,
                             provider_config=thread.provider_config_json if thread is not None else None,
+                            error_code=_receipt_error_code(next_receipt),
                             resume_session_file=(
                                 _live_thread_source_path(orm, thread_id=thread.id, provider=starting.provider)
                                 if thread is not None
@@ -4218,6 +4221,7 @@ class CatalogStore:
                     result = _live_console_turn_dto(
                         turn,
                         client_request_id=receipt.client_request_id if receipt is not None else None,
+                        error_code=_receipt_error_code(receipt),
                         resume_session_file=(
                             _live_thread_source_path(orm, thread_id=thread.id, provider=turn.provider) if thread is not None else None
                         ),
@@ -4316,6 +4320,7 @@ class CatalogStore:
                             message=next_receipt.text if next_receipt is not None else None,
                             client_request_id=next_receipt.client_request_id if next_receipt is not None else None,
                             provider_config=thread.provider_config_json if thread is not None else None,
+                            error_code=_receipt_error_code(next_receipt),
                             resume_session_file=(
                                 _live_thread_source_path(orm, thread_id=thread.id, provider=next_turn.provider)
                                 if thread is not None
@@ -4327,6 +4332,7 @@ class CatalogStore:
                 result = _live_console_turn_dto(
                     turn,
                     client_request_id=receipt.client_request_id if receipt is not None else None,
+                    error_code=_receipt_error_code(receipt),
                     resume_session_file=(
                         _live_thread_source_path(orm, thread_id=thread.id, provider=turn.provider) if thread is not None else None
                     ),

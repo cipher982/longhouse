@@ -190,7 +190,7 @@ struct BugReportSheet: View {
             BugReportLocalStore.saveHandoff(
                 BugReportHandoff(
                     serverURL: handoff.serverURL,
-                    sourceSessionID: handoff.sourceSessionID,
+                    sourceSessionID: handoff.sourceSessionID ?? sourceSessionID,
                     reportID: handoff.reportID,
                     sessionID: handoff.sessionID,
                     deviceID: handoff.deviceID,
@@ -216,7 +216,7 @@ struct BugReportSheet: View {
             statusMessage = "Sent to Console. The agent has the screenshot and diagnostics."
         } catch {
             if case let LonghouseAPIError.structured(_, errorCode, _) = error,
-               !["turn_start_outcome_unknown", "turn_start_ambiguous"].contains(errorCode) {
+               errorCode != "turn_start_outcome_unknown" {
                 clientRequestID = "ios-report-\(UUID().uuidString)"
                 saveHandoffForRetry()
             }
@@ -234,7 +234,7 @@ struct BugReportSheet: View {
         BugReportLocalStore.saveHandoff(
             BugReportHandoff(
                 serverURL: handoff.serverURL,
-                sourceSessionID: handoff.sourceSessionID,
+                sourceSessionID: handoff.sourceSessionID ?? sourceSessionID,
                 reportID: handoff.reportID,
                 sessionID: handoff.sessionID,
                 deviceID: handoff.deviceID,
