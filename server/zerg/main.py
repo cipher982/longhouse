@@ -179,7 +179,7 @@ app = FastAPI(
 async def runtime_write_admission_middleware(request, call_next):
     """Fence mutating HTTP requests during an authenticated cutover drain."""
     path = request.url.path
-    is_internal_control = path.startswith("/internal/deployments/")
+    is_internal_control = path.startswith(("/internal/deployments/", "/api/internal/deployments/"))
     mutating = request.method in {"POST", "PUT", "PATCH", "DELETE"} and not is_internal_control
     admitted = False
     if mutating:

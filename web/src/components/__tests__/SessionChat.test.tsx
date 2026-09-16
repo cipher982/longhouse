@@ -600,8 +600,9 @@ describe("SessionChat", () => {
     expect(inputPostCount).toBe(1);
   });
 
-  it("keeps managed-local intent recoverable when a sent response lacks durable identity", async () => {
+  it("replays the same ID after an initial runtime-draining refusal with no receipt", async () => {
     const user = userEvent.setup();
+    const { ApiError } = await import("../../services/api/base");
     const requestIds: string[] = [];
 
     requestMock.mockImplementation((path: string, init?: RequestInit) => {
@@ -609,15 +610,32 @@ describe("SessionChat", () => {
         return Promise.resolve({ locked: false, fork_available: false });
       }
       if (String(path).endsWith("/input") && init?.method === "POST") {
-        requestIds.push(
-          JSON.parse(String(init.body ?? "{}")).client_request_id,
-        );
+        const payload = JSON.parse(String(init.body ?? "{}"));
+        requestIds.push(payload.client_request_id);
+        if (requestIds.length === 1) {
+          return Promise.reject(
+            new ApiError({
+              url: String(path),
+              status: 503,
+              body: {
+                detail: {
+                  error_code: "runtime_draining",
+                  message: "Runtime is restarting.",
+                },
+              },
+            }),
+          );
+        }
         return Promise.resolve({
           outcome: "sent",
           input_id: 7,
-          intent: "auto",
+          intent: payload.intent,
+          client_request_id: payload.client_request_id,
           queued: [],
         });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve([]);
       }
       return Promise.reject(new Error(`Unexpected request: ${path}`));
     });
@@ -642,32 +660,51 @@ describe("SessionChat", () => {
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(requestIds).toHaveLength(2));
     expect(requestIds[1]).toBe(requestIds[0]);
+    await waitFor(() =>
+      expect(
+        screen.queryByText("Continue locally", {
+          selector: "span.session-chat-pending-message__text",
+        }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(
+      window.localStorage.getItem(
+        `longhouse:session-input:sess-1:${requestIds[0]}`,
+      ),
+    ).toBeNull();
   });
-  it("retains multiple ambiguous operations and retries each by its own identity", async () => {
+  it("retains provider-ambiguous intent after explicit same-ID replay", async () => {
     const user = userEvent.setup();
     const requestIds: string[] = [];
+    const receipts = new Map<
+      string,
+      { id: null; client_request_id: string; text: string; intent: "auto"; status: "delivering"; last_error: string; created_at: null }
+    >();
     requestMock.mockImplementation((path: string, init?: RequestInit) => {
       if (String(path).endsWith("/lock")) {
         return Promise.resolve({ locked: false, fork_available: false });
       }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve(Array.from(receipts.values()));
+      }
       if (String(path).endsWith("/input") && init?.method === "POST") {
         const payload = JSON.parse(String(init.body ?? "{}"));
         requestIds.push(payload.client_request_id);
+        const receipt = {
+          id: null,
+          client_request_id: payload.client_request_id,
+          text: payload.text,
+          intent: "auto" as const,
+          status: "delivering" as const,
+          last_error: "delivery_unknown: provider response not confirmed",
+          created_at: null,
+        };
+        receipts.set(payload.client_request_id, receipt);
         return Promise.resolve({
           outcome: "unknown",
           intent: payload.intent,
           client_request_id: payload.client_request_id,
-          queued: [
-            {
-              id: null,
-              client_request_id: payload.client_request_id,
-              text: payload.text,
-              intent: payload.intent,
-              status: "delivering",
-              last_error: "Delivery status is not confirmed yet.",
-              created_at: null,
-            },
-          ],
+          queued: [receipt],
         });
       }
       return Promise.reject(new Error(`Unexpected request: ${path}`));
@@ -677,13 +714,22 @@ describe("SessionChat", () => {
     await user.type(screen.getByRole("textbox"), "first unresolved");
     await user.click(screen.getByRole("button", { name: /send/i }));
     await waitFor(() =>
-      expect(screen.getByText("first unresolved")).toBeInTheDocument(),
+      expect(
+        screen.getByText("first unresolved", {
+          selector: "span.session-chat-pending-message__text",
+        }),
+      ).toBeInTheDocument(),
     );
 
+    await user.clear(screen.getByRole("textbox"));
     await user.type(screen.getByRole("textbox"), "second unresolved");
     await user.click(screen.getByRole("button", { name: /send/i }));
     await waitFor(() =>
-      expect(screen.getByText("second unresolved")).toBeInTheDocument(),
+      expect(
+        screen.getByText("second unresolved", {
+          selector: "span.session-chat-pending-message__text",
+        }),
+      ).toBeInTheDocument(),
     );
     expect(requestIds).toHaveLength(2);
     expect(requestIds[0]).not.toBe(requestIds[1]);
@@ -695,6 +741,246 @@ describe("SessionChat", () => {
     await user.click(screen.getAllByRole("button", { name: "Retry" })[0]);
     await waitFor(() => expect(requestIds).toHaveLength(3));
     expect(requestIds[2]).toBe(requestIds[0]);
+    expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(2);
+  });
+  it("hydrates the current session outbox on mount and clears it on switch", async () => {
+    const clientRequestId = "web-reload-1";
+    window.localStorage.setItem(
+      `longhouse:session-input:sess-1:${clientRequestId}`,
+      JSON.stringify({
+        sessionId: "sess-1",
+        text: "survive reload",
+        intent: "auto",
+        clientRequestId,
+        attachments: [],
+        createdAt: 1,
+      }),
+    );
+    requestMock.mockImplementation((path: string) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/inputs")) return Promise.resolve([]);
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    const first = renderSessionChat({
+      chatMode: "managed_local",
+      session: makeSession({ id: "sess-1" }),
+    });
+    expect(await screen.findByText("survive reload")).toBeInTheDocument();
+    first.unmount();
+
+    const second = renderSessionChat({
+      chatMode: "managed_local",
+      session: makeSession({ id: "sess-1" }),
+    });
+    expect(await screen.findByText("survive reload")).toBeInTheDocument();
+    window.localStorage.setItem(
+      "longhouse:session-input:sess-2:web-switch-1",
+      JSON.stringify({
+        sessionId: "sess-2",
+        text: "only for session two",
+        intent: "auto",
+        clientRequestId: "web-switch-1",
+        attachments: [],
+        createdAt: 2,
+      }),
+    );
+
+    second.rerenderSessionChat({
+      chatMode: "managed_local",
+      session: makeSession({ id: "sess-2" }),
+    });
+    await waitFor(() =>
+      expect(screen.queryByText("survive reload")).not.toBeInTheDocument(),
+    );
+    expect(await screen.findByText("only for session two")).toBeInTheDocument();
+    second.unmount();
+  });
+
+  it("keeps runtime-draining refusal retryable with the same operation ID", async () => {
+    const user = userEvent.setup();
+    const { ApiError } = await import("../../services/api/base");
+    const requestIds: string[] = [];
+    let receipt: {
+      id: number;
+      client_request_id: string;
+      text: string;
+      intent: "auto";
+      status: "delivering";
+      last_error: string;
+      created_at: null;
+    } | null = null;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve(receipt ? [receipt] : []);
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body ?? "{}"));
+        requestIds.push(payload.client_request_id);
+        if (requestIds.length === 1) {
+          receipt = {
+            id: 77,
+            client_request_id: payload.client_request_id,
+            text: payload.text,
+            intent: "auto",
+            status: "delivering",
+            last_error: "runtime_draining: runtime is restarting",
+            created_at: null,
+          };
+          return Promise.reject(
+            new ApiError({
+              url: String(path),
+              status: 503,
+              body: {
+                detail: {
+                  error_code: "runtime_draining",
+                  message: "Runtime is restarting.",
+                },
+              },
+            }),
+          );
+        }
+        return Promise.resolve({
+          outcome: "sent",
+          input_id: 78,
+          intent: "auto",
+          client_request_id: payload.client_request_id,
+          queued: [],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({ chatMode: "managed_local", timelineItems: [] });
+    await user.type(screen.getByRole("textbox"), "retry after restart");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() =>
+      expect(
+        screen.getByText("retry after restart", {
+          selector: "span.session-chat-pending-message__text",
+        }),
+      ).toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(requestIds).toHaveLength(2));
+    expect(requestIds[1]).toBe(requestIds[0]);
+    await waitFor(() =>
+      expect(
+        screen.queryByText("retry after restart", {
+          selector: "span.session-chat-pending-message__text",
+        }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+  it("rehydrates attachment bytes before retrying a draining refusal", async () => {
+    const user = userEvent.setup();
+    const { ApiError } = await import("../../services/api/base");
+    const requestIds: string[] = [];
+    const multipartBodies: FormData[] = [];
+    let receipt: {
+      id: number;
+      client_request_id: string;
+      text: string;
+      intent: "auto";
+      status: "delivering";
+      last_error: string;
+      created_at: null;
+    } | null = null;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve(receipt ? [receipt] : []);
+      }
+      if (
+        String(path).endsWith("/inputs-multipart") &&
+        init?.method === "POST"
+      ) {
+        const form = init.body as FormData;
+        multipartBodies.push(form);
+        const clientRequestId = String(form.get("client_request_id"));
+        requestIds.push(clientRequestId);
+        if (requestIds.length === 1) {
+          receipt = {
+            id: 81,
+            client_request_id: clientRequestId,
+            text: String(form.get("text") ?? ""),
+            intent: "auto",
+            status: "delivering",
+            last_error: "runtime_draining: runtime is restarting",
+            created_at: null,
+          };
+          return Promise.reject(
+            new ApiError({
+              url: String(path),
+              status: 503,
+              body: {
+                detail: {
+                  error_code: "runtime_draining",
+                  message: "Runtime is restarting.",
+                },
+              },
+            }),
+          );
+        }
+        return Promise.resolve({
+          outcome: "sent",
+          input_id: 82,
+          intent: "auto",
+          client_request_id: clientRequestId,
+          queued: [],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    const session = makeSession({
+      provider: "codex",
+      capabilities: { attach_images: true },
+    });
+    const first = renderSessionChat({ chatMode: "managed_local", session });
+    const input = first.container.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement | null;
+    expect(input).toBeTruthy();
+    const bytes = [7, 8, 9];
+    await user.upload(
+      input!,
+      new File([new Uint8Array(bytes)], "note.png", { type: "image/png" }),
+    );
+    await user.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() =>
+      expect(
+        screen.getByText("Not confirmed — retry with the same request"),
+      ).toBeInTheDocument(),
+    );
+    first.unmount();
+
+    const second = renderSessionChat({ chatMode: "managed_local", session });
+    await screen.findByText("Not confirmed — retry with the same request");
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(requestIds).toHaveLength(2));
+    expect(requestIds[1]).toBe(requestIds[0]);
+    const attachment = multipartBodies[1].get("attachments");
+    expect(attachment).toBeInstanceOf(File);
+    if (!(attachment instanceof File)) throw new Error("Expected attachment file");
+    const attachmentBytes = await new Promise<ArrayBuffer>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as ArrayBuffer);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsArrayBuffer(attachment);
+    });
+    expect(
+      Array.from(new Uint8Array(attachmentBytes)),
+    ).toEqual(bytes);
+    second.unmount();
   });
   it("routes attachment-only sends through multipart with empty text", async () => {
     const user = userEvent.setup();

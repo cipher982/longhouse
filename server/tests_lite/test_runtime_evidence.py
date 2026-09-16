@@ -21,6 +21,7 @@ def evidence_runtime(monkeypatch, tmp_path):
     monkeypatch.setenv("JWT_SECRET", "runtime-evidence-test-only")
     monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_PENDING", "1")
     monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_GENERATION", "7")
+    monkeypatch.setenv("LONGHOUSE_IMAGE_DIGEST", "sha256:" + "a" * 64)
 
     from fastapi.testclient import TestClient
 
@@ -329,3 +330,49 @@ async def test_unavailable_activation_evidence_stays_closed(monkeypatch) -> None
     assert recovered["state"] == "unknown"
     admitted, _ = await runtime.try_admit(path="/api/sessions")
     assert admitted is False
+
+
+def test_mounted_control_can_reopen_while_tenant_writes_are_closed(evidence_runtime, monkeypatch):
+    from fastapi.testclient import TestClient
+    from starlette.routing import Mount
+
+    from zerg.main import api_app
+    from zerg.main import app
+    from zerg.routers import internal_deployments
+    from zerg.services import runtime_admission as admission_module
+
+    _client, runtime, _ping = evidence_runtime
+    monkeypatch.setattr(admission_module, "runtime_admission", lambda: runtime)
+    monkeypatch.setattr(app.router, "routes", [Mount("/api", app=api_app)])
+    activation = {}
+
+    async def catalog_probe(operation):
+        return {"available": True, "state": "closed", "depth": 0, "accepting": False, "active_label": None}
+
+    async def activation_probe(operation, params):
+        activation.update(params)
+        return {
+            "available": True,
+            "state": "open",
+            "depth": 0,
+            "accepting": True,
+            "active_label": None,
+            "activation": {**activation, "activated_at": datetime.now(timezone.utc).isoformat()},
+        }
+
+    monkeypatch.setattr(internal_deployments, "_catalog_admission_probe", catalog_probe)
+    monkeypatch.setattr(internal_deployments, "_catalog_activation_probe", activation_probe)
+    runtime.mark_candidate_ready(attempt_id="owned-attempt")
+    runtime.mark_candidate_consistent(attempt_id="owned-attempt")
+    client = TestClient(app)
+    try:
+        assert client.post("/api/sessions").status_code == 503
+        path = "/api/internal/deployments/owned-attempt/reopen"
+        payload = _activation_payload(runtime)
+        assert client.post(path, json=payload).status_code == 401
+        response = client.post(path, json=payload, headers={"X-Internal-Token": "evidence-test-only"})
+        assert response.status_code == 200
+        assert response.json()["state"] == "reopened"
+        assert activation["generation"] == "7"
+    finally:
+        client.close()

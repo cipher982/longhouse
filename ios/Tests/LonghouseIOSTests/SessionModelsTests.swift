@@ -13,6 +13,7 @@ struct SessionModelsTests {
           "server_fanout_at_ms": 1784251909243,
           "catalog_commit_seq": 41,
           "pubsub_seq": 9,
+          "stream_epoch": "runtime-b",
           "transcript_preview": {
             "event_id": 7,
             "text": "visible before durability",
@@ -36,8 +37,23 @@ struct SessionModelsTests {
         let event = try JSONDecoder().decode(SessionWorkspaceStream.WorkspaceChanged.self, from: json)
         #expect(event.latest_event_id == -7)
         #expect(event.catalog_commit_seq == 41)
+        #expect(event.stream_epoch == "runtime-b")
         #expect(event.transcript_preview?.text == "visible before durability")
         #expect(event.transcript_preview?.is_provisional == true)
+    }
+
+    @Test
+    func restartEpochsSurviveConnectedAndReplayGapDecoding() throws {
+        let connected = try JSONDecoder().decode(
+            SessionWorkspaceStream.Connected.self,
+            from: Data(#"{"session_id":"session-1","stream_epoch":"runtime-b"}"#.utf8)
+        )
+        let gap = try JSONDecoder().decode(
+            SessionWorkspaceStream.ReplayGap.self,
+            from: Data(#"{"session_id":"session-1","requested_seq":17,"earliest_seq":null,"latest_seq":0,"reason":"epoch_changed","stream_epoch":"runtime-b"}"#.utf8)
+        )
+        #expect(connected.stream_epoch == "runtime-b")
+        #expect(gap.stream_epoch == "runtime-b")
     }
 
     private func runtimeDisplay(activityRecency: String, lifecycle: String = "open") -> SessionRuntimeDisplay {

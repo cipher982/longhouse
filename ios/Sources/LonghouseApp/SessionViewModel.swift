@@ -952,65 +952,8 @@ final class SessionViewModel: ObservableObject {
             serverURL: serverURL,
             sessionId: sessionId,
             authGeneration: authGeneration
-        ).first(where: { $0.clientRequestId == clientRequestId }),
-        let api = apiFactory(appState.serverURL)
+        ).first(where: { $0.clientRequestId == clientRequestId })
         else {
-            return false
-        }
-
-        // A retry is never allowed to turn an ambiguous transport result into
-        // a second side effect. First ask the authority; only an absent
-        // receipt permits the same-ID request to be sent again.
-        do {
-            if let receipt = try await api.sessionInputReceipt(
-                id: sessionId,
-                clientRequestId: pending.clientRequestId
-            ) {
-                switch receipt.disposition {
-                case .accepted:
-                    if receipt.status?.lowercased() == "queued" {
-                        updateSubmittedInput(
-                            pending.clientRequestId,
-                            phase: .queued,
-                            serverInputId: receipt.inputId,
-                            lastError: nil
-                        )
-                    } else {
-                        pendingInputStore.remove(pending)
-                        updateSubmittedInput(
-                            pending.clientRequestId,
-                            phase: .sent,
-                            serverInputId: receipt.inputId,
-                            lastError: nil
-                        )
-                    }
-                    return true
-                case .rejected:
-                    pendingInputStore.remove(pending)
-                    updateSubmittedInput(
-                        pending.clientRequestId,
-                        phase: .failed,
-                        serverInputId: receipt.inputId,
-                        lastError: receipt.error ?? "The server rejected this input."
-                    )
-                    return false
-                case .couldNotConfirm:
-                    updateSubmittedInput(
-                        pending.clientRequestId,
-                        phase: .couldNotConfirm,
-                        serverInputId: receipt.inputId,
-                        lastError: receipt.error ?? "Delivery status is not confirmed yet."
-                    )
-                    return false
-                }
-            }
-        } catch {
-            updateSubmittedInput(
-                pending.clientRequestId,
-                phase: .couldNotConfirm,
-                serverInputId: nil,
-                lastError: "Delivery status is not confirmed yet."
-            )
             return false
         }
 
@@ -1021,6 +964,7 @@ final class SessionViewModel: ObservableObject {
             lastError: nil
         )
         return await dispatchPendingInput(pending, sessionId: sessionId, appState: appState)
+
     }
 
     private func restorePendingInputs(_ intents: [PendingInputIntent]) {
@@ -1110,8 +1054,8 @@ final class SessionViewModel: ObservableObject {
                 }
             } catch {
                 // A failed reconciliation is itself unconfirmed. Keep the
-                // payload and attachment bytes; a new connection retries the
-                // authority read before any side effect is sent.
+                // payload and attachment bytes; only an explicit user retry
+                // replays this identity through the idempotent endpoint.
                 updateSubmittedInput(
                     intent.clientRequestId,
                     phase: .couldNotConfirm,
@@ -2996,13 +2940,18 @@ final class SessionViewModel: ObservableObject {
 
     private func sendConfirmationMayHaveLanded(_ error: Error) -> Bool {
         switch error {
-        case LonghouseAPIError.structured(_, let code, _):
-            return code == "delivery_unknown" || code == "input_receipt_unknown"
-        case LonghouseAPIError.upstreamFailed,
-             LonghouseAPIError.requestFailed,
-             LonghouseAPIError.unexpectedResponse,
-             LonghouseAPIError.serviceUnavailable:
-            return true
+        case let apiError as LonghouseAPIError:
+            switch apiError {
+            case .structured(_, _, _):
+                return apiError.isRuntimeDraining || apiError.isProviderDeliveryUnknown
+            case .upstreamFailed,
+                 .requestFailed,
+                 .unexpectedResponse,
+                 .serviceUnavailable:
+                return true
+            case .notAuthenticated, .conflict:
+                return false
+            }
         case is DecodingError:
             return true
         case let urlError as URLError:

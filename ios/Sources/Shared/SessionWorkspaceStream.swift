@@ -42,7 +42,7 @@ actor SessionWorkspaceStream {
         let server_now_ms: Int64?
         /// Process/runtime epoch. Pubsub sequence numbers are only
         /// comparable inside this epoch.
-        let stream_epoch: String? = nil
+        var stream_epoch: String? = nil
     }
 
     struct WorkspaceChanged: Decodable, Sendable {
@@ -95,7 +95,7 @@ actor SessionWorkspaceStream {
         let server_now_ms: Int64?
         var catalog_commit_seq: Int64? = nil
         let pubsub_seq: Int?
-        let stream_epoch: String? = nil
+        var stream_epoch: String? = nil
         let transcript_preview: TranscriptPreview?
     }
 
@@ -105,7 +105,7 @@ actor SessionWorkspaceStream {
         let earliest_seq: Int?
         let latest_seq: Int
         let reason: String
-        let stream_epoch: String? = nil
+        var stream_epoch: String? = nil
     }
 
     enum Event: Sendable {
@@ -152,6 +152,7 @@ actor SessionWorkspaceStream {
     private var requestedStreamEpoch: String?
     private var serverClockSkewMs: Int64 = 0
     private var continuation: AsyncStream<Event>.Continuation?
+    private var task: Task<Void, Never>?
 
     init(
         baseURL: URL,

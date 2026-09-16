@@ -174,7 +174,7 @@ struct PendingInputStore: Sendable {
             sessionId: sessionId,
             text: "",
             intent: "auto",
-            attachments: [],
+            attachments: [PendingInputIntent.Attachment](),
             createdAt: .distantPast
         )
         remove(intent)

@@ -168,10 +168,47 @@ struct SessionInputReconciliationTests {
     func deliveringReceiptRemainsUnconfirmed() {
         #expect(SessionInputReceiptDisposition.from(status: "delivering") == .couldNotConfirm)
         #expect(
+            SessionInputReceiptDisposition.from(
+                status: "delivering",
+                error: "runtime_draining: runtime is restarting"
+            ) == .couldNotConfirm
+        )
+        #expect(
             SessionInputReceiptDisposition.from(status: "failed", error: "delivery_unknown")
                 == .couldNotConfirm
         )
         #expect(SessionInputReceiptDisposition.from(status: "queued") == .accepted)
         #expect(SessionInputOutcome(rawValue: "unknown") == .unknown)
     }
+    @Test
+    func refusalAndAmbiguityStayNonTerminalButDeliveredWins() {
+        #expect(
+            SessionInputReceiptDisposition.from(
+                status: "failed",
+                error: "runtime_draining: runtime is restarting"
+            ) == .couldNotConfirm
+        )
+        #expect(
+            SessionInputReceiptDisposition.from(
+                status: "failed",
+                error: "input_receipt_unknown: provider status unavailable"
+            ) == .couldNotConfirm
+        )
+        #expect(
+            SessionInputReceiptDisposition.from(
+                status: "delivered",
+                error: "runtime_draining"
+            ) == .accepted
+        )
     }
+    @Test
+    func runtimeDrainingAPIErrorIsKnownPreDispatchRefusal() {
+        let error = LonghouseAPIError.structured(
+            status: 503,
+            errorCode: "runtime_draining",
+            message: "Runtime is restarting."
+        )
+        #expect(error.isRuntimeDraining)
+        #expect(!error.isProviderDeliveryUnknown)
+    }
+}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from datetime import datetime
 from datetime import timedelta
@@ -10,6 +11,7 @@ from uuid import uuid4
 
 import pytest
 from cryptography.fernet import Fernet
+from fastapi import HTTPException
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -44,6 +46,8 @@ from zerg.services.live_session_inputs import upsert_live_input_receipt
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
 from zerg.services.managed_control_dispatcher import ManagedControlDispatchResult
 from zerg.services.managed_provider_contracts import contract_for_provider
+from zerg.services.session_kernel_projection import session_lock_scope_id
+from zerg.services.session_locks import session_lock_manager
 
 
 def _seed_live_control(db, *, provider: str = "codex"):
@@ -449,6 +453,202 @@ async def test_catalog_input_dispatches_and_projects_live_receipt_only(tmp_path,
         assert receipt.status == "delivered"
         assert receipt.client_request_id == "catalog-control-1"
         assert receipt.archive_session_input_id is None
+
+
+
+@pytest.mark.asyncio
+async def test_catalog_runtime_draining_replay_keeps_operation_id_and_dispatches_once(tmp_path, monkeypatch):
+    """A late drain is retryable, but two same-ID replays cannot both dispatch."""
+    from zerg.catalogd.schema import initialize_catalog_schema
+    from zerg.catalogd.store import CatalogStore
+
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'runtime-draining-input.db'}")
+    initialize_live_database(engine)
+    initialize_catalog_schema(engine)
+    factory = make_sessionmaker(engine)
+    with factory() as db:
+        session_id = _seed_live_control(db)
+
+    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(database_module, "get_live_write_session_factory", lambda: factory)
+    catalog_store = CatalogStore(engine)
+
+    class _CatalogClient:
+        async def call(self, method, params, **_kwargs):
+            if method == "session.input.receipt.read.v2":
+                return catalog_store.read_input_receipt(**params)
+            if method == "session.input.receipt.upsert.v2":
+                receipt = dict(params["receipt"])
+                if receipt["expires_at"] is not None:
+                    receipt["expires_at"] = datetime.fromisoformat(receipt["expires_at"])
+                return catalog_store.upsert_input_receipt(receipt=receipt)
+            if method == "session.input.finish.v2":
+                return catalog_store.finish_queued_input(**params)
+            if method == "session.input.recent.list.v2":
+                return catalog_store.list_recent_input_receipts(**params)
+            raise AssertionError(method)
+
+    class _Runtime:
+        def __init__(self):
+            self.calls = 0
+
+        async def try_admit(self, *, path):
+            del path
+            self.calls += 1
+            if self.calls == 1:
+                return False, {
+                    "code": "runtime_draining",
+                    "message": "Runtime is restarting",
+                    "runtime_epoch": "epoch-1",
+                    "retryable": True,
+                }
+            return True, {"runtime_epoch": "epoch-1"}
+
+        async def release(self):
+            return None
+
+    runtime = _Runtime()
+    entered_provider = asyncio.Event()
+    release_provider = asyncio.Event()
+    commands: list[dict[str, object]] = []
+
+    import zerg.services.managed_control_dispatcher as dispatcher
+    import zerg.services.runtime_admission as admission_module
+    import zerg.services.session_chat_impl as chat_impl
+    import zerg.routers.session_chat as chat_router
+    ambiguous = {"value": False}
+    async def fake_dispatch(**kwargs):
+        commands.append(dict(kwargs))
+        if ambiguous["value"]:
+            return ManagedControlDispatchResult(
+                ok=False,
+                transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
+                error="control response was lost",
+                failure_reason="indeterminate",
+            )
+        entered_provider.set()
+        await release_provider.wait()
+        return ManagedControlDispatchResult(
+            ok=True,
+            transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
+            data={"exit_code": 0, "turn_id": "turn-1"},
+        )
+
+    monkeypatch.setattr(admission_module, "runtime_admission", lambda: runtime)
+    monkeypatch.setattr(dispatcher, "dispatch_managed_control_command", fake_dispatch)
+    # Keep the existing session lock held through receipt finish so the
+    # concurrent replay exercises the actual single-flight boundary.
+    claim_started = asyncio.Event()
+    allow_claim = asyncio.Event()
+    mark_calls = {"count": 0}
+    original_mark = chat_router._set_catalog_live_receipt_error
+
+    async def mark_receipt_error(**kwargs):
+        mark_calls["count"] += 1
+        if mark_calls["count"] == 2:
+            claim_started.set()
+            await allow_claim.wait()
+        return await original_mark(**kwargs)
+
+    monkeypatch.setattr(chat_router, "_set_catalog_live_receipt_error", mark_receipt_error)
+    monkeypatch.setattr(chat_impl, "_schedule_catalog_lock_release", lambda **_kwargs: None)
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: _CatalogClient())
+    monkeypatch.setattr(
+        "zerg.services.catalog_read_gateway.session_snapshot",
+        lambda value, *, owner_id: catalog_store.read_session(session_id=value, owner_id=owner_id),
+    )
+
+    from zerg.services.live_control_catalog import load_live_control_session_snapshot
+
+    request_id = "runtime-draining-replay-1"
+    with factory() as db:
+        session = load_live_control_session_snapshot(session_id, owner_id=7)
+        assert session is not None
+        with pytest.raises(HTTPException) as refused:
+            await _create_session_input_response(
+                source_session=session,
+                owner_id=7,
+                body=SessionInputRequest(text="late drain", client_request_id=request_id),
+                db=db,
+            )
+        assert refused.value.status_code == 503
+        assert refused.value.detail["error_code"] == "runtime_draining"
+
+    with factory() as db:
+        receipt = db.query(LiveSessionInputReceipt).one()
+        original_delivery_request_id = receipt.delivery_request_id
+        assert receipt.status == "delivering"
+        assert json.loads(receipt.error_json)["code"] == "runtime_draining"
+        assert original_delivery_request_id
+
+    with factory() as db:
+        first_replay = asyncio.create_task(
+            _create_session_input_response(
+                source_session=session,
+                owner_id=7,
+                body=SessionInputRequest(text="late drain", client_request_id=request_id),
+                db=db,
+            )
+        )
+        await claim_started.wait()
+        second_replay = asyncio.create_task(
+            _create_session_input_response(
+                source_session=session,
+                owner_id=7,
+                body=SessionInputRequest(text="late drain", client_request_id=request_id),
+                db=db,
+            )
+        )
+        with pytest.raises(HTTPException) as concurrent_refusal:
+            await asyncio.wait_for(second_replay, timeout=1)
+        assert concurrent_refusal.value.status_code == 409
+        assert concurrent_refusal.value.detail["error_code"] == "input_dispatch_in_flight"
+        assert len(commands) == 0
+        allow_claim.set()
+        await entered_provider.wait()
+        assert len(commands) == 1
+        release_provider.set()
+        first_response = await first_replay
+        assert first_response.outcome == "sent"
+
+        await session_lock_manager.release(
+            session_lock_scope_id(session_id),
+            str(original_delivery_request_id),
+        )
+        duplicate_response = await _create_session_input_response(
+            source_session=session,
+            owner_id=7,
+            body=SessionInputRequest(text="late drain", client_request_id=request_id),
+            db=db,
+        )
+        assert duplicate_response.outcome == "sent"
+
+    assert len(commands) == 1
+    assert commands[0]["request_id"] == original_delivery_request_id
+    with factory() as db:
+        receipt = db.query(LiveSessionInputReceipt).one()
+        assert receipt.status == "delivered"
+        assert receipt.delivery_request_id == original_delivery_request_id
+
+    ambiguous["value"] = True
+    with factory() as db:
+        with pytest.raises(HTTPException) as uncertain:
+            await _create_session_input_response(
+                source_session=session,
+                owner_id=7,
+                body=SessionInputRequest(text="uncertain", client_request_id="uncertain-1"),
+                db=db,
+            )
+        assert uncertain.value.status_code == 502
+        assert uncertain.value.detail["error_code"] == "delivery_unknown"
+        replayed_unknown = await _create_session_input_response(
+            source_session=session,
+            owner_id=7,
+            body=SessionInputRequest(text="uncertain", client_request_id="uncertain-1"),
+            db=db,
+        )
+        assert replayed_unknown.outcome == "unknown"
+    assert len(commands) == 2
 
 
 @pytest.mark.asyncio

@@ -1512,15 +1512,26 @@ enum SessionInputReceiptDisposition: String, Codable, Sendable {
     case couldNotConfirm
 
     static func from(status: String?, error: String? = nil) -> Self {
-        if error?.lowercased().hasPrefix("delivery_unknown") == true {
+        let normalizedStatus = status?.lowercased()
+        switch normalizedStatus {
+        case "delivered", "accepted", "sent", "working", "queued":
+            return .accepted
+        case "rejected", "cancelled", "canceled":
+            return .rejected
+        default:
+            break
+        }
+        let errorCode = error?
+            .split(separator: ":", maxSplits: 1, omittingEmptySubsequences: true)
+            .first
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        if errorCode == "delivery_unknown"
+            || errorCode == "input_receipt_unknown"
+            || errorCode == "runtime_draining" {
             return .couldNotConfirm
         }
-        switch status?.lowercased() {
-        case "delivered", "accepted", "sent", "working":
-            return .accepted
-        case "queued":
-            return .accepted
-        case "failed", "rejected", "cancelled", "canceled":
+        switch normalizedStatus {
+        case "failed":
             return .rejected
         case "delivering":
             return .couldNotConfirm
@@ -1530,9 +1541,9 @@ enum SessionInputReceiptDisposition: String, Codable, Sendable {
     }
 }
 
-/// Authoritative outcome for one operation identity. `couldNotConfirm` is
-/// intentionally distinct from rejection: a missing receipt after transport
-/// loss is not permission to send the side effect again.
+/// An unconfirmed receipt is intentionally distinct from rejection:
+/// automatic reconciliation never dispatches; an explicit retry replays this
+/// same identity through the idempotent server endpoint.
 struct SessionInputReceiptState: Codable, Sendable, Equatable {
     let clientRequestId: String
     let intent: String?

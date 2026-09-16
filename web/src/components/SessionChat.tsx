@@ -343,8 +343,35 @@ function timelineHasDurableSubmittedInput(
     );
   });
 }
+function inputErrorCode(error?: string | null): string | null {
+  const normalized = error?.trim().toLowerCase();
+  if (!normalized) return null;
+  return normalized.split(":", 1)[0].trim();
+}
+
+function hasRuntimeDrainingError(error?: string | null): boolean {
+  return inputErrorCode(error) === "runtime_draining";
+}
+
+function hasProviderDeliveryUnknownError(error?: string | null): boolean {
+  const code = inputErrorCode(error);
+  return code === "delivery_unknown" || code === "input_receipt_unknown";
+}
+
 function hasUnknownDeliveryError(error?: string | null): boolean {
-  return error?.toLowerCase().startsWith("delivery_unknown") ?? false;
+  return (
+    hasProviderDeliveryUnknownError(error) || hasRuntimeDrainingError(error)
+  );
+}
+
+function structuredInputErrorCode(error: unknown): string | null {
+  if (!error || typeof error !== "object" || !("body" in error)) return null;
+  const body = error.body;
+  if (!body || typeof body !== "object" || !("detail" in body)) return null;
+  const detail = body.detail;
+  if (!detail || typeof detail !== "object") return null;
+  const code = "error_code" in detail ? detail.error_code : "code" in detail ? detail.code : null;
+  return typeof code === "string" ? code.trim().toLowerCase() : null;
 }
 
 export function SessionChat({
@@ -399,14 +426,16 @@ export function SessionChat({
   const pendingOutboxSessionRef = useRef<string | null>(null);
   useEffect(() => {
     let mounted = true;
-    if (pendingOutboxSessionRef.current !== session.id) {
+    const sessionChanged = pendingOutboxSessionRef.current !== session.id;
+
+    // Clear the previous session before reading the new scoped outbox. The
+    // load is intentionally tied to the transition itself so an empty pending
+    // list cannot suppress first-mount/reload hydration. React may invoke an
+    // effect setup twice in development; the second setup must still hydrate.
+    if (sessionChanged) {
       pendingOutboxSessionRef.current = session.id;
       setPendingManagedLocalInputs([]);
-      return () => {
-        mounted = false;
-      };
     }
-    if (pendingManagedLocalInputs.length > 0) return;
     void loadInputOutboxes(session.id)
       .then((stored) => {
         if (!mounted || stored.length === 0) return;
@@ -433,7 +462,7 @@ export function SessionChat({
     return () => {
       mounted = false;
     };
-  }, [pendingManagedLocalInputs.length, session.id]);
+  }, [session.id]);
 
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const sentConfirmationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -561,14 +590,15 @@ export function SessionChat({
           (row) => row.client_request_id === pending.clientRequestId,
         );
         if (!receipt) return pending;
-        if (hasUnknownDeliveryError(receipt.last_error)) {
-          return {
-            ...pending,
-            serverInputId: receipt.id ?? null,
-            phase: "unknown",
-          };
+        if (receipt.status === "delivered") {
+          resolvedIds.push(pending.clientRequestId);
+          return pending;
         }
-        if (receipt.status === "failed" || receipt.status === "cancelled") {
+        if (
+          receipt.status === "cancelled" ||
+          (receipt.status === "failed" &&
+            !hasUnknownDeliveryError(receipt.last_error))
+        ) {
           resolvedIds.push(pending.clientRequestId);
           setError(
             receipt.last_error ||
@@ -578,9 +608,12 @@ export function SessionChat({
           );
           return pending;
         }
-        if (receipt.status === "delivered") {
-          resolvedIds.push(pending.clientRequestId);
-          return pending;
+        if (hasUnknownDeliveryError(receipt.last_error)) {
+          return {
+            ...pending,
+            serverInputId: receipt.id ?? null,
+            phase: "unknown",
+          };
         }
         return {
           ...pending,
@@ -690,6 +723,29 @@ export function SessionChat({
         const receipt = result.queued.find(
           (row) => row.client_request_id === clientRequestId,
         );
+        const terminalStatus = receipt?.status;
+        if (
+          terminalStatus === "delivered" ||
+          terminalStatus === "cancelled" ||
+          (terminalStatus === "failed" &&
+            !hasUnknownDeliveryError(receipt?.last_error))
+        ) {
+          clearInputOutbox(session.id, clientRequestId);
+          setPendingManagedLocalInputs((current) =>
+            current.filter(
+              (pending) => pending.clientRequestId !== clientRequestId,
+            ),
+          );
+          if (terminalStatus !== "delivered") {
+            setError(
+              receipt?.last_error ||
+                (terminalStatus === "cancelled"
+                  ? "Input was cancelled before delivery."
+                  : "Input delivery failed."),
+            );
+          }
+          return terminalStatus === "delivered";
+        }
         if (result.outcome === "unknown") {
           setPendingManagedLocalInputs((current) =>
             current.map((pending) =>
@@ -740,7 +796,10 @@ export function SessionChat({
               (pending) => pending.clientRequestId !== clientRequestId,
             ),
           );
-        } else if (hasUnknownDeliveryError(receipt?.last_error)) {
+        } else if (
+          receipt?.status !== "cancelled" &&
+          hasUnknownDeliveryError(receipt?.last_error)
+        ) {
           setPendingManagedLocalInputs((current) =>
             current.map((pending) =>
               pending.clientRequestId === clientRequestId
@@ -805,7 +864,19 @@ export function SessionChat({
         } catch {
           // Preserve the request error when the receipt cannot be refreshed.
         }
-        if (hasUnknownDeliveryError(persistedReceipt?.last_error)) {
+        if (persistedReceipt?.status === "delivered") {
+          clearInputOutbox(session.id, clientRequestId);
+          setPendingManagedLocalInputs((current) =>
+            current.filter(
+              (pending) => pending.clientRequestId !== clientRequestId,
+            ),
+          );
+          return true;
+        }
+        if (
+          persistedReceipt?.status !== "cancelled" &&
+          hasUnknownDeliveryError(persistedReceipt?.last_error)
+        ) {
           setPendingManagedLocalInputs((current) =>
             current.map((pending) =>
               pending.clientRequestId === clientRequestId
@@ -840,7 +911,7 @@ export function SessionChat({
               pending.clientRequestId === clientRequestId
                 ? {
                     ...pending,
-                    serverInputId: persistedReceipt?.id ?? null,
+                    serverInputId: persistedReceipt.id ?? null,
                     phase: "queued",
                   }
                 : pending,
@@ -852,12 +923,11 @@ export function SessionChat({
         const errorBody = (
           e as {
             body?: {
-              detail?: { code?: string; error_code?: string; message?: string };
+              detail?: { message?: string };
             };
           }
         )?.body;
-        const errorCode =
-          errorBody?.detail?.error_code ?? errorBody?.detail?.code;
+        const errorCode = structuredInputErrorCode(e);
         if (intent === "steer" && errorCode === "turn_ended") {
           setTurnEndedDraft(message);
           setError(
@@ -1180,13 +1250,17 @@ export function SessionChat({
     isManagedLocal && activeQueuedInputs.length > 0 ? (
       <div className="session-chat-queued" data-testid="session-chat-queued">
         <div className="session-chat-queued__label">
-          {activeQueuedInputs.some(
-            (row) =>
-              row.status === "delivering" ||
-              hasUnknownDeliveryError(row.last_error),
+          {activeQueuedInputs.some((row) =>
+            hasRuntimeDrainingError(row.last_error)
           )
-            ? "Delivery status uncertain"
-            : "Queued, sends next"}
+            ? "Runtime restarting — retry with same request"
+            : activeQueuedInputs.some(
+                (row) =>
+                  row.status === "delivering" ||
+                  hasProviderDeliveryUnknownError(row.last_error),
+              )
+              ? "Delivery status uncertain"
+              : "Queued, sends next"}
         </div>
         <ul className="session-chat-queued__list">
           {activeQueuedInputs.map((row) => (
