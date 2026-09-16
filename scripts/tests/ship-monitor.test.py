@@ -34,7 +34,7 @@ Local HEAD           ac77b06d72
 def test_parse_deploy_status_normalizes_named_canary_surface() -> None:
     output = deploy_status("ac77b06d72", "ac77b06d72").replace(
         "Canary               ",
-        "Canary kernel-canary  ",
+        "Canary kernel-canary    ",
     )
 
     surfaces = ship_monitor.parse_deploy_status(output)

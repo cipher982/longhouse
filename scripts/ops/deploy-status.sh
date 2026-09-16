@@ -118,13 +118,13 @@ local_sha=$(git rev-parse --short=10 HEAD 2>/dev/null || echo "-")
 # --- Print table --------------------------------------------------------------
 
 printf "\n"
-printf "%-20s %-12s %-10s %s\n" "Surface" "SHA" "Health" "Uptime"
-printf "%-20s %-12s %-10s %s\n" "-------" "---" "------" "------"
-printf "%-20s %-12s %-10s %s\n" "Demo runtime"    "$demo_sha"   "$demo_health"   "$demo_uptime"
-printf "%-20s %-12s %-10s %s\n" "Control plane"   "$cp_sha"     "$cp_health"     "$cp_uptime"
-printf "%-20s %-12s %-10s %s\n" "Dogfood $DOGFOOD_SUBDOMAIN" "$canary_sha" "$canary_health" "$canary_uptime"
-printf "%-20s %-12s %-10s %s\n" "Canary $HOSTED_CANARY_SUBDOMAIN" "$hosted_canary_sha" "$hosted_canary_health" "-"
-printf "%-20s %-12s\n"          "Local HEAD"       "$local_sha"
+printf "%-24s %-12s %-10s %s\n" "Surface" "SHA" "Health" "Uptime"
+printf "%-24s %-12s %-10s %s\n" "-------" "---" "------" "------"
+printf "%-24s %-12s %-10s %s\n" "Demo runtime"    "$demo_sha"   "$demo_health"   "$demo_uptime"
+printf "%-24s %-12s %-10s %s\n" "Control plane"   "$cp_sha"     "$cp_health"     "$cp_uptime"
+printf "%-24s %-12s %-10s %s\n" "Dogfood $DOGFOOD_SUBDOMAIN" "$canary_sha" "$canary_health" "$canary_uptime"
+printf "%-24s %-12s %-10s %s\n" "Canary $HOSTED_CANARY_SUBDOMAIN" "$hosted_canary_sha" "$hosted_canary_health" "-"
+printf "%-24s %-12s\n"          "Local HEAD"       "$local_sha"
 printf "\n"
 
 # --- Drift warning ------------------------------------------------------------
