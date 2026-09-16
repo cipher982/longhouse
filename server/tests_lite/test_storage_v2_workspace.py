@@ -686,6 +686,7 @@ async def test_workspace_places_media_on_the_event_that_owns_the_line(monkeypatc
     other_envelope_hash = "b" * 64
     orphan_hash = "c" * 64
     legacy_hash = "d" * 64
+    first_line_hash = "5" * 64
     catalog = _MediaCatalog(
         [
             _media_ref(
@@ -697,6 +698,9 @@ async def test_workspace_places_media_on_the_event_that_owns_the_line(monkeypatc
             _media_ref(other_envelope_hash, envelope="env-b", ref_key=f"inline_data_url:40:{'f' * 64}:0"),
             _media_ref(orphan_hash, envelope="env-off-page", ref_key=f"inline_data_url:99:{'0' * 64}:0"),
             _media_ref(legacy_hash, envelope=None, ref_key="legacy-ref:12"),
+            # A pasted image on the transcript's very first line is stamped at
+            # position zero, which is a real position and not a missing one.
+            _media_ref(first_line_hash, envelope="env-a", ref_key=f"inline_data_url:0:{'2' * 64}:0"),
         ]
     )
 
@@ -708,6 +712,7 @@ async def test_workspace_places_media_on_the_event_that_owns_the_line(monkeypatc
                 _line_event("sibling", envelope="env-a", position=40, subordinal=1, role="assistant"),
                 _line_event("same-offset-other-envelope", envelope="env-b", position=40, subordinal=0, role="user"),
                 _line_event("unrelated-line", envelope="env-a", position=41, subordinal=0, role="user"),
+                _line_event("first-line", envelope="env-a", position=0, subordinal=0, role="user"),
             ],
             "next_cursor": None,
             "has_more": False,
@@ -762,6 +767,8 @@ async def test_workspace_places_media_on_the_event_that_owns_the_line(monkeypatc
         }
     ]
     assert events["unrelated-line"]["media_refs"] == []
+    assert [ref["sha256"] for ref in events["first-line"]["media_refs"]] == [first_line_hash]
+    assert events["first-line"]["media_refs"][0]["source_offset"] == 0
     assert catalog.calls == 1
 
 

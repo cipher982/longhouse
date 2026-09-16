@@ -107,7 +107,12 @@ def _media_refs_for_event(event: dict[str, object], by_owner: dict[tuple[str, in
     locator = event.get("raw_locator")
     if not isinstance(locator, dict) or locator.get("event_subordinal") != 0:
         return []
-    return by_owner.get((str(locator.get("source_envelope_id")), int(locator.get("source_position") or -1)), [])
+    # Zero is the first line of a transcript, so it is a position like any
+    # other; only a missing one means the event cannot own an image.
+    position = locator.get("source_position")
+    if not isinstance(position, int):
+        return []
+    return by_owner.get((str(locator.get("source_envelope_id")), position), [])
 
 
 def _event_projection(
