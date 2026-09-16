@@ -891,7 +891,7 @@ async def stream_live_catalog_machine_sessions(
     bus = get_pubsub()
     sequence = bus.peek_latest_seq(TOPIC_TIMELINE)
     previous: dict[str, str] = {}
-    yield {"event": "connected", "data": json.dumps({"source": "runtime_host"})}
+    yield {"event": "connected", "data": json.dumps({"source": "runtime_host", "stream_epoch": bus.stream_epoch})}
 
     if not skip_initial_replay:
         while True:
@@ -986,7 +986,10 @@ async def stream_live_catalog_timeline(
     previous: dict[str, str] = {}
     previous_total: int | None = None
     last_heartbeat = monotonic()
-    yield {"event": "connected", "data": json.dumps({"message": "Timeline session stream connected"})}
+    yield {
+        "event": "connected",
+        "data": json.dumps({"message": "Timeline session stream connected", "stream_epoch": bus.stream_epoch}),
+    }
 
     with bus.subscribe(TOPIC_TIMELINE, since_seq=sequence) as subscription:
         # The first snapshot either seeds the signatures behind an already

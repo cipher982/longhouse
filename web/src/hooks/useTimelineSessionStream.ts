@@ -56,6 +56,7 @@ export function useTimelineSessionStream(
   options: UseTimelineSessionStreamOptions = {},
 ) {
   const queryClient = useQueryClient();
+  const streamEpochRef = useRef<string | null>(null);
   const enabled = options.enabled !== false;
   const skipInitialReplay = options.skipInitialReplay === true;
   const skipInitialReplayRef = useRef(skipInitialReplay);
@@ -69,6 +70,16 @@ export function useTimelineSessionStream(
     return connectTimelineSessionsStream(
       filters,
       {
+        onConnected: (data) => {
+          const previousEpoch = streamEpochRef.current;
+          const nextEpoch = data.stream_epoch ?? null;
+          streamEpochRef.current = nextEpoch;
+          if (previousEpoch && nextEpoch && previousEpoch !== nextEpoch) {
+            void queryClient.invalidateQueries({
+              queryKey: ["agent-sessions", filters],
+            });
+          }
+        },
         onSessionUpsert: (event) => {
           queryClient.setQueryData<TimelineSessionsListResponse>(
             ["agent-sessions", filters],

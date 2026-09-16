@@ -5,8 +5,9 @@ import Testing
 @testable import Longhouse
 
 /// M2 "Resume correctness": the workspace stream seeds its reconnect cursor
-/// from the persisted pubsub_seq, and a 401 triggers a single auth-refresh +
-/// stream restart rather than a silent reconnect loop.
+/// only when the persisted pubsub_seq is paired with its runtime epoch, and a
+/// 401 triggers a single auth-refresh + stream restart rather than a silent
+/// reconnect loop.
 @MainActor
 struct SessionStreamResumeTests {
     /// An empty cache rooted in a throwaway directory. Passing `nil` here falls
@@ -40,6 +41,7 @@ struct SessionStreamResumeTests {
                 totalProjectionItemCount: workspace.projection.total,
                 tailSnapshotEventId: "30",
                 lastPubsubSeq: 777,
+                streamEpoch: "epoch-1",
                 workspaceRevisionFingerprint: "sha256:cached"
             )
         )
@@ -194,6 +196,7 @@ struct SessionStreamResumeTests {
                 totalProjectionItemCount: workspace.projection.total,
                 tailSnapshotEventId: "30",
                 lastPubsubSeq: 777,
+                streamEpoch: "epoch-1",
                 workspaceRevisionFingerprint: "sha256:cached-gap"
             )
         )
@@ -773,12 +776,18 @@ private actor FakeStreamResumeClient: SessionWorkspaceClient {
         return workspaces[0]
     }
 
-    func sendInput(id: String, text: String, intent: String, clientRequestId: String?) async throws -> SessionInputResponse {
+    func sendInput(id: String, text: String, intent: String, clientRequestId: String) async throws -> SessionInputResponse {
         SessionInputResponse(outcome: .sent, inputId: 1, clientRequestId: clientRequestId, intent: .auto, queued: [])
     }
 
-    func sendInputMultipart(id: String, text: String, attachments: [ComposerAttachment], clientRequestId: String?) async throws -> SessionInputResponse {
-        try await sendInput(id: id, text: text, intent: "auto", clientRequestId: clientRequestId)
+    func sendInputMultipart(
+        id: String,
+        text: String,
+        intent: String,
+        attachments: [ComposerAttachment],
+        clientRequestId: String
+    ) async throws -> SessionInputResponse {
+        try await sendInput(id: id, text: text, intent: intent, clientRequestId: clientRequestId)
     }
 
     func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async {}

@@ -1295,15 +1295,32 @@ async def _dispatch_managed_local_text(
     attachments: list[dict] | None = None,
 ) -> JSONResponse:
     """Send text to a managed-local session and return acceptance status."""
-    return await _dispatch_catalog_managed_text(
-        source_session=source_session,
-        owner_id=owner_id,
-        message=message,
-        request_id=request_id,
-        lock_scope_id=lock_scope_id,
-        db=db,
-        attachments=attachments,
-    )
+    from zerg.services.runtime_admission import runtime_admission
+
+    admitted, details = await runtime_admission().try_admit(path="/managed-control-dispatch")
+    if not admitted:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "accepted": False,
+                "error_code": details.get("code", "runtime_draining"),
+                "error": details.get("message", "Runtime is restarting"),
+                "request_id": request_id,
+                "runtime_epoch": details.get("runtime_epoch"),
+            },
+        )
+    try:
+        return await _dispatch_catalog_managed_text(
+            source_session=source_session,
+            owner_id=owner_id,
+            message=message,
+            request_id=request_id,
+            lock_scope_id=lock_scope_id,
+            db=db,
+            attachments=attachments,
+        )
+    finally:
+        await runtime_admission().release()
 
 
 def _lock_scope_id_for_session(db: Session, session_id: str) -> str:

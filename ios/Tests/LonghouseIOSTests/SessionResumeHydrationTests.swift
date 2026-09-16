@@ -217,12 +217,18 @@ private actor FakeResumeClient: SessionWorkspaceClient {
         return workspaces[0]
     }
 
-    func sendInput(id: String, text: String, intent: String, clientRequestId: String?) async throws -> SessionInputResponse {
+    func sendInput(id: String, text: String, intent: String, clientRequestId: String) async throws -> SessionInputResponse {
         SessionInputResponse(outcome: .sent, inputId: 1, clientRequestId: clientRequestId, intent: .auto, queued: [])
     }
 
-    func sendInputMultipart(id: String, text: String, attachments: [ComposerAttachment], clientRequestId: String?) async throws -> SessionInputResponse {
-        try await sendInput(id: id, text: text, intent: "auto", clientRequestId: clientRequestId)
+    func sendInputMultipart(
+        id: String,
+        text: String,
+        intent: String,
+        attachments: [ComposerAttachment],
+        clientRequestId: String
+    ) async throws -> SessionInputResponse {
+        try await sendInput(id: id, text: text, intent: intent, clientRequestId: clientRequestId)
     }
 
     func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async {}
@@ -280,12 +286,18 @@ private actor BlockingResumeClient: SessionWorkspaceClient {
         )
     }
 
-    func sendInput(id: String, text: String, intent: String, clientRequestId: String?) async throws -> SessionInputResponse {
+    func sendInput(id: String, text: String, intent: String, clientRequestId: String) async throws -> SessionInputResponse {
         SessionInputResponse(outcome: .sent, inputId: 1, clientRequestId: clientRequestId, intent: .auto, queued: [])
     }
 
-    func sendInputMultipart(id: String, text: String, attachments: [ComposerAttachment], clientRequestId: String?) async throws -> SessionInputResponse {
-        try await sendInput(id: id, text: text, intent: "auto", clientRequestId: clientRequestId)
+    func sendInputMultipart(
+        id: String,
+        text: String,
+        intent: String,
+        attachments: [ComposerAttachment],
+        clientRequestId: String
+    ) async throws -> SessionInputResponse {
+        try await sendInput(id: id, text: text, intent: intent, clientRequestId: clientRequestId)
     }
 
     func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async {}

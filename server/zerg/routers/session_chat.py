@@ -372,11 +372,11 @@ class SessionInputRequest(BaseModel):
 
     text: str = Field(..., min_length=1, max_length=10000)
     intent: InputIntent = Field(INPUT_INTENT_AUTO, description="auto | queue | steer")
-    client_request_id: str | None = Field(
-        None,
+    client_request_id: str = Field(
+        ...,
         min_length=1,
         max_length=64,
-        description="Optional client idempotency key for this submitted input",
+        description="Caller-owned idempotency key for this submitted input",
     )
     report_id: UUID | None = Field(
         None,
@@ -387,6 +387,7 @@ class SessionInputRequest(BaseModel):
 class QueuedInputSummary(BaseModel):
     id: int | None = None
     live_input_id: str | None = None
+    client_request_id: str | None = None
     text: str
     intent: InputIntent
     status: InputStatus
@@ -1372,6 +1373,7 @@ def _live_queued_summary(receipt: LiveInputReceiptSnapshot) -> QueuedInputSummar
     return QueuedInputSummary(
         id=receipt.archive_session_input_id,
         live_input_id=receipt.id,
+        client_request_id=receipt.client_request_id,
         text=receipt.text,
         intent=receipt.intent if receipt.intent in (INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE, INPUT_INTENT_STEER) else INPUT_INTENT_AUTO,
         status=receipt.status,
@@ -1460,13 +1462,6 @@ def _project_live_input_to_archive(
     )
 
 
-def _client_request_id_for_input(body: SessionInputRequest) -> str:
-    client_request_id = (body.client_request_id or "").strip()
-    if client_request_id:
-        return client_request_id
-    return uuid.uuid4().hex
-
-
 async def _finish_catalog_input_receipt(
     *,
     receipt_id: str,
@@ -1505,7 +1500,7 @@ async def _create_catalog_session_input_response(
         raise HTTPException(status_code=400, detail="report_id is only supported for Console sessions")
 
     if getattr(source_session, "command_family", None) == "console_turn":
-        client_request_id = _client_request_id_for_input(body)
+        client_request_id = body.client_request_id
         try:
             turn = await enqueue_catalog_console_turn(
                 owner_id=owner_id,
@@ -1539,20 +1534,29 @@ async def _create_catalog_session_input_response(
     if body.intent not in (INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE, INPUT_INTENT_STEER):
         raise HTTPException(status_code=400, detail=f"unknown intent: {body.intent}")
     _assert_live_session_send_available(db, source_session, owner_id=owner_id)
-    client_request_id = _client_request_id_for_input(body)
+    client_request_id = body.client_request_id
     existing = await load_live_input_receipt_by_client_request_best_effort(
         owner_id=owner_id,
         session_id=source_session.id,
         client_request_id=client_request_id,
     )
     if existing is not None:
-        if existing.text != body.text:
+        if existing.payload_digest is not None or existing.text != body.text or existing.intent != body.intent:
             raise HTTPException(
                 status_code=409,
                 detail={
                     "error_code": "input_conflict",
                     "existing_live_input_id": existing.id,
-                    "reason": "different_text",
+                    "reason": "different_payload",
+                },
+            )
+        if existing.status in (INPUT_STATUS_FAILED, INPUT_STATUS_CANCELLED):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error_code": "input_already_rejected",
+                    "existing_live_input_id": existing.id,
+                    "status": existing.status,
                 },
             )
         if existing.status in (INPUT_STATUS_DELIVERED, INPUT_STATUS_QUEUED, INPUT_STATUS_DELIVERING):

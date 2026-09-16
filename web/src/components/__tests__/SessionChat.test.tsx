@@ -516,7 +516,7 @@ describe("SessionChat", () => {
     expect(screen.queryByText(/--resume/i)).not.toBeInTheDocument();
   });
 
-  it("blocks duplicate input until a managed-local ack arrives, then refreshes all workspace caches", async () => {
+  it("blocks duplicate input until a managed-local ack arrives", async () => {
     const user = userEvent.setup();
     let resolveInput: ((value: unknown) => void) | null = null;
     const inputDeferred = new Promise((resolve) => {
@@ -527,7 +527,6 @@ describe("SessionChat", () => {
         queries: { retry: false },
       },
     });
-    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
     let lockReads = 0;
 
     requestMock.mockImplementation((path: string, init?: RequestInit) => {
@@ -580,10 +579,10 @@ describe("SessionChat", () => {
       outcome: "sent",
       input_id: 1,
       intent: "auto",
+      client_request_id: inputPayload.client_request_id,
       queued: [],
     });
 
-    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledTimes(8));
     await waitFor(() => {
       expect(screen.getByRole("textbox")).toBeEnabled();
       expect(screen.getByRole("button", { name: /waiting/i })).toBeDisabled();
@@ -598,28 +597,20 @@ describe("SessionChat", () => {
         (init as RequestInit | undefined)?.method === "POST",
     ).length;
     expect(inputPostCount).toBe(1);
-    expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: ["session-lock", "sess-1"],
-    });
-    expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: ["agent-session-workspace", "sess-1"],
-    });
   });
 
-  it("clears managed-local pending input after a sent response without waiting for durable identity", async () => {
+  it("keeps managed-local intent recoverable when a sent response lacks durable identity", async () => {
     const user = userEvent.setup();
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-      },
-    });
-    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const requestIds: string[] = [];
 
     requestMock.mockImplementation((path: string, init?: RequestInit) => {
       if (String(path).endsWith("/lock")) {
         return Promise.resolve({ locked: false, fork_available: false });
       }
       if (String(path).endsWith("/input") && init?.method === "POST") {
+        requestIds.push(
+          JSON.parse(String(init.body ?? "{}")).client_request_id,
+        );
         return Promise.resolve({
           outcome: "sent",
           input_id: 7,
@@ -630,26 +621,27 @@ describe("SessionChat", () => {
       return Promise.reject(new Error(`Unexpected request: ${path}`));
     });
 
-    renderSessionChat(
-      { chatMode: "managed_local", timelineItems: [] },
-      { queryClient },
-    );
+    renderSessionChat({ chatMode: "managed_local", timelineItems: [] });
 
     await user.type(screen.getByRole("textbox"), "Continue locally");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
     await waitFor(() =>
-      expect(invalidateSpy).toHaveBeenCalledWith({
-        queryKey: ["agent-session-workspace", "sess-1"],
-      }),
+      expect(
+        screen.getByText("Not confirmed — retry with the same request"),
+      ).toBeInTheDocument(),
     );
-    await waitFor(() => {
-      expect(screen.queryByText("Continue locally")).not.toBeInTheDocument();
-      expect(screen.queryByText("Delivering...")).not.toBeInTheDocument();
-    });
-    expect(screen.getByText("Sent")).toBeInTheDocument();
-  });
+    expect(
+      screen.getByText("Continue locally", {
+        selector: "span.session-chat-pending-message__text",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Sent")).not.toBeInTheDocument();
 
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(requestIds).toHaveLength(2));
+    expect(requestIds[1]).toBe(requestIds[0]);
+  });
   it("routes attachment-only sends through multipart with empty text", async () => {
     const user = userEvent.setup();
     let jsonCalls = 0;
@@ -667,6 +659,9 @@ describe("SessionChat", () => {
           outcome: "sent",
           input_id: 9,
           intent: "auto",
+          client_request_id: (multipartBody as FormData).get(
+            "client_request_id",
+          ),
           queued: [],
         });
       }
@@ -713,10 +708,12 @@ describe("SessionChat", () => {
       }
       if (String(path).endsWith("/input") && init?.method === "POST") {
         inputCalls += 1;
+        const payload = JSON.parse(String(init.body ?? "{}"));
         return Promise.resolve({
           outcome: "sent",
           input_id: inputCalls,
           intent: "auto",
+          client_request_id: payload.client_request_id,
           queued: [],
         });
       }
@@ -779,13 +776,16 @@ describe("SessionChat", () => {
         );
       }
       if (String(path).endsWith("/input") && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body ?? "{}"));
         return Promise.resolve({
           outcome: "queued",
           input_id: 42,
           intent: "auto",
+          client_request_id: payload.client_request_id,
           queued: [
             {
               id: 42,
+              client_request_id: payload.client_request_id,
               text: "wait for it",
               intent: "auto",
               status: "queued",
@@ -855,6 +855,7 @@ describe("SessionChat", () => {
   it("shows a persisted Console launch failure on the input instead of a request banner", async () => {
     const user = userEvent.setup();
     let inputReads = 0;
+    let failedClientRequestId: string | null = null;
     requestMock.mockImplementation((path: string, init?: RequestInit) => {
       if (String(path).endsWith("/lock")) {
         return Promise.resolve({ locked: false, fork_available: false });
@@ -868,6 +869,7 @@ describe("SessionChat", () => {
                 {
                   id: null,
                   live_input_id: "failed-console-input",
+                  client_request_id: failedClientRequestId,
                   text: "launch from missing cwd",
                   intent: "auto",
                   status: "failed",
@@ -878,6 +880,9 @@ describe("SessionChat", () => {
         );
       }
       if (String(path).endsWith("/input") && init?.method === "POST") {
+        failedClientRequestId = JSON.parse(
+          String(init.body ?? "{}"),
+        ).client_request_id;
         return Promise.reject(
           Object.assign(new Error("Request failed (502)"), {
             body: {
@@ -967,6 +972,7 @@ describe("SessionChat", () => {
             outcome: "sent",
             input_id: steerCalls,
             intent: "steer",
+            client_request_id: payload.client_request_id,
             queued: [],
           });
         }
@@ -976,6 +982,7 @@ describe("SessionChat", () => {
             outcome: "queued",
             input_id: 100 + queueCalls,
             intent: "queue",
+            client_request_id: payload.client_request_id,
             queued: [],
           });
         }
@@ -1031,6 +1038,7 @@ describe("SessionChat", () => {
           outcome: "sent",
           input_id: 44,
           intent: "steer",
+          client_request_id: payload.client_request_id,
           queued: [],
         });
       }
@@ -1083,10 +1091,12 @@ describe("SessionChat", () => {
         return Promise.resolve([]);
       }
       if (String(path).endsWith("/input") && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body ?? "{}"));
         return Promise.resolve({
           outcome: "sent",
           input_id: 45,
           intent: "steer",
+          client_request_id: payload.client_request_id,
           queued: [],
         });
       }
@@ -1167,6 +1177,7 @@ describe("SessionChat", () => {
             outcome: "queued",
             input_id: 200 + queueCalls,
             intent: "queue",
+            client_request_id: payload.client_request_id,
             queued: [],
           });
         }
@@ -1218,10 +1229,12 @@ describe("SessionChat", () => {
       }
       if (String(path).endsWith("/input") && init?.method === "POST") {
         postCalls += 1;
+        const payload = JSON.parse(String(init.body ?? "{}"));
         return Promise.resolve({
           outcome: "queued",
           input_id: postCalls,
           intent: "auto",
+          client_request_id: payload.client_request_id,
           queued: [],
         });
       }

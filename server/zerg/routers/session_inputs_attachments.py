@@ -13,6 +13,7 @@ so a leaked attachment id can never read across sessions.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import uuid
 from pathlib import Path
@@ -42,6 +43,7 @@ from zerg.metrics import session_input_attachments_total
 from zerg.models.device_token import DeviceToken
 from zerg.routers.session_chat import QueuedInputSummary
 from zerg.routers.session_chat import SessionInputResponse
+from zerg.services.live_session_inputs import load_live_input_receipt_by_client_request_best_effort
 from zerg.services.live_session_inputs import record_live_input_receipt_best_effort
 from zerg.services.managed_provider_contracts import managed_transport_for_control_plane
 from zerg.services.session_chat_impl import _assert_live_session_send_available
@@ -162,7 +164,7 @@ async def create_session_input_with_attachments(
     request: Request,
     text: str = Form("", max_length=10000),
     intent: str = Form(INPUT_INTENT_AUTO),
-    client_request_id: str | None = Form(None, max_length=64),
+    client_request_id: str = Form(..., min_length=1, max_length=64),
     attachments: List[UploadFile] = File(...),
     user_agent: str | None = Header(default=None),
     db: Session | None = Depends(no_request_db),
@@ -219,6 +221,21 @@ async def create_session_input_with_attachments(
             )
         upload_payloads.append((upload, data))
 
+    payload_hasher = hashlib.sha256()
+    payload_hasher.update(b"longhouse-input-payload-v1\0")
+    payload_hasher.update(text.encode("utf-8"))
+    payload_hasher.update(b"\0")
+    payload_hasher.update(intent.encode("utf-8"))
+    for upload, data in upload_payloads:
+        for component in (
+            upload.filename or "",
+            upload.content_type or "application/octet-stream",
+            str(len(data)),
+        ):
+            payload_hasher.update(component.encode("utf-8"))
+            payload_hasher.update(b"\0")
+        payload_hasher.update(data)
+    payload_digest = payload_hasher.hexdigest()
     try:
         source_session = _load_session_for_continuation(db, session_id, owner_id=int(current_user.id))
     except HTTPException:
@@ -238,7 +255,45 @@ async def create_session_input_with_attachments(
             detail="image attach is only supported on codex sessions",
         )
 
-    request_id = (client_request_id or "").strip() or uuid.uuid4().hex
+    request_id = client_request_id.strip()
+    if not request_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="client_request_id must not be blank",
+        )
+    existing_receipt = await load_live_input_receipt_by_client_request_best_effort(
+        owner_id=int(current_user.id),
+        session_id=source_session.id,
+        client_request_id=request_id,
+    )
+    if existing_receipt is not None:
+        if existing_receipt.payload_digest != payload_digest:
+            _record_outcome("rejected_idempotency_conflict")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error_code": "input_conflict",
+                    "reason": "different_payload",
+                    "existing_live_input_id": existing_receipt.id,
+                },
+            )
+        if existing_receipt.status in {"failed", "cancelled"}:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error_code": "input_already_rejected",
+                    "existing_live_input_id": existing_receipt.id,
+                    "status": existing_receipt.status,
+                },
+            )
+        return SessionInputResponse(
+            outcome="sent" if existing_receipt.status == "delivered" else "queued",
+            input_id=None,
+            live_input_id=existing_receipt.id,
+            client_request_id=request_id,
+            intent=existing_receipt.intent,
+            queued=[],
+        )
     delivery_request_id = uuid.uuid4().hex
     lock_scope_id = session_lock_scope_id(source_session.id)
 
@@ -269,6 +324,7 @@ async def create_session_input_with_attachments(
             intent=intent,
             status=INPUT_STATUS_DELIVERING,
             client_request_id=request_id,
+            payload_digest=payload_digest,
             delivery_request_id=delivery_request_id,
         )
         if catalog_receipt_id is None:

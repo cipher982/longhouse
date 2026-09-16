@@ -838,7 +838,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         )
     }
 
-    func sendInput(id: String, text: String, intent: String, clientRequestId: String?) async throws -> SessionInputResponse {
+    func sendInput(id: String, text: String, intent: String, clientRequestId: String) async throws -> SessionInputResponse {
         try await Task.sleep(nanoseconds: 650_000_000)
         let inputID = nextEventID
         events.append(Self.makeEvent(
@@ -881,8 +881,14 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         )
     }
 
-    func sendInputMultipart(id: String, text: String, attachments: [ComposerAttachment], clientRequestId: String?) async throws -> SessionInputResponse {
-        try await sendInput(id: id, text: text, intent: "auto", clientRequestId: clientRequestId)
+    func sendInputMultipart(
+        id: String,
+        text: String,
+        intent: String,
+        attachments: [ComposerAttachment],
+        clientRequestId: String
+    ) async throws -> SessionInputResponse {
+        try await sendInput(id: id, text: text, intent: intent, clientRequestId: clientRequestId)
     }
 
     func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async {}

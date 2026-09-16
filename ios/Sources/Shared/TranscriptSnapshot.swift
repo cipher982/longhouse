@@ -21,6 +21,9 @@ struct TranscriptSnapshot: Codable, Sendable {
     /// Last realtime pubsub seq rendered, so a reopen can seed the SSE
     /// reconnect cursor instead of replaying cold.
     var lastPubsubSeq: Int?
+    /// Epoch paired with `lastPubsubSeq`; sequence values cannot cross a
+    /// Runtime Host process restart.
+    var streamEpoch: String?
     /// Durable viewport revision this snapshot rendered. Optional so snapshots
     /// written before the handshake rollout still decode.
     var workspaceRevisionFingerprint: String?
@@ -36,6 +39,7 @@ struct TranscriptSnapshot: Codable, Sendable {
         case transcriptReadThrough
         case tailNextCursor
         case lastPubsubSeq
+        case streamEpoch
         case workspaceRevisionFingerprint
         case savedAt
     }
@@ -50,6 +54,7 @@ struct TranscriptSnapshot: Codable, Sendable {
         transcriptReadThrough: String? = nil,
         tailNextCursor: String? = nil,
         lastPubsubSeq: Int? = nil,
+        streamEpoch: String? = nil,
         workspaceRevisionFingerprint: String? = nil,
         savedAt: Date = Date()
     ) {
@@ -62,6 +67,7 @@ struct TranscriptSnapshot: Codable, Sendable {
         self.transcriptReadThrough = transcriptReadThrough
         self.tailNextCursor = tailNextCursor
         self.lastPubsubSeq = lastPubsubSeq
+        self.streamEpoch = streamEpoch
         self.workspaceRevisionFingerprint = workspaceRevisionFingerprint
         self.savedAt = savedAt
     }

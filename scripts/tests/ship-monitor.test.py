@@ -18,15 +18,22 @@ sys.modules[spec.name] = ship_monitor
 spec.loader.exec_module(ship_monitor)
 
 
-def deploy_status(demo_sha: str, canary_sha: str, *, demo_health: str = "healthy", canary_health: str = "healthy") -> str:
+def deploy_status(
+    demo_sha: str,
+    canary_sha: str,
+    *,
+    demo_health: str = "healthy",
+    canary_health: str = "healthy",
+    canary_surface: str = "Canary kernel-canary",
+) -> str:
     return f"""
 
-Surface              SHA          Health     Uptime
--------              ---          ------     ------
-Demo runtime         {demo_sha}   {demo_health}    Up 2 minutes ({demo_health})
-Control plane        f3e42620e7   ok         Up 2 days (healthy)
-Canary               {canary_sha}   {canary_health}    Up 39 seconds ({canary_health})
-Local HEAD           ac77b06d72
+Surface                  SHA          Health         Build identity                  Uptime
+-------                  ---          ------         -------------                  ------
+Demo runtime             {demo_sha}   {demo_health}  runtime-demo-v1                 Up 2 minutes ({demo_health})
+Control plane            f3e42620e7   ok             control-plane-v1                Up 2 days (healthy)
+{canary_surface}         {canary_sha}   {canary_health}  runtime-canary-v1               Up 39 seconds ({canary_health})
+Local HEAD               ac77b06d72
 
 """
 
@@ -113,10 +120,10 @@ def with_fakes(
     ship_monitor.latest_runtime_affecting_sha = lambda root, target_sha: latest_runtime_sha
 
 
-def test_runtime_reuse_does_not_require_exact_live_sha() -> None:
+def test_no_runtime_change_does_not_require_exact_live_sha() -> None:
     with_fakes(
         {
-            1: {ship_monitor.DEPLOY_AND_VERIFY_JOB: "success"},
+            1: {ship_monitor.NO_RUNTIME_CHANGE_JOB: "success"},
             2: {ship_monitor.RUNTIME_IMAGE_JOB: "skipped"},
         }
     )
@@ -132,10 +139,10 @@ def test_runtime_reuse_does_not_require_exact_live_sha() -> None:
     assert "differs from deployed demo" not in raw
 
 
-def test_runtime_reuse_accepts_deploy_stamped_target_sha() -> None:
+def test_no_runtime_change_accepts_deploy_stamped_target_sha() -> None:
     with_fakes(
         {
-            1: {ship_monitor.DEPLOY_AND_VERIFY_JOB: "success"},
+            1: {ship_monitor.NO_RUNTIME_CHANGE_JOB: "success"},
             2: {ship_monitor.RUNTIME_IMAGE_JOB: "skipped"},
         },
         latest_runtime_sha="7e917a42689f626ed83908f7ab0a6ab21c3aafc4",
@@ -151,10 +158,10 @@ def test_runtime_reuse_accepts_deploy_stamped_target_sha() -> None:
     assert errors == []
 
 
-def test_runtime_reuse_accepts_intermediate_deploy_sha() -> None:
+def test_no_runtime_change_accepts_intermediate_deploy_sha() -> None:
     with_fakes(
         {
-            1: {ship_monitor.DEPLOY_AND_VERIFY_JOB: "success"},
+            1: {ship_monitor.NO_RUNTIME_CHANGE_JOB: "success"},
             2: {ship_monitor.RUNTIME_IMAGE_JOB: "skipped"},
         },
         latest_runtime_sha="7447df0799c06120fa254f0732a7d13646562390",
@@ -176,10 +183,10 @@ def test_runtime_reuse_accepts_intermediate_deploy_sha() -> None:
     assert errors == []
 
 
-def test_runtime_reuse_accepts_intermediate_sha_when_deploy_job_is_absent() -> None:
+def test_no_runtime_change_accepts_intermediate_sha_when_deploy_job_is_absent() -> None:
     with_fakes(
         {
-            1: {},
+            1: {ship_monitor.NO_RUNTIME_CHANGE_JOB: "success"},
             2: {ship_monitor.RUNTIME_IMAGE_JOB: "skipped"},
         },
         latest_runtime_sha="7447df0799c06120fa254f0732a7d13646562390",
@@ -201,6 +208,15 @@ def test_runtime_reuse_accepts_intermediate_sha_when_deploy_job_is_absent() -> N
     assert errors == []
 
 
+def test_deploy_status_parses_component_identity() -> None:
+    surfaces = ship_monitor.parse_deploy_status(deploy_status("a" * 10, "b" * 10))
+
+    assert surfaces["Control plane"].sha == "f3e42620e7"
+    assert surfaces["Control plane"].build_identity == "control-plane-v1"
+    assert surfaces[ship_monitor.CANARY_SURFACE].sha == "bbbbbbbbbb"
+    assert surfaces[ship_monitor.CANARY_SURFACE].build_identity == "runtime-canary-v1"
+
+
 def test_runtime_publish_requires_exact_live_sha() -> None:
     with_fakes(
         {
@@ -217,7 +233,7 @@ def test_runtime_publish_requires_exact_live_sha() -> None:
     _surfaces, errors, _raw = ship_monitor.verify_live_state(ROOT, "cipher982/longhouse", "ac77b06d72", runs)
 
     assert "Demo runtime is on latest, expected ac77b06d72" in errors
-    assert "Canary is on latest, expected ac77b06d72" in errors
+    assert f"{ship_monitor.CANARY_SURFACE} is on latest, expected ac77b06d72" in errors
 
 
 def test_runtime_publish_accepts_deploy_stamped_target_sha() -> None:
@@ -275,12 +291,8 @@ def test_live_verify_retries_transient_canary_status_gap() -> None:
             },
             latest_runtime_sha="5c7933e0a4ee57329f03e23247bce26e311e3cdb",
             deploy_status_output=[
-                deploy_status("41818df9fd", "-"),
-                deploy_status("41818df9fd", "41818df9fd"),
-            ],
-            ancestry_path_shas=[
-                "5329d01c9b5265189df9164a06b128bb47df8482",
-                "41818df9fd5e381bfb12f45f9c4a5a5618c28a3d",
+                deploy_status("5329d01c9b", "-"),
+                deploy_status("5329d01c9b", "5329d01c9b"),
             ],
         )
         runs = [
@@ -301,22 +313,26 @@ def test_live_verify_retries_transient_canary_status_gap() -> None:
         ship_monitor.time.sleep = original_sleep
 
 
-def test_skipped_tip_still_requires_latest_runtime_affecting_sha() -> None:
+def test_no_runtime_change_reports_explicit_disposition_without_live_sha_requirement() -> None:
     with_fakes(
         {
-            1: {ship_monitor.DEPLOY_AND_VERIFY_JOB: "skipped"},
+            1: {ship_monitor.NO_RUNTIME_CHANGE_JOB: "success"},
         },
         latest_runtime_sha="7e917a42689f626ed83908f7ab0a6ab21c3aafc4",
         deploy_status_output=deploy_status("edb88b9ebe", "edb88b9ebe"),
     )
     runs = [
-        run_info(ship_monitor.DEPLOY_AND_VERIFY, 1, conclusion="skipped"),
+        run_info(ship_monitor.DEPLOY_AND_VERIFY, 1),
     ]
 
-    _surfaces, errors, _raw = ship_monitor.verify_live_state(ROOT, "cipher982/longhouse", "7ede50e79d", runs)
+    _surfaces, errors, _raw = ship_monitor.verify_live_state(
+        ROOT,
+        "cipher982/longhouse",
+        "7ede50e79d",
+        runs,
+    )
 
-    assert "Demo runtime is on edb88b9ebe, expected 7e917a4268" in errors
-    assert "Canary is on edb88b9ebe, expected 7e917a4268" in errors
+    assert errors == []
 
 
 def test_gate_heartbeat_names_blocking_ci_job_and_step() -> None:
@@ -442,15 +458,16 @@ def test_runtime_image_paths_include_docker_context_rules() -> None:
 
 
 if __name__ == "__main__":
-    test_runtime_reuse_does_not_require_exact_live_sha()
-    test_runtime_reuse_accepts_deploy_stamped_target_sha()
-    test_runtime_reuse_accepts_intermediate_deploy_sha()
-    test_runtime_reuse_accepts_intermediate_sha_when_deploy_job_is_absent()
+    test_no_runtime_change_does_not_require_exact_live_sha()
+    test_no_runtime_change_accepts_deploy_stamped_target_sha()
+    test_no_runtime_change_accepts_intermediate_deploy_sha()
+    test_no_runtime_change_accepts_intermediate_sha_when_deploy_job_is_absent()
     test_runtime_publish_requires_exact_live_sha()
+    test_deploy_status_parses_component_identity()
     test_runtime_publish_accepts_deploy_stamped_target_sha()
     test_live_verify_accepts_degraded_runtime_health()
     test_live_verify_retries_transient_canary_status_gap()
-    test_skipped_tip_still_requires_latest_runtime_affecting_sha()
+    test_no_runtime_change_reports_explicit_disposition_without_live_sha_requirement()
     test_gate_heartbeat_names_blocking_ci_job_and_step()
     test_core_e2e_gate_heartbeat_names_blocking_ci_job_and_step()
     test_deploy_heartbeat_names_active_deploy_step()

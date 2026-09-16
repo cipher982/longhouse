@@ -283,10 +283,10 @@ def peers(
 def send(
     session_id: str = typer.Argument(..., help="Target session UUID."),
     text: str = typer.Argument(..., help="Directed input body."),
-    client_request_id: str | None = typer.Option(
-        None,
+    client_request_id: str = typer.Option(
+        ...,
         "--client-request-id",
-        help="Optional idempotency key.",
+        help="Stable caller-owned idempotency key.",
     ),
     output_json: bool = typer.Option(
         False,
@@ -329,9 +329,8 @@ def send(
     body: dict[str, object] = {
         "target_session_id": resolved_target_session_id,
         "text": text,
+        "client_request_id": client_request_id,
     }
-    if client_request_id is not None:
-        body["client_request_id"] = client_request_id
 
     try:
         with httpx.Client(timeout=15) as client:
@@ -588,10 +587,10 @@ def inbox(
 def reply(
     input_id: int = typer.Argument(..., help="Inbound directed input id."),
     text: str = typer.Argument(..., help="Reply body."),
-    client_request_id: str | None = typer.Option(
-        None,
+    client_request_id: str = typer.Option(
+        ...,
         "--client-request-id",
-        help="Optional idempotency key.",
+        help="Stable caller-owned idempotency key.",
     ),
     output_json: bool = typer.Option(
         False,
@@ -630,9 +629,10 @@ def reply(
         guidance="Run reply inside a Longhouse-managed session.",
     )
 
-    body: dict[str, str] = {"text": text}
-    if client_request_id is not None:
-        body["client_request_id"] = client_request_id
+    body: dict[str, str] = {
+        "text": text,
+        "client_request_id": client_request_id,
+    }
 
     try:
         with httpx.Client(timeout=15) as client:

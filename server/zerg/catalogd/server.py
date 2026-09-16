@@ -66,13 +66,16 @@ class CatalogWriterStats:
     behind bulk ingest was indistinguishable from an unreachable host -- which
     is exactly how one was misdiagnosed as the other. Percentiles are exact over
     a bounded deque rather than estimated, because the interesting signal here is
-    the tail and there are few enough samples for sorting to be free.
+    the tail and there are few enough samples for sorting to be free. The
+    per-label total_exec_ms value is a monotonic lifetime cost counter; the
+    host analyzer segments it at process/container incarnations.
     """
 
     def __init__(self) -> None:
         self._queue_wait: dict[str, deque[float]] = {}
         self._exec: dict[str, deque[float]] = {}
         self._counts: dict[str, int] = {}
+        self._exec_total_ms: dict[str, float] = {}
         self._depth = 0
         self._peak_depth = 0
         self._active_label: str | None = None
@@ -113,6 +116,7 @@ class CatalogWriterStats:
             self._queue_wait.setdefault(label, deque(maxlen=_WRITER_HISTOGRAM_WINDOW)).append(queue_wait_ms)
             self._exec.setdefault(label, deque(maxlen=_WRITER_HISTOGRAM_WINDOW)).append(exec_ms)
             self._counts[label] = self._counts.get(label, 0) + 1
+            self._exec_total_ms[label] = self._exec_total_ms.get(label, 0.0) + exec_ms
             self._active_label = None
             self._active_since = None
 
@@ -132,6 +136,7 @@ class CatalogWriterStats:
             labels = {
                 label: {
                     "n": self._counts.get(label, 0),
+                    "total_exec_ms": round(self._exec_total_ms.get(label, 0.0), 2),
                     "queue_wait_ms": self._percentiles(self._queue_wait.get(label)),
                     "exec_ms": self._percentiles(self._exec.get(label)),
                 }
@@ -741,26 +746,29 @@ class CatalogDaemon:
         metadata = await self._run_control_read_store(read_catalog_meta, self._engine)
         if request.method == "ping.v2":
             writer = self._writer_stats.snapshot()
-            return CatalogRpcResponse(
-                id=request.id,
-                result={
-                    "catalog_id": str(metadata.catalog_id),
-                    "schema_generation": self._schema_generation,
-                    "schema_version": metadata.schema_version,
-                    "commit_seq": str(metadata.commit_seq),
-                    "pid": os.getpid(),
-                    "ready": True,
-                    "writer_admission": {
-                        "depth": writer["depth"],
-                        "max_depth": self._writer_max_depth,
-                        "peak_depth": writer["peak_depth"],
-                        "active_label": writer["active_label"],
-                        "active_age_ms": writer["active_age_ms"],
-                        "rejected_busy": writer["rejected_busy"],
-                        "expired_before_execution": writer["expired_before_execution"],
-                    },
+            result = {
+                "catalog_id": str(metadata.catalog_id),
+                "schema_generation": self._schema_generation,
+                "schema_version": metadata.schema_version,
+                "commit_seq": str(metadata.commit_seq),
+                "pid": os.getpid(),
+                "ready": True,
+                "writer_admission": {
+                    "depth": writer["depth"],
+                    "max_depth": self._writer_max_depth,
+                    "peak_depth": writer["peak_depth"],
+                    "active_label": writer["active_label"],
+                    "active_age_ms": writer["active_age_ms"],
+                    "rejected_busy": writer["rejected_busy"],
+                    "expired_before_execution": writer["expired_before_execution"],
                 },
-            )
+            }
+            # Keep the idle ping shape compatible with older health probes;
+            # once a write has happened, expose the bounded per-label series
+            # and cumulative execution counters for trusted operators.
+            if writer["labels"]:
+                result["writer_admission"]["labels"] = writer["labels"]
+            return CatalogRpcResponse(id=request.id, result=result)
         if request.method == "schema.v2":
             return CatalogRpcResponse(
                 id=request.id,
@@ -4852,6 +4860,7 @@ _INPUT_RECEIPT_FIELDS = {
     "intent",
     "status",
     "client_request_id",
+    "payload_digest",
     "device_id",
     "thread_id",
     "archive_session_input_id",
@@ -4905,6 +4914,8 @@ def _validate_input_attachment(value: object) -> dict:
 
 
 def _validate_input_receipt(value: object) -> dict:
+    if isinstance(value, dict) and "payload_digest" not in value:
+        value = {**value, "payload_digest": None}
     if not isinstance(value, dict) or set(value) != _INPUT_RECEIPT_FIELDS:
         raise ValueError("receipt has invalid fields")
     result = dict(value)
@@ -4928,6 +4939,9 @@ def _validate_input_receipt(value: object) -> dict:
         raw = result[field]
         if raw is not None and (not isinstance(raw, str) or not raw or len(raw) > maximum):
             raise ValueError(f"receipt.{field} must be null or contain 1 to {maximum} characters")
+    digest = result["payload_digest"]
+    if digest is not None and (not isinstance(digest, str) or len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest)):
+        raise ValueError("receipt.payload_digest must be null or lowercase sha256")
     thread_id = result["thread_id"]
     if thread_id is not None and not _is_canonical_uuid(thread_id):
         raise ValueError("receipt.thread_id must be a canonical UUID or null")

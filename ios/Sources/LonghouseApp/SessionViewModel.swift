@@ -120,6 +120,9 @@ final class SessionViewModel: ObservableObject {
     private var stream: SessionWorkspaceStreamSource?
     private var streamTask: Task<Void, Never>?
     private var streamConnected: Bool = false
+    /// The server process epoch last accepted by this route. A pubsub cursor
+    /// from another epoch cannot be used to infer transcript continuity.
+    private var streamEpoch: String?
 
     /// Guards against an auth-refresh→reconnect→401 loop: we attempt at most
     /// one refresh per stream session, reset once a connection succeeds.
@@ -133,7 +136,10 @@ final class SessionViewModel: ObservableObject {
     private var pendingRealtimeTelemetry: PendingRealtimeTelemetry?
     private var activeSessionId: String?
     private var activeServerURL: String?
-    private var lastWorkspaceEvents: [SessionEvent] = []
+    /// Auth/login generation is part of the pending-intent scope. A cookie
+    /// rotation or tenant switch must not reuse the previous route's
+    /// submitted rows or receipt reconciliation.
+    private var activeAuthGeneration: String?
     private var lastWorkspaceProjectionItems: [SessionProjectionItem] = []
     private var loadedProjectionItemCount = 0
     private var totalProjectionItemCount = 0
@@ -189,6 +195,9 @@ final class SessionViewModel: ObservableObject {
     /// Warm reopen and cold relaunch both come from here; the store owns which
     /// tier answers.
     private let snapshotStore: TranscriptSnapshotStore?
+    /// Complete outgoing intents survive process death until receipt
+    /// reconciliation proves accepted or rejected.
+    private let pendingInputStore: PendingInputStore
     private let realtimeRefreshRetryDelaysNanoseconds: [UInt64]
     private var lastPubsubSeq: Int?
     private var lastWorkspaceRevisionFingerprint: String?
@@ -206,6 +215,7 @@ final class SessionViewModel: ObservableObject {
         },
         enableRealtime: Bool = true,
         snapshotStore: TranscriptSnapshotStore? = nil,
+        pendingInputStore: PendingInputStore = .shared,
         realtimeRefreshRetryDelaysNanoseconds: [UInt64] = [
             1_000_000_000,
             2_000_000_000,
@@ -213,15 +223,18 @@ final class SessionViewModel: ObservableObject {
             10_000_000_000,
         ]
     ) {
-        self.apiFactory = apiFactory
-        self.streamFactory = streamFactory
         self.enableRealtime = enableRealtime
         self.snapshotStore = snapshotStore ?? (enableRealtime ? .shared : nil)
+        self.pendingInputStore = pendingInputStore
         self.realtimeRefreshRetryDelaysNanoseconds = realtimeRefreshRetryDelaysNanoseconds
     }
 
     func start(sessionId: String, appState: AppState) async {
+        let normalizedServerURL = TranscriptSnapshot.normalizedServerURL(appState.serverURL)
+        let authGeneration = SharedAuthStore.authGeneration(for: normalizedServerURL)
         let sessionChanged = activeSessionId != sessionId
+            || activeServerURL != normalizedServerURL
+            || activeAuthGeneration != authGeneration
         if sessionChanged {
             routeLoadGeneration &+= 1
         }
@@ -257,7 +270,8 @@ final class SessionViewModel: ObservableObject {
             hasLoadedTranscript = false
             activeSessionId = sessionId
             pendingTranscriptReadThrough = nil
-            activeServerURL = appState.serverURL
+            activeServerURL = normalizedServerURL
+            activeAuthGeneration = authGeneration
             renderedTranscriptReadThrough = nil
             isInitialLoading = true
             isTranscriptFrameReady = false
@@ -273,6 +287,23 @@ final class SessionViewModel: ObservableObject {
             subagents = []
             transcriptRowsPublishedPreview = nil
             submittedInputs = []
+            let pendingAuthGeneration = SharedAuthStore.authGeneration(for: normalizedServerURL)
+            let restoredPendingInputs = pendingInputStore.load(
+                serverURL: normalizedServerURL,
+                sessionId: sessionId,
+                authGeneration: pendingAuthGeneration
+            )
+            restorePendingInputs(restoredPendingInputs)
+            if !restoredPendingInputs.isEmpty {
+                Task { [weak self] in
+                    await self?.reconcilePendingInputs(
+                        restoredPendingInputs,
+                        sessionId: sessionId,
+                        appState: appState,
+                        authGeneration: pendingAuthGeneration
+                    )
+                }
+            }
             loadedProjectionItemCount = 0
             totalProjectionItemCount = 0
             historyFillStalledAtLoadedCount = nil
@@ -305,19 +336,13 @@ final class SessionViewModel: ObservableObject {
             cancelPrimaryDetailLoad()
             subagentsTask?.cancel()
             subagentsTask = nil
-            subagentsRequestToken &+= 1
-            subagentsRefreshPending = false
-
-            realtimeRefreshFailureCount = 0
-            errorMessage = nil
-            // Fence receipts after every transcript-reset mutation, including
-            // the final blocking-error clear above.
+            lastPubsubSeq = nil
+            lastWorkspaceRevisionFingerprint = nil
+            streamEpoch = nil
+            streamAuthRefreshAttempted = false
             transcriptRevisionFloor = transcriptRevision
             refreshErrorMessage = nil
             pauseResponseErrorMessage = nil
-            lastPubsubSeq = nil
-            lastWorkspaceRevisionFingerprint = nil
-            streamAuthRefreshAttempted = false
             // Start compact metadata and transcript networking together before
             // touching durable cache I/O. Cache hydration may still win first,
             // but a cold disk read can never delay the tail request.
@@ -398,7 +423,7 @@ final class SessionViewModel: ObservableObject {
                     startVisiblePolling(sessionId: sessionId, appState: appState)
                 }
             }
-            activeServerURL = appState.serverURL
+            activeServerURL = normalizedServerURL
             if let api = apiFactory(appState.serverURL),
                detail == nil,
                primaryDetailTask == nil {
@@ -869,20 +894,225 @@ final class SessionViewModel: ObservableObject {
         attachments: [ComposerAttachment] = []
     ) async -> Bool {
         let clientRequestId = "ios-\(UUID().uuidString)"
-        let localInput = SubmittedInput(
-            id: clientRequestId,
+        let serverURL = TranscriptSnapshot.normalizedServerURL(appState.serverURL)
+        let authGeneration = SharedAuthStore.authGeneration(for: serverURL)
+        let pending = PendingInputIntent(
             clientRequestId: clientRequestId,
+            serverURL: serverURL,
+            authGeneration: authGeneration,
+            sessionId: sessionId,
             text: text,
             intent: intent,
-            phase: .submitting,
-            serverInputId: nil,
-            lastError: nil,
+            attachments: attachments,
             createdAt: Date()
         )
-        submittedInputs.append(localInput)
-        guard let api = apiFactory(appState.serverURL) else {
+        // This synchronous atomic write is deliberately before even URL
+        // construction. A process kill or transport failure can therefore
+        // never lose the bytes needed to reconcile or explicitly retry.
+        guard pendingInputStore.save(pending) else {
+            submittedInputs.append(
+                SubmittedInput(
+                    id: clientRequestId,
+                    clientRequestId: clientRequestId,
+                    text: text,
+                    intent: intent,
+                    phase: .failed,
+                    serverInputId: nil,
+                    lastError: "Could not save this message for safe delivery.",
+                    createdAt: pending.createdAt
+                )
+            )
+            return false
+        }
+        submittedInputs.append(
+            SubmittedInput(
+                id: clientRequestId,
+                clientRequestId: clientRequestId,
+                text: text,
+                intent: intent,
+                phase: .submitting,
+                serverInputId: nil,
+                lastError: nil,
+                createdAt: pending.createdAt
+            )
+        )
+        return await dispatchPendingInput(pending, sessionId: sessionId, appState: appState)
+    }
+
+    /// Explicit retry of an unconfirmed operation. It reloads the original
+    /// bytes and keeps the same identity; no fresh UUID is ever allocated.
+    func retryPendingInput(
+        clientRequestId: String,
+        sessionId: String,
+        appState: AppState
+    ) async -> Bool {
+        let serverURL = TranscriptSnapshot.normalizedServerURL(appState.serverURL)
+        let authGeneration = SharedAuthStore.authGeneration(for: serverURL)
+        guard let pending = pendingInputStore.load(
+            serverURL: serverURL,
+            sessionId: sessionId,
+            authGeneration: authGeneration
+        ).first(where: { $0.clientRequestId == clientRequestId }),
+        let api = apiFactory(appState.serverURL)
+        else {
+            return false
+        }
+
+        // A retry is never allowed to turn an ambiguous transport result into
+        // a second side effect. First ask the authority; only an absent
+        // receipt permits the same-ID request to be sent again.
+        do {
+            if let receipt = try await api.sessionInputReceipt(
+                id: sessionId,
+                clientRequestId: pending.clientRequestId
+            ) {
+                switch receipt.disposition {
+                case .accepted:
+                    pendingInputStore.remove(pending)
+                    updateSubmittedInput(
+                        pending.clientRequestId,
+                        phase: receipt.status?.lowercased() == "queued" ? .queued : .sent,
+                        serverInputId: receipt.inputId,
+                        lastError: nil
+                    )
+                    return true
+                case .rejected:
+                    pendingInputStore.remove(pending)
+                    updateSubmittedInput(
+                        pending.clientRequestId,
+                        phase: .failed,
+                        serverInputId: receipt.inputId,
+                        lastError: receipt.error ?? "The server rejected this input."
+                    )
+                    return false
+                case .couldNotConfirm:
+                    updateSubmittedInput(
+                        pending.clientRequestId,
+                        phase: .couldNotConfirm,
+                        serverInputId: receipt.inputId,
+                        lastError: receipt.error ?? "Delivery status is not confirmed yet."
+                    )
+                    return false
+                }
+            }
+        } catch {
             updateSubmittedInput(
-                clientRequestId,
+                pending.clientRequestId,
+                phase: .couldNotConfirm,
+                serverInputId: nil,
+                lastError: "Delivery status is not confirmed yet."
+            )
+            return false
+        }
+
+        updateSubmittedInput(
+            clientRequestId,
+            phase: .submitting,
+            serverInputId: nil,
+            lastError: nil
+        )
+        return await dispatchPendingInput(pending, sessionId: sessionId, appState: appState)
+    }
+
+    private func restorePendingInputs(_ intents: [PendingInputIntent]) {
+        submittedInputs.append(contentsOf: intents.map {
+            SubmittedInput(
+                id: $0.clientRequestId,
+                clientRequestId: $0.clientRequestId,
+                text: $0.text,
+                intent: $0.intent,
+                phase: .couldNotConfirm,
+                serverInputId: nil,
+                lastError: "Delivery status is not confirmed yet.",
+                createdAt: $0.createdAt
+            )
+        })
+    }
+
+    private func reconcilePendingInputs(
+        _ intents: [PendingInputIntent],
+        sessionId: String,
+        appState: AppState,
+        authGeneration: String
+    ) async {
+        guard activeSessionId == sessionId,
+              activeServerURL == TranscriptSnapshot.normalizedServerURL(appState.serverURL),
+              SharedAuthStore.authGeneration(for: activeServerURL ?? "") == authGeneration,
+              let api = apiFactory(appState.serverURL)
+        else { return }
+        for intent in intents {
+            guard !Task.isCancelled else { return }
+            do {
+                guard let receipt = try await api.sessionInputReceipt(
+                    id: sessionId,
+                    clientRequestId: intent.clientRequestId
+                ) else {
+                    updateSubmittedInput(
+                        intent.clientRequestId,
+                        phase: .couldNotConfirm,
+                        serverInputId: nil,
+                        lastError: "Delivery status is not confirmed yet."
+                    )
+                    continue
+                }
+                switch receipt.disposition {
+                case .accepted:
+                    pendingInputStore.remove(
+                        serverURL: intent.serverURL,
+                        sessionId: intent.sessionId,
+                        authGeneration: intent.authGeneration,
+                        clientRequestId: intent.clientRequestId
+                    )
+                    updateSubmittedInput(
+                        intent.clientRequestId,
+                        phase: receipt.status?.lowercased() == "queued" ? .queued : .sent,
+                        serverInputId: receipt.inputId,
+                        lastError: nil
+                    )
+                case .rejected:
+                    pendingInputStore.remove(
+                        serverURL: intent.serverURL,
+                        sessionId: intent.sessionId,
+                        authGeneration: intent.authGeneration,
+                        clientRequestId: intent.clientRequestId
+                    )
+                    updateSubmittedInput(
+                        intent.clientRequestId,
+                        phase: .failed,
+                        serverInputId: receipt.inputId,
+                        lastError: receipt.error ?? "The server rejected this input."
+                    )
+                case .couldNotConfirm:
+                    updateSubmittedInput(
+                        intent.clientRequestId,
+                        phase: .couldNotConfirm,
+                        serverInputId: receipt.inputId,
+                        lastError: receipt.error ?? "Delivery status is not confirmed yet."
+                    )
+                }
+            } catch {
+                // A failed reconciliation is itself unconfirmed. Keep the
+                // payload and attachment bytes; a new connection retries the
+                // authority read before any side effect is sent.
+                updateSubmittedInput(
+                    intent.clientRequestId,
+                    phase: .couldNotConfirm,
+                    serverInputId: nil,
+                    lastError: "Delivery status is not confirmed yet."
+                )
+            }
+        }
+    }
+
+    private func dispatchPendingInput(
+        _ pending: PendingInputIntent,
+        sessionId: String,
+        appState: AppState
+    ) async -> Bool {
+        guard let api = apiFactory(appState.serverURL) else {
+            pendingInputStore.remove(pending)
+            updateSubmittedInput(
+                pending.clientRequestId,
                 phase: .failed,
                 serverInputId: nil,
                 lastError: "Invalid server URL"
@@ -893,21 +1123,27 @@ final class SessionViewModel: ObservableObject {
         defer { isSending = false }
         do {
             let response: SessionInputResponse
-            if attachments.isEmpty {
+            if pending.attachments.isEmpty {
                 response = try await api.sendInput(
                     id: sessionId,
-                    text: text,
-                    intent: intent,
-                    clientRequestId: clientRequestId
+                    text: pending.text,
+                    intent: pending.intent,
+                    clientRequestId: pending.clientRequestId
                 )
             } else {
-                // Server v1 multipart accepts intent=auto only; the UI gates
-                // attachments to managed Codex sessions at the composer level.
                 response = try await api.sendInputMultipart(
                     id: sessionId,
-                    text: text,
-                    attachments: attachments,
-                    clientRequestId: clientRequestId
+                    text: pending.text,
+                    intent: pending.intent,
+                    attachments: pending.composerAttachments(),
+                    clientRequestId: pending.clientRequestId
+                )
+            }
+            guard response.clientRequestId == nil
+                || response.clientRequestId == pending.clientRequestId
+            else {
+                throw LonghouseAPIError.unexpectedResponse(
+                    "Longhouse returned a different operation identity."
                 )
             }
             sendCounter &+= 1
@@ -915,8 +1151,9 @@ final class SessionViewModel: ObservableObject {
             queuedInputCount = response.pendingInputCount
             failedInputCount = response.visibleFailedInputCount
             turnEndedDraft = nil
+            pendingInputStore.remove(pending)
             updateSubmittedInput(
-                clientRequestId,
+                pending.clientRequestId,
                 phase: response.turn.map { ["starting", "active", "draining"].contains($0.state) } == true
                     ? .working
                     : (response.outcome == .sent ? .sent : .queued),
@@ -925,29 +1162,34 @@ final class SessionViewModel: ObservableObject {
                 runId: response.turn?.runId,
                 lastError: nil
             )
-            clearSupersededSubmittedInputs(text: text, keepClientRequestId: clientRequestId)
+            clearSupersededSubmittedInputs(text: pending.text, keepClientRequestId: pending.clientRequestId)
             Task { [weak self] in
                 guard let self else { return }
                 try? await self.refreshTail(api: api, sessionId: sessionId, allowFailure: true)
             }
             return true
-        } catch let LonghouseAPIError.structured(_, code, message) where intent == "steer" && code == "turn_ended" {
+        } catch let LonghouseAPIError.structured(_, code, message)
+            where pending.intent == "steer" && code == "turn_ended" {
             // Preserve the original text; the UI offers an explicit
             // "Queue instead" action. Intent is never silently mapped.
+            pendingInputStore.remove(pending)
+            let reason = message.isEmpty
+                ? "Active turn ended before your update arrived."
+                : message
             updateSubmittedInput(
-                clientRequestId,
+                pending.clientRequestId,
                 phase: .needsUserDecision,
                 serverInputId: nil,
-                lastError: message.isEmpty ? "Active turn ended before your update arrived." : message
+                lastError: reason
             )
-            turnEndedDraft = text
-            errorMessage = message.isEmpty ? "Active turn ended before your update arrived." : message
+            turnEndedDraft = pending.text
+            errorMessage = reason
             return false
         } catch {
             let failureMessage = sendFailureMessage(for: error)
             if sendConfirmationMayHaveLanded(error) {
                 updateSubmittedInput(
-                    clientRequestId,
+                    pending.clientRequestId,
                     phase: .couldNotConfirm,
                     serverInputId: nil,
                     lastError: failureMessage
@@ -956,12 +1198,23 @@ final class SessionViewModel: ObservableObject {
                 refreshErrorMessage = failureMessage
                 Task { [weak self] in
                     guard let self else { return }
+                    let normalizedServerURL = TranscriptSnapshot.normalizedServerURL(appState.serverURL)
+                    let authGeneration = SharedAuthStore.authGeneration(for: normalizedServerURL)
+                    await self.reconcilePendingInputs(
+                        [pending],
+                        sessionId: sessionId,
+                        appState: appState,
+                        authGeneration: authGeneration
+                    )
                     try? await self.refreshTail(api: api, sessionId: sessionId, allowFailure: true)
                 }
                 return false
             }
+            // Rejections and validation failures have a known disposition, so
+            // their local attachment bytes are safe to delete.
+            pendingInputStore.remove(pending)
             updateSubmittedInput(
-                clientRequestId,
+                pending.clientRequestId,
                 phase: .failed,
                 serverInputId: nil,
                 lastError: failureMessage
@@ -1378,18 +1631,18 @@ final class SessionViewModel: ObservableObject {
         streamConnected = false
         realtimeConnection = .connecting
         guard let base = URL(string: appState.serverURL) else { return }
-        // Seed the reconnect cursor from the persisted pubsub_seq so a fresh
-        // stream (e.g. after a background pause) replays buffered events from
-        // where we left off instead of cold. The server buffer is bounded
-        // (~1000 msgs, process-local) with no gap signal, so this is a latency
-        // optimization only — refreshTail() remains the correctness backstop.
+        // A sequence without its runtime epoch is not comparable to the
+        // current process. Old snapshots may predate epoch persistence, so
+        // deliberately start cold and let the durable tail provide truth.
+        let resumeSeq = streamEpoch == nil ? nil : lastPubsubSeq
         openWaterfall?.mark(
             "stream_start",
-            "since_seq=\(lastPubsubSeq ?? 0) known_fingerprint=\(lastWorkspaceRevisionFingerprint != nil)"
+            "since_seq=\(resumeSeq ?? 0) known_epoch=\(streamEpoch != nil) known_fingerprint=\(lastWorkspaceRevisionFingerprint != nil)"
         )
-        let s = streamFactory(base, sessionId, lastPubsubSeq, lastWorkspaceRevisionFingerprint)
+        let s = streamFactory(base, sessionId, resumeSeq, lastWorkspaceRevisionFingerprint)
         stream = s
         streamTask = Task { [weak self] in
+            await s.setStreamEpoch(self?.streamEpoch)
             let events = await s.start()
             for await event in events {
                 if Task.isCancelled { break }
@@ -1400,11 +1653,44 @@ final class SessionViewModel: ObservableObject {
 
     private func handleStreamEvent(_ event: SessionWorkspaceStream.Event, sessionId: String, appState: AppState) async {
         switch event {
-        case .connected:
+        case .connected(let connected):
+            let epochChanged = connected.stream_epoch != nil
+                && streamEpoch != nil
+                && connected.stream_epoch != streamEpoch
+            if let epoch = connected.stream_epoch {
+                streamEpoch = epoch
+            }
             streamConnected = true
             realtimeConnection = .connected
             streamAuthRefreshAttempted = false
-            openWaterfall?.mark("stream_connected")
+            openWaterfall?.mark(
+                "stream_connected",
+                "epoch=\(connected.stream_epoch ?? "unknown")"
+            )
+            if epochChanged {
+                // A restarted process can reuse sequence values. Discard the
+                // old cursor/fingerprint and converge from the durable tail.
+                lastPubsubSeq = nil
+                lastWorkspaceRevisionFingerprint = nil
+                if let api = apiFactory(appState.serverURL) {
+                    requestRealtimeRefresh(api: api, sessionId: sessionId)
+                }
+            }
+            let normalizedServerURL = TranscriptSnapshot.normalizedServerURL(appState.serverURL)
+            let authGeneration = SharedAuthStore.authGeneration(for: normalizedServerURL)
+            let pending = pendingInputStore.load(
+                serverURL: normalizedServerURL,
+                sessionId: sessionId,
+                authGeneration: authGeneration
+            )
+            if !pending.isEmpty {
+                await reconcilePendingInputs(
+                    pending,
+                    sessionId: sessionId,
+                    appState: appState,
+                    authGeneration: authGeneration
+                )
+            }
         case .disconnected(let error):
             streamConnected = false
             realtimeConnection = .disconnected
@@ -1425,9 +1711,22 @@ final class SessionViewModel: ObservableObject {
         case .replayGap(let gap):
             streamConnected = true
             realtimeConnection = .connected
-            openWaterfall?.mark("stream_replay_gap", "requested=\(gap.requested_seq) latest=\(gap.latest_seq)")
+            let epochChanged = gap.stream_epoch != nil
+                && streamEpoch != nil
+                && gap.stream_epoch != streamEpoch
+            if let epoch = gap.stream_epoch {
+                streamEpoch = epoch
+            }
+            openWaterfall?.mark(
+                "stream_replay_gap",
+                "requested=\(gap.requested_seq) latest=\(gap.latest_seq) reason=\(gap.reason)"
+            )
             if gap.session_id == sessionId {
-                lastPubsubSeq = gap.latest_seq > 0 ? gap.latest_seq : nil
+                // A runtime restart is an unconfirmed cursor boundary. Do not
+                // carry its sequence into the next stream; refresh truth.
+                lastPubsubSeq = epochChanged || gap.reason == "stream_epoch_changed"
+                    ? nil
+                    : (gap.latest_seq > 0 ? gap.latest_seq : nil)
                 lastWorkspaceRevisionFingerprint = nil
             }
             guard let api = apiFactory(appState.serverURL) else { return }
@@ -1435,8 +1734,18 @@ final class SessionViewModel: ObservableObject {
         case .heartbeat:
             break
         case .changed(let change):
-            if let kind = ActivityPulseStore.classify(change) {
-                activity.record(kind)
+            let epochChanged = change.stream_epoch != nil
+                && streamEpoch != nil
+                && change.stream_epoch != streamEpoch
+            if let epoch = change.stream_epoch {
+                streamEpoch = epoch
+            }
+            if epochChanged {
+                lastPubsubSeq = nil
+                lastWorkspaceRevisionFingerprint = nil
+                guard let api = apiFactory(appState.serverURL) else { return }
+                requestRealtimeRefresh(api: api, sessionId: sessionId)
+                return
             }
             // Push wakes refresh compact metadata or the transcript tail,
             // depending on whether the server says rows actually changed.
@@ -2378,6 +2687,9 @@ final class SessionViewModel: ObservableObject {
         if lastPubsubSeq == nil {
             lastPubsubSeq = snapshot.lastPubsubSeq
         }
+        if streamEpoch == nil {
+            streamEpoch = snapshot.streamEpoch
+        }
         if lastWorkspaceRevisionFingerprint == nil {
             lastWorkspaceRevisionFingerprint = snapshot.workspaceRevisionFingerprint
         }
@@ -2515,6 +2827,7 @@ final class SessionViewModel: ObservableObject {
                 transcriptReadThrough: transcriptReadThrough,
                 tailNextCursor: tailNextCursor,
                 lastPubsubSeq: lastPubsubSeq,
+                streamEpoch: streamEpoch,
                 workspaceRevisionFingerprint: lastWorkspaceRevisionFingerprint
             )
         )
@@ -2540,7 +2853,9 @@ final class SessionViewModel: ObservableObject {
         submittedInputs.removeAll { input in
             input.clientRequestId != keepClientRequestId
                 && input.text == text
-                && (input.phase == .failed || input.phase == .couldNotConfirm || input.phase == .needsUserDecision)
+                // A could-not-confirm row may already have been accepted.
+                // Keep it visible until its own receipt/event identity resolves.
+                && input.phase == .failed
         }
     }
 
@@ -2553,6 +2868,17 @@ final class SessionViewModel: ObservableObject {
             receipts: detail?.inputReceipts ?? []
         )
         if !resolved.isEmpty {
+            if let activeServerURL, let activeSessionId {
+                let authGeneration = SharedAuthStore.authGeneration(for: activeServerURL)
+                for id in resolved {
+                    pendingInputStore.remove(
+                        serverURL: activeServerURL,
+                        sessionId: activeSessionId,
+                        authGeneration: authGeneration,
+                        clientRequestId: id
+                    )
+                }
+            }
             submittedInputs.removeAll { resolved.contains($0.id) }
         }
         let userEvents = events.filter { $0.role == "user" && $0.isHeadBranch }

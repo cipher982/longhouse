@@ -3,14 +3,22 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-runtime-deploy.sh - deploy a direct Longhouse runtime service on zerg
+runtime-deploy.sh - submit an immutable hosted runtime deployment
 
 Usage:
-  ./scripts/ops/runtime-deploy.sh longhouse-demo [--timeout 900] [--docker-image IMAGE --docker-tag TAG]
+  ./scripts/ops/runtime-deploy.sh <target-name> --docker-image IMAGE --docker-tag TAG
+  ./scripts/ops/runtime-deploy.sh <target-name> --docker-ref IMAGE@sha256:DIGEST
 
-Environment:
-  RUNTIME_HOST                 SSH host for zerg. Default: runtime-host
-  LONGHOUSE_MANUAL_APPS_ROOT   Remote manual apps root. Default: /home/zerg/manual-apps
+Required environment:
+  CONTROL_PLANE_URL             Durable private deployment API base URL
+  CONTROL_PLANE_ADMIN_TOKEN     Deployment API admin token
+  INSTANCE_SUBDOMAIN            Explicit hosted target (or LH_TARGET_SUBDOMAIN)
+
+Optional metadata:
+  RUNTIME_SOURCE_SHA, RUNTIME_BUILD_IDENTITY, RUNTIME_SOURCE_WORKFLOW
+  RUNTIME_SOURCE_ORDER, RUNTIME_QUALIFICATION_ID
+  RUNTIME_SCHEMA_VERSION, RUNTIME_SCHEMA_MIN_READER, RUNTIME_SCHEMA_MAX_READER
+  RUNTIME_DEPLOYMENT_IDEMPOTENCY_KEY, RUNTIME_DEPLOYMENT_TIMEOUT
 USAGE
 }
 
@@ -18,135 +26,86 @@ APP_ID=""
 TIMEOUT="${RUNTIME_DEPLOY_TIMEOUT:-900}"
 DOCKER_IMAGE=""
 DOCKER_TAG=""
-RUNTIME_HOST="${RUNTIME_HOST:-runtime-host}"
-REMOTE_ROOT="${LONGHOUSE_MANUAL_APPS_ROOT:-/home/zerg/manual-apps}"
+DOCKER_REF=""
 
 parse_args() {
   if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     usage
     exit 0
   fi
-
   APP_ID="${1:-}"
   if [[ $# -gt 0 ]]; then
     shift
   fi
-
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --timeout)
-        TIMEOUT="${2:-}"
-        shift 2
-        ;;
-      --docker-image)
-        DOCKER_IMAGE="${2:-}"
-        shift 2
-        ;;
-      --docker-tag)
-        DOCKER_TAG="${2:-}"
-        shift 2
-        ;;
-      -h|--help)
-        usage
-        exit 0
-        ;;
-      *)
-        echo "Unknown argument: $1" >&2
-        usage >&2
-        exit 1
-        ;;
+      --timeout) TIMEOUT="${2:-}"; shift 2 ;;
+      --docker-image) DOCKER_IMAGE="${2:-}"; shift 2 ;;
+      --docker-tag) DOCKER_TAG="${2:-}"; shift 2 ;;
+      --docker-ref) DOCKER_REF="${2:-}"; shift 2 ;;
+      -h|--help) usage; exit 0 ;;
+      *) echo "Unknown argument: $1"; usage >&2; exit 1 ;;
     esac
   done
-
-  if [[ -z "$APP_ID" ]]; then
+  if [[ -z "$APP_ID" || ( -z "$DOCKER_REF" && ( -z "$DOCKER_IMAGE" || -z "$DOCKER_TAG" ) ) ]]; then
+    echo "target plus either --docker-ref or --docker-image/--docker-tag are required" >&2
     usage >&2
     exit 1
   fi
-
-  if [[ -n "$DOCKER_IMAGE" || -n "$DOCKER_TAG" ]]; then
-    if [[ -z "$DOCKER_IMAGE" || -z "$DOCKER_TAG" ]]; then
-      echo "--docker-image and --docker-tag must be provided together" >&2
-      exit 1
-    fi
-  fi
-}
-
-compose_var_for_app() {
-  case "$1" in
-    longhouse-demo)
-      echo "LONGHOUSE_DEMO_IMAGE"
-      ;;
-    longhouse-control-plane)
-      echo "LONGHOUSE_CONTROL_PLANE_IMAGE"
-      ;;
-    *)
-      echo "Unsupported runtime app: $1" >&2
-      return 1
-      ;;
-  esac
-}
-
-update_remote_image_pin() {
-  local app="$1"
-  local var_name="$2"
-  local image_ref="$3"
-  local remote_dir="${REMOTE_ROOT}/${app}"
-
-  ssh "$RUNTIME_HOST" "mkdir -p '$remote_dir' && python3 - '$remote_dir/.env' '$var_name' '$image_ref' <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-key = sys.argv[2]
-value = sys.argv[3]
-lines = path.read_text().splitlines() if path.exists() else []
-updated = False
-out = []
-for line in lines:
-    if line.startswith(f'{key}='):
-        out.append(f'{key}={value}')
-        updated = True
-    else:
-        out.append(line)
-if not updated:
-    out.append(f'{key}={value}')
-path.write_text('\n'.join(out) + '\n')
-PY"
-}
-
-wait_for_container() {
-  local app="$1"
-  local deadline=$((SECONDS + TIMEOUT))
-  local health=""
-  local state=""
-
-  while (( SECONDS < deadline )); do
-    state="$(ssh "$RUNTIME_HOST" "docker inspect '$app' --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null" || true)"
-    health="${state##* }"
-    if [[ "$state" == running* && ( "$health" == "healthy" || "$health" == "none" ) ]]; then
-      return 0
-    fi
-    sleep 5
-  done
-
-  echo "Timed out waiting for $app to become healthy" >&2
-  ssh "$RUNTIME_HOST" "docker ps --filter 'name=$app' --format '{{.Names}} {{.Status}}'; docker logs --tail 80 '$app' 2>&1" >&2 || true
-  return 1
 }
 
 main() {
   parse_args "$@"
-
-  local var_name=""
-  var_name="$(compose_var_for_app "$APP_ID")"
-
-  if [[ -n "$DOCKER_IMAGE" ]]; then
-    update_remote_image_pin "$APP_ID" "$var_name" "${DOCKER_IMAGE}:${DOCKER_TAG}"
+  # This script intentionally has no SSH, Docker, Compose, or host mutation
+  # capability. The private worker is the only deployment authority.
+  local root
+  root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+  # shellcheck source=../lib/hosted-instance.sh
+  . "$root/scripts/lib/hosted-instance.sh"
+  lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN
+  INSTANCE_SUBDOMAIN="${INSTANCE_SUBDOMAIN:-${LH_TARGET_SUBDOMAIN:-}}"
+  if [[ -z "$INSTANCE_SUBDOMAIN" ]]; then
+    echo "INSTANCE_SUBDOMAIN (explicit target) is required" >&2
+    exit 1
   fi
-
-  local remote_dir="${REMOTE_ROOT}/${APP_ID}"
-  ssh "$RUNTIME_HOST" "cd '$remote_dir' && docker compose pull && docker compose up -d --remove-orphans"
-  wait_for_container "$APP_ID"
+  lh_hosted_resolve_instance "$INSTANCE_SUBDOMAIN"
+  local image_ref=""
+  if [[ -n "$DOCKER_REF" ]]; then
+    if [[ ! "$DOCKER_REF" =~ ^.+@sha256:[0-9a-f]{64}$ ]]; then
+      echo "--docker-ref must be an immutable IMAGE@sha256:DIGEST" >&2
+      exit 1
+    fi
+    image_ref="$DOCKER_REF"
+  elif [[ "$DOCKER_TAG" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    image_ref="${DOCKER_IMAGE}@${DOCKER_TAG}"
+  else
+    image_ref="${DOCKER_IMAGE}:${DOCKER_TAG}"
+    # Resolve the publishing tag before submission. The control plane receives
+    # only the immutable digest; it never makes a deployment decision from a
+    # mutable registry tag.
+    digest="$(docker buildx imagetools inspect "$image_ref" --format '{{.Manifest.Digest}}')"
+    if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+      echo "Unable to resolve $image_ref to an immutable sha256 digest" >&2
+      exit 1
+    fi
+    image_ref="${DOCKER_IMAGE}@${digest}"
+  fi
+  # The shared hosted helper inspects this exact digest's OCI config and
+  # rejects any caller metadata that does not match its source/schema labels.
+  export LH_DEPLOYMENT_SOURCE_SHA="${RUNTIME_SOURCE_SHA:-}"
+  export LH_DEPLOYMENT_SCHEMA_VERSION="${RUNTIME_SCHEMA_VERSION:-}"
+  export LH_DEPLOYMENT_SCHEMA_MIN_READER="${RUNTIME_SCHEMA_MIN_READER:-}"
+  export LH_DEPLOYMENT_SCHEMA_MAX_READER="${RUNTIME_SCHEMA_MAX_READER:-}"
+  export LH_DEPLOYMENT_BUILD_IDENTITY="${RUNTIME_BUILD_IDENTITY:-}"
+  export LH_DEPLOYMENT_SOURCE_WORKFLOW="${RUNTIME_SOURCE_WORKFLOW:-}"
+  export LH_DEPLOYMENT_SOURCE_ORDER="${RUNTIME_SOURCE_ORDER:-}"
+  export LH_DEPLOYMENT_QUALIFICATION_ID="${RUNTIME_QUALIFICATION_ID:-}"
+  export LH_DEPLOYMENT_REASON="${RUNTIME_DEPLOYMENT_REASON:-${APP_ID} durable release}"
+  export LH_HOSTED_REPROVISION_TIMEOUT="$TIMEOUT"
+  lh_hosted_reprovision "$LH_INSTANCE_ID" "$image_ref"
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    printf 'deployment_id=%s\n' "$LH_DEPLOYMENT_ID" >> "$GITHUB_OUTPUT"
+  fi
 }
 
 main "$@"

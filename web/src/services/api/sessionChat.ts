@@ -17,6 +17,7 @@ export type SessionInputOutcome = "sent" | "queued";
 export interface QueuedInputSummary {
   id?: number | null;
   live_input_id?: string | null;
+  client_request_id?: string | null;
   text: string;
   intent: SessionInputIntent;
   status: SessionInputStatus;
@@ -44,7 +45,7 @@ export interface SessionInterruptResponse {
 
 export async function postSessionInput(
   sessionId: string,
-  body: { text: string; intent: SessionInputIntent; client_request_id?: string | null },
+  body: { text: string; intent: SessionInputIntent; client_request_id: string },
 ): Promise<SessionInputResponse> {
   return request<SessionInputResponse>(`/sessions/${sessionId}/input`, {
     method: "POST",
@@ -62,14 +63,14 @@ export async function postSessionInputMultipart(
   body: {
     text: string;
     attachments: MultipartAttachment[];
-    client_request_id?: string | null;
+    client_request_id: string;
   },
 ): Promise<SessionInputResponse> {
   // Multipart route is auto-intent only in v1; the server enforces this.
   const form = new FormData();
   form.append("text", body.text);
   form.append("intent", "auto");
-  if (body.client_request_id) form.append("client_request_id", body.client_request_id);
+  form.append("client_request_id", body.client_request_id);
   body.attachments.forEach((a) => form.append("attachments", a.blob, a.filename));
   const totalBytes = body.attachments.reduce((sum, a) => sum + a.blob.size, 0);
   const started = performance.now();

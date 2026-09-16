@@ -10,7 +10,6 @@ from typing import Any
 from typing import Literal
 from typing import Optional
 from uuid import UUID
-from uuid import uuid4
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -1673,14 +1672,14 @@ class DirectedInputCreate(UTCBaseModel):
 
     target_session_id: UUID
     text: str = Field(max_length=_DIRECTED_INPUT_MAX_CHARS)
-    client_request_id: str | None = None
+    client_request_id: str = Field(..., min_length=1, max_length=255)
 
 
 class DirectedInputReply(UTCBaseModel):
     """Reply to one inbound directed input."""
 
     text: str = Field(max_length=_DIRECTED_INPUT_MAX_CHARS)
-    client_request_id: str | None = None
+    client_request_id: str = Field(..., min_length=1, max_length=255)
 
 
 class ManagedLocalLaunchOutcomeRequest(UTCBaseModel):
@@ -1944,7 +1943,7 @@ async def _create_directed_input_for_actor(
     source_session,
     target_session_id: UUID,
     text: str,
-    client_request_id: str | None,
+    client_request_id: str,
     reply_to_id: int | None,
 ) -> dict[str, Any]:
     from zerg.services.live_control_catalog import load_live_control_session_snapshot
@@ -1966,7 +1965,7 @@ async def _create_directed_input_for_actor(
             "target_session_id": str(target_session_id),
             "text": text,
             "reply_to_id": reply_to_id,
-            "client_request_id": client_request_id or str(uuid4()),
+            "client_request_id": client_request_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
     )

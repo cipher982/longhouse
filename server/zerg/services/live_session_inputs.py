@@ -27,6 +27,10 @@ from zerg.utils.time import normalize_utc
 logger = logging.getLogger(__name__)
 
 
+class LiveInputPayloadConflict(ValueError):
+    """A request id was reused for a different semantic input."""
+
+
 @dataclass(frozen=True)
 class LiveInputReceiptSnapshot:
     id: str
@@ -37,7 +41,8 @@ class LiveInputReceiptSnapshot:
     intent: str
     status: str
     client_request_id: str | None
-    archive_session_input_id: int | None
+    payload_digest: str | None = None
+    archive_session_input_id: int | None = None
     delivery_request_id: str | None = None
     error_json: str | None = None
     created_at: datetime | None = None
@@ -69,6 +74,7 @@ def _snapshot(row: LiveSessionInputReceipt) -> LiveInputReceiptSnapshot:
         intent=str(row.intent or "auto"),
         status=str(row.status or "created"),
         client_request_id=row.client_request_id,
+        payload_digest=row.payload_digest,
         archive_session_input_id=(int(row.archive_session_input_id) if row.archive_session_input_id is not None else None),
         delivery_request_id=row.delivery_request_id,
         error_json=row.error_json,
@@ -87,6 +93,7 @@ def _snapshot_from_rpc(value: dict[str, Any]) -> LiveInputReceiptSnapshot:
         intent=str(value.get("intent") or "auto"),
         status=str(value.get("status") or "created"),
         client_request_id=value.get("client_request_id"),
+        payload_digest=value.get("payload_digest"),
         archive_session_input_id=value.get("archive_session_input_id"),
         delivery_request_id=value.get("delivery_request_id"),
         error_json=value.get("error_json"),
@@ -395,6 +402,7 @@ def upsert_live_input_receipt(
     intent: str,
     status: str,
     client_request_id: str | None,
+    payload_digest: str | None = None,
     device_id: str | None = None,
     thread_id: UUID | str | None = None,
     archive_session_input_id: int | None = None,
@@ -419,6 +427,13 @@ def upsert_live_input_receipt(
             )
             .first()
         )
+    normalized_intent = _clean_str(intent) or "auto"
+    if row is not None and (
+        row.text != str(text or "")
+        or row.intent != normalized_intent
+        or (payload_digest is not None and row.payload_digest != payload_digest)
+    ):
+        raise LiveInputPayloadConflict("client_request_id was reused with different content")
     if row is None:
         row = LiveSessionInputReceipt(id=str(uuid4()))
         db.add(row)
@@ -429,9 +444,11 @@ def upsert_live_input_receipt(
     row.provider = _clean_str(provider) or "unknown"
     row.device_id = _clean_str(device_id)
     row.client_request_id = client_key
-    row.intent = _clean_str(intent) or "auto"
+    row.intent = normalized_intent
     row.status = _clean_str(status) or "created"
     row.text = str(text or "")
+    if payload_digest is not None:
+        row.payload_digest = payload_digest
     if archive_session_input_id is not None:
         row.archive_session_input_id = int(archive_session_input_id)
     if control_command_id is not None:
@@ -453,6 +470,7 @@ async def record_live_input_receipt_best_effort(
     intent: str,
     status: str,
     client_request_id: str | None,
+    payload_digest: str | None = None,
     device_id: str | None = None,
     thread_id: UUID | str | None = None,
     archive_session_input_id: int | None = None,
@@ -483,6 +501,7 @@ async def record_live_input_receipt_best_effort(
                     "intent": intent,
                     "status": status,
                     "client_request_id": client_request_id,
+                    "payload_digest": payload_digest,
                     "device_id": device_id,
                     "thread_id": str(thread_id) if thread_id is not None else None,
                     "archive_session_input_id": archive_session_input_id,
@@ -520,6 +539,7 @@ def _record_live_input_receipt(
     enqueue_archive_projection: bool,
     error: dict[str, Any] | None,
     expires_at: datetime | None,
+    payload_digest: str | None = None,
 ) -> str:
     row = upsert_live_input_receipt(
         live_db,
@@ -529,6 +549,7 @@ def _record_live_input_receipt(
         text=text,
         intent=intent,
         status=status,
+        payload_digest=payload_digest,
         client_request_id=client_request_id,
         device_id=device_id,
         thread_id=thread_id,

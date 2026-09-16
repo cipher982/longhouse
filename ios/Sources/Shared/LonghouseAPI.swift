@@ -195,8 +195,18 @@ protocol SessionWorkspaceClient: Sendable {
         snapshotEventId: String?,
         cursor: String?
     ) async throws -> SessionMobileTailResponse
-    func sendInput(id: String, text: String, intent: String, clientRequestId: String?) async throws -> SessionInputResponse
-    func sendInputMultipart(id: String, text: String, attachments: [ComposerAttachment], clientRequestId: String?) async throws -> SessionInputResponse
+    func sendInput(id: String, text: String, intent: String, clientRequestId: String) async throws -> SessionInputResponse
+    func sendInputMultipart(
+        id: String,
+        text: String,
+        intent: String,
+        attachments: [ComposerAttachment],
+        clientRequestId: String
+    ) async throws -> SessionInputResponse
+    /// Reads the server-owned receipt for one client request identity. A nil
+    /// result means the authority could not confirm a receipt; it is never
+    /// interpreted as permission to allocate a new request ID.
+    func sessionInputReceipt(id: String, clientRequestId: String) async throws -> SessionInputReceiptState?
     func respondToPauseRequest(
         sessionId: String,
         pauseRequestId: String,
@@ -218,6 +228,25 @@ extension SessionWorkspaceClient {
     /// lightweight timeline detail route.
     func sessionDetail(id: String) async throws -> SessionDetail {
         try await sessionWorkspace(id: id, limit: 1, branchMode: "head").session
+    }
+
+    /// Older protocol doubles and cached-only fixtures have no dedicated
+    /// receipt route. Their session detail still carries the authoritative
+    /// recent receipt projection, so use it as the compatibility read.
+    func sessionInputReceipt(id: String, clientRequestId: String) async throws -> SessionInputReceiptState? {
+        let detail = try await sessionDetail(id: id)
+        guard let receipt = detail.inputReceipts?.first(where: {
+            $0.clientRequestId == clientRequestId
+        }) else {
+            return nil
+        }
+        return SessionInputReceiptState(
+            clientRequestId: clientRequestId,
+            intent: receipt.intent,
+            status: receipt.status,
+            disposition: SessionInputReceiptDisposition.from(status: receipt.status),
+            eventId: receipt.eventId
+        )
     }
 
     // Mocks/fixtures that never exercise acknowledgement inherit a no-op.
@@ -345,6 +374,12 @@ struct LonghouseAPI: Sendable {
         let decoded = try JSONDecoder.snakeCase.decode(APITimelineSessionsListResponse.self, from: data)
         return decoded.sessions.map(\.sessionSummary)
     }
+    /// The authority returns the recent receipt list; filtering by
+    /// client_request_id happens locally because this route intentionally has
+    /// no identity query parameter.
+    static func sessionInputReceiptsURL(baseURL: URL, id: String) -> URL {
+        baseURL.appendingPathComponent("/api/sessions/\(id)/inputs")
+    }
 
     static func sessionWorkspaceURL(baseURL: URL, id: String, limit: Int = 200, branchMode: String = "head") -> URL {
         var components = URLComponents(
@@ -468,6 +503,68 @@ struct LonghouseAPI: Sendable {
         }
         return try JSONDecoder.snakeCase.decode(SessionSubagentsResponse.self, from: data)
     }
+    func sessionInputReceipt(id: String, clientRequestId: String) async throws -> SessionInputReceiptState? {
+        var request = URLRequest(
+            url: Self.sessionInputReceiptsURL(baseURL: baseURL, id: id),
+            cachePolicy: .reloadIgnoringLocalCacheData
+        )
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        request.addValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        let (data, response) = try await data(for: request)
+        guard response.statusCode == 200 else {
+            // An empty/not-found receipt is an unknown outcome. Keep the
+            // durable local intent rather than treating a transport response
+            // as proof that the side effect was rejected.
+            if response.statusCode == 404 { return nil }
+            if let structured = Self.parseStructuredError(statusCode: response.statusCode, data: data) {
+                throw structured
+            }
+            throw LonghouseAPIError.from(statusCode: response.statusCode)
+        }
+        return Self.decodeInputReceiptState(data, clientRequestId: clientRequestId)
+    }
+    private static func decodeInputReceiptState(
+        _ data: Data,
+        clientRequestId: String
+    ) -> SessionInputReceiptState? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) else { return nil }
+        let records: [[String: Any]]
+        if let record = json as? [String: Any] {
+            let collection = (record["inputs"] as? [[String: Any]])
+                ?? (record["receipts"] as? [[String: Any]])
+                ?? (record["items"] as? [[String: Any]])
+            records = collection ?? [record]
+        } else {
+            records = (json as? [[String: Any]]) ?? []
+        }
+        let record = records.first { value in
+            let candidate = (value["client_request_id"] as? String)
+                ?? (value["clientRequestId"] as? String)
+            return candidate == clientRequestId
+        }
+        guard let record else { return nil }
+        let status = (record["status"] as? String)
+            ?? (record["disposition"] as? String)
+            ?? (record["outcome"] as? String)
+        let intent = (record["intent"] as? String)
+        let error = (record["error"] as? String)
+            ?? (record["last_error"] as? String)
+            ?? (record["message"] as? String)
+        let inputId = (record["input_id"] as? Int)
+            ?? (record["live_input_id"] as? Int)
+            ?? (record["id"] as? Int)
+        let eventId = (record["event_id"] as? String)
+            ?? (record["durable_event_id"] as? String)
+        return SessionInputReceiptState(
+            clientRequestId: clientRequestId,
+            intent: intent,
+            status: status,
+            disposition: SessionInputReceiptDisposition.from(status: status),
+            inputId: inputId,
+            eventId: eventId,
+            error: error
+        )
+    }
 
     func sessionMobileTail(
         id: String,
@@ -549,16 +646,17 @@ struct LonghouseAPI: Sendable {
         id: String,
         text: String,
         intent: String = "auto",
-        clientRequestId: String? = nil
+        clientRequestId: String
     ) async throws -> SessionInputResponse {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/sessions/\(id)/input"))
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
         request.addValue("application/json", forHTTPHeaderField: "Accept")
-        var body: [String: Any] = ["text": text, "intent": intent]
-        if let clientRequestId, !clientRequestId.isEmpty {
-            body["client_request_id"] = clientRequestId
-        }
+        let body: [String: Any] = [
+            "text": text,
+            "intent": intent,
+            "client_request_id": clientRequestId,
+        ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, httpResponse) = try await data(for: request)
@@ -577,17 +675,18 @@ struct LonghouseAPI: Sendable {
         id: String,
         text: String,
         intent: String = "auto",
-        clientRequestId: String? = nil,
+        clientRequestId: String,
         reportID: String?
     ) async throws -> SessionInputResponse {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/sessions/\(id)/input"))
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
         request.addValue("application/json", forHTTPHeaderField: "Accept")
-        var body: [String: Any] = ["text": text, "intent": intent]
-        if let clientRequestId, !clientRequestId.isEmpty {
-            body["client_request_id"] = clientRequestId
-        }
+        var body: [String: Any] = [
+            "text": text,
+            "intent": intent,
+            "client_request_id": clientRequestId,
+        ]
         if let reportID, !reportID.isEmpty {
             body["report_id"] = reportID
         }
@@ -651,13 +750,15 @@ struct LonghouseAPI: Sendable {
         return try JSONDecoder.snakeCase.decode(BugReportUploadResponse.self, from: data)
     }
 
-    /// Multipart POST for inputs that include image attachments. Server route
-    /// only accepts `intent=auto` in v1 (steer/queue must use the JSON endpoint).
+    /// Multipart POST for inputs that include image attachments. The intent is
+    /// carried unchanged; the server may reject unsupported intent/attachment
+    /// combinations as a known disposition rather than silently converting it.
     func sendInputMultipart(
         id: String,
         text: String,
+        intent: String = "auto",
         attachments: [ComposerAttachment],
-        clientRequestId: String? = nil
+        clientRequestId: String
     ) async throws -> SessionInputResponse {
         let boundary = "Boundary-\(UUID().uuidString)"
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/sessions/\(id)/inputs-multipart"))
@@ -668,9 +769,9 @@ struct LonghouseAPI: Sendable {
         let body = Self.buildMultipartBody(
             boundary: boundary,
             text: text,
-            intent: "auto",
+            intent: intent,
             clientRequestId: clientRequestId,
-            attachments: attachments,
+            attachments: attachments
         )
         request.httpBody = body
         let totalBytes = body.count
@@ -740,12 +841,11 @@ struct LonghouseAPI: Sendable {
         let decoded = try JSONDecoder.snakeCase.decode(APIPauseRequestResponsePayload.self, from: data)
         return PauseRequestResponse(status: decoded.status, pauseRequest: decoded.pauseRequest.sessionPauseRequest)
     }
-
     static func buildMultipartBody(
         boundary: String,
         text: String,
         intent: String,
-        clientRequestId: String?,
+        clientRequestId: String,
         attachments: [ComposerAttachment]
     ) -> Data {
         var body = Data()
@@ -761,9 +861,7 @@ struct LonghouseAPI: Sendable {
 
         appendField(name: "text", value: text)
         appendField(name: "intent", value: intent)
-        if let clientRequestId, !clientRequestId.isEmpty {
-            appendField(name: "client_request_id", value: clientRequestId)
-        }
+        appendField(name: "client_request_id", value: clientRequestId)
 
         for attachment in attachments {
             let safeFilename = sanitizeMultipartFilename(attachment.filename)

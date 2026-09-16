@@ -57,7 +57,8 @@ interface PendingManagedLocalInput {
   clientRequestId: string;
   serverInputId: number | null;
   intent: "auto" | "queue" | "steer";
-  phase: "submitting";
+  attachments: { blob: Blob; filename: string }[];
+  phase: "submitting" | "unknown";
 }
 
 interface SessionChatProps {
@@ -115,7 +116,167 @@ function newClientRequestId(): string {
   return `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
+const INPUT_OUTBOX_PREFIX = "longhouse:session-input:";
+
+interface StoredInputOutbox {
+  sessionId: string;
+  text: string;
+  intent: "auto" | "queue" | "steer";
+  clientRequestId: string;
+  attachments: { filename: string; type: string; size: number }[];
+  createdAt: number;
+}
+
+interface StoredInputOutboxPayload {
+  attachments: { filename: string; blob: Blob }[];
+}
+
+const INPUT_OUTBOX_DB = "longhouse-input-outbox";
+const INPUT_OUTBOX_STORE = "payloads";
+let inputOutboxDbPromise: Promise<IDBDatabase> | null = null;
+
+function inputOutboxKey(sessionId: string): string {
+  return `${INPUT_OUTBOX_PREFIX}${sessionId}`;
+}
+
+function openInputOutboxDb(): Promise<IDBDatabase> {
+  if (inputOutboxDbPromise) return inputOutboxDbPromise;
+  if (typeof indexedDB === "undefined") {
+
+    return Promise.reject(new Error("IndexedDB is unavailable; attachment cannot be persisted"));
+  }
+  const pending = new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open(INPUT_OUTBOX_DB, 1);
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore(INPUT_OUTBOX_STORE);
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () =>
+      reject(request.error ?? new Error("Could not open attachment storage"));
+  });
+  inputOutboxDbPromise = pending;
+  return pending;
+}
+
+async function writeInputOutboxPayload(
+  sessionId: string,
+  payload: StoredInputOutboxPayload,
+): Promise<void> {
+  const db = await openInputOutboxDb();
+  await new Promise<void>((resolve, reject) => {
+    const request = db
+      .transaction(INPUT_OUTBOX_STORE, "readwrite")
+      .objectStore(INPUT_OUTBOX_STORE)
+      .put(payload, sessionId);
+    request.onsuccess = () => resolve();
+    request.onerror = () =>
+      reject(request.error ?? new Error("Could not persist attachment payload"));
+  });
+}
+
+async function readInputOutboxPayload(
+  sessionId: string,
+): Promise<StoredInputOutboxPayload | null> {
+  const db = await openInputOutboxDb();
+  return new Promise<StoredInputOutboxPayload | null>((resolve, reject) => {
+    const request = db
+      .transaction(INPUT_OUTBOX_STORE, "readonly")
+      .objectStore(INPUT_OUTBOX_STORE)
+      .get(sessionId);
+    request.onsuccess = () =>
+      resolve(
+        (request.result as StoredInputOutboxPayload | undefined) ?? null,
+      );
+    request.onerror = () =>
+      reject(request.error ?? new Error("Could not read attachment payload"));
+  });
+}
+
+function deleteInputOutboxPayload(sessionId: string): void {
+  void openInputOutboxDb()
+    .then((db) => {
+      return new Promise<void>((resolve) => {
+        const request = db
+          .transaction(INPUT_OUTBOX_STORE, "readwrite")
+          .objectStore(INPUT_OUTBOX_STORE)
+          .delete(sessionId);
+        request.onsuccess = () => resolve();
+        request.onerror = () => resolve();
+      });
+    })
+    .catch(() => undefined);
+}
+async function persistInputOutbox(
+  sessionId: string,
+  pending: {
+    text: string;
+    intent: "auto" | "queue" | "steer";
+    clientRequestId: string;
+    attachments: { blob: Blob; filename: string }[];
+  },
+): Promise<void> {
+  if (typeof window === "undefined") {
+    throw new Error("Input storage is unavailable outside a browser");
+  }
+  const stored: StoredInputOutbox = {
+    sessionId,
+    text: pending.text,
+    intent: pending.intent,
+    clientRequestId: pending.clientRequestId,
+    attachments: pending.attachments.map(({ blob, filename }) => ({
+      filename,
+      type: blob.type || "application/octet-stream",
+      size: blob.size,
+    })),
+    createdAt: Date.now(),
+  };
+  if (pending.attachments.length > 0) {
+    await writeInputOutboxPayload(sessionId, {
+      attachments: pending.attachments.map(({ blob, filename }) => ({ blob, filename })),
+    });
+  }
+  try {
+    window.localStorage.setItem(inputOutboxKey(sessionId), JSON.stringify(stored));
+  } catch (storageError) {
+    deleteInputOutboxPayload(sessionId);
+    throw new Error("Could not persist input intent before sending", { cause: storageError });
+  }
+}
+
+function clearInputOutbox(sessionId: string): void {
+  try {
+    window.localStorage.removeItem(inputOutboxKey(sessionId));
+  } finally {
+    deleteInputOutboxPayload(sessionId);
+  }
+}
+
+function readInputOutbox(sessionId: string): StoredInputOutbox | null {
+  try {
+    const raw = window.localStorage.getItem(inputOutboxKey(sessionId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredInputOutbox;
+    if (parsed.sessionId !== sessionId || !parsed.clientRequestId) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function loadInputOutbox(
+  sessionId: string,
+): Promise<{ metadata: StoredInputOutbox; attachments: { blob: Blob; filename: string }[] } | null> {
+  const metadata = readInputOutbox(sessionId);
+  if (!metadata) return null;
+  if (metadata.attachments.length === 0) {
+    return { metadata, attachments: [] };
+  }
+  const payload = await readInputOutboxPayload(sessionId);
+  if (!payload) throw new Error("Stored attachment payload is missing");
+  return { metadata, attachments: payload.attachments };
+}
 function timelineHasDurableSubmittedInput(
+
   timelineItems: TimelineItem[],
   pendingInput: PendingManagedLocalInput,
 ): boolean {
@@ -186,6 +347,35 @@ export function SessionChat({
   const [sentConfirmation, setSentConfirmation] = useState(false);
   const [pendingManagedLocalInput, setPendingManagedLocalInput] =
     useState<PendingManagedLocalInput | null>(null);
+  useEffect(() => {
+    let mounted = true;
+    if (pendingManagedLocalInput) return;
+    void loadInputOutbox(session.id)
+      .then((stored) => {
+        if (!mounted || !stored) return;
+        setPendingManagedLocalInput({
+          text: stored.metadata.text,
+          clientRequestId: stored.metadata.clientRequestId,
+          serverInputId: null,
+          intent: stored.metadata.intent,
+          attachments: stored.attachments,
+          phase: "unknown",
+        });
+      })
+      .catch((storageError) => {
+        if (mounted) {
+          setError(
+            storageError instanceof Error
+              ? storageError.message
+              : "Could not recover the stored input",
+          );
+        }
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [pendingManagedLocalInput, session.id]);
+
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const sentConfirmationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -217,13 +407,6 @@ export function SessionChat({
 
   const refreshCurrentSessionWorkspace = useCallback(async () => {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["session-lock", session.id] }),
-      queryClient.invalidateQueries({
-        queryKey: ["agent-session-workspace", session.id],
-      }),
-      queryClient.invalidateQueries({
-        queryKey: ["agent-session", session.id],
-      }),
       queryClient.invalidateQueries({
         queryKey: ["agent-session-thread", session.id],
       }),
@@ -243,11 +426,13 @@ export function SessionChat({
   useEffect(() => {
     if (!pendingManagedLocalInput || !timelineItems) return;
     if (
+      pendingManagedLocalInput.attachments.length === 0 &&
       timelineHasDurableSubmittedInput(timelineItems, pendingManagedLocalInput)
     ) {
+      clearInputOutbox(session.id);
       setPendingManagedLocalInput(null);
     }
-  }, [pendingManagedLocalInput, timelineItems]);
+  }, [pendingManagedLocalInput, session.id, timelineItems]);
 
   const lockStatusQuery = useQuery<SessionLockInfo | null>({
     queryKey: ["session-lock", session.id],
@@ -288,33 +473,54 @@ export function SessionChat({
     enabled: Boolean(session.id) && isManagedLocal,
     retry: false,
     refetchOnWindowFocus: false,
-    // Poll while any row is queued/delivering so the UI sees drain progress.
     refetchInterval: (query) => {
       const rows = query.state.data ?? [];
       return rows.some(
-        (r) => r.status === "queued" || r.status === "delivering",
+        (row) => row.status === "queued" || row.status === "delivering",
       )
         ? 2_000
         : false;
     },
     staleTime: 10_000,
   });
-  const queuedInputs = queuedInputsQuery.data ?? [];
-  const activeQueuedInputs = queuedInputs.filter(
-    (row) => row.status === "queued" || row.status === "delivering",
-  );
-  // Exclude `steer && turn_ended` rows from the failed-chip list: the user
-  // already saw the actionable "Queue instead" prompt on the POST; showing a
-  // duplicate red "failed" chip afterward reads like a second unrelated
-  // system failure.
-  const failedInputs = queuedInputs.filter(
-    (row) =>
-      row.status === "failed" &&
-      !(row.intent === "steer" && row.last_error === "turn_ended"),
+  useEffect(() => {
+    if (!pendingManagedLocalInput || !queuedInputsQuery.data) return;
+    const receipt = queuedInputsQuery.data.find(
+      (row) =>
+        row.client_request_id === pendingManagedLocalInput.clientRequestId,
+    );
+    if (!receipt) return;
+    if (receipt.status === "failed" || receipt.status === "cancelled") {
+      clearInputOutbox(session.id);
+      setPendingManagedLocalInput(null);
+      setError(
+        receipt.last_error ||
+          (receipt.status === "cancelled"
+            ? "Input was cancelled before delivery."
+            : "Input delivery failed."),
+      );
+      return;
+    }
+    if (receipt.status === "delivered") {
+      clearInputOutbox(session.id);
+      setPendingManagedLocalInput(null);
+      return;
+    }
+    if (
+      (receipt.status === "queued" || receipt.status === "delivering") &&
+      pendingManagedLocalInput.attachments.length === 0
+    ) {
+      clearInputOutbox(session.id);
+      setPendingManagedLocalInput(null);
+    }
+  }, [pendingManagedLocalInput, queuedInputsQuery.data, session.id]);
+  const activeQueuedInputs = (queuedInputsQuery.data ?? []).filter(
+    (row) => !(row.intent === "steer" && row.last_error === "turn_ended"),
   );
   const queueFull = activeQueuedInputs.length >= 5;
-
-  // Set when the most recent send failed with turn_ended; lets the UI
+  const failedInputs = (queuedInputsQuery.data ?? []).filter(
+    (row) => row.status === "failed" || row.status === "cancelled",
+  );
   // offer a one-click "Queue instead" fallback instead of silently re-mapping
   // the user's intent.
   const [turnEndedDraft, setTurnEndedDraft] = useState<string | null>(null);
@@ -324,13 +530,31 @@ export function SessionChat({
       message: string,
       intent: "auto" | "queue" | "steer" = "auto",
       attachments: { blob: Blob; filename: string }[] = [],
+      existingClientRequestId?: string,
     ) => {
-      const clientRequestId = newClientRequestId();
+      const clientRequestId =
+        existingClientRequestId ?? newClientRequestId();
+      try {
+        await persistInputOutbox(session.id, {
+          text: message,
+          intent,
+          clientRequestId,
+          attachments,
+        });
+      } catch (storageError) {
+        setError(
+          storageError instanceof Error
+            ? storageError.message
+            : "Could not persist input intent before sending",
+        );
+        return false;
+      }
       setPendingManagedLocalInput({
         text: message,
         clientRequestId,
         serverInputId: null,
         intent,
+        attachments,
         phase: "submitting",
       });
       setIsSubmitting(true);
@@ -353,9 +577,23 @@ export function SessionChat({
           ["session-inputs", session.id],
           result.queued,
         );
-
-        setTurnEndedDraft(null);
-
+        const durableReceipt =
+          result.client_request_id === clientRequestId ||
+          result.queued.some(
+            (row) => row.client_request_id === clientRequestId,
+          );
+        if (!durableReceipt) {
+          setPendingManagedLocalInput((current) =>
+            current
+              ? {
+                  ...current,
+                  phase: "unknown",
+                }
+              : null,
+          );
+          setError(null);
+          return false;
+        }
         if (result.outcome === "sent") {
           queryClient.setQueryData<SessionLockInfo | null>(
             ["session-lock", session.id],
@@ -376,8 +614,21 @@ export function SessionChat({
           );
 
           void refreshCurrentSessionWorkspace();
+          clearInputOutbox(session.id);
           setPendingManagedLocalInput(null);
+        } else if (attachments.length > 0) {
+          setPendingManagedLocalInput((current) =>
+            current
+              ? {
+                  ...current,
+                  phase: "unknown",
+                }
+              : null,
+          );
+          setError(null);
+          return false;
         } else {
+          clearInputOutbox(session.id);
           setPendingManagedLocalInput(null);
         }
         return true;
@@ -393,7 +644,8 @@ export function SessionChat({
             refreshedInputs,
           );
           persistedFailure = refreshedInputs.some(
-            (row) => row.status === "failed" && row.text === message,
+            (row) =>
+              row.client_request_id === clientRequestId && row.status === "failed",
           );
         } catch {
           // Preserve the request error when the receipt cannot be refreshed.
@@ -416,12 +668,23 @@ export function SessionChat({
             errorBody?.detail?.message ??
               "Active turn ended before your update arrived.",
           );
+          clearInputOutbox(session.id);
+          setPendingManagedLocalInput(null);
         } else if (persistedFailure) {
+          clearInputOutbox(session.id);
           setError(null);
+          setPendingManagedLocalInput(null);
         } else {
           setError(e instanceof Error ? e.message : "Unknown error");
+          setPendingManagedLocalInput((current) =>
+            current
+              ? {
+                  ...current,
+                  phase: "unknown",
+                }
+              : null,
+          );
         }
-        setPendingManagedLocalInput(null);
         return false;
       } finally {
         setIsSubmitting(false);
@@ -1011,12 +1274,33 @@ export function SessionChat({
                   {pendingManagedLocalInput.text}
                 </span>
                 <span className="session-chat-pending-message__status">
-                  Delivering...
+                  {pendingManagedLocalInput.phase === "unknown"
+                    ? "Not confirmed — retry with the same request"
+                    : "Delivering..."}
                 </span>
-                <span
-                  className="session-chat-pending-message__spinner"
-                  aria-label="Sending"
-                />
+                {pendingManagedLocalInput.phase === "unknown" ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    disabled={isSubmitting}
+                    onClick={() =>
+                      void handleManagedLocalSend(
+                        pendingManagedLocalInput.text,
+                        pendingManagedLocalInput.intent,
+                        pendingManagedLocalInput.attachments,
+                        pendingManagedLocalInput.clientRequestId,
+                      )
+                    }
+                  >
+                    Retry
+                  </Button>
+                ) : (
+                  <span
+                    className="session-chat-pending-message__spinner"
+                    aria-label="Sending"
+                  />
+                )}
               </div>
             ) : null}
             {attachImagesEnabled ? (

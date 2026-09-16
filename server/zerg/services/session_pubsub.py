@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from collections import defaultdict
 from collections import deque
 from dataclasses import dataclass
@@ -50,6 +51,7 @@ class ReplayGap:
     earliest_seq: int | None
     latest_seq: int
     reason: str
+    stream_epoch: str = ""
 
 
 class _Subscriber:
@@ -75,6 +77,7 @@ class SessionPubsub:
     """
 
     def __init__(self, *, subscriber_queue_size: int = 256, buffer_size: int = 1000) -> None:
+        self.stream_epoch = uuid.uuid4().hex
         self._topics: dict[str, _TopicState] = defaultdict(_TopicState)
         self._subscriber_queue_size = subscriber_queue_size
         self._buffer_size = buffer_size
@@ -121,17 +124,24 @@ class SessionPubsub:
         state.subscribers.add(sub)
         return _Subscription(self, topic, sub)
 
-    def replay_gap(self, topic: str, *, since_seq: int | None) -> ReplayGap | None:
-        """Return gap metadata when `since_seq` cannot be replayed faithfully.
-
-        Pubsub seqs are process-local. If a client reconnects with a cursor from
-        an older process, or with a cursor older than the bounded ring, the live
-        stream must say so explicitly so clients can reconcile from durable DB
-        state instead of assuming the replay lane was complete.
-        """
+    def replay_gap(
+        self,
+        topic: str,
+        *,
+        since_seq: int | None,
+        stream_epoch: str | None = None,
+    ) -> ReplayGap | None:
+        """Return gap metadata when a process-local cursor is not comparable."""
         if since_seq is None or since_seq <= 0:
             return None
-
+        if stream_epoch != self.stream_epoch:
+            return ReplayGap(
+                requested_seq=since_seq,
+                earliest_seq=None,
+                latest_seq=self.peek_latest_seq(topic),
+                reason="stream_epoch_changed" if stream_epoch else "stream_epoch_unconfirmed",
+                stream_epoch=self.stream_epoch,
+            )
         state = self._topics[topic]
         latest_seq = state.buffer[-1].seq if state.buffer else max(0, state.next_seq - 1)
         if not state.buffer:
@@ -140,8 +150,8 @@ class SessionPubsub:
                 earliest_seq=None,
                 latest_seq=latest_seq,
                 reason="buffer_unavailable",
+                stream_epoch=self.stream_epoch,
             )
-
         earliest_seq = state.buffer[0].seq
         if since_seq < earliest_seq - 1:
             return ReplayGap(
@@ -149,6 +159,7 @@ class SessionPubsub:
                 earliest_seq=earliest_seq,
                 latest_seq=latest_seq,
                 reason="cursor_too_old",
+                stream_epoch=self.stream_epoch,
             )
         if since_seq > latest_seq:
             return ReplayGap(
@@ -156,6 +167,7 @@ class SessionPubsub:
                 earliest_seq=earliest_seq,
                 latest_seq=latest_seq,
                 reason="cursor_ahead",
+                stream_epoch=self.stream_epoch,
             )
         return None
 

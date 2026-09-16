@@ -577,11 +577,13 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
     async def send(
         session_id: str,
         text: str,
-        client_request_id: str | None = None,
+        client_request_id: str,
     ) -> str:
         """Send durable attributed input to another managed session.
 
         The sender session id is inferred from the current managed session.
+        ``client_request_id`` is caller-owned and must remain stable across
+        ambiguous transport retries.
         """
         if not _UUID_RE.match(session_id):
             return json.dumps({"error": "Invalid session_id format — expected UUID"})
@@ -596,9 +598,8 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         body = {
             "target_session_id": session_id,
             "text": text[:4000],
+            "client_request_id": client_request_id,
         }
-        if client_request_id is not None:
-            body["client_request_id"] = client_request_id
 
         try:
             resp = await client.post(
@@ -665,9 +666,12 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
     async def reply(
         input_id: int,
         text: str,
-        client_request_id: str | None = None,
+        client_request_id: str,
     ) -> str:
         """Reply to inbound input without copying its source session id.
+
+        ``client_request_id`` is caller-owned and must remain stable across
+        ambiguous transport retries.
 
         Args:
             input_id: Numeric Longhouse directed input id.
@@ -682,9 +686,10 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         if not coordination_token:
             return json.dumps({"error": "reply requires session-scoped coordination authority"})
 
-        body: dict[str, str] = {"text": text[:4000]}
-        if client_request_id is not None:
-            body["client_request_id"] = client_request_id
+        body: dict[str, str] = {
+            "text": text[:4000],
+            "client_request_id": client_request_id,
+        }
 
         try:
             resp = await client.post(

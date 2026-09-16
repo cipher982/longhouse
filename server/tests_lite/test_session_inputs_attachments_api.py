@@ -773,7 +773,7 @@ def test_multipart_rejects_queue_intent(monkeypatch, tmp_path):
     try:
         resp = client.post(
             f"/api/sessions/{session_id}/inputs-multipart",
-            data={"text": "queue?", "intent": "queue"},
+            data={"text": "queue?", "intent": "queue", "client_request_id": "attach-queue-reject"},
             files=[("attachments", ("a.png", io.BytesIO(_PNG_BYTES), "image/png"))],
         )
         assert resp.status_code == 400, resp.text
@@ -794,7 +794,7 @@ def test_multipart_rejects_unsupported_mime(monkeypatch, tmp_path):
     try:
         resp = client.post(
             f"/api/sessions/{session_id}/inputs-multipart",
-            data={"text": "bad type", "intent": "auto"},
+            data={"text": "bad type", "intent": "auto", "client_request_id": "attach-mime-reject"},
             files=[("attachments", ("a.txt", io.BytesIO(b"hi"), "text/plain"))],
         )
         assert resp.status_code == 400, resp.text
@@ -817,7 +817,7 @@ def test_multipart_rejects_oversize(monkeypatch, tmp_path):
     try:
         resp = client.post(
             f"/api/sessions/{session_id}/inputs-multipart",
-            data={"text": "huge", "intent": "auto"},
+            data={"text": "huge", "intent": "auto", "client_request_id": "attach-oversize-reject"},
             files=[("attachments", ("big.png", io.BytesIO(big), "image/png"))],
         )
         assert resp.status_code == 400, resp.text
@@ -831,7 +831,7 @@ def _upload_one_attachment(live_catalog, live_catalog_client, *, owner_id, email
     cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
     resp = live_catalog_client.post(
         f"/sessions/{session_id}/inputs-multipart",
-        data={"text": "look", "intent": "auto"},
+        data={"text": "look", "intent": "auto", "client_request_id": f"attach-fetch-{session_id}"},
         files=[("attachments", ("a.png", io.BytesIO(_PNG_BYTES), "image/png"))],
         cookies=cookies,
     )

@@ -7,13 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       sha:
-        description: "Commit to promote (defaults to the newest canary-verified main commit)"
-        required: false
+        description: "Exact commit SHA to promote; must have a successful canary-qualified Deploy and Verify run"
+        required: true
         type: string
 
 permissions:
   actions: read
   contents: read
+  packages: read
 
 concurrency:
   group: promote-dogfood
@@ -33,8 +34,10 @@ jobs:
 
       - name: Promote
         env:
-          GH_TOKEN: ${{ github.token }}
+          CONTROL_PLANE_URL: https://control.longhouse.ai
           CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ github.token }}
           SUBDOMAIN: ${{ vars.LONGHOUSE_DEFAULT_SUBDOMAIN }}
           REQUESTED_SHA: ${{ inputs.sha }}
-        run: ./scripts/ops/promote-dogfood.sh "${REQUESTED_SHA:-}"
+        run: ./scripts/ops/promote-dogfood.sh "${REQUESTED_SHA}"

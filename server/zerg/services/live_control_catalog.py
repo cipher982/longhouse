@@ -512,106 +512,113 @@ async def wake_next_live_catalog_input(session_id: UUID | str) -> bool:
     from zerg.services.catalogd_supervisor import get_catalogd_client
     from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
     from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
+    from zerg.services.runtime_admission import runtime_admission
     from zerg.services.session_kernel_projection import session_lock_scope_id
     from zerg.services.session_locks import session_lock_manager
 
-    catalogd = get_catalogd_client()
-    if catalogd is None:
-        return False
-
-    request_id = uuid4().hex
-    lock_scope_id = session_lock_scope_id(session_id)
-    if not await session_lock_manager.acquire(session_id=lock_scope_id, holder=request_id, ttl_seconds=300):
+    admitted, _admission = await runtime_admission().try_admit(path="background:live-input")
+    if not admitted:
         return False
     try:
-        claimed = await catalogd.call(
-            "session.input.claim.v2",
-            {"session_id": str(session_id), "delivery_request_id": request_id},
-            timeout_seconds=1.0,
-        )
-    except Exception:
-        logger.warning("Failed to claim queued catalog input for session %s", session_id, exc_info=True)
-        await session_lock_manager.release(lock_scope_id, request_id)
-        return False
-    session_payload = claimed.get("session")
-    receipt = claimed.get("receipt")
-    if claimed.get("claimed") is not True or not isinstance(session_payload, dict) or not isinstance(receipt, dict):
-        await session_lock_manager.release(lock_scope_id, request_id)
-        return False
-    session = LiveControlSession(
-        id=UUID(str(session_payload["id"])),
-        provider=str(session_payload["provider"]),
-        device_id=session_payload.get("device_id"),
-        device_name=session_payload.get("device_name"),
-        cwd=session_payload.get("cwd"),
-        project=session_payload.get("project"),
-        git_repo=session_payload.get("git_repo"),
-        git_branch=session_payload.get("git_branch"),
-        ended_at=session_payload.get("ended_at"),
-        closed_at=session_payload.get("closed_at"),
-        close_reason=session_payload.get("close_reason"),
-        permission_mode=str(session_payload.get("permission_mode") or "bypass"),
-        primary_thread_id=(UUID(str(session_payload["primary_thread_id"])) if session_payload.get("primary_thread_id") else None),
-        command_family="live_control",
-    )
+        catalogd = get_catalogd_client()
+        if catalogd is None:
+            return False
 
-    dispatched_at = datetime.now(timezone.utc)
-    result = await dispatch_managed_control_command(
-        db=None,  # type: ignore[arg-type] -- catalog mode validates through catalogd.
-        owner_id=int(receipt["owner_id"]),
-        session=session,  # type: ignore[arg-type] -- bounded DTO matches the dispatcher contract.
-        timeout_secs=15,
-        command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
-        payload={"text": str(receipt.get("text") or "")},
-        # Seed the engine command id from the durable receipt, not this
-        # attempt's claim token. Retrying a transient failure must reuse the
-        # same command id, or an ambiguous acceptance followed by a retry
-        # injects the same prompt twice.
-        request_id=str(receipt["id"]),
-        run_id=None,
-    )
-    data = dict(result.data or {})
-    if not result.ok or int(data.get("exit_code", 1)) != 0:
-        delivery_error = str(result.error or data.get("stderr") or "queued send failed")[:500]
-        # A transport that was never reachable did not reject the input; it
-        # never saw it. Returning the receipt to the queue makes an offline or
-        # briefly-disconnected machine deliver late instead of dropping the
-        # message. A provider that actually refused the input is terminal.
-        outcome = "queued" if _is_transient_delivery_failure(result) else "failed"
+        request_id = uuid4().hex
+        lock_scope_id = session_lock_scope_id(session_id)
+        if not await session_lock_manager.acquire(session_id=lock_scope_id, holder=request_id, ttl_seconds=300):
+            return False
         try:
-            await catalogd.call(
-                "session.input.finish.v2",
-                {
-                    "receipt_id": str(receipt["id"]),
-                    "delivery_request_id": request_id,
-                    "status": outcome,
-                    "error": delivery_error,
-                },
+            claimed = await catalogd.call(
+                "session.input.claim.v2",
+                {"session_id": str(session_id), "delivery_request_id": request_id},
                 timeout_seconds=1.0,
             )
-        finally:
+        except Exception:
+            logger.warning("Failed to claim queued catalog input for session %s", session_id, exc_info=True)
             await session_lock_manager.release(lock_scope_id, request_id)
-        return False
+            return False
+        session_payload = claimed.get("session")
+        receipt = claimed.get("receipt")
+        if claimed.get("claimed") is not True or not isinstance(session_payload, dict) or not isinstance(receipt, dict):
+            await session_lock_manager.release(lock_scope_id, request_id)
+            return False
+        session = LiveControlSession(
+            id=UUID(str(session_payload["id"])),
+            provider=str(session_payload["provider"]),
+            device_id=session_payload.get("device_id"),
+            device_name=session_payload.get("device_name"),
+            cwd=session_payload.get("cwd"),
+            project=session_payload.get("project"),
+            git_repo=session_payload.get("git_repo"),
+            git_branch=session_payload.get("git_branch"),
+            ended_at=session_payload.get("ended_at"),
+            closed_at=session_payload.get("closed_at"),
+            close_reason=session_payload.get("close_reason"),
+            permission_mode=str(session_payload.get("permission_mode") or "bypass"),
+            primary_thread_id=(UUID(str(session_payload["primary_thread_id"])) if session_payload.get("primary_thread_id") else None),
+            command_family="live_control",
+        )
 
-    await catalogd.call(
-        "session.input.finish.v2",
-        {
-            "receipt_id": str(receipt["id"]),
-            "delivery_request_id": request_id,
-            "status": "delivered",
-            "error": None,
-        },
-        timeout_seconds=1.0,
-    )
-    from zerg.services.session_chat_impl import _schedule_catalog_lock_release
+        dispatched_at = datetime.now(timezone.utc)
+        result = await dispatch_managed_control_command(
+            db=None,  # type: ignore[arg-type] -- catalog mode validates through catalogd.
+            owner_id=int(receipt["owner_id"]),
+            session=session,  # type: ignore[arg-type] -- bounded DTO matches the dispatcher contract.
+            timeout_secs=15,
+            command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+            payload={"text": str(receipt.get("text") or "")},
+            # Seed the engine command id from the durable receipt, not this
+            # attempt's claim token. Retrying a transient failure must reuse the
+            # same command id, or an ambiguous acceptance followed by a retry
+            # injects the same prompt twice.
+            request_id=str(receipt["id"]),
+            run_id=None,
+        )
+        data = dict(result.data or {})
+        if not result.ok or int(data.get("exit_code", 1)) != 0:
+            delivery_error = str(result.error or data.get("stderr") or "queued send failed")[:500]
+            # A transport that was never reachable did not reject the input; it
+            # never saw it. Returning the receipt to the queue makes an offline or
+            # briefly-disconnected machine deliver late instead of dropping the
+            # message. A provider that actually refused the input is terminal.
+            outcome = "queued" if _is_transient_delivery_failure(result) else "failed"
+            try:
+                await catalogd.call(
+                    "session.input.finish.v2",
+                    {
+                        "receipt_id": str(receipt["id"]),
+                        "delivery_request_id": request_id,
+                        "status": outcome,
+                        "error": delivery_error,
+                    },
+                    timeout_seconds=1.0,
+                )
+            finally:
+                await session_lock_manager.release(lock_scope_id, request_id)
+            return False
 
-    _schedule_catalog_lock_release(
-        session_id=session.id,
-        lock_scope_id=lock_scope_id,
-        request_id=request_id,
-        dispatched_at=dispatched_at,
-    )
-    return True
+        await catalogd.call(
+            "session.input.finish.v2",
+            {
+                "receipt_id": str(receipt["id"]),
+                "delivery_request_id": request_id,
+                "status": "delivered",
+                "error": None,
+            },
+            timeout_seconds=1.0,
+        )
+        from zerg.services.session_chat_impl import _schedule_catalog_lock_release
+
+        _schedule_catalog_lock_release(
+            session_id=session.id,
+            lock_scope_id=lock_scope_id,
+            request_id=request_id,
+            dispatched_at=dispatched_at,
+        )
+        return True
+    finally:
+        await runtime_admission().release()
 
 
 async def run_live_catalog_input_recovery_loop() -> None:

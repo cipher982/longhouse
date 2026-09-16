@@ -23,6 +23,8 @@ on:
       - 'deploy/zerg/**'
       - 'scripts/qa/**'
       - '.github/actions/wait-for-ci/**'
+      - 'scripts/ops/runtime-schema.py'
+      - 'scripts/ops/release-artifacts.py'
       - '.github/workflows/deploy-and-verify.yml'
       - '.github/workflows/runtime-image.yml'
   workflow_dispatch:
@@ -38,17 +40,20 @@ permissions:
   packages: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  # Each exact source SHA has its own durable deployment graph. Do not let a
+  # newer push cancel an older candidate before the control plane can order it.
+  group: deploy-${{ github.repository }}-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   changes:
     timeout-minutes: 10
+    runs-on: cube
     name: "Detect runtime deploy scope"
-    runs-on: ubuntu-latest
     outputs:
       deploy_verify: ${{ steps.decide.outputs.deploy_verify }}
       runtime_image: ${{ steps.decide.outputs.runtime_image }}
+      no_runtime_change: ${{ steps.decide.outputs.no_runtime_change }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         if: ${{ github.event_name == 'push' }}
@@ -63,17 +68,49 @@ jobs:
         id: decide
         run: |
           if [[ "${{ github.event_name }}" == "push" ]]; then
-            echo "deploy_verify=${{ steps.filter.outputs.deploy_verify }}" >> "$GITHUB_OUTPUT"
-            echo "runtime_image=${{ steps.filter.outputs.runtime_image }}" >> "$GITHUB_OUTPUT"
+            candidate_deploy="${{ steps.filter.outputs.deploy_verify }}"
+            candidate_image="${{ steps.filter.outputs.runtime_image }}"
+            if [[ "$candidate_deploy" == "true" && "$candidate_image" != "true" ]]; then
+              {
+                echo "deploy_verify=false"
+                echo "runtime_image=false"
+                echo "no_runtime_change=true"
+              } >> "$GITHUB_OUTPUT"
+              echo "::notice::No runtime image changed; this workflow records no-runtime-mutation and does not deploy mutable latest."
+            else
+              {
+                echo "deploy_verify=$candidate_deploy"
+                echo "runtime_image=$candidate_image"
+                echo "no_runtime_change=false"
+              } >> "$GITHUB_OUTPUT"
+            fi
           else
-            echo "deploy_verify=true" >> "$GITHUB_OUTPUT"
-            echo "runtime_image=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "deploy_verify=true"
+              echo "runtime_image=true"
+              echo "no_runtime_change=false"
+            } >> "$GITHUB_OUTPUT"
           fi
+
+  no_runtime_change:
+    name: "No runtime mutation required"
+    runs-on: cube
+    needs: changes
+    if: ${{ needs.changes.outputs.no_runtime_change == 'true' }}
+    steps:
+      - name: Record explicit disposition
+        run: |
+          {
+            echo "## Runtime Deploy Disposition"
+            echo ""
+            echo "No runtime image changed for this SHA; no hosted mutation was submitted."
+            echo "The mutable \`latest\` tag was not used as a release artifact."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   gate:
     timeout-minutes: 15
     name: "Resolve exact-SHA deploy metadata"
-    runs-on: ubuntu-latest
+    runs-on: cube
     needs: changes
     if: ${{ needs.changes.outputs.deploy_verify == 'true' }}
     outputs:
@@ -82,13 +119,23 @@ jobs:
       head_branch: ${{ steps.meta.outputs.head_branch }}
       runtime_image_name: ${{ steps.meta.outputs.runtime_image_name }}
       runtime_image_tag: ${{ steps.meta.outputs.runtime_image_tag }}
-      runtime_image_ref: ${{ steps.meta.outputs.runtime_image_ref }}
+      runtime_image_ref: ${{ steps.digest.outputs.image_ref }}
+      runtime_source_sha: ${{ steps.artifact_schema.outputs.source_sha }}
+      runtime_source_order: ${{ steps.source.outputs.source_order }}
+      runtime_source_workflow: ${{ steps.source.outputs.source_workflow }}
+      runtime_schema_version: ${{ steps.artifact_schema.outputs.schema_version }}
+      runtime_schema_min_reader: ${{ steps.artifact_schema.outputs.schema_min_reader }}
+      runtime_schema_max_reader: ${{ steps.artifact_schema.outputs.schema_max_reader }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30af803 # v6.1.0
         with:
-          sparse-checkout: .github/actions
+          sparse-checkout: |
+            .github/actions
+            scripts/ops/release-artifacts.py
           sparse-checkout-cone-mode: false
           fetch-depth: 1
+
+
 
       - name: Resolve target commit
         id: meta
@@ -108,11 +155,11 @@ jobs:
           fi
 
           if [[ -z "$IMAGE_TAG" ]]; then
-            if [[ "${{ needs.changes.outputs.runtime_image }}" == "true" ]]; then
-              IMAGE_TAG="$HEAD_SHA"
-            else
-              IMAGE_TAG="latest"
+            if [[ "${{ needs.changes.outputs.runtime_image }}" != "true" ]]; then
+              echo "No immutable runtime artifact is available for this SHA; no-runtime-change must remain mutation-free." >&2
+              exit 1
             fi
+            IMAGE_TAG="$HEAD_SHA"
           fi
 
           {
@@ -123,10 +170,6 @@ jobs:
             echo "runtime_image_tag=$IMAGE_TAG"
             echo "runtime_image_ref=ghcr.io/${{ github.repository_owner }}/longhouse-runtime:$IMAGE_TAG"
           } >> "$GITHUB_OUTPUT"
-
-          if [[ "${{ needs.changes.outputs.runtime_image }}" != "true" ]]; then
-            echo "::notice::No runtime image changes detected; reusing ghcr.io/${{ github.repository_owner }}/longhouse-runtime:$IMAGE_TAG for deploy/QA."
-          fi
 
       - name: Wait for core E2E gate
         if: ${{ github.event_name == 'push' && needs.changes.outputs.runtime_image == 'true' && vars.DEPLOY_WAIT_FULL_CI != 'true' }}
@@ -147,16 +190,117 @@ jobs:
           required_jobs: Backend tests,Engine tests,Core E2E tests,Accessibility E2E tests,CLI wheel packaging
           ignored_failure_jobs: OSS onboarding smoke
 
+      - name: Wait for exact runtime image publication
+        if: ${{ needs.changes.outputs.runtime_image == 'true' && github.event_name == 'push' }}
+        uses: ./.github/actions/wait-for-ci
+        with:
+          head_sha: ${{ steps.meta.outputs.head_sha }}
+          head_branch: ${{ steps.meta.outputs.head_branch }}
+          github_token: ${{ github.token }}
+          workflow_id: runtime-image.yml
+          event: ${{ github.event_name }}
+          timeout_seconds: "1200"
+
+      - name: Resolve publishing workflow order
+        if: ${{ needs.changes.outputs.runtime_image == 'true' && github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.meta.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          run_number="$(gh run list \
+            --repo "${{ github.repository }}" \
+            --workflow runtime-image.yml \
+            --commit "$SOURCE_SHA" \
+            --status success \
+            --limit 1 \
+            --json number \
+            --jq '.[0].number // empty')"
+          [[ "$run_number" =~ ^[0-9]+$ ]] || {
+            echo "No successful runtime-image publishing run for $SOURCE_SHA" >&2
+            exit 1
+          }
+          {
+            echo "source_order=$run_number"
+            echo "source_workflow=Publish Runtime Image"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify exact runtime image publication
+        if: ${{ needs.changes.outputs.runtime_image == 'true' }}
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.runtime_image_ref }}
+        run: docker manifest inspect "$IMAGE_REF" >/dev/null
+      - name: Resolve immutable runtime image digest
+        id: digest
+        env:
+          IMAGE_REF: ${{ steps.meta.outputs.runtime_image_ref }}
+        run: |
+          set -euo pipefail
+          digest="$(docker buildx imagetools inspect "$IMAGE_REF" --format '{{.Manifest.Digest}}')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "Runtime image $IMAGE_REF did not resolve to an immutable digest" >&2
+            exit 1
+          }
+          echo "image_ref=${{ steps.meta.outputs.runtime_image_name }}@$digest" >> "$GITHUB_OUTPUT"
+      - name: Resolve exact artifact catalog schema and source
+        id: artifact_schema
+        env:
+          IMAGE_REF: ${{ steps.digest.outputs.image_ref }}
+          HEAD_SHA: ${{ steps.meta.outputs.head_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          metadata="$(python3 scripts/ops/release-artifacts.py inspect --image "$IMAGE_REF")"
+          SCHEMA_METADATA="$metadata" HEAD_SHA="$HEAD_SHA" EVENT_NAME="$EVENT_NAME" python3 - "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import os
+          import re
+          import sys
+
+          metadata = json.loads(os.environ["SCHEMA_METADATA"])
+          source_sha = metadata.get("source_sha")
+          if not isinstance(source_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+              raise SystemExit("selected immutable image has no full source revision label; bootstrap historical images before deployment")
+          if os.environ["EVENT_NAME"] == "push" and source_sha != os.environ["HEAD_SHA"]:
+              raise SystemExit(
+                  f"selected immutable image source {source_sha} does not match workflow SHA {os.environ['HEAD_SHA']}"
+              )
+          with open(sys.argv[1], "a", encoding="utf-8") as output:
+              print(f"source_sha={source_sha}", file=output)
+              for name in ("schema_version", "schema_min_reader", "schema_max_reader"):
+                  value = metadata.get(name)
+                  if type(value) is not int or value < 0:
+                      raise SystemExit(f"artifact schema metadata {name} is not a non-negative integer")
+                  print(f"{name}={value}", file=output)
+          PY
+
+
   deploy_demo:
     name: "Deploy public demo runtime"
     runs-on: cube-deploy
     if: github.repository == 'cipher982/longhouse'
     timeout-minutes: 60
-    needs: [changes, gate]
+    needs: [changes, gate, fast_smoke]
+    outputs:
+      deployment_id: ${{ steps.submit_demo.outputs.deployment_id }}
     env:
       PUBLIC_DEMO_URL: https://longhouse.ai
-      RUNTIME_HOST: ${{ secrets.DEPLOY_RUNTIME_HOST }}
-
+      # The public demo is a real hosted tenant managed by the primary
+      # control-plane authority, never the isolated canary control plane.
+      CONTROL_PLANE_URL: https://control.longhouse.ai
+      CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
+      INSTANCE_SUBDOMAIN: demo
+      RUNTIME_SOURCE_SHA: ${{ needs.gate.outputs.runtime_source_sha }}
+      RUNTIME_SOURCE_WORKFLOW: ${{ needs.gate.outputs.runtime_source_workflow }}
+      RUNTIME_SOURCE_ORDER: ${{ needs.gate.outputs.runtime_source_order }}
+      RUNTIME_SCHEMA_VERSION: ${{ needs.gate.outputs.runtime_schema_version }}
+      RUNTIME_SCHEMA_MIN_READER: ${{ needs.gate.outputs.runtime_schema_min_reader }}
+      RUNTIME_SCHEMA_MAX_READER: ${{ needs.gate.outputs.runtime_schema_max_reader }}
+      REGISTRY_USERNAME: ${{ github.actor }}
+      REGISTRY_PASSWORD: ${{ github.token }}
+      RUNTIME_DEPLOYMENT_IDEMPOTENCY_KEY: deploy-and-verify-${{ github.run_id }}-${{ github.run_attempt }}-demo
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -165,53 +309,18 @@ jobs:
           filter: blob:none
           show-progress: false
 
-      - name: Setup SSH
-        env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_HOST: ${{ secrets.DEPLOY_COOLIFY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_SSH_USER }}
-          RUNTIME_HOST: ${{ secrets.DEPLOY_RUNTIME_HOST }}
-          RUNTIME_USER: ${{ secrets.DEPLOY_RUNTIME_USER || 'zerg' }}
-        run: ./scripts/ci/setup-deploy-ssh.sh
 
-      - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Wait for runtime image publish
-        if: ${{ needs.changes.outputs.runtime_image == 'true' }}
-        uses: ./.github/actions/wait-for-ci
-        with:
-          head_sha: ${{ needs.gate.outputs.head_sha }}
-          head_branch: ${{ needs.gate.outputs.head_branch }}
-          github_token: ${{ github.token }}
-          workflow_id: runtime-image.yml
-          event: ${{ github.event_name }}
-          timeout_seconds: "1200"
 
       - name: Verify runtime image exists
         run: docker manifest inspect "${{ needs.gate.outputs.runtime_image_ref }}" >/dev/null
 
-      - name: Deploy public demo runtime
-        env:
-          RUNTIME_HOST: runtime-host
+      - name: Submit public demo deployment
+        id: submit_demo
         run: |
           ./scripts/ops/runtime-deploy.sh \
             longhouse-demo \
-            --docker-image "${{ needs.gate.outputs.runtime_image_name }}" \
-            --docker-tag "${{ needs.gate.outputs.runtime_image_tag }}" \
+            --docker-ref "${{ needs.gate.outputs.runtime_image_ref }}" \
             --timeout 900
-
-      - name: Wait for public demo runtime image
-        run: |
-          . scripts/lib/hosted-instance.sh
-          lh_wait_for_runtime_image \
-            "$PUBLIC_DEMO_URL" \
-            "${{ needs.gate.outputs.runtime_image_ref }}" \
-            240
 
   reprovision_canary:
     name: "Reprovision hosted canary"
@@ -219,15 +328,19 @@ jobs:
     if: github.repository == 'cipher982/longhouse'
     timeout-minutes: 60
     needs: [changes, gate]
-    outputs:
-      instance_id: ${{ steps.instance.outputs.instance_id }}
-      instance_url: ${{ steps.instance.outputs.instance_url }}
-      frontend_url: ${{ steps.instance.outputs.frontend_url }}
-      api_url: ${{ steps.instance.outputs.api_url }}
     env:
       CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.HOSTED_CANARY_CONTROL_PLANE_ADMIN_TOKEN }}
       CONTROL_PLANE_URL: ${{ vars.HOSTED_CANARY_CONTROL_PLANE_URL }}
       INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
+      LH_DEPLOYMENT_SOURCE_SHA: ${{ needs.gate.outputs.runtime_source_sha }}
+      LH_DEPLOYMENT_SOURCE_WORKFLOW: ${{ needs.gate.outputs.runtime_source_workflow }}
+      LH_DEPLOYMENT_SOURCE_ORDER: ${{ needs.gate.outputs.runtime_source_order }}
+      LH_DEPLOYMENT_SCHEMA_VERSION: ${{ needs.gate.outputs.runtime_schema_version }}
+      LH_DEPLOYMENT_SCHEMA_MIN_READER: ${{ needs.gate.outputs.runtime_schema_min_reader }}
+      LH_DEPLOYMENT_SCHEMA_MAX_READER: ${{ needs.gate.outputs.runtime_schema_max_reader }}
+      LH_DEPLOYMENT_IDEMPOTENCY_KEY: deploy-and-verify-${{ github.run_id }}-${{ github.run_attempt }}-canary
+      REGISTRY_USERNAME: ${{ github.actor }}
+      REGISTRY_PASSWORD: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -245,17 +358,6 @@ jobs:
             echo "Refusing automated reprovision of personal dogfood or public demo; configure a dedicated hosted canary." >&2
             exit 1
           fi
-
-      - name: Wait for runtime image publish
-        if: ${{ needs.changes.outputs.runtime_image == 'true' }}
-        uses: ./.github/actions/wait-for-ci
-        with:
-          head_sha: ${{ needs.gate.outputs.head_sha }}
-          head_branch: ${{ needs.gate.outputs.head_branch }}
-          github_token: ${{ github.token }}
-          workflow_id: runtime-image.yml
-          event: ${{ github.event_name }}
-          timeout_seconds: "1200"
 
       - name: Wait for control plane
         run: ./scripts/ci/wait-for-http.sh "$CONTROL_PLANE_URL/health" "Control plane"
@@ -279,16 +381,16 @@ jobs:
           lh_hosted_reprovision "${{ steps.instance.outputs.instance_id }}" "${{ needs.gate.outputs.runtime_image_ref }}"
 
   fast_smoke:
-    name: "Fast smoke"
+    name: "Canary qualification smoke"
     runs-on: cube-deploy
     if: github.repository == 'cipher982/longhouse'
     timeout-minutes: 20
-    needs: [gate, deploy_demo, reprovision_canary]
+    needs: [gate, reprovision_canary]
     env:
       CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.HOSTED_CANARY_CONTROL_PLANE_ADMIN_TOKEN }}
       CONTROL_PLANE_URL: ${{ vars.HOSTED_CANARY_CONTROL_PLANE_URL }}
       SMOKE_RUNTIME_TOKEN: ${{ secrets.HOSTED_CANARY_RUNTIME_TOKEN }}
-      PUBLIC_DEMO_URL: https://longhouse.ai
+      PUBLIC_DEMO_URL: ${{ needs.reprovision_canary.outputs.instance_url }}
       INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
       API_URL: ${{ needs.reprovision_canary.outputs.api_url }}
       FRONTEND_URL: ${{ needs.reprovision_canary.outputs.frontend_url }}
@@ -302,9 +404,8 @@ jobs:
           filter: blob:none
           show-progress: false
 
-      - name: Wait for public demo, control plane, and hosted canary
+      - name: Wait for control plane and hosted canary
         run: |
-          ./scripts/ci/wait-for-http.sh "$PUBLIC_DEMO_URL/api/health" "Public demo runtime"
           ./scripts/ci/wait-for-http.sh "$CONTROL_PLANE_URL/health" "Control plane"
           ./scripts/ci/wait-for-http.sh "$API_URL/api/health" "Hosted canary"
 
@@ -319,15 +420,14 @@ jobs:
         if: always()
         run: |
           {
-            echo "## Runtime Deploy + Verify Results"
+            echo "## Canary Qualification Results"
             echo ""
             echo "- **Hosted canary:** $INSTANCE_SUBDOMAIN"
             echo "- **Hosted canary URL:** $INSTANCE_URL"
-            echo "- **Public demo:** $PUBLIC_DEMO_URL"
             echo "- **Control plane:** $CONTROL_PLANE_URL"
             echo "- **Commit:** ${{ needs.gate.outputs.head_sha }}"
-            echo "- **Demo image:** \`${{ needs.gate.outputs.runtime_image_name }}:${{ needs.gate.outputs.runtime_image_tag }}\`"
-            echo "- **fast smoke:** \`${{ steps.fast_smoke.outcome || 'skipped' }}\`"
+            echo "- **Candidate image:** \`${{ needs.gate.outputs.runtime_image_name }}:${{ needs.gate.outputs.runtime_image_tag }}\`"
+            echo "- **canary smoke:** \`${{ steps.fast_smoke.outcome || 'skipped' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload live QA artifacts
@@ -363,23 +463,36 @@ jobs:
 
           Check the workflow logs for which step failed.
           EOF_BODY
-          )" \
-            --label "deploy-failure"
-
+          )"
   hosted_live_qa:
-    name: "Hosted live QA"
-    needs: [gate, fast_smoke]
+    name: "Dispatch hosted live QA (async)"
+    needs: [gate, fast_smoke, deploy_demo]
     if: github.repository == 'cipher982/longhouse'
-    uses: ./.github/workflows/hosted-live-qa.yml
-    with:
-      source_sha: ${{ needs.gate.outputs.head_sha }}
-      runtime_image_tag: ${{ needs.gate.outputs.runtime_image_tag }}
-    secrets: inherit
+    runs-on: cube-deploy
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Dispatch durable hosted QA observer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.gate.outputs.head_sha }}
+          RUNTIME_IMAGE_TAG: ${{ needs.gate.outputs.runtime_image_tag }}
+          DEPLOYMENT_ID: ${{ needs.deploy_demo.outputs.deployment_id }}
+        run: |
+          set -euo pipefail
+          gh workflow run hosted-live-qa.yml \
+            --repo "${{ github.repository }}" \
+            --ref "$SOURCE_SHA" \
+            -f source_sha="$SOURCE_SHA" \
+            -f runtime_image_tag="$RUNTIME_IMAGE_TAG" \
+            -f deployment_id="$DEPLOYMENT_ID"
+          echo "Dispatched hosted-live-qa for deployment receipt $DEPLOYMENT_ID"
 
   profile-deploy:
     timeout-minutes: 30
     name: "Profile deploy wall time"
-    runs-on: ubuntu-latest
+    runs-on: cube
     needs: [changes, deploy_demo, reprovision_canary, fast_smoke]
     if: ${{ always() && needs.changes.outputs.deploy_verify == 'true' }}
     steps:

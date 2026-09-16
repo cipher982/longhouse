@@ -40,6 +40,9 @@ actor SessionWorkspaceStream {
     struct Connected: Decodable, Sendable {
         let session_id: String
         let server_now_ms: Int64?
+        /// Process/runtime epoch. Pubsub sequence numbers are only
+        /// comparable inside this epoch.
+        let stream_epoch: String? = nil
     }
 
     struct WorkspaceChanged: Decodable, Sendable {
@@ -92,6 +95,7 @@ actor SessionWorkspaceStream {
         let server_now_ms: Int64?
         var catalog_commit_seq: Int64? = nil
         let pubsub_seq: Int?
+        let stream_epoch: String? = nil
         let transcript_preview: TranscriptPreview?
     }
 
@@ -101,6 +105,7 @@ actor SessionWorkspaceStream {
         let earliest_seq: Int?
         let latest_seq: Int
         let reason: String
+        let stream_epoch: String? = nil
     }
 
     enum Event: Sendable {
@@ -139,13 +144,12 @@ actor SessionWorkspaceStream {
     private var drainLineCount = 0
     private var drainByteCount = 0
     private let logger = Logger(subsystem: "ai.longhouse.ios", category: "SessionStream")
-    private var task: Task<Void, Never>?
-    /// Reconnect cursor. The server sets the SSE `id:` field to the per-topic
-    /// pubsub sequence (NOT the DB event id), and replays buffered messages
-    /// with `seq > Last-Event-ID`. So this tracks pubsub_seq despite the name.
-    /// Seeded from a persisted snapshot on resume so a freshly-created actor
-    /// replays from where the last one left off instead of cold.
     private var lastEventId: Int = 0
+    /// Runtime epochs fence pubsub sequences. A process restart may reuse
+    /// sequence values, so an old Last-Event-ID is not replay-safe.
+    private var streamEpoch: String?
+    /// Epoch paired with Last-Event-ID on the next HTTP request.
+    private var requestedStreamEpoch: String?
     private var serverClockSkewMs: Int64 = 0
     private var continuation: AsyncStream<Event>.Continuation?
 
@@ -171,7 +175,8 @@ actor SessionWorkspaceStream {
         baseURL: URL,
         sessionId: String,
         skipInitial: Bool = true,
-        knownWorkspaceFingerprint: String? = nil
+        knownWorkspaceFingerprint: String? = nil,
+        streamEpoch: String? = nil
     ) -> URL {
         var components = URLComponents(
             url: baseURL.appendingPathComponent("/api/timeline/sessions/\(sessionId)/workspace/stream"),
@@ -184,8 +189,15 @@ actor SessionWorkspaceStream {
         if let knownWorkspaceFingerprint, !knownWorkspaceFingerprint.isEmpty {
             queryItems.append(URLQueryItem(name: "known_workspace_fingerprint", value: knownWorkspaceFingerprint))
         }
+        if let streamEpoch, !streamEpoch.isEmpty {
+            queryItems.append(URLQueryItem(name: "stream_epoch", value: streamEpoch))
+        }
         components.queryItems = queryItems.isEmpty ? nil : queryItems
         return components.url!
+    }
+
+    func setStreamEpoch(_ epoch: String?) {
+        requestedStreamEpoch = epoch
     }
 
     func clockSkewMs() -> Int64 { serverClockSkewMs }
@@ -272,7 +284,8 @@ actor SessionWorkspaceStream {
             baseURL: baseURL,
             sessionId: sessionId,
             skipInitial: skipInitial,
-            knownWorkspaceFingerprint: knownWorkspaceFingerprint
+            knownWorkspaceFingerprint: knownWorkspaceFingerprint,
+            streamEpoch: requestedStreamEpoch
         )
         var req = URLRequest(url: url)
         req.addValue("text/event-stream", forHTTPHeaderField: "Accept")
@@ -403,6 +416,16 @@ actor SessionWorkspaceStream {
         case "connected":
             do {
                 let c = try JSONDecoder().decode(Connected.self, from: data)
+                if let incomingEpoch = c.stream_epoch {
+                    if let previousEpoch = streamEpoch, previousEpoch != incomingEpoch {
+                        // Sequence values are not comparable across process
+                        // epochs. Do not carry an old cursor into the next
+                        // reconnect after this handshake.
+                        replaceLastEventId(0)
+                    }
+                    streamEpoch = incomingEpoch
+                    requestedStreamEpoch = incomingEpoch
+                }
                 setSkew(c.server_now_ms)
                 emit(.connected(c))
             } catch {
@@ -411,6 +434,13 @@ actor SessionWorkspaceStream {
         case "workspace_changed":
             do {
                 let w = try JSONDecoder().decode(WorkspaceChanged.self, from: data)
+                if let incomingEpoch = w.stream_epoch {
+                    if let previousEpoch = streamEpoch, previousEpoch != incomingEpoch {
+                        replaceLastEventId(0)
+                    }
+                    streamEpoch = incomingEpoch
+                    requestedStreamEpoch = incomingEpoch
+                }
                 emit(.changed(w))
             } catch {
                 logger.error(
@@ -420,6 +450,10 @@ actor SessionWorkspaceStream {
             }
         case "replay_gap":
             if let gap = try? JSONDecoder().decode(ReplayGap.self, from: data) {
+                if let incomingEpoch = gap.stream_epoch {
+                    streamEpoch = incomingEpoch
+                    requestedStreamEpoch = incomingEpoch
+                }
                 // The cursor belongs to an old or truncated replay domain.
                 // Reset to the server's current latest seq so future reconnects
                 // do not keep asking for an impossible cursor.

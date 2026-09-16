@@ -73,6 +73,8 @@ runtime_image:
   - 'server/**'
   - 'web/**'
   - '.github/workflows/runtime-image.yml'
+  - 'scripts/ops/runtime-schema.py'
+  - 'scripts/ops/release-artifacts.py'
 
 deploy_verify:
   - '.dockerignore'
@@ -91,4 +93,6 @@ deploy_verify:
   - 'scripts/qa/**'
   - '.github/actions/wait-for-ci/**'
   - '.github/workflows/deploy-and-verify.yml'
+  - 'scripts/ops/runtime-schema.py'
+  - 'scripts/ops/release-artifacts.py'
   - '.github/workflows/runtime-image.yml'

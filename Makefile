@@ -579,6 +579,7 @@ test-install: ## Installer syntax + first-run smoke
 test-hosted-instance: ## @internal Hosted-instance helper tests
 	@bash scripts/tests/hosted-instance-auth.test.sh
 	@bash scripts/tests/hosted-session-debug.test.sh
+	@python3 scripts/tests/release-artifacts.test.py
 
 test-wheel-package: ## @internal CLI wheel packaging smoke
 	@./scripts/qa/test-wheel-package.sh
