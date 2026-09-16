@@ -798,12 +798,7 @@ def _session_media_ref_dto(row) -> dict[str, Any]:
         "media_state": row["media_state"],
         "mime_type": row["mime_type"],
         "byte_size": int(row["byte_size"]) if row["byte_size"] is not None else None,
-        "thumb_hash": (
-            row["thumb_hash"]
-            if row["thumb_state"] == "present"
-            and row["thumb_derived_from"] == row["media_hash"]
-            else None
-        ),
+        "thumb_hash": (row["thumb_hash"] if row["thumb_state"] == "present" and row["thumb_derived_from"] == row["media_hash"] else None),
         "width": row["width"],
         "height": row["height"],
     }
