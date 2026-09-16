@@ -1079,6 +1079,11 @@ def save_verdict(state: dict, scenario: str, envelope: dict) -> dict:
     path.write_text(json.dumps(envelope, indent=2))
     RUN_DIR.mkdir(parents=True, exist_ok=True)
     (RUN_DIR / f"verdict-{re.sub(r'[^a-zA-Z0-9_-]', '_', scenario)}.json").write_text(json.dumps(envelope, indent=2))
+    # The served page is the artifact a projection failure has to be read from,
+    # and the scenario directory is not part of the uploaded evidence.
+    served = scenario_artifact_dir(state, scenario) / "workspace.json"
+    if served.exists():
+        (RUN_DIR / f"workspace-{re.sub(r'[^a-zA-Z0-9_-]', '_', scenario)}.json").write_text(served.read_text())
     save_state(state)
     return envelope
 
@@ -1303,13 +1308,17 @@ def scenario_image_fidelity(state: dict, deploy: bool) -> dict:
     sim(state, deploy)
     settle(state, 1, "settle_image_fidelity")
     envelope = verdict(state, "image-fidelity", "1m", False, None, 1)
-    digests = served_media_digests(state)
+    digests, census = served_media(state)
     matched = state["image_digest"] in digests
     envelope["checks"].append(
         {
             "id": "served_image_matches_source",
             "status": "pass" if matched else "fail",
-            "detail": f"source={state['image_digest'][:12]} served={len(digests)} refs",
+            "detail": (
+                f"source={state['image_digest'][:12]} served={len(digests)} refs "
+                f"projected_items={census['items']} events={census['events']} "
+                f"events_with_refs={census['events_with_refs']}"
+            ),
         }
     )
     if not matched:
