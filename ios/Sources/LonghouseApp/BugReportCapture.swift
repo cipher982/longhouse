@@ -6,12 +6,17 @@ enum BugReportScreenCapture {
     static func captureJPEG() -> Data? {
         guard let window = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
+            .filter({ $0.activationState == .foregroundActive })
             .flatMap(\.windows)
-            .first(where: { $0.isKeyWindow })
+            .first(where: {
+                $0.isKeyWindow
+                    && !$0.isHidden
+                    && $0.windowLevel == .normal
+            })
         else { return nil }
         let renderer = UIGraphicsImageRenderer(bounds: window.bounds)
         let image = renderer.image { _ in
-            window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
         }
         return image.jpegData(compressionQuality: 0.78)
     }

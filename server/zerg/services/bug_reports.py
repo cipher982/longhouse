@@ -242,13 +242,6 @@ def create_bug_report(
     _validate_uploads(uploads)
     description_data = clean_description.encode("utf-8")
     payload_sha256 = _payload_sha256(clean_description, context_bytes, source_session_id, uploads)
-    legacy_payload_sha256 = _payload_sha256(
-        clean_description,
-        context_bytes,
-        source_session_id,
-        uploads,
-        include_source_session=False,
-    )
     if len(description_data) + len(context_bytes) + sum(len(upload.data) for upload in uploads) > MAX_REPORT_TOTAL_BYTES:
         raise _report_error("report_too_large", "The bug report is too large.", status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
     if client_report_id:
@@ -262,6 +255,13 @@ def create_bug_report(
     root.mkdir(parents=True, exist_ok=True)
     final_dir = root / report_id
     if final_dir.exists():
+        legacy_payload_sha256 = _payload_sha256(
+            clean_description,
+            context_bytes,
+            source_session_id,
+            uploads,
+            include_source_session=False,
+        )
         return _replay_bundle_or_conflict(
             report_id,
             owner_id=owner_id,
@@ -315,6 +315,14 @@ def create_bug_report(
         except OSError as exc:
             if exc.errno not in {errno.EEXIST, errno.ENOTEMPTY, errno.EISDIR}:
                 raise
+            shutil.rmtree(temporary_dir, ignore_errors=True)
+            legacy_payload_sha256 = _payload_sha256(
+                clean_description,
+                context_bytes,
+                source_session_id,
+                uploads,
+                include_source_session=False,
+            )
             return _replay_bundle_or_conflict(
                 report_id,
                 owner_id=owner_id,
