@@ -1283,20 +1283,34 @@ def scenario_network_recovery(state: dict, deploy: bool) -> dict:
     return verdict(state, scenario, "10m", False, None, 3)
 
 
-def served_media_digests(state: dict) -> list[str]:
-    """Every image the served projection shows, by content hash."""
+def served_media(state: dict) -> tuple[list[str], dict]:
+    """Every image the served projection shows, plus what the page looked like.
+
+    The census travels with the failure so a missing image says whether the
+    events arrived without refs at all, or whether the refs arrived and the
+    check was looking in the wrong place.
+    """
 
     if not state.get("session_id"):
-        return []
+        return [], {"events": 0, "events_with_refs": 0, "items": 0}
     projection = server_projection(state, state["session_id"])
+    items = (projection.get("projection") or {}).get("items", [])
     digests: list[str] = []
-    for item in (projection.get("projection") or {}).get("items", []):
-        event = item.get("event") or {}
-        for ref in event.get("media_refs") or []:
+    events = 0
+    events_with_refs = 0
+    for item in items:
+        event = item.get("event")
+        if not event:
+            continue
+        events += 1
+        refs = event.get("media_refs") or []
+        if refs:
+            events_with_refs += 1
+        for ref in refs:
             digest = ref.get("sha256")
             if isinstance(digest, str) and digest:
                 digests.append(digest)
-    return digests
+    return digests, {"events": events, "events_with_refs": events_with_refs, "items": len(items)}
 
 
 def scenario_image_fidelity(state: dict, deploy: bool) -> dict:
