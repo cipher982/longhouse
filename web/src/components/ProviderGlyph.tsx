@@ -7,7 +7,6 @@ import {
   normalizeProviderKey,
   providerDisplayName,
 } from "../generated/provider-brands";
-import type { ProviderBrandConfig } from "../generated/provider-brands";
 
 /**
  * Provider brand glyphs — real logo marks for the AI coding agents Longhouse
