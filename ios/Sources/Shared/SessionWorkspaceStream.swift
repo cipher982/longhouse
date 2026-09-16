@@ -152,6 +152,7 @@ actor SessionWorkspaceStream {
     private var requestedStreamEpoch: String?
     private var serverClockSkewMs: Int64 = 0
     private var continuation: AsyncStream<Event>.Continuation?
+    private var task: Task<Void, Never>?
 
     init(
         baseURL: URL,
