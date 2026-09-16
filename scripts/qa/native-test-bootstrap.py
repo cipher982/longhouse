@@ -124,6 +124,11 @@ def main() -> int:
         "RUSTUP_HOME": os.environ.get("RUSTUP_HOME", str(Path.home() / ".rustup")),
         "CARGO_HOME": str(scratch / "cargo"),
         "UV_CACHE_DIR": str(scratch / "uv-cache"),
+        # Pin the interpreter for this lane. The hosted macOS image ships a
+        # Python newer than the native dependency set supports (PyO3 0.22 caps
+        # at 3.13), and uv would otherwise resolve the runner's default - which
+        # fails the build before any fixture runs.
+        "UV_PYTHON": "3.13",
         "BUN_INSTALL_CACHE_DIR": str(scratch / "bun-cache"),
         **options,
     }
