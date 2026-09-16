@@ -18,6 +18,13 @@ if (!socketPath || !authToken || !launchSessionId) {
   throw new Error("Longhouse OMP Helm extension is missing launch-scoped channel identity");
 }
 
+export function ompProviderIsIdle(
+  lastAgentEndTerminal: boolean | undefined,
+  contextIdle: boolean,
+): boolean {
+  return lastAgentEndTerminal ?? contextIdle;
+}
+
 export default function (pi: any) {
   let socket: Socket | undefined;
   let buffer = "";
@@ -144,7 +151,7 @@ export default function (pi: any) {
   // every keepalive, but preserve an explicit terminal OMP event because its
   // event shape is the provider-specific settlement signal.
   const providerIsIdle = (ctx: any) =>
-    lastAgentEndTerminal === true || Boolean(ctx.isIdle());
+    ompProviderIsIdle(lastAgentEndTerminal, Boolean(ctx.isIdle()));
 
 
   const sendEvent = (kind: string, event: Frame, ctx: any) =>
