@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { ProviderGlyph } from "../ProviderGlyph";
+import { canonicalProvider } from "../../lib/providers";
 
 const SUPPORTED_PROVIDERS = [
   "claude",
@@ -37,6 +38,11 @@ describe("ProviderGlyph", () => {
 
     expect(screen.getByRole("img", { name: "OMP" })).toBeInTheDocument();
     expect(hasFallbackMark(container)).toBe(false);
+  });
+
+  it("normalizes provider ids for other web surfaces", () => {
+    expect(canonicalProvider(" Gemini ")).toBe("antigravity");
+    expect(canonicalProvider(" OMP ")).toBe("omp");
   });
 
   it("keeps the OMP connector solid in monochrome mode", () => {

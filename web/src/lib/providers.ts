@@ -103,8 +103,8 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
 
 /** Map deprecated provider ids to their canonical successor. */
 export function canonicalProvider(provider: string): string {
-  const key = provider.toLowerCase();
-  return key === "gemini" ? "antigravity" : provider;
+  const key = provider.trim().toLowerCase();
+  return key === "gemini" ? "antigravity" : key;
 }
 
 /** CSS variable for a provider's brand color. */
