@@ -10,6 +10,8 @@ struct SessionView: View {
     let onTranscriptDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
     /// Pushes a worker transcript. Owned by the navigation stack, not this view.
     var onOpenSubagent: ((String) -> Void)? = nil
+    /// Opens a newly created Console route from an in-session handoff.
+    var onOpenSession: ((String) -> Void)? = nil
 
     @EnvironmentObject var appState: AppState
     @Environment(\.scenePhase) private var scenePhase
@@ -31,13 +33,15 @@ struct SessionView: View {
         fallbackSubtitle: String? = nil,
         viewModel: SessionViewModel = SessionViewModel(),
         onTranscriptDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil,
-        onOpenSubagent: ((String) -> Void)? = nil
+        onOpenSubagent: ((String) -> Void)? = nil,
+        onOpenSession: ((String) -> Void)? = nil
     ) {
         self.sessionId = sessionId
         self.fallbackTitle = fallbackTitle
         self.fallbackSubtitle = fallbackSubtitle
         self.onTranscriptDiagnostics = onTranscriptDiagnostics
         self.onOpenSubagent = onOpenSubagent
+        self.onOpenSession = onOpenSession
         _viewModel = StateObject(wrappedValue: viewModel)
     }
 
@@ -189,7 +193,8 @@ struct SessionView: View {
             BugReportSheet(
                 sourceSessionID: sessionId,
                 contextJSON: bugReportContextJSON,
-                screenshotData: bugReportScreenshot
+                screenshotData: bugReportScreenshot,
+                onSent: { onOpenSession?($0) }
             )
         }
     }

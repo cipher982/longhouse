@@ -162,6 +162,9 @@ struct TimelineView: View {
                         // A worker pushes onto the same stack: it is part of this
                         // session's work, so Back returns to the row that spawned it.
                         path.append(SessionRoute(sessionId: childSessionId, fallbackTitle: "Subagent"))
+                    },
+                    onOpenSession: { newSessionId in
+                        path.append(SessionRoute(sessionId: newSessionId, fallbackTitle: "Bug report"))
                     }
                 )
             }

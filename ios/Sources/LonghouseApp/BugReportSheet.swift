@@ -10,6 +10,7 @@ struct BugReportSheet: View {
     let sourceSessionID: String
     let initialContextJSON: Data
     let initialScreenshot: Data?
+    let onSent: ((String) -> Void)?
 
     @State private var description = ""
     @State private var screenshotData: Data?
@@ -21,14 +22,21 @@ struct BugReportSheet: View {
     @State private var showingLaunchPicker = false
     @State private var isUploading = false
     @State private var isSending = false
+    @State private var didSend = false
     @State private var draftSaveTask: Task<Void, Never>?
     @State private var errorMessage: String?
     @State private var statusMessage: String?
 
-    init(sourceSessionID: String, contextJSON: Data, screenshotData: Data?) {
+    init(
+        sourceSessionID: String,
+        contextJSON: Data,
+        screenshotData: Data?,
+        onSent: ((String) -> Void)? = nil
+    ) {
         self.sourceSessionID = sourceSessionID
         self.initialContextJSON = contextJSON
         self.initialScreenshot = screenshotData
+        self.onSent = onSent
         _screenshotData = State(initialValue: screenshotData)
     }
 
@@ -118,6 +126,8 @@ struct BugReportSheet: View {
                             .disabled(!canUpload)
                     } else if targetSessionID == nil {
                         Button("Choose agent") { showingLaunchPicker = true }
+                    } else if didSend {
+                        Button("Done") { dismiss() }
                     } else {
                         Button("Retry") { Task { await sendReport() } }
                             .disabled(isSending)
@@ -184,6 +194,7 @@ struct BugReportSheet: View {
         guard let reportID, let sessionID = targetSessionID, let api = LonghouseAPI(host: appState.serverURL) else { return }
         isSending = true
         errorMessage = nil
+        statusMessage = nil
         let requestID = clientRequestID ?? "ios-report-\(UUID().uuidString)"
         clientRequestID = requestID
         if let handoff = BugReportLocalStore.loadHandoff(), handoff.reportID == reportID, handoff.sessionID == sessionID {
@@ -213,7 +224,10 @@ struct BugReportSheet: View {
             draftSaveTask = nil
             BugReportLocalStore.clearDraft()
             BugReportLocalStore.clearHandoff()
+            didSend = true
             statusMessage = "Sent to Console. The agent has the screenshot and diagnostics."
+            dismiss()
+            onSent?(sessionID)
         } catch {
             if case let LonghouseAPIError.structured(_, errorCode, _) = error,
                errorCode != "turn_start_outcome_unknown" {
