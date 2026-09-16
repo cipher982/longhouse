@@ -35,6 +35,7 @@ struct BugReportSheet: View {
     @State private var failureAction: FailureAction?
 
     @State private var statusMessage: String?
+    @State private var showingDiscardConfirmation = false
 
     init(
         sourceSessionID: String?,
@@ -140,10 +141,13 @@ struct BugReportSheet: View {
                     } else if reportID == nil {
                         Button("Send report") { Task { await uploadReport() } }
                             .disabled(!canUpload)
-                    } else if didSend {
-                        Button("Done") { dismiss() }
                     } else if targetSessionID == nil {
-                        Button("Start a fix") { showingLaunchPicker = true }
+                        Menu("Start a fix") {
+                            Button("Start a fix") { showingLaunchPicker = true }
+                            Button("Start a new report", role: .destructive) {
+                                showingDiscardConfirmation = true
+                            }
+                        }
                     } else if failureAction == .reportInProgress {
                         Button("Done") { dismiss() }
                     } else if failureAction == .chooseAgent {
@@ -192,6 +196,18 @@ struct BugReportSheet: View {
                         Task { await sendReport(sessionID: sessionID) }
                     }
                 )
+            }
+            .confirmationDialog(
+                "Start a new report?",
+                isPresented: $showingDiscardConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Start New Report", role: .destructive) {
+                    startNewReport()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The saved report will remain available, but this screen will start a fresh draft.")
             }
         }
     }
@@ -442,6 +458,23 @@ struct BugReportSheet: View {
                 BugReportLocalStore.saveDraft(draft)
             }.value
         }
+    }
+    private func startNewReport() {
+        draftSaveTask?.cancel()
+        BugReportLocalStore.clearDraft()
+        BugReportLocalStore.clearHandoff()
+        reportID = nil
+        clientReportID = UUID().uuidString
+        targetSessionID = nil
+        clientRequestID = nil
+        description = ""
+        screenshotData = nil
+        additionalFiles = []
+        photoItems = []
+        errorMessage = nil
+        statusMessage = nil
+        failureAction = nil
+        didSend = false
     }
 }
 

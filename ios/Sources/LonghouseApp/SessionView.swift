@@ -240,7 +240,7 @@ struct SessionView: View {
                     serverURL: appState.serverURL
                 )
                 Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    try? await Task.sleep(nanoseconds: 350_000_000)
                     bugReportScreenshot = BugReportScreenCapture.captureJPEG()
                     isShowingBugReport = true
                 }

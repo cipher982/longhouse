@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 
 from zerg.services.bug_reports import BugReportUpload
+from zerg.services.bug_reports import _payload_sha256
 from zerg.services.bug_reports import create_bug_report
 from zerg.services.bug_reports import read_manifest
 from zerg.services.bug_reports import read_report_file
@@ -45,6 +46,40 @@ def test_bug_report_reuses_client_report_id_after_replay(tmp_path, monkeypatch):
         description="The first upload.",
         context_json="{}",
         source_session_id=None,
+        uploads=[],
+        client_report_id=client_report_id,
+    )
+
+    assert replay == first
+
+
+def test_bug_report_replays_manifest_from_legacy_digest(tmp_path, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_BUG_REPORT_ROOT", str(tmp_path / "reports"))
+    client_report_id = str(uuid4())
+    first = create_bug_report(
+        owner_id=7,
+        description="The first upload.",
+        context_json="{}",
+        source_session_id="session-1",
+        uploads=[],
+        client_report_id=client_report_id,
+    )
+    manifest_path = tmp_path / "reports" / client_report_id / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["payload_sha256"] = _payload_sha256(
+        "The first upload.",
+        b"{}",
+        "session-1",
+        [],
+        include_source_session=False,
+    )
+    manifest_path.write_text(json.dumps(manifest))
+
+    replay = create_bug_report(
+        owner_id=7,
+        description="The first upload.",
+        context_json="{}",
+        source_session_id="session-1",
         uploads=[],
         client_report_id=client_report_id,
     )
