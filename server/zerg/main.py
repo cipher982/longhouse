@@ -115,6 +115,8 @@ from zerg.routers.agents_state_diagnostics import health_router as agents_state_
 from zerg.routers.agents_state_diagnostics import router as agents_state_diagnostics_router
 from zerg.routers.agents_storage_v2 import router as agents_storage_v2_router
 from zerg.routers.auth import router as auth_router
+from zerg.routers.bug_reports import agents_router as agents_bug_reports_router
+from zerg.routers.bug_reports import router as bug_reports_router
 from zerg.routers.device_tokens import router as device_tokens_router
 from zerg.routers.health import router as health_router
 from zerg.routers.heartbeat import router as heartbeat_router
@@ -276,6 +278,8 @@ api_app.include_router(ops_beacon_router)
 api_app.include_router(telemetry_beacon_router)
 api_app.include_router(telemetry_admin_router)
 api_app.include_router(telemetry_canary_router)
+api_app.include_router(bug_reports_router)
+api_app.include_router(agents_bug_reports_router)
 api_app.include_router(observability_router)
 api_app.include_router(agents_observability_router)
 api_app.include_router(agents_media_router)

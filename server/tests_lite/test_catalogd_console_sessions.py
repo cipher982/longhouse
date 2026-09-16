@@ -97,16 +97,19 @@ def test_pi_console_persists_provider_local_policy_through_turn_dispatch(tmp_pat
         assert session.permission_mode == "provider_local"
         assert json.loads(thread.provider_config_json)["permission_mode"] == "provider_local"
 
+    report_id = uuid4()
     turn = store.enqueue_console_turn(
         data={
             "session_id": str(session_id),
             "owner_id": 1,
             "message": "read the project file",
             "client_request_id": "pi-console-request-1",
+            "report_id": str(report_id),
             "created_at": datetime.now(UTC),
         }
     )
     assert turn["turn"]["provider_config"]["permission_mode"] == "provider_local"
+    assert turn["turn"]["report_id"] == str(report_id)
 
 
 def test_pi_console_continuation_forwards_exact_native_source_file(tmp_path):

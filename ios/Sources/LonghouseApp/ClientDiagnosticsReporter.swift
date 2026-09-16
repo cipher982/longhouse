@@ -50,6 +50,7 @@ final class ClientDiagnosticsReporter {
     }
 
     func flush() {
+
         flushTask?.cancel()
         flushTask = nil
         guard let sink, !buffer.isEmpty else { return }
@@ -62,5 +63,12 @@ final class ClientDiagnosticsReporter {
             entries: entries
         )
         Task { await sink(payload) }
+    }
+    func snapshotEntries(sessionId: String?, limit: Int = 100) -> [ClientDiagnosticsPayload.Entry] {
+        let filtered = buffer.filter { entry in
+            guard let sessionId else { return true }
+            return entry.session_id == nil || entry.session_id == sessionId
+        }
+        return Array(filtered.suffix(limit))
     }
 }

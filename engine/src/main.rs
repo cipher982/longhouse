@@ -72,6 +72,7 @@ mod pi_helm_launcher;
 mod pi_print;
 mod pi_session;
 mod pipeline;
+mod report_bundle;
 mod process_group;
 mod process_identity;
 mod provider_readiness;

@@ -830,6 +830,37 @@ final class SessionViewModel: ObservableObject {
         benchmarkSourceOperation = operation
     }
 
+    func makeBugReportContext(sessionId: String, serverURL: String) -> Data {
+        var stateFacts: [String: Any] = [
+            "transcript_item_count": items.count,
+            "recent_item_ids": Array(items.suffix(20).map(\.id)),
+            "submitted_input_count": submittedInputs.count,
+            "queued_input_count": queuedInputCount,
+            "failed_input_count": failedInputCount,
+            "captured_at": ISO8601DateFormatter().string(from: Date()),
+            "session_id": sessionId,
+            "server_url": serverURL,
+            "diagnostics": ClientDiagnosticsReporter.shared.snapshotEntries(sessionId: sessionId, limit: 100).map {
+                var entry: [String: Any] = [
+                    "at_ms": $0.at_ms,
+                    "stage": $0.stage,
+                ]
+                if let detail = $0.detail { entry["detail"] = detail }
+                if let entrySessionID = $0.session_id { entry["session_id"] = entrySessionID }
+                return entry
+            },
+        ]
+        if let activityState = detail?.stateFacts.activityState { stateFacts["activity_state"] = activityState }
+        if let commitSeq = detail?.stateFacts.commitSeq { stateFacts["commit_seq"] = commitSeq }
+        if let lastResultAt = detail?.stateFacts.lastResultAt { stateFacts["last_result_at"] = lastResultAt }
+        if let displayTitle = detail?.displayTitle { stateFacts["display_title"] = displayTitle }
+        if let transcriptReadThrough { stateFacts["transcript_read_through"] = transcriptReadThrough }
+        if let appBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
+            stateFacts["app_build"] = appBuild
+        }
+        return (try? JSONSerialization.data(withJSONObject: stateFacts, options: [.sortedKeys])) ?? Data("{}".utf8)
+    }
+
     func send(
         text: String,
         sessionId: String,

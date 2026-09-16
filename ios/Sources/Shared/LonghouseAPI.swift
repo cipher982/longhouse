@@ -155,6 +155,27 @@ struct ClientDiagnosticsPayload: Encodable, Sendable {
     let entries: [Entry]
 }
 
+struct BugReportUploadFile: Sendable {
+    let filename: String
+    let mimeType: String
+    let data: Data
+}
+
+struct BugReportUploadedFile: Decodable, Sendable {
+    let name: String
+    let mimeType: String
+    let byteSize: Int
+    let sha256: String
+    let kind: String
+}
+
+struct BugReportUploadResponse: Decodable, Sendable {
+    let reportId: String
+    let createdAt: String
+    let sourceSessionId: String?
+    let files: [BugReportUploadedFile]
+}
+
 protocol SessionWorkspaceClient: Sendable {
     /// Lightweight session chrome/state. This is intentionally separate from
     /// the transcript projection so the route can paint its title and controls
@@ -550,6 +571,84 @@ struct LonghouseAPI: Sendable {
         return try Self.decodeSessionInputResponse(data)
     }
 
+    /// Sends the first turn of a report-backed Console session without
+    /// changing the existing text-input protocol.
+    func sendInput(
+        id: String,
+        text: String,
+        intent: String = "auto",
+        clientRequestId: String? = nil,
+        reportID: String?
+    ) async throws -> SessionInputResponse {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/sessions/\(id)/input"))
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        var body: [String: Any] = ["text": text, "intent": intent]
+        if let clientRequestId, !clientRequestId.isEmpty {
+            body["client_request_id"] = clientRequestId
+        }
+        if let reportID, !reportID.isEmpty {
+            body["report_id"] = reportID
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, httpResponse) = try await data(for: request)
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            if let structured = Self.parseStructuredError(statusCode: httpResponse.statusCode, data: data) {
+                throw structured
+            }
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        return try Self.decodeSessionInputResponse(data)
+    }
+
+    /// Uploads a reviewed bug report bundle. The report is immutable once
+    /// accepted; the Console turn carries only its id.
+    func uploadBugReport(
+        description: String,
+        contextJSON: Data,
+        sourceSessionID: String?,
+        files: [BugReportUploadFile]
+    ) async throws -> BugReportUploadResponse {
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/reports"))
+        request.httpMethod = "POST"
+        request.addValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        request.addValue("Longhouse-iOS", forHTTPHeaderField: "User-Agent")
+        var body = Data()
+        Self.appendMultipartField(&body, boundary: boundary, name: "description", value: description)
+        Self.appendMultipartField(
+            &body,
+            boundary: boundary,
+            name: "context_json",
+            value: String(data: contextJSON, encoding: .utf8) ?? "{}"
+        )
+        if let sourceSessionID, !sourceSessionID.isEmpty {
+            Self.appendMultipartField(&body, boundary: boundary, name: "source_session_id", value: sourceSessionID)
+        }
+        for file in files {
+            Self.appendMultipartFile(
+                &body,
+                boundary: boundary,
+                name: "files",
+                filename: file.filename,
+                mimeType: file.mimeType,
+                data: file.data
+            )
+        }
+        body.append(Data("--\(boundary)--\r\n".utf8))
+        request.httpBody = body
+        let (data, response) = try await self.data(for: request)
+        guard (200..<300).contains(response.statusCode) else {
+            if let structured = Self.parseStructuredError(statusCode: response.statusCode, data: data) {
+                throw structured
+            }
+            throw LonghouseAPIError.from(statusCode: response.statusCode)
+        }
+        return try JSONDecoder.snakeCase.decode(BugReportUploadResponse.self, from: data)
+    }
+
     /// Multipart POST for inputs that include image attachments. Server route
     /// only accepts `intent=auto` in v1 (steer/queue must use the JSON endpoint).
     func sendInputMultipart(
@@ -675,6 +774,32 @@ struct LonghouseAPI: Sendable {
         body.append("\(dashes)\(boundary)\(dashes)\(crlf)".data(using: .utf8)!)
         return body
     }
+    private static func appendMultipartField(_ body: inout Data, boundary: String, name: String, value: String) {
+        body.append(Data("--\(boundary)\r\n".utf8))
+        body.append(Data("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".utf8))
+        body.append(Data(value.utf8))
+        body.append(Data("\r\n".utf8))
+    }
+
+    private static func appendMultipartFile(
+        _ body: inout Data,
+        boundary: String,
+        name: String,
+        filename: String,
+        mimeType: String,
+        data: Data
+    ) {
+        body.append(Data("--\(boundary)\r\n".utf8))
+        body.append(
+            Data(
+                "Content-Disposition: form-data; name=\"\(name)\"; filename=\"\(sanitizeMultipartFilename(filename))\"\r\n".utf8
+            )
+        )
+        body.append(Data("Content-Type: \(mimeType)\r\n\r\n".utf8))
+        body.append(data)
+        body.append(Data("\r\n".utf8))
+    }
+
 
     private static func sanitizeMultipartFilename(_ name: String) -> String {
         let stripped = name.replacingOccurrences(of: "\"", with: "")

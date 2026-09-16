@@ -193,6 +193,7 @@ async def enqueue_catalog_console_turn(
     session_id: UUID,
     message: str,
     client_request_id: str,
+    report_id: UUID | None = None,
     registry=None,
 ) -> CatalogConsoleTurn:
     """Live-catalog equivalent of enqueue + claim + machine dispatch."""
@@ -213,6 +214,7 @@ async def enqueue_catalog_console_turn(
                 "owner_id": owner_id,
                 "message": message,
                 "client_request_id": client_request_id,
+                "report_id": str(report_id) if report_id is not None else None,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
         },
@@ -255,6 +257,8 @@ async def enqueue_catalog_console_turn(
             "server_dispatched_at_ms": dispatch_wall_ms,
             **dict(turn.get("provider_config") or {}),
         }
+        if turn.get("report_id"):
+            payload["report_id"] = str(turn["report_id"])
         if turn.get("resume_provider_thread_id"):
             payload["resume_provider_thread_id"] = turn["resume_provider_thread_id"]
         if turn.get("resume_session_file"):
@@ -513,6 +517,8 @@ async def dispatch_catalog_claimed_turn(
             "launch_surface": "console",
             **dict(turn.get("provider_config") or {}),
         }
+        if turn.get("report_id"):
+            payload["report_id"] = str(turn["report_id"])
         if turn.get("resume_provider_thread_id"):
             payload["resume_provider_thread_id"] = turn["resume_provider_thread_id"]
         if turn.get("resume_session_file"):

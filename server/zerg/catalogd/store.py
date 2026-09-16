@@ -406,6 +406,7 @@ def _live_console_turn_dto(
         "thread_id": turn.thread_id,
         "run_id": turn.run_id,
         "state": turn.state,
+        "report_id": turn.report_id,
         "provider": turn.provider,
         "device_id": turn.device_id,
         "cwd": turn.cwd,
@@ -3923,6 +3924,12 @@ class CatalogStore:
         """Accept one idempotent Console message and claim it when the thread is idle."""
 
         now = data["created_at"]
+        report_id = data.get("report_id")
+        if report_id is not None:
+            try:
+                report_id = str(UUID(str(report_id)))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("invalid report_id") from exc
         with _write_transaction(self.engine) as connection:
             orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
             try:
@@ -3978,7 +3985,7 @@ class CatalogStore:
                 )
                 if existing_receipt is not None:
                     turn = orm.query(LiveConsoleTurn).filter(LiveConsoleTurn.receipt_id == existing_receipt.id).one()
-                    exact = existing_receipt.text == data["message"]
+                    exact = existing_receipt.text == data["message"] and turn.report_id == report_id
                     replay_turn = _live_console_turn_dto(
                         turn,
                         message=existing_receipt.text,
@@ -4034,6 +4041,7 @@ class CatalogStore:
                     thread_id=thread.id,
                     receipt_id=receipt_id,
                     state="queued",
+                    report_id=report_id,
                     provider=session.provider,
                     device_id=thread.device_id,
                     cwd=thread.cwd,

@@ -6,6 +6,13 @@ enum WorkspaceSelectionSource: Equatable {
     case explicitUserChoice
 }
 
+
+struct ConsoleLaunchSelection: Sendable {
+    let sessionId: String
+    let deviceId: String
+    let provider: String
+    let cwd: String
+}
 struct WorkspaceSelectionResolution: Equatable {
     let path: String
     let source: WorkspaceSelectionSource
@@ -30,8 +37,8 @@ func resolveFreshWorkspaceSelection(
 struct LaunchSessionSheet: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
-
     let onLaunched: (String) -> Void
+    let onLaunchSelection: ((ConsoleLaunchSelection) -> Void)?
     private let previewMachines: [MachineDirectoryEntry]?
     private let previewWorkspaces: [WorkspaceSuggestion]?
 
@@ -50,14 +57,15 @@ struct LaunchSessionSheet: View {
     @State private var workspaceSelectionSource: WorkspaceSelectionSource = .implicitDefault
     @State private var displayName: String = ""
     private let logger = Logger(subsystem: "ai.longhouse.ios", category: "LaunchSession")
-
     init(
         previewMachines: [MachineDirectoryEntry]? = nil,
         previewWorkspaces: [WorkspaceSuggestion]? = nil,
+        onLaunchSelection: ((ConsoleLaunchSelection) -> Void)? = nil,
         onLaunched: @escaping (String) -> Void
     ) {
         self.previewMachines = previewMachines
         self.previewWorkspaces = previewWorkspaces
+        self.onLaunchSelection = onLaunchSelection
         self.onLaunched = onLaunched
         _machines = State(initialValue: previewMachines ?? [])
         _workspaces = State(initialValue: previewWorkspaces ?? [])
@@ -404,6 +412,14 @@ struct LaunchSessionSheet: View {
                 provider: selectedProvider,
                 cwd: normalizedCwd,
                 displayName: trimmedDisplayName.isEmpty ? nil : trimmedDisplayName
+            )
+            onLaunchSelection?(
+                ConsoleLaunchSelection(
+                    sessionId: response.sessionId,
+                    deviceId: selectedDeviceId,
+                    provider: selectedProvider,
+                    cwd: normalizedCwd
+                )
             )
             onLaunched(response.sessionId)
         } catch let LonghouseAPIError.structured(_, _, message) {

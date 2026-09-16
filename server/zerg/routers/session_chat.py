@@ -376,6 +376,10 @@ class SessionInputRequest(BaseModel):
         max_length=64,
         description="Optional client idempotency key for this submitted input",
     )
+    report_id: UUID | None = Field(
+        None,
+        description="Optional immutable bug report to stage before a Console turn",
+    )
 
 
 class QueuedInputSummary(BaseModel):
@@ -1493,6 +1497,8 @@ async def _create_catalog_session_input_response(
     db: Session,
 ) -> SessionInputResponse:
     """Live-receipt authoritative input path used when the cold DB is absent."""
+    if body.report_id is not None and getattr(source_session, "command_family", None) != "console_turn":
+        raise HTTPException(status_code=400, detail="report_id is only supported for Console sessions")
 
     if getattr(source_session, "command_family", None) == "console_turn":
         client_request_id = _client_request_id_for_input(body)
@@ -1502,6 +1508,7 @@ async def _create_catalog_session_input_response(
                 session_id=uuid.UUID(str(source_session.id)),
                 message=body.text,
                 client_request_id=client_request_id,
+                report_id=body.report_id,
             )
         except ConsoleTurnUnavailable as exc:
             raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)}) from exc

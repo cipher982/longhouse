@@ -21,6 +21,9 @@ struct SessionView: View {
     @StateObject private var attachmentStore = ComposerAttachmentStore()
     @State private var pickerSelection: [PhotosPickerItem] = []
     @State private var isShowingPhotoPicker: Bool = false
+    @State private var isShowingBugReport = false
+    @State private var bugReportScreenshot: Data?
+    @State private var bugReportContextJSON = Data("{}".utf8)
     @State private var isLoadingPickerItems: Bool = false
     init(
         sessionId: String,
@@ -182,6 +185,13 @@ struct SessionView: View {
                 )
             )
         }
+        .sheet(isPresented: $isShowingBugReport) {
+            BugReportSheet(
+                sourceSessionID: sessionId,
+                contextJSON: bugReportContextJSON,
+                screenshotData: bugReportScreenshot
+            )
+        }
     }
 
     // The fused Balanced signal field: status and composer share one anchored
@@ -221,6 +231,20 @@ struct SessionView: View {
         Menu {
             if let detail = viewModel.detail {
                 let isWatching = liveActivityManager.isWatching(sessionId: detail.id)
+                Button {
+                    bugReportContextJSON = viewModel.makeBugReportContext(
+                        sessionId: sessionId,
+                        serverURL: appState.serverURL
+                    )
+                    Task { @MainActor in
+                        await Task.yield()
+                        bugReportScreenshot = BugReportScreenCapture.captureJPEG()
+                        isShowingBugReport = true
+                    }
+                } label: {
+                    Label("Report a bug", systemImage: "ladybug")
+                }
+                Divider()
                 Button {
                     Task { await liveActivityManager.toggle(detail: detail, appState: appState) }
                 } label: {

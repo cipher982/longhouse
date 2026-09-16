@@ -837,6 +837,7 @@ class LiveConsoleTurn(LiveBase):
     receipt_id = Column(String(36), nullable=False, unique=True)
     run_id = Column(String(36), nullable=True, unique=True, index=True)
     state = Column(String(20), nullable=False, index=True)
+    report_id = Column(String(36), nullable=True, index=True)
     provider = Column(String(64), nullable=False)
     device_id = Column(String(255), nullable=False)
     cwd = Column(Text, nullable=False)
