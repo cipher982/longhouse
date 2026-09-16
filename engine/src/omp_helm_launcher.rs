@@ -203,6 +203,37 @@ impl OmpHelmServer {
         write_json_private(&self.state_path, &state)
     }
 
+    fn persist_state_snapshot(&self, state: &OmpHelmStateFile) -> Result<()> {
+        let _lock = self
+            .persist_lock
+            .lock()
+            .expect("OMP state persist mutex poisoned");
+        write_json_private(&self.state_path, state)
+    }
+
+    fn mutate_and_persist_state<F>(&self, update: F) -> Option<OmpHelmStateFile>
+    where
+        F: FnOnce(&mut OmpHelmStateFile),
+    {
+        let _persist_lock = self
+            .persist_lock
+            .lock()
+            .expect("OMP state persist mutex poisoned");
+        let mut shared = self.shared.lock().expect("OMP state mutex poisoned");
+        if shared.state.status == "stopped" || shared.state.terminal_state.is_some() {
+            return None;
+        }
+        update(&mut shared.state);
+        let snapshot = shared.state.clone();
+        if let Err(error) = write_json_private(&self.state_path, &snapshot) {
+            eprintln!(
+                "[omp-helm] state persistence failed for {}: {error}",
+                snapshot.session_id
+            );
+        }
+        Some(snapshot)
+    }
+
     fn handle_connection(&self, stream: std::os::unix::net::UnixStream) {
         let _ = stream.set_read_timeout(Some(SOCKET_TIMEOUT));
         let _ = stream.set_write_timeout(Some(SOCKET_TIMEOUT));
@@ -864,37 +895,32 @@ impl OmpHelmServer {
     /// they must preserve an active tool/phase, refresh already-idle evidence,
     /// and never revive a terminal launcher.
     fn record_keepalive(&self, provider_idle: bool) {
-        let (phase, tool) = {
-            let mut state = self.shared.lock().expect("OMP state mutex poisoned");
-            if state.state.status == "stopped" || state.state.terminal_state.is_some() {
-                return;
-            }
-            let phase = if provider_idle {
-                "idle"
-            } else if state.state.phase == "thinking" {
-                "thinking"
+        let Some(state) = self.mutate_and_persist_state(|state| {
+            state.phase = if provider_idle {
+                "idle".into()
+            } else if state.phase == "thinking" {
+                "thinking".into()
             } else {
-                "running"
+                "running".into()
             };
-            let tool = if provider_idle {
+            state.tool_name = if provider_idle {
                 None
             } else {
-                state.state.tool_name.clone()
+                state.tool_name.clone()
             };
-            state.state.phase = phase.into();
-            state.state.tool_name = tool.clone();
-            state.state.updated_at = Utc::now().to_rfc3339();
-            (phase, tool)
+            state.updated_at = Utc::now().to_rfc3339();
+        }) else {
+            return;
         };
-        let _ = self.persist_state();
+        let phase = state.phase.as_str();
+        let tool = state.tool_name.as_deref();
         if let Ok(db_path) = crate::config::get_agent_db_path() {
-            let state = self.current_state();
             if let Err(error) = crate::hook_outbox::enqueue_local_phase(
                 &db_path,
                 &state.session_id,
                 "omp",
                 phase,
-                tool.as_deref(),
+                tool,
                 OMP_HELM_TRANSPORT,
                 &state.updated_at,
             ) {
@@ -904,7 +930,7 @@ impl OmpHelmServer {
                 );
             }
         }
-        self.publish_phase(phase, tool);
+        self.publish_phase_snapshot(&state, phase, tool);
     }
 
     fn publish_binding(&self, source: &Path, native_id: &str, replacement: bool) -> Result<()> {
@@ -950,6 +976,10 @@ impl OmpHelmServer {
 
     fn publish_phase(&self, phase: &str, tool: Option<String>) {
         let state = self.current_state();
+        self.publish_phase_snapshot(&state, phase, tool.as_deref());
+    }
+
+    fn publish_phase_snapshot(&self, state: &OmpHelmStateFile, phase: &str, tool: Option<&str>) {
         if let Ok(outbox) = crate::config::get_agent_runtime_events_outbox_dir() {
             let _ = crate::outbox::enqueue_runtime_event(
                 &outbox,
@@ -964,7 +994,7 @@ impl OmpHelmServer {
             );
         }
         wake_transcript_shipper(
-            &state,
+            state,
             Path::new(&state.session_file),
             &state.native_session_id,
             "phase",
@@ -2292,7 +2322,8 @@ mod tests {
         initial.tool_name = Some("shell".into());
 
         temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
-            let server = OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
+            let server =
+                OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
             let (sender, _receiver) = mpsc::channel();
             {
                 let mut shared = server.shared.lock().unwrap();
@@ -2311,28 +2342,35 @@ mod tests {
                     "lease_generation": "generation"
                 })
             };
-            let read_json_files = |directory: &std::path::Path| -> Vec<(std::path::PathBuf, serde_json::Value)> {
-                let Ok(entries) = fs::read_dir(directory) else {
-                    return Vec::new();
+            let read_json_files =
+                |directory: &std::path::Path| -> Vec<(std::path::PathBuf, serde_json::Value)> {
+                    let Ok(entries) = fs::read_dir(directory) else {
+                        return Vec::new();
+                    };
+                    entries
+                        .flatten()
+                        .filter(|entry| {
+                            entry.path().extension().and_then(|value| value.to_str())
+                                == Some("json")
+                        })
+                        .filter_map(|entry| {
+                            let path = entry.path();
+                            let value = serde_json::from_slice(&fs::read(&path).ok()?).ok()?;
+                            Some((path, value))
+                        })
+                        .collect()
                 };
-                entries
-                    .flatten()
-                    .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("json"))
-                    .filter_map(|entry| {
-                        let path = entry.path();
-                        let value = serde_json::from_slice(&fs::read(&path).ok()?).ok()?;
-                        Some((path, value))
-                    })
-                    .collect()
-            };
-            let new_json_file = |before: &[(std::path::PathBuf, serde_json::Value)],
-                                 after: &[(std::path::PathBuf, serde_json::Value)]| {
-                after
-                    .iter()
-                    .find(|(path, _)| !before.iter().any(|(before_path, _)| before_path == path))
-                    .map(|(_, value)| value.clone())
-                    .unwrap()
-            };
+            let new_json_file =
+                |before: &[(std::path::PathBuf, serde_json::Value)],
+                 after: &[(std::path::PathBuf, serde_json::Value)]| {
+                    after
+                        .iter()
+                        .find(|(path, _)| {
+                            !before.iter().any(|(before_path, _)| before_path == path)
+                        })
+                        .map(|(_, value)| value.clone())
+                        .unwrap()
+                };
             let persisted = || {
                 serde_json::from_slice::<serde_json::Value>(
                     &fs::read(&persisted_state_path).unwrap(),
@@ -2354,9 +2392,18 @@ mod tests {
             assert_eq!(persisted_active["updated_at"], active.updated_at);
             let local_active = read_json_files(&local_outbox);
             let runtime_active = read_json_files(&runtime_outbox);
-            assert_eq!(new_json_file(&local_before, &local_active)["state"], "thinking");
-            assert_eq!(new_json_file(&runtime_before, &runtime_active)["kind"], "phase_signal");
-            assert_eq!(new_json_file(&runtime_before, &runtime_active)["phase"], "thinking");
+            assert_eq!(
+                new_json_file(&local_before, &local_active)["state"],
+                "thinking"
+            );
+            assert_eq!(
+                new_json_file(&runtime_before, &runtime_active)["kind"],
+                "phase_signal"
+            );
+            assert_eq!(
+                new_json_file(&runtime_before, &runtime_active)["phase"],
+                "thinking"
+            );
 
             server.handle_extension_frame("connection", keepalive(false));
             let local_active_again = read_json_files(&local_outbox);
@@ -2376,13 +2423,25 @@ mod tests {
             assert_eq!(persisted_idle["updated_at"], idle.updated_at);
             let local_idle = read_json_files(&local_outbox);
             let runtime_idle = read_json_files(&runtime_outbox);
-            assert_eq!(new_json_file(&local_before_idle, &local_idle)["state"], "idle");
-            assert_eq!(new_json_file(&runtime_before_idle, &runtime_idle)["kind"], "phase_signal");
-            assert_eq!(new_json_file(&runtime_before_idle, &runtime_idle)["phase"], "idle");
+            assert_eq!(
+                new_json_file(&local_before_idle, &local_idle)["state"],
+                "idle"
+            );
+            assert_eq!(
+                new_json_file(&runtime_before_idle, &runtime_idle)["kind"],
+                "phase_signal"
+            );
+            assert_eq!(
+                new_json_file(&runtime_before_idle, &runtime_idle)["phase"],
+                "idle"
+            );
 
             server.handle_extension_frame("connection", keepalive(true));
             assert_eq!(read_json_files(&local_outbox).len(), local_idle.len() + 1);
-            assert_eq!(read_json_files(&runtime_outbox).len(), runtime_idle.len() + 1);
+            assert_eq!(
+                read_json_files(&runtime_outbox).len(),
+                runtime_idle.len() + 1
+            );
 
             {
                 let mut shared = server.shared.lock().unwrap();
@@ -2414,7 +2473,10 @@ mod tests {
             assert_eq!(stopped.status, "stopped");
             assert_eq!(stopped.phase, "idle");
             assert!(stopped.terminal_state.is_some());
-            assert_eq!(read_json_files(&runtime_outbox).len(), stopped_runtime_count);
+            assert_eq!(
+                read_json_files(&runtime_outbox).len(),
+                stopped_runtime_count
+            );
             assert_eq!(read_json_files(&local_outbox).len(), stopped_local_count);
             server.shutdown();
         });
