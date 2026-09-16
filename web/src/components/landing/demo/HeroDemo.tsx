@@ -1,56 +1,70 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  BEATS,
-  CROSSFADE_SEC,
-  DEMO_DURATION_SEC,
-  POSTER_SEC,
-  beatWindows,
-  type BeatId,
+  HANDOFF,
+  HANDOFF_REPLAY_START_SEC,
+  HANDOFF_SENT_SEC,
+  HERO_CHAPTERS,
+  HERO_DURATION_SEC,
+  HERO_POSTER_SEC,
+  HERO_SESSIONS,
+  HERO_TIMING as T,
 } from "@longhouse/video/demo";
-import { generateDemoStory, useDemoSeed, type DemoStory } from "../../../lib/demoSimulation";
 import { useDemoClock } from "./useDemoClock";
-import { AgentsBeat } from "./AgentsBeat";
-import { UnifyBeat } from "./UnifyBeat";
-import { SteerBeat } from "./SteerBeat";
-import { CloseBeat } from "./CloseBeat";
-import { clamp, clamp01 } from "./ease";
+import { ResponsiveTerminal } from "./ResponsiveTerminal";
+import { HeroTimeline } from "./HeroTimeline";
+import { HeroPhone } from "./HeroPhone";
+import { heroLayout, placeTransform } from "./heroLayout";
+import { clamp01 } from "./ease";
 import "../../../styles/hero-demo.css";
 
 /**
- * The landing hero demo, rendered natively as DOM — no video element, no
- * fixed-aspect player frame. Beats stack in one grid cell and crossfade on
- * a shared looping clock; every layout inside them reflows with the page,
- * so mobile gets readable terminals instead of a uniformly shrunk canvas.
+ * The landing hero: one real session, handed off.
  *
- * The narrative (providers, beat schedule, replay windows) comes from
- * video/src/demo/script.ts, shared with the mp4 export composition.
+ * Three recorded provider sessions work, dock into a Longhouse timeline,
+ * and the Claude session takes a follow-up sent from a phone — replayed
+ * from the same recorded PTY. Everything is a pure function of the looping
+ * clock's `tSec`; the narrative and every take-coupled number live in
+ * video/src/demo/story.ts.
  */
 
-interface BeatProps {
-  tLocal: number;
-  story: DemoStory | null;
+const easeInOut = (p: number) => {
+  const x = clamp01(p);
+  return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+};
+const ramp = (t: number, start: number, dur: number) => easeInOut((t - start) / dur);
+
+function useStageWidth() {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      const next = Math.round(entry?.contentRect.width ?? 0);
+      setWidth((prev) => (prev === next ? prev : next));
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  return { ref, width };
 }
 
-const BEAT_COMPONENTS: Record<BeatId, React.ComponentType<BeatProps>> = {
-  agents: AgentsBeat,
-  unify: UnifyBeat,
-  steer: SteerBeat,
-  close: CloseBeat,
-};
-
 export function HeroDemo({ "aria-label": ariaLabel }: { "aria-label": string }) {
-  const { tSec, cycle, seek, containerRef } = useDemoClock(DEMO_DURATION_SEC, POSTER_SEC);
-  const seed = useDemoSeed();
-  const story = useMemo(
-    () => cycle === 0 ? null : generateDemoStory(seed, cycle - 1),
-    [cycle, seed],
-  );
-  const windows = useMemo(() => beatWindows(), []);
+  const { tSec: t, cycle, seek, containerRef } = useDemoClock(HERO_DURATION_SEC, HERO_POSTER_SEC);
+  const { ref: stageRef, width } = useStageWidth();
+  const layout = useMemo(() => (width > 0 ? heroLayout(width) : null), [width]);
 
-  const activeIndex = windows.reduce(
-    (acc, w, i) => (tSec >= w.startSec ? i : acc),
-    0,
-  );
+  const chapterIndex = HERO_CHAPTERS.reduce((acc, c, i) => (t >= c.startSec ? i : acc), 0);
+  // Fade in only when the loop wraps; the first paint replaces the static
+  // fallback and must not flash an empty stage.
+  const loopIn = cycle > 0 ? clamp01(t / T.loopFadeSec) : 1;
+  const loopOut = 1 - clamp01((t - (HERO_DURATION_SEC - T.loopFadeSec)) / T.loopFadeSec);
+
+  const handoffP = ramp(t, T.handoffStartSec, T.handoffInDurSec);
+  const handoffOn = t >= T.handoffStartSec;
+  const replayT = t < HANDOFF_REPLAY_START_SEC
+    ? HANDOFF.holdSec
+    : Math.min(HANDOFF.replayStartSec + (t - HANDOFF_REPLAY_START_SEC), HANDOFF.replayEndSec);
 
   return (
     <div
@@ -58,49 +72,124 @@ export function HeroDemo({ "aria-label": ariaLabel }: { "aria-label": string }) 
       className="hero-demo"
       role="group"
       aria-label={ariaLabel}
-      data-demo-cycle={cycle}
-      data-demo-story={story?.id ?? "recorded"}
+      data-hero-chapter={HERO_CHAPTERS[chapterIndex].id}
     >
-      <div className="hero-demo-stage">
-        {windows.map((w, i) => {
-          const local = tSec - w.startSec;
-          const inWindow = local >= 0 && local < w.durSec;
-          const fadeIn = i === 0 ? 1 : clamp01(local / CROSSFADE_SEC);
-          const fadeOut =
-            i === windows.length - 1
-              ? 1
-              : clamp01((w.durSec - local) / CROSSFADE_SEC);
-          const opacity = inWindow ? Math.min(fadeIn, fadeOut) : 0;
-          const BeatComponent = BEAT_COMPONENTS[w.id];
-          return (
-            <div
-              key={w.id}
-              className="hero-demo-beat"
-              style={{
-                opacity,
-                visibility: opacity <= 0 ? "hidden" : "visible",
-                zIndex: i === activeIndex ? 2 : 1,
-              }}
-              aria-hidden={i !== activeIndex}
-            >
-              <BeatComponent tLocal={clamp(local, 0, w.durSec)} story={story} />
-            </div>
-          );
-        })}
+      <div
+        ref={stageRef}
+        className={`hero-stage${layout?.narrow ? " is-narrow" : ""}`}
+        style={{ height: layout ? layout.height : undefined }}
+      >
+        {layout ? (
+          <>
+            {HERO_SESSIONS.map((session, i) => {
+              const dockP = ramp(t, T.dockStartSec + i * T.dockStaggerSec, T.dockDurSec);
+              const opacity = loopIn * (1 - clamp01((dockP - 0.72) / 0.28));
+              if (opacity <= 0) return null;
+              const rect = layout.deck[i];
+              const replay = Math.min(
+                session.window.startSec + Math.max(0, t - T.replayLeadSec),
+                session.window.endSec,
+              );
+              return (
+                <div
+                  key={session.id}
+                  className="hero-stage-item hero-stage-tile"
+                  style={{
+                    width: rect.w,
+                    zIndex: 25 + i,
+                    opacity,
+                    transform: placeTransform(rect, rect, layout.thumb(i), dockP),
+                  }}
+                >
+                  <ResponsiveTerminal
+                    timeline={session.timeline}
+                    tSec={replay}
+                    title={session.name}
+                    accent={session.accent}
+                    detail={session.machine}
+                  />
+                </div>
+              );
+            })}
+
+            <HeroTimeline
+              layout={layout}
+              sessions={HERO_SESSIONS}
+              opacity={ramp(t, T.dockStartSec + 0.2, 0.5) * (1 - ramp(t, T.handoffStartSec, 0.45))}
+              rowsIn={HERO_SESSIONS.map((_, i) =>
+                ramp(t, T.dockStartSec + 0.7 + i * T.dockStaggerSec, 0.4),
+              )}
+              focus={ramp(t, T.handoffStartSec - 0.7, 0.4)}
+            />
+
+            {handoffOn ? (
+              <>
+                <div
+                  className="hero-stage-item hero-stage-terminal"
+                  style={{
+                    width: layout.terminal.w,
+                    zIndex: 45,
+                    opacity: clamp01((t - T.handoffStartSec) / 0.2) * loopOut,
+                    transform: placeTransform(
+                      layout.terminal,
+                      layout.thumb(0),
+                      layout.terminal,
+                      handoffP,
+                    ),
+                  }}
+                >
+                  <ResponsiveTerminal
+                    timeline={HERO_SESSIONS[0].timeline}
+                    tSec={replayT}
+                    title={HERO_SESSIONS[0].name}
+                    accent={HERO_SESSIONS[0].accent}
+                    detail={`${HERO_SESSIONS[0].machine} · still at your desk`}
+                  />
+                </div>
+                <div
+                  className="hero-stage-item hero-stage-phone"
+                  style={{
+                    width: layout.phone.w,
+                    height: layout.phone.h,
+                    zIndex: 40,
+                    opacity: ramp(t, T.handoffStartSec + 0.25, 0.5) * loopOut,
+                    transform: `translate(${layout.phone.x}px, ${(
+                      layout.phone.y + (1 - ramp(t, T.handoffStartSec + 0.25, 0.6)) * 28
+                    ).toFixed(2)}px)`,
+                  }}
+                >
+                  <HeroPhone
+                    narrow={layout.narrow}
+                    width={layout.phone.w}
+                    session={HERO_SESSIONS[0]}
+                    project={HANDOFF.project}
+                    history={HANDOFF.history}
+                    prompt={HANDOFF.prompt}
+                    typedChars={Math.floor((t - T.typeStartSec) * T.charsPerSec)}
+                    sentAgo={t - HANDOFF_SENT_SEC}
+                    reply={HANDOFF.reply.filter((item) => t >= HANDOFF_REPLAY_START_SEC && item.shownSec <= replayT)}
+                    working={t >= HANDOFF_SENT_SEC && replayT < HANDOFF.replayEndSec - 0.2}
+                  />
+                </div>
+              </>
+            ) : null}
+          </>
+        ) : null}
       </div>
+
       <div className="hero-demo-footer">
-        <p className="hero-demo-caption" key={windows[activeIndex].id}>
-          {windows[activeIndex].caption}
+        <p className="hero-demo-caption" key={HERO_CHAPTERS[chapterIndex].id}>
+          {HERO_CHAPTERS[chapterIndex].caption}
         </p>
         <div className="hero-demo-dots" role="group" aria-label="Demo parts">
-          {windows.map((w, i) => (
+          {HERO_CHAPTERS.map((chapter, i) => (
             <button
-              key={w.id}
+              key={chapter.id}
               type="button"
-              aria-pressed={i === activeIndex}
-              className={`hero-demo-dot${i === activeIndex ? " is-active" : ""}`}
-              aria-label={`Part ${i + 1} of ${BEATS.length}: ${w.caption}`}
-              onClick={() => seek(w.startSec + (i === 0 ? 0 : CROSSFADE_SEC))}
+              aria-pressed={i === chapterIndex}
+              className={`hero-demo-dot${i === chapterIndex ? " is-active" : ""}`}
+              aria-label={`Part ${i + 1} of ${HERO_CHAPTERS.length}: ${chapter.caption}`}
+              onClick={() => seek(chapter.startSec + (i === 0 ? 0.5 : 0.05))}
             />
           ))}
         </div>

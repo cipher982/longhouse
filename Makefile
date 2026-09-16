@@ -475,8 +475,8 @@ test-e2e: ## Launch-surface E2E (core + a11y)
 qa-landing-live: ## Headless QA of the landing live demo (URL=... RUN=1 to execute an instruction)
 	cd e2e && node scripts/qa-landing-live-demo.mjs $(or $(URL),http://localhost:5173/landing) $(if $(RUN),--run,) $(if $(SHOTS),--shots $(SHOTS),) $(if $(SEED),--seed=$(SEED),) $(ARGS)
 
-hero-frames: ## Render the landing hero demo frame by frame (STEP=1 CYCLE=0 VIEWPORT=desktop|mobile) to artifacts/hero-frames/
-	bun scripts/qa/hero-frames.ts $(if $(STEP),--step=$(STEP),) $(if $(CYCLE),--cycle=$(CYCLE),) $(if $(VIEWPORT),--viewport=$(VIEWPORT),)
+hero-frames: ## Render the landing hero demo frame by frame (STEP=1 VIEWPORT=desktop|mobile) to artifacts/hero-frames/
+	bun scripts/qa/hero-frames.ts $(if $(STEP),--step=$(STEP),) $(if $(VIEWPORT),--viewport=$(VIEWPORT),)
 
 test-e2e-core: ## @internal Core E2E — no retries
 	@$(MAKE) ensure-playwright-browser

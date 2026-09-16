@@ -8,7 +8,7 @@ import { HeroDemoFallback } from "./demo/HeroDemoFallback";
 const INSTALL_COMMAND = "curl -fsSL https://get.longhouse.ai/install.sh | bash";
 const MAC_DOWNLOAD_URL = "/download/macos";
 const DEMO_ARIA_LABEL =
-  "Longhouse demo: real recorded coding-agent sessions unify into one system, then later loops simulate varied remote work without running a live model";
+  "Longhouse demo: recorded Claude Code, Codex, and OpenCode sessions dock into one timeline, then the Claude session takes a follow-up sent from a phone";
 const HeroDemo = lazy(() =>
   import("./demo/HeroDemo").then(({ HeroDemo: Component }) => ({ default: Component })),
 );
@@ -90,9 +90,12 @@ export function HeroSection() {
 
         <p className="landing-hero-subhead">
           Longhouse connects to coding-agent CLIs already installed on your machines
-          and puts every session in one system. Watch from the web or your iPhone.
-          Launch supported agents through Longhouse to send instructions, interrupt,
-          and resume, with the controls each provider exposes.
+          and puts every session in one system.{" "}
+          <span className="landing-hero-subhead-more">
+            Watch from the web or your iPhone. Launch supported agents through Longhouse
+            to send instructions, interrupt, and resume, with the controls each provider
+            exposes.
+          </span>
         </p>
 
         <div className="hero-install">
@@ -107,25 +110,38 @@ export function HeroSection() {
               <span className="hero-install-mac-detail">Free and open source · Apple silicon</span>
             </span>
           </a>
+        </div>
+      </div>
 
-          <div className="hero-install-shell">
-            <span className="hero-install-shell-label">Linux, WSL, or automation</span>
-            <button
-              type="button"
-              className="hero-install-cmd"
-              onClick={handleCopy}
-              aria-label={`Copy install command: ${INSTALL_COMMAND}`}
-            >
-              <span className="hero-install-prompt" aria-hidden="true">$</span>
-              <code className="hero-install-text">
-                <span>curl -fsSL</span>{" "}
-                <span>https://get.longhouse.ai/install.sh | bash</span>
-              </code>
-              <span className={`hero-install-copy ${copied ? "copied" : ""}`}>
-                <CopyIcon copied={copied} />
-              </span>
-            </button>
-          </div>
+      <div className="landing-hero-stage">
+        <div className="landing-hero-glow" aria-hidden="true" />
+        <Suspense fallback={<HeroDemoFallback />}>
+          <HeroDemo aria-label={DEMO_ARIA_LABEL} />
+        </Suspense>
+        <p className="landing-hero-video-note">
+          Real provider CLIs replayed from recordings, with scripted model responses.
+          No live model runs in this hero demo.
+        </p>
+      </div>
+
+      <div className="landing-hero-secondary">
+        <div className="hero-install-shell">
+          <span className="hero-install-shell-label">Linux, WSL, or automation</span>
+          <button
+            type="button"
+            className="hero-install-cmd"
+            onClick={handleCopy}
+            aria-label={`Copy install command: ${INSTALL_COMMAND}`}
+          >
+            <span className="hero-install-prompt" aria-hidden="true">$</span>
+            <code className="hero-install-text">
+              <span>curl -fsSL</span>{" "}
+              <span>https://get.longhouse.ai/install.sh | bash</span>
+            </code>
+            <span className={`hero-install-copy ${copied ? "copied" : ""}`}>
+              <CopyIcon copied={copied} />
+            </span>
+          </button>
         </div>
 
         <div className="hero-install-extras">
@@ -146,17 +162,6 @@ export function HeroSection() {
           )}
           <a href="/docs" className="hero-install-docs">Read the setup guide</a>
         </div>
-      </div>
-
-      <div className="landing-hero-stage">
-        <div className="landing-hero-glow" aria-hidden="true" />
-        <Suspense fallback={<HeroDemoFallback />}>
-          <HeroDemo aria-label={DEMO_ARIA_LABEL} />
-        </Suspense>
-        <p className="landing-hero-video-note">
-          First loop: real recorded sessions. Later loops simulate new tasks locally.
-          No live model runs in this hero demo.
-        </p>
       </div>
     </section>
   );

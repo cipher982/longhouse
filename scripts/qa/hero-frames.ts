@@ -10,16 +10,14 @@
  *   <viewport>/t<sec>.png      the demo element at that instant
  *   <viewport>/fold.png        the full first viewport, hero scrolled to top
  *   <viewport>-sheet.png       labelled contact sheet of every frame
- *   frames.json                per frame: beat, caption, each visible beat's
- *                              opacity, text, and element boxes — the same
- *                              frames for agents that cannot read images
+ *   frames.json                per frame: chapter, caption, and each visible
+ *                              stage layer's opacity, box, and text — the
+ *                              same frames for agents that cannot read images
  *
  * Usage:
- *   bun scripts/qa/hero-frames.ts [--step=0.5] [--viewport=desktop|mobile] [--cycle=N] [--output=DIR]
+ *   bun scripts/qa/hero-frames.ts [--step=0.5] [--from=S --to=S] [--viewport=desktop|mobile] [--output=DIR]
  *
- * --cycle=0 (default) is the recorded first loop; later loops swap in
- * simulated stories (web/src/lib/demoSimulation), which visitors who stay
- * on the page see from the second loop on.
+ * Narrow --from/--to with a small --step to inspect one transition.
  *
  * Starts Vite on :47210 when nothing serves FRONTEND_URL and stops it after.
  */
@@ -29,14 +27,13 @@ import { spawn, execFileSync } from "child_process";
 import { mkdirSync, writeFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { BEATS, DEMO_DURATION_SEC, beatWindows } from "../../video/src/demo/script";
+import { HERO_CHAPTERS, HERO_DURATION_SEC } from "../../video/src/demo/story";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const arg = (name: string) =>
   process.argv.find((a) => a.startsWith(`--${name}=`))?.split("=")[1];
 
 const STEP = Number(arg("step") ?? "1");
-const CYCLE = Number(arg("cycle") ?? "0");
 const BASE_URL = process.env.FRONTEND_URL ?? "http://localhost:47210";
 const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
 const OUT = path.resolve(arg("output") ?? path.join(REPO_ROOT, "artifacts/hero-frames", stamp));
@@ -80,15 +77,16 @@ async function ensureFrontend(): Promise<() => void> {
 }
 
 const times: number[] = [];
-for (let t = 0; t < DEMO_DURATION_SEC; t += STEP) times.push(Math.round(t * 100) / 100);
+const FROM = Number(arg("from") ?? "0");
+const TO = Math.min(Number(arg("to") ?? HERO_DURATION_SEC), HERO_DURATION_SEC);
+for (let t = FROM; t < TO; t += STEP) times.push(Math.round(t * 100) / 100);
 
 mkdirSync(OUT, { recursive: true });
 const stopFrontend = await ensureFrontend();
 const browser = await chromium.launch();
 const report: Record<string, unknown> = {
-  durationSec: DEMO_DURATION_SEC,
-  cycle: CYCLE,
-  beats: beatWindows().map((w) => ({ id: w.id, startSec: w.startSec, durSec: w.durSec, caption: w.caption })),
+  durationSec: HERO_DURATION_SEC,
+  chapters: HERO_CHAPTERS,
   viewports: {},
 };
 
@@ -106,7 +104,7 @@ try {
       const page = await context.newPage();
       // Only real API calls: a `**/api/**` glob also swallows Vite's src/services/api modules.
       await page.route((url) => url.pathname.startsWith("/api/"), (r) => r.abort());
-      await page.goto(`${BASE_URL}/landing?demoT=0&demoCycle=${CYCLE}&demoSeed=hero-frames`, { waitUntil: "domcontentloaded" });
+      await page.goto(`${BASE_URL}/landing?demoT=1`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => "__heroDemoSeek" in window, null, { timeout: 30_000 });
       await document_fonts(page);
 
@@ -127,21 +125,20 @@ try {
             const r = el.getBoundingClientRect();
             return [r.x - origin.x, r.y - origin.y, r.width, r.height].map(Math.round);
           };
-          const beats = [...demoEl.querySelectorAll<HTMLElement>(".hero-demo-beat")]
-            .map((beat, index) => ({ beat, index, opacity: Number(getComputedStyle(beat).opacity) }))
-            .filter((b) => b.opacity > 0.01)
-            .map(({ beat, index, opacity }) => ({
-              index,
+          const layers = [...demoEl.querySelectorAll<HTMLElement>(".hero-stage-item")]
+            .map((el) => ({ el, opacity: Number(getComputedStyle(el).opacity) }))
+            .filter((l) => l.opacity > 0.01)
+            .map(({ el, opacity }) => ({
+              class: el.className.replace("hero-stage-item ", ""),
               opacity: Math.round(opacity * 100) / 100,
-              text: beat.innerText.split("\n").map((l) => l.trimEnd()).filter(Boolean),
-              elements: [...beat.querySelectorAll("[class*='hero-demo-']")]
-                .filter((el) => el.parentElement === beat || el.parentElement?.parentElement === beat)
-                .map((el) => ({ class: el.className, box: box(el) })),
+              box: box(el),
+              text: el.innerText.split("\n").map((l) => l.trimEnd()).filter(Boolean),
             }));
           return {
             caption: demoEl.querySelector(".hero-demo-caption")?.textContent ?? "",
             demoBox: [origin.x, origin.y, origin.width, origin.height].map(Math.round),
-            beats,
+            chapter: (demoEl as HTMLElement).dataset.heroChapter ?? "",
+            layers,
           };
         });
         frames.push({ t, file, ...state });
@@ -168,7 +165,7 @@ try {
     }
   }
   writeFileSync(path.join(OUT, "frames.json"), JSON.stringify(report, null, 2));
-  console.log(`hero frames: ${OUT} (${times.length} frames x ${VIEWPORTS.length} viewports; beats ${BEATS.map((b) => b.id).join(",")})`);
+  console.log(`hero frames: ${OUT} (${times.length} frames x ${VIEWPORTS.length} viewports; chapters ${HERO_CHAPTERS.map((c) => c.id).join(",")})`);
 } finally {
   await browser.close();
   stopFrontend();

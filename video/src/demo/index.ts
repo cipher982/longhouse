@@ -6,4 +6,5 @@
  */
 export * from "./script";
 export * from "./recordings";
+export * from "./story";
 export { TerminalGrid, type GridTimeline } from "../terminal/TerminalGrid";

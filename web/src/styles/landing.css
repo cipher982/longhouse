@@ -150,9 +150,14 @@
 
   .landing-hero {
     display: grid;
+    grid-template-areas:
+      "content stage"
+      "secondary stage";
+    grid-template-rows: auto auto;
     grid-template-columns: minmax(430px, 0.9fr) minmax(560px, 1.1fr);
+    align-content: center;
     align-items: center;
-    gap: clamp(40px, 5vw, 80px);
+    gap: 16px clamp(40px, 5vw, 80px);
     width: min(1320px, calc(100% - 48px));
     min-height: 720px;
     margin: 0 auto;
@@ -162,6 +167,8 @@
   .landing-hero-content {
     position: relative;
     z-index: 3;
+    grid-area: content;
+    align-self: end;
     min-width: 0;
     animation: landing-rise 0.65s ease-out both;
   }
@@ -344,8 +351,19 @@
     color: var(--color-text-primary);
   }
 
+  .landing-hero-secondary {
+    position: relative;
+    z-index: 3;
+    grid-area: secondary;
+    align-self: start;
+    max-width: 560px;
+    min-width: 0;
+    animation: landing-rise 0.65s ease-out both;
+  }
+
   .landing-hero-stage {
     position: relative;
+    grid-area: stage;
     width: 100%;
     animation: landing-rise 0.75s 0.08s ease-out both;
   }
@@ -1082,6 +1100,10 @@
     }
 
     .landing-hero {
+      grid-template-areas:
+        "content"
+        "stage"
+        "secondary";
       grid-template-columns: 1fr;
       gap: 40px;
       min-height: 0;
@@ -1247,8 +1269,12 @@
     }
 
     .landing-hero {
-      gap: 32px;
-      padding: 60px 0 74px;
+      gap: 26px;
+      padding: 30px 0 74px;
+    }
+
+    .landing-hero-subhead-more {
+      display: none;
     }
 
     .landing-hero-kicker {
@@ -1263,7 +1289,7 @@
     }
 
     .landing-hero-subhead {
-      margin-bottom: 26px;
+      margin-bottom: 20px;
       font-size: 0.96rem;
       line-height: 1.65;
     }

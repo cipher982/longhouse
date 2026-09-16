@@ -55,22 +55,20 @@ function usePrefersReducedMotion(): boolean {
 }
 
 /**
- * `?demoT=<sec>` freezes the clock at that second (`&demoCycle=<n>` picks
- * which loop: 0 is the recorded story, later loops are simulated) and exposes
+ * `?demoT=<sec>` freezes the clock at that second and exposes
  * `window.__heroDemoSeek` so capture tooling (scripts/qa/hero-frames.ts)
  * can step through the loop deterministically instead of racing rAF.
  */
-function frozenDemoParam(name: "demoT" | "demoCycle"): number | null {
+function frozenDemoT(): number | null {
   if (typeof window === "undefined") return null;
-  const raw = new URLSearchParams(window.location.search).get(name);
+  const raw = new URLSearchParams(window.location.search).get("demoT");
   const value = raw === null ? NaN : Number(raw);
   return Number.isFinite(value) ? value : null;
 }
 
 export function useDemoClock(durationSec: number, posterSec: number): DemoClock {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [frozenT] = useState(() => frozenDemoParam("demoT"));
-  const [frozenCycle] = useState(() => (frozenT === null ? null : frozenDemoParam("demoCycle")));
+  const [frozenT] = useState(frozenDemoT);
   const reducedMotion = usePrefersReducedMotion();
   const [isInViewport, setIsInViewport] = useState(true);
   const [isDocumentVisible, setIsDocumentVisible] = useState(
@@ -78,9 +76,9 @@ export function useDemoClock(durationSec: number, posterSec: number): DemoClock 
   );
 
   const clockRef = useRef(frozenT ?? 0);
-  const cycleRef = useRef(frozenCycle ?? 0);
+  const cycleRef = useRef(0);
   const [tSec, setTSec] = useState(frozenT ?? 0);
-  const [cycle, setCycle] = useState(frozenCycle ?? 0);
+  const [cycle, setCycle] = useState(0);
   const playing = frozenT === null && !reducedMotion && isInViewport && isDocumentVisible;
 
   useEffect(() => {

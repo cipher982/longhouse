@@ -11,13 +11,13 @@ const TERMINALS = [
     title: "Codex",
     detail: "devbox",
     accent: "#7BC9A8",
-    lines: ["Repair the release build", "Inspecting the failing target", "Running focused tests"],
+    lines: ["Make busiest_shelf return None", "Checking the empty case", "Returning None instead"],
   },
   {
     title: "OpenCode",
     detail: "homelab",
     accent: "#6FB7E8",
-    lines: ["Run the nightly digest", "$ python3 test_inventory.py", "all tests passed"],
+    lines: ["Add type hints to inventory.py", "Reading inventory.py", "Checking the module imports"],
   },
 ] as const;
 
@@ -25,7 +25,7 @@ const TERMINALS = [
  * Lightweight first paint for the lazy recorded-terminal bundle.
  *
  * Keep this as plain DOM so a cold visit has a complete hero before the
- * recording data arrives. Its geometry mirrors AgentsBeat closely enough that
+ * recording data arrives. Its geometry approximates the agents deck closely enough that
  * Suspense can replace it without flashing an empty media frame or shifting
  * the page.
  */
@@ -72,7 +72,6 @@ export function HeroDemoFallback() {
         <p className="hero-demo-caption">Your coding agents already run everywhere.</p>
         <div className="hero-demo-dots">
           <span className="hero-demo-dot is-active" />
-          <span className="hero-demo-dot" />
           <span className="hero-demo-dot" />
           <span className="hero-demo-dot" />
         </div>
