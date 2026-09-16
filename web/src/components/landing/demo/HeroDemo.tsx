@@ -13,7 +13,7 @@ import { useDemoClock } from "./useDemoClock";
 import { ResponsiveTerminal } from "./ResponsiveTerminal";
 import { HeroTimeline } from "./HeroTimeline";
 import { HeroPhone } from "./HeroPhone";
-import { heroLayout, placeTransform } from "./heroLayout";
+import { bezierPoint, heroLayout, placeTransform, type HeroLayout } from "./heroLayout";
 import { clamp01 } from "./ease";
 import "../../../styles/hero-demo.css";
 
@@ -73,6 +73,8 @@ export function HeroDemo({ "aria-label": ariaLabel }: { "aria-label": string }) 
       role="group"
       aria-label={ariaLabel}
       data-hero-chapter={HERO_CHAPTERS[chapterIndex].id}
+      data-demo-cycle={cycle}
+      data-handoff-replay-sec={HANDOFF_REPLAY_START_SEC.toFixed(2)}
     >
       <div
         ref={stageRef}
@@ -124,8 +126,20 @@ export function HeroDemo({ "aria-label": ariaLabel }: { "aria-label": string }) 
 
             {handoffOn ? (
               <>
+                <HeroRelay
+                  relay={layout.relay}
+                  narrow={layout.narrow}
+                  width={layout.width}
+                  height={layout.height}
+                  opacity={ramp(t, T.handoffStartSec + 0.6, 0.5) * loopOut}
+                  travel={clamp01((t - HANDOFF_SENT_SEC) / T.reactDelaySec)}
+                  afterglow={1 - 0.6 * ramp(t, HANDOFF_REPLAY_START_SEC + 0.4, 0.8)}
+                  sent={t >= HANDOFF_SENT_SEC}
+                />
                 <div
-                  className="hero-stage-item hero-stage-terminal"
+                  className={`hero-stage-item hero-stage-terminal${
+                    t >= HANDOFF_REPLAY_START_SEC && t < HANDOFF_REPLAY_START_SEC + 0.6 ? " is-receiving" : ""
+                  }`}
                   style={{
                     width: layout.terminal.w,
                     zIndex: 45,
@@ -168,7 +182,7 @@ export function HeroDemo({ "aria-label": ariaLabel }: { "aria-label": string }) 
                     typedChars={Math.floor((t - T.typeStartSec) * T.charsPerSec)}
                     sentAgo={t - HANDOFF_SENT_SEC}
                     reply={HANDOFF.reply.filter((item) => t >= HANDOFF_REPLAY_START_SEC && item.shownSec <= replayT)}
-                    working={t >= HANDOFF_SENT_SEC && replayT < HANDOFF.replayEndSec - 0.2}
+                    working={t >= HANDOFF_REPLAY_START_SEC && replayT < HANDOFF.replayEndSec - 0.2}
                   />
                 </div>
               </>
@@ -195,5 +209,60 @@ export function HeroDemo({ "aria-label": ariaLabel }: { "aria-label": string }) 
         </div>
       </div>
     </div>
+  );
+}
+
+/** The message's path: phone Send → Longhouse → the terminal on the desk. */
+function HeroRelay({
+  relay,
+  narrow,
+  width,
+  height,
+  opacity,
+  travel,
+  afterglow,
+  sent,
+}: {
+  relay: HeroLayout["relay"];
+  narrow: boolean;
+  width: number;
+  height: number;
+  opacity: number;
+  travel: number;
+  afterglow: number;
+  sent: boolean;
+}) {
+  if (opacity <= 0) return null;
+  const [a, b, c, d] = relay;
+  const path = `M${a.x},${a.y} C${b.x},${b.y} ${c.x},${c.y} ${d.x},${d.y}`;
+  const label = bezierPoint(relay, 0.5);
+  const pulse = bezierPoint(relay, travel);
+  const inFlight = sent && travel < 1;
+  return (
+    <svg
+      className="hero-stage-item hero-relay"
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      style={{ zIndex: 35, opacity }}
+      aria-hidden="true"
+    >
+      <path className="hero-relay-track" d={path} />
+      {sent ? (
+        <path
+          className="hero-relay-lit"
+          d={path}
+          pathLength={1}
+          style={{ strokeDasharray: `${travel} 1`, opacity: afterglow }}
+        />
+      ) : null}
+      {inFlight ? <circle className="hero-relay-pulse" cx={pulse.x} cy={pulse.y} r={5} /> : null}
+      <g transform={`translate(${narrow ? label.x - 64 : label.x}, ${label.y})`}>
+        <rect className="hero-relay-pill" x={-50} y={-12} width={100} height={24} rx={12} />
+        <text className="hero-relay-label" x={0} y={4} textAnchor="middle">
+          via Longhouse
+        </text>
+      </g>
+    </svg>
   );
 }

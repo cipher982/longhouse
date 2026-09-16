@@ -101,32 +101,32 @@ try {
       await hero.waitFor({ state: "visible", timeout: 20000 });
       await page
         .waitForFunction(
-          () =>
-            Array.from(document.querySelectorAll(".landing-hero .hero-demo-beat")).some((beat) => {
-              const rect = beat.getBoundingClientRect();
-              return getComputedStyle(beat).visibility === "visible" && rect.height >= 180;
-            }),
+          () => (document.querySelector(".landing-hero .hero-stage")?.getBoundingClientRect().height ?? 0) >= 180,
           null,
           { timeout: 10000 },
         )
         .catch(() => {});
       const heroPaint = await page.evaluate(() => {
         const demo = document.querySelector(".landing-hero .hero-demo");
-        const visibleBeat = Array.from(
-          document.querySelectorAll(".landing-hero .hero-demo-beat"),
-        ).find((beat) => getComputedStyle(beat).visibility === "visible");
-        if (!demo || !visibleBeat) return null;
+        const stage = document.querySelector(".landing-hero .hero-stage");
+        if (!demo || !stage) return null;
         const demoRect = demo.getBoundingClientRect();
-        const beatRect = visibleBeat.getBoundingClientRect();
+        const stageRect = stage.getBoundingClientRect();
         return {
           demoWidth: Math.round(demoRect.width),
-          beatHeight: Math.round(beatRect.height),
+          stageHeight: Math.round(stageRect.height),
+          stageTop: Math.round(stageRect.top + window.scrollY),
         };
       });
       check(
         `${viewport.name}: autoplay demo remains in the hero`,
-        Boolean(heroPaint && heroPaint.demoWidth >= 300 && heroPaint.beatHeight >= 180),
-        heroPaint ? `${heroPaint.demoWidth}px wide, ${heroPaint.beatHeight}px tall` : "not painted",
+        Boolean(heroPaint && heroPaint.demoWidth >= 300 && heroPaint.stageHeight >= 180),
+        heroPaint ? `${heroPaint.demoWidth}px wide, ${heroPaint.stageHeight}px tall` : "not painted",
+      );
+      check(
+        `${viewport.name}: demo starts above the fold`,
+        Boolean(heroPaint && heroPaint.stageTop <= viewport.height - 200),
+        heroPaint ? `stage top at y=${heroPaint.stageTop} of ${viewport.height}` : "not painted",
       );
       check(
         `${viewport.name}: hero has no live-demo toggle`,
@@ -135,26 +135,33 @@ try {
       await page.screenshot({ path: path.join(shotsDir, `${viewport.name}-hero.png`) });
 
       if (viewport.name !== "wide-short") {
-        await page.waitForFunction(
-          () => Number(document.querySelector(".landing-hero .hero-demo")?.getAttribute("data-demo-cycle") ?? 0) >= 1,
-          null,
-          { timeout: 25000 },
-        );
         const heroTabs = page.locator(".landing-hero .hero-demo-dot");
         await heroTabs.nth(2).click();
-        // Capture after the phone has sent and the generated terminal has
-        // reached tool activity, not during the intentional idle-composer hold.
-        await page.waitForTimeout(4000);
-        await page.evaluate(() => window.scrollTo(0, 0));
-        await page.waitForTimeout(100);
-        const simulatedStory = await hero.getAttribute("data-demo-story");
         check(
-          `${viewport.name}: later hero loop selects a procedural story`,
-          Boolean(simulatedStory && simulatedStory !== "recorded"),
-          simulatedStory ?? "missing story",
+          `${viewport.name}: third dot seeks to the handoff`,
+          (await hero.getAttribute("data-hero-chapter")) === "handoff",
+        );
+        // Causality is checked on a frozen frame: in real time the recorded
+        // terminal scrolls the pasted follow-up away within a second.
+        const replaySec = Number(await hero.getAttribute("data-handoff-replay-sec"));
+        const frozen = new URL(page.url());
+        frozen.searchParams.set("demoT", String(replaySec + 0.4));
+        await page.goto(frozen.toString(), { waitUntil: "domcontentloaded" });
+        await page.locator(".landing-hero .hero-stage-terminal").waitFor({ timeout: 20000 });
+        await page.waitForTimeout(300);
+        const handoff = await page.evaluate(() => {
+          const bubble = document.querySelector(".landing-hero .hero-phone-user")?.textContent ?? "";
+          const terminal = document.querySelector(".landing-hero .hero-stage-terminal")?.textContent ?? "";
+          const squash = (value) => value.replace(/\s+/g, "");
+          return { bubble, reached: Boolean(bubble) && squash(terminal).includes(squash(bubble)) };
+        });
+        check(
+          `${viewport.name}: phone follow-up lands in the recorded terminal`,
+          handoff.reached,
+          handoff.bubble || "no follow-up bubble",
         );
         await page.screenshot({
-          path: path.join(shotsDir, `${viewport.name}-hero-simulated.png`),
+          path: path.join(shotsDir, `${viewport.name}-hero-handoff.png`),
         });
       }
 

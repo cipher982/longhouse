@@ -145,6 +145,55 @@
     will-change: transform, opacity;
   }
 
+  /* relay: phone Send → terminal */
+
+  .hero-relay {
+    overflow: visible;
+    pointer-events: none;
+  }
+
+  .hero-relay-track {
+    fill: none;
+    stroke: rgba(201, 166, 107, 0.28);
+    stroke-dasharray: 3 6;
+    stroke-linecap: round;
+    stroke-width: 1.5;
+  }
+
+  .hero-relay-lit {
+    fill: none;
+    stroke: #e2b865;
+    stroke-linecap: round;
+    stroke-width: 2;
+    filter: drop-shadow(0 0 6px rgba(226, 184, 101, 0.7));
+  }
+
+  .hero-relay-pulse {
+    fill: #f6d9a0;
+    filter: drop-shadow(0 0 8px rgba(246, 217, 160, 0.95));
+  }
+
+  .hero-relay-pill {
+    fill: #15100b;
+    stroke: rgba(201, 166, 107, 0.45);
+  }
+
+  .hero-relay-label {
+    fill: rgba(243, 234, 217, 0.78);
+    font-size: 11px;
+    letter-spacing: 0.02em;
+  }
+
+  .hero-stage-terminal .hero-demo-terminal {
+    transition: box-shadow 200ms ease-out, border-color 200ms ease-out;
+  }
+
+  .hero-stage-terminal.is-receiving .hero-demo-terminal {
+    border-color: rgba(226, 184, 101, 0.75);
+    box-shadow: 0 0 0 1px rgba(226, 184, 101, 0.35), 0 0 40px rgba(226, 184, 101, 0.25),
+      0 22px 54px rgba(0, 0, 0, 0.5);
+  }
+
   /* timeline: the web timeline's row grammar */
 
   .hero-timeline {

@@ -129,10 +129,10 @@ try {
             .map((el) => ({ el, opacity: Number(getComputedStyle(el).opacity) }))
             .filter((l) => l.opacity > 0.01)
             .map(({ el, opacity }) => ({
-              class: el.className.replace("hero-stage-item ", ""),
+              class: (el.getAttribute("class") ?? "").replace("hero-stage-item ", ""),
               opacity: Math.round(opacity * 100) / 100,
               box: box(el),
-              text: el.innerText.split("\n").map((l) => l.trimEnd()).filter(Boolean),
+              text: (el.innerText ?? el.textContent ?? "").split("\n").map((l) => l.trimEnd()).filter(Boolean),
             }));
           return {
             caption: demoEl.querySelector(".hero-demo-caption")?.textContent ?? "",

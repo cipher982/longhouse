@@ -240,7 +240,8 @@ export const HERO_TIMING = {
   handoffInDurSec: 0.8,
   typeStartSec: 7.9,
   charsPerSec: 40,
-  reactDelaySec: 0.3,
+  /** Send → paste lands: the relay pulse travels phone → terminal. */
+  reactDelaySec: 0.6,
   /** Result hold after the replay ends, then fade to the loop start. */
   holdSec: 1.8,
   loopFadeSec: 0.45,

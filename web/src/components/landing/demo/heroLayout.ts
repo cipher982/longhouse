@@ -33,6 +33,22 @@ export interface HeroLayout {
   thumb: (index: number) => Rect;
   terminal: Rect;
   phone: Rect;
+  /** Cubic path phone → terminal. */
+  relay: [Point, Point, Point, Point];
+}
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+export function bezierPoint([a, b, c, d]: [Point, Point, Point, Point], t: number): Point {
+  const u = 1 - t;
+  const w = [u * u * u, 3 * u * u * t, 3 * u * t * t, t * t * t];
+  return {
+    x: w[0] * a.x + w[1] * b.x + w[2] * c.x + w[3] * d.x,
+    y: w[0] * a.y + w[1] * b.y + w[2] * c.y + w[3] * d.y,
+  };
 }
 
 export function heroLayout(width: number): HeroLayout {
@@ -54,10 +70,11 @@ export function heroLayout(width: number): HeroLayout {
   let phone: Rect;
   let height: number;
   if (narrow) {
+    const gap = 40;
     const phoneH = Math.max(270, width * 0.78);
     terminal = { x: 0, y: 0, w: width, h: tileH };
-    height = Math.max(deckH, tileH + 14 + phoneH);
-    phone = { x: width * 0.04, y: tileH + 14, w: width * 0.92, h: height - tileH - 14 };
+    height = Math.max(deckH, tileH + gap + phoneH);
+    phone = { x: width * 0.04, y: tileH + gap, w: width * 0.92, h: height - tileH - gap };
   } else {
     // Diagonal: terminal upper-right in front, phone lower-left tucked under
     // its corner, where the phone shows only status bar and nav.
@@ -85,7 +102,26 @@ export function heroLayout(width: number): HeroLayout {
     };
   };
 
-  return { narrow, width, height, deck, panel, panelHeaderH, rowH, thumb, terminal, phone };
+  let relay: HeroLayout["relay"];
+  if (narrow) {
+    // Stacked: a short hop up from the phone's top edge to the terminal.
+    const x = width * 0.78;
+    const start = { x, y: phone.y };
+    const end = { x, y: terminal.y + terminal.h };
+    relay = [start, { x, y: start.y - 12 }, { x, y: end.y + 12 }, end];
+  } else {
+    // Send sits bottom-right in the phone's steering card.
+    const start = { x: phone.x + phone.w * 0.87, y: phone.y + phone.h - phone.w * 0.17 };
+    const end = { x: terminal.x + terminal.w * 0.55, y: terminal.y + terminal.h };
+    relay = [
+      start,
+      { x: start.x + (width - start.x) * 0.75, y: start.y },
+      { x: end.x + (width - end.x) * 0.2, y: end.y + (start.y - end.y) * 0.55 },
+      end,
+    ];
+  }
+
+  return { narrow, width, height, deck, panel, panelHeaderH, rowH, thumb, terminal, phone, relay };
 }
 
 export const lerp = (a: number, b: number, p: number) => a + (b - a) * p;
