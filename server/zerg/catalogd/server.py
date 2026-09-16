@@ -20,6 +20,7 @@ from contextvars import ContextVar
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from zerg.catalogd.protocol import CatalogRpcError
 from zerg.catalogd.protocol import CatalogRpcRequest
@@ -33,6 +34,7 @@ from zerg.catalogd.schema import CatalogMeta
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.schema import read_catalog_meta
+from zerg.catalogd.schema import read_deployment_activation
 from zerg.catalogd.store import CatalogStore
 
 logger = logging.getLogger(__name__)
@@ -82,7 +84,52 @@ class CatalogWriterStats:
         self._active_since: float | None = None
         self._rejected_busy = 0
         self._expired_before_execution = 0
+        self._accepting = os.getenv("LONGHOUSE_DEPLOYMENT_PENDING", "").strip() != "1"
         self._lock = threading.Lock()
+
+    def admit(self, max_depth: int, *, allow_closed: bool = False) -> str:
+        """Atomically fence admission and account for an accepted writer."""
+        with self._lock:
+            if not self._accepting and not allow_closed:
+                return "closed"
+            if self._depth >= max_depth:
+                self._rejected_busy += 1
+                return "busy"
+            self._depth += 1
+            self._peak_depth = max(self._peak_depth, self._depth)
+            return "accepted"
+
+    def close_admission(self) -> dict:
+        with self._lock:
+            self._accepting = False
+            return self._snapshot_unlocked()
+
+    def open_admission(self) -> dict:
+        with self._lock:
+            self._accepting = True
+            return self._snapshot_unlocked()
+
+    def _snapshot_unlocked(self) -> dict:
+        labels = {
+            label: {
+                "n": self._counts.get(label, 0),
+                "total_exec_ms": round(self._exec_total_ms.get(label, 0.0), 2),
+                "queue_wait_ms": self._percentiles(self._queue_wait.get(label)),
+                "exec_ms": self._percentiles(self._exec.get(label)),
+            }
+            for label in sorted(self._counts)
+        }
+        active_age_ms = round((time.perf_counter() - self._active_since) * 1000.0, 2) if self._active_since else 0.0
+        return {
+            "depth": self._depth,
+            "peak_depth": self._peak_depth,
+            "active_label": self._active_label,
+            "active_age_ms": active_age_ms,
+            "rejected_busy": self._rejected_busy,
+            "expired_before_execution": self._expired_before_execution,
+            "accepting": self._accepting,
+            "labels": labels,
+        }
 
     @property
     def depth(self) -> int:
@@ -133,25 +180,7 @@ class CatalogWriterStats:
 
     def snapshot(self) -> dict:
         with self._lock:
-            labels = {
-                label: {
-                    "n": self._counts.get(label, 0),
-                    "total_exec_ms": round(self._exec_total_ms.get(label, 0.0), 2),
-                    "queue_wait_ms": self._percentiles(self._queue_wait.get(label)),
-                    "exec_ms": self._percentiles(self._exec.get(label)),
-                }
-                for label in sorted(self._counts)
-            }
-            active_age_ms = round((time.perf_counter() - self._active_since) * 1000.0, 2) if self._active_since else 0.0
-            return {
-                "depth": self._depth,
-                "peak_depth": self._peak_depth,
-                "active_label": self._active_label,
-                "active_age_ms": active_age_ms,
-                "rejected_busy": self._rejected_busy,
-                "expired_before_execution": self._expired_before_execution,
-                "labels": labels,
-            }
+            return self._snapshot_unlocked()
 
 
 class CatalogDaemonError(RuntimeError):
@@ -159,6 +188,10 @@ class CatalogDaemonError(RuntimeError):
 
 
 class CatalogWriterBusy(CatalogDaemonError):
+    pass
+
+
+class CatalogWriterClosed(CatalogDaemonError):
     pass
 
 
@@ -427,6 +460,13 @@ class CatalogDaemon:
                         "catalog read lane is full",
                         retryable=True,
                         retry_after_ms=25,
+                    )
+                except CatalogWriterClosed:
+                    response = self._error(
+                        message,
+                        "admission_closed",
+                        "catalog writer admission is closed",
+                        retryable=True,
                     )
                 except CatalogWriterBusy:
                     response = self._error(
@@ -741,11 +781,115 @@ class CatalogDaemon:
             return await self._summarize_migration_run(request)
         if request.method == "migration.gaps.list.v2":
             return await self._list_migration_gaps(request)
+        if request.method in {"writer.admission.close.v2", "writer.admission.open.v2"}:
+            if request.params:
+                return self._error(request, "invalid_request", f"{request.method} accepts no parameters")
+            writer = (
+                self._writer_stats.close_admission()
+                if request.method == "writer.admission.close.v2"
+                else self._writer_stats.open_admission()
+            )
+            return CatalogRpcResponse(
+                id=request.id,
+                result={
+                    "ready": True,
+                    "writer_admission": {
+                        **writer,
+                        "max_depth": self._writer_max_depth,
+                    },
+                },
+            )
+        if request.method == "writer.admission.activation.read.v2":
+            if request.params:
+                return self._error(request, "invalid_request", "activation read accepts no parameters")
+            activation = await self._run_control_read_store(read_deployment_activation, self._engine)
+            return CatalogRpcResponse(
+                id=request.id,
+                result={
+                    "ready": True,
+                    "activation": (
+                        {
+                            "image_digest": activation.image_digest,
+                            "generation": activation.generation,
+                            "activated_at": activation.activated_at.isoformat(),
+                        }
+                        if activation is not None
+                        else None
+                    ),
+                },
+            )
+        if request.method == "writer.admission.activation.record.v2":
+            if set(request.params) != {"image_digest", "generation"}:
+                return self._error(request, "invalid_request", "activation record requires image_digest and generation")
+            image_digest = request.params["image_digest"]
+            generation = request.params["generation"]
+            if (
+                not isinstance(image_digest, str)
+                or not image_digest.strip()
+                or len(image_digest.strip()) > 255
+                or not isinstance(generation, str)
+                or not generation.strip()
+                or len(generation.strip()) > 255
+            ):
+                return self._error(request, "invalid_request", "activation identity is invalid")
+            writer_before = self._writer_stats.snapshot()
+            if writer_before["accepting"]:
+                existing = await self._run_control_read_store(read_deployment_activation, self._engine)
+                if existing is not None and existing.image_digest == image_digest.strip() and existing.generation == generation.strip():
+                    return CatalogRpcResponse(
+                        id=request.id,
+                        result={
+                            "ready": True,
+                            "activation": {
+                                "image_digest": existing.image_digest,
+                                "generation": existing.generation,
+                                "activated_at": existing.activated_at.isoformat(),
+                            },
+                            "writer_admission": {
+                                **writer_before,
+                                "max_depth": self._writer_max_depth,
+                            },
+                        },
+                    )
+                return self._error(request, "conflict", "activation requires a closed writer or an exact existing receipt")
+            if writer_before["depth"] != 0 or writer_before["active_label"] is not None:
+                return self._error(request, "conflict", "activation requires a closed, idle writer")
+            result = await self._run_store(
+                self._record_deployment_activation,
+                image_digest=image_digest.strip(),
+                generation=generation.strip(),
+                allow_closed=True,
+            )
+            if result.get("conflict"):
+                return self._error(request, "conflict", str(result["conflict"]))
+            opened = self._writer_stats.open_admission()
+            return CatalogRpcResponse(
+                id=request.id,
+                result={
+                    "ready": True,
+                    "activation": result["activation"],
+                    "writer_admission": {
+                        **opened,
+                        "max_depth": self._writer_max_depth,
+                    },
+                },
+            )
         if request.params:
             return self._error(request, "invalid_request", "catalog metadata methods accept empty params")
         metadata = await self._run_control_read_store(read_catalog_meta, self._engine)
         if request.method == "ping.v2":
             writer = self._writer_stats.snapshot()
+            activation = None
+            if (
+                metadata.deployment_activation_image_digest
+                and metadata.deployment_activation_generation
+                and metadata.deployment_activation_at is not None
+            ):
+                activation = {
+                    "image_digest": metadata.deployment_activation_image_digest,
+                    "generation": metadata.deployment_activation_generation,
+                    "activated_at": metadata.deployment_activation_at.isoformat(),
+                }
             result = {
                 "catalog_id": str(metadata.catalog_id),
                 "schema_generation": self._schema_generation,
@@ -755,14 +899,17 @@ class CatalogDaemon:
                 "ready": True,
                 "writer_admission": {
                     "depth": writer["depth"],
-                    "max_depth": self._writer_max_depth,
                     "peak_depth": writer["peak_depth"],
+                    "max_depth": self._writer_max_depth,
+                    "accepting": writer["accepting"],
                     "active_label": writer["active_label"],
                     "active_age_ms": writer["active_age_ms"],
                     "rejected_busy": writer["rejected_busy"],
                     "expired_before_execution": writer["expired_before_execution"],
                 },
             }
+            if activation is not None:
+                result["deployment_activation"] = activation
             # Keep the idle ping shape compatible with older health probes;
             # once a write has happened, expose the bounded per-label series
             # and cumulative execution counters for trusted operators.
@@ -3925,11 +4072,66 @@ class CatalogDaemon:
         )
         return CatalogRpcResponse(id=request.id, result=result)
 
-    async def _run_store(self, operation, *args, **kwargs):
+    def _record_deployment_activation(self, *, image_digest: str, generation: str) -> dict[str, Any]:
+        if self._engine is None:
+            raise CatalogDaemonError("catalog engine is not ready")
+        now = datetime.now(UTC).isoformat()
+        with self._engine.begin() as connection:
+            row = (
+                connection.exec_driver_sql(
+                    """
+                SELECT deployment_activation_image_digest,
+                       deployment_activation_generation,
+                       deployment_activation_at
+                  FROM catalog_meta
+                 WHERE singleton = 1
+                """
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                raise CatalogDaemonError("catalog activation metadata is missing")
+            existing_digest = row["deployment_activation_image_digest"]
+            existing_generation = row["deployment_activation_generation"]
+            existing_at = row["deployment_activation_at"]
+            if any(value is not None for value in (existing_digest, existing_generation, existing_at)):
+                if not all(isinstance(value, str) and value.strip() for value in (existing_digest, existing_generation, existing_at)):
+                    return {"conflict": "catalog activation evidence is malformed"}
+                if existing_digest.strip() == image_digest and existing_generation.strip() == generation:
+                    return {
+                        "activation": {
+                            "image_digest": existing_digest.strip(),
+                            "generation": existing_generation.strip(),
+                            "activated_at": existing_at,
+                        }
+                    }
+            connection.exec_driver_sql(
+                """
+                UPDATE catalog_meta
+                   SET deployment_activation_image_digest = ?,
+                       deployment_activation_generation = ?,
+                       deployment_activation_at = ?,
+                       updated_at = ?
+                 WHERE singleton = 1
+                """,
+                (image_digest, generation, now, now),
+            )
+        return {
+            "activation": {
+                "image_digest": image_digest,
+                "generation": generation,
+                "activated_at": now,
+            }
+        }
+
+    async def _run_store(self, operation, *args, allow_closed: bool = False, **kwargs):
         if self._executor is None:
             raise CatalogDaemonError("catalog executor is not ready")
-        if self._writer_stats.depth >= self._writer_max_depth:
-            self._writer_stats.record_rejected_busy()
+        admission = self._writer_stats.admit(self._writer_max_depth, allow_closed=allow_closed)
+        if admission == "closed":
+            raise CatalogWriterClosed("catalog writer admission is closed")
+        if admission == "busy":
             raise CatalogWriterBusy("catalog writer queue is full")
         loop = asyncio.get_running_loop()
         # Everything serialized here shares one thread, so a caller's latency is
@@ -3941,7 +4143,6 @@ class CatalogDaemon:
         label = getattr(operation, "__name__", "unknown")
         enqueued_at = time.perf_counter()
         deadline_ns = _REQUEST_DEADLINE_NS.get()
-        self._writer_stats.record_enqueue()
         try:
             result = await loop.run_in_executor(
                 self._executor,

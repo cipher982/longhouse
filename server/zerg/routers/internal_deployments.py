@@ -6,6 +6,7 @@ remain control-plane-owned; a process restart creates a new runtime epoch.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -87,7 +88,128 @@ def _fence_response(payload: dict[str, Any]) -> JSONResponse:
         status_code = 202
     else:
         status_code = 200
+
     return JSONResponse(status_code=status_code, content=payload)
+
+
+async def _catalog_admission_probe(operation: str) -> dict[str, Any]:
+    """Close/open the catalog writer gate or observe its truthful state."""
+    method = {
+        "close": "writer.admission.close.v2",
+        "open": "writer.admission.open.v2",
+        "status": "ping.v2",
+    }.get(operation)
+    if method is None:
+        raise ValueError(f"unsupported catalog admission operation: {operation}")
+    try:
+        _database_path, catalog_socket = catalogd_paths()
+        payload = await asyncio.to_thread(
+            call_catalogd_sync,
+            catalog_socket,
+            method,
+            timeout_seconds=0.05 if operation == "close" else 0.75,
+        )
+    except Exception as exc:
+        return {
+            "available": False,
+            "state": "unknown",
+            "depth": None,
+            "accepting": None,
+            "detail": str(exc) or "catalog writer admission unavailable",
+        }
+    if not isinstance(payload, dict) or payload.get("ready") is not True or not isinstance(payload.get("writer_admission"), dict):
+        return {
+            "available": False,
+            "state": "unknown",
+            "depth": None,
+            "accepting": None,
+            "detail": "catalog writer admission is not reported",
+        }
+    writer = payload["writer_admission"]
+    depth = writer.get("depth")
+    accepting = writer.get("accepting")
+    if type(depth) is not int or depth < 0 or type(accepting) is not bool:
+        return {
+            "available": False,
+            "state": "unknown",
+            "depth": None,
+            "accepting": None,
+            "detail": "catalog writer admission is malformed",
+        }
+    result = {
+        "available": True,
+        "state": "open" if accepting else "closed",
+        "depth": depth,
+        "accepting": accepting,
+        "active_label": writer.get("active_label"),
+        "active_age_ms": writer.get("active_age_ms"),
+        "max_depth": writer.get("max_depth"),
+        "detail": None,
+    }
+    if operation == "status":
+        result["activation"] = payload.get("deployment_activation")
+    return result
+
+
+async def _catalog_activation_probe(operation: str, params: dict[str, Any]) -> dict[str, Any]:
+    method = {
+        "read": "writer.admission.activation.read.v2",
+        "record": "writer.admission.activation.record.v2",
+    }.get(operation)
+    if method is None:
+        raise ValueError(f"unsupported catalog activation operation: {operation}")
+    try:
+        _database_path, catalog_socket = catalogd_paths()
+        payload = await asyncio.to_thread(
+            call_catalogd_sync,
+            catalog_socket,
+            method,
+            params=params,
+            timeout_seconds=0.75,
+        )
+    except Exception as exc:
+        return {
+            "available": False,
+            "activation": None,
+            "detail": str(exc) or "catalog activation authority unavailable",
+        }
+    if not isinstance(payload, dict) or payload.get("ready") is not True:
+        return {
+            "available": False,
+            "activation": None,
+            "detail": "catalog activation authority is not ready",
+        }
+    result: dict[str, Any] = {
+        "available": True,
+        "activation": payload.get("activation"),
+        "detail": None,
+    }
+    writer = payload.get("writer_admission")
+    if isinstance(writer, dict):
+        depth = writer.get("depth")
+        accepting = writer.get("accepting")
+        if type(depth) is not int or depth < 0 or type(accepting) is not bool:
+            return {
+                "available": False,
+                "activation": result["activation"],
+                "detail": "catalog writer admission is malformed",
+            }
+        result.update(
+            {
+                "state": "open" if accepting else "closed",
+                "depth": depth,
+                "accepting": accepting,
+                "active_label": writer.get("active_label"),
+                "active_age_ms": writer.get("active_age_ms"),
+                "max_depth": writer.get("max_depth"),
+            }
+        )
+    return result
+
+
+async def recover_runtime_startup() -> dict[str, Any]:
+    """Recover a pending runtime from an exact catalog activation receipt."""
+    return await runtime_admission().recover_startup(_catalog_activation_probe, _catalog_admission_probe)
 
 
 @router.post("/{attempt_id}/drain")
@@ -97,7 +219,11 @@ async def drain_runtime(
     x_internal_token: str | None = Header(None, alias="X-Internal-Token"),
 ):
     _require_internal_token(x_internal_token)
-    result = await runtime_admission().drain(body.model_dump(mode="json"), attempt_id=attempt_id)
+    result = await runtime_admission().drain(
+        body.model_dump(mode="json"),
+        attempt_id=attempt_id,
+        catalog_probe=_catalog_admission_probe,
+    )
     await _signal_runtime_lifecycle(result)
     return _fence_response(result)
 
@@ -111,9 +237,9 @@ async def get_runtime_drain(
 ):
     _require_internal_token(x_internal_token)
     runtime = runtime_admission()
-    snapshot = await runtime.snapshot()
     fence = runtime.fence
-    if runtime_epoch and runtime_epoch != runtime.runtime_epoch:
+    snapshot = await runtime.snapshot()
+    if isinstance(runtime_epoch, str) and runtime_epoch and runtime_epoch != runtime.runtime_epoch:
         return _fence_response(
             {
                 **snapshot,
@@ -126,10 +252,35 @@ async def get_runtime_drain(
         return _fence_response(
             {**snapshot, "state": "unknown", "code": "drain_fence_unknown", "message": "runtime has no matching drain fence"}
         )
+    if runtime.state not in {"draining", "drained"}:
+        return _fence_response(
+            {
+                **snapshot,
+                "state": runtime.state,
+                "attempt_id": fence.attempt_id,
+                "request_id": fence.request_id,
+                "deployment_id": fence.deployment_id,
+                "target_id": fence.target_id,
+                "generation": fence.generation,
+                "deadline_utc": fence.deadline_utc,
+                "grace_seconds": fence.grace_seconds,
+            }
+        )
+    catalog = await _catalog_admission_probe("close")
+    snapshot = await runtime.snapshot(catalog_admission=catalog)
+    catalog_quiescent = (
+        snapshot.get("catalog_admission", {}).get("available") is True
+        and snapshot.get("catalog_admission", {}).get("state") == "closed"
+        and snapshot.get("catalog_admission", {}).get("depth") == 0
+        and snapshot.get("catalog_admission", {}).get("active_label") is None
+    )
+    state = runtime.state
+    if state == "drained" and not catalog_quiescent:
+        state = "draining"
     return _fence_response(
         {
             **snapshot,
-            "state": runtime.state,
+            "state": state,
             "attempt_id": fence.attempt_id,
             "request_id": fence.request_id,
             "deployment_id": fence.deployment_id,
@@ -148,7 +299,15 @@ async def reopen_runtime(
     x_internal_token: str | None = Header(None, alias="X-Internal-Token"),
 ):
     _require_internal_token(x_internal_token)
-    result = await runtime_admission().reopen(body.model_dump(mode="json"), attempt_id=attempt_id)
+    runtime = runtime_admission()
+    catalog = await _catalog_admission_probe("status")
+    await runtime.update_catalog_admission(catalog)
+    result = await runtime.reopen(
+        body.model_dump(mode="json"),
+        attempt_id=attempt_id,
+        catalog_probe=_catalog_admission_probe,
+        activation_probe=_catalog_activation_probe,
+    )
     await _signal_runtime_lifecycle(result)
     return _fence_response(result)
 
@@ -183,6 +342,7 @@ def _runtime_evidence() -> dict[str, Any]:
     build_ok = build.get("status") not in {"missing", "error"} and "error" not in build
     return {
         "image_digest": os.getenv("LONGHOUSE_IMAGE_DIGEST"),
+        "generation": os.getenv("LONGHOUSE_DEPLOYMENT_GENERATION"),
         "source_sha": build.get("commit"),
         "build_identity": build,
         "schema_version": schema_version,
@@ -375,9 +535,14 @@ async def read_consistency(
                 "build_identity": build_identity,
             }
         )
-        runtime.mark_candidate_consistent(attempt_id=attempt_id)
+        try:
+            runtime.mark_candidate_consistent(attempt_id=attempt_id)
+        except ValueError as exc:
+            base["outcome"] = "conflict"
+            base["detail"] = str(exc) or "runtime consistency fence conflicts with this process"
+            return JSONResponse(status_code=409, content=base)
     except (CatalogUnavailable, CatalogRemoteError) as exc:
         base["detail"] = str(exc) or "catalog consistency read unavailable"
     except Exception as exc:
         base["detail"] = str(exc) or "runtime consistency read failed"
-    return JSONResponse(status_code=200 if base["outcome"] == "pass" else 409, content=base)
+    return JSONResponse(status_code=200 if base["outcome"] == "pass" else 503, content=base)

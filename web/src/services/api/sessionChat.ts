@@ -12,7 +12,7 @@ export type SessionInputStatus =
   | "delivered"
   | "cancelled"
   | "failed";
-export type SessionInputOutcome = "sent" | "queued";
+export type SessionInputOutcome = "sent" | "queued" | "unknown";
 
 export interface QueuedInputSummary {
   id?: number | null;

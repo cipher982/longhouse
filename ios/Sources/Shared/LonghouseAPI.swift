@@ -559,7 +559,7 @@ struct LonghouseAPI: Sendable {
             clientRequestId: clientRequestId,
             intent: intent,
             status: status,
-            disposition: SessionInputReceiptDisposition.from(status: status),
+            disposition: SessionInputReceiptDisposition.from(status: status, error: error),
             inputId: inputId,
             eventId: eventId,
             error: error

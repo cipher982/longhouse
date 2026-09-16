@@ -522,7 +522,7 @@ extension APIQueuedInputSummary {
 extension APISessionInputResponse {
     var sessionInputResponse: SessionInputResponse {
         SessionInputResponse(
-            outcome: SessionInputOutcome(rawValue: outcome) ?? .queued,
+            outcome: SessionInputOutcome(rawValue: outcome) ?? .unknown,
             inputId: inputId,
             liveInputId: liveInputId,
             clientRequestId: clientRequestId,

@@ -310,7 +310,7 @@ def test_directed_input_delivery_links_failed_receipt_when_attempt_started(monke
     monkeypatch.setattr("zerg.services.live_control_catalog.live_control_session_capability_available", lambda *_args, **_kwargs: True)
     monkeypatch.setattr("zerg.routers.session_chat._create_catalog_session_input_response", create_input_response)
     monkeypatch.setattr(
-        "zerg.services.live_session_inputs.load_live_input_receipt_by_client_request_best_effort",
+        "zerg.services.live_session_inputs.load_live_input_receipt_by_client_request",
         load_receipt,
     )
     monkeypatch.setattr("zerg.routers.agents_sessions._directed_input_call", catalog_call)

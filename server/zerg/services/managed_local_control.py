@@ -86,6 +86,7 @@ class ManagedLocalSendResult:
     ok: bool
     exit_code: int | None = None
     error: str | None = None
+    failure_reason: str | None = None
     baseline_event_id: int | None = None
     verified_turn_started: bool = False
     verified_user_event_id: int | None = None
@@ -848,6 +849,7 @@ async def steer_text_to_managed_local_session(
         return ManagedLocalSendResult(
             ok=False,
             error=result.error or "Failed to dispatch steer command",
+            failure_reason=result.failure_reason,
         )
 
     data = result.data or {}

@@ -48,9 +48,10 @@ from zerg.services.console_turns import enqueue_catalog_console_turn
 from zerg.services.console_turns import interrupt_console_turn
 from zerg.services.live_archive_outbox import project_session_input_receipt_to_archive
 from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
+from zerg.services.live_session_inputs import LiveInputReceiptUnavailable
 from zerg.services.live_session_inputs import cancel_live_queued_receipt_catalog
 from zerg.services.live_session_inputs import list_recent_live_input_receipts_catalog
-from zerg.services.live_session_inputs import load_live_input_receipt_by_client_request_best_effort
+from zerg.services.live_session_inputs import load_live_input_receipt_by_client_request
 from zerg.services.live_session_inputs import record_live_input_receipt_best_effort
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.managed_local_control import answer_pause_request_on_managed_local_session
@@ -404,7 +405,7 @@ class ConsoleTurnReceiptResponse(BaseModel):
 class SessionInputResponse(BaseModel):
     """Shape returned from POST /api/sessions/{id}/input."""
 
-    outcome: InputOutcome = Field(..., description="sent | queued")
+    outcome: InputOutcome = Field(..., description="sent | queued | unknown")
     input_id: int | None = None
     live_input_id: str | None = None
     client_request_id: str | None = None
@@ -1390,6 +1391,38 @@ async def _catalog_recent_input_summaries(session_id) -> tuple[list[QueuedInputS
     return [_live_queued_summary(receipt) for receipt in receipts], queued_count
 
 
+_UNKNOWN_DELIVERY_CODES = frozenset({"delivery_unknown", "provider_unknown", "provider_delivery_unknown"})
+
+
+def _delivery_unknown_error(value: object) -> bool:
+    """Return whether an error records an ambiguous provider handoff."""
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if not text:
+        return False
+    try:
+        payload = json.loads(text)
+    except (TypeError, ValueError):
+        payload = None
+    if isinstance(payload, dict):
+        code = payload.get("code") or payload.get("reason")
+    else:
+        code = text.split(":", 1)[0]
+    return str(code or "").strip().lower() in _UNKNOWN_DELIVERY_CODES
+
+
+def _live_receipt_outcome(receipt: LiveInputReceiptSnapshot) -> InputOutcome:
+    """Project a receipt into the POST response without upgrading ambiguity."""
+    if receipt.status == INPUT_STATUS_DELIVERED:
+        return "sent"
+    if receipt.status == INPUT_STATUS_DELIVERING:
+        return "unknown"
+    if receipt.status == INPUT_STATUS_FAILED and _delivery_unknown_error(receipt.error_json):
+        return "unknown"
+    return "queued"
+
+
 def _recent_input_summaries(source_session, db: Session) -> list[QueuedInputSummary]:
     return []
 
@@ -1432,7 +1465,7 @@ def _live_receipt_response(
     if recent is None:
         recent = _recent_input_summaries(source_session, db)
     return SessionInputResponse(
-        outcome="sent" if receipt.status == INPUT_STATUS_DELIVERED else "queued",
+        outcome=_live_receipt_outcome(receipt),
         input_id=receipt.archive_session_input_id,
         live_input_id=receipt.id,
         client_request_id=receipt.client_request_id,
@@ -1535,11 +1568,20 @@ async def _create_catalog_session_input_response(
         raise HTTPException(status_code=400, detail=f"unknown intent: {body.intent}")
     _assert_live_session_send_available(db, source_session, owner_id=owner_id)
     client_request_id = body.client_request_id
-    existing = await load_live_input_receipt_by_client_request_best_effort(
-        owner_id=owner_id,
-        session_id=source_session.id,
-        client_request_id=client_request_id,
-    )
+    try:
+        existing = await load_live_input_receipt_by_client_request(
+            owner_id=owner_id,
+            session_id=source_session.id,
+            client_request_id=client_request_id,
+        )
+    except LiveInputReceiptUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error_code": "input_receipt_unknown",
+                "message": "The server could not confirm this operation; retry with the same client_request_id.",
+            },
+        ) from exc
     if existing is not None:
         if existing.payload_digest is not None or existing.text != body.text or existing.intent != body.intent:
             raise HTTPException(
@@ -1550,7 +1592,9 @@ async def _create_catalog_session_input_response(
                     "reason": "different_payload",
                 },
             )
-        if existing.status in (INPUT_STATUS_FAILED, INPUT_STATUS_CANCELLED):
+        if existing.status in (INPUT_STATUS_FAILED, INPUT_STATUS_CANCELLED) and not (
+            existing.status == INPUT_STATUS_FAILED and _delivery_unknown_error(existing.error_json)
+        ):
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -1559,7 +1603,9 @@ async def _create_catalog_session_input_response(
                     "status": existing.status,
                 },
             )
-        if existing.status in (INPUT_STATUS_DELIVERED, INPUT_STATUS_QUEUED, INPUT_STATUS_DELIVERING):
+        if existing.status in (INPUT_STATUS_DELIVERED, INPUT_STATUS_QUEUED, INPUT_STATUS_DELIVERING) or (
+            existing.status == INPUT_STATUS_FAILED and _delivery_unknown_error(existing.error_json)
+        ):
             state = await _catalog_recent_input_summaries(source_session.id)
             recent = state[0] if state is not None else []
             return _live_receipt_response(source_session=source_session, db=db, receipt=existing, recent=recent)
@@ -1598,6 +1644,11 @@ async def _create_catalog_session_input_response(
         data = dict(result.data or {})
         if not result.ok or int(data.get("exit_code", 1)) != 0:
             error = str(result.error or data.get("stderr") or data.get("stdout") or "Pi native send failed")
+            if result.failure_reason == "indeterminate":
+                raise HTTPException(
+                    status_code=502,
+                    detail={"error_code": "delivery_unknown", "message": error},
+                )
             await _finish_catalog_input_receipt(
                 receipt_id=receipt_id,
                 delivery_request_id=delivery_request_id,
@@ -1655,6 +1706,11 @@ async def _create_catalog_session_input_response(
         data = dict(result.data or {})
         if not result.ok or int(data.get("exit_code", 1)) != 0:
             error = str(result.error or data.get("stderr") or data.get("stdout") or "OMP native send failed")
+            if result.failure_reason == "indeterminate":
+                raise HTTPException(
+                    status_code=502,
+                    detail={"error_code": "delivery_unknown", "message": error},
+                )
             await _finish_catalog_input_receipt(
                 receipt_id=receipt_id,
                 delivery_request_id=delivery_request_id,
@@ -1758,6 +1814,11 @@ async def _create_catalog_session_input_response(
             text=body.text,
             request_id=delivery_request_id,
         )
+        if result.failure_reason == "indeterminate":
+            raise HTTPException(
+                status_code=502,
+                detail={"error_code": "delivery_unknown", "message": str(result.error or "steer outcome is unknown")},
+            )
         if not result.ok:
             await _finish_catalog_input_receipt(
                 receipt_id=receipt_id,
@@ -1780,6 +1841,10 @@ async def _create_catalog_session_input_response(
             except Exception:
                 payload = {}
             error = str(payload.get("error") or "send failed")
+            if payload.get("error_code") == "delivery_unknown":
+                # Keep the receipt in delivering: the provider may have
+                # accepted the command, so replay must remain visibly unknown.
+                raise HTTPException(status_code=dispatch_response.status_code, detail=payload)
             await _finish_catalog_input_receipt(
                 receipt_id=receipt_id,
                 delivery_request_id=delivery_request_id,
@@ -1883,10 +1948,17 @@ def _existing_input_response(
         return None
     if existing.body != body.text:
         raise _input_conflict(existing, reason="different_text")
-    if existing.status not in (INPUT_STATUS_DELIVERED, INPUT_STATUS_QUEUED, INPUT_STATUS_DELIVERING):
+    is_delivery_unknown = existing.status == INPUT_STATUS_FAILED and _delivery_unknown_error(existing.last_error)
+    if existing.status not in (INPUT_STATUS_DELIVERED, INPUT_STATUS_QUEUED, INPUT_STATUS_DELIVERING) and not is_delivery_unknown:
         raise _conflict_for_existing_input(existing)
     recent = _recent_input_summaries(source_session, db)
-    outcome = "sent" if existing.status == INPUT_STATUS_DELIVERED else "queued"
+    outcome: InputOutcome = (
+        "sent"
+        if existing.status == INPUT_STATUS_DELIVERED
+        else "unknown"
+        if (existing.status == INPUT_STATUS_DELIVERING or is_delivery_unknown)
+        else "queued"
+    )
     return SessionInputResponse(
         outcome=outcome,
         input_id=int(existing.id),

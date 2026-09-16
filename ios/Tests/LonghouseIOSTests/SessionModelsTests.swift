@@ -1568,6 +1568,30 @@ struct SessionModelsTests {
     }
 
     @Test
+    func sessionInputResponseDoesNotCountUnknownDeliveryAsQueued() throws {
+        let json = """
+        {
+          "outcome": "unknown",
+          "intent": "auto",
+          "queued": [
+            {
+              "id": 7,
+              "text": "do not claim queued",
+              "intent": "auto",
+              "status": "delivering",
+              "last_error": "delivery_unknown",
+              "created_at": "2026-04-26T23:00:00Z"
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder.snakeCase.decodeSessionFixture(SessionInputResponse.self, from: json)
+        #expect(response.outcome == .unknown)
+        #expect(response.pendingInputCount == 0)
+    }
+
+    @Test
     func sessionCapabilitiesDecodesSteerAndQueueFlags() throws {
         let json = """
         {

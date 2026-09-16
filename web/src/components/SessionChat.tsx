@@ -58,7 +58,7 @@ interface PendingManagedLocalInput {
   serverInputId: number | null;
   intent: "auto" | "queue" | "steer";
   attachments: { blob: Blob; filename: string }[];
-  phase: "submitting" | "unknown";
+  phase: "submitting" | "queued" | "unknown";
 }
 
 interface SessionChatProps {
@@ -135,15 +135,16 @@ const INPUT_OUTBOX_DB = "longhouse-input-outbox";
 const INPUT_OUTBOX_STORE = "payloads";
 let inputOutboxDbPromise: Promise<IDBDatabase> | null = null;
 
-function inputOutboxKey(sessionId: string): string {
-  return `${INPUT_OUTBOX_PREFIX}${sessionId}`;
+function inputOutboxKey(sessionId: string, clientRequestId: string): string {
+  return `${INPUT_OUTBOX_PREFIX}${sessionId}:${clientRequestId}`;
 }
 
 function openInputOutboxDb(): Promise<IDBDatabase> {
   if (inputOutboxDbPromise) return inputOutboxDbPromise;
   if (typeof indexedDB === "undefined") {
-
-    return Promise.reject(new Error("IndexedDB is unavailable; attachment cannot be persisted"));
+    return Promise.reject(
+      new Error("IndexedDB is unavailable; attachment cannot be persisted"),
+    );
   }
   const pending = new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(INPUT_OUTBOX_DB, 1);
@@ -160,6 +161,7 @@ function openInputOutboxDb(): Promise<IDBDatabase> {
 
 async function writeInputOutboxPayload(
   sessionId: string,
+  clientRequestId: string,
   payload: StoredInputOutboxPayload,
 ): Promise<void> {
   const db = await openInputOutboxDb();
@@ -167,39 +169,43 @@ async function writeInputOutboxPayload(
     const request = db
       .transaction(INPUT_OUTBOX_STORE, "readwrite")
       .objectStore(INPUT_OUTBOX_STORE)
-      .put(payload, sessionId);
+      .put(payload, inputOutboxKey(sessionId, clientRequestId));
     request.onsuccess = () => resolve();
     request.onerror = () =>
-      reject(request.error ?? new Error("Could not persist attachment payload"));
+      reject(
+        request.error ?? new Error("Could not persist attachment payload"),
+      );
   });
 }
 
 async function readInputOutboxPayload(
   sessionId: string,
+  clientRequestId: string,
 ): Promise<StoredInputOutboxPayload | null> {
   const db = await openInputOutboxDb();
   return new Promise<StoredInputOutboxPayload | null>((resolve, reject) => {
     const request = db
       .transaction(INPUT_OUTBOX_STORE, "readonly")
       .objectStore(INPUT_OUTBOX_STORE)
-      .get(sessionId);
+      .get(inputOutboxKey(sessionId, clientRequestId));
     request.onsuccess = () =>
-      resolve(
-        (request.result as StoredInputOutboxPayload | undefined) ?? null,
-      );
+      resolve((request.result as StoredInputOutboxPayload | undefined) ?? null);
     request.onerror = () =>
       reject(request.error ?? new Error("Could not read attachment payload"));
   });
 }
 
-function deleteInputOutboxPayload(sessionId: string): void {
+function deleteInputOutboxPayload(
+  sessionId: string,
+  clientRequestId: string,
+): void {
   void openInputOutboxDb()
     .then((db) => {
       return new Promise<void>((resolve) => {
         const request = db
           .transaction(INPUT_OUTBOX_STORE, "readwrite")
           .objectStore(INPUT_OUTBOX_STORE)
-          .delete(sessionId);
+          .delete(inputOutboxKey(sessionId, clientRequestId));
         request.onsuccess = () => resolve();
         request.onerror = () => resolve();
       });
@@ -231,52 +237,91 @@ async function persistInputOutbox(
     createdAt: Date.now(),
   };
   if (pending.attachments.length > 0) {
-    await writeInputOutboxPayload(sessionId, {
-      attachments: pending.attachments.map(({ blob, filename }) => ({ blob, filename })),
+    await writeInputOutboxPayload(sessionId, pending.clientRequestId, {
+      attachments: pending.attachments.map(({ blob, filename }) => ({
+        blob,
+        filename,
+      })),
     });
   }
   try {
-    window.localStorage.setItem(inputOutboxKey(sessionId), JSON.stringify(stored));
+    window.localStorage.setItem(
+      inputOutboxKey(sessionId, pending.clientRequestId),
+      JSON.stringify(stored),
+    );
   } catch (storageError) {
-    deleteInputOutboxPayload(sessionId);
-    throw new Error("Could not persist input intent before sending", { cause: storageError });
+    deleteInputOutboxPayload(sessionId, pending.clientRequestId);
+    throw new Error("Could not persist input intent before sending", {
+      cause: storageError,
+    });
   }
 }
 
-function clearInputOutbox(sessionId: string): void {
+function clearInputOutbox(sessionId: string, clientRequestId: string): void {
   try {
-    window.localStorage.removeItem(inputOutboxKey(sessionId));
+    window.localStorage.removeItem(inputOutboxKey(sessionId, clientRequestId));
   } finally {
-    deleteInputOutboxPayload(sessionId);
+    deleteInputOutboxPayload(sessionId, clientRequestId);
   }
 }
 
-function readInputOutbox(sessionId: string): StoredInputOutbox | null {
-  try {
-    const raw = window.localStorage.getItem(inputOutboxKey(sessionId));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as StoredInputOutbox;
-    if (parsed.sessionId !== sessionId || !parsed.clientRequestId) return null;
-    return parsed;
-  } catch {
-    return null;
+function readInputOutboxes(sessionId: string): StoredInputOutbox[] {
+  const prefix = `${INPUT_OUTBOX_PREFIX}${sessionId}:`;
+  const entries: StoredInputOutbox[] = [];
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    const key = window.localStorage.key(index);
+    if (!key || !key.startsWith(prefix)) continue;
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw) as StoredInputOutbox;
+      if (
+        parsed.sessionId === sessionId &&
+        parsed.clientRequestId &&
+        key === inputOutboxKey(sessionId, parsed.clientRequestId)
+      ) {
+        entries.push(parsed);
+      }
+    } catch {
+      // Ignore one malformed slot without hiding other operation identities.
+    }
   }
+  return entries.sort((lhs, rhs) => {
+    if (lhs.createdAt === rhs.createdAt) {
+      return lhs.clientRequestId.localeCompare(rhs.clientRequestId);
+    }
+    return lhs.createdAt - rhs.createdAt;
+  });
 }
 
-async function loadInputOutbox(
+async function loadInputOutboxes(
   sessionId: string,
-): Promise<{ metadata: StoredInputOutbox; attachments: { blob: Blob; filename: string }[] } | null> {
-  const metadata = readInputOutbox(sessionId);
-  if (!metadata) return null;
-  if (metadata.attachments.length === 0) {
-    return { metadata, attachments: [] };
+): Promise<
+  {
+    metadata: StoredInputOutbox;
+    attachments: { blob: Blob; filename: string }[];
+  }[]
+> {
+  const metadata = readInputOutboxes(sessionId);
+  const loaded: {
+    metadata: StoredInputOutbox;
+    attachments: { blob: Blob; filename: string }[];
+  }[] = [];
+  for (const entry of metadata) {
+    if (entry.attachments.length === 0) {
+      loaded.push({ metadata: entry, attachments: [] });
+      continue;
+    }
+    const payload = await readInputOutboxPayload(
+      sessionId,
+      entry.clientRequestId,
+    );
+    if (!payload) throw new Error("Stored attachment payload is missing");
+    loaded.push({ metadata: entry, attachments: payload.attachments });
   }
-  const payload = await readInputOutboxPayload(sessionId);
-  if (!payload) throw new Error("Stored attachment payload is missing");
-  return { metadata, attachments: payload.attachments };
+  return loaded;
 }
 function timelineHasDurableSubmittedInput(
-
   timelineItems: TimelineItem[],
   pendingInput: PendingManagedLocalInput,
 ): boolean {
@@ -297,6 +342,9 @@ function timelineHasDurableSubmittedInput(
       origin.client_request_id === pendingInput.clientRequestId,
     );
   });
+}
+function hasUnknownDeliveryError(error?: string | null): boolean {
+  return error?.toLowerCase().startsWith("delivery_unknown") ?? false;
 }
 
 export function SessionChat({
@@ -345,22 +393,33 @@ export function SessionChat({
   const [blockedKeyboardSubmit, setBlockedKeyboardSubmit] = useState(false);
 
   const [sentConfirmation, setSentConfirmation] = useState(false);
-  const [pendingManagedLocalInput, setPendingManagedLocalInput] =
-    useState<PendingManagedLocalInput | null>(null);
+  const [pendingManagedLocalInputs, setPendingManagedLocalInputs] = useState<
+    PendingManagedLocalInput[]
+  >([]);
+  const pendingOutboxSessionRef = useRef<string | null>(null);
   useEffect(() => {
     let mounted = true;
-    if (pendingManagedLocalInput) return;
-    void loadInputOutbox(session.id)
+    if (pendingOutboxSessionRef.current !== session.id) {
+      pendingOutboxSessionRef.current = session.id;
+      setPendingManagedLocalInputs([]);
+      return () => {
+        mounted = false;
+      };
+    }
+    if (pendingManagedLocalInputs.length > 0) return;
+    void loadInputOutboxes(session.id)
       .then((stored) => {
-        if (!mounted || !stored) return;
-        setPendingManagedLocalInput({
-          text: stored.metadata.text,
-          clientRequestId: stored.metadata.clientRequestId,
-          serverInputId: null,
-          intent: stored.metadata.intent,
-          attachments: stored.attachments,
-          phase: "unknown",
-        });
+        if (!mounted || stored.length === 0) return;
+        setPendingManagedLocalInputs(
+          stored.map(({ metadata, attachments }) => ({
+            text: metadata.text,
+            clientRequestId: metadata.clientRequestId,
+            serverInputId: null,
+            intent: metadata.intent,
+            attachments,
+            phase: "unknown",
+          })),
+        );
       })
       .catch((storageError) => {
         if (mounted) {
@@ -374,7 +433,7 @@ export function SessionChat({
     return () => {
       mounted = false;
     };
-  }, [pendingManagedLocalInput, session.id]);
+  }, [pendingManagedLocalInputs.length, session.id]);
 
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
   const sentConfirmationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
@@ -424,15 +483,24 @@ export function SessionChat({
   }, [queryClient, session.id]);
 
   useEffect(() => {
-    if (!pendingManagedLocalInput || !timelineItems) return;
-    if (
-      pendingManagedLocalInput.attachments.length === 0 &&
-      timelineHasDurableSubmittedInput(timelineItems, pendingManagedLocalInput)
-    ) {
-      clearInputOutbox(session.id);
-      setPendingManagedLocalInput(null);
+    if (pendingManagedLocalInputs.length === 0 || !timelineItems) return;
+    const resolvedIds = pendingManagedLocalInputs
+      .filter(
+        (pending) =>
+          pending.attachments.length === 0 &&
+          timelineHasDurableSubmittedInput(timelineItems, pending),
+      )
+      .map((pending) => pending.clientRequestId);
+    if (resolvedIds.length === 0) return;
+    for (const clientRequestId of resolvedIds) {
+      clearInputOutbox(session.id, clientRequestId);
     }
-  }, [pendingManagedLocalInput, session.id, timelineItems]);
+    setPendingManagedLocalInputs((current) =>
+      current.filter(
+        (pending) => !resolvedIds.includes(pending.clientRequestId),
+      ),
+    );
+  }, [pendingManagedLocalInputs, session.id, timelineItems]);
 
   const lockStatusQuery = useQuery<SessionLockInfo | null>({
     queryKey: ["session-lock", session.id],
@@ -484,47 +552,80 @@ export function SessionChat({
     staleTime: 10_000,
   });
   useEffect(() => {
-    if (!pendingManagedLocalInput || !queuedInputsQuery.data) return;
-    const receipt = queuedInputsQuery.data.find(
-      (row) =>
-        row.client_request_id === pendingManagedLocalInput.clientRequestId,
+    if (pendingManagedLocalInputs.length === 0 || !queuedInputsQuery.data)
+      return;
+    const resolvedIds: string[] = [];
+    const nextInputs = pendingManagedLocalInputs.map<PendingManagedLocalInput>(
+      (pending) => {
+        const receipt = queuedInputsQuery.data.find(
+          (row) => row.client_request_id === pending.clientRequestId,
+        );
+        if (!receipt) return pending;
+        if (hasUnknownDeliveryError(receipt.last_error)) {
+          return {
+            ...pending,
+            serverInputId: receipt.id ?? null,
+            phase: "unknown",
+          };
+        }
+        if (receipt.status === "failed" || receipt.status === "cancelled") {
+          resolvedIds.push(pending.clientRequestId);
+          setError(
+            receipt.last_error ||
+              (receipt.status === "cancelled"
+                ? "Input was cancelled before delivery."
+                : "Input delivery failed."),
+          );
+          return pending;
+        }
+        if (receipt.status === "delivered") {
+          resolvedIds.push(pending.clientRequestId);
+          return pending;
+        }
+        return {
+          ...pending,
+          serverInputId: receipt.id ?? null,
+          phase: receipt.status === "queued" ? "queued" : "unknown",
+        };
+      },
     );
-    if (!receipt) return;
-    if (receipt.status === "failed" || receipt.status === "cancelled") {
-      clearInputOutbox(session.id);
-      setPendingManagedLocalInput(null);
-      setError(
-        receipt.last_error ||
-          (receipt.status === "cancelled"
-            ? "Input was cancelled before delivery."
-            : "Input delivery failed."),
+    if (resolvedIds.length > 0) {
+      for (const clientRequestId of resolvedIds) {
+        clearInputOutbox(session.id, clientRequestId);
+      }
+      setPendingManagedLocalInputs((current) =>
+        current.filter(
+          (pending) => !resolvedIds.includes(pending.clientRequestId),
+        ),
       );
-      return;
-    }
-    if (receipt.status === "delivered") {
-      clearInputOutbox(session.id);
-      setPendingManagedLocalInput(null);
-      return;
-    }
-    if (
-      (receipt.status === "queued" || receipt.status === "delivering") &&
-      pendingManagedLocalInput.attachments.length === 0
+    } else if (
+      nextInputs.some(
+        (pending, index) =>
+          pending.phase !== pendingManagedLocalInputs[index]?.phase ||
+          pending.serverInputId !==
+            pendingManagedLocalInputs[index]?.serverInputId,
+      )
     ) {
-      clearInputOutbox(session.id);
-      setPendingManagedLocalInput(null);
+      setPendingManagedLocalInputs(nextInputs);
     }
-  }, [pendingManagedLocalInput, queuedInputsQuery.data, session.id]);
+  }, [pendingManagedLocalInputs, queuedInputsQuery.data, session.id]);
   const activeQueuedInputs = (queuedInputsQuery.data ?? []).filter(
-    (row) => !(row.intent === "steer" && row.last_error === "turn_ended"),
+    (row) =>
+      !(row.intent === "steer" && row.last_error === "turn_ended") &&
+      (row.status === "queued" ||
+        row.status === "delivering" ||
+        hasUnknownDeliveryError(row.last_error)),
   );
-  const queueFull = activeQueuedInputs.length >= 5;
+  const queueFull =
+    activeQueuedInputs.filter((row) => row.status === "queued").length >= 5;
   const failedInputs = (queuedInputsQuery.data ?? []).filter(
-    (row) => row.status === "failed" || row.status === "cancelled",
+    (row) =>
+      (row.status === "failed" || row.status === "cancelled") &&
+      !hasUnknownDeliveryError(row.last_error),
   );
-  // offer a one-click "Queue instead" fallback instead of silently re-mapping
-  // the user's intent.
+  // Offer an explicit "Queue instead" fallback instead of silently remapping
+  // the user's original steer intent.
   const [turnEndedDraft, setTurnEndedDraft] = useState<string | null>(null);
-
   const handleManagedLocalSend = useCallback(
     async (
       message: string,
@@ -532,8 +633,7 @@ export function SessionChat({
       attachments: { blob: Blob; filename: string }[] = [],
       existingClientRequestId?: string,
     ) => {
-      const clientRequestId =
-        existingClientRequestId ?? newClientRequestId();
+      const clientRequestId = existingClientRequestId ?? newClientRequestId();
       try {
         await persistInputOutbox(session.id, {
           text: message,
@@ -549,13 +649,25 @@ export function SessionChat({
         );
         return false;
       }
-      setPendingManagedLocalInput({
+      const nextPending: PendingManagedLocalInput = {
         text: message,
         clientRequestId,
         serverInputId: null,
         intent,
         attachments,
         phase: "submitting",
+      };
+      setPendingManagedLocalInputs((current) => {
+        const existing = current.some(
+          (pending) => pending.clientRequestId === clientRequestId,
+        );
+        return existing
+          ? current.map((pending) =>
+              pending.clientRequestId === clientRequestId
+                ? nextPending
+                : pending,
+            )
+          : [...current, nextPending];
       });
       setIsSubmitting(true);
       try {
@@ -571,27 +683,37 @@ export function SessionChat({
               client_request_id: clientRequestId,
             });
 
-        // Seed the queued-inputs cache immediately so the chip appears
-        // before the next poll.
         queryClient.setQueryData<QueuedInputSummary[]>(
           ["session-inputs", session.id],
           result.queued,
         );
-        const durableReceipt =
-          result.client_request_id === clientRequestId ||
-          result.queued.some(
-            (row) => row.client_request_id === clientRequestId,
+        const receipt = result.queued.find(
+          (row) => row.client_request_id === clientRequestId,
+        );
+        if (result.outcome === "unknown") {
+          setPendingManagedLocalInputs((current) =>
+            current.map((pending) =>
+              pending.clientRequestId === clientRequestId
+                ? { ...pending, phase: "unknown" }
+                : pending,
+            ),
           );
-        if (!durableReceipt) {
-          setPendingManagedLocalInput((current) =>
-            current
-              ? {
-                  ...current,
-                  phase: "unknown",
-                }
-              : null,
+          setError("Delivery is not confirmed; retry with the same request.");
+          return false;
+        }
+        if (
+          (result.client_request_id &&
+            result.client_request_id !== clientRequestId) ||
+          (!result.client_request_id && !receipt)
+        ) {
+          setPendingManagedLocalInputs((current) =>
+            current.map((pending) =>
+              pending.clientRequestId === clientRequestId
+                ? { ...pending, phase: "unknown" }
+                : pending,
+            ),
           );
-          setError(null);
+          setError("Delivery is not confirmed; retry with the same request.");
           return false;
         }
         if (result.outcome === "sent") {
@@ -604,7 +726,6 @@ export function SessionChat({
               fork_available: true,
             },
           );
-
           if (sentConfirmationTimerRef.current)
             clearTimeout(sentConfirmationTimerRef.current);
           setSentConfirmation(true);
@@ -612,47 +733,122 @@ export function SessionChat({
             () => setSentConfirmation(false),
             2000,
           );
-
           void refreshCurrentSessionWorkspace();
-          clearInputOutbox(session.id);
-          setPendingManagedLocalInput(null);
-        } else if (attachments.length > 0) {
-          setPendingManagedLocalInput((current) =>
-            current
-              ? {
-                  ...current,
-                  phase: "unknown",
-                }
-              : null,
+          clearInputOutbox(session.id, clientRequestId);
+          setPendingManagedLocalInputs((current) =>
+            current.filter(
+              (pending) => pending.clientRequestId !== clientRequestId,
+            ),
           );
-          setError(null);
+        } else if (hasUnknownDeliveryError(receipt?.last_error)) {
+          setPendingManagedLocalInputs((current) =>
+            current.map((pending) =>
+              pending.clientRequestId === clientRequestId
+                ? { ...pending, phase: "unknown" }
+                : pending,
+            ),
+          );
+          setError("Delivery is not confirmed; retry with the same request.");
+          return false;
+        } else if (receipt?.status === "queued") {
+          setPendingManagedLocalInputs((current) =>
+            current.map((pending) =>
+              pending.clientRequestId === clientRequestId
+                ? {
+                    ...pending,
+                    serverInputId: receipt.id ?? null,
+                    phase: "queued",
+                  }
+                : pending,
+            ),
+          );
+        } else if (
+          receipt?.status === "failed" ||
+          receipt?.status === "cancelled"
+        ) {
+          clearInputOutbox(session.id, clientRequestId);
+          setPendingManagedLocalInputs((current) =>
+            current.filter(
+              (pending) => pending.clientRequestId !== clientRequestId,
+            ),
+          );
+          setError(
+            receipt.last_error ||
+              (receipt.status === "cancelled"
+                ? "Input was cancelled before delivery."
+                : "Input delivery failed."),
+          );
           return false;
         } else {
-          clearInputOutbox(session.id);
-          setPendingManagedLocalInput(null);
+          setPendingManagedLocalInputs((current) =>
+            current.map((pending) =>
+              pending.clientRequestId === clientRequestId
+                ? { ...pending, phase: "unknown" }
+                : pending,
+            ),
+          );
+          setError("Delivery is not confirmed; retry with the same request.");
+          return false;
         }
         return true;
       } catch (e) {
-        // Console turn-start failures are durable input receipts. Refresh them
-        // immediately so the failed message stays attached to the turn instead
-        // of being represented only by a transient request error.
-        let persistedFailure = false;
+        let persistedReceipt: QueuedInputSummary | undefined;
         try {
           const refreshedInputs = await fetchSessionInputs(session.id);
           queryClient.setQueryData<QueuedInputSummary[]>(
             ["session-inputs", session.id],
             refreshedInputs,
           );
-          persistedFailure = refreshedInputs.some(
-            (row) =>
-              row.client_request_id === clientRequestId && row.status === "failed",
+          persistedReceipt = refreshedInputs.find(
+            (row) => row.client_request_id === clientRequestId,
           );
         } catch {
           // Preserve the request error when the receipt cannot be refreshed.
         }
-
-        // Parse structured backend errors so turn_ended on steer surfaces
-        // as an actionable prompt, not a mystery failure.
+        if (hasUnknownDeliveryError(persistedReceipt?.last_error)) {
+          setPendingManagedLocalInputs((current) =>
+            current.map((pending) =>
+              pending.clientRequestId === clientRequestId
+                ? { ...pending, phase: "unknown" }
+                : pending,
+            ),
+          );
+          setError("Delivery is not confirmed; retry with the same request.");
+          return false;
+        }
+        if (
+          persistedReceipt?.status === "failed" ||
+          persistedReceipt?.status === "cancelled"
+        ) {
+          clearInputOutbox(session.id, clientRequestId);
+          setPendingManagedLocalInputs((current) =>
+            current.filter(
+              (pending) => pending.clientRequestId !== clientRequestId,
+            ),
+          );
+          setError(
+            persistedReceipt.last_error ||
+              (persistedReceipt.status === "cancelled"
+                ? "Input was cancelled before delivery."
+                : "Input delivery failed."),
+          );
+          return false;
+        }
+        if (persistedReceipt?.status === "queued") {
+          setPendingManagedLocalInputs((current) =>
+            current.map((pending) =>
+              pending.clientRequestId === clientRequestId
+                ? {
+                    ...pending,
+                    serverInputId: persistedReceipt?.id ?? null,
+                    phase: "queued",
+                  }
+                : pending,
+            ),
+          );
+          setError(null);
+          return true;
+        }
         const errorBody = (
           e as {
             body?: {
@@ -668,21 +864,24 @@ export function SessionChat({
             errorBody?.detail?.message ??
               "Active turn ended before your update arrived.",
           );
-          clearInputOutbox(session.id);
-          setPendingManagedLocalInput(null);
-        } else if (persistedFailure) {
-          clearInputOutbox(session.id);
-          setError(null);
-          setPendingManagedLocalInput(null);
+          clearInputOutbox(session.id, clientRequestId);
+          setPendingManagedLocalInputs((current) =>
+            current.filter(
+              (pending) => pending.clientRequestId !== clientRequestId,
+            ),
+          );
         } else {
-          setError(e instanceof Error ? e.message : "Unknown error");
-          setPendingManagedLocalInput((current) =>
-            current
-              ? {
-                  ...current,
-                  phase: "unknown",
-                }
-              : null,
+          setError(
+            e instanceof Error
+              ? `${e.message}. Delivery is not confirmed; retry with the same request.`
+              : "Delivery is not confirmed; retry with the same request.",
+          );
+          setPendingManagedLocalInputs((current) =>
+            current.map((pending) =>
+              pending.clientRequestId === clientRequestId
+                ? { ...pending, phase: "unknown" }
+                : pending,
+            ),
           );
         }
         return false;
@@ -690,7 +889,7 @@ export function SessionChat({
         setIsSubmitting(false);
       }
     },
-    [queryClient, session.id, refreshCurrentSessionWorkspace],
+    [queryClient, refreshCurrentSessionWorkspace, session.id],
   );
 
   const handleCancelQueuedInput = useCallback(
@@ -884,7 +1083,8 @@ export function SessionChat({
     if (!message || isSubmitting || isComposerDisabled || !canQueueNow) return;
     setDraft("");
     setError(null);
-    await handleManagedLocalSend(message, "queue");
+    const sent = await handleManagedLocalSend(message, "queue");
+    if (!sent) setDraft(message);
   }, [
     draft,
     isSubmitting,
@@ -898,7 +1098,8 @@ export function SessionChat({
     setError(null);
     const text = turnEndedDraft;
     setTurnEndedDraft(null);
-    await handleManagedLocalSend(text, "queue");
+    const sent = await handleManagedLocalSend(text, "queue");
+    if (!sent) setTurnEndedDraft(text);
   }, [turnEndedDraft, handleManagedLocalSend]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -955,7 +1156,11 @@ export function SessionChat({
     () => getRunningTurnStartMs(timelineItems ?? []),
     [timelineItems],
   );
-  const composerState = getSessionHeaderState(session, activityNowMs, turnStartMs);
+  const composerState = getSessionHeaderState(
+    session,
+    activityNowMs,
+    turnStartMs,
+  );
   const activityTool = activity.tool?.trim() || null;
   const composerElapsedSeconds =
     composerState.tone === "live" && turnStartMs != null
@@ -974,19 +1179,31 @@ export function SessionChat({
   const queuedBanner =
     isManagedLocal && activeQueuedInputs.length > 0 ? (
       <div className="session-chat-queued" data-testid="session-chat-queued">
-        <div className="session-chat-queued__label">Queued, sends next</div>
+        <div className="session-chat-queued__label">
+          {activeQueuedInputs.some(
+            (row) =>
+              row.status === "delivering" ||
+              hasUnknownDeliveryError(row.last_error),
+          )
+            ? "Delivery status uncertain"
+            : "Queued, sends next"}
+        </div>
         <ul className="session-chat-queued__list">
           {activeQueuedInputs.map((row) => (
             <li
-              key={row.live_input_id ?? row.id ?? row.text}
+              key={
+                row.client_request_id ?? row.live_input_id ?? row.id ?? row.text
+              }
               className="session-chat-queued__item"
             >
               <span className="session-chat-queued__text">{row.text}</span>
               <span
                 className={`session-chat-queued__status session-chat-queued__status--${row.status}`}
               >
-                {row.status === "delivering"
-                  ? row.last_error || "Sending…"
+                {row.status === "delivering" ||
+                hasUnknownDeliveryError(row.last_error)
+                  ? row.last_error ||
+                    "Not confirmed — retry with the same request"
                   : "Queued"}
               </span>
               {row.status === "queued" ? (
@@ -1126,7 +1343,12 @@ export function SessionChat({
           <ul className="session-chat-queued__list">
             {failedInputs.map((row) => (
               <li
-                key={row.live_input_id ?? row.id ?? row.text}
+                key={
+                  row.client_request_id ??
+                  row.live_input_id ??
+                  row.id ??
+                  row.text
+                }
                 className="session-chat-queued__item"
               >
                 <span className="session-chat-queued__text">{row.text}</span>
@@ -1171,59 +1393,83 @@ export function SessionChat({
         {isDock ? (
           <>
             <span className="session-chat-composer__leaf" aria-hidden="true" />
-            <span className="session-chat-composer__point session-chat-composer__point--tl" aria-hidden="true" />
-            <span className="session-chat-composer__point session-chat-composer__point--tr" aria-hidden="true" />
-            <span className="session-chat-composer__point session-chat-composer__point--bl" aria-hidden="true" />
-            <span className="session-chat-composer__point session-chat-composer__point--br" aria-hidden="true" />
+            <span
+              className="session-chat-composer__point session-chat-composer__point--tl"
+              aria-hidden="true"
+            />
+            <span
+              className="session-chat-composer__point session-chat-composer__point--tr"
+              aria-hidden="true"
+            />
+            <span
+              className="session-chat-composer__point session-chat-composer__point--bl"
+              aria-hidden="true"
+            />
+            <span
+              className="session-chat-composer__point session-chat-composer__point--br"
+              aria-hidden="true"
+            />
           </>
         ) : null}
         {isDock ? (
-          <div className="session-chat-composer__head" data-testid="session-chat-composer-head">
+          <div
+            className="session-chat-composer__head"
+            data-testid="session-chat-composer-head"
+          >
             {/* The runtime-evidence strip rides in this row, so the row must
                 exist even while the composer is unavailable (a pending
                 question, a disconnected control path); only the state label
                 yields to the unavailable notice below. */}
             {showComposerUnavailableState ? null : (
               <>
-            {composerState.tone === "live" ? (
-              <>
-                <span className="session-ember-dot" aria-hidden="true" />
-                <span className="session-chat-composer__head-label">{composerUsingLabel}</span>
-                {composerElapsedSeconds != null ? (
-                  <Nixie
-                    value={formatElapsedClock(composerElapsedSeconds)}
-                    flickerOnChange={false}
-                  />
-                ) : null}
-              </>
-            ) : composerState.tone === "attention" ? (
-              <>
-                <span className="session-ember-dot session-ember-dot--attention" aria-hidden="true" />
-                <span className="session-chat-composer__head-label">{composerState.text}</span>
-              </>
-            ) : composerState.tone === "unknown" ? (
-              <>
-                <span className="session-unknown-dot" aria-hidden="true" />
-                <span className="session-chat-composer__head-label">Activity uncertain</span>
-                {composerIdleClock ? (
-                  <span className="session-chat-composer__head-detail">
-                    last observed at {composerIdleClock}
-                  </span>
-                ) : null}
-              </>
-            ) : (
-              <>
-                <span className="session-cool-dot" aria-hidden="true" />
-                <span className="session-chat-composer__head-label session-chat-composer__head-label--idle">
-                  Idle
-                </span>
-                {composerIdleClock ? (
-                  <span className="session-chat-composer__head-detail">
-                    the last turn ended at {composerIdleClock}
-                  </span>
-                ) : null}
-              </>
-            )}
+                {composerState.tone === "live" ? (
+                  <>
+                    <span className="session-ember-dot" aria-hidden="true" />
+                    <span className="session-chat-composer__head-label">
+                      {composerUsingLabel}
+                    </span>
+                    {composerElapsedSeconds != null ? (
+                      <Nixie
+                        value={formatElapsedClock(composerElapsedSeconds)}
+                        flickerOnChange={false}
+                      />
+                    ) : null}
+                  </>
+                ) : composerState.tone === "attention" ? (
+                  <>
+                    <span
+                      className="session-ember-dot session-ember-dot--attention"
+                      aria-hidden="true"
+                    />
+                    <span className="session-chat-composer__head-label">
+                      {composerState.text}
+                    </span>
+                  </>
+                ) : composerState.tone === "unknown" ? (
+                  <>
+                    <span className="session-unknown-dot" aria-hidden="true" />
+                    <span className="session-chat-composer__head-label">
+                      Activity uncertain
+                    </span>
+                    {composerIdleClock ? (
+                      <span className="session-chat-composer__head-detail">
+                        last observed at {composerIdleClock}
+                      </span>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    <span className="session-cool-dot" aria-hidden="true" />
+                    <span className="session-chat-composer__head-label session-chat-composer__head-label--idle">
+                      Idle
+                    </span>
+                    {composerIdleClock ? (
+                      <span className="session-chat-composer__head-detail">
+                        the last turn ended at {composerIdleClock}
+                      </span>
+                    ) : null}
+                  </>
+                )}
               </>
             )}
             {composerHeaderAccessory ? (
@@ -1268,41 +1514,43 @@ export function SessionChat({
                 aria-hidden="true"
               />
             )}
-            {isManagedLocal && pendingManagedLocalInput ? (
-              <div className="session-chat-pending-message">
-                <span className="session-chat-pending-message__text">
-                  {pendingManagedLocalInput.text}
-                </span>
-                <span className="session-chat-pending-message__status">
-                  {pendingManagedLocalInput.phase === "unknown"
-                    ? "Not confirmed — retry with the same request"
-                    : "Delivering..."}
-                </span>
-                {pendingManagedLocalInput.phase === "unknown" ? (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    disabled={isSubmitting}
-                    onClick={() =>
-                      void handleManagedLocalSend(
-                        pendingManagedLocalInput.text,
-                        pendingManagedLocalInput.intent,
-                        pendingManagedLocalInput.attachments,
-                        pendingManagedLocalInput.clientRequestId,
-                      )
-                    }
+            {isManagedLocal && pendingManagedLocalInputs.length > 0
+              ? pendingManagedLocalInputs.map((pendingInput) => (
+                  <div
+                    className="session-chat-pending-message"
+                    key={pendingInput.clientRequestId}
                   >
-                    Retry
-                  </Button>
-                ) : (
-                  <span
-                    className="session-chat-pending-message__spinner"
-                    aria-label="Sending"
-                  />
-                )}
-              </div>
-            ) : null}
+                    <span className="session-chat-pending-message__text">
+                      {pendingInput.text}
+                    </span>
+                    <span className="session-chat-pending-message__status">
+                      {pendingInput.phase === "unknown"
+                        ? "Not confirmed — retry with the same request"
+                        : pendingInput.phase === "queued"
+                          ? "Queued — server has this request"
+                          : "Delivering..."}
+                    </span>
+                    {pendingInput.phase === "unknown" ? (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        disabled={isSubmitting}
+                        onClick={() =>
+                          void handleManagedLocalSend(
+                            pendingInput.text,
+                            pendingInput.intent,
+                            pendingInput.attachments,
+                            pendingInput.clientRequestId,
+                          )
+                        }
+                      >
+                        Retry
+                      </Button>
+                    ) : null}
+                  </div>
+                ))
+              : null}
             {attachImagesEnabled ? (
               <AttachmentTray
                 attachments={composerAttachments.attachments}

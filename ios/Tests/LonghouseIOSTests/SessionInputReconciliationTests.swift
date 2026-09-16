@@ -123,4 +123,55 @@ struct SessionInputReconciliationTests {
         ).isEmpty)
     }
 
+    @Test
+    func pendingStoreKeepsMultipleOperationIdentitiesSeparate() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-pending-many-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PendingInputStore(directory: directory)
+        let first = PendingInputIntent(
+            clientRequestId: "ios-request-1",
+            serverURL: "https://tenant.example",
+            authGeneration: "login-1",
+            sessionId: "session-1",
+            text: "first",
+            intent: "auto",
+            attachments: [],
+            createdAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let second = PendingInputIntent(
+            clientRequestId: "ios-request-2",
+            serverURL: "https://tenant.example",
+            authGeneration: "login-1",
+            sessionId: "session-1",
+            text: "second",
+            intent: "auto",
+            attachments: [],
+            createdAt: Date(timeIntervalSince1970: 1_001)
+        )
+
+        #expect(store.save(first))
+        #expect(store.save(second))
+        #expect(store.load(
+            serverURL: "https://tenant.example",
+            sessionId: "session-1",
+            authGeneration: "login-1"
+        ).map(\.clientRequestId) == ["ios-request-1", "ios-request-2"])
+        store.remove(first)
+        #expect(store.load(
+            serverURL: "https://tenant.example",
+            sessionId: "session-1",
+            authGeneration: "login-1"
+        ) == [second])
+    }
+    @Test
+    func deliveringReceiptRemainsUnconfirmed() {
+        #expect(SessionInputReceiptDisposition.from(status: "delivering") == .couldNotConfirm)
+        #expect(
+            SessionInputReceiptDisposition.from(status: "failed", error: "delivery_unknown")
+                == .couldNotConfirm
+        )
+        #expect(SessionInputReceiptDisposition.from(status: "queued") == .accepted)
+        #expect(SessionInputOutcome(rawValue: "unknown") == .unknown)
+    }
     }

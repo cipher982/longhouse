@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 InputIntent = Literal["auto", "queue", "steer"]
 InputStatus = Literal["queued", "delivering", "delivered", "cancelled", "failed"]
 RetryInputStatus = Literal["queued", "delivering"]
-InputOutcome = Literal["sent", "queued"]
+InputOutcome = Literal["sent", "queued", "unknown"]
 InputConflictReason = Literal["different_text", "cancelled"]
 
 INPUT_INTENT_AUTO: InputIntent = "auto"

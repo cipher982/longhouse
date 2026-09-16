@@ -1,9 +1,9 @@
 """Process-epoch admission fence for hosted runtime cutovers.
 
-The control plane owns durable deployment receipts.  The Runtime Host owns only
-this process-local fence: a restart creates a new epoch and all old drain or
-reopen requests become unknown/conflicting instead of being reported as a
-successful drain.
+Catalogd owns the durable exact image/generation activation receipt. The Runtime
+Host owns only this process-local fence: a restart creates a new epoch and all
+old drain or reopen requests become unknown/conflicting instead of being
+reported as a successful drain.
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 from typing import Any
+from typing import Awaitable
+from typing import Callable
 from uuid import uuid4
 
 
@@ -33,6 +35,10 @@ class RuntimeFence:
     fingerprint: str
 
 
+CatalogAdmissionProbe = Callable[[str], Awaitable[dict[str, Any]]]
+CatalogActivationProbe = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
+
+
 class RuntimeAdmission:
     """Admission and bounded drain state for one Runtime Host process."""
 
@@ -42,14 +48,23 @@ class RuntimeAdmission:
         self._state = "closed" if self._startup_closed else "open"
         self._fence: RuntimeFence | None = None
         self._request_fingerprints: dict[str, str] = {}
-        self._request_results: dict[str, dict[str, Any]] = {}
         self._in_flight = 0
+        self._request_results: dict[str, dict[str, Any]] = {}
+        self._drained_at: str | None = None
+        self._catalog_admission: dict[str, Any] = {
+            "available": False,
+            "state": "unknown",
+            "depth": None,
+            "accepting": None,
+            "detail": "catalog writer admission has not been observed",
+        }
         self._lock = asyncio.Lock()
         self._candidate_attempt: str | None = None
         self._candidate_generation: str | None = None
         self._candidate_ready_attempt: str | None = None
         self._candidate_consistent_attempt: str | None = None
         self._process_generation = os.getenv("LONGHOUSE_DEPLOYMENT_GENERATION", "").strip() or None
+        self._process_image_digest = os.getenv("LONGHOUSE_IMAGE_DIGEST", "").strip() or None
         self.deployment_id = os.getenv("LONGHOUSE_DEPLOYMENT_ID") or None
         self.target_id = os.getenv("LONGHOUSE_TARGET_ID") or None
 
@@ -94,27 +109,155 @@ class RuntimeAdmission:
             raise ValueError("candidate consistency requires successful readiness")
         self._candidate_consistent_attempt = attempt_id
 
+    async def recover_startup(
+        self,
+        activation_probe: CatalogActivationProbe | None,
+        catalog_probe: CatalogAdmissionProbe | None,
+    ) -> dict[str, Any]:
+        """Reopen a pending process only when its exact durable activation matches."""
+
+        async with self._lock:
+            if not self._startup_closed:
+                return self._snapshot_unlocked()
+            if activation_probe is None or catalog_probe is None:
+                result = self._snapshot_unlocked()
+                result.update(
+                    {
+                        "state": "unknown",
+                        "code": "activation_unavailable",
+                        "message": "durable activation authority is unavailable",
+                    }
+                )
+                return result
+            if self._process_generation is None or self._process_image_digest is None:
+                result = self._snapshot_unlocked()
+                result.update(
+                    {
+                        "state": "unknown",
+                        "code": "activation_identity_unavailable",
+                        "message": "runtime image or generation identity is unavailable",
+                    }
+                )
+                return result
+            try:
+                evidence = await activation_probe("read", {})
+            except Exception as exc:
+                evidence = {"available": False, "activation": None, "detail": str(exc) or "activation read failed"}
+            activation = evidence.get("activation") if isinstance(evidence, dict) else None
+            if not isinstance(evidence, dict) or evidence.get("available") is not True:
+                result = self._snapshot_unlocked()
+                result.update(
+                    {
+                        "state": "unknown",
+                        "code": "activation_unavailable",
+                        "message": evidence.get("detail") if isinstance(evidence, dict) else "activation read failed",
+                    }
+                )
+                return result
+            if (
+                not isinstance(activation, dict)
+                or activation.get("image_digest") != self._process_image_digest
+                or str(activation.get("generation") or "").strip() != self._process_generation
+            ):
+                result = self._snapshot_unlocked()
+                result.update(
+                    {
+                        "state": "closed",
+                        "code": "activation_mismatch",
+                        "message": "durable activation evidence does not match this runtime",
+                    }
+                )
+                return result
+            opened = await self._catalog_operation(catalog_probe, "open")
+            self._set_catalog_admission_unlocked(opened or {})
+            if not self._catalog_open_ready(opened):
+                await self._catalog_fail_closed(catalog_probe)
+                result = self._snapshot_unlocked()
+                result.update(
+                    {
+                        "state": "unknown",
+                        "code": "catalog_unavailable",
+                        "message": "catalog writer admission could not be reopened from durable activation",
+                    }
+                )
+                return result
+            self._state = "reopened"
+            self._startup_closed = False
+            result = self._snapshot_unlocked()
+            result.update(
+                {
+                    "state": "reopened",
+                    "startup_recovered": True,
+                    "activation": dict(activation),
+                }
+            )
+            return result
+
+    @staticmethod
+    def _catalog_open_ready(admission: dict[str, Any] | None) -> bool:
+        return bool(
+            isinstance(admission, dict)
+            and admission.get("available") is True
+            and admission.get("state") == "open"
+            and admission.get("accepting") is True
+            and admission.get("depth") == 0
+            and admission.get("active_label") is None
+        )
+
+    def _set_catalog_admission_unlocked(self, admission: dict[str, Any]) -> None:
+        self._catalog_admission = dict(admission)
+
+    def _catalog_quiescent_unlocked(self) -> bool:
+        catalog = self._catalog_admission
+        return (
+            catalog.get("available") is True
+            and catalog.get("state") == "closed"
+            and type(catalog.get("depth")) is int
+            and catalog["depth"] == 0
+            and catalog.get("active_label") is None
+        )
+
     def _snapshot_unlocked(self) -> dict[str, Any]:
-        # The Runtime Host no longer owns the catalog writer. All mutating
-        # ingress that this process can admit is counted here; catalogd's
-        # authoritative writer queue is reported by ping.v2/readiness.
-        active_writers = self._in_flight
-        queued_side_effects = 0
+        catalog = self._catalog_admission
+        catalog_depth = catalog.get("depth")
+        catalog_known = (
+            catalog.get("available") is True
+            and catalog.get("state") in {"open", "closed"}
+            and type(catalog_depth) is int
+            and type(catalog.get("accepting")) is bool
+        )
+        active_writers = self._in_flight + catalog_depth if catalog_known else None
+        queued_side_effects = 0 if catalog_known else None
+        state = self._state
+        if state == "drained" and not self._catalog_quiescent_unlocked():
+            state = "draining"
         return {
             "runtime_epoch": self.runtime_epoch,
-            "state": self._state,
+            "state": state,
             "active_writers": active_writers,
             "queued_side_effects": queued_side_effects,
+            "runtime_in_flight": self._in_flight,
+            "catalog_admission": dict(catalog),
             "startup_closed": self._startup_closed,
             "drained_at": None,
         }
 
-    async def snapshot(self) -> dict[str, Any]:
+    async def snapshot(self, *, catalog_admission: dict[str, Any] | None = None) -> dict[str, Any]:
         async with self._lock:
+            if catalog_admission is not None:
+                self._set_catalog_admission_unlocked(catalog_admission)
+            if self._state == "draining" and self._is_drained_unlocked():
+                self._state = "drained"
+                self._drained_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             payload = self._snapshot_unlocked()
-            if self._state == "drained" and payload["active_writers"] == 0 and payload["queued_side_effects"] == 0:
+            if self._state == "drained" and not self._is_drained_unlocked():
+                payload["state"] = "draining"
+            if self._state == "drained" and self._is_drained_unlocked():
                 payload["drained_at"] = getattr(self, "_drained_at", None)
             return payload
+
+    async def update_catalog_admission(self, admission: dict[str, Any]) -> dict[str, Any]:
+        return await self.snapshot(catalog_admission=admission)
 
     async def try_admit(self, *, path: str) -> tuple[bool, dict[str, Any]]:
         async with self._lock:
@@ -140,14 +283,19 @@ class RuntimeAdmission:
                 self._drained_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
     def _is_drained_unlocked(self) -> bool:
-        snapshot = self._snapshot_unlocked()
-        return self._in_flight == 0 and snapshot["active_writers"] == 0 and snapshot["queued_side_effects"] == 0
+        return self._in_flight == 0 and self._catalog_quiescent_unlocked()
 
     def _fingerprint(self, payload: dict[str, Any]) -> str:
         raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         return hashlib.sha256(raw.encode()).hexdigest()
 
-    async def drain(self, payload: dict[str, Any], *, attempt_id: str) -> dict[str, Any]:
+    async def drain(
+        self,
+        payload: dict[str, Any],
+        *,
+        attempt_id: str,
+        catalog_probe: CatalogAdmissionProbe | None = None,
+    ) -> dict[str, Any]:
         required = ("request_id", "deployment_id", "target_id", "generation", "deadline_utc", "grace_seconds")
         if any(not str(payload.get(key) or "").strip() for key in required[:-1]):
             return {
@@ -207,6 +355,9 @@ class RuntimeAdmission:
                     "runtime_epoch": self.runtime_epoch,
                 }
             if existing_fingerprint is not None:
+                admission = await self._catalog_operation(catalog_probe, "close")
+                if admission is not None:
+                    self._set_catalog_admission_unlocked(admission)
                 existing = dict(self._request_results[request_id])
                 if self._state == "draining" and self._is_drained_unlocked():
                     self._state = "drained"
@@ -251,10 +402,26 @@ class RuntimeAdmission:
                 }
             )
             self._request_results[request_id] = dict(result)
-        # Wait outside lock so admitted handlers can release. A request which
-        # exceeds its grace remains explicitly draining, never falsely drained.
-        end = min(time.monotonic() + grace, max(time.monotonic(), deadline.timestamp() - time.time()))
-        while time.monotonic() < end:
+        # The control-plane deadline is UTC; turn its remaining duration into a
+        # single monotonic deadline before waiting. Mixing the UTC timestamp
+        # directly with monotonic time collapses the bound to "now".
+        now = time.monotonic()
+        remaining_utc = max(0.0, deadline.astimezone(timezone.utc).timestamp() - time.time())
+        end = now + min(grace, remaining_utc)
+        while True:
+            if catalog_probe is not None:
+                try:
+                    admission = await catalog_probe("close")
+                except Exception as exc:
+                    admission = {
+                        "available": False,
+                        "state": "unknown",
+                        "depth": None,
+                        "accepting": None,
+                        "detail": str(exc) or "catalog writer admission unavailable",
+                    }
+                async with self._lock:
+                    self._set_catalog_admission_unlocked(admission)
             async with self._lock:
                 if self._is_drained_unlocked():
                     self._state = "drained"
@@ -274,12 +441,15 @@ class RuntimeAdmission:
                     )
                     self._request_results[request_id] = dict(result)
                     return result
-            await asyncio.sleep(0.01)
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(0.01, remaining))
         async with self._lock:
             result = self._snapshot_unlocked()
             result.update(
                 {
-                    "state": "drained" if self._is_drained_unlocked() else "draining",
+                    "state": "draining",
                     "attempt_id": attempt_id,
                     "request_id": request_id,
                     "deployment_id": str(payload["deployment_id"]),
@@ -288,13 +458,61 @@ class RuntimeAdmission:
                     "replayed": False,
                 }
             )
-            if result["state"] == "drained":
-                self._drained_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-                result["drained_at"] = self._drained_at
             self._request_results[request_id] = dict(result)
             return result
 
-    async def reopen(self, payload: dict[str, Any], *, attempt_id: str) -> dict[str, Any]:
+    async def _catalog_operation(self, catalog_probe: CatalogAdmissionProbe | None, operation: str) -> dict[str, Any] | None:
+        if catalog_probe is None:
+            return None
+        try:
+            return await catalog_probe(operation)
+        except Exception as exc:
+            return {
+                "available": False,
+                "state": "unknown",
+                "depth": None,
+                "accepting": None,
+                "detail": str(exc) or f"catalog writer admission {operation} unavailable",
+            }
+
+    async def _activation_operation(
+        self,
+        activation_probe: CatalogActivationProbe | None,
+        operation: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        if activation_probe is None:
+            return {
+                "available": False,
+                "activation": None,
+                "detail": f"catalog activation {operation} unavailable",
+            }
+        try:
+            result = await activation_probe(operation, params)
+        except Exception as exc:
+            return {
+                "available": False,
+                "activation": None,
+                "detail": str(exc) or f"catalog activation {operation} unavailable",
+            }
+        return (
+            result
+            if isinstance(result, dict)
+            else {
+                "available": False,
+                "activation": None,
+                "detail": "catalog activation response is malformed",
+            }
+        )
+
+    async def reopen(
+        self,
+        payload: dict[str, Any],
+        *,
+        attempt_id: str,
+        catalog_probe: CatalogAdmissionProbe | None = None,
+        activation_probe: CatalogActivationProbe | None = None,
+    ) -> dict[str, Any]:
         request_id = str(payload.get("request_id") or "").strip()
         expected_epoch = str(payload.get("runtime_epoch") or "").strip()
         async with self._lock:
@@ -336,6 +554,13 @@ class RuntimeAdmission:
                         "message": "reopen does not match the candidate generation",
                         "runtime_epoch": self.runtime_epoch,
                     }
+                if self._process_image_digest is None or self._process_generation != generation:
+                    return {
+                        "state": "unknown",
+                        "code": "activation_identity_unavailable",
+                        "message": "candidate image or generation identity is unavailable",
+                        "runtime_epoch": self.runtime_epoch,
+                    }
                 canonical = {
                     key: payload.get(key)
                     for key in (
@@ -363,6 +588,35 @@ class RuntimeAdmission:
                     runtime_epoch=self.runtime_epoch,
                     fingerprint=fingerprint,
                 )
+                activation = await self._activation_operation(
+                    activation_probe,
+                    "record",
+                    {
+                        "image_digest": self._process_image_digest,
+                        "generation": generation,
+                    },
+                )
+                recorded = activation.get("activation")
+                if (
+                    activation.get("available") is not True
+                    or not isinstance(recorded, dict)
+                    or recorded.get("image_digest") != self._process_image_digest
+                    or str(recorded.get("generation") or "").strip() != generation
+                    or not self._catalog_open_ready(activation)
+                ):
+                    await self._catalog_fail_closed(catalog_probe)
+                    result = self._snapshot_unlocked()
+                    result.update(
+                        {
+                            "state": "unknown",
+                            "code": "activation_unavailable",
+                            "message": activation.get("detail") or "durable activation could not be recorded before reopening",
+                            "attempt_id": attempt_id,
+                            "request_id": request_id,
+                        }
+                    )
+                    return result
+                self._set_catalog_admission_unlocked(activation)
                 self._fence = fence
                 self._request_fingerprints[request_id] = fingerprint
                 self._state = "reopened"
@@ -376,6 +630,7 @@ class RuntimeAdmission:
                         "deployment_id": fence.deployment_id,
                         "target_id": fence.target_id,
                         "generation": fence.generation,
+                        "activation": dict(recorded),
                         "replayed": False,
                     }
                 )
@@ -394,6 +649,18 @@ class RuntimeAdmission:
                     "message": "runtime has no drained fence",
                     "runtime_epoch": self.runtime_epoch,
                 }
+            if self._catalog_admission.get("available") is not True:
+                result = self._snapshot_unlocked()
+                result.update(
+                    {
+                        "state": "unknown",
+                        "code": "catalog_unavailable",
+                        "message": "catalog writer admission is unavailable",
+                        "attempt_id": attempt_id,
+                        "request_id": request_id,
+                    }
+                )
+                return result
             if not self._is_drained_unlocked():
                 result = self._snapshot_unlocked()
                 result.update(
@@ -406,6 +673,28 @@ class RuntimeAdmission:
                     }
                 )
                 return result
+            opened = await self._catalog_operation(catalog_probe, "open")
+            if opened is not None:
+                self._set_catalog_admission_unlocked(opened)
+                if not (
+                    opened.get("available") is True
+                    and opened.get("state") == "open"
+                    and opened.get("accepting") is True
+                    and opened.get("depth") == 0
+                    and opened.get("active_label") is None
+                ):
+                    await self._catalog_fail_closed(catalog_probe)
+                    result = self._snapshot_unlocked()
+                    result.update(
+                        {
+                            "state": "unknown",
+                            "code": "catalog_unavailable",
+                            "message": "catalog writer admission could not be reopened",
+                            "attempt_id": attempt_id,
+                            "request_id": request_id,
+                        }
+                    )
+                    return result
             self._state = "reopened"
             self._startup_closed = False
             result = self._snapshot_unlocked()
@@ -421,6 +710,11 @@ class RuntimeAdmission:
                 }
             )
             return result
+
+    async def _catalog_fail_closed(self, catalog_probe: CatalogAdmissionProbe | None) -> None:
+        closed = await self._catalog_operation(catalog_probe, "close")
+        if closed is not None:
+            self._set_catalog_admission_unlocked(closed)
 
 
 _RUNTIME_ADMISSION = RuntimeAdmission()

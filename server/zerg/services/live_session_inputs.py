@@ -31,6 +31,10 @@ class LiveInputPayloadConflict(ValueError):
     """A request id was reused for a different semantic input."""
 
 
+class LiveInputReceiptUnavailable(RuntimeError):
+    """The receipt authority could not answer a read request."""
+
+
 @dataclass(frozen=True)
 class LiveInputReceiptSnapshot:
     id: str
@@ -563,21 +567,21 @@ def _record_live_input_receipt(
     return str(row.id)
 
 
-async def load_live_input_receipt_by_client_request_best_effort(
+async def load_live_input_receipt_by_client_request(
     *,
     owner_id: int,
     session_id: UUID | str,
     client_request_id: str | None,
 ) -> LiveInputReceiptSnapshot | None:
     if not database_module.live_store_configured():
-        return None
+        raise LiveInputReceiptUnavailable("Live input receipt authority is unavailable")
     if not _clean_str(client_request_id):
         return None
     from zerg.services.catalogd_supervisor import get_catalogd_client
 
     catalogd = get_catalogd_client()
     if catalogd is None:
-        return None
+        raise LiveInputReceiptUnavailable("Live input receipt authority is unavailable")
     try:
         result = await catalogd.call(
             "session.input.receipt.read.v2",
@@ -590,9 +594,9 @@ async def load_live_input_receipt_by_client_request_best_effort(
         )
         receipt = result.get("receipt")
         return _snapshot_from_rpc(receipt) if result.get("found") is True and isinstance(receipt, dict) else None
-    except Exception:
+    except Exception as exc:
         logger.warning("Failed to read catalog input receipt for session %s", session_id, exc_info=True)
-        return None
+        raise LiveInputReceiptUnavailable("Live input receipt authority could not answer") from exc
 
 
 async def list_recent_live_input_receipts_catalog(

@@ -8160,10 +8160,10 @@ export interface components {
         SessionInputResponse: {
             /**
              * Outcome
-             * @description sent | queued
+             * @description sent | queued | unknown
              * @enum {string}
              */
-            outcome: "sent" | "queued";
+            outcome: "sent" | "queued" | "unknown";
             /** Input Id */
             input_id?: number | null;
             /** Live Input Id */

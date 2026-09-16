@@ -66,6 +66,18 @@ class CatalogMeta:
     commit_seq: int
     created_at: datetime
     updated_at: datetime
+    deployment_activation_image_digest: str | None = None
+    deployment_activation_generation: str | None = None
+    deployment_activation_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DeploymentActivation:
+    """Exact image/generation receipt that may reopen a restarted candidate."""
+
+    image_digest: str
+    generation: str
+    activated_at: datetime
 
 
 _catalog_metadata = MetaData()
@@ -78,6 +90,11 @@ catalog_meta = Table(
     Column("commit_seq", Integer, nullable=False, server_default=text("0")),
     Column("created_at", Text, nullable=False),
     Column("updated_at", Text, nullable=False),
+    # Durable candidate activation authority. These values are written only
+    # after readiness and read-consistency proof, through catalogd's writer.
+    Column("deployment_activation_image_digest", Text, nullable=True),
+    Column("deployment_activation_generation", Text, nullable=True),
+    Column("deployment_activation_at", Text, nullable=True),
     # Additive feature marker. Older v2 binaries ignore this column and the
     # reducer tables, so pre-cutover rollback remains possible.
     Column("fact_reducer_generation", Text, nullable=True),
@@ -583,12 +600,26 @@ def _decode_meta(row, *, expected_schema_version: int) -> CatalogMeta:
         raise CatalogSchemaMismatchError("catalog_meta timestamps are invalid") from exc
     if created_at.tzinfo is None or updated_at.tzinfo is None:
         raise CatalogSchemaMismatchError("catalog_meta timestamps must include a timezone")
+    activation_digest = getattr(row, "deployment_activation_image_digest", None)
+    activation_generation = getattr(row, "deployment_activation_generation", None)
+    activation_at_raw = getattr(row, "deployment_activation_at", None)
+    activation_at = None
+    if activation_at_raw is not None:
+        try:
+            parsed_activation_at = datetime.fromisoformat(str(activation_at_raw))
+            if parsed_activation_at.tzinfo is not None:
+                activation_at = parsed_activation_at
+        except ValueError:
+            activation_at = None
     return CatalogMeta(
         catalog_id=catalog_id,
         schema_version=row.schema_version,
         commit_seq=row.commit_seq,
         created_at=created_at,
         updated_at=updated_at,
+        deployment_activation_image_digest=activation_digest if isinstance(activation_digest, str) else None,
+        deployment_activation_generation=activation_generation if isinstance(activation_generation, str) else None,
+        deployment_activation_at=activation_at,
     )
 
 
@@ -609,6 +640,37 @@ def read_catalog_meta(engine: Engine, *, expected_schema_version: int | None = N
             f"PRAGMA user_version={user_version} does not match catalog metadata schema_version={metadata.schema_version}"
         )
     return metadata
+
+
+def read_deployment_activation(engine: Engine) -> DeploymentActivation | None:
+    """Read the complete activation receipt, or ``None`` for no evidence."""
+
+    with engine.connect() as connection:
+        row = connection.execute(
+            select(
+                catalog_meta.c.deployment_activation_image_digest,
+                catalog_meta.c.deployment_activation_generation,
+                catalog_meta.c.deployment_activation_at,
+            ).where(catalog_meta.c.singleton == 1)
+        ).one_or_none()
+    if row is None:
+        raise CatalogSchemaMismatchError("catalog_meta activation row is missing")
+    digest = row.deployment_activation_image_digest
+    generation = row.deployment_activation_generation
+    activated_at = row.deployment_activation_at
+    if not all(isinstance(value, str) and value.strip() for value in (digest, generation, activated_at)):
+        return None
+    try:
+        parsed_at = datetime.fromisoformat(activated_at)
+    except ValueError:
+        return None
+    if parsed_at.tzinfo is None:
+        return None
+    return DeploymentActivation(
+        image_digest=digest.strip(),
+        generation=generation.strip(),
+        activated_at=parsed_at,
+    )
 
 
 def _migrate_catalog_schema(engine: Engine, *, from_version: int) -> None:
@@ -910,6 +972,7 @@ __all__ = [
     "CATALOG_SCHEMA_MIGRATIONS",
     "CATALOG_SCHEMA_VERSION",
     "CatalogMeta",
+    "DeploymentActivation",
     "CatalogSchemaError",
     "CatalogSchemaMigrationError",
     "CatalogSchemaMismatchError",
@@ -918,4 +981,5 @@ __all__ = [
     "create_catalog_engine",
     "initialize_catalog_schema",
     "read_catalog_meta",
+    "read_deployment_activation",
 ]

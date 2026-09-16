@@ -1,5 +1,10 @@
 """Schema discovery must not authorize a candidate or invent catalog health."""
 
+import asyncio
+import json
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from types import SimpleNamespace
 
 import pytest
@@ -74,3 +79,253 @@ def test_unknown_catalog_schema_is_not_ready(evidence_runtime):
     assert response.json()["outcome"] == "not_ready"
     assert response.json()["schema_version"] is None
     assert runtime.state == "closed"
+
+
+def _drain_payload(runtime) -> dict[str, object]:
+    return {
+        "request_id": "drain-request",
+        "deployment_id": "deployment",
+        "target_id": "target",
+        "generation": "7",
+        "deadline_utc": (datetime.now(timezone.utc) + timedelta(seconds=0.2)).isoformat(),
+        "grace_seconds": 0.15,
+        "runtime_epoch": runtime.runtime_epoch,
+    }
+
+
+@pytest.mark.asyncio
+async def test_drain_waits_for_runtime_and_catalog_quiescence() -> None:
+    from zerg.services.runtime_admission import RuntimeAdmission
+
+    runtime = RuntimeAdmission()
+    admitted, _ = await runtime.try_admit(path="/test")
+    assert admitted is True
+    probes: list[str] = []
+
+    async def probe(operation: str) -> dict[str, object]:
+        probes.append(operation)
+        return {"available": True, "state": "closed", "depth": 0, "accepting": False}
+
+    task = asyncio.create_task(runtime.drain(_drain_payload(runtime), attempt_id="attempt", catalog_probe=probe))
+    await asyncio.sleep(0.02)
+    assert task.done() is False
+    await runtime.release()
+    result = await task
+
+    assert result["state"] == "drained"
+    assert result["active_writers"] == 0
+    assert probes and all(operation == "close" for operation in probes)
+
+
+@pytest.mark.asyncio
+async def test_drain_observes_late_catalog_depth_before_drained() -> None:
+    from zerg.services.runtime_admission import RuntimeAdmission
+
+    runtime = RuntimeAdmission()
+    depths = iter((1, 0))
+
+    async def probe(operation: str) -> dict[str, object]:
+        assert operation == "close"
+        return {"available": True, "state": "closed", "depth": next(depths), "accepting": False}
+
+    result = await runtime.drain(_drain_payload(runtime), attempt_id="attempt", catalog_probe=probe)
+
+    assert result["state"] == "drained"
+    assert result["catalog_admission"]["depth"] == 0
+
+
+@pytest.mark.asyncio
+async def test_drain_catalog_unavailable_stays_unknown() -> None:
+    from zerg.services.runtime_admission import RuntimeAdmission
+
+    runtime = RuntimeAdmission()
+
+    async def probe(_operation: str) -> dict[str, object]:
+        return {"available": False, "state": "unknown", "depth": None, "accepting": None}
+
+    result = await runtime.drain(_drain_payload(runtime), attempt_id="attempt", catalog_probe=probe)
+
+    assert result["state"] == "draining"
+    assert result["active_writers"] is None
+    assert result["queued_side_effects"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_drain_promotes_when_catalog_gate_and_runtime_are_quiescent(monkeypatch) -> None:
+    from zerg.routers import internal_deployments
+    from zerg.services.runtime_admission import RuntimeAdmission
+    from zerg.services.runtime_admission import RuntimeFence
+
+    runtime = RuntimeAdmission()
+    runtime._state = "draining"
+    runtime._fence = RuntimeFence(
+        attempt_id="attempt",
+        request_id="drain-request",
+        deployment_id="deployment",
+        target_id="target",
+        generation="7",
+        deadline_utc=_drain_payload(runtime)["deadline_utc"],
+        grace_seconds=0.15,
+        runtime_epoch=runtime.runtime_epoch,
+        fingerprint="fingerprint",
+    )
+    monkeypatch.setattr(
+        internal_deployments,
+        "get_settings",
+        lambda: SimpleNamespace(internal_api_secret="secret"),
+    )
+
+    async def probe(_operation: str) -> dict[str, object]:
+        return {"available": True, "state": "closed", "depth": 0, "accepting": False}
+
+    monkeypatch.setattr(internal_deployments, "_catalog_admission_probe", probe)
+    monkeypatch.setattr(internal_deployments, "runtime_admission", lambda: runtime)
+    response = await internal_deployments.get_runtime_drain(
+        "attempt",
+        request_id="drain-request",
+        x_internal_token="secret",
+    )
+
+    assert response.status_code == 200
+    assert json.loads(response.body)["state"] == "drained"
+    assert runtime.state == "drained"
+
+
+def test_read_consistency_reports_catalog_failure_as_503_not_conflict(evidence_runtime, monkeypatch):
+    client, runtime, _ping = evidence_runtime
+    conflict = client.get(
+        "/internal/deployments/owned-attempt/read-consistency",
+        params={"runtime_epoch": "old-epoch"},
+        headers={"X-Internal-Token": "evidence-test-only"},
+    )
+    assert conflict.status_code == 409
+
+    from zerg.catalogd.client import CatalogUnavailable
+    from zerg.routers import internal_deployments
+
+    monkeypatch.setattr(
+        internal_deployments,
+        "call_catalogd_sync",
+        lambda *args, **kwargs: (_ for _ in ()).throw(CatalogUnavailable("catalog down")),
+    )
+    unavailable = client.get(
+        "/internal/deployments/owned-attempt/read-consistency",
+        params={"runtime_epoch": runtime.runtime_epoch},
+        headers={"X-Internal-Token": "evidence-test-only"},
+    )
+    assert unavailable.status_code == 503
+    assert unavailable.json()["outcome"] == "unknown"
+
+
+def _activation_payload(runtime) -> dict[str, object]:
+    return {
+        "request_id": "reopen-request",
+        "deployment_id": "deployment",
+        "target_id": "target",
+        "generation": "7",
+        "deadline_utc": (datetime.now(timezone.utc) + timedelta(seconds=5)).isoformat(),
+        "grace_seconds": 1.0,
+        "runtime_epoch": runtime.runtime_epoch,
+    }
+
+
+@pytest.mark.asyncio
+async def test_exact_activation_receipt_reopens_same_env_process_restart(monkeypatch) -> None:
+    monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_PENDING", "1")
+    monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_GENERATION", "7")
+    monkeypatch.setenv("LONGHOUSE_IMAGE_DIGEST", "sha256:" + "a" * 64)
+    from zerg.services.runtime_admission import RuntimeAdmission
+
+    receipt: dict[str, str] = {}
+
+    async def catalog_probe(operation: str) -> dict[str, object]:
+        if operation == "open":
+            return {"available": True, "state": "open", "depth": 0, "accepting": True, "active_label": None}
+        return {"available": True, "state": "closed", "depth": 0, "accepting": False, "active_label": None}
+
+    async def activation_probe(operation: str, params: dict[str, object]) -> dict[str, object]:
+        if operation == "record":
+            receipt.update({key: str(value) for key, value in params.items()})
+            return {
+                "available": True,
+                "state": "open",
+                "depth": 0,
+                "accepting": True,
+                "active_label": None,
+                "activation": {
+                    **receipt,
+                    "activated_at": "2026-09-16T00:00:00+00:00",
+                },
+            }
+        return {"available": True, "activation": {**receipt, "activated_at": "2026-09-16T00:00:00+00:00"}}
+
+    first = RuntimeAdmission()
+    first.observe_candidate(attempt_id="attempt", generation="7")
+    first.mark_candidate_ready(attempt_id="attempt")
+    first.mark_candidate_consistent(attempt_id="attempt")
+    reopened = await first.reopen(
+        _activation_payload(first),
+        attempt_id="attempt",
+        catalog_probe=catalog_probe,
+        activation_probe=activation_probe,
+    )
+    assert reopened["state"] == "reopened"
+
+    restarted = RuntimeAdmission()
+    recovered = await restarted.recover_startup(activation_probe, catalog_probe)
+    assert recovered["state"] == "reopened"
+    admitted, _ = await restarted.try_admit(path="/api/sessions")
+    assert admitted is True
+
+
+@pytest.mark.asyncio
+async def test_activation_receipt_mismatch_stays_closed(monkeypatch) -> None:
+    monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_PENDING", "1")
+    monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_GENERATION", "8")
+    monkeypatch.setenv("LONGHOUSE_IMAGE_DIGEST", "sha256:" + "b" * 64)
+    from zerg.services.runtime_admission import RuntimeAdmission
+
+    opened = False
+
+    async def catalog_probe(operation: str) -> dict[str, object]:
+        nonlocal opened
+        opened = operation == "open"
+        return {"available": True, "state": "open", "depth": 0, "accepting": True, "active_label": None}
+
+    async def activation_probe(_operation: str, _params: dict[str, object]) -> dict[str, object]:
+        return {
+            "available": True,
+            "activation": {
+                "image_digest": "sha256:" + "a" * 64,
+                "generation": "7",
+                "activated_at": "2026-09-16T00:00:00+00:00",
+            },
+        }
+
+    runtime = RuntimeAdmission()
+    recovered = await runtime.recover_startup(activation_probe, catalog_probe)
+    assert recovered["state"] == "closed"
+    assert recovered["code"] == "activation_mismatch"
+    assert opened is False
+    admitted, _ = await runtime.try_admit(path="/api/sessions")
+    assert admitted is False
+
+
+@pytest.mark.asyncio
+async def test_unavailable_activation_evidence_stays_closed(monkeypatch) -> None:
+    monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_PENDING", "1")
+    monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_GENERATION", "7")
+    monkeypatch.setenv("LONGHOUSE_IMAGE_DIGEST", "sha256:" + "a" * 64)
+    from zerg.services.runtime_admission import RuntimeAdmission
+
+    async def activation_probe(_operation: str, _params: dict[str, object]) -> dict[str, object]:
+        return {"available": False, "activation": None, "detail": "catalog unavailable"}
+
+    async def catalog_probe(_operation: str) -> dict[str, object]:
+        raise AssertionError("catalog must not open without activation evidence")
+
+    runtime = RuntimeAdmission()
+    recovered = await runtime.recover_startup(activation_probe, catalog_probe)
+    assert recovered["state"] == "unknown"
+    admitted, _ = await runtime.try_admit(path="/api/sessions")
+    assert admitted is False

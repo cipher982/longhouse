@@ -814,6 +814,81 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func deliveryUnknownErrorRetainsSamePendingOperation() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let api = FakeSessionWorkspaceClient(workspaces: [before])
+        await api.failFutureSends(
+            LonghouseAPIError.structured(
+                status: 502,
+                errorCode: "delivery_unknown",
+                message: "Provider handoff status is unknown."
+            )
+        )
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-delivery-unknown-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PendingInputStore(directory: directory)
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            pendingInputStore: store
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let sent = await model.send(text: "retain this", sessionId: "session-1", appState: appState)
+
+        #expect(!sent)
+        #expect(model.submittedInputs.first?.phase == .couldNotConfirm)
+        let requestId = try #require(model.submittedInputs.first?.clientRequestId)
+        #expect(store.load(
+            serverURL: appState.serverURL,
+            sessionId: "session-1",
+            authGeneration: SharedAuthStore.authGeneration(for: appState.serverURL)
+        ).map(\.clientRequestId) == [requestId])
+    }
+    @Test
+    func reopeningRestoresEachPendingOperationWithoutDispatching() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let api = FakeSessionWorkspaceClient(workspaces: [before])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-reopen-pending-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PendingInputStore(directory: directory)
+        let intent = PendingInputIntent(
+            clientRequestId: "ios-reopen-1",
+            serverURL: appState.serverURL,
+            authGeneration: SharedAuthStore.authGeneration(for: appState.serverURL),
+            sessionId: "session-1",
+            text: "survive relaunch",
+            intent: "auto",
+            attachments: [],
+            createdAt: Date(timeIntervalSince1970: 1_000)
+        )
+        #expect(store.save(intent))
+
+        let first = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            pendingInputStore: store
+        )
+        await first.start(sessionId: "session-1", appState: appState)
+        #expect(first.submittedInputs.map(\.clientRequestId) == ["ios-reopen-1"])
+
+        let second = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            pendingInputStore: store
+        )
+        await second.start(sessionId: "session-1", appState: appState)
+        #expect(second.submittedInputs.map(\.clientRequestId) == ["ios-reopen-1"])
+        #expect(await api.sendRequests() == [])
+    }
+
+    @Test
     func structuredSendRejectionIsTerminalFailure() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let api = FakeSessionWorkspaceClient(workspaces: [before])

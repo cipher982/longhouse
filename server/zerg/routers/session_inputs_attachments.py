@@ -14,6 +14,7 @@ so a leaked attachment id can never read across sessions.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import uuid
 from pathlib import Path
@@ -43,7 +44,10 @@ from zerg.metrics import session_input_attachments_total
 from zerg.models.device_token import DeviceToken
 from zerg.routers.session_chat import QueuedInputSummary
 from zerg.routers.session_chat import SessionInputResponse
-from zerg.services.live_session_inputs import load_live_input_receipt_by_client_request_best_effort
+from zerg.routers.session_chat import _delivery_unknown_error
+from zerg.routers.session_chat import _live_receipt_outcome
+from zerg.services.live_session_inputs import LiveInputReceiptUnavailable
+from zerg.services.live_session_inputs import load_live_input_receipt_by_client_request
 from zerg.services.live_session_inputs import record_live_input_receipt_best_effort
 from zerg.services.managed_provider_contracts import managed_transport_for_control_plane
 from zerg.services.session_chat_impl import _assert_live_session_send_available
@@ -261,11 +265,20 @@ async def create_session_input_with_attachments(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="client_request_id must not be blank",
         )
-    existing_receipt = await load_live_input_receipt_by_client_request_best_effort(
-        owner_id=int(current_user.id),
-        session_id=source_session.id,
-        client_request_id=request_id,
-    )
+    try:
+        existing_receipt = await load_live_input_receipt_by_client_request(
+            owner_id=int(current_user.id),
+            session_id=source_session.id,
+            client_request_id=request_id,
+        )
+    except LiveInputReceiptUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error_code": "input_receipt_unknown",
+                "message": "The server could not confirm this operation; retry with the same client_request_id.",
+            },
+        ) from exc
     if existing_receipt is not None:
         if existing_receipt.payload_digest != payload_digest:
             _record_outcome("rejected_idempotency_conflict")
@@ -277,7 +290,8 @@ async def create_session_input_with_attachments(
                     "existing_live_input_id": existing_receipt.id,
                 },
             )
-        if existing_receipt.status in {"failed", "cancelled"}:
+        is_delivery_unknown = existing_receipt.status == "failed" and _delivery_unknown_error(existing_receipt.error_json)
+        if existing_receipt.status in {"failed", "cancelled"} and not is_delivery_unknown:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail={
@@ -287,7 +301,7 @@ async def create_session_input_with_attachments(
                 },
             )
         return SessionInputResponse(
-            outcome="sent" if existing_receipt.status == "delivered" else "queued",
+            outcome=_live_receipt_outcome(existing_receipt),
             input_id=None,
             live_input_id=existing_receipt.id,
             client_request_id=request_id,
@@ -408,6 +422,15 @@ async def create_session_input_with_attachments(
 
     dispatch_status = int(getattr(dispatch_response, "status_code", 200) or 200)
     if dispatch_status >= 400:
+        try:
+            payload = json.loads(getattr(dispatch_response, "body", b"{}") or b"{}")
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict) and payload.get("error_code") == "delivery_unknown":
+            # Keep the receipt and its durable blobs in delivering state. The
+            # provider may have accepted the handoff, so replay must be unknown.
+            _record_outcome("dispatch_unknown")
+            raise HTTPException(status_code=dispatch_status, detail=payload)
         await _finish_catalog_receipt(
             receipt_id=catalog_receipt_id,
             delivery_request_id=delivery_request_id,

@@ -196,7 +196,7 @@ final class SessionViewModel: ObservableObject {
     /// tier answers.
     private let snapshotStore: TranscriptSnapshotStore?
     /// Complete outgoing intents survive process death until receipt
-    /// reconciliation proves accepted or rejected.
+    /// reconciliation proves durable delivery or terminal dismissal.
     private let pendingInputStore: PendingInputStore
     private let realtimeRefreshRetryDelaysNanoseconds: [UInt64]
     private var lastPubsubSeq: Int?
@@ -968,13 +968,22 @@ final class SessionViewModel: ObservableObject {
             ) {
                 switch receipt.disposition {
                 case .accepted:
-                    pendingInputStore.remove(pending)
-                    updateSubmittedInput(
-                        pending.clientRequestId,
-                        phase: receipt.status?.lowercased() == "queued" ? .queued : .sent,
-                        serverInputId: receipt.inputId,
-                        lastError: nil
-                    )
+                    if receipt.status?.lowercased() == "queued" {
+                        updateSubmittedInput(
+                            pending.clientRequestId,
+                            phase: .queued,
+                            serverInputId: receipt.inputId,
+                            lastError: nil
+                        )
+                    } else {
+                        pendingInputStore.remove(pending)
+                        updateSubmittedInput(
+                            pending.clientRequestId,
+                            phase: .sent,
+                            serverInputId: receipt.inputId,
+                            lastError: nil
+                        )
+                    }
                     return true
                 case .rejected:
                     pendingInputStore.remove(pending)
@@ -1057,18 +1066,27 @@ final class SessionViewModel: ObservableObject {
                 }
                 switch receipt.disposition {
                 case .accepted:
-                    pendingInputStore.remove(
-                        serverURL: intent.serverURL,
-                        sessionId: intent.sessionId,
-                        authGeneration: intent.authGeneration,
-                        clientRequestId: intent.clientRequestId
-                    )
-                    updateSubmittedInput(
-                        intent.clientRequestId,
-                        phase: receipt.status?.lowercased() == "queued" ? .queued : .sent,
-                        serverInputId: receipt.inputId,
-                        lastError: nil
-                    )
+                    if receipt.status?.lowercased() == "queued" {
+                        updateSubmittedInput(
+                            intent.clientRequestId,
+                            phase: .queued,
+                            serverInputId: receipt.inputId,
+                            lastError: nil
+                        )
+                    } else {
+                        pendingInputStore.remove(
+                            serverURL: intent.serverURL,
+                            sessionId: intent.sessionId,
+                            authGeneration: intent.authGeneration,
+                            clientRequestId: intent.clientRequestId
+                        )
+                        updateSubmittedInput(
+                            intent.clientRequestId,
+                            phase: .sent,
+                            serverInputId: receipt.inputId,
+                            lastError: nil
+                        )
+                    }
                 case .rejected:
                     pendingInputStore.remove(
                         serverURL: intent.serverURL,
@@ -1110,13 +1128,13 @@ final class SessionViewModel: ObservableObject {
         appState: AppState
     ) async -> Bool {
         guard let api = apiFactory(appState.serverURL) else {
-            pendingInputStore.remove(pending)
             updateSubmittedInput(
                 pending.clientRequestId,
-                phase: .failed,
+                phase: .couldNotConfirm,
                 serverInputId: nil,
-                lastError: "Invalid server URL"
+                lastError: "The Longhouse server URL is invalid."
             )
+            errorMessage = "Could not confirm delivery. Check the server URL and retry with the same request."
             return false
         }
         isSending = true
@@ -1151,18 +1169,41 @@ final class SessionViewModel: ObservableObject {
             queuedInputCount = response.pendingInputCount
             failedInputCount = response.visibleFailedInputCount
             turnEndedDraft = nil
-            pendingInputStore.remove(pending)
-            updateSubmittedInput(
-                pending.clientRequestId,
-                phase: response.turn.map { ["starting", "active", "draining"].contains($0.state) } == true
-                    ? .working
-                    : (response.outcome == .sent ? .sent : .queued),
-                serverInputId: response.inputId,
-                turnId: response.turn?.turnId,
-                runId: response.turn?.runId,
-                lastError: nil
-            )
-            clearSupersededSubmittedInputs(text: pending.text, keepClientRequestId: pending.clientRequestId)
+            switch response.outcome {
+            case .unknown:
+                updateSubmittedInput(
+                    pending.clientRequestId,
+                    phase: .couldNotConfirm,
+                    serverInputId: response.inputId,
+                    turnId: response.turn?.turnId,
+                    runId: response.turn?.runId,
+                    lastError: "Delivery status is not confirmed yet."
+                )
+                refreshErrorMessage = "Delivery status is not confirmed yet."
+                return false
+            case .queued:
+                updateSubmittedInput(
+                    pending.clientRequestId,
+                    phase: .queued,
+                    serverInputId: response.inputId,
+                    turnId: response.turn?.turnId,
+                    runId: response.turn?.runId,
+                    lastError: nil
+                )
+            case .sent:
+                pendingInputStore.remove(pending)
+                updateSubmittedInput(
+                    pending.clientRequestId,
+                    phase: response.turn.map { ["starting", "active", "draining"].contains($0.state) } == true
+                        ? .working
+                        : .sent,
+                    serverInputId: response.inputId,
+                    turnId: response.turn?.turnId,
+                    runId: response.turn?.runId,
+                    lastError: nil
+                )
+                clearSupersededSubmittedInputs(text: pending.text, keepClientRequestId: pending.clientRequestId)
+            }
             Task { [weak self] in
                 guard let self else { return }
                 try? await self.refreshTail(api: api, sessionId: sessionId, allowFailure: true)
@@ -2955,6 +2996,8 @@ final class SessionViewModel: ObservableObject {
 
     private func sendConfirmationMayHaveLanded(_ error: Error) -> Bool {
         switch error {
+        case LonghouseAPIError.structured(_, let code, _):
+            return code == "delivery_unknown" || code == "input_receipt_unknown"
         case LonghouseAPIError.upstreamFailed,
              LonghouseAPIError.requestFailed,
              LonghouseAPIError.unexpectedResponse,

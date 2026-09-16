@@ -1913,13 +1913,23 @@ async def _attempt_directed_input_delivery(
 
     receipt_id = response.live_input_id if response is not None else None
     if receipt_id is None:
-        from zerg.services.live_session_inputs import load_live_input_receipt_by_client_request_best_effort
+        from zerg.services.live_session_inputs import LiveInputReceiptUnavailable
+        from zerg.services.live_session_inputs import load_live_input_receipt_by_client_request
 
-        receipt = await load_live_input_receipt_by_client_request_best_effort(
-            owner_id=owner_id,
-            session_id=target_session.id,
-            client_request_id=input_request_id,
-        )
+        try:
+            receipt = await load_live_input_receipt_by_client_request(
+                owner_id=owner_id,
+                session_id=target_session.id,
+                client_request_id=input_request_id,
+            )
+        except LiveInputReceiptUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "input_receipt_unknown",
+                    "message": "The server could not confirm directed input delivery; retry with the same client_request_id.",
+                },
+            ) from exc
         receipt_id = receipt.id if receipt is not None else None
     if receipt_id is None:
         return directed_input

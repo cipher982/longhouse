@@ -286,6 +286,23 @@ struct LonghouseAPITests {
     }
 
     @Test
+    func sendInputDecodesUnknownOutcomeWithoutMappingItToQueued() throws {
+        let data = try #require("""
+        {
+          "outcome": "unknown",
+          "input_id": null,
+          "live_input_id": "live-1",
+          "client_request_id": "request-1",
+          "intent": "auto",
+          "queued": []
+        }
+        """.data(using: .utf8))
+
+        let response = try LonghouseAPI.decodeSessionInputResponse(data)
+        #expect(response.outcome == .unknown)
+        #expect(response.clientRequestId == "request-1")
+    }
+    @Test
     func reportTurnCarriesReportAndIdempotencyIdentities() async throws {
         let capture = APIRequestCapture()
         APIRequestMockURLProtocol.handler = { request in

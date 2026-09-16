@@ -43,6 +43,7 @@ from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.routers.session_chat import _live_queued_summary
+from zerg.routers.session_chat import _live_receipt_outcome
 from zerg.routers.session_chat import _project_live_input_to_archive
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
@@ -570,8 +571,7 @@ def test_session_input_api_schema_exposes_typed_lifecycle_contract():
     response_schema = SessionInputResponse.model_json_schema()
     queued_schema = QueuedInputSummary.model_json_schema()
 
-    assert request_schema["properties"]["intent"]["enum"] == ["auto", "queue", "steer"]
-    assert response_schema["properties"]["outcome"]["enum"] == ["sent", "queued"]
+    assert response_schema["properties"]["outcome"]["enum"] == ["sent", "queued", "unknown"]
     assert response_schema["properties"]["intent"]["enum"] == ["auto", "queue", "steer"]
     turn_schema = response_schema["properties"]["turn"]
     assert "ConsoleTurnReceiptResponse" in str(turn_schema)
@@ -583,6 +583,19 @@ def test_session_input_api_schema_exposes_typed_lifecycle_contract():
         "cancelled",
         "failed",
     ]
+
+
+def test_live_receipt_replay_exposes_provider_handoff_ambiguity():
+    def receipt(status: str, error_json: str | None = None):
+        return SimpleNamespace(status=status, error_json=error_json)
+
+    assert _live_receipt_outcome(receipt("delivered")) == "sent"
+    assert _live_receipt_outcome(receipt("queued")) == "queued"
+    assert _live_receipt_outcome(receipt("delivering")) == "unknown"
+    assert _live_receipt_outcome(
+        receipt("failed", '{"code":"delivery_unknown","message":"handoff was ambiguous"}')
+    ) == "unknown"
+    assert _live_receipt_outcome(receipt("failed", '{"code":"provider_rejected"}')) == "queued"
 
 
 def test_json_input_rejects_empty_text_by_contract(tmp_path):

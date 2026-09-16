@@ -27,6 +27,7 @@ from zerg.catalogd.server import CatalogDaemon
 from zerg.catalogd.server import CatalogDaemonError
 from zerg.catalogd.server import CatalogReaderBusy
 from zerg.catalogd.server import CatalogWriterBusy
+from zerg.catalogd.server import CatalogWriterClosed
 from zerg.catalogd.server import CatalogWriterExpired
 from zerg.catalogd.store import CatalogStore
 from zerg.models.live_store import LiveDeviceToken
@@ -61,6 +62,7 @@ async def test_daemon_publishes_private_socket_and_serves_ping_schema(daemon_pat
             "writer_admission": {
                 "depth": 0,
                 "max_depth": 128,
+                "accepting": True,
                 "peak_depth": 0,
                 "active_label": None,
                 "active_age_ms": 0.0,
@@ -1058,6 +1060,41 @@ async def test_writer_queue_rejects_work_beyond_admission_bound(daemon_paths):
         await daemon.close()
 
 
+
+@pytest.mark.asyncio
+async def test_writer_admission_close_fences_late_work(daemon_paths):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def hold_writer():
+        entered.set()
+        assert release.wait(timeout=5)
+
+    blocked = asyncio.create_task(daemon._run_store(hold_writer))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        closed = await client.call("writer.admission.close.v2")
+        assert closed["writer_admission"]["accepting"] is False
+        assert closed["writer_admission"]["depth"] == 1
+        with pytest.raises(CatalogWriterClosed):
+            await daemon._run_store(lambda: None)
+        release.set()
+        await blocked
+        assert daemon._writer_stats.snapshot()["depth"] == 0
+        reopened = await client.call("writer.admission.open.v2")
+        assert reopened["writer_admission"]["accepting"] is True
+        assert await daemon._run_store(lambda: "accepted") == "accepted"
+    finally:
+        release.set()
+        if not blocked.done():
+            await blocked
+        await client.close()
+        await daemon.close()
+
 def test_writer_drops_expired_work_before_mutation(daemon_paths):
     database_path, socket_path = daemon_paths
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
@@ -1071,3 +1108,42 @@ def test_writer_drops_expired_work_before_mutation(daemon_paths):
         daemon._run_store_timed("mutate", time.perf_counter(), 0, mutate, (), {})
     assert mutated is False
     assert daemon._writer_stats.snapshot()["expired_before_execution"] == 1
+
+
+@pytest.mark.asyncio
+async def test_activation_receipt_survives_catalogd_restart_and_fences_mismatch(daemon_paths, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_PENDING", "1")
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    image = "sha256:" + "a" * 64
+    try:
+        recorded = await client.call(
+            "writer.admission.activation.record.v2",
+            {"image_digest": image, "generation": "7"},
+        )
+        assert recorded["activation"]["image_digest"] == image
+        assert recorded["activation"]["generation"] == "7"
+        assert recorded["writer_admission"]["accepting"] is True
+    finally:
+        await client.close()
+        await daemon.close()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        assert (await client.call("writer.admission.activation.read.v2"))["activation"]["generation"] == "7"
+        assert (await client.call("ping.v2"))["writer_admission"]["accepting"] is False
+        replaced = await client.call(
+            "writer.admission.activation.record.v2",
+            {"image_digest": "sha256:" + "b" * 64, "generation": "8"},
+        )
+        assert replaced["activation"]["generation"] == "8"
+        assert replaced["writer_admission"]["accepting"] is True
+        reopened = await client.call("writer.admission.open.v2")
+        assert reopened["writer_admission"]["accepting"] is True
+    finally:
+        await client.close()
+        await daemon.close()

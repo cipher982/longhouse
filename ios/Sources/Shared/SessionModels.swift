@@ -587,11 +587,14 @@ struct TimelineCardPresentation: Codable, Hashable, Sendable {
 /// Outcome returned from POST /api/sessions/{id}/input.
 ///
 /// - `sent`: Longhouse dispatched the message to the live session immediately.
-/// - `queued`: The session was working; the message is durably queued and
-///   will auto-send at the next safe turn boundary.
+/// - `queued`: The session was working; the message is durably queued
+///   and will auto-send at the next safe turn boundary.
+/// - `unknown`: provider handoff may have happened, but Longhouse cannot
+///   confirm delivery; the client must retain the same operation identity.
 enum SessionInputOutcome: String, Codable, Sendable {
     case sent
     case queued
+    case unknown
 }
 
 enum SessionInputIntent: String, Codable, Sendable {
@@ -678,7 +681,7 @@ struct SessionInputResponse: Codable, Sendable {
     }
 
     var pendingInputCount: Int {
-        queued.filter { $0.status == .queued || $0.status == .delivering }.count
+        queued.filter { $0.status == .queued }.count
     }
 
     var visibleFailedInputCount: Int {
@@ -1508,12 +1511,19 @@ enum SessionInputReceiptDisposition: String, Codable, Sendable {
     case rejected
     case couldNotConfirm
 
-    static func from(status: String?) -> Self {
+    static func from(status: String?, error: String? = nil) -> Self {
+        if error?.lowercased().hasPrefix("delivery_unknown") == true {
+            return .couldNotConfirm
+        }
         switch status?.lowercased() {
-        case "delivered", "accepted", "queued", "delivering", "sent", "working":
+        case "delivered", "accepted", "sent", "working":
+            return .accepted
+        case "queued":
             return .accepted
         case "failed", "rejected", "cancelled", "canceled":
             return .rejected
+        case "delivering":
+            return .couldNotConfirm
         default:
             return .couldNotConfirm
         }

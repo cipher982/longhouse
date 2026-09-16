@@ -218,6 +218,7 @@ describe("SessionChat", () => {
     });
     URL.createObjectURL = vi.fn(() => "blob:test-preview");
     URL.revokeObjectURL = vi.fn();
+    window.localStorage.clear();
   });
   it("expires turn-specific actions without another update while retaining the draft", async () => {
     vi.useFakeTimers();
@@ -641,6 +642,59 @@ describe("SessionChat", () => {
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(requestIds).toHaveLength(2));
     expect(requestIds[1]).toBe(requestIds[0]);
+  });
+  it("retains multiple ambiguous operations and retries each by its own identity", async () => {
+    const user = userEvent.setup();
+    const requestIds: string[] = [];
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body ?? "{}"));
+        requestIds.push(payload.client_request_id);
+        return Promise.resolve({
+          outcome: "unknown",
+          intent: payload.intent,
+          client_request_id: payload.client_request_id,
+          queued: [
+            {
+              id: null,
+              client_request_id: payload.client_request_id,
+              text: payload.text,
+              intent: payload.intent,
+              status: "delivering",
+              last_error: "Delivery status is not confirmed yet.",
+              created_at: null,
+            },
+          ],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat({ chatMode: "managed_local", timelineItems: [] });
+    await user.type(screen.getByRole("textbox"), "first unresolved");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() =>
+      expect(screen.getByText("first unresolved")).toBeInTheDocument(),
+    );
+
+    await user.type(screen.getByRole("textbox"), "second unresolved");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() =>
+      expect(screen.getByText("second unresolved")).toBeInTheDocument(),
+    );
+    expect(requestIds).toHaveLength(2);
+    expect(requestIds[0]).not.toBe(requestIds[1]);
+    expect(screen.getAllByRole("button", { name: "Retry" })).toHaveLength(2);
+
+    expect(screen.getByTestId("session-chat-queued")).toHaveTextContent(
+      "Delivery status uncertain",
+    );
+    await user.click(screen.getAllByRole("button", { name: "Retry" })[0]);
+    await waitFor(() => expect(requestIds).toHaveLength(3));
+    expect(requestIds[2]).toBe(requestIds[0]);
   });
   it("routes attachment-only sends through multipart with empty text", async () => {
     const user = userEvent.setup();

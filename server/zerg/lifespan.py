@@ -198,6 +198,14 @@ async def lifespan(app: FastAPI):
                 from zerg.services.catalogd_supervisor import start_catalogd_supervisor
 
                 app.state.catalogd_ping = await start_catalogd_supervisor()
+            try:
+                from zerg.routers.internal_deployments import recover_runtime_startup
+
+                app.state.runtime_activation = await recover_runtime_startup()
+            except Exception:
+                # Missing or unavailable activation evidence must leave the
+                # runtime closed; it must not prevent read-only startup.
+                logger.exception("Failed to recover runtime activation")
             logger.info("Live catalog schema is owned by catalogd")
             with _timed_startup_step("searchd_supervisor"):
                 try:
@@ -255,6 +263,12 @@ async def lifespan(app: FastAPI):
                 from zerg.services.catalogd_supervisor import start_catalogd_supervisor
 
                 app.state.catalogd_ping = await start_catalogd_supervisor()
+            try:
+                from zerg.routers.internal_deployments import recover_runtime_startup
+
+                app.state.runtime_activation = await recover_runtime_startup()
+            except Exception:
+                logger.exception("Failed to recover runtime activation")
             with _timed_startup_step("storage_v2_workers"):
                 from zerg.services.raw_object_workers import get_raw_object_worker_pool
                 from zerg.services.render_object_workers import get_render_object_worker_pool

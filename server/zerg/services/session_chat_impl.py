@@ -1257,12 +1257,13 @@ async def _dispatch_catalog_managed_text(
     if not result.ok or exit_code != 0:
         await session_lock_manager.release(lock_scope_id, request_id)
         detail = str(result.error or data.get("stderr") or data.get("stdout") or "Managed control dispatch failed")
+        error_code = "delivery_unknown" if result.failure_reason == "indeterminate" else SESSION_TURN_ERROR_SEND_FAILED
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,
             content={
                 "accepted": False,
                 "error": detail,
-                "error_code": SESSION_TURN_ERROR_SEND_FAILED,
+                "error_code": error_code,
                 "session_id": str(source_session.id),
                 "request_id": request_id,
             },
