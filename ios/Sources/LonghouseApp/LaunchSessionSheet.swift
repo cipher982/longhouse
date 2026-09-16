@@ -58,6 +58,7 @@ struct LaunchSessionSheet: View {
     @State private var displayName: String = ""
     @State private var sessionId = UUID().uuidString
     @State private var threadId = UUID().uuidString
+    @State private var launchIdentityKey: String?
     private let logger = Logger(subsystem: "ai.longhouse.ios", category: "LaunchSession")
     init(
         previewMachines: [MachineDirectoryEntry]? = nil,
@@ -401,12 +402,24 @@ struct LaunchSessionSheet: View {
             logger.error("workspace suggestions load failed device=\(deviceId, privacy: .public) elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public) error=\(error.localizedDescription, privacy: .public)")
         }
     }
-
     private func submit() async {
         guard canSubmit, let api = LonghouseAPI(host: appState.serverURL) else { return }
         submitting = true
         submitError = nil
         defer { submitting = false }
+        let identityKey = [selectedDeviceId, selectedProvider, normalizedCwd].joined(separator: "\u{1F}")
+        let requestSessionID: String
+        let requestThreadID: String
+        if launchIdentityKey == identityKey {
+            requestSessionID = sessionId
+            requestThreadID = threadId
+        } else {
+            requestSessionID = UUID().uuidString
+            requestThreadID = UUID().uuidString
+            sessionId = requestSessionID
+            threadId = requestThreadID
+            launchIdentityKey = identityKey
+        }
         let trimmedDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             let response = try await api.createConsoleSession(
@@ -414,8 +427,8 @@ struct LaunchSessionSheet: View {
                 provider: selectedProvider,
                 cwd: normalizedCwd,
                 displayName: trimmedDisplayName.isEmpty ? nil : trimmedDisplayName,
-                sessionId: sessionId,
-                threadId: threadId
+                sessionId: requestSessionID,
+                threadId: requestThreadID
             )
             onLaunchSelection?(
                 ConsoleLaunchSelection(

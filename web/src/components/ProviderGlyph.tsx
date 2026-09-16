@@ -51,31 +51,25 @@ function PiMark({ mono }: { mono: boolean }) {
   );
 }
 
-/** OMP — the official Pi mark with its orange plugin connector. */
+/** OMP — official mark from https://omp.sh/favicon.svg. */
 function OMPMark({ mono }: { mono: boolean }) {
   const gradientId = `omp-mark-${useId().replace(/:/g, "")}`;
   return (
-    <svg viewBox="0 0 120 90" aria-hidden="true" focusable="false">
+    <svg viewBox="0 0 64 64" aria-hidden="true" focusable="false">
       {!mono && (
         <defs>
-          <linearGradient id={gradientId} x1="10" y1="8" x2="110" y2="82" gradientUnits="userSpaceOnUse">
-            <stop stopColor="#F044C7" />
-            <stop offset="1" stopColor="#6E9BFF" />
+          <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stopColor="#ED4ABF" />
+            <stop offset="0.5" stopColor="#9B4DFF" />
+            <stop offset="1" stopColor="#5AD8E6" />
           </linearGradient>
         </defs>
       )}
-      <rect x="10" y="8" width="100" height="12" rx="2" fill={mono ? "currentColor" : `url(#${gradientId})`} />
-      <rect x="25" y="20" width="12" height="62" rx="2" fill={mono ? "currentColor" : `url(#${gradientId})`} />
-      <rect x="75" y="20" width="12" height="45" rx="2" fill={mono ? "currentColor" : `url(#${gradientId})`} />
-      <rect x="71" y="55" width="20" height="16" rx="3" fill={mono ? "currentColor" : "#F97316"} />
-      {!mono && (
-        <>
-          <rect x="76" y="59" width="3" height="8" rx="1" fill="#0D0D0D" />
-          <rect x="82" y="59" width="3" height="8" rx="1" fill="#0D0D0D" />
-        </>
-      )}
-      <circle cx="18" cy="14" r="2" fill={mono ? "currentColor" : "#F97316"} opacity="0.8" />
-      <circle cx="102" cy="14" r="2" fill={mono ? "currentColor" : "#F97316"} opacity="0.8" />
+      {!mono && <rect width="64" height="64" rx="12" fill="#0F0A14" />}
+      <path
+        fill={mono ? "currentColor" : `url(#${gradientId})`}
+        d="M14 16h36v8H40v32h-8V24h-6v22h-8V24h-4z"
+      />
     </svg>
   );
 }

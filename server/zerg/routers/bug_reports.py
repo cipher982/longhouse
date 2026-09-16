@@ -91,7 +91,7 @@ async def upload_bug_report(
 
     if len(files) > MAX_REPORT_FILES:
         raise HTTPException(
-            status_code=413,
+            status_code=400,
             detail={"code": "report_too_many_files", "message": f"Too many report images (maximum {MAX_REPORT_FILES})."},
         )
     uploads: list[BugReportUpload] = []

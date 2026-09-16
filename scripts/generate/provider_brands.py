@@ -10,6 +10,7 @@ Outputs:
   - desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ProviderBrands.generated.swift
   - server/zerg/generated/provider_brands.py
 """
+
 from __future__ import annotations
 
 import json
@@ -20,14 +21,7 @@ CONFIG = REPO / "config" / "provider-brands.json"
 MANAGED_CONTRACTS = REPO / "server" / "zerg" / "config" / "managed_provider_contracts.json"
 TS_OUT = REPO / "web" / "src" / "generated" / "provider-brands.ts"
 SWIFT_OUT_IOS = REPO / "ios" / "Sources" / "Shared" / "ProviderBrands.generated.swift"
-SWIFT_OUT_DESKTOP = (
-    REPO
-    / "desktop"
-    / "LonghouseMenuBarHarness"
-    / "Sources"
-    / "LonghouseMenuBarCore"
-    / "ProviderBrands.generated.swift"
-)
+SWIFT_OUT_DESKTOP = REPO / "desktop" / "LonghouseMenuBarHarness" / "Sources" / "LonghouseMenuBarCore" / "ProviderBrands.generated.swift"
 PYTHON_OUT = REPO / "server" / "zerg" / "generated" / "provider_brands.py"
 
 
@@ -108,21 +102,21 @@ def render_ts(data: dict) -> str:
         fill = p["chip"]["fill"]
         stroke = p["chip"]["stroke"]
         entries.append(
-            f'  {json.dumps(key)}: {{\n'
-            f'    displayName: {json.dumps(p["display_name"])},\n'
-            f'    marketingName: {json.dumps(p["marketing_name"])},\n'
-            f'    brand: {json.dumps(p["brand"])},\n'
-            f'    glyphStyle: {json.dumps(p["glyph_style"])},\n'
-            f'    markColor: {_ts_nullable_hex(p["mark_color"])},\n'
-            f'    chipFillType: {json.dumps(fill["type"])},\n'
-            f'    chipFillAlpha: {fill.get("alpha", "null")},\n'
-            f'    chipFillColor: {json.dumps(fill.get("color", None)) if fill.get("color") else "null"},\n'
-            f'    chipStrokeType: {json.dumps(stroke["type"])},\n'
-            f'    chipStrokeAlpha: {stroke.get("alpha", "null")},\n'
-            f'    chipStrokeColor: {json.dumps(stroke.get("color", None)) if stroke.get("color") else "null"},\n'
-            f'    chipStrokeWidth: {stroke["width"]},\n'
-            f'    cornerRadiusFactor: {p["chip"]["corner_radius_factor"]},\n'
-            f'    aliases: {json.dumps(p["aliases"])},\n'
+            f"  {json.dumps(key)}: {{\n"
+            f"    displayName: {json.dumps(p['display_name'])},\n"
+            f"    marketingName: {json.dumps(p['marketing_name'])},\n"
+            f"    brand: {json.dumps(p['brand'])},\n"
+            f"    glyphStyle: {json.dumps(p['glyph_style'])},\n"
+            f"    markColor: {_ts_nullable_hex(p['mark_color'])},\n"
+            f"    chipFillType: {json.dumps(fill['type'])},\n"
+            f"    chipFillAlpha: {fill.get('alpha', 'null')},\n"
+            f"    chipFillColor: {json.dumps(fill.get('color', None)) if fill.get('color') else 'null'},\n"
+            f"    chipStrokeType: {json.dumps(stroke['type'])},\n"
+            f"    chipStrokeAlpha: {stroke.get('alpha', 'null')},\n"
+            f"    chipStrokeColor: {json.dumps(stroke.get('color', None)) if stroke.get('color') else 'null'},\n"
+            f"    chipStrokeWidth: {stroke['width']},\n"
+            f"    cornerRadiusFactor: {p['chip']['corner_radius_factor']},\n"
+            f"    aliases: {json.dumps(p['aliases'])},\n"
             f"  }},"
         )
 
@@ -188,7 +182,6 @@ const DEFAULT_CONFIG: ProviderBrandConfig = {{
 
 export function normalizeProviderKey(provider: string): string {{
   const key = provider.trim().toLowerCase();
-  if (key === "gemini") return "antigravity";
   if (PROVIDER_ALIASES[key]) return PROVIDER_ALIASES[key];
   return key;
 }}
@@ -253,30 +246,33 @@ def render_swift(data: dict) -> str:
 
     # Per-provider static config properties
     config_props = []
-    # Lookup switch cases (string key -> static property)
+    # Canonical key cases (raw provider/alias -> canonical provider key).
+    canonical_cases = []
+    # Lookup switch cases (canonical provider key -> static property).
     lookup_cases = []
     for key, p in providers.items():
         fill = p["chip"]["fill"]
         stroke = p["chip"]["stroke"]
         brand = p["brand"]
-        fill_color = _swift_color_opt(fill.get("color"))
-        stroke_color = _swift_color_opt(stroke.get("color"))
 
         lookup_cases.append(f"        case {json.dumps(key)}: return {key}")
+        canonical_cases.append(f"        case {json.dumps(key)}: return {json.dumps(key)}")
         for alias in p["aliases"]:
-            lookup_cases.append(f"        case {json.dumps(alias)}: return {key}")
+            canonical_cases.append(f"        case {json.dumps(alias)}: return {json.dumps(key)}")
 
+        fill_color = _swift_color_opt(fill.get("color"))
+        stroke_color = _swift_color_opt(stroke.get("color"))
         config_props.append(
             f"    static let {key} = ProviderBrandConfig(\n"
-            f'        displayName: {json.dumps(p["display_name"])},\n'
-            f'        marketingName: {json.dumps(p["marketing_name"])},\n'
+            f"        displayName: {json.dumps(p['display_name'])},\n"
+            f"        marketingName: {json.dumps(p['marketing_name'])},\n"
             f"        brand: {_swift_color(brand)},\n"
-            f'        glyphStyle: {json.dumps(p["glyph_style"])},\n'
+            f"        glyphStyle: {json.dumps(p['glyph_style'])},\n"
             f"        markColor: {_swift_color_opt(p['mark_color'])},\n"
-            f'        chipFillType: {json.dumps(fill["type"])},\n'
+            f"        chipFillType: {json.dumps(fill['type'])},\n"
             f"        chipFillAlpha: {fill.get('alpha', 'nil')},\n"
             f"        chipFillColor: {fill_color},\n"
-            f'        chipStrokeType: {json.dumps(stroke["type"])},\n'
+            f"        chipStrokeType: {json.dumps(stroke['type'])},\n"
             f"        chipStrokeAlpha: {stroke.get('alpha', 'nil')},\n"
             f"        chipStrokeColor: {stroke_color},\n"
             f"        chipStrokeWidth: {stroke['width']},\n"
@@ -324,13 +320,19 @@ private let defaultConfig = ProviderBrandConfig(
     chipStrokeWidth: {default_stroke["width"]},
     cornerRadiusFactor: {defaults["chip"]["corner_radius_factor"]},
 )
-
 public enum ProviderBrands {{
-    public static func lookup(_ provider: String?) -> ProviderBrandConfig {{
-        guard let provider else {{ return defaultConfig }}
+    public static func canonicalKey(_ provider: String?) -> String? {{
+        guard let provider else {{ return nil }}
         let raw = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !raw.isEmpty else {{ return defaultConfig }}
-        let key = raw == "gemini" ? "antigravity" : raw
+        guard !raw.isEmpty else {{ return nil }}
+        switch raw {{
+{chr(10).join(canonical_cases)}
+        default: return raw
+        }}
+    }}
+
+    public static func lookup(_ provider: String?) -> ProviderBrandConfig {{
+        guard let key = canonicalKey(provider) else {{ return defaultConfig }}
         switch key {{
 {chr(10).join(lookup_cases)}
         default: return defaultConfig
@@ -342,7 +344,7 @@ public enum ProviderBrands {{
         let cleaned = provider.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else {{ return fallback }}
         switch cleaned.lowercased() {{
-{chr(10).join(f'        case {json.dumps(alias)}: return {json.dumps(name)}' for p in providers.values() for alias, name in p["alias_display_names"].items())}
+{chr(10).join(f"        case {json.dumps(alias)}: return {json.dumps(name)}" for p in providers.values() for alias, name in p["alias_display_names"].items())}
         default:
             let config = lookup(cleaned)
             if config.displayName != defaultConfig.displayName {{ return config.displayName }}

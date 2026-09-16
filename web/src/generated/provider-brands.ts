@@ -212,7 +212,6 @@ const DEFAULT_CONFIG: ProviderBrandConfig = {
 
 export function normalizeProviderKey(provider: string): string {
   const key = provider.trim().toLowerCase();
-  if (key === "gemini") return "antigravity";
   if (PROVIDER_ALIASES[key]) return PROVIDER_ALIASES[key];
   return key;
 }

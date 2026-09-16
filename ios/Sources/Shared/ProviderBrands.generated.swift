@@ -35,36 +35,49 @@ private let defaultConfig = ProviderBrandConfig(
     chipStrokeWidth: 0.5,
     cornerRadiusFactor: 0.28,
 )
-
 public enum ProviderBrands {
-    public static func lookup(_ provider: String?) -> ProviderBrandConfig {
-        guard let provider else { return defaultConfig }
+    public static func canonicalKey(_ provider: String?) -> String? {
+        guard let provider else { return nil }
         let raw = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !raw.isEmpty else { return defaultConfig }
-        let key = raw == "gemini" ? "antigravity" : raw
+        guard !raw.isEmpty else { return nil }
+        switch raw {
+        case "claude": return "claude"
+        case "claude-code": return "claude"
+        case "antigravity": return "antigravity"
+        case "gemini": return "antigravity"
+        case "agy": return "antigravity"
+        case "google-antigravity": return "antigravity"
+        case "codex": return "codex"
+        case "openai": return "codex"
+        case "codex-cli": return "codex"
+        case "openai-codex": return "codex"
+        case "opencode": return "opencode"
+        case "open-code": return "opencode"
+        case "cursor": return "cursor"
+        case "cursor-agent": return "cursor"
+        case "zai": return "zai"
+        case "z.ai": return "zai"
+        case "pi": return "pi"
+        case "pi-agent": return "pi"
+        case "omp": return "omp"
+        case "oh-my-pi": return "omp"
+        case "oh my pi": return "omp"
+        case "ohmypi": return "omp"
+        default: return raw
+        }
+    }
+
+    public static func lookup(_ provider: String?) -> ProviderBrandConfig {
+        guard let key = canonicalKey(provider) else { return defaultConfig }
         switch key {
         case "claude": return claude
-        case "claude-code": return claude
         case "antigravity": return antigravity
-        case "gemini": return antigravity
-        case "agy": return antigravity
-        case "google-antigravity": return antigravity
         case "codex": return codex
-        case "openai": return codex
-        case "codex-cli": return codex
-        case "openai-codex": return codex
         case "opencode": return opencode
-        case "open-code": return opencode
         case "cursor": return cursor
-        case "cursor-agent": return cursor
         case "zai": return zai
-        case "z.ai": return zai
         case "pi": return pi
-        case "pi-agent": return pi
         case "omp": return omp
-        case "oh-my-pi": return omp
-        case "oh my pi": return omp
-        case "ohmypi": return omp
         default: return defaultConfig
         }
     }

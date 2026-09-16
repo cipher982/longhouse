@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -80,6 +81,26 @@ class BugReportBundle:
     files: tuple[BugReportFile, ...]
 
 
+def _replay_bundle_or_conflict(
+    report_id: str,
+    *,
+    owner_id: int,
+    payload_sha256: str,
+) -> BugReportBundle:
+    try:
+        manifest = read_manifest(report_id, owner_id=owner_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise _report_error("report_id_conflict", "The report could not be reused.", status.HTTP_409_CONFLICT) from exc
+    stored_sha256 = str(manifest.get("payload_sha256") or "")
+    if stored_sha256 and stored_sha256 != payload_sha256:
+        raise _report_error(
+            "report_id_conflict",
+            "This report id was already used for different evidence.",
+            status.HTTP_409_CONFLICT,
+        )
+    return _bundle_from_manifest(report_id, owner_id=owner_id)
+
+
 def bug_report_root() -> Path:
     override = os.getenv("LONGHOUSE_BUG_REPORT_ROOT")
     if override:
@@ -97,6 +118,20 @@ def _report_dir(report_id: str) -> Path:
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _payload_sha256(description: str, context_bytes: bytes, uploads: list[BugReportUpload]) -> str:
+    digest = hashlib.sha256()
+    for value in (description.encode("utf-8"), context_bytes):
+        digest.update(len(value).to_bytes(8, "big"))
+        digest.update(value)
+    for upload in uploads:
+        mime_type = upload.mime_type.split(";", 1)[0].strip().lower().encode("ascii")
+        digest.update(len(mime_type).to_bytes(8, "big"))
+        digest.update(mime_type)
+        digest.update(len(upload.data).to_bytes(8, "big"))
+        digest.update(upload.data)
+    return digest.hexdigest()
 
 
 def _write_private(path: Path, data: bytes) -> None:
@@ -191,7 +226,9 @@ def create_bug_report(
     clean_description = _validate_description(description)
     context_bytes = _validate_context(context_json)
     _validate_uploads(uploads)
-    if len(clean_description.encode("utf-8")) + len(context_bytes) + sum(len(upload.data) for upload in uploads) > MAX_REPORT_TOTAL_BYTES:
+    description_data = clean_description.encode("utf-8")
+    payload_sha256 = _payload_sha256(clean_description, context_bytes, uploads)
+    if len(description_data) + len(context_bytes) + sum(len(upload.data) for upload in uploads) > MAX_REPORT_TOTAL_BYTES:
         raise _report_error("report_too_large", "The bug report is too large.", status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
     if client_report_id:
         try:
@@ -204,10 +241,7 @@ def create_bug_report(
     root.mkdir(parents=True, exist_ok=True)
     final_dir = root / report_id
     if final_dir.exists():
-        try:
-            return _bundle_from_manifest(report_id, owner_id=owner_id)
-        except FileNotFoundError as exc:
-            raise _report_error("report_id_conflict", "The report could not be reused.", status.HTTP_409_CONFLICT) from exc
+        return _replay_bundle_or_conflict(report_id, owner_id=owner_id, payload_sha256=payload_sha256)
     created_at = datetime.now(timezone.utc).isoformat()
     try:
         root.chmod(0o700)
@@ -236,6 +270,7 @@ def create_bug_report(
             "owner_id": int(owner_id),
             "created_at": created_at,
             "source_session_id": source_session_id,
+            "payload_sha256": payload_sha256,
             "files": [
                 {
                     "name": item.name,
@@ -251,9 +286,11 @@ def create_bug_report(
         _write_private(temporary_dir / "manifest.json", manifest_bytes)
         try:
             os.replace(temporary_dir, final_dir)
-        except FileExistsError:
+        except OSError as exc:
+            if exc.errno not in {errno.EEXIST, errno.ENOTEMPTY, errno.EISDIR}:
+                raise
             shutil.rmtree(temporary_dir, ignore_errors=True)
-            return _bundle_from_manifest(report_id, owner_id=owner_id)
+            return _replay_bundle_or_conflict(report_id, owner_id=owner_id, payload_sha256=payload_sha256)
     except BaseException:
         shutil.rmtree(temporary_dir, ignore_errors=True)
         raise

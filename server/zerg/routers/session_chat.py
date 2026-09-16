@@ -1515,9 +1515,8 @@ async def _create_catalog_session_input_response(
                 report_id=body.report_id,
             )
         except ConsoleTurnUnavailable as exc:
-            raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)}) from exc
-        except ConsoleTurnConflict as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            error_status = status.HTTP_404_NOT_FOUND if exc.code == "report_not_found" else status.HTTP_409_CONFLICT
+            raise HTTPException(status_code=error_status, detail={"code": exc.code, "message": str(exc)}) from exc
         if turn.error:
             raise HTTPException(
                 status_code=502,

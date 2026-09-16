@@ -4,9 +4,10 @@ private enum ProviderGlyphPalette {
     static let piRose = Color(red: 0.941176, green: 0.564706, blue: 0.509804)
     static let piBlue = Color(red: 0.301961, green: 0.603922, blue: 0.74902)
     static let piGold = Color(red: 0.945098, green: 0.745098, blue: 0.345098)
-    static let ompPink = Color(red: 0.941176, green: 0.266667, blue: 0.780392)
-    static let ompBlue = Color(red: 0.431373, green: 0.607843, blue: 1)
-    static let ompOrange = Color(red: 0.976471, green: 0.45098, blue: 0.0862745)
+    static let ompPink = Color(red: 0.929412, green: 0.290196, blue: 0.74902)
+    static let ompPurple = Color(red: 0.607843, green: 0.301961, blue: 1)
+    static let ompCyan = Color(red: 0.352941, green: 0.847059, blue: 0.901961)
+    static let ompInk = Color(red: 0.058824, green: 0.039216, blue: 0.078431)
 }
 
 /// Pi's official three-colour mark, sourced from pi.dev/logo-auto.svg.
@@ -66,72 +67,55 @@ private struct PiProviderMark: View {
     }
 }
 
-/// OMP's official Pi-plus-plugin mark, sourced from omp.sh/assets/icon.svg.
+/// OMP's official mark, sourced from https://omp.sh/favicon.svg.
 private struct OMPProviderMark: View {
-
     var body: some View {
         Canvas { context, size in
-            let scale = min(size.width / 120, size.height / 90)
+            let scale = min(size.width, size.height) / 64
             let origin = CGPoint(
-                x: (size.width - 120 * scale) / 2,
-                y: (size.height - 90 * scale) / 2
+                x: (size.width - 64 * scale) / 2,
+                y: (size.height - 64 * scale) / 2
             )
-            func roundedRect(
-                _ x: CGFloat,
-                _ y: CGFloat,
-                _ width: CGFloat,
-                _ height: CGFloat,
-                _ radius: CGFloat
-            ) -> Path {
-                Path(
-                    roundedRect: CGRect(
-                        x: origin.x + x * scale,
-                        y: origin.y + y * scale,
-                        width: width * scale,
-                        height: height * scale
-                    ),
-                    cornerRadius: radius * scale
-                )
+            func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+                CGPoint(x: origin.x + x * scale, y: origin.y + y * scale)
             }
 
-            let gradient = Gradient(colors: [ProviderGlyphPalette.ompPink, ProviderGlyphPalette.ompBlue])
-            let piShading: GraphicsContext.Shading = .linearGradient(
-                gradient,
-                startPoint: CGPoint(x: origin.x + 10 * scale, y: origin.y + 8 * scale),
-                endPoint: CGPoint(x: origin.x + 110 * scale, y: origin.y + 82 * scale)
-            )
-            context.fill(roundedRect(10, 8, 100, 12, 2), with: piShading)
-            context.fill(roundedRect(25, 20, 12, 62, 2), with: piShading)
-            context.fill(roundedRect(75, 20, 12, 45, 2), with: piShading)
-            context.fill(
-                roundedRect(71, 55, 20, 16, 3),
-                with: .color(ProviderGlyphPalette.ompOrange)
+            let markBounds = CGRect(
+                x: origin.x,
+                y: origin.y,
+                width: 64 * scale,
+                height: 64 * scale
             )
             context.fill(
-                roundedRect(76, 59, 3, 8, 1),
-                with: .color(Color(red: 0.05098, green: 0.05098, blue: 0.05098))
+                Path(roundedRect: markBounds, cornerRadius: 12 * scale),
+                with: .color(ProviderGlyphPalette.ompInk)
             )
+
+            var mark = Path()
+            mark.move(to: point(14, 16))
+            mark.addLine(to: point(50, 16))
+            mark.addLine(to: point(50, 24))
+            mark.addLine(to: point(40, 24))
+            mark.addLine(to: point(40, 56))
+            mark.addLine(to: point(32, 56))
+            mark.addLine(to: point(32, 24))
+            mark.addLine(to: point(26, 24))
+            mark.addLine(to: point(26, 46))
+            mark.addLine(to: point(18, 46))
+            mark.addLine(to: point(18, 24))
+            mark.addLine(to: point(14, 24))
+            mark.closeSubpath()
             context.fill(
-                roundedRect(82, 59, 3, 8, 1),
-                with: .color(Color(red: 0.05098, green: 0.05098, blue: 0.05098))
-            )
-            context.fill(
-                Path(ellipseIn: CGRect(
-                    x: origin.x + 16 * scale,
-                    y: origin.y + 12 * scale,
-                    width: 4 * scale,
-                    height: 4 * scale
-                )),
-                with: .color(ProviderGlyphPalette.ompOrange)
-            )
-            context.fill(
-                Path(ellipseIn: CGRect(
-                    x: origin.x + 100 * scale,
-                    y: origin.y + 12 * scale,
-                    width: 4 * scale,
-                    height: 4 * scale
-                )),
-                with: .color(ProviderGlyphPalette.ompOrange)
+                mark,
+                with: .linearGradient(
+                    Gradient(colors: [
+                        ProviderGlyphPalette.ompPink,
+                        ProviderGlyphPalette.ompPurple,
+                        ProviderGlyphPalette.ompCyan,
+                    ]),
+                    startPoint: point(14, 16),
+                    endPoint: point(50, 56)
+                )
             )
         }
     }
@@ -198,27 +182,7 @@ public struct ProviderGlyph: View {
     }
 
     private var key: String {
-        let raw = (provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        switch raw {
-        case "gemini", "agy", "google-antigravity":
-            return "antigravity"
-        case "z.ai":
-            return "zai"
-        case "openai", "codex-cli", "openai-codex":
-            return "codex"
-        case "claude-code":
-            return "claude"
-        case "open-code":
-            return "opencode"
-        case "cursor-agent":
-            return "cursor"
-        case "pi-agent":
-            return "pi"
-        case "oh-my-pi", "oh my pi", "ohmypi":
-            return "omp"
-        default:
-            return raw
-        }
+        ProviderBrands.canonicalKey(provider) ?? ""
     }
 
     private var assetName: String? {

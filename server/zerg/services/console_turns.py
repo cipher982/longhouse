@@ -14,6 +14,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
+from zerg.services.bug_reports import read_manifest
 from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
 from zerg.services.session_turns import SESSION_TURN_STATE_FAILED
 from zerg.services.session_turns import SESSION_TURN_STATE_STARTING
@@ -198,12 +199,16 @@ async def enqueue_catalog_console_turn(
 ) -> CatalogConsoleTurn:
     """Live-catalog equivalent of enqueue + claim + machine dispatch."""
 
+    if report_id is not None:
+        try:
+            read_manifest(str(report_id), owner_id=owner_id)
+        except (FileNotFoundError, ValueError) as exc:
+            raise ConsoleTurnUnavailable("report_not_found", "The staged bug report was not found") from exc
+
     from zerg.services.catalogd_supervisor import get_catalogd_client
     from zerg.services.machine_control_channel import get_machine_control_channel_registry
 
     client = get_catalogd_client()
-    if client is None:
-        raise ConsoleTurnUnavailable("catalog_unavailable", "Console turn catalog is unavailable")
     accepted_wall_ms = int(time.time() * 1000)
     accepted_mono = time.monotonic()
     result = await client.call(

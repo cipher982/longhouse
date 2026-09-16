@@ -134,6 +134,8 @@ struct BugReportSheet: View {
                     } else if reportID == nil {
                         Button("Send report") { Task { await uploadAndChooseTarget() } }
                             .disabled(!canUpload)
+                    } else if didSend {
+                        Button("Done") { dismiss() }
                     } else if targetSessionID == nil {
                         Button("Choose agent") { showingLaunchPicker = true }
                     } else if failureAction == .reportInProgress {
@@ -258,12 +260,13 @@ struct BugReportSheet: View {
             statusMessage = "Sent to Console. The agent has the screenshot and diagnostics."
             onSent?(sessionID)
         } catch {
-            saveHandoffForRetry()
             if let apiError = error as? LonghouseAPIError, apiError.structuredCode == "report_in_progress" {
+                BugReportLocalStore.clearHandoff()
                 failureAction = .reportInProgress
                 statusMessage = "This report is already being handled. Open Timeline to follow it."
                 errorMessage = nil
             } else {
+                saveHandoffForRetry()
                 failureAction = isRetryableHandoffError(error) ? .retryHandoff : .chooseAgent
                 errorMessage = (error as? LocalizedError)?.errorDescription ?? "The report was saved, but the agent could not be started."
             }
