@@ -301,7 +301,7 @@ struct TimelineView: View {
     private func presentBugReport() {
         bugReportContextJSON = BugReportContext.timeline(serverURL: appState.serverURL)
         Task { @MainActor in
-            await Task.yield()
+            try? await Task.sleep(nanoseconds: 100_000_000)
             bugReportScreenshot = BugReportScreenCapture.captureJPEG()
             isShowingBugReport = true
         }

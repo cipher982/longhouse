@@ -70,6 +70,7 @@ struct BugReportSheet: View {
                 } header: {
                     Text("Describe the problem")
                 }
+                .disabled(reportID != nil)
 
                 Section {
                     if let screenshotData, let image = BugReportScreenCapture.previewImage(from: screenshotData) {
@@ -105,8 +106,13 @@ struct BugReportSheet: View {
                 } header: {
                     Text("Evidence")
                 } footer: {
-                    Text("Recent iOS diagnostics and the visible Longhouse state are included. Review the screenshot and remove it if it contains anything sensitive.")
+                    Text(
+                        reportID == nil
+                            ? "Recent iOS diagnostics and the visible Longhouse state are included. Review the screenshot and remove it if it contains anything sensitive."
+                            : "This report is saved and immutable. Start a fix below when you are ready."
+                    )
                 }
+                .disabled(reportID != nil)
 
                 if let errorMessage {
                     Section {
@@ -191,7 +197,11 @@ struct BugReportSheet: View {
     }
 
     private func uploadReport() async {
-        guard canUpload, let api = LonghouseAPI(host: appState.serverURL) else { return }
+        guard canUpload else { return }
+        guard let api = LonghouseAPI(host: appState.serverURL) else {
+            errorMessage = "Enter a valid Longhouse server before sending the report."
+            return
+        }
         isUploading = true
         errorMessage = nil
         statusMessage = nil
@@ -209,7 +219,7 @@ struct BugReportSheet: View {
             reportID = response.reportId
             draftSaveTask?.cancel()
             draftSaveTask = nil
-            BugReportLocalStore.clearDraft()
+            saveDraft()
             statusMessage = "Report saved. Start a fix when you’re ready."
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? "Could not save the bug report."
@@ -376,6 +386,7 @@ struct BugReportSheet: View {
               draft.sourceSessionID == sourceSessionID
         else { return }
         clientReportID = draft.clientReportID ?? clientReportID
+        reportID = draft.reportID
         if description.isEmpty { description = draft.description }
         if screenshotData == nil { screenshotData = draft.screenshotData }
         if additionalFiles.isEmpty {
@@ -385,7 +396,7 @@ struct BugReportSheet: View {
         }
         if let handoff = BugReportLocalStore.loadHandoff(),
            handoff.serverURL == appState.serverURL,
-           handoff.sourceSessionID.map({ $0 == sourceSessionID }) ?? true,
+           handoff.sourceSessionID == sourceSessionID,
            handoff.sessionID.isEmpty == false {
             reportID = handoff.reportID
             targetSessionID = handoff.sessionID
@@ -394,11 +405,12 @@ struct BugReportSheet: View {
     }
 
     private func makeDraft() -> BugReportDraft? {
-        guard !description.isEmpty || screenshotData != nil || !additionalFiles.isEmpty else { return nil }
+        guard reportID != nil || !description.isEmpty || screenshotData != nil || !additionalFiles.isEmpty else { return nil }
         return BugReportDraft(
             serverURL: appState.serverURL,
             sourceSessionID: sourceSessionID,
             clientReportID: clientReportID,
+            reportID: reportID,
             description: description,
             screenshotData: screenshotData,
             additionalImages: additionalFiles.map(\.data)

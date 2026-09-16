@@ -241,7 +241,7 @@ struct LonghouseAPITests {
             ).isRetryableReportHandoff
         )
         #expect(LonghouseAPIError.serviceUnavailable.isRetryableReportHandoff)
-        #expect(!LonghouseAPIError.upstreamFailed.isRetryableReportHandoff)
+        #expect(LonghouseAPIError.upstreamFailed.isRetryableReportHandoff)
         #expect(!LonghouseAPIError.conflict.isRetryableReportHandoff)
         #expect(!LonghouseAPIError.requestFailed.isRetryableReportHandoff)
     }

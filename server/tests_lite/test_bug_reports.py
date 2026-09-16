@@ -73,6 +73,15 @@ def test_bug_report_rejects_changed_or_cross_owner_replay(tmp_path, monkeypatch)
             uploads=[],
             client_report_id=client_report_id,
         )
+    with pytest.raises(Exception, match="different evidence"):
+        create_bug_report(
+            owner_id=7,
+            description="The first upload.",
+            context_json="{}",
+            source_session_id="session-2",
+            uploads=[],
+            client_report_id=client_report_id,
+        )
     with pytest.raises(Exception, match="could not be reused"):
         create_bug_report(
             owner_id=8,
