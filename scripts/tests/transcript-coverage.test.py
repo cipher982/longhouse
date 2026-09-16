@@ -573,6 +573,74 @@ class MediaCoverageTests(unittest.TestCase):
         self.assertEqual([event.key for event in events], [digest])
         self.assertEqual(events[0].chars, len(raw))
 
+    def test_codex_inline_data_url_is_hashed_and_deduplicated(self) -> None:
+        raw = b"\x89PNG\r\ncodex-pasted"
+        digest = hashlib.sha256(raw).hexdigest()
+        encoded = base64.b64encode(raw).decode("ascii")
+        record = {
+            "timestamp": "2026-09-13T14:10:48.525Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_image", "image_url": f"data:image/png;base64,{encoded}"}],
+            },
+        }
+        mirrored = {
+            "timestamp": "2026-09-13T14:10:49.525Z",
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "output": [{"type": "input_image", "image_url": f"data:image/png;base64,{encoded}"}],
+            },
+        }
+        path = write_transcript([record, mirrored])
+        try:
+            events = coverage.extract_native_events("codex", path)
+        finally:
+            path.unlink()
+        self.assertEqual([(event.event_class, event.key) for event in events], [("media", digest)])
+        self.assertEqual(events[0].chars, len(raw))
+
+    def test_pi_provider_uses_the_omp_blob_image_shape(self) -> None:
+        raw = b"\x89PNG\r\npi-pasted"
+        digest = hashlib.sha256(raw).hexdigest()
+        root = Path(tempfile.mkdtemp())
+        session_dir = root / "agent" / "sessions" / "cwd"
+        session_dir.mkdir(parents=True)
+        blob_dir = root / "agent" / "blobs"
+        blob_dir.mkdir(parents=True)
+        (blob_dir / digest).write_bytes(raw)
+        record = {
+            "type": "message",
+            "id": "pi-user",
+            "timestamp": "2026-09-13T14:08:48.525Z",
+            "message": {
+                "role": "user",
+                "content": [{"type": "image", "data": f"blob:sha256:{digest}", "mimeType": "image/png"}],
+            },
+        }
+        tool_record = {
+            "type": "message",
+            "id": "pi-tool",
+            "timestamp": "2026-09-13T14:08:49.525Z",
+            "message": {
+                "role": "toolResult",
+                "toolCallId": "call-1",
+                "content": [{"type": "image", "data": f"blob:sha256:{digest}", "mimeType": "image/png"}],
+            },
+        }
+        path = session_dir / "session.jsonl"
+        path.write_text(
+            json.dumps(record) + "\n" + json.dumps(tool_record) + "\n",
+            encoding="utf-8",
+        )
+        try:
+            events = coverage.extract_native_events("pi", path)
+        finally:
+            path.unlink()
+        self.assertEqual([event.key for event in events if event.event_class == "media"], [digest])
 
 if __name__ == "__main__":
     sys.exit(main())
+

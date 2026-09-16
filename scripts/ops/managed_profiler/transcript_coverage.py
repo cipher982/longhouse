@@ -290,9 +290,103 @@ def extract_claude_transcript(path: Path) -> list[NativeEvent]:
     return events
 
 
+def _walk_codex_images(node: Any, found: list[tuple[str, int]]) -> None:
+    """Find Codex's inline ``input_image`` data URLs in a transcript record.
+
+    Codex stores pasted images in both user messages and tool outputs as
+    ``{"type": "input_image", "image_url": "data:image/...;base64,..."}``.
+    Walking the record keeps this extractor independent of whether the image
+    is under ``payload.content`` or a function-call output array.
+    """
+
+    if isinstance(node, dict):
+        if node.get("type") == "input_image":
+            image_url = node.get("image_url")
+            if isinstance(image_url, str):
+                header, separator, encoded = image_url.partition(",")
+                if separator and header.lower().startswith("data:image/") and header.lower().endswith(";base64"):
+                    try:
+                        raw = base64.b64decode(encoded, validate=True)
+                    except (TypeError, ValueError):
+                        raw = b""
+                    if raw:
+                        found.append((hashlib.sha256(raw).hexdigest(), len(raw)))
+        for value in node.values():
+            _walk_codex_images(value, found)
+    elif isinstance(node, list):
+        for value in node:
+            _walk_codex_images(value, found)
+
+
+def extract_codex_transcript(path: Path) -> list[NativeEvent]:
+    """Extract Codex images, whose transcript records carry inline data URLs."""
+
+    seen: set[str] = set()
+    events: list[NativeEvent] = []
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            timestamp_ms = _parse_timestamp_ms(record.get("timestamp"))
+            found: list[tuple[str, int]] = []
+            _walk_codex_images(record, found)
+            for digest, byte_size in found:
+                if digest in seen:
+                    continue
+                seen.add(digest)
+                events.append(media_event(digest, timestamp_ms, byte_size))
+    return events
+
+
+def extract_pi_transcript(path: Path) -> list[NativeEvent]:
+    """Extract Pi records, including blob-backed images in tool results."""
+
+    events = extract_omp_transcript(path)
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            message = record.get("message")
+            if not isinstance(message, dict):
+                continue
+            timestamp_ms = _parse_timestamp_ms(record.get("timestamp"))
+            for part in _content_parts(message):
+                if part.get("type") != "image":
+                    continue
+                digest = pi_image_digest(part, provider_blob_root(path))
+                if digest:
+                    events.append(media_event(digest, timestamp_ms))
+
+    deduplicated: list[NativeEvent] = []
+    seen_media: set[str] = set()
+    for event in events:
+        if event.event_class == "media":
+            if event.key in seen_media:
+                continue
+            seen_media.add(event.key)
+        deduplicated.append(event)
+    return deduplicated
+
+
 EXTRACTORS: dict[str, Callable[[Path], list[NativeEvent]]] = {
     "omp": extract_omp_transcript,
     "claude": extract_claude_transcript,
+    "codex": extract_codex_transcript,
+    "pi": extract_pi_transcript,
 }
 
 
