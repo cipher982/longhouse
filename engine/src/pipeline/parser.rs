@@ -5913,6 +5913,109 @@ mod tests {
     }
 
     #[test]
+    fn claude_transcript_resolves_every_image_shape_and_redacts_the_raw_line() {
+        // Claude nests an image under `source` one level deeper than the Pi
+        // family and writes plain base64 with no `data:` URL, so a data-URL scan
+        // sees nothing. One record can carry the same picture twice - a tool
+        // result mirrored under `toolUseResult` - and an attachment record keeps
+        // its own copy.
+        use base64::Engine as _;
+
+        let pasted = b"\x89PNG\r\nclaude-pasted".to_vec();
+        let tool = b"\x89PNG\r\ntool-produced-screenshot".to_vec();
+        let pasted_digest = format!("{:x}", Sha256::digest(&pasted));
+        let tool_digest = format!("{:x}", Sha256::digest(&tool));
+        let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        let image = |bytes: &[u8]| {
+            json!({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": encode(bytes),
+                },
+            })
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let lines = [
+            json!({
+                "type": "user",
+                "uuid": "u-1",
+                "timestamp": "2026-09-13T14:08:48.525Z",
+                "message": {"role": "user", "content": [{"type": "text", "text": "look"}, image(&pasted)]},
+            }),
+            json!({
+                "type": "user",
+                "uuid": "u-2",
+                "timestamp": "2026-09-13T14:09:48.525Z",
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "tool_result", "content": [image(&tool)]}],
+                },
+                "toolUseResult": image(&tool),
+            }),
+            json!({
+                "type": "attachment",
+                "uuid": "a-1",
+                "timestamp": "2026-09-13T14:10:48.525Z",
+                "attachment": {"prompt": [image(&tool)]},
+            }),
+        ];
+        let body: String = lines.iter().map(|line| format!("{line}\n")).collect();
+        std::fs::write(&path, &body).unwrap();
+
+        let result = parse_session_file_with_provider(&path, 0, Some("claude")).unwrap();
+
+        let mut digests: Vec<&str> = result
+            .media_objects
+            .iter()
+            .map(|m| m.sha256.as_str())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        digests.sort_unstable();
+        let mut expected = vec![pasted_digest.as_str(), tool_digest.as_str()];
+        expected.sort_unstable();
+        assert_eq!(digests, expected, "each distinct image is one object");
+        // Three placements of two images: the pasted one once, the tool's twice
+        // (its own record and the attachment that repeats it). Repeating an
+        // image at a second position is a second reference, not a second image.
+        assert_eq!(result.media_objects.len(), 3);
+        assert_eq!(
+            result
+                .media_objects
+                .iter()
+                .map(|m| m.byte_size)
+                .sum::<usize>(),
+            pasted.len() + 2 * tool.len()
+        );
+
+        let placeholders: usize = result
+            .source_lines
+            .iter()
+            .map(|line| line.raw_line.matches("longhouse_media_ref:sha256=").count())
+            .sum();
+        assert_eq!(
+            placeholders, 4,
+            "every copy is redacted: one paste, one nested result, its mirror, one attachment"
+        );
+        for line in &result.source_lines {
+            if line.raw_line.contains("\"media_type\":\"image/") {
+                assert!(
+                    line.raw_line.contains("longhouse_media_ref:sha256="),
+                    "an image line must carry a reconstructable reference"
+                );
+                assert!(
+                    !line.raw_line.contains(&encode(&tool)),
+                    "the payload itself must not survive in the raw line"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn pi_user_message_with_text_and_image_is_one_row() {
         // Reproduces the pasted-screenshot shape: one native user message with
         // a text block and an image block. Both parts used to become separate

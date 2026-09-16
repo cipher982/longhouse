@@ -10,7 +10,9 @@
 use base64::{engine::general_purpose, Engine as _};
 use serde::Deserialize;
 use serde_json::value::RawValue;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -230,9 +232,90 @@ fn pi_image_redactions(
     result
 }
 
+/// Claude nests a pasted image under `source`, one level deeper than the Pi
+/// family, and writes plain base64 with no `data:` URL - the shape a data-URL
+/// scan cannot see. The marker makes that cheap to rule out per line.
+const CLAUDE_IMAGE_MARKER: &str = "\"media_type\":\"image/";
+
+/// Every base64 image a Claude record wraps, wherever it sits.
+///
+/// One record can hold the same picture several times: a tool's screenshot is
+/// nested inside its result block and mirrored again under `toolUseResult`, and
+/// an attachment record keeps its own copy under `prompt`. Walking only the
+/// first would under-report what the terminal showed; the content digest is what
+/// makes the repeats one fact.
+fn collect_claude_images(node: &Value, found: &mut Vec<(String, String)>) {
+    match node {
+        Value::Object(map) => {
+            if map.get("type").and_then(Value::as_str) == Some("image") {
+                if let Some(source) = map.get("source").and_then(Value::as_object) {
+                    let is_base64 = source.get("type").and_then(Value::as_str) == Some("base64");
+                    let media_type = source
+                        .get("media_type")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    if let (true, Some(data)) =
+                        (is_base64, source.get("data").and_then(Value::as_str))
+                    {
+                        if media_type.starts_with("image/") && !data.is_empty() {
+                            found.push((data.to_string(), media_type.to_string()));
+                        }
+                    }
+                }
+            }
+            for value in map.values() {
+                collect_claude_images(value, found);
+            }
+        }
+        Value::Array(items) => {
+            for value in items {
+                collect_claude_images(value, found);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn claude_image_redactions(raw: &str) -> Vec<(usize, usize, String, InlineImageRedaction)> {
+    if !raw.contains(CLAUDE_IMAGE_MARKER) {
+        return Vec::new();
+    }
+    let Ok(document) = serde_json::from_str::<Value>(raw) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    collect_claude_images(&document, &mut found);
+    let mut result = Vec::new();
+    let mut spans: HashSet<usize> = HashSet::new();
+    for (encoded, media_type) in found {
+        let Some(redaction) = image_redaction(&encoded, &media_type, encoded.len()) else {
+            continue;
+        };
+        // The encoded value is long and unique, so locating it in the source
+        // text is unambiguous; every occurrence is replaced even though the
+        // same bytes count once as media.
+        let Ok(needle) = serde_json::to_string(&encoded) else {
+            continue;
+        };
+        let mut search_from = 0usize;
+        while let Some(offset) = raw[search_from..].find(&needle) {
+            let start = search_from + offset;
+            search_from = start + needle.len();
+            if !spans.insert(start) {
+                continue;
+            }
+            let replacement =
+                serde_json::to_string(&redaction.placeholder).expect("media reference is JSON");
+            result.push((start, start + needle.len(), replacement, redaction.clone()));
+        }
+    }
+    result
+}
+
 pub fn redact_source_line_with_media(raw: &str, blob_root: Option<&Path>) -> RedactedJsonLine {
     let original_line_sha256 = format!("{:x}", Sha256::digest(raw.as_bytes()));
     let mut replacements = pi_image_redactions(raw, blob_root);
+    replacements.extend(claude_image_redactions(raw));
     if replacements.is_empty() && !raw.contains(DATA_IMAGE_PREFIX) {
         return RedactedJsonLine {
             raw_line: raw.to_string(),
@@ -264,12 +347,16 @@ pub fn redact_source_line_with_media(raw: &str, blob_root: Option<&Path>) -> Red
     replacements.sort_unstable_by_key(|replacement| replacement.0);
     let mut out = String::with_capacity(raw.len().min(4096));
     let mut media = Vec::with_capacity(replacements.len());
+    let mut seen_media: HashSet<String> = HashSet::new();
     let mut cursor = 0;
     for (start, end, replacement, redaction) in replacements {
         out.push_str(&raw[cursor..start]);
         out.push_str(&replacement);
         cursor = end;
-        media.push(redaction);
+        // Two placements of one image are two lines to redact and one image.
+        if seen_media.insert(redaction.sha256.clone()) {
+            media.push(redaction);
+        }
     }
     out.push_str(&raw[cursor..]);
     RedactedJsonLine {
