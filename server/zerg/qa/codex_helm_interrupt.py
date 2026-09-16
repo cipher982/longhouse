@@ -52,6 +52,11 @@ PACKAGE_MEMBERS = frozenset(
     }
 )
 _EXECUTABLE_PACKAGE_MEMBERS = PACKAGE_MEMBERS - {"codex-package.json"}
+# The official package carries the optional voice runtime as a resource closure
+# (first seen in openai/codex releases on 2026-09-15). Admit only this subtree,
+# matching provider_factory/core.py PACKAGE_MEMBER_PREFIXES, and hash it into
+# the package identity like every other member.
+PACKAGE_MEMBER_PREFIXES = ("codex-resources/voice/",)
 _SEMANTIC_FAILURE_CODES = frozenset(
     {
         "managed_live_interrupt_not_interrupted",
@@ -94,12 +99,13 @@ def _package_identity(raw_root: str, provider_bin: Path) -> tuple[Path, str, dic
         raise identity_bridge.RequestError(f"{PACKAGE_ROOT_ENV} must be an absolute non-symlink directory")
     root = root.resolve(strict=True)
     observed = {path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file() or path.is_symlink()}
-    if observed != PACKAGE_MEMBERS:
+    optional = {name for name in observed if name.startswith(PACKAGE_MEMBER_PREFIXES)}
+    if observed - optional != PACKAGE_MEMBERS:
         missing = sorted(PACKAGE_MEMBERS - observed)
-        unexpected = sorted(observed - PACKAGE_MEMBERS)
+        unexpected = sorted(observed - optional - PACKAGE_MEMBERS)
         raise identity_bridge.RequestError(f"managed Codex package members mismatch: missing={missing}, unexpected={unexpected}")
     identities: dict[str, str] = {}
-    for name in sorted(PACKAGE_MEMBERS):
+    for name in sorted(PACKAGE_MEMBERS | optional):
         member = root / name
         try:
             member.resolve(strict=True).relative_to(root)
