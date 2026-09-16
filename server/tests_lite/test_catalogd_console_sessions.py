@@ -163,6 +163,7 @@ def test_console_replay_precedes_active_owner_guard(tmp_path):
     assert replay["created"] is False
     assert replay["turn"]["turn_id"] == first["turn"]["turn_id"]
 
+
 def test_pi_console_continuation_forwards_exact_native_source_file(tmp_path):
     engine = create_catalog_engine(tmp_path / "catalog-pi-continuation.db")
     initialize_catalog_schema(engine)
