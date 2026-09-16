@@ -36,9 +36,26 @@ fn validate_name(name: &str) -> Result<()> {
         || name == ".."
         || name.contains('/')
         || name.contains('\\')
-        || name.bytes().any(|byte| !(byte.is_ascii_alphanumeric() || b"._-".contains(&byte)))
+        || name
+            .bytes()
+            .any(|byte| !(byte.is_ascii_alphanumeric() || b"._-".contains(&byte)))
     {
         bail!("report_stage_failed: unsafe report filename")
+    }
+    Ok(())
+}
+
+fn validate_mime_type(mime_type: &str) -> Result<()> {
+    if !matches!(
+        mime_type,
+        "text/markdown"
+            | "application/json"
+            | "image/png"
+            | "image/jpeg"
+            | "image/webp"
+            | "image/gif"
+    ) {
+        bail!("report_stage_failed: unsupported report mime type")
     }
     Ok(())
 }
@@ -47,6 +64,7 @@ fn validate_manifest(manifest: &ReportManifest, report_id: &str) -> Result<()> {
     if manifest.schema_version != 1 || manifest.report_id != report_id {
         bail!("report_stage_failed: unsupported or mismatched report manifest")
     }
+
     if manifest.files.is_empty() || manifest.files.len() > MAX_FILES {
         bail!("report_stage_failed: invalid report file count")
     }
@@ -54,13 +72,23 @@ fn validate_manifest(manifest: &ReportManifest, report_id: &str) -> Result<()> {
     for file in &manifest.files {
         validate_name(&file.name)?;
         if file.byte_size == 0 || file.byte_size > MAX_FILE_BYTES {
-            bail!("report_stage_failed: invalid report file size for {}", file.name)
+            bail!(
+                "report_stage_failed: invalid report file size for {}",
+                file.name
+            )
         }
         if file.sha256.len() != 64 || !file.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            bail!("report_stage_failed: invalid report file hash for {}", file.name)
+            bail!(
+                "report_stage_failed: invalid report file hash for {}",
+                file.name
+            )
         }
+        validate_mime_type(&file.mime_type)?;
         if file.mime_type.is_empty() || file.kind.is_empty() {
-            bail!("report_stage_failed: incomplete report file metadata for {}", file.name)
+            bail!(
+                "report_stage_failed: incomplete report file metadata for {}",
+                file.name
+            )
         }
         total = total.saturating_add(file.byte_size);
         if total > MAX_TOTAL_BYTES {
@@ -120,7 +148,8 @@ pub async fn stage_bug_report(
         .join(".longhouse")
         .join("bug-reports")
         .join(&normalized_report_id);
-    fs::create_dir_all(&report_dir).with_context(|| format!("creating {}", report_dir.display()))?;
+    fs::create_dir_all(&report_dir)
+        .with_context(|| format!("creating {}", report_dir.display()))?;
     let manifest_bytes = serde_json::to_vec_pretty(&serde_json::json!({
         "schema_version": manifest.schema_version,
         "report_id": manifest.report_id,
@@ -136,7 +165,11 @@ pub async fn stage_bug_report(
 
     for file in &manifest.files {
         let bytes = client
-            .get(resolve_url(api_url, &normalized_report_id, Some(&file.name)))
+            .get(resolve_url(
+                api_url,
+                &normalized_report_id,
+                Some(&file.name),
+            ))
             .header("X-Agents-Token", api_token)
             .timeout(FETCH_TIMEOUT)
             .send()
