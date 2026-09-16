@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   HANDOFF,
   HANDOFF_REPLAY_START_SEC,
@@ -33,12 +33,24 @@ const easeInOut = (p: number) => {
 };
 const ramp = (t: number, start: number, dur: number) => easeInOut((t - start) / dur);
 
+/** `rect` shrunk about its center by `scale`. */
+const settleFrom = (rect: HeroLayout["terminal"], scale: number) => ({
+  x: rect.x + (rect.w * (1 - scale)) / 2,
+  y: rect.y + (rect.h * (1 - scale)) / 2,
+  w: rect.w * scale,
+  h: rect.h * scale,
+});
+
 function useStageWidth() {
   const ref = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(0);
-  useEffect(() => {
+  // Layout effect: measure before first paint so replacing the static
+  // fallback never shows an empty stage for a frame.
+  useLayoutEffect(() => {
     const el = ref.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
+    if (!el) return;
+    setWidth(Math.round(el.getBoundingClientRect().width));
+    if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(([entry]) => {
       const next = Math.round(entry?.contentRect.width ?? 0);
       setWidth((prev) => (prev === next ? prev : next));
@@ -117,7 +129,7 @@ export function HeroDemo({ "aria-label": ariaLabel }: { "aria-label": string }) 
             <HeroTimeline
               layout={layout}
               sessions={HERO_SESSIONS}
-              opacity={ramp(t, T.dockStartSec + 0.2, 0.5) * (1 - ramp(t, T.handoffStartSec, 0.45))}
+              opacity={ramp(t, T.dockStartSec + 0.2, 0.5) * (1 - ramp(t, T.handoffStartSec, 0.35))}
               rowsIn={HERO_SESSIONS.map((_, i) =>
                 ramp(t, T.dockStartSec + 0.7 + i * T.dockStaggerSec, 0.4),
               )}
@@ -143,10 +155,12 @@ export function HeroDemo({ "aria-label": ariaLabel }: { "aria-label": string }) 
                   style={{
                     width: layout.terminal.w,
                     zIndex: 45,
-                    opacity: clamp01((t - T.handoffStartSec) / 0.2) * loopOut,
+                    // The docked row opens: the terminal settles into place
+                    // as the timeline fades behind it.
+                    opacity: handoffP * loopOut,
                     transform: placeTransform(
                       layout.terminal,
-                      layout.thumb(0),
+                      settleFrom(layout.terminal, 0.94),
                       layout.terminal,
                       handoffP,
                     ),
@@ -166,9 +180,9 @@ export function HeroDemo({ "aria-label": ariaLabel }: { "aria-label": string }) 
                     width: layout.phone.w,
                     height: layout.phone.h,
                     zIndex: 40,
-                    opacity: ramp(t, T.handoffStartSec + 0.25, 0.5) * loopOut,
+                    opacity: ramp(t, T.handoffStartSec + 0.35, 0.45) * loopOut,
                     transform: `translate(${layout.phone.x}px, ${(
-                      layout.phone.y + (1 - ramp(t, T.handoffStartSec + 0.25, 0.6)) * 28
+                      layout.phone.y + (1 - ramp(t, T.handoffStartSec + 0.35, 0.55)) * 28
                     ).toFixed(2)}px)`,
                   }}
                 >

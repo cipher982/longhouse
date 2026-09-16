@@ -84,9 +84,14 @@ export function useDemoClock(durationSec: number, posterSec: number): DemoClock 
   useEffect(() => {
     const container = containerRef.current;
     if (!container || typeof IntersectionObserver === "undefined") return;
-    const observer = new IntersectionObserver(([entry]) => {
-      setIsInViewport(entry?.isIntersecting ?? false);
-    });
+    // Play once a meaningful share is visible: a sliver at the bottom of a
+    // phone screen should not spend the opening chapter unseen.
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setIsInViewport(Boolean(entry?.isIntersecting && entry.intersectionRatio >= 0.3));
+      },
+      { threshold: [0, 0.3, 0.6] },
+    );
     observer.observe(container);
     return () => observer.disconnect();
   }, []);

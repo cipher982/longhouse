@@ -113,6 +113,16 @@ function transcriptFor(fixture: Fixture, from: number, to: number): TranscriptIt
 const lastReply = (fixture: Fixture, before = fixture.turns.length) =>
   [...fixture.turns.slice(0, before)].reverse().find((t) => t.text)?.text ?? "";
 
+const firstReply = (fixture: Fixture) => fixture.turns.find((t) => t.text)?.text ?? "";
+
+/**
+ * Open a tile just before its first reply: after the provider's splash,
+ * tips, and logo, with the prompt already submitted and work starting.
+ */
+const WORK_LEAD_SEC = 0.55;
+const workStartSec = (grid: GridTimeline, fixture: Fixture) =>
+  firstShownSec(grid, firstReply(fixture), recordingTurns(grid)[0].typedSec) - WORK_LEAD_SEC;
+
 /* ── The sessions ────────────────────────────────────────────────────── */
 
 export interface HeroSession {
@@ -148,7 +158,7 @@ export const HERO_SESSIONS: HeroSession[] = [
     title: CLAUDE_TURNS[0].prompt,
     preview: lastReply(claudeFixture, CLAUDE_FIRST_REPLY_TURNS),
     window: {
-      startSec: CLAUDE_TURNS[0].typedSec + 0.05,
+      startSec: workStartSec(claudeHandoff, claudeFixture),
       endSec:
         firstShownSec(
           claudeHandoff,
@@ -169,7 +179,7 @@ export const HERO_SESSIONS: HeroSession[] = [
     title: recordingTurns(codexTile)[0].prompt,
     preview: lastReply(codexFixture),
     window: {
-      startSec: recordingTurns(codexTile)[0].typedSec + 0.05,
+      startSec: workStartSec(codexTile, codexFixture),
       endSec: firstShownSec(codexTile, lastReply(codexFixture), 0) + 0.3,
     },
     ago: "1m ago",
@@ -185,7 +195,7 @@ export const HERO_SESSIONS: HeroSession[] = [
     title: recordingTurns(opencodeTile)[0].prompt,
     preview: lastReply(opencodeFixture),
     window: {
-      startSec: recordingTurns(opencodeTile)[0].typedSec + 0.05,
+      startSec: workStartSec(opencodeTile, opencodeFixture),
       endSec: firstShownSec(opencodeTile, lastReply(opencodeFixture), 0) + 0.3,
     },
     ago: "3m ago",
@@ -236,9 +246,9 @@ export const HERO_TIMING = {
   dockDurSec: 1.0,
   /** Stagger between tiles docking. */
   dockStaggerSec: 0.1,
-  handoffStartSec: 6.9,
-  handoffInDurSec: 0.8,
-  typeStartSec: 7.9,
+  handoffStartSec: 7.6,
+  handoffInDurSec: 0.55,
+  typeStartSec: 8.5,
   charsPerSec: 40,
   /** Send → paste lands: the relay pulse travels phone → terminal. */
   reactDelaySec: 0.6,
@@ -261,7 +271,7 @@ export const HERO_CHAPTERS = [
   { id: "agents", startSec: 0, caption: "Your coding agents already run everywhere." },
   {
     id: "timeline",
-    startSec: HERO_TIMING.dockStartSec,
+    startSec: HERO_TIMING.dockStartSec + 0.5,
     caption: "Longhouse puts every session in one timeline.",
   },
   {
