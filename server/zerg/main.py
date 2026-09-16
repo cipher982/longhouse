@@ -256,7 +256,7 @@ app.add_middleware(SafeErrorResponseMiddleware, cors_origins=cors_origins)
 
 from zerg.middleware.security_headers import SecurityHeadersMiddleware
 
-app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(SecurityHeadersMiddleware, analytics_script_src=_settings.umami_script_src)
 
 from zerg.middleware.access_log import AccessLogMiddleware
 
