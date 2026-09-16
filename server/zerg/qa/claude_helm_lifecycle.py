@@ -378,6 +378,10 @@ def _post(api_url: str, token: str, path: str, body: dict[str, Any] | None = Non
             time.sleep(0.5)
 
 
+def _slow_echo(seconds: int, marker: str) -> str:
+    return f"python3 -c \"import select; select.select([], [], [], {seconds}); print('{marker}')\""
+
+
 def _drive_lifecycle(
     args: argparse.Namespace,
     *,
@@ -440,9 +444,11 @@ def _drive_lifecycle(
         token,
         f"sessions/{session_id}/send-live",
         {
+            # Claude's own Bash guidance refuses idle `sleep`, so each step is
+            # a bounded wait that reads as work: an 8-second select() then echo.
             "message": "Run these three Bash commands one at a time, each as its own separate foreground Bash tool call, "
-            f"waiting for each to finish: `sleep 8; echo {step}_1`, then `sleep 8; echo {step}_2`, then "
-            f"`sleep 8; echo {step}_3`. After all three, reply with exactly {done}"
+            f"waiting for each to finish: `{_slow_echo(8, step + '_1')}`, then `{_slow_echo(8, step + '_2')}`, then "
+            f"`{_slow_echo(8, step + '_3')}`. After all three, reply with exactly {done}"
         },
     )
     wait_until(
@@ -451,7 +457,7 @@ def _drive_lifecycle(
         description="first slow Claude Bash step",
     )
     time.sleep(1.0)
-    _post(api, token, f"sessions/{session_id}/input", {"text": steer_text, "intent": "steer"})
+    _post(api, token, f"sessions/{session_id}/input", {"text": steer_text, "intent": "steer", "client_request_id": uuid.uuid4().hex})
     wait_turn_end(f"{step}_1", "steered Claude turn completing", args.response_timeout_secs)
     if fault == "claude_steer_after_turn":
         # Let the delayed follow-up land and be answered before judging.
@@ -489,8 +495,8 @@ def _drive_lifecycle(
         token,
         f"sessions/{session_id}/send-live",
         {
-            "message": "Use one foreground Bash tool call (not background) to run exactly: "
-            f"`for i in $(seq 1 {int(tool_seconds)}); do date +%s >> {abort_prompt}.txt; sleep 1; done`. "
+            "message": "This is a Longhouse interrupt qualification. Use one foreground Bash tool call (not background) "
+            f"to run exactly: `{_slow_echo(int(tool_seconds), abort_prompt)}`. "
             f"When it finishes, reply with exactly {forbidden}"
         },
     )

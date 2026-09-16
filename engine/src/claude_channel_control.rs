@@ -256,25 +256,40 @@ pub async fn interrupt(
 /// command the PreToolUse hook recorded, and terminate its process group.
 #[cfg(unix)]
 fn terminate_foreground_tool(claude_pid: i32, command: &str) -> Option<i32> {
-    if command.trim().is_empty() {
+    let wanted = shell_words_key(command);
+    if wanted.is_empty() {
         return None;
     }
-    let quoted = format!("eval '{}'", command.replace('\'', "'\\''"));
     let output = std::process::Command::new("ps")
         .args(["-A", "-o", "pid=,ppid=,pgid=,args="])
         .output()
         .ok()?;
     let listing = String::from_utf8_lossy(&output.stdout);
-    let group = listing.lines().find_map(|line| {
-        let mut fields = line.split_whitespace();
-        let pid: i32 = fields.next()?.parse().ok()?;
-        let ppid: i32 = fields.next()?.parse().ok()?;
-        let pgid: i32 = fields.next()?.parse().ok()?;
-        let args = fields.collect::<Vec<_>>().join(" ");
-        let normalized = quoted.split_whitespace().collect::<Vec<_>>().join(" ");
-        (ppid == claude_pid && pid == pgid && args.contains(&normalized)).then_some(pgid)
-    })?;
+    let group = listing
+        .lines()
+        .find_map(|line| foreground_tool_group(line, claude_pid, &wanted))?;
     (unsafe { libc::kill(-group, libc::SIGTERM) } == 0).then_some(group)
+}
+
+/// Claude quotes the command inside `eval '...'`, so compare with every quote
+/// and escape removed and whitespace collapsed on both sides.
+fn shell_words_key(text: &str) -> String {
+    text.chars()
+        .filter(|c| !matches!(c, '\'' | '"' | '\\'))
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn foreground_tool_group(line: &str, claude_pid: i32, wanted: &str) -> Option<i32> {
+    let mut fields = line.split_whitespace();
+    let pid: i32 = fields.next()?.parse().ok()?;
+    let ppid: i32 = fields.next()?.parse().ok()?;
+    let pgid: i32 = fields.next()?.parse().ok()?;
+    let args = shell_words_key(&fields.collect::<Vec<_>>().join(" "));
+    (ppid == claude_pid && pid == pgid && args.contains("eval") && args.contains(wanted))
+        .then_some(pgid)
 }
 
 #[cfg(not(unix))]
@@ -914,5 +929,14 @@ mod tests {
             None
         );
         assert!(!state.with_extension(FOREGROUND_TOOL_EXTENSION).exists());
+    }
+
+    #[test]
+    fn foreground_tool_matches_claude_eval_quoting() {
+        let command = "python3 -c \"import select; select.select([], [], [], 45); print('lh_x')\"";
+        let line = "  5690  5641  5690 /bin/bash -c source snap.sh && eval 'python3 -c \"import select; select.select([], [], [], 45); print('\\''lh_x'\\'')\"' < /dev/null && pwd -P";
+        let wanted = shell_words_key(command);
+        assert_eq!(foreground_tool_group(line, 5641, &wanted), Some(5690));
+        assert_eq!(foreground_tool_group(line, 1, &wanted), None);
     }
 }
