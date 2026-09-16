@@ -38,8 +38,9 @@ private let defaultConfig = ProviderBrandConfig(
 
 public enum ProviderBrands {
     public static func lookup(_ provider: String?) -> ProviderBrandConfig {
-        guard let provider, !provider.isEmpty else { return defaultConfig }
-        let raw = provider.lowercased()
+        guard let provider else { return defaultConfig }
+        let raw = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !raw.isEmpty else { return defaultConfig }
         let key = raw == "gemini" ? "antigravity" : raw
         switch key {
         case "claude": return claude

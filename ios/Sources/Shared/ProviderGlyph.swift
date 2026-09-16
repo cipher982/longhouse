@@ -11,35 +11,56 @@ private enum ProviderGlyphPalette {
 
 /// Pi's official three-colour mark, sourced from pi.dev/logo-auto.svg.
 private struct PiProviderMark: View {
-    let monochrome: Bool
 
     var body: some View {
         Canvas { context, size in
-            let scale = min(size.width, size.height) / 800
+            let extent: CGFloat = 469.43
+            let scale = min(size.width, size.height) / extent
             let origin = CGPoint(
-                x: (size.width - 800 * scale) / 2,
-                y: (size.height - 800 * scale) / 2
+                x: (size.width - extent * scale) / 2 - 165.29 * scale,
+                y: (size.height - extent * scale) / 2 - 165.29 * scale
             )
-            func rect(_ x: CGFloat, _ y: CGFloat, _ width: CGFloat, _ height: CGFloat) -> Path {
-                Path(CGRect(
-                    x: origin.x + x * scale,
-                    y: origin.y + y * scale,
-                    width: width * scale,
-                    height: height * scale
-                ))
+            func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+                CGPoint(x: origin.x + x * scale, y: origin.y + y * scale)
             }
 
+            var rose = Path()
+            rose.move(to: point(165.29, 165.29))
+            rose.addLine(to: point(517.36, 165.29))
+            rose.addLine(to: point(517.36, 400))
+            rose.addLine(to: point(400, 400))
+            rose.addLine(to: point(400, 282.65))
+            rose.addLine(to: point(165.29, 282.65))
+            rose.closeSubpath()
             context.fill(
-                rect(165.29, 165.29, 352.07, 234.71),
-                with: .color(monochrome ? .white : ProviderGlyphPalette.piRose)
+                rose,
+                with: .color(ProviderGlyphPalette.piRose)
             )
+
+            var blue = Path()
+            blue.move(to: point(165.29, 282.65))
+            blue.addLine(to: point(282.65, 282.65))
+            blue.addLine(to: point(282.65, 400))
+            blue.addLine(to: point(400, 400))
+            blue.addLine(to: point(400, 517.36))
+            blue.addLine(to: point(282.65, 517.36))
+            blue.addLine(to: point(282.65, 634.72))
+            blue.addLine(to: point(165.29, 634.72))
+            blue.closeSubpath()
             context.fill(
-                rect(165.29, 282.65, 234.71, 352.07),
-                with: .color(monochrome ? .white : ProviderGlyphPalette.piBlue)
+                blue,
+                with: .color(ProviderGlyphPalette.piBlue)
             )
+
+            var gold = Path()
+            gold.move(to: point(517.36, 400))
+            gold.addLine(to: point(634.72, 400))
+            gold.addLine(to: point(634.72, 634.72))
+            gold.addLine(to: point(517.36, 634.72))
+            gold.closeSubpath()
             context.fill(
-                rect(517.36, 400, 117.36, 234.72),
-                with: .color(monochrome ? .white : ProviderGlyphPalette.piGold)
+                gold,
+                with: .color(ProviderGlyphPalette.piGold)
             )
         }
     }
@@ -47,7 +68,6 @@ private struct PiProviderMark: View {
 
 /// OMP's official Pi-plus-plugin mark, sourced from omp.sh/assets/icon.svg.
 private struct OMPProviderMark: View {
-    let monochrome: Bool
 
     var body: some View {
         Canvas { context, size in
@@ -75,27 +95,25 @@ private struct OMPProviderMark: View {
             }
 
             let gradient = Gradient(colors: [ProviderGlyphPalette.ompPink, ProviderGlyphPalette.ompBlue])
-            let piShading: GraphicsContext.Shading = monochrome
-                ? .color(.white)
-                : .linearGradient(
-                    gradient,
-                    startPoint: CGPoint(x: origin.x + 10 * scale, y: origin.y + 8 * scale),
-                    endPoint: CGPoint(x: origin.x + 110 * scale, y: origin.y + 82 * scale)
-                )
+            let piShading: GraphicsContext.Shading = .linearGradient(
+                gradient,
+                startPoint: CGPoint(x: origin.x + 10 * scale, y: origin.y + 8 * scale),
+                endPoint: CGPoint(x: origin.x + 110 * scale, y: origin.y + 82 * scale)
+            )
             context.fill(roundedRect(10, 8, 100, 12, 2), with: piShading)
             context.fill(roundedRect(25, 20, 12, 62, 2), with: piShading)
             context.fill(roundedRect(75, 20, 12, 45, 2), with: piShading)
             context.fill(
                 roundedRect(71, 55, 20, 16, 3),
-                with: .color(monochrome ? .white : ProviderGlyphPalette.ompOrange)
+                with: .color(ProviderGlyphPalette.ompOrange)
             )
             context.fill(
                 roundedRect(76, 59, 3, 8, 1),
-                with: .color(monochrome ? Color.black : Color(red: 0.05098, green: 0.05098, blue: 0.05098))
+                with: .color(Color(red: 0.05098, green: 0.05098, blue: 0.05098))
             )
             context.fill(
                 roundedRect(82, 59, 3, 8, 1),
-                with: .color(monochrome ? Color.black : Color(red: 0.05098, green: 0.05098, blue: 0.05098))
+                with: .color(Color(red: 0.05098, green: 0.05098, blue: 0.05098))
             )
             context.fill(
                 Path(ellipseIn: CGRect(
@@ -104,7 +122,7 @@ private struct OMPProviderMark: View {
                     width: 4 * scale,
                     height: 4 * scale
                 )),
-                with: .color(monochrome ? .white : ProviderGlyphPalette.ompOrange)
+                with: .color(ProviderGlyphPalette.ompOrange)
             )
             context.fill(
                 Path(ellipseIn: CGRect(
@@ -113,7 +131,7 @@ private struct OMPProviderMark: View {
                     width: 4 * scale,
                     height: 4 * scale
                 )),
-                with: .color(monochrome ? .white : ProviderGlyphPalette.ompOrange)
+                with: .color(ProviderGlyphPalette.ompOrange)
             )
         }
     }
@@ -248,9 +266,9 @@ public struct ProviderGlyph: View {
         } else {
             switch key {
             case "pi":
-                PiProviderMark(monochrome: false)
+                PiProviderMark()
             case "omp":
-                OMPProviderMark(monochrome: false)
+                OMPProviderMark()
             case "zai":
                 ZAIProviderMark()
             default:

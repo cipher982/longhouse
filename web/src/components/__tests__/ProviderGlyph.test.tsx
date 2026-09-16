@@ -32,4 +32,20 @@ describe("ProviderGlyph", () => {
     expect(screen.getByRole("img", { name: "Z.ai" })).toBeInTheDocument();
     expect(hasFallbackMark(container)).toBe(false);
   });
+  it("trims provider keys before lookup", () => {
+    const { container } = render(<ProviderGlyph provider=" omp " />);
+
+    expect(screen.getByRole("img", { name: "OMP" })).toBeInTheDocument();
+    expect(hasFallbackMark(container)).toBe(false);
+  });
+
+  it("keeps the OMP connector solid in monochrome mode", () => {
+    const { container } = render(<ProviderGlyph provider="omp" tone="mono" />);
+
+    expect(
+      Array.from(container.querySelectorAll("rect")).some(
+        (rect) => rect.getAttribute("fill") === "#0D0D0D",
+      ),
+    ).toBe(false);
+  });
 });

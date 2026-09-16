@@ -44,7 +44,7 @@ function ClaudeMark() {
 /** Pi — the official three-color mark from pi.dev, reduced for small UI. */
 function PiMark({ mono }: { mono: boolean }) {
   return (
-    <svg viewBox="0 0 800 800" aria-hidden="true" focusable="false">
+    <svg viewBox="165.29 165.29 469.43 469.43" aria-hidden="true" focusable="false">
       <path fill={mono ? "currentColor" : "#F09082"} d="M165.29 165.29H517.36V400H400V282.65H165.29Z" />
       <path fill={mono ? "currentColor" : "#4D9ABF"} d="M165.29 282.65H282.65V400H400V517.36H282.65V634.72H165.29Z" />
       <path fill={mono ? "currentColor" : "#F1BE58"} d="M517.36 400H634.72V634.72H517.36Z" />
@@ -69,8 +69,12 @@ function OMPMark({ mono }: { mono: boolean }) {
       <rect x="25" y="20" width="12" height="62" rx="2" fill={mono ? "currentColor" : `url(#${gradientId})`} />
       <rect x="75" y="20" width="12" height="45" rx="2" fill={mono ? "currentColor" : `url(#${gradientId})`} />
       <rect x="71" y="55" width="20" height="16" rx="3" fill={mono ? "currentColor" : "#F97316"} />
-      <rect x="76" y="59" width="3" height="8" rx="1" fill="#0D0D0D" />
-      <rect x="82" y="59" width="3" height="8" rx="1" fill="#0D0D0D" />
+      {!mono && (
+        <>
+          <rect x="76" y="59" width="3" height="8" rx="1" fill="#0D0D0D" />
+          <rect x="82" y="59" width="3" height="8" rx="1" fill="#0D0D0D" />
+        </>
+      )}
       <circle cx="18" cy="14" r="2" fill={mono ? "currentColor" : "#F97316"} opacity="0.8" />
       <circle cx="102" cy="14" r="2" fill={mono ? "currentColor" : "#F97316"} opacity="0.8" />
     </svg>

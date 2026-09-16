@@ -187,7 +187,7 @@ const DEFAULT_CONFIG: ProviderBrandConfig = {{
 }};
 
 export function normalizeProviderKey(provider: string): string {{
-  const key = provider.toLowerCase();
+  const key = provider.trim().toLowerCase();
   if (key === "gemini") return "antigravity";
   if (PROVIDER_ALIASES[key]) return PROVIDER_ALIASES[key];
   return key;
@@ -327,8 +327,9 @@ private let defaultConfig = ProviderBrandConfig(
 
 public enum ProviderBrands {{
     public static func lookup(_ provider: String?) -> ProviderBrandConfig {{
-        guard let provider, !provider.isEmpty else {{ return defaultConfig }}
-        let raw = provider.lowercased()
+        guard let provider else {{ return defaultConfig }}
+        let raw = provider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !raw.isEmpty else {{ return defaultConfig }}
         let key = raw == "gemini" ? "antigravity" : raw
         switch key {{
 {chr(10).join(lookup_cases)}
