@@ -2726,25 +2726,26 @@ final class SessionViewModel: ObservableObject {
         guard let detail else { return "" }
         let facts = detail.stateFacts
         let pause = detail.activePauseRequest
-        return [
-            detail.id,
-            detail.displayTitle,
-            facts.dispositionState,
-            facts.runLifecycle ?? "",
-            facts.activityState,
-            facts.activityTool ?? "",
-            facts.activityObservedAt ?? "",
-            facts.controlOwnership,
-            facts.controlConnection,
-            facts.primary?.key ?? "",
-            facts.primary?.label ?? "",
-            facts.pendingInteractionKind ?? "",
-            pause?.id ?? "",
-            pause?.status ?? "",
-            pause?.title ?? "",
-            detail.project ?? "",
-            detail.provider,
-        ].joined(separator: "|")
+        var components: [String] = []
+        components.reserveCapacity(20)
+        components.append(detail.id)
+        components.append(detail.displayTitle)
+        components.append(facts.dispositionState)
+        components.append(facts.runLifecycle ?? "")
+        components.append(facts.activityState)
+        components.append(facts.activityTool ?? "")
+        components.append(facts.activityObservedAt ?? "")
+        components.append(facts.controlOwnership)
+        components.append(facts.controlConnection)
+        components.append(facts.primary?.key ?? "")
+        components.append(facts.primary?.label ?? "")
+        components.append(facts.pendingInteractionKind ?? "")
+        components.append(pause?.id ?? "")
+        components.append(pause?.status ?? "")
+        components.append(pause?.title ?? "")
+        components.append(detail.project ?? "")
+        components.append(detail.provider)
+        return components.joined(separator: "|")
     }
 
     var isSessionEnded: Bool {
