@@ -590,8 +590,8 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path, monkeypatch):
             "turn_id": settled["next_turn"]["turn_id"],
             "run_id": settled["next_turn"]["run_id"],
             "state": "failed",
-            "error_code": "claude_lifecycle_hook_missing",
-            "error": "run `longhouse claude configure`",
+            "error_code": "turn_start_ambiguous",
+            "error": "Machine Agent still has an unresolved turn claim",
             "updated_at": datetime.now(UTC),
         }
     )
@@ -600,11 +600,21 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path, monkeypatch):
         failed_turn = db.get(LiveConsoleTurn, settled["next_turn"]["turn_id"])
         failed_run = db.get(LiveSessionRun, settled["next_turn"]["run_id"])
         receipt = db.get(LiveSessionInputReceipt, failed_turn.receipt_id)
-        assert failed_run.exit_status == "claude_lifecycle_hook_missing"
+        assert failed_run.exit_status == "turn_start_ambiguous"
         assert json.loads(receipt.error_json) == {
-            "code": "claude_lifecycle_hook_missing",
-            "message": "run `longhouse claude configure`",
+            "code": "turn_start_ambiguous",
+            "message": "Machine Agent still has an unresolved turn claim",
         }
+    replay = store.enqueue_console_turn(
+        data={
+            "session_id": str(session_id),
+            "owner_id": 1,
+            "message": "second",
+            "client_request_id": settled["next_turn"]["client_request_id"],
+            "created_at": datetime.now(UTC),
+        }
+    )
+    assert replay["turn"]["error_code"] == "turn_start_ambiguous"
 
 
 @pytest.mark.asyncio

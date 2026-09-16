@@ -392,6 +392,17 @@ def _json_launch_result(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _receipt_error_code(receipt: LiveSessionInputReceipt | None) -> str | None:
+    if receipt is None or not receipt.error_json:
+        return None
+    try:
+        payload = json.loads(receipt.error_json)
+    except (TypeError, ValueError):
+        return None
+    code = payload.get("code") if isinstance(payload, dict) else None
+    return str(code).strip() or None if code else None
+
+
 def _live_console_turn_dto(
     turn: LiveConsoleTurn,
     *,
@@ -399,6 +410,7 @@ def _live_console_turn_dto(
     client_request_id: str | None = None,
     provider_config: str | None = None,
     resume_session_file: str | None = None,
+    error_code: str | None = None,
 ) -> dict[str, Any]:
     return {
         "turn_id": turn.id,
@@ -416,6 +428,7 @@ def _live_console_turn_dto(
         "resume_provider_thread_id": turn.resume_provider_thread_id,
         "resume_session_file": resume_session_file,
         "fork_from_provider_thread_id": turn.fork_from_provider_thread_id,
+        "error_code": error_code,
         "error": turn.error,
     }
 
@@ -4006,6 +4019,7 @@ class CatalogStore:
                             thread_id=thread.id,
                             provider=session.provider,
                         ),
+                        error_code=_receipt_error_code(existing_receipt),
                     )
                     orm.rollback()
                     return {

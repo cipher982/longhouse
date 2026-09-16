@@ -78,9 +78,12 @@ struct BugReportSheet: View {
                         Label("Add screenshots from Photos", systemImage: "photo.on.rectangle")
                     }
                     if !additionalFiles.isEmpty {
-                        Text("Added screenshots: \(additionalFiles.count)")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                        HStack {
+                            Text("Added screenshots:")
+                            Text(String(additionalFiles.count))
+                        }
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                     }
                 } header: {
                     Text("Evidence")
@@ -134,6 +137,7 @@ struct BugReportSheet: View {
                         targetSessionID = selection.sessionId
                         let handoff = BugReportHandoff(
                             serverURL: appState.serverURL,
+                            sourceSessionID: sourceSessionID,
                             reportID: reportID ?? "",
                             sessionID: selection.sessionId,
                             deviceID: selection.deviceId,
@@ -186,6 +190,7 @@ struct BugReportSheet: View {
             BugReportLocalStore.saveHandoff(
                 BugReportHandoff(
                     serverURL: handoff.serverURL,
+                    sourceSessionID: handoff.sourceSessionID,
                     reportID: handoff.reportID,
                     sessionID: handoff.sessionID,
                     deviceID: handoff.deviceID,
@@ -204,6 +209,8 @@ struct BugReportSheet: View {
                 clientRequestId: requestID,
                 reportID: reportID
             )
+            draftSaveTask?.cancel()
+            draftSaveTask = nil
             BugReportLocalStore.clearDraft()
             BugReportLocalStore.clearHandoff()
             statusMessage = "Sent to Console. The agent has the screenshot and diagnostics."
@@ -227,6 +234,7 @@ struct BugReportSheet: View {
         BugReportLocalStore.saveHandoff(
             BugReportHandoff(
                 serverURL: handoff.serverURL,
+                sourceSessionID: handoff.sourceSessionID,
                 reportID: handoff.reportID,
                 sessionID: handoff.sessionID,
                 deviceID: handoff.deviceID,
@@ -284,7 +292,10 @@ struct BugReportSheet: View {
                 BugReportUploadFile(filename: "saved-photo-\($0.offset).jpg", mimeType: "image/jpeg", data: $0.element)
             }
         }
-        if let handoff = BugReportLocalStore.loadHandoff(), handoff.serverURL == appState.serverURL, handoff.sessionID.isEmpty == false {
+        if let handoff = BugReportLocalStore.loadHandoff(),
+           handoff.serverURL == appState.serverURL,
+           handoff.sourceSessionID.map({ $0 == sourceSessionID }) ?? true,
+           handoff.sessionID.isEmpty == false {
             reportID = handoff.reportID
             targetSessionID = handoff.sessionID
             clientRequestID = handoff.clientRequestID

@@ -10,6 +10,7 @@ struct BugReportDraft: Codable, Sendable {
 
 struct BugReportHandoff: Codable, Sendable {
     let serverURL: String
+    let sourceSessionID: String?
     let reportID: String
     let sessionID: String
     let deviceID: String
