@@ -1,6 +1,7 @@
 //! Fetch and materialize an owner-approved bug report before Console startup.
 
 use anyhow::{bail, Context, Result};
+use futures_util::future::try_join_all;
 use reqwest::Client;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -12,7 +13,10 @@ use uuid::Uuid;
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_TOTAL_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_FILES: usize = 6;
-const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
+// The command reply has a ten-second server budget. Fetch the manifest and
+// all files concurrently, with a bounded per-request timeout, so evidence
+// cannot consume that budget through sequential downloads.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Deserialize)]
 struct ReportManifest {
@@ -129,6 +133,14 @@ pub async fn stage_bug_report(
     let normalized_report_id = Uuid::parse_str(report_id)
         .map(|value| value.to_string())
         .context("report_stage_failed: invalid report id")?;
+    let report_dir = cwd
+        .join(".longhouse")
+        .join("bug-reports")
+        .join(&normalized_report_id);
+    if report_dir.is_dir() {
+        return Ok(report_dir);
+    }
+
     let response = client
         .get(resolve_url(api_url, &normalized_report_id, None))
         .header("X-Agents-Token", api_token)
@@ -144,51 +156,62 @@ pub async fn stage_bug_report(
         .context("report_stage_failed: invalid manifest JSON")?;
     validate_manifest(&manifest, &normalized_report_id)?;
 
-    let report_dir = cwd
-        .join(".longhouse")
-        .join("bug-reports")
-        .join(&normalized_report_id);
-    fs::create_dir_all(&report_dir)
-        .with_context(|| format!("creating {}", report_dir.display()))?;
-    let manifest_bytes = serde_json::to_vec_pretty(&serde_json::json!({
-        "schema_version": manifest.schema_version,
-        "report_id": manifest.report_id,
-        "files": manifest.files.iter().map(|file| serde_json::json!({
-            "name": file.name,
-            "mime_type": file.mime_type,
-            "byte_size": file.byte_size,
-            "sha256": file.sha256,
-            "kind": file.kind,
-        })).collect::<Vec<_>>(),
-    }))?;
-    write_private(&report_dir.join("manifest.json"), &manifest_bytes)?;
+    let temporary_dir = report_dir.with_extension(format!("staging-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temporary_dir)
+        .with_context(|| format!("creating {}", temporary_dir.display()))?;
+    let result = async {
+        let manifest_bytes = serde_json::to_vec_pretty(&serde_json::json!({
+            "schema_version": manifest.schema_version,
+            "report_id": manifest.report_id,
+            "files": manifest.files.iter().map(|file| serde_json::json!({
+                "name": file.name,
+                "mime_type": file.mime_type,
+                "byte_size": file.byte_size,
+                "sha256": file.sha256,
+                "kind": file.kind,
+            })).collect::<Vec<_>>(),
+        }))?;
+        write_private(&temporary_dir.join("manifest.json"), &manifest_bytes)?;
 
-    for file in &manifest.files {
-        let bytes = client
-            .get(resolve_url(
-                api_url,
-                &normalized_report_id,
-                Some(&file.name),
-            ))
-            .header("X-Agents-Token", api_token)
-            .timeout(FETCH_TIMEOUT)
-            .send()
-            .await
-            .with_context(|| format!("report_stage_failed: file request {}", file.name))?
-            .error_for_status()
-            .with_context(|| format!("report_stage_failed: file response {}", file.name))?
-            .bytes()
-            .await
-            .with_context(|| format!("report_stage_failed: file body {}", file.name))?;
-        if bytes.len() as u64 != file.byte_size {
-            bail!("report_stage_failed: size mismatch for {}", file.name)
+        let file_bytes = try_join_all(manifest.files.iter().map(|file| {
+            let report_id = normalized_report_id.clone();
+            async move {
+                let bytes = client
+                    .get(resolve_url(api_url, &report_id, Some(&file.name)))
+                    .header("X-Agents-Token", api_token)
+                    .timeout(FETCH_TIMEOUT)
+                    .send()
+                    .await
+                    .with_context(|| format!("report_stage_failed: file request {}", file.name))?
+                    .error_for_status()
+                    .with_context(|| format!("report_stage_failed: file response {}", file.name))?
+                    .bytes()
+                    .await
+                    .with_context(|| format!("report_stage_failed: file body {}", file.name))?;
+                if bytes.len() as u64 != file.byte_size {
+                    bail!("report_stage_failed: size mismatch for {}", file.name);
+                }
+                let actual = format!("{:x}", Sha256::digest(&bytes));
+                if actual != file.sha256.to_ascii_lowercase() {
+                    bail!("report_stage_failed: sha256 mismatch for {}", file.name);
+                }
+                Ok::<_, anyhow::Error>((file.name.clone(), bytes))
+            }
+        }))
+        .await?;
+
+        for (name, bytes) in file_bytes {
+            write_private(&temporary_dir.join(&name), &bytes)?;
         }
-        let actual = format!("{:x}", Sha256::digest(&bytes));
-        if actual != file.sha256.to_ascii_lowercase() {
-            bail!("report_stage_failed: sha256 mismatch for {}", file.name)
-        }
-        write_private(&report_dir.join(&file.name), &bytes)?;
+        fs::rename(&temporary_dir, &report_dir)
+            .with_context(|| format!("publishing {}", report_dir.display()))?;
+        Ok::<_, anyhow::Error>(())
     }
+    .await;
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&temporary_dir);
+    }
+    result?;
     Ok(report_dir)
 }
 

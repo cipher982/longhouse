@@ -21,6 +21,7 @@ struct BugReportSheet: View {
     @State private var showingLaunchPicker = false
     @State private var isUploading = false
     @State private var isSending = false
+    @State private var draftSaveTask: Task<Void, Never>?
     @State private var errorMessage: String?
     @State private var statusMessage: String?
 
@@ -123,7 +124,7 @@ struct BugReportSheet: View {
             .task {
                 restoreDraft()
             }
-            .onChange(of: description) { _, _ in saveDraft() }
+            .onChange(of: description) { _, _ in scheduleDraftSave() }
             .onChange(of: photoItems) { _, items in
                 Task { await loadPhotos(items) }
             }
@@ -207,16 +208,61 @@ struct BugReportSheet: View {
             BugReportLocalStore.clearHandoff()
             statusMessage = "Sent to Console. The agent has the screenshot and diagnostics."
         } catch {
+            if case let LonghouseAPIError.structured(_, errorCode, _) = error,
+               errorCode != "turn_start_outcome_unknown" {
+                clientRequestID = "ios-report-\(UUID().uuidString)"
+                saveHandoffForRetry()
+            }
             errorMessage = (error as? LocalizedError)?.errorDescription ?? "The report was saved, but the agent could not be started. Retry without choosing a new target."
         }
     }
 
+    private func saveHandoffForRetry() {
+        guard let reportID, let targetSessionID,
+              let handoff = BugReportLocalStore.loadHandoff(),
+              handoff.reportID == reportID,
+              handoff.sessionID == targetSessionID,
+              let clientRequestID
+        else { return }
+        BugReportLocalStore.saveHandoff(
+            BugReportHandoff(
+                serverURL: handoff.serverURL,
+                reportID: handoff.reportID,
+                sessionID: handoff.sessionID,
+                deviceID: handoff.deviceID,
+                provider: handoff.provider,
+                cwd: handoff.cwd,
+                clientRequestID: clientRequestID
+            )
+        )
+    }
+
     private func reportFiles() -> [BugReportUploadFile] {
         var files = additionalFiles
-        if let screenshotData {
-            files.insert(BugReportUploadFile(filename: "captured-screen.jpg", mimeType: "image/jpeg", data: screenshotData), at: 0)
+        if let screenshotData, let jpeg = preparedJPEG(from: screenshotData) {
+            files.insert(BugReportUploadFile(filename: "captured-screen.jpg", mimeType: "image/jpeg", data: jpeg), at: 0)
         }
         return Array(files.prefix(4))
+    }
+
+    private func preparedJPEG(from data: Data) -> Data? {
+        guard let image = UIImage(data: data) else { return nil }
+        let maxDimension: CGFloat = 1600
+        let scale = min(1, maxDimension / max(image.size.width, image.size.height))
+        let size = CGSize(width: max(1, image.size.width * scale), height: max(1, image.size.height * scale))
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let resized = renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }
+        var quality: CGFloat = 0.78
+        var best: Data?
+        while quality >= 0.38 {
+            guard let jpeg = resized.jpegData(compressionQuality: quality) else { break }
+            best = jpeg
+            if jpeg.count <= 1_800_000 { return jpeg }
+            quality -= 0.1
+        }
+        return best
     }
 
     private func loadPhotos(_ items: [PhotosPickerItem]) async {
@@ -224,8 +270,7 @@ struct BugReportSheet: View {
         var loaded: [BugReportUploadFile] = []
         for (index, item) in items.prefix(4).enumerated() {
             guard let data = try? await item.loadTransferable(type: Data.self),
-                  let image = UIImage(data: data),
-                  let jpeg = image.jpegData(compressionQuality: 0.72)
+                  let jpeg = preparedJPEG(from: data)
             else { continue }
             loaded.append(BugReportUploadFile(filename: "photo-\(index).jpg", mimeType: "image/jpeg", data: jpeg))
         }
@@ -242,8 +287,9 @@ struct BugReportSheet: View {
         if description.isEmpty { description = draft.description }
         if screenshotData == nil { screenshotData = draft.screenshotData }
         if additionalFiles.isEmpty {
-            additionalFiles = draft.additionalImages.enumerated().map {
-                BugReportUploadFile(filename: "saved-photo-\($0.offset).jpg", mimeType: "image/jpeg", data: $0.element)
+            additionalFiles = draft.additionalImages.enumerated().compactMap {
+                guard let jpeg = preparedJPEG(from: $0.element) else { return nil }
+                return BugReportUploadFile(filename: "saved-photo-\($0.offset).jpg", mimeType: "image/jpeg", data: jpeg)
             }
         }
         if let handoff = BugReportLocalStore.loadHandoff(), handoff.serverURL == appState.serverURL, handoff.sessionID.isEmpty == false {
@@ -253,16 +299,33 @@ struct BugReportSheet: View {
         }
     }
 
-    private func saveDraft() {
-        guard !description.isEmpty || screenshotData != nil || !additionalFiles.isEmpty else { return }
-        BugReportLocalStore.saveDraft(
-            BugReportDraft(
-                serverURL: appState.serverURL,
-                sourceSessionID: sourceSessionID,
-                description: description,
-                screenshotData: screenshotData,
-                additionalImages: additionalFiles.map(\.data)
-            )
+    private func makeDraft() -> BugReportDraft? {
+        guard !description.isEmpty || screenshotData != nil || !additionalFiles.isEmpty else { return nil }
+        return BugReportDraft(
+            serverURL: appState.serverURL,
+            sourceSessionID: sourceSessionID,
+            description: description,
+            screenshotData: screenshotData,
+            additionalImages: additionalFiles.map(\.data)
         )
+    }
+
+    private func saveDraft() {
+        guard let draft = makeDraft() else { return }
+        draftSaveTask?.cancel()
+        draftSaveTask = nil
+        BugReportLocalStore.saveDraft(draft)
+    }
+
+    private func scheduleDraftSave() {
+        guard let draft = makeDraft() else { return }
+        draftSaveTask?.cancel()
+        draftSaveTask = Task {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            await Task.detached(priority: .utility) {
+                BugReportLocalStore.saveDraft(draft)
+            }.value
+        }
     }
 }

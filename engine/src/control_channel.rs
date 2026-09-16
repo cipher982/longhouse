@@ -84,6 +84,7 @@ const CONSOLE_DEFAULT_PERMISSION_MODE: &str = "bypass";
 const MANAGED_PROVIDER_CONTRACTS_JSON: &str =
     include_str!("../../server/zerg/config/managed_provider_contracts.json");
 const LAUNCH_START_TIMEOUT_SECS: u64 = 45;
+const REPORT_STAGE_DEADLINE_SECS: u64 = 8;
 const COMPLETED_COMMAND_CACHE_CAPACITY: usize = 256;
 const COMPLETED_COMMAND_CACHE_TTL_SECS: u64 = 5 * 60;
 // This receipt fence covers only provider-affecting managed controls. It is
@@ -2012,14 +2013,21 @@ async fn execute_turn_start(
                 code: "report_stage_failed".to_string(),
                 message: format!("cannot create report client: {error}"),
             })?;
-        let report_dir = crate::report_bundle::stage_bug_report(
-            &report_client,
-            &config.api_url,
-            api_token,
-            &report_id,
-            &cwd,
+        let report_dir = tokio::time::timeout(
+            Duration::from_secs(REPORT_STAGE_DEADLINE_SECS),
+            crate::report_bundle::stage_bug_report(
+                &report_client,
+                &config.api_url,
+                api_token,
+                &report_id,
+                &cwd,
+            ),
         )
         .await
+        .map_err(|_| CommandError {
+            code: "report_stage_failed".to_string(),
+            message: format!("report evidence staging exceeded {REPORT_STAGE_DEADLINE_SECS}s"),
+        })?
         .map_err(|error| CommandError {
             code: "report_stage_failed".to_string(),
             message: error.to_string(),

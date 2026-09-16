@@ -230,7 +230,14 @@ async def enqueue_catalog_console_turn(
     run_id = UUID(str(turn["run_id"])) if turn.get("run_id") else None
     state = str(turn.get("state") or "queued")
     if state != SESSION_TURN_STATE_STARTING or run_id is None:
-        return CatalogConsoleTurn(turn_id=turn_id, run_id=run_id, state=state, created=bool(result.get("created")))
+        return CatalogConsoleTurn(
+            turn_id=turn_id,
+            run_id=run_id,
+            state=state,
+            created=bool(result.get("created")),
+            error_code=str(turn.get("error_code") or "") or None,
+            error=str(turn.get("error") or "") or None,
+        )
 
     control = registry or get_machine_control_channel_registry()
     provider = str(turn["provider"])

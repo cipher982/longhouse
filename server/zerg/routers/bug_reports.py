@@ -23,6 +23,7 @@ from zerg.dependencies.form_post_origin import reject_cross_origin_form_post
 from zerg.dependencies.request_db import no_request_db
 from zerg.models.device_token import DeviceToken
 from zerg.services.bug_reports import MAX_REPORT_FILE_BYTES
+from zerg.services.bug_reports import MAX_REPORT_FILES
 from zerg.services.bug_reports import BugReportUpload
 from zerg.services.bug_reports import create_bug_report
 from zerg.services.bug_reports import read_manifest
@@ -87,6 +88,8 @@ async def upload_bug_report(
             raise HTTPException(status_code=400, detail="invalid source_session_id") from exc
         _load_session_for_continuation(db, normalized_source_session_id, owner_id=owner_id)
 
+    if len(files) > MAX_REPORT_FILES:
+        raise HTTPException(status_code=413, detail="too many report images")
     uploads: list[BugReportUpload] = []
     for upload in files:
         data = await upload.read(MAX_REPORT_FILE_BYTES + 1)
