@@ -31,9 +31,8 @@
   --color-state-cool: #7C8790;
 
   /* Provider Colors — real brand marks (not theme-harmonized).
-     Claude terracotta happens to sit naturally in the warm-gold palette;
-     OpenAI is intentionally monochrome (white on dark); Gemini renders as a
-     multicolor gradient in <ProviderGlyph>, this single value is its fallback. */
+     Claude and OMP use warm accents; Pi and OMP retain their own
+     multicolour geometry; OpenAI stays monochrome on a dark plate. */
   --color-provider-claude: #D97757;
   --color-provider-codex: #F3EAD9;
   --color-provider-antigravity: #4F87ED;
