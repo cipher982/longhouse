@@ -241,8 +241,11 @@ def _insert_demo_session(db: Session, data) -> None:
             (event.content_text for event in data.events if event.role == "user" and event.content_text),
             None,
         ),
-        launch_actor="automation",
-        launch_surface="test",
+        # Demo samples are sessions a visitor should see. Automation/test launch
+        # labels are exactly what the timeline hides as QA noise, so leave them
+        # unset like any observed session; demo_database labels the managed ones.
+        launch_actor=None,
+        launch_surface=None,
     )
     db.add(session)
     db.flush()

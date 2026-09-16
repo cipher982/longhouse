@@ -305,6 +305,32 @@ def _build_demo_db(db_path: Path) -> None:
     build_demo_database(db_path)
 
 
+def _demo_mode_requested() -> bool:
+    """DEMO_MODE / APP_MODE=demo, resolved the way runtime config does."""
+    from zerg.config import AppMode
+    from zerg.config import resolve_app_mode
+
+    if os.environ.get("DEMO_MODE", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    return resolve_app_mode() is AppMode.DEMO
+
+
+def _ensure_demo_corpus(database_url: str) -> None:
+    """Give a demo-mode runtime its sample sessions on first start.
+
+    The public demo runs `serve` with DEMO_MODE=1 on a fresh container, so
+    without this it served an empty timeline. An existing database is never
+    touched: the corpus is built only where no database file exists yet.
+    """
+    from zerg.config import sqlite_file_path
+
+    db_path = sqlite_file_path(database_url)
+    if db_path is None or db_path.exists():
+        return
+    typer.echo(f"Demo mode: building sample data at {db_path}...")
+    _build_demo_db(db_path)
+
+
 @app.command()
 def serve(
     host: str = typer.Option(
@@ -455,6 +481,9 @@ def serve(
     elif db:
         # Set database URL if explicitly provided
         os.environ["DATABASE_URL"] = db
+
+    if not (demo or demo_fresh) and _demo_mode_requested():
+        _ensure_demo_corpus(os.environ["DATABASE_URL"])
 
     db_url = os.environ["DATABASE_URL"]
     is_sqlite = db_url.startswith("sqlite")
