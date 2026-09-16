@@ -74,6 +74,34 @@ def die(msg: str) -> None:
     raise RuntimeError(msg)
 
 
+def retain_failure_logs() -> None:
+    """Copy the scratch service logs where the lane uploads them.
+
+    A failure inside `up` happens before any scenario artifact exists, so the
+    only evidence is on the scratch disk - and the isolated lane uploads the run
+    directory, not the scratch root. Without this, that class of failure is
+    undiagnosable from the outside.
+    """
+
+    try:
+        state = load_state()
+    except Exception:  # noqa: BLE001 - best effort on an already-failing path
+        return
+    scratch = state.get("scratch")
+    if not scratch:
+        return
+    target = RUN_DIR / "failure-logs"
+    target.mkdir(parents=True, exist_ok=True)
+    for name in ("server", "engine", "proxy", "app"):
+        source = Path(scratch) / f"{name}.log"
+        if not source.is_file():
+            continue
+        try:
+            (target / f"{name}.log").write_text(source.read_text(errors="replace")[-200_000:])
+        except OSError:
+            continue
+
+
 def load_state() -> dict:
     if not STATE_FILE.exists():
         die("no scratch run; start one with `simlab.py up`")
@@ -1391,7 +1419,11 @@ def main() -> None:
     run_parser.set_defaults(func=cmd_run)
 
     args = parser.parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except Exception:
+        retain_failure_logs()
+        raise
 
 
 if __name__ == "__main__":
