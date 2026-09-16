@@ -906,7 +906,14 @@ final class SessionViewModel: ObservableObject {
             sessionId: sessionId,
             text: text,
             intent: intent,
-            attachments: attachments,
+            attachments: attachments.map {
+                PendingInputIntent.Attachment(
+                    id: $0.id,
+                    filename: $0.filename,
+                    data: $0.data,
+                    mimeType: $0.mimeType
+                )
+            },
             createdAt: Date()
         )
         // This synchronous atomic write is deliberately before even URL

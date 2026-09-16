@@ -46,30 +46,6 @@ struct PendingInputIntent: Codable, Identifiable, Sendable, Equatable {
         self.createdAt = createdAt
     }
 
-    init(
-        clientRequestId: String,
-        serverURL: String,
-        authGeneration: String,
-        sessionId: String,
-        text: String,
-        intent: String,
-        attachments: [ComposerAttachment],
-        createdAt: Date
-    ) {
-        self.init(
-            clientRequestId: clientRequestId,
-            serverURL: serverURL,
-            authGeneration: authGeneration,
-            sessionId: sessionId,
-            text: text,
-            intent: intent,
-            attachments: attachments.map {
-                Attachment(id: $0.id, filename: $0.filename, data: $0.data, mimeType: $0.mimeType)
-            },
-            createdAt: createdAt
-        )
-    }
-
     func composerAttachments() -> [ComposerAttachment] {
         attachments.map {
             ComposerAttachment(
@@ -179,8 +155,6 @@ struct PendingInputStore: Sendable {
         )
         remove(intent)
     }
-
-    func waitForPendingWrites() {}
 
     private func fileURL(for intent: PendingInputIntent) -> URL {
         let key = [
