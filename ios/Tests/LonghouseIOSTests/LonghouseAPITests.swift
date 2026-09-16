@@ -218,6 +218,35 @@ struct LonghouseAPITests {
     }
 
     @Test
+    func reportHandoffRetriesOnlyReplaySafeFailures() {
+        #expect(
+            LonghouseAPIError.structured(
+                status: 409,
+                errorCode: "turn_start_outcome_unknown",
+                message: ""
+            ).isRetryableReportHandoff
+        )
+        #expect(
+            LonghouseAPIError.structured(
+                status: 409,
+                errorCode: "catalog_unavailable",
+                message: ""
+            ).isRetryableReportHandoff
+        )
+        #expect(
+            !LonghouseAPIError.structured(
+                status: 502,
+                errorCode: "provider_launch_failed",
+                message: ""
+            ).isRetryableReportHandoff
+        )
+        #expect(LonghouseAPIError.serviceUnavailable.isRetryableReportHandoff)
+        #expect(!LonghouseAPIError.upstreamFailed.isRetryableReportHandoff)
+        #expect(!LonghouseAPIError.conflict.isRetryableReportHandoff)
+        #expect(!LonghouseAPIError.requestFailed.isRetryableReportHandoff)
+    }
+
+    @Test
     func sendInputDecodeFailureUsesDomainErrorCopy() throws {
         let data = try #require("""
         {

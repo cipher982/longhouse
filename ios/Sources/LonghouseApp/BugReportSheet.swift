@@ -12,6 +12,11 @@ struct BugReportSheet: View {
     let initialScreenshot: Data?
     let onSent: ((String) -> Void)?
 
+    private enum FailureAction: Equatable {
+        case retryHandoff
+        case chooseAgent
+    }
+
     @State private var description = ""
     @State private var screenshotData: Data?
     @State private var additionalFiles: [BugReportUploadFile] = []
@@ -25,6 +30,8 @@ struct BugReportSheet: View {
     @State private var didSend = false
     @State private var draftSaveTask: Task<Void, Never>?
     @State private var errorMessage: String?
+    @State private var failureAction: FailureAction?
+
     @State private var statusMessage: String?
 
     init(
@@ -122,29 +129,20 @@ struct BugReportSheet: View {
                     if isUploading || isSending {
                         ProgressView()
                     } else if reportID == nil {
-                        Button("Choose agent") { Task { await uploadAndChooseTarget() } }
+                        Button("Send report") { Task { await uploadAndChooseTarget() } }
                             .disabled(!canUpload)
                     } else if targetSessionID == nil {
                         Button("Choose agent") { showingLaunchPicker = true }
                     } else if didSend {
                         Button("Done") { dismiss() }
+                    } else if failureAction == .chooseAgent {
+                        Button("Choose agent") { showingLaunchPicker = true }
                     } else {
-                        Button("Retry") { Task { await sendReport() } }
-                            .disabled(isSending)
+                        Button(failureAction == .retryHandoff ? "Try again" : "Send to Console") {
+                            Task { await sendReport() }
+                        }
                     }
                 }
-            }
-            .alert(
-                "Couldn’t send report",
-                isPresented: Binding(
-                    get: { errorMessage != nil && !isUploading && !isSending },
-                    set: { if !$0 { errorMessage = nil } }
-                )
-            ) {
-                Button("Retry") { Task { await sendReport() } }
-                Button("Close", role: .cancel) {}
-            } message: {
-                Text(errorMessage ?? "The report could not be sent.")
             }
             .task {
                 restoreDraft()
@@ -157,6 +155,10 @@ struct BugReportSheet: View {
                 LaunchSessionSheet(
                     onLaunchSelection: { selection in
                         targetSessionID = selection.sessionId
+                        errorMessage = nil
+                        statusMessage = nil
+                        failureAction = nil
+                        let requestID = "ios-report-\(UUID().uuidString)"
                         let handoff = BugReportHandoff(
                             serverURL: appState.serverURL,
                             sourceSessionID: sourceSessionID,
@@ -165,9 +167,9 @@ struct BugReportSheet: View {
                             deviceID: selection.deviceId,
                             provider: selection.provider,
                             cwd: selection.cwd,
-                            clientRequestID: clientRequestID ?? "ios-report-\(UUID().uuidString)"
+                            clientRequestID: requestID
                         )
-                        clientRequestID = handoff.clientRequestID
+                        clientRequestID = requestID
                         BugReportLocalStore.saveHandoff(handoff)
                     },
                     onLaunched: { sessionID in
@@ -206,16 +208,19 @@ struct BugReportSheet: View {
     }
 
     private func sendReport(sessionID explicitSessionID: String? = nil) async {
+        guard !isSending else { return }
         guard let reportID,
               let sessionID = explicitSessionID ?? targetSessionID,
               let api = LonghouseAPI(host: appState.serverURL)
         else {
             errorMessage = "The report handoff is incomplete. Choose an agent again."
+            failureAction = .chooseAgent
             return
         }
         isSending = true
         errorMessage = nil
         statusMessage = nil
+        failureAction = nil
         let requestID = clientRequestID ?? "ios-report-\(UUID().uuidString)"
         clientRequestID = requestID
         if let handoff = BugReportLocalStore.loadHandoff(), handoff.reportID == reportID, handoff.sessionID == sessionID {
@@ -250,12 +255,9 @@ struct BugReportSheet: View {
             dismiss()
             onSent?(sessionID)
         } catch {
-            if case let LonghouseAPIError.structured(_, errorCode, _) = error,
-               errorCode != "turn_start_outcome_unknown" {
-                clientRequestID = "ios-report-\(UUID().uuidString)"
-                saveHandoffForRetry()
-            }
-            errorMessage = (error as? LocalizedError)?.errorDescription ?? "The report was saved, but the agent could not be started. Retry without choosing a new target."
+            saveHandoffForRetry()
+            failureAction = isRetryableHandoffError(error) ? .retryHandoff : .chooseAgent
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? "The report was saved, but the agent could not be started."
         }
     }
 
@@ -282,6 +284,20 @@ struct BugReportSheet: View {
                 clientRequestID: clientRequestID
             )
         )
+    }
+
+    private func isRetryableHandoffError(_ error: Error) -> Bool {
+        if let apiError = error as? LonghouseAPIError {
+            return apiError.isRetryableReportHandoff
+        }
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed,
+             .networkConnectionLost, .notConnectedToInternet, .timedOut:
+            return true
+        default:
+            return false
+        }
     }
 
     private func reportFiles() -> [BugReportUploadFile] {
@@ -378,4 +394,13 @@ struct BugReportSheet: View {
             }.value
         }
     }
+}
+
+#Preview("Bug report handoff") {
+    BugReportSheet(
+        sourceSessionID: "session-preview",
+        contextJSON: Data("{}".utf8),
+        screenshotData: nil
+    )
+    .environmentObject(AppState())
 }

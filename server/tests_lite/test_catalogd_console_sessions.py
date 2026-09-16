@@ -20,6 +20,8 @@ from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveConsoleTurn
 from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveSessionConnection
+
 from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSessionLaunchAttempt
 from zerg.models.live_store import LiveSessionRun
@@ -111,6 +113,55 @@ def test_pi_console_persists_provider_local_policy_through_turn_dispatch(tmp_pat
     assert turn["turn"]["provider_config"]["permission_mode"] == "provider_local"
     assert turn["turn"]["report_id"] == str(report_id)
 
+
+def test_console_replay_precedes_active_owner_guard(tmp_path):
+    engine = create_catalog_engine(tmp_path / "catalog-replay.db")
+    initialize_catalog_schema(engine)
+    store = CatalogStore(engine)
+    with Session(engine) as db:
+        db.add(LiveUser(id=1, email="owner@example.com", is_active=True))
+        db.commit()
+    session_id = uuid4()
+    thread_id = uuid4()
+    store.create_console_session(
+        data={
+            "session_id": str(session_id),
+            "thread_id": str(thread_id),
+            "owner_id": 1,
+            "provider": "claude",
+            "device_id": "cinder",
+            "cwd": "/tmp/longhouse",
+            "project": "longhouse",
+            "provider_config": {},
+            "started_at": datetime.now(UTC),
+        }
+    )
+
+    request = {
+        "session_id": str(session_id),
+        "owner_id": 1,
+        "message": "investigate the report",
+        "client_request_id": "report-handoff-1",
+        "created_at": datetime.now(UTC),
+    }
+    first = store.enqueue_console_turn(data=request)
+    with Session(engine) as db:
+        turn = db.get(LiveConsoleTurn, first["turn"]["turn_id"])
+        assert turn is not None
+        db.add(
+            LiveSessionConnection(
+                run_id=turn.run_id,
+                control_plane="machine",
+                acquisition_kind="spawned_control",
+                acquired_at=datetime.now(UTC),
+            )
+        )
+        db.commit()
+
+    replay = store.enqueue_console_turn(data=request)
+
+    assert replay["created"] is False
+    assert replay["turn"]["turn_id"] == first["turn"]["turn_id"]
 
 def test_pi_console_continuation_forwards_exact_native_source_file(tmp_path):
     engine = create_catalog_engine(tmp_path / "catalog-pi-continuation.db")

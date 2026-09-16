@@ -3969,20 +3969,6 @@ class CatalogStore:
                 if thread is None or not thread.device_id or not thread.cwd:
                     orm.rollback()
                     return {"found": True, "unavailable": "execution_target_missing"}
-                execution_owner = (
-                    orm.query(LiveSessionRun.id)
-                    .join(LiveSessionConnection, LiveSessionConnection.run_id == LiveSessionRun.id)
-                    .filter(
-                        LiveSessionRun.thread_id == thread.id,
-                        LiveSessionRun.ended_at.is_(None),
-                        LiveSessionConnection.acquisition_kind.in_(("spawned_control", "adopted_control")),
-                        LiveSessionConnection.released_at.is_(None),
-                    )
-                    .first()
-                )
-                if execution_owner is not None:
-                    orm.rollback()
-                    return {"found": True, "unavailable": "execution_owner_conflict"}
                 if str(session.provider or "").strip().lower() == "pi":
                     from zerg.services.live_catalog_launch import normalize_console_provider_config
 
@@ -4023,6 +4009,20 @@ class CatalogStore:
                         "idempotency_conflict": not exact,
                         "turn": replay_turn if exact else None,
                     }
+                execution_owner = (
+                    orm.query(LiveSessionRun.id)
+                    .join(LiveSessionConnection, LiveSessionConnection.run_id == LiveSessionRun.id)
+                    .filter(
+                        LiveSessionRun.thread_id == thread.id,
+                        LiveSessionRun.ended_at.is_(None),
+                        LiveSessionConnection.acquisition_kind.in_(("spawned_control", "adopted_control")),
+                        LiveSessionConnection.released_at.is_(None),
+                    )
+                    .first()
+                )
+                if execution_owner is not None:
+                    orm.rollback()
+                    return {"found": True, "unavailable": "execution_owner_conflict"}
                 receipt_id = str(uuid4())
                 turn_id = str(uuid4())
                 resume_alias = (

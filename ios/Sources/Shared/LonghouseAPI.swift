@@ -1441,6 +1441,22 @@ enum LonghouseAPIError: Error {
             return .requestFailed
         }
     }
+
+    /// Whether replaying the same handoff request can plausibly change the outcome.
+    ///
+    /// Structured Console failures are terminal unless the server explicitly
+    /// reports an unavailable catalog or an ambiguous dispatch. The request ID
+    /// remains stable in both cases, so a retry can only replay the same intent.
+    var isRetryableReportHandoff: Bool {
+        switch self {
+        case .serviceUnavailable, .unexpectedResponse:
+            return true
+        case .structured(_, let code, _):
+            return code == "catalog_unavailable" || code == "turn_start_outcome_unknown"
+        case .requestFailed, .notAuthenticated, .conflict, .upstreamFailed:
+            return false
+        }
+    }
 }
 
 extension LonghouseAPIError: LocalizedError {
