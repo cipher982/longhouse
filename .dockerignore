@@ -13,6 +13,8 @@
 video/*
 !video/package.json
 !video/src/
+!video/scripts/
+!video/scripts/**
 !video/src/**
 !e2e/
 e2e/*
