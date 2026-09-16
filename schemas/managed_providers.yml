@@ -1745,9 +1745,15 @@ providers:
       disposition: "not_implemented"
       owner_action: "observe whether Cursor can branch a conversation and record the surface"
     launch_local:
-      level: live_token
-      source: "cursor_helm_launch_registration: stock longhouse cursor launches cursor-agent, binds the native conversation, and its first reply reaches the served archive. server/zerg/qa/cursor_helm_lifecycle.py (cursor.helm_lifecycle.v1)"
-      disposition: "implemented"
+      disposition: implemented
+      required_assertions:
+      - id: cursor_helm_launch_registration
+        scenario_id: cursor_helm_lifecycle
+        oracle_source: server/zerg/qa/cursor_helm_product_e2e.py
+        minimum_scenario_revision: 1
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
     run_once:
       level: none
       source: Cursor Console mints or resumes a provider thread through cursor_print;
@@ -1760,17 +1766,35 @@ providers:
       source: "Gate 0 native_resume_continuity resumed the same provider conversation and store agent id under the same Longhouse session id. ~/.longhouse/canaries/provider-live/cursor/20260726T020333Z/gate0.json"
       disposition: "implemented"
     send_input:
-      level: live_token
-      source: "cursor_helm_send_idle: a Runtime Host send-live to the idle session produces a new reply in the served archive. server/zerg/qa/cursor_helm_lifecycle.py (cursor.helm_lifecycle.v1)"
-      disposition: "implemented"
+      disposition: implemented
+      required_assertions:
+      - id: cursor_helm_send_idle
+        scenario_id: cursor_helm_lifecycle
+        oracle_source: server/zerg/qa/cursor_helm_product_e2e.py
+        minimum_scenario_revision: 1
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
     interrupt:
-      level: live_token
-      source: "cursor_helm_abort_native: Runtime Host interrupt-live stops the active generation with an aborted stop and no response, the TUI survives, and a following send completes a new turn. server/zerg/qa/cursor_helm_lifecycle.py (cursor.helm_lifecycle.v1)"
-      disposition: "implemented"
+      disposition: implemented
+      required_assertions:
+      - id: cursor_helm_abort_native
+        scenario_id: cursor_helm_lifecycle
+        oracle_source: server/zerg/qa/cursor_helm_product_e2e.py
+        minimum_scenario_revision: 1
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
     steer_active_turn:
-      level: live_token
-      source: "cursor_helm_steer_active: Enter on Cursor's empty prompt injects a queued message into the running generation at its next tool boundary (cursor-agent 2026.08.11+). The oracle requires the steered reply inside the targeted generation with later steps absent, and rejects the queued next-generation shape; a qa-fault-injection negative control proves it. server/zerg/qa/cursor_helm_lifecycle.py (cursor.helm_lifecycle.v1)"
-      disposition: "implemented"
+      disposition: implemented
+      required_assertions:
+      - id: cursor_helm_steer_active
+        scenario_id: cursor_helm_lifecycle
+        oracle_source: server/zerg/qa/cursor_helm_product_e2e.py
+        minimum_scenario_revision: 1
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
     answer_pause:
       level: none
       source: 'Cursor permission hooks use the separate pull-based Longhouse pause-request
@@ -1779,9 +1803,15 @@ providers:
       reason: "Cursor exposes a permission reply over ACP only, and Longhouse deliberately does not execute ACP; adopting it would replace the stock TUI and change the session mode."
       routed_to: "the pull-based Longhouse pause-request API via the fail-closed permission hook"
     terminate:
-      level: live_token
-      source: "cursor_helm_terminate_owned: Runtime Host terminate-live ends the run and the owned cursor-agent process exits. server/zerg/qa/cursor_helm_lifecycle.py (cursor.helm_lifecycle.v1)"
-      disposition: "implemented"
+      disposition: implemented
+      required_assertions:
+      - id: cursor_helm_terminate_owned
+        scenario_id: cursor_helm_lifecycle
+        oracle_source: server/zerg/qa/cursor_helm_product_e2e.py
+        minimum_scenario_revision: 1
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
     tail_output:
       level: live_token
       source: "The product E2E observed archive convergence with a 0.337s recovery lag and matching event counts. ~/.longhouse/canaries/provider-live/cursor-product/20260726T024725Z/product-e2e.json"
