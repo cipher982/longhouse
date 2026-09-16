@@ -234,23 +234,23 @@ struct SessionView: View {
     // the blurred ghost controls seen in the cold-open transition.
     private var overflowMenu: some View {
         Menu {
+            Button {
+                bugReportContextJSON = viewModel.makeBugReportContext(
+                    sessionId: sessionId,
+                    serverURL: appState.serverURL
+                )
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    bugReportScreenshot = BugReportScreenCapture.captureJPEG()
+                    isShowingBugReport = true
+                }
+            } label: {
+                Label("Report a problem", systemImage: "exclamationmark.bubble")
+            }
+            .accessibilityIdentifier("session-report-problem")
+            Divider()
             if let detail = viewModel.detail {
                 let isWatching = liveActivityManager.isWatching(sessionId: detail.id)
-                Button {
-                    bugReportContextJSON = viewModel.makeBugReportContext(
-                        sessionId: sessionId,
-                        serverURL: appState.serverURL
-                    )
-                    Task { @MainActor in
-                        await Task.yield()
-                        bugReportScreenshot = BugReportScreenCapture.captureJPEG()
-                        isShowingBugReport = true
-                    }
-                } label: {
-                    Label("Report a problem", systemImage: "exclamationmark.bubble")
-                }
-                .accessibilityIdentifier("session-report-problem")
-                Divider()
                 Button {
                     Task { await liveActivityManager.toggle(detail: detail, appState: appState) }
                 } label: {

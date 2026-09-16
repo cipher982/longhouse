@@ -1537,10 +1537,10 @@ enum LonghouseAPIError: Error {
             return .notAuthenticated
         case 409:
             return .conflict
-        case 502:
-            return .upstreamFailed
-        case 503:
+        case 408, 429:
             return .serviceUnavailable
+        case 500...599:
+            return .upstreamFailed
         default:
             return .requestFailed
         }
@@ -1553,11 +1553,11 @@ enum LonghouseAPIError: Error {
     /// remains stable in both cases, so a retry can only replay the same intent.
     var isRetryableReportHandoff: Bool {
         switch self {
-        case .serviceUnavailable, .unexpectedResponse:
+        case .serviceUnavailable, .upstreamFailed, .unexpectedResponse:
             return true
         case .structured(_, let code, _):
             return code == "catalog_unavailable" || code == "turn_start_outcome_unknown"
-        case .requestFailed, .notAuthenticated, .conflict, .upstreamFailed:
+        case .requestFailed, .notAuthenticated, .conflict:
             return false
         }
     }

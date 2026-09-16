@@ -120,9 +120,18 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _payload_sha256(description: str, context_bytes: bytes, uploads: list[BugReportUpload]) -> str:
+def _payload_sha256(
+    description: str,
+    context_bytes: bytes,
+    source_session_id: str | None,
+    uploads: list[BugReportUpload],
+) -> str:
     digest = hashlib.sha256()
-    for value in (description.encode("utf-8"), context_bytes):
+    for value in (
+        description.encode("utf-8"),
+        context_bytes,
+        (source_session_id or "").encode("utf-8"),
+    ):
         digest.update(len(value).to_bytes(8, "big"))
         digest.update(value)
     for upload in uploads:
@@ -227,7 +236,7 @@ def create_bug_report(
     context_bytes = _validate_context(context_json)
     _validate_uploads(uploads)
     description_data = clean_description.encode("utf-8")
-    payload_sha256 = _payload_sha256(clean_description, context_bytes, uploads)
+    payload_sha256 = _payload_sha256(clean_description, context_bytes, source_session_id, uploads)
     if len(description_data) + len(context_bytes) + sum(len(upload.data) for upload in uploads) > MAX_REPORT_TOTAL_BYTES:
         raise _report_error("report_too_large", "The bug report is too large.", status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
     if client_report_id:
