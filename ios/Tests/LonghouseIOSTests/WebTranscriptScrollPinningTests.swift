@@ -156,6 +156,27 @@ final class WebTranscriptScrollPinningTests: XCTestCase {
         XCTAssertEqual(rows, 8, accuracy: 0, "Every payload row must reach the DOM")
     }
 
+    /// A compact grouped tail can be slightly taller than the viewport while
+    /// still leaving older history inaccessible. The native geometry callback
+    /// must request another page before the user has to discover that dead end.
+    func testNearlyScrollableTailRequestsOlderHistory() async throws {
+        let coordinator = attachNativeViewportHook()
+        var fillRequests = 0
+        coordinator.setNeedsMoreHistoryHandlerForTesting { fillRequests += 1 }
+
+        try await render(rowCount: 1, stick: true)
+        let initialRequests = fillRequests
+
+        _ = try await evaluate("document.getElementById('root').style.height = '450px'; 1")
+        try await waitUntil("native content becomes slightly taller than the viewport") {
+            self.nativeMaxScrollOffset() > 20
+        }
+        coordinator.contentSizeDidChange(on: webView)
+        try await waitUntil("compact tail requests older history") {
+            fillRequests > initialRequests
+        }
+    }
+
     /// The production trigger, not a synthetic one.
     ///
     /// `testViewportResizeRepinsFrozenNativeContentOffset` hand-dispatches a

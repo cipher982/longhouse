@@ -1025,6 +1025,14 @@ struct WebTranscriptView: UIViewRepresentable {
         private var viewportReconcileGeneration = 0
         private var contentSizeObservation: NSKeyValueObservation?
         private var dragStartOffsetY: CGFloat?
+        private static let historyFillSlack: CGFloat = 240
+
+#if DEBUG
+        func setNeedsMoreHistoryHandlerForTesting(_ handler: (() -> Void)?) {
+            onNeedsMoreHistory = handler
+        }
+#endif
+
         /// Identity and input waiting behind the one active encoder. Keeping
         /// only the newest request bounds CPU/memory during a realtime burst.
         private struct PreparationRequest {
@@ -1321,10 +1329,11 @@ struct WebTranscriptView: UIViewRepresentable {
                 let target = self.shouldStickToBottom && !self.userScrollInProgress
                     ? maxOffset
                     : min(max(scrollView.contentOffset.y, minOffset), maxOffset)
-                // The measurement the fill decision actually needs: a document
-                // that does not reach the bottom of its viewport wants older
-                // history, whatever its row count.
-                if scrollView.contentSize.height > 0, scrollView.contentSize.height <= scrollView.bounds.height {
+                // A compact tail can be slightly taller than the viewport
+                // while still hiding every older page behind the initial
+                // window, so leave enough spare height for a near-top gesture.
+                if scrollView.contentSize.height > 0,
+                   scrollView.contentSize.height <= scrollView.bounds.height + Self.historyFillSlack {
                     self.onNeedsMoreHistory?()
                 }
                 guard abs(scrollView.contentOffset.y - target) > 0.5 else { return }
@@ -1384,7 +1393,7 @@ struct WebTranscriptView: UIViewRepresentable {
             guard inFlightPayload == nil else { return }
             guard userScrollInProgress || !shouldStickToBottom else { return }
             guard Date() >= suppressNearTopUntil else { return }
-            guard scrollView.contentSize.height > scrollView.bounds.height + 240 else { return }
+            guard scrollView.contentSize.height > scrollView.bounds.height + Self.historyFillSlack else { return }
             guard scrollView.contentOffset.y < 180 else { return }
             let now = Date()
             guard now.timeIntervalSince(lastNearTopRequestAt) > 0.75 else { return }
