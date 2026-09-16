@@ -164,7 +164,6 @@ def test_console_replay_precedes_active_owner_guard(tmp_path):
     assert replay["turn"]["turn_id"] == first["turn"]["turn_id"]
 
 
-
 def test_console_report_is_single_flight_across_request_ids(tmp_path):
     engine = create_catalog_engine(tmp_path / "catalog-report-single-flight.db")
     initialize_catalog_schema(engine)
@@ -213,6 +212,7 @@ def test_console_report_is_single_flight_across_request_ids(tmp_path):
     assert replay["created"] is False
     assert replay["report_conflict"] is True
     assert replay["turn"]["turn_id"] == first["turn"]["turn_id"]
+
 
 def test_pi_console_continuation_forwards_exact_native_source_file(tmp_path):
     engine = create_catalog_engine(tmp_path / "catalog-pi-continuation.db")
