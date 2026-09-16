@@ -1,6 +1,6 @@
 import type { AgentSession } from "../../services/api/agents";
 
-export type SessionHeaderStateTone = "live" | "attention" | "cool";
+export type SessionHeaderStateTone = "live" | "attention" | "unknown" | "cool";
 
 export interface SessionHeaderStateInfo {
   tone: SessionHeaderStateTone;
@@ -41,11 +41,11 @@ export function formatElapsedClock(totalSeconds: number): string {
 }
 
 /**
- * The header's right-side state: a dot plus one sentence, replacing the
- * bare runtime tone chip. Three shapes only — live (breathing ember),
- * attention (a provider question is pending), and cool (idle or ended) —
- * because that is all the header has room to say at a glance; the full
- * evidence disclosure still lives in the runtime strip below.
+ * The header's right-side state: a dot plus one sentence. Four shapes only —
+ * live (breathing ember), attention (a provider question is pending),
+ * unknown (the provider may still be active but evidence is stale), and cool
+ * (idle or ended) — because that is all the header has room to say at a
+ * glance; the full evidence disclosure still lives in the runtime strip below.
  *
  * `turnStartMs` is the one shared turn-elapsed anchor (see
  * `getRunningTurnStartMs` in `components/instruments/toolActivity.ts`) —
@@ -107,6 +107,10 @@ export function getSessionHeaderState(
           ? `${using} for ${formatDurationWords(elapsedSeconds)}`
           : using,
     };
+  }
+
+  if (facts.activity.state === "unknown") {
+    return { tone: "unknown", text: "Activity uncertain" };
   }
 
   const lastMs = Date.parse(

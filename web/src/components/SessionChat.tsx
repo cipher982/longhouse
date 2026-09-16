@@ -938,6 +938,16 @@ export function SessionChat({
                 <span className="session-ember-dot session-ember-dot--attention" aria-hidden="true" />
                 <span className="session-chat-composer__head-label">{composerState.text}</span>
               </>
+            ) : composerState.tone === "unknown" ? (
+              <>
+                <span className="session-unknown-dot" aria-hidden="true" />
+                <span className="session-chat-composer__head-label">Activity uncertain</span>
+                {composerIdleClock ? (
+                  <span className="session-chat-composer__head-detail">
+                    last observed at {composerIdleClock}
+                  </span>
+                ) : null}
+              </>
             ) : (
               <>
                 <span className="session-cool-dot" aria-hidden="true" />

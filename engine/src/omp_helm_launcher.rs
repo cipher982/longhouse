@@ -299,6 +299,7 @@ impl OmpHelmServer {
         let state = self.shared.lock().expect("OMP state mutex poisoned");
         !state.state.pending_transition
             && state.state.status != "stopped"
+            && state.state.terminal_state.is_none()
             && state.state.terminal_reason.as_deref()
                 != Some("native_session_transition_not_committed")
     }
@@ -506,6 +507,9 @@ impl OmpHelmServer {
 
     fn mark_degraded(&self, error: &anyhow::Error) {
         let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+        if state.state.status == "stopped" || state.state.terminal_state.is_some() {
+            return;
+        }
         state.state.ready = false;
         state.state.status = "degraded".into();
         state.state.terminal_reason = Some(error.to_string());
@@ -603,6 +607,9 @@ impl OmpHelmServer {
                 {
                     return;
                 }
+                if state.state.status == "stopped" || state.state.terminal_state.is_some() {
+                    return;
+                }
                 fail_pending_locked(&mut state, "OMP native session transition cancelled");
                 state.state.pending_transition = false;
                 state.state.ready = true;
@@ -617,6 +624,11 @@ impl OmpHelmServer {
                     connection_id,
                     json!({"kind": "extension_generation", "connection_id": connection, "lease_generation": generation}),
                 );
+            }
+            "extension_keepalive" => {
+                if let Some(provider_idle) = frame.get("provider_idle").and_then(Value::as_bool) {
+                    self.record_keepalive(provider_idle);
+                }
             }
             "command_result" => {
                 if let Some(request_id) = frame.get("request_id").and_then(Value::as_str) {
@@ -742,6 +754,9 @@ impl OmpHelmServer {
             .then(|| omp_live_text_delta(event).map(str::to_string))
             .flatten();
         let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+        if state.state.status == "stopped" || state.state.terminal_state.is_some() {
+            return;
+        }
         if kind == "agent_start" {
             state.live_turn_seq = state.live_turn_seq.saturating_add(1);
             state.live_message_seq = 0;
@@ -834,6 +849,28 @@ impl OmpHelmServer {
                 &current.session_id,
                 Path::new(&current.cwd),
                 None,
+            );
+        }
+    }
+
+    /// Keep the served phase fresh during provider silence, while preserving
+    /// OMP's own idle decision. The extension channel is not itself activity:
+    /// it carries the provider's `isIdle()` result so a quiet active turn
+    /// becomes running, and a turn that ended without a final lifecycle frame
+    /// becomes idle.
+    fn record_keepalive(&self, provider_idle: bool) {
+        if provider_idle {
+            let current = self.current_state();
+            if matches!(current.phase.as_str(), "running" | "thinking") {
+                self.record_activity(
+                    "agent_end",
+                    &json!({"event": {"type": "agent_end", "isTerminal": true}}),
+                );
+            }
+        } else {
+            self.record_activity(
+                "activity",
+                &json!({"event": {"type": "extension_keepalive"}}),
             );
         }
     }
@@ -1072,6 +1109,7 @@ fn is_activity_frame_kind(kind: &str) -> bool {
     matches!(
         kind,
         "activity"
+            | "extension_keepalive"
             | "agent_start"
             | "tool_execution_start"
             | "tool_execution_update"
@@ -2155,6 +2193,51 @@ mod tests {
             assert_eq!(current.phase, "running");
             assert!(current.ready);
             assert_eq!(current.status, "ready");
+            server.shutdown();
+        });
+    }
+
+    #[test]
+    fn extension_keepalive_refreshes_silent_activity_without_reviving_stopped_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let socket_dir = temp.path().join("socket");
+        let socket_path = socket_dir.join("channel.sock");
+        let state_path = temp.path().join("state.json");
+
+        temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
+            let server = OmpHelmServer::start(state(), socket_path, socket_dir, state_path).unwrap();
+            let (sender, _receiver) = mpsc::channel();
+            {
+                let mut shared = server.shared.lock().unwrap();
+                shared.extension_sender = Some(sender);
+                shared.extension_connection_id = Some("connection".into());
+            }
+            let keepalive = |provider_idle| {
+                json!({
+                    "kind": "extension_keepalive",
+                    "provider_idle": provider_idle,
+                    "auth_token": "token",
+                    "session_id": "session",
+                    "native_session_id": "native",
+                    "session_file": "/tmp/session.jsonl",
+                    "connection_id": "connection",
+                    "lease_generation": "generation"
+                })
+            };
+
+            server.handle_extension_frame("connection", keepalive(false));
+            assert_eq!(server.current_state().phase, "running");
+
+            server.handle_extension_frame("connection", keepalive(true));
+            assert_eq!(server.current_state().phase, "idle");
+
+            server.mark_stopped(None, "provider_exit").unwrap();
+            server.handle_extension_frame("connection", keepalive(false));
+            let stopped = server.current_state();
+            assert_eq!(stopped.status, "stopped");
+            assert_eq!(stopped.phase, "idle");
+            assert!(stopped.terminal_state.is_some());
             server.shutdown();
         });
     }

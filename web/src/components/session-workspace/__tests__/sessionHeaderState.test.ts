@@ -69,6 +69,19 @@ describe("getSessionHeaderState", () => {
     expect(state.text).toBe("Using hub for 35 minutes");
   });
 
+  it("does not turn expired activity evidence into a positive idle claim", () => {
+    const now = Date.parse("2026-04-15T16:30:00Z");
+    const state = getSessionHeaderState(
+      session({
+        activityState: "unknown",
+        observedAt: "2026-04-15T16:29:00Z",
+        lastResultAt: "2026-04-15T15:55:00Z",
+      }),
+      now,
+    );
+    expect(state).toEqual({ tone: "unknown", text: "Activity uncertain" });
+  });
+
   it("reads a closed session as cool/ended", () => {
     const state = getSessionHeaderState(
       session({ disposition: "closed", lastResultAt: "2026-04-15T16:12:00Z" }),

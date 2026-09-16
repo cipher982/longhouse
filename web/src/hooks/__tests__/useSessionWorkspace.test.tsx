@@ -580,6 +580,56 @@ describe("useSessionWorkspace", () => {
     });
   });
 
+  it("does not lose a runtime-only wake while a workspace refresh is active", async () => {
+    let handlers:
+      | {
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            change_kind?: string | null;
+            latest_event_id: number;
+            thread_session_count: number;
+          }) => void;
+        }
+      | undefined;
+    let finishRefresh: (() => void) | undefined;
+    const pendingRefresh = new Promise<void>((resolve) => {
+      finishRefresh = resolve;
+    });
+    queryClientMocks.invalidateQueries.mockReturnValue(pendingRefresh);
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        change_kind: "runtime",
+        latest_event_id: 1,
+        thread_session_count: 1,
+      });
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        change_kind: "runtime",
+        latest_event_id: 2,
+        thread_session_count: 1,
+      });
+    });
+
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(4);
+
+    await act(async () => {
+      finishRefresh?.();
+      await pendingRefresh;
+    });
+
+    await waitFor(() => {
+      expect(queryClientMocks.invalidateQueries).toHaveBeenCalledTimes(8);
+    });
+  });
+
   it("applies SSE transcript previews to the workspace cache before refetch", () => {
     let handlers:
       | {

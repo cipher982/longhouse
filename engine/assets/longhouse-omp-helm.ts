@@ -243,7 +243,13 @@ export default function (pi: any) {
         keepaliveTimer = setInterval(() => {
           if (shuttingDown || socket !== candidate) return;
           try {
-            candidate.write(`${JSON.stringify({ kind: "extension_keepalive", ...session(ctx) })}\n`);
+            candidate.write(
+              `${JSON.stringify({
+                kind: "extension_keepalive",
+                provider_idle: providerIsIdle(ctx),
+                ...session(ctx),
+              })}\n`,
+            );
           } catch {
             // A failed write is the channel telling us it is gone; the read
             // deadline on the launcher side is what turns that into a

@@ -252,7 +252,10 @@ export function useSessionWorkspace(
       ["agent-session-events-infinite", sessionId],
     ] as const;
     let refreshInFlight: Promise<void> | null = null;
-    let queuedIncludeTranscript = false;
+    // Keep a tri-state queued value: null means no wake arrived while the
+    // refresh was active; false preserves a runtime-only wake that must still
+    // trigger a second snapshot; true also refreshes transcript families.
+    let queuedRefresh: boolean | null = null;
     let disposed = false;
     let freshnessTimer: number | null = null;
     const armFreshnessDeadline = () => {
@@ -265,7 +268,8 @@ export function useSessionWorkspace(
     };
     const refreshWorkspaceQueries = (includeTranscript: boolean) => {
       if (refreshInFlight) {
-        queuedIncludeTranscript = queuedIncludeTranscript || includeTranscript;
+        queuedRefresh =
+          queuedRefresh === null ? includeTranscript : queuedRefresh || includeTranscript;
         return;
       }
       const refreshQueryKeys = includeTranscript
@@ -279,12 +283,10 @@ export function useSessionWorkspace(
         .then(() => undefined)
         .finally(() => {
           refreshInFlight = null;
-          if (queuedIncludeTranscript && !disposed) {
-            const nextIncludeTranscript = queuedIncludeTranscript;
-            queuedIncludeTranscript = false;
+          const nextIncludeTranscript = queuedRefresh;
+          queuedRefresh = null;
+          if (nextIncludeTranscript !== null && !disposed) {
             refreshWorkspaceQueries(nextIncludeTranscript);
-          } else {
-            queuedIncludeTranscript = false;
           }
         });
     };

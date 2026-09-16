@@ -353,6 +353,15 @@
   background: var(--color-state-cool);
 }
 
+.session-unknown-dot {
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--color-text-secondary);
+  border-radius: 999px;
+  flex: none;
+  opacity: 0.85;
+}
+
 .session-overflow-menu {
   position: relative;
   flex-shrink: 0;

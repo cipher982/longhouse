@@ -2,9 +2,9 @@ import type { SessionHeaderStateTone } from "./sessionHeaderState";
 
 /**
  * Dot + sentence state readout, shared by the session header and the
- * composer header. Three tones only: live breathes (ember, flame-colored),
- * attention is a static ember (a question is pending), cool is a static
- * ash dot (idle or ended) — the one cold foil in the palette.
+ * composer header. Live breathes (ember), attention is a static red ember,
+ * unknown is a static outlined marker, and cool is a static ash dot (idle or
+ * ended).
  */
 export function SessionStateBadge({
   tone,
@@ -23,7 +23,9 @@ export function SessionStateBadge({
             ? "session-ember-dot"
             : tone === "attention"
               ? "session-ember-dot session-ember-dot--attention"
-              : "session-cool-dot"
+              : tone === "unknown"
+                ? "session-unknown-dot"
+                : "session-cool-dot"
         }
         aria-hidden="true"
       />
