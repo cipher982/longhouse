@@ -94,10 +94,10 @@ extension TranscriptSnapshot {
     }
 
     private static func estimatedBytes(of event: SessionEvent) -> Int {
-        256
-            + (event.contentText?.utf8.count ?? 0)
-            + (event.toolName?.utf8.count ?? 0)
-            + (event.toolOutputText?.utf8.count ?? 0)
-            + event.timestamp.utf8.count
+        let contentBytes = event.contentText?.utf8.count ?? 0
+        let toolNameBytes = event.toolName?.utf8.count ?? 0
+        let toolOutputBytes = event.toolOutputText?.utf8.count ?? 0
+        let timestampBytes = event.timestamp.utf8.count
+        return 256 + contentBytes + toolNameBytes + toolOutputBytes + timestampBytes
     }
 }
