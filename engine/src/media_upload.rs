@@ -17,38 +17,89 @@ const PREVIEW_SKIP_BYTES: usize = 64 * 1024;
 const PREVIEW_MIME_TYPE: &str = "image/jpeg";
 const PREVIEW_JPEG_QUALITY: u8 = 75;
 
+/// A preview plus the source's pixel size, which the timeline needs to reserve
+/// layout before the bytes arrive.
+#[derive(Debug, Clone)]
+pub struct DerivedPreview {
+    pub bytes: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// A decode ceiling. An image bomb is small on disk and gigabytes in memory, so
+/// the bound has to be on pixels and allocation, not on the encoded size.
+const MAX_DECODE_EDGE: u32 = 20_000;
+const MAX_DECODE_ALLOC_BYTES: u64 = 256 * 1024 * 1024;
+
+fn decode_limits() -> image::Limits {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_DECODE_EDGE);
+    limits.max_image_height = Some(MAX_DECODE_EDGE);
+    limits.max_alloc = Some(MAX_DECODE_ALLOC_BYTES);
+    limits
+}
+
+/// Composite onto white before dropping alpha.
+///
+/// Most of what users paste is a screenshot with transparency, and `to_rgb8`
+/// discards alpha by ignoring it, which renders those as black smears.
+fn flatten_onto_white(image: &image::DynamicImage) -> image::RgbImage {
+    let rgba = image.to_rgba8();
+    let mut rgb = image::RgbImage::new(rgba.width(), rgba.height());
+    for (x, y, pixel) in rgba.enumerate_pixels() {
+        let [red, green, blue, alpha] = pixel.0;
+        let alpha = u32::from(alpha);
+        let blend = |channel: u8| ((u32::from(channel) * alpha + 255 * (255 - alpha)) / 255) as u8;
+        rgb.put_pixel(x, y, image::Rgb([blend(red), blend(green), blend(blue)]));
+    }
+    rgb
+}
+
 /// A small JPEG standing in for an oversized image.
 ///
 /// Both clients show a preview in the row and link to the original, so the bytes
 /// fetched by default should be a fraction of a retina screenshot rather than
-/// the screenshot. Decoding is CPU work over a possibly multi-megabyte buffer,
-/// so it runs on the blocking pool, and anything already small enough to serve
-/// directly is left alone.
-async fn derive_preview(bytes: Vec<u8>) -> Option<Vec<u8>> {
-    if bytes.len() <= PREVIEW_SKIP_BYTES {
+/// the screenshot. The decision needs the image's pixel size, which the header
+/// carries: judging by encoded size alone would skip a heavily compressed
+/// 8000-pixel-wide image that very much needs one. Decoding is CPU work over a
+/// possibly multi-megabyte buffer, so it runs on the blocking pool under a
+/// pixel and allocation bound.
+async fn derive_preview(bytes: Vec<u8>) -> Option<DerivedPreview> {
+    tokio::task::spawn_blocking(move || derive_preview_blocking(&bytes))
+        .await
+        .ok()
+        .flatten()
+}
+
+fn derive_preview_blocking(bytes: &[u8]) -> Option<DerivedPreview> {
+    let reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    let (width, height) = reader.into_dimensions().ok()?;
+    if width.max(height) <= PREVIEW_MAX_EDGE && bytes.len() <= PREVIEW_SKIP_BYTES {
         return None;
     }
-    tokio::task::spawn_blocking(move || {
-        let decoded = image::load_from_memory(&bytes).ok()?;
-        if decoded.width().max(decoded.height()) <= PREVIEW_MAX_EDGE {
-            return None;
-        }
-        let preview = decoded.thumbnail(PREVIEW_MAX_EDGE, PREVIEW_MAX_EDGE);
-        let rgb = preview.to_rgb8();
-        let mut out = Vec::new();
-        JpegEncoder::new_with_quality(&mut out, PREVIEW_JPEG_QUALITY)
-            .write_image(
-                rgb.as_raw(),
-                rgb.width(),
-                rgb.height(),
-                image::ExtendedColorType::Rgb8,
-            )
-            .ok()?;
-        Some(out)
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    reader.limits(decode_limits());
+    let decoded = reader.decode().ok()?;
+    let preview = decoded.thumbnail(PREVIEW_MAX_EDGE, PREVIEW_MAX_EDGE);
+    let flat = flatten_onto_white(&preview);
+    let mut out = Vec::new();
+    JpegEncoder::new_with_quality(&mut out, PREVIEW_JPEG_QUALITY)
+        .write_image(
+            flat.as_raw(),
+            flat.width(),
+            flat.height(),
+            image::ExtendedColorType::Rgb8,
+        )
+        .ok()?;
+    Some(DerivedPreview {
+        bytes: out,
+        width,
+        height,
     })
-    .await
-    .ok()
-    .flatten()
 }
 
 use crate::pipeline::parser::ParsedMediaObject;
@@ -204,7 +255,7 @@ async fn upload_preview(
         return None;
     }
     let preview = derive_preview(media.bytes.clone()).await?;
-    let preview_hash = format!("{:x}", Sha256::digest(&preview));
+    let preview_hash = format!("{:x}", Sha256::digest(&preview.bytes));
     let preview_path = capabilities
         .media_upload_path_template
         .replace("{sha256}", &preview_hash);
@@ -213,7 +264,7 @@ async fn upload_preview(
             &preview_path,
             PREVIEW_MIME_TYPE,
             lane_headers.to_vec(),
-            preview,
+            preview.bytes,
             request_timeout,
         )
         .await
@@ -243,9 +294,22 @@ mod tests {
             pixels.push(((state >> 8) & 0xff) as u8);
             pixels.push(((state >> 16) & 0xff) as u8);
         }
+        encode_png(&pixels, width, height)
+    }
+
+    /// A flat image: large in pixels, a few hundred bytes encoded.
+    fn flat_png(width: u32, height: u32, color: [u8; 3]) -> Vec<u8> {
+        let mut pixels = Vec::with_capacity((width * height * 3) as usize);
+        for _ in 0..(width * height) {
+            pixels.extend_from_slice(&color);
+        }
+        encode_png(&pixels, width, height)
+    }
+
+    fn encode_png(pixels: &[u8], width: u32, height: u32) -> Vec<u8> {
         let mut out = Vec::new();
         image::codecs::png::PngEncoder::new(&mut out)
-            .write_image(&pixels, width, height, image::ExtendedColorType::Rgb8)
+            .write_image(pixels, width, height, image::ExtendedColorType::Rgb8)
             .unwrap();
         out
     }
@@ -255,48 +319,70 @@ mod tests {
         let original = noisy_png(1200, 900);
         assert!(
             original.len() > PREVIEW_SKIP_BYTES,
-            "the fixture must be big enough to be worth previewing"
+            "fixture must be worth previewing"
         );
 
         let preview = derive_preview(original.clone()).await.expect("a preview");
         assert!(
-            preview.len() < original.len() / 4,
+            preview.bytes.len() < original.len() / 4,
             "a preview must be a fraction of the original: {} vs {}",
-            preview.len(),
+            preview.bytes.len(),
             original.len()
         );
-        let decoded = image::load_from_memory(&preview).expect("a decodable preview");
-        assert_eq!(decoded.width().max(decoded.height()), PREVIEW_MAX_EDGE);
+        assert_eq!((preview.width, preview.height), (1200, 900));
+        let decoded = image::load_from_memory(&preview.bytes).expect("a decodable preview");
         assert_eq!(decoded.width(), PREVIEW_MAX_EDGE);
         assert_eq!(decoded.height(), 384);
     }
 
-    /// A smooth image: large in pixels, a few hundred bytes encoded, which is
-    /// exactly the case that needs no preview.
-    fn flat_png(width: u32, height: u32) -> Vec<u8> {
-        let pixels = vec![200u8; (width * height * 3) as usize];
-        let mut out = Vec::new();
-        image::codecs::png::PngEncoder::new(&mut out)
-            .write_image(&pixels, width, height, image::ExtendedColorType::Rgb8)
-            .unwrap();
-        out
+    #[tokio::test]
+    async fn previews_a_small_file_that_is_large_in_pixels() {
+        // The case an encoded-size shortcut gets wrong: 3 KB on disk, 2000
+        // pixels wide, and exactly the image a timeline most needs scaled down.
+        let compact = flat_png(2000, 1500, [200, 200, 200]);
+        assert!(
+            compact.len() <= PREVIEW_SKIP_BYTES,
+            "fixture must be small on disk"
+        );
+        let preview = derive_preview(compact).await.expect("a preview");
+        assert_eq!((preview.width, preview.height), (2000, 1500));
+        let decoded = image::load_from_memory(&preview.bytes).expect("a decodable preview");
+        assert_eq!(decoded.width().max(decoded.height()), PREVIEW_MAX_EDGE);
     }
 
     #[tokio::test]
-    async fn leaves_an_image_that_is_already_small_enough_alone() {
-        let small = flat_png(2000, 1500);
+    async fn leaves_an_image_that_is_small_in_every_sense_alone() {
+        let small = flat_png(200, 150, [10, 20, 30]);
         assert!(small.len() <= PREVIEW_SKIP_BYTES, "fixture must be small");
         assert!(derive_preview(small).await.is_none());
     }
 
     #[tokio::test]
-    async fn does_not_preview_an_image_already_within_the_preview_edge() {
-        let compact = noisy_png(400, 400);
-        assert!(
-            compact.len() > PREVIEW_SKIP_BYTES,
-            "fixture must exceed the byte floor to exercise the dimension rule"
-        );
-        assert!(derive_preview(compact).await.is_none());
+    async fn composites_transparency_onto_white_not_black() {
+        // A screenshot with a transparent background must not preview as a
+        // black smear, which is what dropping alpha silently does. Larger than
+        // the preview edge, so the normal rule already produces a preview.
+        let width = 600u32;
+        let height = 600u32;
+        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+        for _ in 0..(width * height) {
+            rgba.extend_from_slice(&[255, 255, 255, 0]);
+        }
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(&rgba, width, height, image::ExtendedColorType::Rgba8)
+            .unwrap();
+
+        let preview = derive_preview(png).await.expect("a preview");
+        let decoded = image::load_from_memory(&preview.bytes).expect("decodable");
+        let rgb = decoded.to_rgb8();
+        for pixel in rgb.pixels() {
+            assert!(
+                pixel.0[0] > 200 && pixel.0[1] > 200 && pixel.0[2] > 200,
+                "transparent pixels must flatten to white, got {:?}",
+                pixel.0
+            );
+        }
     }
 
     #[tokio::test]
