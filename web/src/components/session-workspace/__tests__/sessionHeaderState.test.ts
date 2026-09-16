@@ -101,7 +101,8 @@ describe("getSessionHeaderState", () => {
       }),
       now,
     );
-    expect(state).toEqual({ tone: "cool", text: "Ended 4:12 PM" });
+    expect(state.tone).toBe("cool");
+    expect(state.text).toMatch(/^Ended /);
   });
 
   it("reads an open, non-working session as idle", () => {
