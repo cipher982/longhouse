@@ -33,6 +33,8 @@ providers:
   - engine/src/codex_bridge_ownership.rs
   - engine/src/codex_exec.rs
   - engine/src/codex_ws_relay.rs
+  # QA-only negative-control seam at the codex-bridge dispatch functions.
+  - engine/src/qa_fault.rs
   wire_families: [codex_jsonl, codex_app_server]
   observation_sources: [native_archive, managed_bridge]
   normalization_ruleset: codex
@@ -356,23 +358,35 @@ providers:
       disposition: "implemented"
       owner_action: "codex resume-after-process-restart assertion"
     send_input:
-      level: hermetic
-      source: engine codex_bridge IPC turn/start tests
       disposition: "implemented"
-      owner_action: "codex_bridge live-token send transcript canary"
-      blocker: "budget"
+      required_assertions:
+      - id: codex_helm_send_idle
+        scenario_id: codex_helm_lifecycle
+        oracle_source: server/zerg/qa/codex_helm_lifecycle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
     interrupt:
-      level: hermetic
-      source: engine codex_bridge turn/interrupt tests
       disposition: "implemented"
-      owner_action: "codex_bridge live-token interrupt canary"
-      blocker: "budget"
+      required_assertions:
+      - id: codex_helm_abort_native
+        scenario_id: codex_helm_lifecycle
+        oracle_source: server/zerg/qa/codex_helm_lifecycle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
     steer_active_turn:
-      level: hermetic
-      source: engine codex_bridge turn/steer active-turn tests
       disposition: "implemented"
-      owner_action: "codex_bridge live-token steer transcript canary"
-      blocker: "budget"
+      required_assertions:
+      - id: codex_helm_steer_active
+        scenario_id: codex_helm_lifecycle
+        oracle_source: server/zerg/qa/codex_helm_lifecycle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
     answer_pause:
       level: hermetic
       source: engine codex_bridge pause-answer command tests
@@ -380,10 +394,15 @@ providers:
       owner_action: "codex_bridge live-token pause-answer transcript canary"
       blocker: "budget"
     terminate:
-      level: hermetic
-      source: engine bridge stop and process cleanup tests
       disposition: "implemented"
-      owner_action: "codex bridge stop and process cleanup live canary"
+      required_assertions:
+      - id: codex_helm_terminate_owned
+        scenario_id: codex_helm_lifecycle
+        oracle_source: server/zerg/qa/codex_helm_lifecycle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
     tail_output:
       level: live_no_token
       source: Codex bridge rollout/transcript binding canaries

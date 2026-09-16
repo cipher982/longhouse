@@ -88,6 +88,7 @@ mod turn_claims;
 mod unmanaged_bindings;
 mod update;
 mod warp_cli_agent;
+mod qa_fault;
 mod watcher;
 
 use std::path::PathBuf;

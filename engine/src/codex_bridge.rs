@@ -2540,6 +2540,20 @@ pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSen
         .thread_id
         .clone()
         .context("bridge state is missing thread_id")?;
+    if crate::qa_fault::codex_fault() == Some(crate::qa_fault::CodexFault::SendNoop) {
+        let turn_id = format!("qa-fault-send-noop-{}", uuid::Uuid::new_v4());
+        crate::qa_fault::record_fired(
+            crate::qa_fault::CodexFault::SendNoop,
+            &config.session_id,
+            json!({"thread_id": thread_id, "fabricated_turn_id": turn_id}),
+        );
+        return Ok(BridgeSendSummary {
+            session_id: config.session_id,
+            thread_id,
+            turn_id,
+            turn_status: "inProgress".to_string(),
+        });
+    }
 
     // Managed sends normally route through the daemon IPC socket so they use
     // the persistent app-server connection and preserve conversation context.
@@ -2982,6 +2996,10 @@ pub async fn cmd_codex_bridge_steer(
         .clone()
         .ok_or(BridgeSteerError::NoActiveTurn)?;
 
+    if crate::qa_fault::codex_fault() == Some(crate::qa_fault::CodexFault::SteerAsFollowUp) {
+        return qa_fault_steer_as_follow_up(config, &turn_id).await;
+    }
+
     // Preferred path: route through the daemon's persistent app-server
     // connection via the IPC socket. Avoids per-call WS connect +
     // initialize_client on the hot path; keeps the app-server's per-thread
@@ -3085,6 +3103,44 @@ pub async fn cmd_codex_bridge_steer(
     }
 }
 
+/// Negative control: hold the steer until the active turn ends, then deliver
+/// its text as a brand-new turn. The steer oracle must reject this shape.
+async fn qa_fault_steer_as_follow_up(
+    config: BridgeSteerConfig,
+    steered_turn_id: &str,
+) -> std::result::Result<(), BridgeSteerError> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
+    loop {
+        let state = load_ready_state(&config.session_id, config.state_root.as_deref())
+            .map_err(BridgeSteerError::Protocol)?;
+        if state.active_turn_id.as_deref() != Some(steered_turn_id) {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            return Err(BridgeSteerError::Protocol(anyhow!(
+                "qa fault: steered turn never completed"
+            )));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    let session_id = config.session_id.clone();
+    let summary = cmd_codex_bridge_send(BridgeSendConfig {
+        session_id: config.session_id,
+        text: config.text,
+        state_root: config.state_root,
+        allow_direct_ws_fallback: false,
+        attachments: config.attachments,
+    })
+    .await
+    .map_err(BridgeSteerError::Protocol)?;
+    crate::qa_fault::record_fired(
+        crate::qa_fault::CodexFault::SteerAsFollowUp,
+        &session_id,
+        json!({"steered_turn_id": steered_turn_id, "follow_up_turn_id": summary.turn_id}),
+    );
+    Ok(())
+}
+
 /// Decide whether a raw `turn/steer` error message from the Codex app-server
 /// represents a turn-state race (the caller expected an active turn that had
 /// already ended, been interrupted, or completed). Surfaced as a separate
@@ -3123,6 +3179,14 @@ pub async fn cmd_codex_bridge_interrupt(config: BridgeInterruptConfig) -> Result
         .active_turn_id
         .clone()
         .context("bridge state does not have an active turn to interrupt")?;
+    if crate::qa_fault::codex_fault() == Some(crate::qa_fault::CodexFault::InterruptNoop) {
+        crate::qa_fault::record_fired(
+            crate::qa_fault::CodexFault::InterruptNoop,
+            &config.session_id,
+            json!({"thread_id": thread_id, "turn_id": turn_id}),
+        );
+        return Ok(());
+    }
     let ws_url = state
         .ws_url
         .clone()

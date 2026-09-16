@@ -70,9 +70,9 @@ export const GENERATED_PROVIDER_CAPABILITIES: Record<GeneratedProviderId, Genera
     steerMidTurn: true,
     resume: true,
     proven: {
-      launchAndSend: false,
-      interrupt: false,
-      steerMidTurn: false,
+      launchAndSend: true,
+      interrupt: true,
+      steerMidTurn: true,
       resume: true,
       search: false,
     },

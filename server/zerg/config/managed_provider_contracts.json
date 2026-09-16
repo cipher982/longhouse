@@ -28,7 +28,8 @@
         "engine/src/codex_bridge.rs",
         "engine/src/codex_bridge_ownership.rs",
         "engine/src/codex_exec.rs",
-        "engine/src/codex_ws_relay.rs"
+        "engine/src/codex_ws_relay.rs",
+        "engine/src/qa_fault.rs"
       ],
       "wire_families": [
         "codex_jsonl",
@@ -535,25 +536,58 @@
           "owner_action": "codex resume-after-process-restart assertion"
         },
         "send_input": {
-          "level": "hermetic",
-          "source": "engine codex_bridge IPC turn/start tests",
           "disposition": "implemented",
-          "owner_action": "codex_bridge live-token send transcript canary",
-          "blocker": "budget"
+          "required_assertions": [
+            {
+              "id": "codex_helm_send_idle",
+              "scenario_id": "codex_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/codex_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "9a231309bbac49f80650c747d4a6a157df1ca1d5e4b1c03150d3ecc6c6666a28"
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: codex_helm_send_idle"
         },
         "interrupt": {
-          "level": "hermetic",
-          "source": "engine codex_bridge turn/interrupt tests",
           "disposition": "implemented",
-          "owner_action": "codex_bridge live-token interrupt canary",
-          "blocker": "budget"
+          "required_assertions": [
+            {
+              "id": "codex_helm_abort_native",
+              "scenario_id": "codex_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/codex_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "9a231309bbac49f80650c747d4a6a157df1ca1d5e4b1c03150d3ecc6c6666a28"
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: codex_helm_abort_native"
         },
         "steer_active_turn": {
-          "level": "hermetic",
-          "source": "engine codex_bridge turn/steer active-turn tests",
           "disposition": "implemented",
-          "owner_action": "codex_bridge live-token steer transcript canary",
-          "blocker": "budget"
+          "required_assertions": [
+            {
+              "id": "codex_helm_steer_active",
+              "scenario_id": "codex_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/codex_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "9a231309bbac49f80650c747d4a6a157df1ca1d5e4b1c03150d3ecc6c6666a28"
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: codex_helm_steer_active"
         },
         "answer_pause": {
           "level": "hermetic",
@@ -563,10 +597,22 @@
           "blocker": "budget"
         },
         "terminate": {
-          "level": "hermetic",
-          "source": "engine bridge stop and process cleanup tests",
           "disposition": "implemented",
-          "owner_action": "codex bridge stop and process cleanup live canary"
+          "required_assertions": [
+            {
+              "id": "codex_helm_terminate_owned",
+              "scenario_id": "codex_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/codex_helm_lifecycle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "9a231309bbac49f80650c747d4a6a157df1ca1d5e4b1c03150d3ecc6c6666a28"
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: codex_helm_terminate_owned"
         },
         "tail_output": {
           "level": "live_no_token",
@@ -666,7 +712,7 @@
           "owner_action": "render reasoning as collapsed thinking records"
         }
       },
-      "adapter_digest": "6b4554e154a80db998f4cdb07d6fa3f3a0005c28720e0582c39b2258741a584a"
+      "adapter_digest": "34538f81062462edefdd57966de46a19182de979706626a75aaba2aa0a5e1589"
     },
     {
       "provider": "claude",

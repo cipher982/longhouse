@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 276,
+  "file_count": 278,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1258,7 +1258,22 @@
       "providers": [
         "antigravity",
         "claude",
-        "codex",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_provider_chip_proof_edges.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_provider_chip_proof_edges.py",
+      "providers": [
+        "antigravity",
+        "claude",
         "opencode"
       ]
     },
