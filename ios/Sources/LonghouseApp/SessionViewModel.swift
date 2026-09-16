@@ -1722,10 +1722,11 @@ final class SessionViewModel: ObservableObject {
     }
 
 
-    /// WebKit measured the rendered transcript shorter than its viewport: a
-    /// 50-event window grouped down to a few rows. Pull one older page; the
-    /// next render measures again, so this repeats until the viewport fills,
-    /// history runs out, or a page adds nothing.
+    /// WebKit measured the rendered transcript with too little scroll range for
+    /// the near-top callback: a 50-event window may group down to a few rows.
+    /// Pull one older page; the next render measures again, so this repeats
+    /// until the gesture can reach near-top, history runs out, or a page adds
+    /// nothing.
     func fillHistoryForShortViewport(sessionId: String, appState: AppState) async {
         guard let api = apiFactory(appState.serverURL) else { return }
         await fillHistoryForShortViewport(api: api, sessionId: sessionId)

@@ -63,8 +63,8 @@ struct WebTranscriptView: UIViewRepresentable {
     let sourceRevision: Int?
     let sourceOperation: String?
     let onNearTop: (() -> Void)?
-    /// A render left the document shorter than the viewport; the owner can
-    /// load older history so the transcript reaches the composer.
+    /// A render left too little scroll range for the near-top callback; the
+    /// owner can load older history so the transcript reaches the composer.
     let onNeedsMoreHistory: (() -> Void)?
     let onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
     let onLifecycle: ((String) -> Void)?
