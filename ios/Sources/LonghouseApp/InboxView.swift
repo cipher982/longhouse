@@ -62,25 +62,21 @@ struct TimelineView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var viewModel = TimelineViewModel()
-    @State private var path: [SessionRoute] = []
     @State private var launchSheetPresented = false
     @State private var settingsPresented = false
+    @State private var isShowingBugReport = false
+    @State private var bugReportScreenshot: Data?
+    @State private var bugReportContextJSON = Data("{}".utf8)
     @State private var searchText = ""
-    #if DEBUG
-    @State private var forcedConnectionBanner: TimelineConnectivityBanner?
-    #endif
 
     private var effectiveConnectionBanner: TimelineConnectivityBanner {
-        #if DEBUG
-        forcedConnectionBanner ?? viewModel.connectionBanner
-        #else
         viewModel.connectionBanner
-        #endif
     }
 
     private var normalizedSearch: String {
         searchText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
 
     @ViewBuilder
     private var content: some View {
@@ -169,6 +165,21 @@ struct TimelineView: View {
                 )
             }
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        presentBugReport()
+                    } label: {
+                        Image(systemName: "exclamationmark.bubble")
+                            .accessibilityLabel("Report a problem")
+                    }
+                    .accessibilityIdentifier("timeline-report-problem")
+                    .transaction { transaction in
+                        transaction.animation = nil
+                    }
+                    .opacity(path.isEmpty ? 1 : 0)
+                    .disabled(!path.isEmpty)
+                    .accessibilityHidden(!path.isEmpty)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         launchSheetPresented = true
@@ -201,33 +212,6 @@ struct TimelineView: View {
                     .disabled(!path.isEmpty)
                     .accessibilityHidden(!path.isEmpty)
                 }
-                #if DEBUG
-                ToolbarItem(placement: .topBarLeading) {
-                    Menu {
-                        Button("Auto (\(label(for: viewModel.connectionBanner)))") {
-                            forcedConnectionBanner = nil
-                        }
-                        Divider()
-                        ForEach([
-                            TimelineConnectivityBanner.none,
-                            .degraded,
-                            .offline,
-                            .authRequired,
-                        ], id: \.self) { banner in
-                            Button("Force: \(label(for: banner))") { forcedConnectionBanner = banner }
-                        }
-                    } label: {
-                        Image(systemName: "ladybug")
-                            .accessibilityLabel("Debug: force connection state")
-                    }
-                    .transaction { transaction in
-                        transaction.animation = nil
-                    }
-                    .opacity(path.isEmpty ? 1 : 0)
-                    .disabled(!path.isEmpty)
-                    .accessibilityHidden(!path.isEmpty)
-                }
-                #endif
             }
             .sheet(isPresented: $settingsPresented) {
                 SettingsView()
@@ -237,6 +221,16 @@ struct TimelineView: View {
                     launchSheetPresented = false
                     path.append(SessionRoute(sessionId: sessionId, fallbackTitle: "New session"))
                 }
+            }
+            .sheet(isPresented: $isShowingBugReport) {
+                BugReportSheet(
+                    sourceSessionID: nil,
+                    contextJSON: bugReportContextJSON,
+                    screenshotData: bugReportScreenshot,
+                    onSent: { sessionID in
+                        path.append(SessionRoute(sessionId: sessionID, fallbackTitle: "Bug report"))
+                    }
+                )
             }
             .refreshable {
                 if normalizedSearch.isEmpty {
@@ -303,6 +297,15 @@ struct TimelineView: View {
             }
         }
     }
+    private func presentBugReport() {
+        bugReportContextJSON = BugReportContext.timeline(serverURL: appState.serverURL)
+        Task { @MainActor in
+            await Task.yield()
+            bugReportScreenshot = BugReportScreenCapture.captureJPEG()
+            isShowingBugReport = true
+        }
+    }
+
 
     private func timelineBody(sessions: [SessionSummary]) -> some View {
         TimelineSessionList(sessions: sessions, connectivityBanner: effectiveConnectionBanner)
@@ -732,16 +735,6 @@ struct ConnectionStatusStrip: View {
     }
 }
 
-#if DEBUG
-private func label(for banner: TimelineConnectivityBanner) -> String {
-    switch banner {
-    case .none: return "Hidden"
-    case .degraded: return "Degraded"
-    case .offline: return "Offline"
-    case .authRequired: return "Sign in required"
-    }
-}
-#endif
 
 private struct LivenessDot: View {
     let color: Color

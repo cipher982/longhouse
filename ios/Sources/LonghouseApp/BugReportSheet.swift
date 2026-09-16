@@ -7,7 +7,7 @@ struct BugReportSheet: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
-    let sourceSessionID: String
+    let sourceSessionID: String?
     let initialContextJSON: Data
     let initialScreenshot: Data?
     let onSent: ((String) -> Void)?
@@ -37,7 +37,7 @@ struct BugReportSheet: View {
     @State private var statusMessage: String?
 
     init(
-        sourceSessionID: String,
+        sourceSessionID: String?,
         contextJSON: Data,
         screenshotData: Data?,
         onSent: ((String) -> Void)? = nil
@@ -68,7 +68,7 @@ struct BugReportSheet: View {
                             }
                         }
                 } header: {
-                    Text("Describe the bug")
+                    Text("Describe the problem")
                 }
 
                 Section {
@@ -105,7 +105,7 @@ struct BugReportSheet: View {
                 } header: {
                     Text("Evidence")
                 } footer: {
-                    Text("The report includes recent iOS diagnostics and the visible session state. Review the image before sending.")
+                    Text("Recent iOS diagnostics and the visible Longhouse state are included. Review the screenshot and remove it if it contains anything sensitive.")
                 }
 
                 if let errorMessage {
@@ -121,7 +121,7 @@ struct BugReportSheet: View {
                     }
                 }
             }
-            .navigationTitle("Report a bug")
+            .navigationTitle("Report a problem")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -132,12 +132,12 @@ struct BugReportSheet: View {
                     if isUploading || isSending {
                         ProgressView()
                     } else if reportID == nil {
-                        Button("Send report") { Task { await uploadAndChooseTarget() } }
+                        Button("Send report") { Task { await uploadReport() } }
                             .disabled(!canUpload)
                     } else if didSend {
                         Button("Done") { dismiss() }
                     } else if targetSessionID == nil {
-                        Button("Choose agent") { showingLaunchPicker = true }
+                        Button("Start a fix") { showingLaunchPicker = true }
                     } else if failureAction == .reportInProgress {
                         Button("Done") { dismiss() }
                     } else if failureAction == .chooseAgent {
@@ -190,11 +190,12 @@ struct BugReportSheet: View {
         }
     }
 
-    private func uploadAndChooseTarget() async {
+    private func uploadReport() async {
         guard canUpload, let api = LonghouseAPI(host: appState.serverURL) else { return }
         isUploading = true
         errorMessage = nil
         statusMessage = nil
+        failureAction = nil
         saveDraft()
         defer { isUploading = false }
         do {
@@ -206,8 +207,10 @@ struct BugReportSheet: View {
                 files: try reportFiles()
             )
             reportID = response.reportId
-            statusMessage = "Report saved. Choose the machine and workspace to repair it."
-            showingLaunchPicker = true
+            draftSaveTask?.cancel()
+            draftSaveTask = nil
+            BugReportLocalStore.clearDraft()
+            statusMessage = "Report saved. Start a fix when you’re ready."
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? "Could not save the bug report."
         }
@@ -433,6 +436,15 @@ struct BugReportSheet: View {
 #Preview("Bug report handoff") {
     BugReportSheet(
         sourceSessionID: "session-preview",
+        contextJSON: Data("{}".utf8),
+        screenshotData: nil
+    )
+    .environmentObject(AppState())
+}
+
+#Preview("Bug report from Timeline") {
+    BugReportSheet(
+        sourceSessionID: nil,
         contextJSON: Data("{}".utf8),
         screenshotData: nil
     )

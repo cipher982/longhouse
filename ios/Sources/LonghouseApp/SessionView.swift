@@ -247,8 +247,9 @@ struct SessionView: View {
                         isShowingBugReport = true
                     }
                 } label: {
-                    Label("Report a bug", systemImage: "ladybug")
+                    Label("Report a problem", systemImage: "exclamationmark.bubble")
                 }
+                .accessibilityIdentifier("session-report-problem")
                 Divider()
                 Button {
                     Task { await liveActivityManager.toggle(detail: detail, appState: appState) }
