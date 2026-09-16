@@ -135,6 +135,14 @@ Two matching traps when asserting on terminal text: strip ANSI before matching
 and emits cursor moves mid-phrase, so "all tests passed" arrives as
 "all testspassed" and a flag can split across rows).
 
+**See the demo without a human screenshot:** `make hero-frames` freezes the
+clock (`/landing?demoT=<sec>&demoCycle=<n>`), steps one loop, and writes
+per-second PNGs, a labelled contact sheet per viewport, and `frames.json`
+(visible beats, opacity, text, element boxes — for non-vision agents) under
+`artifacts/hero-frames/<stamp>/`. `CYCLE=1` shows what visitors see from the
+second loop on: simulated stories (`web/src/lib/demoSimulation`), not the
+recording. Read the sheet before and after every change.
+
 Verify loop (never skip; this is the vision-check rule):
 1. `cd web && bun run build`, then `bunx vite preview --port 4188` and
    Playwright-screenshot `http://localhost:4188/landing` at 1440x900 AND
