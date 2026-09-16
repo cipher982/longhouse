@@ -16,6 +16,7 @@ path = "src/longhouse.rs"
 [features]
 # Negative-control builds only. Never enabled in release artifacts: it lets a
 # qualification producer prove its oracle fails when an operation is broken.
+# Codex dispatch seam: src/qa_fault.rs.
 qa-fault-injection = []
 
 [dependencies]
@@ -96,10 +97,6 @@ num_cpus = "1"
 
 # Process-lifetime file locking (bridge state file liveness)
 fd-lock = "4"
-
-[features]
-# QA-only negative-control seam; see src/qa_fault.rs. Never enabled in release builds.
-qa-fault-injection = []
 
 [dev-dependencies]
 tempfile = "3"
