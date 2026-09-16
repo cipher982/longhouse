@@ -368,6 +368,11 @@ def cmd_up(args: argparse.Namespace) -> None:
             ["uv", "run", "python", "-m", "zerg.cli.main", "serve", "--host", "127.0.0.1", "--port", str(port)],
             {
                 **os.environ,
+                # The scratch runtime needs the real catalog owner and the
+                # storage-v2 lanes; without them catalogd is never supervised,
+                # every catalog-backed route answers 503, and media has nowhere
+                # to land. This is the same branch browser E2E runs use.
+                "ENVIRONMENT": "test:e2e",
                 "AUTH_DISABLED": "1",
                 "LLM_DISABLED": "1",
                 "LOG_LEVEL": "INFO",
