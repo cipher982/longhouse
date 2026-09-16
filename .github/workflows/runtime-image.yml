@@ -93,6 +93,9 @@ jobs:
         with:
           ref: ${{ needs.gate.outputs.head_sha }}
           fetch-depth: 1
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+
 
       - name: Stage build identity for runtime image
         run: python3 scripts/build/generate_build_identity.py
