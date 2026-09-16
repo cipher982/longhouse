@@ -355,7 +355,16 @@ def cmd_up(args: argparse.Namespace) -> None:
         wait_for("runtime host health", lambda: http("GET", f"{base_url}/api/health", timeout=2), timeout_s=90)
         record_timing(state, "server_readiness", started)
         started = time.monotonic()
-        token = http("POST", f"{base_url}/api/devices/tokens", {"name": "simlab", "device_id": DEVICE_ID})["token"]
+        # Health passing is not the whole dependency: minting a device token
+        # goes through the catalog, which can still be coming up. Waiting on the
+        # call that actually needs it removes the race instead of racing it.
+        token = wait_for(
+            "runtime host device token",
+            lambda: http(
+                "POST", f"{base_url}/api/devices/tokens", {"name": "simlab", "device_id": DEVICE_ID}
+            ).get("token"),
+            timeout_s=90,
+        )
         if not token.startswith("zdt_"):
             die("expected a device token from the scratch runtime")
         state["token"] = token
