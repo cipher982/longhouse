@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 272,
+  "file_count": 274,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -467,7 +467,9 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "omp",
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -539,6 +541,8 @@
     {
       "path": "scripts/ops/managed_profiler/transcript_coverage.py",
       "providers": [
+        "claude",
+        "codex",
         "cursor",
         "omp",
         "pi"
@@ -733,6 +737,15 @@
       "providers": [
         "codex",
         "cursor"
+      ]
+    },
+    {
+      "path": "scripts/tests/transcript-coverage.test.py",
+      "providers": [
+        "claude",
+        "codex",
+        "omp",
+        "pi"
       ]
     },
     {
@@ -2234,7 +2247,9 @@
         "claude",
         "codex",
         "cursor",
-        "opencode"
+        "omp",
+        "opencode",
+        "pi"
       ]
     },
     {
@@ -2242,6 +2257,18 @@
       "providers": [
         "codex",
         "opencode"
+      ]
+    },
+    {
+      "path": "web/src/components/__tests__/ProviderGlyph.test.tsx",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "omp",
+        "opencode",
+        "pi"
       ]
     },
     {
