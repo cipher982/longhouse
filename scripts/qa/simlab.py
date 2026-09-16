@@ -1374,6 +1374,10 @@ def cmd_run(args: argparse.Namespace) -> None:
         except (Exception, KeyboardInterrupt) as exc:
             interrupted = isinstance(exc, KeyboardInterrupt)
             envelope = failure_verdict(state, name, exc)
+        if envelope.get("status") != "pass":
+            # A scenario can fail by returning a failing verdict rather than by
+            # raising, and that path kept none of the client evidence.
+            retain_failure_logs()
         results.append(envelope)
         summary = write_summary(results)
         failed = [check["id"] for check in envelope["checks"] if check["status"] != "pass"]
