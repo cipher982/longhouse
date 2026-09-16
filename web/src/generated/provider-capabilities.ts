@@ -9,12 +9,23 @@
 
 export type GeneratedProviderId = "antigravity" | "claude" | "codex" | "cursor" | "omp" | "opencode" | "pi";
 
+// Landing chips: lit only by live-token factory assertions behind every
+// backing operation. The runtime capability fields never light a chip.
+export type ProvenChips = {
+  readonly search: boolean;
+  readonly launchAndSend: boolean;
+  readonly interrupt: boolean;
+  readonly steerMidTurn: boolean;
+  readonly resume: boolean;
+};
+
 export type GeneratedProviderCapabilities = {
   readonly id: GeneratedProviderId;
   readonly launchAndSend: boolean;
   readonly interrupt: boolean;
   readonly steerMidTurn: boolean;
   readonly resume: boolean;
+  readonly proven: ProvenChips;
   readonly cloudSessionStart: "live" | "none";
   readonly nativeLaunchCommand: string | null;
 };
@@ -26,6 +37,13 @@ export const GENERATED_PROVIDER_CAPABILITIES: Record<GeneratedProviderId, Genera
     interrupt: false,
     steerMidTurn: false,
     resume: false,
+    proven: {
+      launchAndSend: false,
+      interrupt: false,
+      steerMidTurn: false,
+      resume: false,
+      search: false,
+    },
     cloudSessionStart: "none",
     nativeLaunchCommand: "longhouse antigravity",
   },
@@ -35,6 +53,13 @@ export const GENERATED_PROVIDER_CAPABILITIES: Record<GeneratedProviderId, Genera
     interrupt: true,
     steerMidTurn: true,
     resume: true,
+    proven: {
+      launchAndSend: false,
+      interrupt: false,
+      steerMidTurn: false,
+      resume: true,
+      search: false,
+    },
     cloudSessionStart: "live",
     nativeLaunchCommand: "longhouse claude",
   },
@@ -44,6 +69,13 @@ export const GENERATED_PROVIDER_CAPABILITIES: Record<GeneratedProviderId, Genera
     interrupt: true,
     steerMidTurn: true,
     resume: true,
+    proven: {
+      launchAndSend: false,
+      interrupt: false,
+      steerMidTurn: false,
+      resume: true,
+      search: false,
+    },
     cloudSessionStart: "live",
     nativeLaunchCommand: "longhouse codex",
   },
@@ -53,6 +85,13 @@ export const GENERATED_PROVIDER_CAPABILITIES: Record<GeneratedProviderId, Genera
     interrupt: true,
     steerMidTurn: false,
     resume: true,
+    proven: {
+      launchAndSend: false,
+      interrupt: false,
+      steerMidTurn: false,
+      resume: true,
+      search: false,
+    },
     cloudSessionStart: "live",
     nativeLaunchCommand: "longhouse cursor",
   },
@@ -62,6 +101,13 @@ export const GENERATED_PROVIDER_CAPABILITIES: Record<GeneratedProviderId, Genera
     interrupt: true,
     steerMidTurn: true,
     resume: true,
+    proven: {
+      launchAndSend: true,
+      interrupt: true,
+      steerMidTurn: true,
+      resume: true,
+      search: false,
+    },
     cloudSessionStart: "live",
     nativeLaunchCommand: "longhouse omp",
   },
@@ -71,6 +117,13 @@ export const GENERATED_PROVIDER_CAPABILITIES: Record<GeneratedProviderId, Genera
     interrupt: true,
     steerMidTurn: false,
     resume: true,
+    proven: {
+      launchAndSend: false,
+      interrupt: false,
+      steerMidTurn: false,
+      resume: true,
+      search: false,
+    },
     cloudSessionStart: "live",
     nativeLaunchCommand: "longhouse opencode",
   },
@@ -80,6 +133,13 @@ export const GENERATED_PROVIDER_CAPABILITIES: Record<GeneratedProviderId, Genera
     interrupt: true,
     steerMidTurn: true,
     resume: true,
+    proven: {
+      launchAndSend: true,
+      interrupt: true,
+      steerMidTurn: true,
+      resume: true,
+      search: false,
+    },
     cloudSessionStart: "live",
     nativeLaunchCommand: "longhouse pi",
   },

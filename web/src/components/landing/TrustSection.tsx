@@ -1,8 +1,21 @@
 import { useState } from "react";
+import { getLaunchProviderSupportList } from "../../lib/providers";
 
 interface FAQ {
   question: string;
   answer: string;
+}
+
+function strongestProvidersAnswer(): string {
+  // Derived from the same proof edges as the provider list, never hand-written.
+  const full = getLaunchProviderSupportList()
+    .filter(({ proven }) => proven.launchAndSend && proven.interrupt && proven.steerMidTurn && proven.resume)
+    .map((provider) => provider.marketingName);
+  const lead =
+    full.length === 0
+      ? "No provider has every control capability release-proven yet."
+      : `${full.join(", ")} ${full.length === 1 ? "has" : "have"} launch, send, interrupt, mid-turn steering, and resume all release-proven.`;
+  return `${lead} Each chip in the provider list above lights only where the provider factory runs a live test against the real binary.`;
 }
 
 const faqs: FAQ[] = [
@@ -14,7 +27,7 @@ const faqs: FAQ[] = [
   {
     question: "Which sessions can I control?",
     answer:
-      "Sessions started outside Longhouse are searchable and inspectable. Sessions started through Longhouse can also be controlled: send the next instruction, interrupt a turn, and resume where the provider supports it. Mid-turn steering works on Claude Code, Codex, and Pi Agent. With Cursor Agent and OpenCode, your message lands when the current turn ends.",
+      "Sessions started outside Longhouse are searchable and inspectable. Sessions started through Longhouse can also be controlled: send the next instruction, interrupt a turn, steer it, and resume where the provider supports it. The provider list above shows which of those the provider factory has proven for each CLI.",
   },
   {
     question: "What happens when my laptop sleeps?",
@@ -28,8 +41,7 @@ const faqs: FAQ[] = [
   },
   {
     question: "Which providers are strongest today?",
-    answer:
-      "Claude Code, Codex, and Pi Agent support launch, send, interrupt, mid-turn steering, and resume. Cursor Agent and OpenCode support everything except mid-turn steering; your next instruction lands when the turn ends. Antigravity can launch and send through its hook channel, but interrupt and resume are not available. The provider list above is generated from the provider contract.",
+    answer: strongestProvidersAnswer(),
   },
   {
     question: "Where is my data stored?",

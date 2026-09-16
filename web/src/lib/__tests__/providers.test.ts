@@ -9,8 +9,12 @@ import {
   type LaunchProviderId,
 } from "../providers";
 
+type ProofAssertion = { acceptable_evidence?: string[] };
+type ProofDeclaration = { disposition?: string; required_assertions?: ProofAssertion[] };
+
 type ContractProvider = {
   provider: string;
+  operation_evidence: Record<string, ProofDeclaration>;
   launch_local: boolean;
   send_input: boolean;
   interrupt: boolean;
@@ -178,6 +182,27 @@ describe("providers launch support", () => {
       expect(support!.interrupt).toBe((contract.interrupt && contract.terminate) || turnInterrupt);
       expect(support!.steerMidTurn).toBe(contract.steer_active_turn);
       expect(support!.resume).toBe(contract.can_resume);
+      // Landing chips follow live-token factory proof, never the runtime flags
+      // alone (scripts/generate/provider_capabilities_ts.py).
+      const isLive = (a: ProofAssertion) => JSON.stringify(a.acceptable_evidence) === JSON.stringify(["live_token"]);
+      const liveOnly = (assertions: ProofAssertion[] | undefined) =>
+        Array.isArray(assertions) && assertions.length > 0 && assertions.every(isLive);
+      const proven = (operation: "launch_local" | "send_input" | "interrupt" | "terminate" | "steer_active_turn") =>
+        contract[operation] === true &&
+        contract.operation_evidence[operation]?.disposition === "implemented" &&
+        liveOnly(contract.operation_evidence[operation]?.required_assertions);
+      const capabilityProven = (capability: string) => {
+        const declaration = contract.capabilities[capability] as ProofDeclaration | undefined;
+        const live = (declaration?.required_assertions ?? []).filter(isLive);
+        return declaration?.disposition === "implemented" && liveOnly(live);
+      };
+      expect(support!.proven).toEqual({
+        search: capabilityProven("session.transcript.search"),
+        launchAndSend: proven("launch_local") && proven("send_input"),
+        interrupt: proven("interrupt") && proven("terminate"),
+        steerMidTurn: proven("steer_active_turn"),
+        resume: contract.can_resume && capabilityProven("session.resume.helm"),
+      });
       expect(support!.cloudSessionStart).toBe(
         "session.turn.start" in contract.capabilities ? "live" : "none",
       );

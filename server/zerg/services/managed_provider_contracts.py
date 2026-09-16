@@ -11,6 +11,7 @@ from collections.abc import Iterable
 from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import field
+from typing import Any
 
 from zerg.managed_provider_contract_manifest import MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX
 from zerg.managed_provider_contract_manifest import managed_provider_contract_entry_digest
@@ -131,7 +132,7 @@ class ManagedProviderContract:
     # Per-operation evidence is intentionally separate from the support flag.
     # A provider can be first-class by design while still carrying a lower proof
     # level until scheduled live canaries promote the evidence.
-    operation_evidence: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    operation_evidence: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     capabilities: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
     transcript_signals: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
 
@@ -180,7 +181,7 @@ class ManagedProviderContract:
 
         return self.machine_control_capability_for_operation(operation) is not None
 
-    def operation_evidence_for(self, operation: str) -> Mapping[str, str]:
+    def operation_evidence_for(self, operation: str) -> Mapping[str, Any]:
         return self.operation_evidence.get(operation, {})
 
     @property
@@ -292,7 +293,7 @@ def managed_provider_contract_from_item(item: dict[str, object]) -> ManagedProvi
         live_proof=bool(item.get("live_proof", False)),
         machine_control_supports=tuple(str(value) for value in item.get("machine_control_supports") or ()),
         operation_evidence={
-            str(operation): {str(key): str(value) for key, value in dict(evidence).items()}
+            str(operation): {str(key): (value if key == "required_assertions" else str(value)) for key, value in dict(evidence).items()}
             for operation, evidence in dict(item.get("operation_evidence") or {}).items()
             if isinstance(evidence, dict)
         },

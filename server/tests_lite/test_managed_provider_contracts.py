@@ -14,6 +14,7 @@ from zerg.managed_provider_contract_manifest import _validate_operation_evidence
 from zerg.managed_provider_contract_manifest import managed_provider_contract_entry_digest
 from zerg.managed_provider_contract_manifest import managed_provider_contract_items
 from zerg.managed_provider_contract_manifest import normalize_contract_manifest
+from zerg.managed_provider_contract_manifest import proof_backed_operation_evidence
 from zerg.managed_provider_contract_manifest import render_contract_manifest_json
 from zerg.managed_provider_contract_manifest import validate_generated_contract_manifest
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
@@ -314,6 +315,68 @@ def test_operation_evidence_validation_rejects_drift(mutator, message):
     mutator(item)
 
     with pytest.raises(ValueError, match=message):
+        _validate_operation_evidence(item)
+
+
+_LIVE_PROOF = {
+    "id": "send_idle",
+    "scenario_id": "helm_lifecycle",
+    "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+    "minimum_scenario_revision": 1,
+    "acceptable_evidence": ["live_token"],
+    "max_age_seconds": 604800,
+}
+
+
+def _proof_backed(item: dict, operation: str = "send_input") -> dict:
+    entry = item["operation_evidence"][operation]
+    entry.pop("level", None)
+    entry.pop("source", None)
+    entry["disposition"] = "implemented"
+    entry["required_assertions"] = [dict(_LIVE_PROOF)]
+    return entry
+
+
+def test_operation_evidence_derives_level_and_source_from_required_assertions():
+    assert proof_backed_operation_evidence([_LIVE_PROOF]) == {
+        "level": "live_token",
+        "source": "factory assertions: send_idle",
+    }
+    pi = contract_for_provider("pi")
+    assert pi is not None
+    steer = pi.operation_evidence_for("steer_active_turn")
+    assert steer["level"] == "live_token"
+    assert steer["source"] == "factory assertions: pi_helm_steer_active"
+    assert len(steer["required_assertions"][0]["oracle_digest"]) == 64
+
+
+@pytest.mark.parametrize(
+    ("mutator", "message"),
+    [
+        (lambda entry: entry.__setitem__("source", "a July canary path"), "source is derived from required_assertions"),
+        (lambda entry: entry.__setitem__("level", "hermetic"), "level is derived from required_assertions"),
+        (lambda entry: entry.__setitem__("required_assertions", []), "required_assertions must be a non-empty list"),
+        (
+            lambda entry: entry["required_assertions"][0].__setitem__("acceptable_evidence", ["screenshot"]),
+            "acceptable_evidence is invalid",
+        ),
+    ],
+)
+def test_proof_backed_operation_evidence_rejects_hand_written_evidence(mutator, message):
+    item = _manifest_item()
+    mutator(_proof_backed(item))
+
+    with pytest.raises(ValueError, match=message):
+        _validate_operation_evidence(item)
+
+
+def test_required_assertions_cannot_back_an_unimplemented_operation():
+    item = _manifest_item()
+    item["steer_active_turn"] = False
+    entry = _proof_backed(item, "steer_active_turn")
+    entry["disposition"] = "not_implemented"
+
+    with pytest.raises(ValueError, match="only prove an implemented operation"):
         _validate_operation_evidence(item)
 
 

@@ -129,6 +129,7 @@ _OPERATION_EVIDENCE_KEYS = frozenset(
         "owner_action",
         "blocker",
         "observed_provider_version",
+        "required_assertions",
     }
 )
 _CAPABILITY_ACTION_GATES = frozenset({"ceiling", "warn", "strict"})
@@ -192,8 +193,22 @@ def _validate_operation_evidence(item: dict[str, Any]) -> None:
         entry = evidence.get(field)
         if not isinstance(entry, dict):
             raise ValueError(f"managed provider contract {provider}: operation_evidence.{field} must be an object")
-        level = entry.get("level")
-        source = entry.get("source")
+        proof = entry.get("required_assertions")
+        if proof is not None:
+            _validate_required_assertions(f"managed provider contract {provider}: operation_evidence.{field}", proof)
+            if entry.get("disposition") != "implemented":
+                raise ValueError(
+                    f"managed provider contract {provider}: operation_evidence.{field}.required_assertions "
+                    "only prove an implemented operation"
+                )
+            for key, derived in proof_backed_operation_evidence(proof).items():
+                if key in entry and entry[key] != derived:
+                    raise ValueError(
+                        f"managed provider contract {provider}: operation_evidence.{field}.{key} is derived from "
+                        "required_assertions; remove the hand-written value"
+                    )
+        level = entry.get("level") if proof is None else proof_backed_operation_evidence(proof)["level"]
+        source = entry.get("source") if proof is None else proof_backed_operation_evidence(proof)["source"]
         if level not in _OPERATION_EVIDENCE_LEVELS:
             raise ValueError(
                 f"managed provider contract {provider}: operation_evidence.{field}.level must be one of "
@@ -219,6 +234,26 @@ def _validate_operation_evidence(item: dict[str, Any]) -> None:
             entry=evidence[field],
             supported=item.get(field) is True,
         )
+
+
+def proof_backed_operation_evidence(assertions: list[dict[str, Any]]) -> dict[str, str]:
+    """The evidence level and source an assertion-backed operation reports.
+
+    Both are derived rather than written: an operation's proof is the factory
+    assertions that execute it, so a hand-written level or source can only
+    drift from them. The level is the weakest evidence any required assertion
+    accepts, because a chip is only as proven as its weakest edge.
+    """
+
+    ranks = ("hermetic", "live_no_token", "live_token")
+    level = min(
+        (max(assertion["acceptable_evidence"], key=ranks.index) for assertion in assertions),
+        key=ranks.index,
+    )
+    cells = ", ".join(
+        f"{assertion['id']}/{assertion['variant']}" if assertion.get("variant") else str(assertion["id"]) for assertion in assertions
+    )
+    return {"level": level, "source": f"factory assertions: {cells}"}
 
 
 def _require_operation_string(*, provider: str, operation: str, entry: dict[str, Any], key: str, because: str) -> None:
@@ -395,30 +430,33 @@ def _validate_capabilities(item: dict[str, Any]) -> None:
             isinstance(prerequisite, str) and prerequisite for prerequisite in runtime_prerequisites
         ):
             raise ValueError(f"{prefix}.runtime_prerequisites must be a string list")
-        assertions = declaration.get("required_assertions")
-        if not isinstance(assertions, list) or not assertions:
-            raise ValueError(f"{prefix}.required_assertions must be a non-empty list")
-        for assertion in assertions:
-            if not isinstance(assertion, dict):
-                raise ValueError(f"{prefix}.required_assertions entries must be objects")
-            for field in ("id", "scenario_id"):
-                _validate_capability_string(f"{prefix}.required_assertions", assertion, field)
-            variant = assertion.get("variant")
-            if variant is not None and (not isinstance(variant, str) or not variant.strip()):
-                raise ValueError(f"{prefix}.required_assertions variant must be a non-empty string when present")
-            _validate_capability_string(f"{prefix}.required_assertions", assertion, "oracle_source")
-            revision = assertion.get("minimum_scenario_revision")
-            if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
-                raise ValueError(f"{prefix}.required_assertions minimum_scenario_revision must be positive")
-            evidence = assertion.get("acceptable_evidence")
-            if not isinstance(evidence, list) or not evidence or not set(evidence) <= _CAPABILITY_EVIDENCE_CLASSES:
-                raise ValueError(f"{prefix}.required_assertions acceptable_evidence is invalid")
-            max_age = assertion.get("max_age_seconds")
-            if not isinstance(max_age, int) or isinstance(max_age, bool) or max_age < 1:
-                raise ValueError(f"{prefix}.required_assertions max_age_seconds must be positive")
-            priority = assertion.get("assurance_priority", "release_gate")
-            if priority not in {"release_gate", "sampled", "ordinary_ci"}:
-                raise ValueError(f"{prefix}.required_assertions assurance_priority must be release_gate, sampled, or ordinary_ci")
+        _validate_required_assertions(prefix, declaration.get("required_assertions"))
+
+
+def _validate_required_assertions(prefix: str, assertions: Any) -> None:
+    if not isinstance(assertions, list) or not assertions:
+        raise ValueError(f"{prefix}.required_assertions must be a non-empty list")
+    for assertion in assertions:
+        if not isinstance(assertion, dict):
+            raise ValueError(f"{prefix}.required_assertions entries must be objects")
+        for field in ("id", "scenario_id"):
+            _validate_capability_string(f"{prefix}.required_assertions", assertion, field)
+        variant = assertion.get("variant")
+        if variant is not None and (not isinstance(variant, str) or not variant.strip()):
+            raise ValueError(f"{prefix}.required_assertions variant must be a non-empty string when present")
+        _validate_capability_string(f"{prefix}.required_assertions", assertion, "oracle_source")
+        revision = assertion.get("minimum_scenario_revision")
+        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+            raise ValueError(f"{prefix}.required_assertions minimum_scenario_revision must be positive")
+        evidence = assertion.get("acceptable_evidence")
+        if not isinstance(evidence, list) or not evidence or not set(evidence) <= _CAPABILITY_EVIDENCE_CLASSES:
+            raise ValueError(f"{prefix}.required_assertions acceptable_evidence is invalid")
+        max_age = assertion.get("max_age_seconds")
+        if not isinstance(max_age, int) or isinstance(max_age, bool) or max_age < 1:
+            raise ValueError(f"{prefix}.required_assertions max_age_seconds must be positive")
+        priority = assertion.get("assurance_priority", "release_gate")
+        if priority not in {"release_gate", "sampled", "ordinary_ci"}:
+            raise ValueError(f"{prefix}.required_assertions assurance_priority must be release_gate, sampled, or ordinary_ci")
 
 
 TRANSCRIPT_SIGNAL_IDS = frozenset(
@@ -695,6 +733,18 @@ def normalize_contract_manifest(
     for item in _validated_contract_items(payload):
         normalized_item = deepcopy(item)
         normalized_item["adapter_digest"] = _adapter_digest(item, source_root=source_root)
+        for entry in normalized_item.get("operation_evidence", {}).values():
+            proof = entry.get("required_assertions")
+            if proof is None:
+                continue
+            entry.update(proof_backed_operation_evidence(proof))
+            for assertion in proof:
+                assertion["oracle_digest"] = _source_digest(
+                    provider=str(item["provider"]),
+                    raw_path=str(assertion["oracle_source"]),
+                    label="oracle source",
+                    source_root=source_root,
+                )
         for declaration in normalized_item.get("capabilities", {}).values():
             for assertion in declaration.get("required_assertions", []):
                 assertion["oracle_digest"] = _source_digest(
@@ -719,8 +769,10 @@ def validate_generated_contract_manifest(payload: dict[str, Any]) -> dict[str, A
         adapter_digest = item.get("adapter_digest")
         if not _is_sha256_digest(adapter_digest):
             raise ValueError(f"managed provider contract {provider}: adapter_digest must be a SHA-256 hex digest")
-        for declaration in item.get("capabilities", {}).values():
-            for assertion in declaration.get("required_assertions", []):
+        proven = [entry.get("required_assertions") or [] for entry in item.get("operation_evidence", {}).values()]
+        declared = [declaration.get("required_assertions", []) for declaration in item.get("capabilities", {}).values()]
+        for assertions in (*proven, *declared):
+            for assertion in assertions:
                 oracle_digest = assertion.get("oracle_digest")
                 if not _is_sha256_digest(oracle_digest):
                     raise ValueError(f"managed provider contract {provider}: oracle_digest must be a SHA-256 hex digest")

@@ -497,11 +497,22 @@
       "fork_thread": true,
       "operation_evidence": {
         "launch_local": {
-          "level": "live_no_token",
-          "source": "scripts/qa/codex-provider-release-canary.py managed_tui_attach",
           "disposition": "implemented",
-          "owner_action": "codex_provider_release_canary live-token prompt attach",
-          "blocker": "budget"
+          "required_assertions": [
+            {
+              "id": "helm_launch_visibility_preserved",
+              "scenario_id": "codex_helm_launch_visibility",
+              "oracle_source": "server/zerg/qa/provider_launch_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "e5d28a89f6d5b6b2650d7f857914cc0e3d34c2db818933aa41ce149f4b9432d0"
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: helm_launch_visibility_preserved"
         },
         "run_once": {
           "level": "hermetic",
@@ -1194,11 +1205,22 @@
           "owner_action": "teach claude_print to discover the forked session id before binding, then add the installed-binary fork canary beside Codex's"
         },
         "launch_local": {
-          "level": "live_no_token",
-          "source": "longhouse provider-live canary --provider claude binary/auth/channel/PTY checks",
           "disposition": "implemented",
-          "owner_action": "claude live-token channel and PTY transcript canary",
-          "blocker": "budget"
+          "required_assertions": [
+            {
+              "id": "claude_cli_channel_contract_preserved",
+              "scenario_id": "claude_real_print",
+              "oracle_source": "server/zerg/qa/provider_release_semantic_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_no_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "138a9e04b758d5c1324ec1727a39d169d85b20ce88f5ba1d8499ce6eb355d058"
+            }
+          ],
+          "level": "live_no_token",
+          "source": "factory assertions: claude_cli_channel_contract_preserved"
         },
         "run_once": {
           "level": "none",
@@ -1760,11 +1782,22 @@
           "owner_action": "observe whether OpenCode can branch a session and record the surface"
         },
         "launch_local": {
-          "level": "live_no_token",
-          "source": "longhouse provider-live canary --provider opencode server readiness/schema/session checks",
           "disposition": "implemented",
-          "owner_action": "opencode release-canary prompt transcript proof",
-          "blocker": "budget"
+          "required_assertions": [
+            {
+              "id": "serve_session_contract_preserved",
+              "scenario_id": "opencode_server_contract",
+              "oracle_source": "server/zerg/qa/provider_release_semantic_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_no_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "138a9e04b758d5c1324ec1727a39d169d85b20ce88f5ba1d8499ce6eb355d058"
+            }
+          ],
+          "level": "live_no_token",
+          "source": "factory assertions: serve_session_contract_preserved"
         },
         "run_once": {
           "level": "none",
@@ -1774,11 +1807,22 @@
           "routed_to": "session.turn.start through the opencode_run adapter"
         },
         "reattach": {
-          "level": "live_no_token",
-          "source": "longhouse provider-live canary OpenCode process-restart session recovery plus attach command shape",
           "disposition": "implemented",
-          "owner_action": "opencode live-token reattach release lane",
-          "blocker": "budget"
+          "required_assertions": [
+            {
+              "id": "process_restart_reattach_preserved",
+              "scenario_id": "opencode_server_contract",
+              "oracle_source": "server/zerg/qa/provider_release_semantic_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_no_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "138a9e04b758d5c1324ec1727a39d169d85b20ce88f5ba1d8499ce6eb355d058"
+            }
+          ],
+          "level": "live_no_token",
+          "source": "factory assertions: process_restart_reattach_preserved"
         },
         "send_input": {
           "level": "live_no_token",
@@ -2132,10 +2176,22 @@
           "owner_action": "revisit only after Antigravity Console turns are proven beyond hermetic"
         },
         "launch_local": {
-          "level": "live_no_token",
-          "source": "longhouse provider-live canary --provider antigravity version/help/plugin checks",
           "disposition": "implemented",
-          "owner_action": "real agy loop invocation canary"
+          "required_assertions": [
+            {
+              "id": "hook_inbox_contract_preserved",
+              "scenario_id": "antigravity_hook_inbox",
+              "oracle_source": "server/zerg/qa/provider_release_semantic_oracles.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_no_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "138a9e04b758d5c1324ec1727a39d169d85b20ce88f5ba1d8499ce6eb355d058"
+            }
+          ],
+          "level": "live_no_token",
+          "source": "factory assertions: hook_inbox_contract_preserved"
         },
         "run_once": {
           "level": "live_token",
@@ -3131,9 +3187,22 @@
           "owner_action": "add a Pi native fork ownership canary before exposing remote branch"
         },
         "launch_local": {
-          "level": "source_review",
-          "source": "stock Pi TUI with a process-scoped Longhouse extension; pi_helm_lifecycle",
-          "disposition": "implemented"
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "pi_helm_launch_registration",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 3,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: pi_helm_launch_registration"
         },
         "run_once": {
           "level": "none",
@@ -3143,24 +3212,76 @@
           "routed_to": "turn_start"
         },
         "reattach": {
-          "level": "source_review",
-          "source": "exact-file cold resume with a single execution owner; pi_helm_cold_resume_exact_file",
-          "disposition": "implemented"
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "pi_helm_cold_resume_exact_file",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 3,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: pi_helm_cold_resume_exact_file"
         },
         "send_input": {
-          "level": "source_review",
-          "source": "authenticated native sendUserMessage while idle; pi_helm_send_idle",
-          "disposition": "implemented"
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "pi_helm_send_idle",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 3,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: pi_helm_send_idle"
         },
         "interrupt": {
-          "level": "source_review",
-          "source": "Helm native abort and Console owned-turn interruption; pi_helm_abort_native",
-          "disposition": "implemented"
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "pi_helm_abort_native",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 3,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: pi_helm_abort_native"
         },
         "steer_active_turn": {
-          "level": "source_review",
-          "source": "native boundary-delivered steer, not token preemption; pi_helm_steer_active",
-          "disposition": "implemented"
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "pi_helm_steer_active",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 3,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: pi_helm_steer_active"
         },
         "answer_pause": {
           "level": "none",
@@ -3170,9 +3291,22 @@
           "observed_provider_version": "0.85.1"
         },
         "terminate": {
-          "level": "source_review",
-          "source": "owned native process-group termination; pi_helm_terminate_owned",
-          "disposition": "implemented"
+          "disposition": "implemented",
+          "required_assertions": [
+            {
+              "id": "pi_helm_terminate_owned",
+              "scenario_id": "pi_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
+              "minimum_scenario_revision": 3,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: pi_helm_terminate_owned"
         },
         "tail_output": {
           "level": "source_review",
@@ -3422,11 +3556,22 @@
       ],
       "operation_evidence": {
         "launch_local": {
-          "level": "live_no_token",
-          "source": "OMP 18.1.18 native Helm launcher and PTY fixture",
           "disposition": "implemented",
-          "owner_action": "Run bounded OMP native lifecycle canary",
-          "blocker": "budget"
+          "required_assertions": [
+            {
+              "id": "omp_helm_launch_registration",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 8,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "fc0ad425b279d7f524cf64ad89ae906aa5ed6339f82d2d99c78d8273f0fc281c"
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: omp_helm_launch_registration"
         },
         "run_once": {
           "level": "none",
@@ -3436,32 +3581,76 @@
           "routed_to": "turn_start"
         },
         "reattach": {
-          "level": "hermetic",
-          "source": "OMP exact-file resume validation and owner lock tests",
           "disposition": "implemented",
-          "owner_action": "Run bounded OMP native lifecycle canary",
-          "blocker": "budget"
+          "required_assertions": [
+            {
+              "id": "omp_helm_cold_resume_exact_file",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 8,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "fc0ad425b279d7f524cf64ad89ae906aa5ed6339f82d2d99c78d8273f0fc281c"
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: omp_helm_cold_resume_exact_file"
         },
         "send_input": {
-          "level": "hermetic",
-          "source": "OMP extension command routing tests",
           "disposition": "implemented",
-          "owner_action": "Run bounded OMP native lifecycle canary",
-          "blocker": "budget"
+          "required_assertions": [
+            {
+              "id": "omp_helm_send_idle",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 8,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "fc0ad425b279d7f524cf64ad89ae906aa5ed6339f82d2d99c78d8273f0fc281c"
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: omp_helm_send_idle"
         },
         "interrupt": {
-          "level": "hermetic",
-          "source": "OMP extension abort routing and owned teardown tests",
           "disposition": "implemented",
-          "owner_action": "Run bounded OMP native lifecycle canary",
-          "blocker": "budget"
+          "required_assertions": [
+            {
+              "id": "omp_helm_abort_native",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 8,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "fc0ad425b279d7f524cf64ad89ae906aa5ed6339f82d2d99c78d8273f0fc281c"
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: omp_helm_abort_native"
         },
         "steer_active_turn": {
-          "level": "hermetic",
-          "source": "OMP extension steer routing tests",
           "disposition": "implemented",
-          "owner_action": "Run bounded OMP native lifecycle canary",
-          "blocker": "budget"
+          "required_assertions": [
+            {
+              "id": "omp_helm_steer_active",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 8,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "fc0ad425b279d7f524cf64ad89ae906aa5ed6339f82d2d99c78d8273f0fc281c"
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: omp_helm_steer_active"
         },
         "answer_pause": {
           "level": "none",
@@ -3472,11 +3661,22 @@
           "blocker": "none"
         },
         "terminate": {
-          "level": "hermetic",
-          "source": "OMP owned process-group cleanup tests",
           "disposition": "implemented",
-          "owner_action": "Run bounded OMP native lifecycle canary",
-          "blocker": "budget"
+          "required_assertions": [
+            {
+              "id": "omp_helm_terminate_owned",
+              "scenario_id": "omp_helm_lifecycle",
+              "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
+              "minimum_scenario_revision": 8,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "fc0ad425b279d7f524cf64ad89ae906aa5ed6339f82d2d99c78d8273f0fc281c"
+            }
+          ],
+          "level": "live_token",
+          "source": "factory assertions: omp_helm_terminate_owned"
         },
         "tail_output": {
           "level": "source_review",

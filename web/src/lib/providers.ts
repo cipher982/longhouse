@@ -6,7 +6,7 @@
  * Add new providers here when onboarding them.
  */
 
-import { GENERATED_PROVIDER_CAPABILITIES } from "../generated/provider-capabilities";
+import { GENERATED_PROVIDER_CAPABILITIES, type ProvenChips } from "../generated/provider-capabilities";
 import { lookupProviderBrand, providerDisplayName } from "../generated/provider-brands";
 
 export type LaunchProviderId = "claude" | "codex" | "opencode" | "antigravity" | "cursor" | "pi" | "omp";
@@ -23,6 +23,11 @@ export type LaunchProviderSupport = {
   interrupt: boolean;
   steerMidTurn: boolean;
   resume: boolean;
+  /**
+   * Landing chips. Lit only by live-token provider-factory assertions; the
+   * runtime flags above describe what the product can dispatch.
+   */
+  proven: ProvenChips;
   /**
    * The `longhouse <id>` command, when the native device facade actually offers
    * one. Sourced from config/native_device_entrypoints.json, NOT from the
@@ -43,7 +48,7 @@ export type LaunchProviderSupport = {
 // into ../generated/provider-capabilities.ts and merged below, because this
 // table drifted from the contract twice (4402f99ea, 6432e21fa) while its own
 // header claimed to mirror it.
-const LAUNCH_PROVIDER_PRESENTATION: Record<LaunchProviderId, Omit<LaunchProviderSupport, "id" | "marketingName" | "launchAndSend" | "interrupt" | "steerMidTurn" | "resume" | "cloudSessionStart" | "nativeLaunchCommand">> = {
+const LAUNCH_PROVIDER_PRESENTATION: Record<LaunchProviderId, Omit<LaunchProviderSupport, "id" | "marketingName" | "launchAndSend" | "interrupt" | "steerMidTurn" | "resume" | "proven" | "cloudSessionStart" | "nativeLaunchCommand">> = {
   claude: {
     archiveVisibility: "live",
     hooksSupport: "live",
@@ -94,6 +99,7 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
         interrupt: generated.interrupt,
         steerMidTurn: generated.steerMidTurn,
         resume: generated.resume,
+        proven: generated.proven,
         cloudSessionStart: generated.cloudSessionStart,
         ...LAUNCH_PROVIDER_PRESENTATION[id],
       },

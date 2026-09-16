@@ -328,11 +328,15 @@ providers:
   fork_thread: true
   operation_evidence:
     launch_local:
-      level: live_no_token
-      source: scripts/qa/codex-provider-release-canary.py managed_tui_attach
       disposition: "implemented"
-      owner_action: "codex_provider_release_canary live-token prompt attach"
-      blocker: "budget"
+      required_assertions:
+      - id: helm_launch_visibility_preserved
+        scenario_id: codex_helm_launch_visibility
+        oracle_source: server/zerg/qa/provider_launch_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
     run_once:
       level: hermetic
       source: engine codex_exec argv/runtime terminal tests plus server one-shot launch
@@ -726,12 +730,15 @@ providers:
       owner_action: "teach claude_print to discover the forked session id before
         binding, then add the installed-binary fork canary beside Codex's"
     launch_local:
-      level: live_no_token
-      source: longhouse provider-live canary --provider claude binary/auth/channel/PTY
-        checks
       disposition: "implemented"
-      owner_action: "claude live-token channel and PTY transcript canary"
-      blocker: "budget"
+      required_assertions:
+      - id: claude_cli_channel_contract_preserved
+        scenario_id: claude_real_print
+        oracle_source: server/zerg/qa/provider_release_semantic_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence:
+        - live_no_token
+        max_age_seconds: 604800
     run_once:
       level: none
       source: legacy session.run_once is retired; Claude Console uses session.turn.start through
@@ -1045,12 +1052,15 @@ providers:
       disposition: "not_implemented"
       owner_action: "observe whether OpenCode can branch a session and record the surface"
     launch_local:
-      level: live_no_token
-      source: longhouse provider-live canary --provider opencode server readiness/schema/session
-        checks
       disposition: "implemented"
-      owner_action: "opencode release-canary prompt transcript proof"
-      blocker: "budget"
+      required_assertions:
+      - id: serve_session_contract_preserved
+        scenario_id: opencode_server_contract
+        oracle_source: server/zerg/qa/provider_release_semantic_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence:
+        - live_no_token
+        max_age_seconds: 604800
     run_once:
       level: none
       source: OpenCode Console uses turn_start; session.run_once is not supported by the engine
@@ -1058,12 +1068,15 @@ providers:
       reason: "The engine has no OpenCode one-shot run path; Console work is turn-scoped."
       routed_to: "session.turn.start through the opencode_run adapter"
     reattach:
-      level: live_no_token
-      source: longhouse provider-live canary OpenCode process-restart session recovery
-        plus attach command shape
       disposition: "implemented"
-      owner_action: "opencode live-token reattach release lane"
-      blocker: "budget"
+      required_assertions:
+      - id: process_restart_reattach_preserved
+        scenario_id: opencode_server_contract
+        oracle_source: server/zerg/qa/provider_release_semantic_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence:
+        - live_no_token
+        max_age_seconds: 604800
     send_input:
       level: live_no_token
       source: longhouse provider-live canary OpenCode prompt_async noReply delivery
@@ -1328,11 +1341,15 @@ providers:
       disposition: "not_implemented"
       owner_action: "revisit only after Antigravity Console turns are proven beyond hermetic"
     launch_local:
-      level: live_no_token
-      source: longhouse provider-live canary --provider antigravity version/help/plugin
-        checks
       disposition: "implemented"
-      owner_action: "real agy loop invocation canary"
+      required_assertions:
+      - id: hook_inbox_contract_preserved
+        scenario_id: antigravity_hook_inbox
+        oracle_source: server/zerg/qa/provider_release_semantic_oracles.py
+        minimum_scenario_revision: 1
+        acceptable_evidence:
+        - live_no_token
+        max_age_seconds: 604800
     run_once:
       level: live_token
       source: real agy --print returned a structured single-turn result carrying the requested marker
@@ -1974,9 +1991,15 @@ providers:
       disposition: not_implemented
       owner_action: "add a Pi native fork ownership canary before exposing remote branch"
     launch_local:
-      level: source_review
-      source: "stock Pi TUI with a process-scoped Longhouse extension; pi_helm_lifecycle"
       disposition: implemented
+      required_assertions:
+      - id: pi_helm_launch_registration
+        scenario_id: pi_helm_lifecycle
+        oracle_source: server/zerg/qa/pi_helm_lifecycle.py
+        minimum_scenario_revision: 3
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
     run_once:
       level: none
       source: "Console routes through session.turn.start, not the legacy run_once command"
@@ -1984,21 +2007,45 @@ providers:
       reason: "Pi Console has one turn-scoped path through session.turn.start."
       routed_to: turn_start
     reattach:
-      level: source_review
-      source: "exact-file cold resume with a single execution owner; pi_helm_cold_resume_exact_file"
       disposition: implemented
+      required_assertions:
+      - id: pi_helm_cold_resume_exact_file
+        scenario_id: pi_helm_lifecycle
+        oracle_source: server/zerg/qa/pi_helm_lifecycle.py
+        minimum_scenario_revision: 3
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
     send_input:
-      level: source_review
-      source: "authenticated native sendUserMessage while idle; pi_helm_send_idle"
       disposition: implemented
+      required_assertions:
+      - id: pi_helm_send_idle
+        scenario_id: pi_helm_lifecycle
+        oracle_source: server/zerg/qa/pi_helm_lifecycle.py
+        minimum_scenario_revision: 3
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
     interrupt:
-      level: source_review
-      source: "Helm native abort and Console owned-turn interruption; pi_helm_abort_native"
       disposition: implemented
+      required_assertions:
+      - id: pi_helm_abort_native
+        scenario_id: pi_helm_lifecycle
+        oracle_source: server/zerg/qa/pi_helm_lifecycle.py
+        minimum_scenario_revision: 3
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
     steer_active_turn:
-      level: source_review
-      source: "native boundary-delivered steer, not token preemption; pi_helm_steer_active"
       disposition: implemented
+      required_assertions:
+      - id: pi_helm_steer_active
+        scenario_id: pi_helm_lifecycle
+        oracle_source: server/zerg/qa/pi_helm_lifecycle.py
+        minimum_scenario_revision: 3
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
     answer_pause:
       level: none
       source: "Pi has no provider-owned remote permission reply transport"
@@ -2006,9 +2053,15 @@ providers:
       reason: "Project trust and extension UI remain provider-local."
       observed_provider_version: "0.85.1"
     terminate:
-      level: source_review
-      source: "owned native process-group termination; pi_helm_terminate_owned"
       disposition: implemented
+      required_assertions:
+      - id: pi_helm_terminate_owned
+        scenario_id: pi_helm_lifecycle
+        oracle_source: server/zerg/qa/pi_helm_lifecycle.py
+        minimum_scenario_revision: 3
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
     tail_output:
       level: source_review
       source: "native JSONL history plus reconciled Console live previews"
@@ -2191,14 +2244,68 @@ providers:
   live_proof: false
   machine_control_supports: [omp.send, omp.interrupt, omp.steer, omp.terminate, omp.turn_start, omp.turn_interrupt]
   operation_evidence:
-    launch_local: {level: live_no_token, source: "OMP 18.1.18 native Helm launcher and PTY fixture", disposition: implemented, owner_action: "Run bounded OMP native lifecycle canary", blocker: budget}
+    launch_local:
+      disposition: implemented
+      required_assertions:
+      - id: omp_helm_launch_registration
+        scenario_id: omp_helm_lifecycle
+        oracle_source: server/zerg/qa/omp_helm_lifecycle.py
+        minimum_scenario_revision: 8
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
     run_once: {level: none, source: "Console routes through session.turn.start, not the legacy run_once command", disposition: policy_disabled, reason: "OMP Console has one turn-scoped path through session.turn.start.", routed_to: turn_start}
-    reattach: {level: hermetic, source: "OMP exact-file resume validation and owner lock tests", disposition: implemented, owner_action: "Run bounded OMP native lifecycle canary", blocker: budget}
-    send_input: {level: hermetic, source: "OMP extension command routing tests", disposition: implemented, owner_action: "Run bounded OMP native lifecycle canary", blocker: budget}
-    interrupt: {level: hermetic, source: "OMP extension abort routing and owned teardown tests", disposition: implemented, owner_action: "Run bounded OMP native lifecycle canary", blocker: budget}
-    steer_active_turn: {level: hermetic, source: "OMP extension steer routing tests", disposition: implemented, owner_action: "Run bounded OMP native lifecycle canary", blocker: budget}
+    reattach:
+      disposition: implemented
+      required_assertions:
+      - id: omp_helm_cold_resume_exact_file
+        scenario_id: omp_helm_lifecycle
+        oracle_source: server/zerg/qa/omp_helm_lifecycle.py
+        minimum_scenario_revision: 8
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
+    send_input:
+      disposition: implemented
+      required_assertions:
+      - id: omp_helm_send_idle
+        scenario_id: omp_helm_lifecycle
+        oracle_source: server/zerg/qa/omp_helm_lifecycle.py
+        minimum_scenario_revision: 8
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
+    interrupt:
+      disposition: implemented
+      required_assertions:
+      - id: omp_helm_abort_native
+        scenario_id: omp_helm_lifecycle
+        oracle_source: server/zerg/qa/omp_helm_lifecycle.py
+        minimum_scenario_revision: 8
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
+    steer_active_turn:
+      disposition: implemented
+      required_assertions:
+      - id: omp_helm_steer_active
+        scenario_id: omp_helm_lifecycle
+        oracle_source: server/zerg/qa/omp_helm_lifecycle.py
+        minimum_scenario_revision: 8
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
     answer_pause: {level: none, source: "OMP provider-local Console approval surface", disposition: not_implemented, reason: "OMP does not expose a proven remote approval transport", owner_action: "Add an OMP remote approval canary before exposing answer_pause", blocker: none}
-    terminate: {level: hermetic, source: "OMP owned process-group cleanup tests", disposition: implemented, owner_action: "Run bounded OMP native lifecycle canary", blocker: budget}
+    terminate:
+      disposition: implemented
+      required_assertions:
+      - id: omp_helm_terminate_owned
+        scenario_id: omp_helm_lifecycle
+        oracle_source: server/zerg/qa/omp_helm_lifecycle.py
+        minimum_scenario_revision: 8
+        acceptable_evidence:
+        - live_token
+        max_age_seconds: 604800
     tail_output: {level: source_review, source: "OMP native JSONL Shadow source", disposition: implemented, blocker: none}
     runtime_phase: {level: hermetic, source: "OMP extension lifecycle reducer tests", disposition: implemented, owner_action: "Run bounded OMP native lifecycle canary", blocker: budget}
     transcript_binding: {level: source_review, source: "Opaque OMP source identity and source epochs", disposition: implemented, blocker: none}
