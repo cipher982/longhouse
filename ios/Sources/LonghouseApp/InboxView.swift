@@ -64,6 +64,7 @@ struct TimelineView: View {
     @StateObject private var viewModel = TimelineViewModel()
     @State private var launchSheetPresented = false
     @State private var settingsPresented = false
+    @State private var path: [SessionRoute] = []
     @State private var isShowingBugReport = false
     @State private var bugReportScreenshot: Data?
     @State private var bugReportContextJSON = Data("{}".utf8)
