@@ -3866,6 +3866,8 @@ export interface components {
             context_json: string;
             /** Source Session Id */
             source_session_id?: string | null;
+            /** Client Report Id */
+            client_report_id?: string | null;
             /**
              * Files
              * @default []
@@ -3974,6 +3976,10 @@ export interface components {
              * @default web
              */
             launch_surface: string;
+            /** Session Id */
+            session_id?: string | null;
+            /** Thread Id */
+            thread_id?: string | null;
         };
         /** ConsoleTurnCreate */
         ConsoleTurnCreate: {
