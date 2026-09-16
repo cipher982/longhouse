@@ -1126,6 +1126,10 @@ fn identity_commit_authority_matches_locked(
         state.state.pending_transition == expected_pending,
         "OMP native session transition changed during identity binding"
     );
+    anyhow::ensure!(
+        state.state.status != "stopped" && state.state.terminal_state.is_none(),
+        "OMP execution stopped during identity binding"
+    );
     Ok(())
 }
 
@@ -2259,6 +2263,64 @@ mod tests {
             assert_eq!(current.phase, "idle");
             assert!(current.ready);
             assert_eq!(current.status, "ready");
+            server.shutdown();
+        });
+    }
+
+    #[test]
+    fn stopped_identity_reconciliation_cannot_restore_readiness() {
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let source_a = temp.path().join("session-a.jsonl");
+        let source_b = temp.path().join("session-b.jsonl");
+        let session_id = Uuid::new_v4().to_string();
+        let mut initial = state();
+        initial.session_id = session_id.clone();
+        initial.native_session_id = "native-a".into();
+        initial.session_file = source_a.display().to_string();
+        let socket_dir = temp.path().join("socket");
+        let socket_path = socket_dir.join("channel.sock");
+        let state_path = temp.path().join("state.json");
+
+        temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
+            let server =
+                OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
+            let (sender, _receiver) = mpsc::channel();
+            {
+                let mut shared = server.shared.lock().unwrap();
+                shared.extension_sender = Some(sender);
+                shared.extension_connection_id = Some("connection".into());
+            }
+            let frame = json!({
+                "kind": "agent_start",
+                "event": {"type": "agent_start"},
+                "auth_token": "token",
+                "session_id": session_id,
+                "native_session_id": "native-b",
+                "session_file": source_b.display().to_string(),
+                "connection_id": "connection",
+                "lease_generation": "generation"
+            });
+            let worker = {
+                let server = server.clone();
+                thread::spawn(move || server.update_identity("connection", &frame, false))
+            };
+            thread::sleep(Duration::from_millis(100));
+            server.mark_stopped(None, "provider_exit").unwrap();
+            fs::write(
+                &source_b,
+                b"{\"type\":\"session\",\"id\":\"native-b\",\"cwd\":\"/tmp\"}\n",
+            )
+            .unwrap();
+
+            assert!(worker.join().unwrap().is_err());
+            let after = server.current_state();
+            assert_eq!(after.native_session_id, "native-a");
+            assert_eq!(after.session_file, source_a.display().to_string());
+            assert!(!after.ready);
+            assert_eq!(after.status, "stopped");
+            assert_eq!(after.phase, "idle");
+            assert_eq!(after.terminal_reason.as_deref(), Some("provider_exit"));
             server.shutdown();
         });
     }
