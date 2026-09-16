@@ -536,16 +536,6 @@
     box-shadow: 0 34px 90px rgba(0, 0, 0, 0.47);
   }
 
-  .app-screenshot-frame--cool-pop {
-    --screenshot-frame-border: rgba(126, 183, 255, 0.38);
-    --screenshot-frame-bg: #101620;
-    --screenshot-chrome-bg: #182335;
-    --screenshot-chrome-border: rgba(126, 183, 255, 0.24);
-    --screenshot-content-bg: #0c1420;
-    --screenshot-title: #d5e9ff;
-    box-shadow: 0 34px 90px rgba(19, 79, 134, 0.25);
-  }
-
   .app-screenshot-chrome {
     position: relative;
     display: flex;
@@ -586,10 +576,18 @@
     width: 100%;
     overflow: hidden;
     background: var(--screenshot-content-bg);
+    /* make landing-screenshots captures desktop views at exactly 16:9 */
+    aspect-ratio: 16 / 9;
   }
 
-  .app-screenshot-content img,
-  .app-screenshot-content video {
+  @media (width <= 640px) {
+    /* ...and the app's phone layout at 390x720 */
+    .app-screenshot-content.has-mobile {
+      aspect-ratio: 390 / 720;
+    }
+  }
+
+  .app-screenshot-content img {
     display: block;
     width: 100%;
     height: auto;

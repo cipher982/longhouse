@@ -388,7 +388,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   };
 }
 
-function makeTimelineCard(
+export function makeTimelineCard(
   overrides: Partial<AgentSession> = {},
   cardOverrides: Partial<TimelineSessionCard> = {},
 ): TimelineSessionCard {

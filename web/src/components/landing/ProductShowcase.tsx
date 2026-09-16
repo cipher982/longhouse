@@ -1,8 +1,8 @@
 /**
  * ProductShowcase
  *
- * Tabbed showcase of real product screenshots.
- * Shows Timeline and Session Detail views.
+ * Tabbed showcase of real product screenshots, regenerated from the current UI
+ * with curated fixtures by `make landing-screenshots`.
  */
 
 import { useEffect, useState } from "react";
@@ -15,8 +15,7 @@ interface TabConfig {
   label: string;
   description: string;
   image: string;
-  /** Autoplaying clip for the tab; the image doubles as its poster. */
-  video?: string;
+  mobileImage: string;
   alt: string;
 }
 
@@ -25,23 +24,25 @@ const tabs: TabConfig[] = [
     id: "timeline",
     label: "Timeline",
     description: "Every session across your machines, most recently touched first. Open one to see what it is doing right now and pick up where it stopped.",
-    image: "/images/landing/timeline-preview.webp?v=20260810-1",
-    video: "/videos/timeline-clip.mp4?v=20260810-1",
-    alt: "Session timeline showing Claude Code sessions with timestamps and summaries",
+    image: "/images/landing/timeline-preview.webp?v=20260916-1",
+    mobileImage: "/images/landing/timeline-preview-mobile.webp?v=20260916-1",
+    alt: "Longhouse timeline with live Claude Code, Codex, and Cursor sessions across three machines, and recent history",
   },
   {
     id: "search",
     label: "Search",
     description: "Find the session by what you remember typing, then jump into it. Weeks of sessions across supported CLIs, not folders of provider logs.",
-    image: "/images/landing/search-preview.webp?v=20260810-1",
-    alt: "Search results filtering sessions by keyword with highlighted matches",
+    image: "/images/landing/search-preview.webp?v=20260916-1",
+    mobileImage: "/images/landing/search-preview-mobile.webp?v=20260916-1",
+    alt: "Searching for flaky returns past sessions from several providers and machines, weeks apart",
   },
   {
     id: "session",
     label: "Session Detail",
     description: "The full transcript and every tool call, plus the composer. Read what it did, then tell it what to do next without going back to the terminal that started it.",
-    image: "/images/landing/session-detail-preview.webp?v=20260810-1",
-    alt: "Detailed session view showing tool calls and conversation",
+    image: "/images/landing/session-detail-preview.webp?v=20260916-1",
+    mobileImage: "/images/landing/session-detail-preview-mobile.webp?v=20260916-1",
+    alt: "A live Claude Code session: transcript, tool calls, and the composer to steer it",
   },
 ];
 
@@ -52,9 +53,10 @@ export function ProductShowcase() {
   useEffect(() => {
     // These are presentation assets, not user data. Fetch their compact WebP
     // variants after first paint so a tab click never waits on the network.
-    const warmScreenshots = () => tabs.forEach(({ image }) => {
+    const phone = window.matchMedia?.("(max-width: 640px)").matches;
+    const warmScreenshots = () => tabs.forEach(({ image, mobileImage }) => {
       const preload = new Image();
-      preload.src = image;
+      preload.src = phone ? mobileImage : image;
     });
 
     const idleWindow = window as Window & {
@@ -101,12 +103,9 @@ export function ProductShowcase() {
         <div className="product-showcase-frame">
           <AppScreenshotFrame
             src={activeConfig.image}
-            videoSrc={activeConfig.video}
+            mobileSrc={activeConfig.mobileImage}
             alt={activeConfig.alt}
             title={activeConfig.label}
-            aspectRatio="16/9"
-            showChrome={true}
-            theme="warm"
             loading="eager"
             fetchPriority="high"
           />

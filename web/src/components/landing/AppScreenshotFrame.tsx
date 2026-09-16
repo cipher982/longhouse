@@ -2,13 +2,10 @@ import { useEffect, useState } from "react";
 
 interface AppScreenshotFrameProps {
   src: string;
+  /** Capture of the app's own phone layout, used below 640px wide. */
+  mobileSrc?: string;
   alt: string;
-  /** When set, renders an autoplaying looped clip with `src` as its poster. */
-  videoSrc?: string;
   title?: string;
-  aspectRatio?: "16/9" | "4/3" | "21/9";
-  showChrome?: boolean;
-  theme?: "warm" | "cool-pop";
   className?: string;
   loading?: "eager" | "lazy";
   fetchPriority?: "high" | "low" | "auto";
@@ -16,12 +13,9 @@ interface AppScreenshotFrameProps {
 
 export function AppScreenshotFrame({
   src,
+  mobileSrc,
   alt,
-  videoSrc,
   title,
-  aspectRatio = "16/9",
-  showChrome = true,
-  theme = "warm",
   className = "",
   loading = "lazy",
   fetchPriority = "low",
@@ -35,21 +29,16 @@ export function AppScreenshotFrame({
   }, [src]);
 
   return (
-    <div className={`app-screenshot-frame app-screenshot-frame--${theme} ${className}`}>
-      {showChrome && (
-        <div className="app-screenshot-chrome">
-          <div className="app-screenshot-dots">
-            <span className="dot dot-red" />
-            <span className="dot dot-yellow" />
-            <span className="dot dot-green" />
-          </div>
-          {title && <div className="app-screenshot-title">{title}</div>}
+    <div className={`app-screenshot-frame ${className}`}>
+      <div className="app-screenshot-chrome">
+        <div className="app-screenshot-dots">
+          <span className="dot dot-red" />
+          <span className="dot dot-yellow" />
+          <span className="dot dot-green" />
         </div>
-      )}
-      <div
-        className="app-screenshot-content"
-        style={{ aspectRatio }}
-      >
+        {title && <div className="app-screenshot-title">{title}</div>}
+      </div>
+      <div className={`app-screenshot-content${mobileSrc ? " has-mobile" : ""}`}>
         {!loaded && !error && (
           <div className="app-screenshot-skeleton">
             <div className="skeleton-pulse" />
@@ -61,21 +50,8 @@ export function AppScreenshotFrame({
             <p>Screenshot unavailable</p>
           </div>
         )}
-        {videoSrc ? (
-          <video
-            src={videoSrc}
-            poster={src}
-            aria-label={alt}
-            autoPlay
-            muted
-            loop
-            playsInline
-            preload="metadata"
-            onLoadedData={() => setLoaded(true)}
-            onError={() => setError(true)}
-            style={{ opacity: loaded ? 1 : 0 }}
-          />
-        ) : (
+        <picture>
+          {mobileSrc ? <source media="(max-width: 640px)" srcSet={mobileSrc} /> : null}
           <img
             src={src}
             alt={alt}
@@ -86,7 +62,7 @@ export function AppScreenshotFrame({
             fetchPriority={fetchPriority}
             style={{ opacity: loaded ? 1 : 0 }}
           />
-        )}
+        </picture>
       </div>
     </div>
   );

@@ -71,6 +71,14 @@ providers.yml (pinned source + auth mode + sentinels)
   offscreen/hidden pause, reduced-motion poster freeze, `?demoT=` freeze),
   `ResponsiveTerminal.tsx` (ResizeObserver -> cell metrics)
 - `web/src/components/landing/HeroSection.tsx` — copy + HeroDemo mount
+- `make landing-screenshots` — regenerates the "Every session" showcase
+  images (desktop 16:9 + phone layout, webp + png masters) from the current
+  web UI via `ui-capture` scenes `landing`/`landing-search`/`landing-session`
+  with curated data in `scripts/ui-fixtures/landingShowcase.ts`. Every API
+  call is mocked or sealed, so no real account data can reach an image. Re-run
+  after timeline/session-detail UI changes, bump the `?v=` stamps in
+  `ProductShowcase.tsx`, and `bun scripts/generate-og-image.mjs` for the
+  social card.
 - `video/src/compositions/ControlRoom.tsx` — Remotion export composition
 - `Makefile demo-render` — export lane (mp4 has its silent AAC stripped)
 

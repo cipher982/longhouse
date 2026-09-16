@@ -220,7 +220,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   };
 }
 
-function makeEvent(
+export function makeEvent(
   id: number,
   role: string,
   timestamp: string,
@@ -242,7 +242,7 @@ function makeEvent(
   };
 }
 
-function projectionEvent(event: AgentEvent, sessionId: string): AgentSessionProjectionItem {
+export function projectionEvent(event: AgentEvent, sessionId: string): AgentSessionProjectionItem {
   return {
     kind: "event",
     session_id: sessionId,

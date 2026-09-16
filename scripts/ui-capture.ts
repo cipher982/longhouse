@@ -31,7 +31,7 @@
  *   bunx tsx scripts/ui-capture.ts --all
  */
 
-import { chromium, type BrowserContext, type Page } from "playwright";
+import { chromium, type BrowserContext, type Page, type Route } from "playwright";
 import { execSync, spawn } from "child_process";
 import { mkdirSync, writeFileSync } from "fs";
 import path from "path";
@@ -47,6 +47,11 @@ import {
   type SessionTone,
 } from "./ui-fixtures/sessionDetailStress";
 import { buildTimelineCardStressFixture } from "./ui-fixtures/timelineCardStress";
+import {
+  LANDING_SEARCH_QUERY,
+  buildLandingSessionFixture,
+  buildLandingTimelineFixture,
+} from "./ui-fixtures/landingShowcase";
 
 const PAGE_DEFINITIONS = {
   timeline: { path: "/timeline" },
@@ -73,10 +78,18 @@ const SCENES = [
   "session-resume",
   "session-stale-observation",
   "session-tones",
+  "landing",
+  "landing-search",
+  "landing-session",
 ] as const;
 type SceneName = (typeof SCENES)[number];
 
+/** Curated landing-page showcase data (scripts/ui-fixtures/landingShowcase.ts). */
+const LANDING_TIMELINE_SCENES: readonly SceneName[] = ["landing", "landing-search"];
+const LANDING_SCENES: readonly SceneName[] = [...LANDING_TIMELINE_SCENES, "landing-session"];
+
 const SESSION_DETAIL_SCENES: readonly SceneName[] = [
+  "landing-session",
   "session-detail-stress",
   "session-resume",
   "session-stale-observation",
@@ -189,15 +202,18 @@ function parseViewport(value: string | undefined): ViewportConfig {
     return { ...VIEWPORT_PRESETS[value as ViewportPresetName] };
   }
 
-  const match = /^(\d+)x(\d+)$/.exec(value);
+  const match = /^(\d+)x(\d+)(?:@(\d+))?$/.exec(value);
   if (!match) {
     throw new Error(
-      `Unsupported viewport "${value}". Use one of ${Object.keys(VIEWPORT_PRESETS).join(", ")} or WIDTHxHEIGHT.`,
+      `Unsupported viewport "${value}". Use one of ${Object.keys(VIEWPORT_PRESETS).join(", ")}, WIDTHxHEIGHT, or WIDTHxHEIGHT@SCALE.`,
     );
   }
 
   const width = Number.parseInt(match[1], 10);
   const height = Number.parseInt(match[2], 10);
+  if (match[3]) {
+    return { width, height, isMobile: false, hasTouch: false, deviceScaleFactor: Number.parseInt(match[3], 10) };
+  }
 
   return {
     width,
@@ -211,6 +227,8 @@ function parseViewport(value: string | undefined): ViewportConfig {
 function sceneUsesMockApi(scene: SceneName): boolean {
   return (
     scene === "timeline-card-stress" ||
+    LANDING_TIMELINE_SCENES.includes(scene) ||
+    scene === "landing-session" ||
     scene === "session-detail-stress" ||
     scene === "session-resume" ||
     scene === "session-stale-observation" ||
@@ -332,7 +350,9 @@ async function installSceneMocks(
 
   if (SESSION_DETAIL_SCENES.includes(scene)) {
     const fixture =
-      scene === "session-resume"
+      scene === "landing-session"
+        ? buildLandingSessionFixture()
+        : scene === "session-resume"
         ? buildSessionResumeFixture()
         : scene === "session-stale-observation"
           ? buildSessionStaleObservationFixture()
@@ -426,6 +446,11 @@ async function installSceneMocks(
         return;
       }
 
+      if (pathname === `/api/sessions/${fixture.session.id}/inputs` && scene === "landing-session") {
+        await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+        return;
+      }
+
       if (pathname === `/api/sessions/${fixture.session.id}/inputs`) {
         await route.fulfill({
           status: 200,
@@ -480,7 +505,7 @@ async function installSceneMocks(
         return;
       }
 
-      await route.fallback();
+      await sealOrFallback(route, scene, pathname);
     });
     return;
   }
@@ -488,13 +513,17 @@ async function installSceneMocks(
   const fixture = buildTimelineCardStressFixture();
 
   await context.route(`${appOrigin}/api/**`, async (route) => {
-    const pathname = new URL(route.request().url()).pathname;
+    const requestUrl = new URL(route.request().url());
+    const pathname = requestUrl.pathname;
 
     if (pathname === "/api/timeline/sessions") {
+      const sessions = LANDING_TIMELINE_SCENES.includes(scene)
+        ? buildLandingTimelineFixture(requestUrl.searchParams.get("query") ?? "").sessions
+        : fixture.sessions;
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(fixture.sessions),
+        body: JSON.stringify(sessions),
       });
       return;
     }
@@ -503,7 +532,9 @@ async function installSceneMocks(
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(fixture.filters),
+        body: JSON.stringify(
+          LANDING_TIMELINE_SCENES.includes(scene) ? buildLandingTimelineFixture().filters : fixture.filters,
+        ),
       });
       return;
     }
@@ -525,8 +556,45 @@ async function installSceneMocks(
       return;
     }
 
-    await route.fallback();
+    await sealOrFallback(route, scene, pathname);
   });
+}
+
+/**
+ * Landing scenes publish images, so no request may reach a real server: the
+ * dev proxy would forward it to the operator's own instance and leak real
+ * account data (initials, admin tabs) into marketing assets. Unmocked API
+ * calls get an empty 404 and are logged so the fixture can cover them.
+ */
+const LANDING_APP_SHELL: Record<string, unknown> = {
+  // A generic, non-admin viewer so no operator identity or admin tab shows.
+  "/api/auth/status": {
+    authenticated: true,
+    user: {
+      id: 1,
+      email: "sam@example.com",
+      display_name: "Sam Rivera",
+      avatar_url: null,
+      is_active: true,
+      created_at: "2026-03-01T12:00:00Z",
+      role: "USER",
+    },
+  },
+  "/api/auth/methods": { google: false, password: false, sso: false, sso_url: null },
+  "/api/health": { status: "healthy" },
+};
+
+async function sealOrFallback(route: Route, scene: SceneName, pathname: string): Promise<void> {
+  if (LANDING_SCENES.includes(scene)) {
+    if (pathname in LANDING_APP_SHELL) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(LANDING_APP_SHELL[pathname]) });
+      return;
+    }
+    console.log(`  [landing] unmocked ${route.request().method()} ${pathname} -> 404`);
+    await route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
+    return;
+  }
+  await route.fallback();
 }
 
 async function installScenePageOverrides(page: Page, scene: SceneName, pageName: PageName): Promise<void> {
@@ -551,7 +619,7 @@ async function installScenePageOverrides(page: Page, scene: SceneName, pageName:
     Date.now = () => fixtureNow;
   }, fixtureNowIso);
 
-  if (scene === "timeline-card-stress") {
+  if (scene === "timeline-card-stress" || LANDING_TIMELINE_SCENES.includes(scene)) {
     await page.addInitScript(() => {
       Object.defineProperty(window, "EventSource", {
         configurable: true,
@@ -571,7 +639,8 @@ async function captureBundle(
   frameName: string = pageName,
   probe: string[] = [],
 ): Promise<CaptureResult> {
-  const url = `${baseUrl}${PAGE_DEFINITIONS[pageName].path}`;
+  const query = scene === "landing-search" ? `?query=${encodeURIComponent(LANDING_SEARCH_QUERY)}` : "";
+  const url = `${baseUrl}${PAGE_DEFINITIONS[pageName].path}${query}`;
   console.log(`  Navigating to ${url}...`);
 
   await installScenePageOverrides(page, scene, pageName);

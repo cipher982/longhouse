@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 276,
+  "file_count": 277,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -746,6 +746,15 @@
         "codex",
         "omp",
         "pi"
+      ]
+    },
+    {
+      "path": "scripts/ui-fixtures/landingShowcase.ts",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
       ]
     },
     {
