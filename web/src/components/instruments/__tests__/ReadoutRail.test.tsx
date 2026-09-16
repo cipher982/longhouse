@@ -21,7 +21,7 @@ function renderRail(props: Partial<ReadoutRailProps> = {}) {
     contextWindow: null,
     toolCallsThisTurn: null,
     toolCallsLive: false,
-    waitingOnLabel: null,
+    waitingOn: null,
   };
   return render(
     <QueryClientProvider client={queryClient}>
@@ -73,8 +73,21 @@ describe("ReadoutRail", () => {
   });
 
   it("shows Waiting on only when a tool is running", () => {
-    renderRail({ waitingOnLabel: "bg_3 backend suite" });
-    expect(screen.getByTestId("readout-waiting-on")).toHaveTextContent("bg_3 backend suite");
+    renderRail({ waitingOn: { toolName: "hub", label: "bg_3 backend suite" } });
+    const readout = screen.getByTestId("readout-waiting-on");
+    expect(readout).toHaveTextContent("hub");
+    expect(readout).toHaveTextContent("bg_3 backend suite");
+  });
+
+  it("keeps the capsule to the bare tool name even for a long label", () => {
+    const longLabel =
+      "Recapturing every session-detail viewport now that the density and trace-line changes are in place";
+    renderRail({ waitingOn: { toolName: "hub", label: longLabel } });
+    const readout = screen.getByTestId("readout-waiting-on");
+    expect(readout.querySelector(".instrument-nixie")).toHaveTextContent("hub");
+    const labelEl = readout.querySelector(".instrument-readout__waiting-label");
+    expect(labelEl).toHaveTextContent(longLabel);
+    expect(labelEl).toHaveAttribute("title", longLabel);
   });
 
   it("omits Machines up when the runner status is unavailable", async () => {

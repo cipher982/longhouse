@@ -191,7 +191,7 @@ describe("exploration run helpers", () => {
         interaction({ key: "4", anchorId: 4, toolName: "Grep" }),
         interaction({ key: "5", anchorId: 5, toolName: "LS" }),
       ]),
-    ).toBe("Searched 2 · Read 1 · Listed 2");
+    ).toBe("Searched 2 searches, read 1 file, listed 2 directories");
   });
 
   it("splits overflow keeping the latest visible window", () => {
@@ -296,7 +296,7 @@ describe("exploration run integration", () => {
 
     expect(model.items).toHaveLength(1);
     expect(model.items[0].kind).toBe("activity_group");
-    expect(formatActivitySummary(model.activityGroups[0].interactions)).toBe("Waited 6");
+    expect(formatActivitySummary(model.activityGroups[0].interactions)).toBe("Waited 6 times");
 
     const failed = model.activityGroups[0].interactions[0];
     failed.resultEvent = event({
@@ -375,7 +375,7 @@ describe("exploration run integration", () => {
     expect(group.interactions.map((i) => i.toolName)).toEqual(["Read", "Grep", "Edit"]);
     // Named, not counted: an input with a path but no diff shape still names
     // the file so the reader sees *what* changed without expanding.
-    expect(formatActivitySummary(group.interactions)).toBe("Searched 1 · Read 1 · Edited a.ts");
+    expect(formatActivitySummary(group.interactions)).toBe("Searched 1 search, read 1 file, edited a.ts");
   });
 
   it("keeps an alternating edit/read refactor in one group", () => {
@@ -416,7 +416,7 @@ describe("exploration run integration", () => {
     expect(model.activityGroups).toHaveLength(1);
     expect(model.activityGroups[0].interactions).toHaveLength(8);
     expect(formatActivitySummary(model.activityGroups[0].interactions)).toBe(
-      "Read 4 · Edited f0.ts +1 −1 · f1.ts +1 −1 · +2 more",
+      "Read 4 files, edited f0.ts +1 −1 · f1.ts +1 −1 · +2 more",
     );
   });
 

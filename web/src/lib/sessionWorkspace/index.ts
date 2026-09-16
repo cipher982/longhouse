@@ -32,6 +32,7 @@ export {
   EXPLORATION_OVERFLOW_VISIBLE,
   formatActivitySummary,
   formatToolInput,
+  getActivityGroupTiming,
   getFailurePreview,
   getPreferredSelectionKey,
   getInteractionDisplayInfo,

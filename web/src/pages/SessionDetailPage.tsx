@@ -32,6 +32,7 @@ import {
   ResumeSessionModal,
 } from "../components/session-workspace/ResumeSessionModal";
 import { BranchSessionCard } from "../components/session-workspace/BranchSessionCard";
+import { deriveTurnOutline, TurnOutline, type TurnOutlineTurn } from "../components/session-workspace/TurnOutline";
 import { SessionStateBadge } from "../components/session-workspace/SessionStateBadge";
 import {
   buildSessionMetaSentence,
@@ -44,7 +45,8 @@ import { ReadoutRail } from "../components/instruments/ReadoutRail";
 import {
   bucketToolActivityByMinute,
   countToolCallsThisTurn,
-  findRunningToolLabel,
+  findRunningTool,
+  getRunningTurnStartMs,
 } from "../components/instruments/toolActivity";
 import {
   isSessionClosed,
@@ -148,7 +150,22 @@ function SessionDetailWorkspaceRoute({
     const count = countToolCallsThisTurn(items);
     return count > 0 ? count : null;
   }, [items]);
-  const waitingOnLabel = useMemo(() => findRunningToolLabel(items), [items]);
+  const waitingOn = useMemo(() => findRunningTool(items), [items]);
+  // The one turn-elapsed anchor shared by the header, the composer clock
+  // (SessionChat's own copy of this derivation), and the readout rail's Turn
+  // readout below — see getRunningTurnStartMs for why this replaces
+  // activity.observed_at.
+  const turnStartMs = useMemo(() => getRunningTurnStartMs(items), [items]);
+  // Item 7: the turn outline column. Turns derive from the same loaded
+  // thread as everything else on this page — no new fetch.
+  const turns = useMemo(() => deriveTurnOutline(items), [items]);
+  const handleSelectTurn = useCallback((turn: TurnOutlineTurn) => {
+    selectKey(`message:${turn.eventId}`);
+    document.getElementById(`event-${turn.eventId}`)?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }, [selectKey]);
 
   // Read-on-open acknowledgement for Console results; shared viewers never
   // acknowledge (console-unread-acknowledgement spec).
@@ -354,7 +371,7 @@ function SessionDetailWorkspaceRoute({
     displaySession.control?.source_runner_name?.trim() ||
     (homeLabel && !GENERIC_HOME_LABELS.has(homeLabel) ? homeLabel : null);
   const runtime = resolveSessionRuntimeState(displaySession);
-  const headerState = getSessionHeaderState(displaySession, nowMs);
+  const headerState = getSessionHeaderState(displaySession, nowMs, turnStartMs);
   // One sentence instead of a dot-joined fragment list and a separate
   // "N messages · N tool calls loaded" pill — same facts, read as prose.
   // "working" only appears while the header tone is live.
@@ -402,11 +419,12 @@ function SessionDetailWorkspaceRoute({
   // plain per-render arithmetic on `displaySession`, not a hook, so it's
   // fine here.
   const turnLive = headerState.tone === "live";
-  const activityForTurn = displaySession.session_state.activity;
-  const activityAnchorMs = Date.parse(activityForTurn.observed_at ?? "");
+  const lastTurn = turns.length > 0 ? turns[turns.length - 1] : null;
+  const runningTurnKey = turnLive ? (lastTurn?.key ?? null) : null;
+  const currentTurnKey = runningTurnKey ?? lastTurn?.key ?? null;
   const turnElapsedSeconds =
-    turnLive && Number.isFinite(activityAnchorMs)
-      ? Math.max(0, Math.floor((nowMs - activityAnchorMs) / 1_000))
+    turnLive && turnStartMs != null
+      ? Math.max(0, Math.floor((nowMs - turnStartMs) / 1_000))
       : null;
   const lastTurnSeconds = displaySession.last_turn
     ? Math.round(displaySession.last_turn.duration_ms / 1_000)
@@ -666,6 +684,14 @@ function SessionDetailWorkspaceRoute({
             />
           }
           headerRight={headerRight}
+          outline={
+            <TurnOutline
+              turns={turns}
+              runningTurnKey={runningTurnKey}
+              currentTurnKey={currentTurnKey}
+              onSelectTurn={handleSelectTurn}
+            />
+          }
           rail={
             <ReadoutRail
               turnSeconds={turnSeconds}
@@ -674,7 +700,7 @@ function SessionDetailWorkspaceRoute({
               contextWindow={displaySession.usage_latest?.context_window ?? null}
               toolCallsThisTurn={toolCallsThisTurn}
               toolCallsLive={turnLive}
-              waitingOnLabel={waitingOnLabel}
+              waitingOn={waitingOn}
             />
           }
           listRef={registerTimelineList}

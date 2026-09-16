@@ -10,7 +10,7 @@ import type {
   ToolInteraction,
   SubagentChild,
 } from "./types";
-import { truncatePath } from "./formatters";
+import { formatTime, truncatePath } from "./formatters";
 import { formatEditStat, getEditStat } from "./editSummary";
 import {
   colorTokenToCss,
@@ -73,6 +73,35 @@ const ACTIVITY_SUMMARY_LABEL: Record<ActivityCategory, string> = {
   run: "Ran",
   wait: "Waited",
 };
+// The count moves into the label itself ("Read 2 files") instead of a
+// separate pill, so the noun this category counts has to live somewhere too.
+const ACTIVITY_SUMMARY_NOUN: Record<ActivityCategory, [string, string]> = {
+  search: ["search", "searches"],
+  read: ["file", "files"],
+  list: ["directory", "directories"],
+  view: ["page", "pages"],
+  edit: ["file", "files"],
+  call: ["call", "calls"],
+  run: ["command", "commands"],
+  wait: ["time", "times"],
+};
+
+function pluralizeNoun(category: ActivityCategory, count: number): string {
+  const [singular, plural] = ACTIVITY_SUMMARY_NOUN[category];
+  return count === 1 ? singular : plural;
+}
+
+function lowerFirst(text: string): string {
+  return text.length > 0 ? text[0].toLowerCase() + text.slice(1) : text;
+}
+
+/** "a, b and c" — the join for a group's collapsed run label. No Oxford
+ * comma before "and": the label reads as a sentence fragment, not a list. */
+function joinWithAnd(parts: string[]): string {
+  if (parts.length <= 1) return parts.join("");
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
 
 export function isOutsideActiveContext(event: AgentEvent | null | undefined): boolean {
   return event?.in_active_context === false;
@@ -337,12 +366,16 @@ export function formatActivitySummary(interactions: ToolInteraction[]): string {
       continue;
     }
     if (category !== "run") {
-      if (counts[category] > 0) parts.push(`${ACTIVITY_SUMMARY_LABEL[category]} ${counts[category]}`);
+      if (counts[category] > 0) {
+        parts.push(
+          `${ACTIVITY_SUMMARY_LABEL[category]} ${counts[category]} ${pluralizeNoun(category, counts[category])}`,
+        );
+      }
       continue;
     }
     const operations = [...runOperations.values()];
     if (operations.length === 0) {
-      if (unnamedRuns > 0) parts.push(`Ran ${unnamedRuns}`);
+      if (unnamedRuns > 0) parts.push(`Ran ${unnamedRuns} ${pluralizeNoun("run", unnamedRuns)}`);
       continue;
     }
     const visibleOperations = operations.length > 2
@@ -352,11 +385,14 @@ export function formatActivitySummary(interactions: ToolInteraction[]): string {
       operation.count > 1 ? `${operation.label} ×${operation.count}` : operation.label,
     );
     const hiddenDistinct = Math.max(0, operations.length - visible.length);
-    if (hiddenDistinct > 0) visible.push(`+${hiddenDistinct} more`);
-    if (unnamedRuns > 0) visible.push(`+${unnamedRuns} other`);
-    parts.push(`Ran ${visible.join(" · ")}`);
+    if (hiddenDistinct > 0) visible.push(`${hiddenDistinct} more`);
+    if (unnamedRuns > 0) visible.push(`${unnamedRuns} other`);
+    parts.push(`Ran ${joinWithAnd(visible)}`);
   }
-  return parts.join(" · ");
+  // Natural phrasing across categories ("Ran 1 command, waited 6 times"),
+  // never a dot-joined fragment list: only the first segment keeps its
+  // capitalized verb, everything after reads as a clause continuation.
+  return parts.map((part, index) => (index === 0 ? part : lowerFirst(part))).join(", ");
 }
 
 export function splitExplorationOverflow<T>(
@@ -608,13 +644,42 @@ export function formatToolInput(value: unknown): string | null {
   return serialized ?? String(value);
 }
 
+function formatDurationMs(diffMs: number): string {
+  if (diffMs < 1000) return `${diffMs}ms`;
+  return `${(diffMs / 1000).toFixed(1)}s`;
+}
+
 export function getToolDuration(callEvent: AgentEvent | null, resultEvent: AgentEvent | null): string | null {
   if (!callEvent || !resultEvent) return null;
 
   const diffMs = parseUTC(resultEvent.timestamp).getTime() - parseUTC(callEvent.timestamp).getTime();
   if (diffMs <= 0) return null;
-  if (diffMs < 1000) return `${diffMs}ms`;
-  return `${(diffMs / 1000).toFixed(1)}s`;
+  return formatDurationMs(diffMs);
+}
+
+/**
+ * A group row's right column, matching item 3's row vocabulary: the group's
+ * total duration when every member call timed cleanly, else the time of its
+ * last call (never a fabricated total from partial data).
+ */
+export function getActivityGroupTiming(group: ActivityGroup): { duration: string | null; time: string } {
+  let totalMs = 0;
+  let allTimed = group.interactions.length > 0;
+  for (const interaction of group.interactions) {
+    const diffMs = interaction.callEvent && interaction.resultEvent
+      ? parseUTC(interaction.resultEvent.timestamp).getTime() - parseUTC(interaction.callEvent.timestamp).getTime()
+      : null;
+    if (diffMs != null && diffMs > 0) {
+      totalMs += diffMs;
+    } else {
+      allTimed = false;
+    }
+  }
+  const last = group.interactions[group.interactions.length - 1];
+  return {
+    duration: allTimed && totalMs > 0 ? formatDurationMs(totalMs) : null,
+    time: formatTime(last.timestamp),
+  };
 }
 
 /**

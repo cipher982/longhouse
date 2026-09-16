@@ -1196,6 +1196,16 @@
   padding-bottom: var(--space-2);
 }
 
+/* The rows themselves, as a plain (non-scrolling) block inside the
+   scrolling `.timeline-pane__list` — see the trace-conductor comment in
+   TimelinePane.tsx for why this wrapper exists. */
+.timeline-pane__rows {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
 .timeline-pane__dock {
   flex: 0 1 auto;
   min-height: 0;
@@ -1332,39 +1342,45 @@
   white-space: nowrap;
 }
 
-/* --- Provider reasoning: collapsed prose with an explicit expand affordance. --- */
-/* Etched glass: model reasoning reads as frosted parchment, never as
-   machine output — Inter, not mono, and never bordered like a tool block. */
+/* --- Provider reasoning: a quiet text line, same row vocabulary as a tool
+   row (trace node, 30px, hairline below) while collapsed — the etched-glass
+   panel (frosted parchment, never bordered like a tool block) appears only
+   once expanded. --- */
 .tl-reasoning {
   display: block;
   max-width: var(--tl-tool-max);
-  margin: 4px auto;
+  margin-inline: auto;
   width: 100%;
   border-radius: 2px;
-  background: rgba(246, 235, 214, 0.035);
-  box-shadow: inset 0 0 0 1px rgba(246, 235, 214, 0.06);
-}
-.tl-reasoning.is-selected {
-  box-shadow: inset 0 0 0 1px rgba(212, 184, 122, 0.22);
 }
 .tl-reasoning.is-expanded {
   background: rgba(246, 235, 214, 0.045);
+  box-shadow: inset 0 0 0 1px rgba(246, 235, 214, 0.06);
+}
+.tl-reasoning.is-selected.is-expanded {
+  box-shadow: inset 0 0 0 1px rgba(212, 184, 122, 0.22);
 }
 .tl-reasoning__head {
+  position: relative;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  height: 30px;
+  padding: 0 var(--space-2);
   cursor: pointer;
   min-width: 0;
   width: 100%;
   border: 0;
+  border-bottom: 1px solid rgba(70, 54, 41, 0.9);
   background: transparent;
   color: inherit;
   text-align: left;
   font-family: var(--font-family-base);
   font-size: 13.5px;
   line-height: 1.5;
+}
+.tl-reasoning.is-expanded .tl-reasoning__head {
+  border-bottom: 0;
 }
 .tl-reasoning__head:hover {
   background: rgba(246, 235, 214, 0.02);
@@ -1396,12 +1412,13 @@
 .tl-reasoning__time {
   flex-shrink: 0;
   color: var(--color-text-secondary);
-  font-size: 11px;
+  font-size: 11.5px;
+  font-family: var(--font-family-mono);
 }
 .tl-reasoning__body,
 .tl-reasoning__body.tl-msg__body {
   margin: 0;
-  padding: 0 12px 10px;
+  padding: 8px 12px 10px;
   border-left: 0;
   font-family: var(--font-family-base);
   font-size: 13.5px;
@@ -1421,7 +1438,6 @@
        - tool rows may run wider than prose (up to the column width) so
          bash commands and diffs don't wrap awkwardly. */
 .timeline-pane__list.timeline-events {
-  position: relative;
   gap: 2px;
   align-items: stretch;
   /* The list is one fixed column inside .timeline-pane__body (a centered
@@ -1434,27 +1450,39 @@
   padding-inline: var(--space-4);
 }
 /* The trace: one brass conductor down the transcript's edge, fading at
-   both ends. Tool rows branch off it (see .tl-action__head::before/after). */
-.timeline-pane__list.timeline-events::before {
+   both ends. Tool rows branch off it (see .tl-action__head::before/after).
+   Lives on `.timeline-pane__rows` (the plain block wrapping just the rows),
+   not on the scrolling `.timeline-pane__list` — see the comment in
+   TimelinePane.tsx for why: an absolutely positioned box sized off top/
+   bottom takes its height from the scroll container's own visible box, not
+   its full scrollable content, so it used to cover only the first
+   screenful and disappear once the view scrolled to the bottom. */
+.timeline-pane__rows::before {
   content: "";
   position: absolute;
-  left: calc(var(--space-4) - var(--trace-inset, 8px));
+  left: calc(-1 * var(--trace-inset, 8px));
   top: 24px;
   bottom: 24px;
   width: 1px;
   background: linear-gradient(
     180deg,
     transparent,
-    rgba(233, 185, 73, 0.55) 10%,
-    rgba(233, 185, 73, 0.55) 90%,
+    rgba(233, 185, 73, 0.7) 10%,
+    rgba(233, 185, 73, 0.7) 90%,
     transparent
   );
   pointer-events: none;
 }
 @media (max-width: 640px) {
-  .timeline-pane__list.timeline-events::before,
+  .timeline-pane__rows::before,
   .tl-action__head::before,
-  .tl-action__head::after {
+  .tl-action__head::after,
+  .tl-context__head::before,
+  .tl-context__head::after,
+  .tl-noise__head::before,
+  .tl-noise__head::after,
+  .tl-reasoning__head::before,
+  .tl-reasoning__head::after {
     display: none;
   }
 }
@@ -1494,6 +1522,109 @@
   }
 }
 
+/* Item 7 (web-restyle-signal.md): three columns at 1600px+ — the turn
+   outline (below), the transcript (widened here), and the readout rail.
+   Between 1180 and 1600 today's two-column layout (transcript + rail, set
+   above) is unchanged; below 1180 it's the single centered column. Only
+   --tl-tool-max grows: tool rows and output wells key off it, so they use
+   the full widened column, while --tl-prose-max stays a fixed reading
+   measure so message bodies don't stretch. */
+@media (min-width: 1600px) {
+  .session-workspace-route--single-column {
+    --tl-prose-max: 78ch;
+    --tl-tool-max: 900px;
+    --tl-dock-max: calc(var(--tl-tool-max) + 2 * var(--space-4) + var(--space-8) + 200px);
+  }
+}
+@media (min-width: 1900px) {
+  .session-workspace-route--single-column {
+    --tl-tool-max: 1000px;
+    --tl-dock-max: calc(var(--tl-tool-max) + 2 * var(--space-4) + var(--space-8) + 200px);
+  }
+}
+
+/* --- Turn outline: a left sidebar listing the session's turns (item 7).
+   One component (session-workspace/TurnOutline.tsx) + this block —
+   deletable together in one commit. Hidden below 1600px. --- */
+.timeline-pane-shell {
+  display: flex;
+  min-height: 0;
+}
+
+.session-turn-outline {
+  display: none;
+}
+
+@media (min-width: 1600px) {
+  .timeline-pane-shell {
+    gap: var(--space-4);
+  }
+  .session-turn-outline {
+    display: block;
+    flex: 0 0 240px;
+    width: 240px;
+    min-height: 0;
+    overflow-y: auto;
+    padding: var(--space-4) var(--space-2) var(--space-4) var(--space-4);
+    border-right: 1px solid rgba(70, 54, 41, 0.7);
+  }
+}
+
+.session-turn-outline__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-turn-outline__item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-family-base);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.session-turn-outline__item:hover {
+  background: rgba(246, 235, 214, 0.035);
+}
+.session-turn-outline__item.is-current {
+  background: rgba(212, 184, 122, 0.09);
+  box-shadow: inset 2px 0 0 rgba(233, 185, 73, 0.7);
+}
+.session-turn-outline__ember {
+  flex-shrink: 0;
+  align-self: center;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-intent-warning);
+  box-shadow: 0 0 6px rgba(240, 138, 36, 0.7);
+}
+.session-turn-outline__time {
+  flex-shrink: 0;
+  font-family: var(--font-family-mono);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+.session-turn-outline__ask {
+  min-width: 0;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .tl-chip {
   display: inline-flex;
   align-items: center;
@@ -1528,9 +1659,9 @@
 
 /* --- Prose messages: no card, no border, just text. ---
      Assistant turns are the document: full reading width, left edge
-     shared with tool rows. User turns are short prompts: compact
-     right-aligned bubbles with a faint tint so the offset reads as
-     intentional rather than ragged-right. */
+     shared with tool rows. The user's ask shares that same left edge and
+     measure — serif italic with "You asked at …" above it is what marks it
+     as the ask, not a right-aligned bubble. */
 .tl-msg {
   display: flex;
   flex-direction: column;
@@ -1542,10 +1673,15 @@
 .tl-msg--assistant {
   align-self: flex-start;
 }
+/* The ask reads as part of the same left-aligned column as assistant prose
+   (same measure, same left edge) — never a shrink-wrapped, right-aligned
+   bubble, which is what pushed its left edge to the middle of the column at
+   wide viewports instead of lining up with the paragraphs around it. */
 .tl-msg--user {
-  align-self: flex-end;
-  width: auto;
-  max-width: min(var(--tl-prose-max), 82%);
+  align-self: flex-start;
+  width: 100%;
+  max-width: var(--tl-prose-max);
+  margin-inline: 0;
 }
 .tl-msg__head {
   display: flex;
@@ -1814,10 +1950,15 @@
   text-align: left;
   cursor: pointer;
 }
-/* The trace: a 16px branch off the transcript's brass conductor, with a
-   node at the joint — page-filled with a gold ring, or flame-filled and
-   glowing while the tool is running. */
-.tl-action__head::before {
+/* The trace: a branch off the transcript's brass conductor, with a node at
+   the joint — page-filled with a gold ring, or flame-filled and glowing
+   while the tool is running. Shared by every row kind (tool, context,
+   grouped activity, Thinking) — one lead treatment, per web-restyle-signal
+   item 3. */
+.tl-action__head::before,
+.tl-context__head::before,
+.tl-noise__head::before,
+.tl-reasoning__head::before {
   content: "";
   position: absolute;
   left: calc(-1 * var(--trace-inset, 8px));
@@ -1826,7 +1967,10 @@
   height: 1px;
   background: rgba(233, 185, 73, 0.5);
 }
-.tl-action__head::after {
+.tl-action__head::after,
+.tl-context__head::after,
+.tl-noise__head::after,
+.tl-reasoning__head::after {
   content: "";
   position: absolute;
   left: calc(-1 * var(--trace-inset, 8px) - 2.5px);
@@ -1837,7 +1981,8 @@
   background: var(--color-surface-page);
   box-shadow: inset 0 0 0 1px rgba(233, 185, 73, 0.75);
 }
-.tl-action--pending .tl-action__head::after {
+.tl-action--pending .tl-action__head::after,
+.tl-context--pending .tl-context__head::after {
   background: var(--color-intent-warning);
   box-shadow: 0 0 6px rgba(240, 138, 36, 0.7);
 }
@@ -2016,14 +2161,17 @@
   box-shadow: none;
 }
 .tl-context__head {
+  position: relative;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
-  padding: 4px 10px 4px 14px;
+  height: 30px;
+  padding: 0 var(--space-2);
   cursor: pointer;
   min-width: 0;
   width: 100%;
   border: 0;
+  border-bottom: 1px solid rgba(70, 54, 41, 0.9);
   background: transparent;
   color: inherit;
   text-align: left;
@@ -2033,12 +2181,6 @@
 }
 .tl-context__head:hover {
   background: rgba(255, 255, 255, 0.02);
-  border-radius: var(--radius-md);
-}
-.tl-context__arrow {
-  color: var(--color-text-muted);
-  opacity: 0.6;
-  flex-shrink: 0;
 }
 .tl-context__label {
   flex-shrink: 0;
@@ -2059,7 +2201,7 @@
   flex-shrink: 0;
 }
 .tl-context__time {
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--color-text-secondary);
 }
 
@@ -2078,34 +2220,30 @@
   background: rgba(18, 11, 9, 0.45);
 }
 .tl-noise__head {
+  position: relative;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
-  padding: 4px 10px 4px 14px;
+  height: 30px;
+  padding: 0 var(--space-2);
   cursor: pointer;
-  font-family: var(--font-family-mono);
-  font-size: 12px;
-  line-height: 1.6;
+  /* Prose, like a tool row's own summary text (.tl-action__summary) — a
+     group label is a sentence ("Ran 9 commands"), not machine output, so it
+     reads in Inter, not mono. Only the right column (time/duration) stays
+     mono, set explicitly on .tl-noise__time below. */
+  font-family: var(--font-family-base);
+  font-size: 13.5px;
+  line-height: 1.5;
   min-width: 0;
   width: 100%;
   border: 0;
+  border-bottom: 1px solid rgba(70, 54, 41, 0.9);
   background: transparent;
   color: inherit;
   text-align: left;
 }
 .tl-noise__head:hover {
   background: rgba(255, 255, 255, 0.02);
-  border-radius: var(--radius-md);
-}
-.tl-noise__arrow {
-  color: var(--color-text-muted);
-  opacity: 0.6;
-  flex-shrink: 0;
-}
-.tl-noise__label {
-  color: var(--color-text-secondary);
-  font-weight: var(--font-weight-semibold);
-  flex-shrink: 0;
 }
 .tl-noise__summary {
   flex: 1;
@@ -2115,13 +2253,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.tl-noise__count {
-  font-size: 11px;
-  color: var(--color-text-secondary);
-  padding: 0 6px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
+.tl-noise__time {
   flex-shrink: 0;
+  font-family: var(--font-family-mono);
+  font-size: 11.5px;
+  color: var(--color-text-secondary);
 }
 .tl-noise__chev {
   color: var(--color-text-muted);
@@ -2856,9 +2992,17 @@
   flex-direction: column;
 }
 
+.session-workspace-route--single-column .timeline-pane-shell {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+}
+
 .session-workspace-route--single-column .timeline-pane {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   border-radius: 0;
   border-left: 0;
   border-right: 0;

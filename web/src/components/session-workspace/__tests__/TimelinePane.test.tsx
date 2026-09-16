@@ -487,7 +487,10 @@ describe("TimelinePane", () => {
     );
 
     expect(screen.getByText("Ran gh run view ×2")).toBeInTheDocument();
-    expect(screen.getByText("2")).toBeInTheDocument();
+    // The group's right column is duration/time now, not a redundant count
+    // pill (item 3, web-restyle-signal) — the count already lives in the
+    // summary text asserted above.
+    expect(screen.getByTestId("session-timeline-row")).toHaveClass("tl-noise");
   });
 
   it("reveals the exact child when a grouped tool is selected", () => {

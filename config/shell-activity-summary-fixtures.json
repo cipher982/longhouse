@@ -47,7 +47,7 @@
           ]
         }
       ],
-      "expected": "Read 1 · Edited 1 · Ran gh run view"
+      "expected": "Read 1 file, edited 1, ran gh run view"
     },
     {
       "name": "display budget brackets distinct overflow chronologically",
@@ -83,7 +83,7 @@
           ]
         }
       ],
-      "expected": "Ran gh run view · docker compose up · +1 more"
+      "expected": "Ran gh run view, docker compose up and 1 more"
     },
     {
       "name": "named and opaque work remain honest",
@@ -105,7 +105,7 @@
           "category": "run"
         }
       ],
-      "expected": "Ran gh run view · +2 other"
+      "expected": "Ran gh run view and 2 other"
     },
     {
       "name": "first and last survive a noisy edit verification commit group",
@@ -179,7 +179,7 @@
           "category": "wait"
         }
       ],
-      "expected": "Edited 1 · Ran git add · git commit · +3 more · +1 other · Waited 4"
+      "expected": "Edited 1, ran git add, git commit, 3 more and 1 other, waited 4 times"
     },
     {
       "name": "all opaque falls back to count",
@@ -191,7 +191,7 @@
           "category": "run"
         }
       ],
-      "expected": "Ran 2"
+      "expected": "Ran 2 commands"
     },
     {
       "name": "one call may contain repeated literal operations",
@@ -226,7 +226,7 @@
           ]
         }
       ],
-      "expected": "Ran gh run view · Waited 1"
+      "expected": "Ran gh run view, waited 1 time"
     },
     {
       "name": "edit names its file and diff stat",
@@ -243,7 +243,7 @@
           "category": "read"
         }
       ],
-      "expected": "Read 1 · Edited timelineModel.ts +1 −1"
+      "expected": "Read 1 file, edited timelineModel.ts +1 −1"
     },
     {
       "name": "edited files deduplicate by path",

@@ -1,6 +1,6 @@
 import * as React from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -712,13 +712,18 @@ describe("SessionDetailPage", () => {
         "Using Shell",
       );
 
+      // Scoped to the transcript list — the readout rail's "Waiting on"
+      // capsule also renders the bare tool name ("Bash") now (item 5,
+      // web-restyle-signal), so an unscoped query is ambiguous.
+      const transcriptList = screen.getByTestId("session-timeline-list");
+
       {
-        const label = screen.getByText("Bash");
+        const label = within(transcriptList).getByText("Bash");
         const row = label.closest('[data-row-kind="tool"]');
         expect(row).toHaveTextContent("running");
       }
 
-      const toolLabel = screen.getByText("Bash");
+      const toolLabel = within(transcriptList).getByText("Bash");
       const toolRow = toolLabel.closest("button");
       if (!(toolRow instanceof HTMLButtonElement)) {
         throw new Error(
@@ -728,7 +733,7 @@ describe("SessionDetailPage", () => {
 
       fireEvent.click(toolRow);
 
-      const row = screen.getByText("Bash").closest('[data-row-kind="tool"]');
+      const row = within(transcriptList).getByText("Bash").closest('[data-row-kind="tool"]');
       expect(row).not.toBeNull();
       expect(row).toHaveTextContent("Result not recorded yet.");
       expect(row).not.toHaveTextContent(

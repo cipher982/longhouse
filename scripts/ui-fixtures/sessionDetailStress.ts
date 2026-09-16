@@ -50,6 +50,7 @@ type AgentEvent = {
   tool_input_json: unknown;
   tool_output_text: string | null;
   tool_call_id: string | null;
+  tool_call_state?: "running" | "completed" | "dropped" | null;
   tool_presentation?: JsonObject | null;
   timestamp: string;
   in_active_context?: boolean;
@@ -278,6 +279,40 @@ function codexWaitPresentation(sessionId: number): JsonObject {
     rule_id: "codex:exec:single-child:v1",
     wrapper_recedes: true,
     children: [],
+  };
+}
+
+/** A shell call the client recognizes and names in a grouped-run summary
+ * (formatActivitySummary's "run" category) — e.g. three of these with the
+ * same key/label collapse to "Ran manual-app ×3" in an activity group. */
+function namedRunPresentation(key: string, label: string): JsonObject {
+  return {
+    version: 1,
+    disposition: "parsed",
+    tool_name: "exec_command",
+    source_tool_name: "exec",
+    execution_method: "exec",
+    label,
+    icon: "$",
+    color: "tertiary",
+    tier: "noise",
+    aggregate: "run",
+    mcp_namespace: null,
+    tool_input_json: {},
+    rule_id: "fixture:named-run:v1",
+    wrapper_recedes: false,
+    children: [],
+    shell_summary: {
+      version: 1,
+      confidence: "syntactic",
+      operations: [{ key, label, executable: label.split(" ")[0], subcommands: [], count: 1 }],
+      candidate_count: 1,
+      truncated: false,
+      dynamic: false,
+      parse_error: null,
+      parser_id: "fixture",
+      shape_registry_version: 1,
+    },
   };
 }
 
@@ -725,11 +760,15 @@ export function buildSessionDetailStressFixture(): {
         ].join("\n"),
       ),
     }),
-    makeEvent(212, "assistant", "2026-04-15T15:21:00Z", {
+    // Fresh ids (not 212/213 again): those were already spent above on the
+    // "make test-frontend" call/result pair, and a repeated id silently drops
+    // one of the two events from the built projection (Map-keyed by id) —
+    // this pair used to vanish from the render entirely.
+    makeEvent(2120, "assistant", "2026-04-15T15:21:00Z", {
       content_text:
         "The failure is useful: the session page readiness flag only flips after both workspace and projection finish. I need to mock the projection and turn endpoints too.",
     }),
-    makeEvent(213, "user", "2026-04-15T15:22:00Z", {
+    makeEvent(2130, "user", "2026-04-15T15:22:00Z", {
       content_text:
         "Exactly. Make this useful for catching the dumb stuff before I load production and notice padding, dull contrast, or labels that do not make sense.",
     }),
@@ -744,12 +783,17 @@ export function buildSessionDetailStressFixture(): {
       content_text: 'Background command "Run the checks" completed (exit code 0)',
       interaction_kind: "provider_notification",
     }),
-    makeEvent(215, "assistant", "2026-04-15T16:11:35Z", {
+    makeEvent(215, "assistant", "2026-04-15T15:22:37Z", {
       tool_name: "exec_command",
       tool_input_json: {
         cmd: "make ui-capture PAGE=session-detail SCENE=session-detail-stress VIEWPORT=mobile NO_TRACE=1",
       },
-      tool_call_id: "head-tool-5",
+      tool_call_id: "head-tool-mobile-capture",
+    }),
+    makeEvent(2151, "tool", "2026-04-15T15:23:07Z", {
+      tool_name: "exec_command",
+      tool_output_text: toolOutput(0, "30.0", "Saved artifacts/ui-capture/session-detail.png"),
+      tool_call_id: "head-tool-mobile-capture",
     }),
     // Spread across the last 30 minutes (not clustered at `now`) so the
     // Phase 4 activity sparkline (web/src/components/instruments/
@@ -769,6 +813,126 @@ export function buildSessionDetailStressFixture(): {
         tool_call_id: `head-wait-${index}`,
       }),
     ]).flat(),
+    // --- Dense recent tail (16:09:40 - 16:11:35, just before `now`):
+    // reasoning rows whose collapsed first line carries markdown bold (item
+    // 1), an activity group of plain reads (item 3's "Read 2 files"), a
+    // named-run group ("Ran manual-app ×3 and 1 other"), an unnamed-run
+    // group ("Ran 9 commands"), and a currently-running tool call with a
+    // 60+ char label (items 3, 5, 8). ---
+    makeEvent(2301, "system", "2026-04-15T16:09:40Z", {
+      interaction_kind: "provider_reasoning",
+      content_text:
+        "Thinking:\n**Planning code deployment** and checking the manual-app workflow\nCross-checking the release steps against the manual-app runbook before pushing anything.",
+    }),
+    makeEvent(2302, "assistant", "2026-04-15T16:09:45Z", {
+      tool_name: "Read",
+      tool_input_json: { file_path: "domains/mytech/infrastructure/manual-apps/deploy.md" },
+      tool_call_id: "tail-read-1",
+    }),
+    makeEvent(2303, "tool", "2026-04-15T16:09:45Z", {
+      tool_name: "Read",
+      tool_output_text: "## Manual app deployment\n1. Build image\n2. manual-app deploy\n3. Verify health",
+      tool_call_id: "tail-read-1",
+    }),
+    makeEvent(2305, "assistant", "2026-04-15T16:09:52Z", {
+      tool_name: "Read",
+      tool_input_json: { file_path: "server/zerg/cli/deploy.py" },
+      tool_call_id: "tail-read-2",
+    }),
+    makeEvent(2306, "tool", "2026-04-15T16:09:53Z", {
+      tool_name: "Read",
+      tool_output_text: "def deploy(): ...",
+      tool_call_id: "tail-read-2",
+    }),
+    makeEvent(2307, "assistant", "2026-04-15T16:09:54Z", {
+      tool_name: "Read",
+      tool_input_json: { file_path: "server/zerg/cli/__init__.py" },
+      tool_call_id: "tail-read-3",
+    }),
+    makeEvent(2308, "tool", "2026-04-15T16:09:55Z", {
+      tool_name: "Read",
+      tool_output_text: "from .deploy import deploy",
+      tool_call_id: "tail-read-3",
+    }),
+    makeEvent(2309, "system", "2026-04-15T16:10:00Z", {
+      interaction_kind: "provider_reasoning",
+      content_text:
+        "Thinking:\n**Deploying now** and watching manual-app for the rollout to finish\nRunning the deploy script against cinder and tailing its status output.",
+    }),
+    makeEvent(2310, "assistant", "2026-04-15T16:10:02Z", {
+      tool_name: "exec_command",
+      tool_input_json: { cmd: "manual-app deploy sauron-jobs" },
+      tool_call_id: "tail-run-1",
+      tool_presentation: namedRunPresentation("manual-app", "manual-app"),
+    }),
+    makeEvent(2311, "tool", "2026-04-15T16:10:03Z", {
+      tool_name: "exec_command",
+      tool_output_text: toolOutput(0, "1.0", "Deployed sauron-jobs"),
+      tool_call_id: "tail-run-1",
+    }),
+    makeEvent(2312, "assistant", "2026-04-15T16:10:04Z", {
+      tool_name: "exec_command",
+      tool_input_json: { cmd: "manual-app deploy stopsign" },
+      tool_call_id: "tail-run-2",
+      tool_presentation: namedRunPresentation("manual-app", "manual-app"),
+    }),
+    makeEvent(2313, "tool", "2026-04-15T16:10:05Z", {
+      tool_name: "exec_command",
+      tool_output_text: toolOutput(0, "0.9", "Deployed stopsign"),
+      tool_call_id: "tail-run-2",
+    }),
+    makeEvent(2314, "assistant", "2026-04-15T16:10:06Z", {
+      tool_name: "exec_command",
+      tool_input_json: { cmd: "manual-app deploy longhouse-web" },
+      tool_call_id: "tail-run-3",
+      tool_presentation: namedRunPresentation("manual-app", "manual-app"),
+    }),
+    makeEvent(2315, "tool", "2026-04-15T16:10:07Z", {
+      tool_name: "exec_command",
+      tool_output_text: toolOutput(0, "1.1", "Deployed longhouse-web"),
+      tool_call_id: "tail-run-3",
+    }),
+    makeEvent(2316, "assistant", "2026-04-15T16:10:08Z", {
+      tool_name: "exec_command",
+      tool_input_json: { cmd: "docker compose restart worker" },
+      tool_call_id: "tail-run-4",
+    }),
+    makeEvent(2317, "tool", "2026-04-15T16:10:09Z", {
+      tool_name: "exec_command",
+      tool_output_text: toolOutput(0, "0.6", "Restarted worker"),
+      tool_call_id: "tail-run-4",
+    }),
+    makeEvent(2318, "system", "2026-04-15T16:10:20Z", {
+      interaction_kind: "provider_reasoning",
+      content_text:
+        "Thinking:\n**Verifying deployment tasks** and tailing the health checks\nWaiting on the health-check script before declaring the rollout done.",
+    }),
+    ...Array.from({ length: 9 }, (_, index) => [
+      makeEvent(2400 + index * 2, "assistant", `2026-04-15T16:10:${String(22 + index).padStart(2, "0")}Z`, {
+        tool_name: "Bash",
+        tool_input_json: { command: `curl -sf https://cinder.local/health/${index}` },
+        tool_call_id: `tail-health-${index}`,
+      }),
+      makeEvent(2401 + index * 2, "tool", `2026-04-15T16:10:${String(22 + index).padStart(2, "0")}Z`, {
+        tool_name: "Bash",
+        tool_output_text: "ok",
+        tool_call_id: `tail-health-${index}`,
+      }),
+    ]).flat(),
+    makeEvent(2419, "system", "2026-04-15T16:11:00Z", {
+      interaction_kind: "provider_reasoning",
+      content_text:
+        "Thinking:\n**Collecting the monitor result** and confirming Sauron sees the new commits\nRe-running the recapture at every viewport now that the density and trace-line changes are in.",
+    }),
+    makeEvent(2420, "assistant", "2026-04-15T16:11:35Z", {
+      tool_name: "exec_command",
+      tool_input_json: {
+        cmd: "make ui-capture PAGE=session-detail SCENE=session-detail-stress VIEWPORT=2000x1200 NO_TRACE=1",
+        i: "Recapturing every session-detail viewport now that the density and trace-line changes are in place",
+      },
+      tool_call_id: "tail-running-1",
+      tool_call_state: "running",
+    }),
   ];
 
   const items: AgentSessionProjectionItem[] = [
@@ -822,7 +986,7 @@ export function buildSessionDetailStressFixture(): {
         state: "active",
         terminal_phase: null,
         error_code: null,
-        user_event_id: 213,
+        user_event_id: 2130,
         durable_assistant_event_id: null,
         baseline_event_id: 214,
         baseline_observation_cursor: null,

@@ -46,10 +46,19 @@ export function formatElapsedClock(totalSeconds: number): string {
  * attention (a provider question is pending), and cool (idle or ended) —
  * because that is all the header has room to say at a glance; the full
  * evidence disclosure still lives in the runtime strip below.
+ *
+ * `turnStartMs` is the one shared turn-elapsed anchor (see
+ * `getRunningTurnStartMs` in `components/instruments/toolActivity.ts`) —
+ * pass it whenever the caller has the loaded thread, so this sentence's
+ * "for N minutes" agrees with the composer clock and the readout rail's
+ * Turn readout. Omitting it falls back to the activity heartbeat, which is
+ * "how long since the last observed tool signal", not "how long has this
+ * turn run" — the three-clocks-disagree bug this parameter exists to avoid.
  */
 export function getSessionHeaderState(
   session: Pick<AgentSession, "session_state">,
   nowMs: number,
+  turnStartMs?: number | null,
 ): SessionHeaderStateInfo {
   const facts = session.session_state;
   // The route's own tone (`session-workspace-route--tone-<tone>`) already
@@ -85,8 +94,9 @@ export function getSessionHeaderState(
 
   if (working) {
     const tool = facts.activity.tool?.trim();
-    const anchorMs = Date.parse(facts.activity.observed_at ?? "");
-    const elapsedSeconds = Number.isFinite(anchorMs)
+    const fallbackAnchorMs = Date.parse(facts.activity.observed_at ?? "");
+    const anchorMs = turnStartMs ?? (Number.isFinite(fallbackAnchorMs) ? fallbackAnchorMs : null);
+    const elapsedSeconds = anchorMs != null
       ? Math.max(0, Math.floor((nowMs - anchorMs) / 1_000))
       : null;
     const using = tool ? `Using ${tool}` : "Working";

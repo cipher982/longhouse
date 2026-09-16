@@ -37,6 +37,7 @@ import { Badge, Button } from "./ui";
 import { AttachmentTray } from "./AttachmentTray";
 import { ManagedLaunchHintCard } from "./session-workspace/ManagedLaunchHintCard";
 import { Nixie } from "./instruments/Nixie";
+import { getRunningTurnStartMs } from "./instruments/toolActivity";
 import {
   formatClockTime,
   formatElapsedClock,
@@ -682,12 +683,20 @@ export function SessionChat({
   // never disagree about live/attention/cool, but keeps its own mono clock
   // timer rather than a word-based duration, matching the instrument
   // panel's Nixie-style readout (Phase 4 wraps it in a capsule).
-  const composerState = getSessionHeaderState(session, activityNowMs);
+  //
+  // `turnStartMs` is the same shared turn-elapsed anchor the session header
+  // and the readout rail use (getRunningTurnStartMs) — derived from the same
+  // durable timeline rows passed in as `timelineItems`, so this clock can
+  // never drift from theirs.
+  const turnStartMs = useMemo(
+    () => getRunningTurnStartMs(timelineItems ?? []),
+    [timelineItems],
+  );
+  const composerState = getSessionHeaderState(session, activityNowMs, turnStartMs);
   const activityTool = activity.tool?.trim() || null;
-  const activityAnchorMs = Date.parse(activity.observed_at ?? "");
   const composerElapsedSeconds =
-    composerState.tone === "live" && Number.isFinite(activityAnchorMs)
-      ? Math.max(0, Math.floor((activityNowMs - activityAnchorMs) / 1_000))
+    composerState.tone === "live" && turnStartMs != null
+      ? Math.max(0, Math.floor((activityNowMs - turnStartMs) / 1_000))
       : null;
   const composerUsingLabel = activityTool ? `Using ${activityTool}` : "Working";
   const composerLastTurnMs = Date.parse(

@@ -37,6 +37,29 @@ export function bucketToolActivityByMinute(
 }
 
 /**
+ * Turn start = the timestamp of the most recent user message in the loaded
+ * thread — the one anchor the header, the composer clock, and the readout
+ * rail all read now, so the three never disagree (web-restyle-signal item
+ * 6). `session_state.run.started_at` is deliberately NOT this: `run` is the
+ * underlying provider run's lifecycle (one continuous process, started
+ * once, unchanged across every turn inside it), not a per-turn field — using
+ * it as a turn anchor is the bug this replaces. The `/turns` list endpoint
+ * would be the ideal source but returns empty rows under the live catalog
+ * (see `lib/sessionTiming.ts`), so the loaded thread's own last user event is
+ * the only fact actually available for this.
+ */
+export function getRunningTurnStartMs(items: TimelineItem[]): number | null {
+  let lastUserMs: number | null = null;
+  for (const item of items) {
+    if (item.kind === "message" && item.event.role === "user") {
+      const ms = Date.parse(item.event.timestamp);
+      if (Number.isFinite(ms)) lastUserMs = ms;
+    }
+  }
+  return lastUserMs;
+}
+
+/**
  * "This turn" = tool calls since the most recent user message in the loaded
  * thread. Falls back to every loaded tool call when no user message has
  * loaded yet (e.g. a continuation whose first loaded page starts mid-turn).
@@ -52,15 +75,21 @@ export function countToolCallsThisTurn(items: TimelineItem[]): number {
   return collectToolInteractions(scope).length;
 }
 
-/**
- * The transcript's own summary text for the currently running tool row, if
- * any — the same label the trace shows on that row (never a fabricated
- * one).
- */
-export function findRunningToolLabel(items: TimelineItem[]): string | null {
+export interface RunningToolInfo {
+  /** The bare tool name — short enough for the rail's capsule (e.g. "hub"). */
+  toolName: string;
+  /** The transcript's own summary text for the row, if any — the same label
+   * the trace shows on that row (never a fabricated one). Can run 60+
+   * characters, so callers must clamp it themselves rather than growing a
+   * capsule to fit it. */
+  label: string;
+}
+
+/** The currently running tool row, if any. */
+export function findRunningTool(items: TimelineItem[]): RunningToolInfo | null {
   const running = collectToolInteractions(items).find((interaction) =>
     isToolInteractionRunning(interaction),
   );
   if (!running) return null;
-  return getToolSummary(running) || running.toolName || null;
+  return { toolName: running.toolName, label: getToolSummary(running) || running.toolName };
 }

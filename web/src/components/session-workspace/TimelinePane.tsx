@@ -19,6 +19,7 @@ import {
   formatToolInput,
   formatTime,
   formatTurnDuration,
+  getActivityGroupTiming,
   getEditStat,
   getFailurePreview,
   getTimelineMessagePreview,
@@ -96,6 +97,12 @@ interface TimelinePaneProps {
   /** Readout rail (Phase 4 Instruments), rendered beside the transcript on
    *  wide viewports; CSS hides it below 1180px. */
   rail?: ReactNode;
+  /** Turn outline column (item 7, web-restyle-signal): a fixed-width sidebar
+   * to the left of the whole pane (header, transcript, and dock), shown only
+   * at wide viewports — CSS hides it below 1600px. Rendered outside the
+   * transcript+rail group the composer spans, so the dock's own width is
+   * unaffected by whether this is present. */
+  outline?: ReactNode;
   dock?: ReactNode;
   listRef?: (node: HTMLDivElement | null) => void;
   renderMedia?: boolean;
@@ -848,7 +855,6 @@ function ContextLine({
         aria-expanded={expanded}
         aria-controls={detailId}
       >
-        <span className="tl-context__arrow">↳</span>
         <span
           className="tl-context__label"
           style={{ color: info.color }}
@@ -896,6 +902,7 @@ function ActivityChip({
 }) {
   const [showEarlier, setShowEarlier] = useState(false);
   const summary = formatActivitySummary(group.interactions) || "Activity";
+  const timing = getActivityGroupTiming(group);
   const { earlier, latest } = splitExplorationOverflow(group.interactions);
   const visibleInteractions = showEarlier ? group.interactions : latest;
 
@@ -927,14 +934,13 @@ function ActivityChip({
         aria-expanded={expanded}
         aria-controls={`${rowId}-list`}
       >
-        <span className="tl-noise__arrow">↳</span>
         <span
           className="tl-noise__summary"
           {...{ elementtiming: "longhouse-session-timeline-row" }}
         >
           {summary}
         </span>
-        <span className="tl-noise__count">{group.interactions.length}</span>
+        <span className="tl-noise__time">{timing.duration ?? timing.time}</span>
         <span className={`tl-noise__chev${expanded ? " is-open" : ""}`} aria-hidden="true">›</span>
       </button>
       {expanded ? (
@@ -1084,6 +1090,7 @@ export function TimelinePane({
   headerSparkline,
   headerRight,
   rail = null,
+  outline = null,
   dock = null,
   listRef,
   renderMedia = true,
@@ -1307,7 +1314,7 @@ export function TimelinePane({
   const showScopedLoading = loading && filteredItems.length === 0;
   const showScopedError = !loading && !!error && filteredItems.length === 0;
 
-  return (
+  const paneContent = (
     <div
       className={`timeline-pane${dock ? " timeline-pane--with-dock" : ""}`}
       data-testid="session-timeline-pane"
@@ -1460,7 +1467,20 @@ export function TimelinePane({
             }
           />
         ) : (
-          filteredItems.map((item) => {
+          // A plain block wrapper around just the rows (not the sentinel or
+          // empty/loading states): the trace conductor (item 4,
+          // web-restyle-signal) is an absolutely positioned child of THIS
+          // element rather than of the scrolling `.timeline-pane__list`
+          // itself, because an absolutely positioned box sized off `top`/
+          // `bottom` takes its height from its containing block's own laid
+          // -out box — for a scroll container that's the visible clientHeight,
+          // not the full scrollable content height, so the line only ever
+          // covered the first screenful of a long transcript and vanished
+          // once the view auto-scrolled to the bottom. This wrapper is a
+          // normal (non-scrolling) block, so its height is the true content
+          // height and the line spans the whole transcript.
+          <div className="timeline-pane__rows">
+          {filteredItems.map((item) => {
             if (item.kind === "seam") {
               return <SeamRow key={item.seam.key} seam={item.seam} />;
             }
@@ -1525,7 +1545,8 @@ export function TimelinePane({
                 renderMedia={renderMedia}
               />
             );
-          })
+          })}
+          </div>
         )}
         </div>
         {rail}
@@ -1552,6 +1573,15 @@ export function TimelinePane({
       ) : null}
 
       {dock ? <div className="timeline-pane__dock">{dock}</div> : null}
+    </div>
+  );
+
+  if (!outline) return paneContent;
+
+  return (
+    <div className="timeline-pane-shell" data-testid="session-timeline-shell">
+      {outline}
+      {paneContent}
     </div>
   );
 }

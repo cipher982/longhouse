@@ -23,9 +23,8 @@ export interface ReadoutRailProps {
   contextWindow: number | null;
   toolCallsThisTurn: number | null;
   toolCallsLive: boolean;
-  /** Label of the currently running tool row; omitted when nothing is
-   * running. */
-  waitingOnLabel: string | null;
+  /** The currently running tool row; omitted when nothing is running. */
+  waitingOn: { toolName: string; label: string } | null;
 }
 
 function formatCompactTokens(n: number): string {
@@ -40,7 +39,7 @@ export function ReadoutRail({
   contextWindow,
   toolCallsThisTurn,
   toolCallsLive,
-  waitingOnLabel,
+  waitingOn,
 }: ReadoutRailProps) {
   // Same query key as the nav's status read (components/Layout.tsx) — the
   // cache is shared, so this doesn't add a second network request.
@@ -91,11 +90,18 @@ export function ReadoutRail({
         </div>
       ) : null}
 
-      {waitingOnLabel ? (
+      {waitingOn ? (
         <div className="instrument-readout" data-testid="readout-waiting-on">
           <span className="instrument-readout__key">Waiting on</span>
-          {/* A tool label, not a live numeric value — no glow. */}
-          <Nixie value={waitingOnLabel} dim />
+          {/* The capsule carries the short tool name only — a 60+ char
+              label would otherwise grow to dominate the rail (see
+              web-restyle-signal item 5). The full label sits underneath as
+              plain muted text, clamped to two lines, with the untruncated
+              text still reachable via title. */}
+          <Nixie value={waitingOn.toolName} dim />
+          <span className="instrument-readout__waiting-label" title={waitingOn.label}>
+            {waitingOn.label}
+          </span>
         </div>
       ) : null}
 
