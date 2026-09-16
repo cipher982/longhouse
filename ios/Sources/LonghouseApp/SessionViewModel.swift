@@ -140,6 +140,7 @@ final class SessionViewModel: ObservableObject {
     /// rotation or tenant switch must not reuse the previous route's
     /// submitted rows or receipt reconciliation.
     private var activeAuthGeneration: String?
+    private var lastWorkspaceEvents: [SessionEvent] = []
     private var lastWorkspaceProjectionItems: [SessionProjectionItem] = []
     private var loadedProjectionItemCount = 0
     private var totalProjectionItemCount = 0
