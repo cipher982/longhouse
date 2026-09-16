@@ -490,7 +490,7 @@ def test_steer_text_to_managed_local_session_passes_codex_attachments_to_engine(
 def test_unsupported_steer_rejects_before_control_write(monkeypatch, tmp_path):
     dispatcher = _install_fake_control_dispatch(monkeypatch)
 
-    for provider in ("cursor", "antigravity"):
+    for provider in ("antigravity",):
         provider_root = tmp_path / provider
         provider_root.mkdir()
         SessionLocal = _make_db(provider_root)

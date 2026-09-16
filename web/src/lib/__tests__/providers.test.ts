@@ -117,7 +117,7 @@ describe("providers launch support", () => {
     expect(getLaunchProviderSupport("cursor")).toMatchObject({
       launchAndSend: true,
       interrupt: true,
-      steerMidTurn: false,
+      steerMidTurn: true,
       resume: true,
       cloudSessionStart: "live",
       hooksSupport: "live",

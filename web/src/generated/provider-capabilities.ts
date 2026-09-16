@@ -83,7 +83,7 @@ export const GENERATED_PROVIDER_CAPABILITIES: Record<GeneratedProviderId, Genera
     id: "cursor",
     launchAndSend: true,
     interrupt: true,
-    steerMidTurn: false,
+    steerMidTurn: true,
     resume: true,
     proven: {
       launchAndSend: false,

@@ -193,6 +193,7 @@ fn load_state(
 #[derive(Debug, Clone, Copy)]
 enum CommandKind {
     Send,
+    Steer,
     Interrupt,
     Terminate,
 }
@@ -201,6 +202,7 @@ impl CommandKind {
     fn as_str(&self) -> &'static str {
         match self {
             CommandKind::Send => "send",
+            CommandKind::Steer => "steer",
             CommandKind::Interrupt => "interrupt",
             CommandKind::Terminate => "terminate",
         }
@@ -221,7 +223,7 @@ async fn dispatch_command(
         )));
     }
     // A missing launcher is an attachment failure, not a generation mismatch.
-    let generation = if matches!(kind, CommandKind::Interrupt) {
+    let generation = if matches!(kind, CommandKind::Interrupt | CommandKind::Steer) {
         Some(active_generation_id(session_id, state_root)?)
     } else {
         None
@@ -329,6 +331,16 @@ pub async fn send_text(
     state_root: Option<&Path>,
 ) -> std::result::Result<CursorHelmCommandSummary, CursorHelmControlError> {
     dispatch_command(session_id, CommandKind::Send, Some(text), state_root).await
+}
+
+/// Steer the active generation. The launcher refuses unless the generation it
+/// sees is still the one read here, so a steer never lands as a new turn.
+pub async fn steer(
+    session_id: &str,
+    text: &str,
+    state_root: Option<&Path>,
+) -> std::result::Result<CursorHelmCommandSummary, CursorHelmControlError> {
+    dispatch_command(session_id, CommandKind::Steer, Some(text), state_root).await
 }
 
 pub async fn interrupt(
@@ -448,6 +460,51 @@ mod tests {
 
         interrupt(session_id, Some(&root)).await.unwrap();
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn steer_carries_text_and_exact_active_generation() {
+        let root = tmp_state_root();
+        let session_id = "steer-generation-session";
+        let socket = root.join("steer-generation.sock");
+        write_state(&root, session_id, &socket, None);
+        fs::write(
+            root.join(format!("{session_id}.phase.json")),
+            json!({"session_id": session_id, "phase": "active", "generation_id": "generation-9"})
+                .to_string(),
+        )
+        .unwrap();
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut conn, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            conn.read_to_end(&mut bytes).await.unwrap();
+            let request: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(request["kind"], "steer");
+            assert_eq!(request["text"], "change course");
+            assert_eq!(request["generation_id"], "generation-9");
+            conn.write_all(b"{\"ok\":true}\n").await.unwrap();
+        });
+
+        steer(session_id, "change course", Some(&root)).await.unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn steer_without_active_generation_is_refused() {
+        let root = tmp_state_root();
+        let session_id = "steer-idle-session";
+        let socket = root.join("steer-idle.sock");
+        write_state(&root, session_id, &socket, None);
+        let _server = echo_server(&socket, json!({"ok": true})).await;
+        fs::write(
+            root.join(format!("{session_id}.phase.json")),
+            json!({"session_id": session_id, "phase": "idle", "generation_id": "old"}).to_string(),
+        )
+        .unwrap();
+
+        let error = steer(session_id, "x", Some(&root)).await.unwrap_err();
+        assert_eq!(error.code(), "command_failed");
     }
 
     #[tokio::test]

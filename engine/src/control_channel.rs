@@ -1626,6 +1626,21 @@ async fn execute_command(
                         .to_string(),
                 });
             }
+            if provider == "cursor" {
+                let summary = crate::cursor_helm_control::steer(&session_id, &text, None)
+                    .await
+                    .map_err(|error| CommandError {
+                        code: error.code().to_string(),
+                        message: error.message().to_string(),
+                    })?;
+                return Ok(json!({
+                    "exit_code": summary.exit_code,
+                    "stdout": summary.stdout,
+                    "stderr": summary.stderr,
+                    "provider": "cursor",
+                    "transport": crate::cursor_helm_control::CURSOR_HELM_TRANSPORT,
+                }));
+            }
             if provider == "pi" {
                 let summary = crate::pi_helm_control::dispatch(
                     &session_id,
@@ -3568,6 +3583,7 @@ mod tests {
         ("antigravity", "turn_start", COMMAND_TURN_START),
         ("cursor", "send", COMMAND_SEND_TEXT),
         ("cursor", "interrupt", COMMAND_INTERRUPT),
+        ("cursor", "steer", COMMAND_STEER_TEXT),
         ("cursor", "terminate", COMMAND_TERMINATE),
         ("cursor", "turn_start", COMMAND_TURN_START),
         ("cursor", "turn_interrupt", COMMAND_TURN_INTERRUPT),

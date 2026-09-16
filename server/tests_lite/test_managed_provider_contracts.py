@@ -229,6 +229,7 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
         "coordination.awareness.create",
         "coordination.directed_input.send",
         "coordination.directed_input.receive",
+        "session.launch.helm",
         "session.resume.helm",
         "session.turn.start",
     }
@@ -246,15 +247,12 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
     # disproven. The two representations that remain are load-bearing.
     for contract in (cursor, antigravity):
         assert "session.input.steer_active" not in contract.capabilities
-        assert contract.steer_active_turn is False
-        # The surviving disposition is per-provider and stays meaningful:
-        # Cursor has no upstream steer surface, Longhouse has not built one for
-        # Antigravity. The deleted cell flattened both to one string.
-        assert contract.operation_evidence_for("steer_active_turn")["disposition"] in {
-            "upstream_absent",
-            "not_implemented",
-        }
-    assert cursor.operation_evidence_for("steer_active_turn")["disposition"] == "upstream_absent"
+    # Cursor's TUI steers natively (Enter on the empty prompt injects the
+    # queued message into the running generation), proven by
+    # cursor.helm_lifecycle.v1. Longhouse has not built Antigravity's.
+    assert cursor.steer_active_turn is True
+    assert cursor.operation_evidence_for("steer_active_turn")["disposition"] == "implemented"
+    assert antigravity.steer_active_turn is False
     assert antigravity.operation_evidence_for("steer_active_turn")["disposition"] == "not_implemented"
     assert claude.capabilities["coordination.awareness.create"]["contexts"]["modes"] == ["helm", "console"]
     assert claude.contract_entry_digest == managed_provider_contract_entry_digest("claude")
@@ -836,8 +834,12 @@ def _manifest_copy() -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _provider_entry(payload: dict, provider: str) -> dict:
+    return next(item for item in payload["providers"] if item["provider"] == provider)
+
+
 def _cursor_entry(payload: dict) -> dict:
-    return next(item for item in payload["providers"] if item["provider"] == "cursor")
+    return _provider_entry(payload, "cursor")
 
 
 def test_operation_disposition_rejects_a_flag_that_contradicts_it() -> None:
@@ -849,8 +851,8 @@ def test_operation_disposition_rejects_a_flag_that_contradicts_it() -> None:
     from zerg.managed_provider_contract_manifest import validate_generated_contract_manifest
 
     payload = copy.deepcopy(_manifest_copy())
-    # steer_active_turn is false for Cursor; claiming it is implemented must fail.
-    _cursor_entry(payload)["operation_evidence"]["steer_active_turn"]["disposition"] = "implemented"
+    # steer_active_turn is false for Antigravity; claiming it is implemented must fail.
+    _provider_entry(payload, "antigravity")["operation_evidence"]["steer_active_turn"]["disposition"] = "implemented"
     with pytest.raises(ValueError, match="contradicts the steer_active_turn support flag"):
         validate_generated_contract_manifest(payload)
 
@@ -865,7 +867,7 @@ def test_upstream_absent_requires_a_reason_and_an_observed_version() -> None:
 
     for missing in ("reason", "observed_provider_version"):
         payload = copy.deepcopy(_manifest_copy())
-        _cursor_entry(payload)["operation_evidence"]["steer_active_turn"].pop(missing)
+        _provider_entry(payload, "antigravity")["operation_evidence"]["answer_pause"].pop(missing)
         with pytest.raises(ValueError, match=missing):
             validate_generated_contract_manifest(payload)
 

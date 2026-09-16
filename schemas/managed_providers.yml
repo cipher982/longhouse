@@ -1600,7 +1600,7 @@ providers:
   reattach: true
   send_input: true
   interrupt: true
-  steer_active_turn: false
+  steer_active_turn: true
   answer_pause: false
   terminate: true
   tail_output: true
@@ -1639,6 +1639,47 @@ providers:
       required_assertions:
       - <<: *console_release_interrupt_supported
         scenario_id: cursor_console_adapter_lifecycle
+    session.launch.helm:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.cursor.launch_local
+      action_gate: ceiling
+      contexts:
+        modes: [helm]
+      runtime_prerequisites: []
+      # One live stock-Cursor Helm session proves the whole control lifecycle;
+      # operation_evidence names which assertion carries each operation.
+      required_assertions:
+      - id: cursor_helm_launch_registration
+        scenario_id: cursor_helm_lifecycle
+        oracle_source: server/zerg/qa/cursor_helm_product_e2e.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
+      - id: cursor_helm_send_idle
+        scenario_id: cursor_helm_lifecycle
+        oracle_source: server/zerg/qa/cursor_helm_product_e2e.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
+      - id: cursor_helm_steer_active
+        scenario_id: cursor_helm_lifecycle
+        oracle_source: server/zerg/qa/cursor_helm_product_e2e.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
+      - id: cursor_helm_abort_native
+        scenario_id: cursor_helm_lifecycle
+        oracle_source: server/zerg/qa/cursor_helm_product_e2e.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
+      - id: cursor_helm_terminate_owned
+        scenario_id: cursor_helm_lifecycle
+        oracle_source: server/zerg/qa/cursor_helm_product_e2e.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
     session.resume.helm:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -1705,7 +1746,7 @@ providers:
       owner_action: "observe whether Cursor can branch a conversation and record the surface"
     launch_local:
       level: live_token
-      source: "Gate 0 create_chat_resume and new_session_id launched stock cursor-agent 2026.07.23-e383d2b and completed a real turn; the product E2E launched through the installed facade and archived it. ~/.longhouse/canaries/provider-live/cursor/20260726T020333Z/gate0.json, ~/.longhouse/canaries/provider-live/cursor-product/20260726T024725Z/product-e2e.json"
+      source: "cursor_helm_launch_registration: stock longhouse cursor launches cursor-agent, binds the native conversation, and its first reply reaches the served archive. server/zerg/qa/cursor_helm_lifecycle.py (cursor.helm_lifecycle.v1)"
       disposition: "implemented"
     run_once:
       level: none
@@ -1720,18 +1761,16 @@ providers:
       disposition: "implemented"
     send_input:
       level: live_token
-      source: "Gate 0 create_chat_resume matched the exact prompt digest and observed a provider response; the product E2E sent remotely from hosted while idle. ~/.longhouse/canaries/provider-live/cursor/20260726T020333Z/gate0.json, ~/.longhouse/canaries/provider-live/cursor-product/20260726T024725Z/product-e2e.json"
+      source: "cursor_helm_send_idle: a Runtime Host send-live to the idle session produces a new reply in the served archive. server/zerg/qa/cursor_helm_lifecycle.py (cursor.helm_lifecycle.v1)"
       disposition: "implemented"
     interrupt:
       level: live_token
-      source: "Gate 0 ctrl_c_cancel stopped the active generation, left the TUI process alive, and completed the next turn. ~/.longhouse/canaries/provider-live/cursor/20260726T020333Z/gate0.json"
+      source: "cursor_helm_abort_native: Runtime Host interrupt-live stops the active generation with an aborted stop and no response, the TUI survives, and a following send completes a new turn. server/zerg/qa/cursor_helm_lifecycle.py (cursor.helm_lifecycle.v1)"
       disposition: "implemented"
     steer_active_turn:
-      level: none
-      source: unsupported until Cursor exposes a mid-turn injection API
-      disposition: "upstream_absent"
-      reason: "Stock cursor-agent exposes no mid-turn injection: ACP offers session/prompt, session/update, and session/cancel only, stream-json is output-only, and hooks do not inject into an in-flight generation. Gate 0 records that injected input did not alter the active generation."
-      observed_provider_version: "2026.07.23-e383d2b"
+      level: live_token
+      source: "cursor_helm_steer_active: Enter on Cursor's empty prompt injects a queued message into the running generation at its next tool boundary (cursor-agent 2026.08.11+). The oracle requires the steered reply inside the targeted generation with later steps absent, and rejects the queued next-generation shape; a qa-fault-injection negative control proves it. server/zerg/qa/cursor_helm_lifecycle.py (cursor.helm_lifecycle.v1)"
+      disposition: "implemented"
     answer_pause:
       level: none
       source: 'Cursor permission hooks use the separate pull-based Longhouse pause-request
@@ -1741,7 +1780,7 @@ providers:
       routed_to: "the pull-based Longhouse pause-request API via the fail-closed permission hook"
     terminate:
       level: live_token
-      source: "The product E2E terminated the session and verified cleanup and terminal restoration. ~/.longhouse/canaries/provider-live/cursor-product/20260726T024725Z/product-e2e.json"
+      source: "cursor_helm_terminate_owned: Runtime Host terminate-live ends the run and the owned cursor-agent process exits. server/zerg/qa/cursor_helm_lifecycle.py (cursor.helm_lifecycle.v1)"
       disposition: "implemented"
     tail_output:
       level: live_token
@@ -1763,6 +1802,7 @@ providers:
   machine_control_supports:
   - cursor.send
   - cursor.interrupt
+  - cursor.steer
   - cursor.terminate
   - cursor.turn_start
   - cursor.turn_interrupt

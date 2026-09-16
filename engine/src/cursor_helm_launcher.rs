@@ -1222,6 +1222,74 @@ fn serve(
                 json!({"ok":true,"exit_code":0,"stdout":"","stderr":""}),
             );
         }
+        // Cursor's TUI steers natively: while a generation is active, text plus
+        // Enter queues a follow-up, and Enter on the now-empty prompt injects
+        // that queued message into the running generation at its next tool
+        // boundary. ESC would clear the queue, so unlike the idle send this
+        // never writes one. A third Enter would interrupt-and-send; this sends
+        // exactly two.
+        Some("steer")
+            if request
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|s| !s.is_empty()) =>
+        {
+            let expected = request.get("generation_id").and_then(Value::as_str);
+            let generation = phase(dir, session_id, conversation, launch_id)
+                .filter(|value| value.get("phase").and_then(Value::as_str) == Some("active"))
+                .and_then(|value| {
+                    value
+                        .get("generation_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                });
+            if expected.is_none() || generation.as_deref() != expected {
+                return response(
+                    &mut stream,
+                    json!({"ok":false,"error":{"code":"provider_generation_mismatch","message":"Cursor active generation changed; steer was not injected"}}),
+                );
+            }
+            let _hold = pty_lock.lock().unwrap();
+            let settle = |name: &str, default: u64| {
+                thread::sleep(std::time::Duration::from_millis(
+                    std::env::var(name)
+                        .ok()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(default),
+                ))
+            };
+            let text = request["text"].as_str().unwrap().as_bytes();
+            let mut writes = vec![
+                (text, "LH_CURSOR_HELM_TEXT_SETTLE_MS", 300),
+                (b"\r".as_slice(), "LH_CURSOR_HELM_STEER_QUEUE_SETTLE_MS", 500),
+                (b"\r".as_slice(), "", 0),
+            ];
+            // Negative control: queue the text as a follow-up without steering.
+            // The lifecycle producer must then fail its steer assertion.
+            #[cfg(feature = "qa-fault-injection")]
+            if std::env::var("LH_QA_FAULT").as_deref() == Ok("cursor_steer_queue_only") {
+                writes.pop();
+                let _ = write_json(
+                    &dir.join(format!("{session_id}.qa-fault.json")),
+                    &json!({"fault":"cursor_steer_queue_only","generation_id":expected}),
+                );
+            }
+            for (bytes, settle_env, default_ms) in writes {
+                if let Err(error) = write_all(master, bytes) {
+                    return response(
+                        &mut stream,
+                        json!({"ok":false,"error":{"code":"session_not_attached","message":error.to_string()}}),
+                    );
+                }
+                if !settle_env.is_empty() {
+                    settle(settle_env, default_ms);
+                }
+            }
+            response(
+                &mut stream,
+                json!({"ok":true,"exit_code":0,"stdout":"","stderr":""}),
+            );
+        }
         Some("interrupt") => {
             let expected = request.get("generation_id").and_then(Value::as_str);
             let generation = phase(dir, session_id, conversation, launch_id)
@@ -2397,6 +2465,32 @@ mod tests {
         let mut relayed = Vec::new();
         reader.read_to_end(&mut relayed).unwrap();
         assert_eq!(relayed, b"\x03");
+
+        let mut steer_pipe = [0; 2];
+        assert_eq!(unsafe { libc::pipe(steer_pipe.as_mut_ptr()) }, 0);
+        let (steer_mismatch, _, _) = serve_request(
+            root.path(),
+            steer_pipe[1],
+            -1,
+            json!({"kind":"steer","text":"change course","generation_id":"other"}),
+        );
+        assert_eq!(
+            steer_mismatch["error"]["code"],
+            "provider_generation_mismatch"
+        );
+        let (steered, _, _) = serve_request(
+            root.path(),
+            steer_pipe[1],
+            -1,
+            json!({"kind":"steer","text":"change course","generation_id":"turn-1"}),
+        );
+        assert_eq!(steered["ok"], true);
+        unsafe { libc::close(steer_pipe[1]) };
+        let mut reader = unsafe { fs::File::from_raw_fd(steer_pipe[0]) };
+        let mut relayed = Vec::new();
+        reader.read_to_end(&mut relayed).unwrap();
+        // Queue then steer: no ESC, which would clear Cursor's follow-up queue.
+        assert_eq!(relayed, b"change course\r\r");
 
         let child = unsafe { libc::fork() };
         assert!(child >= 0);

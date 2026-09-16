@@ -13,6 +13,11 @@ path = "src/main.rs"
 name = "longhouse"
 path = "src/longhouse.rs"
 
+[features]
+# Negative-control builds only. Never enabled in release artifacts: it lets a
+# qualification producer prove its oracle fails when an operation is broken.
+qa-fault-injection = []
+
 [dependencies]
 # Serialization
 serde = { version = "1", features = ["derive"] }

@@ -90,6 +90,63 @@ def _response_observed_at(rows: list[dict[str, Any]], marker: str) -> datetime:
     return datetime.fromisoformat(str(row["observed_at"]))
 
 
+def steer_landed_in_generation(
+    rows: list[dict[str, Any]],
+    *,
+    generation_id: str,
+    steered_marker: str,
+    done_marker: str,
+    later_step_command: str,
+) -> dict[str, Any]:
+    """Did a steer change the course of the generation it was aimed at?
+
+    A queued follow-up is the shape this must reject: Cursor finishes the
+    original generation as asked, then answers the steer text in a new
+    generation. Seeing the steered marker somewhere later proves nothing.
+    """
+
+    in_generation = [row for row in rows if row.get("generation_id") == generation_id]
+    responses = [str(row.get("text") or "") for row in in_generation if row.get("event") == "afterAgentResponse"]
+    stopped = any(row.get("event") == "stop" for row in in_generation)
+    later_step_ran = any(
+        row.get("event") == "beforeShellExecution" and later_step_command in str(row.get("command") or "") for row in in_generation
+    )
+    steered_here = any(steered_marker in text for text in responses)
+    finished_original = any(done_marker in text for text in responses)
+    steered_elsewhere = any(
+        row.get("event") == "afterAgentResponse"
+        and row.get("generation_id") != generation_id
+        and steered_marker in str(row.get("text") or "")
+        for row in rows
+    )
+    if not stopped:
+        failure = "steer_target_generation_never_completed"
+    elif steered_here and not later_step_ran and not finished_original:
+        failure = None
+    elif steered_elsewhere:
+        failure = "steer_delivered_as_followup"
+    elif later_step_ran or finished_original:
+        failure = "steer_did_not_change_course"
+    else:
+        failure = "steer_marker_missing"
+    return {
+        "passed": failure is None,
+        "failure_code": failure,
+        "generation_id": generation_id,
+        "steered_in_target_generation": steered_here,
+        "steered_in_other_generation": steered_elsewhere,
+        "later_step_ran_in_target_generation": later_step_ran,
+        "original_task_finished": finished_original,
+    }
+
+
+def abort_stopped_generation(rows: list[dict[str, Any]], *, generation_id: str, forbidden_marker: str) -> dict[str, Any]:
+    in_generation = [row for row in rows if row.get("generation_id") == generation_id]
+    aborted = any(row.get("event") == "stop" and row.get("status") in {"aborted", "error"} for row in in_generation)
+    responded = any(row.get("event") == "afterAgentResponse" and forbidden_marker in str(row.get("text") or "") for row in in_generation)
+    return {"passed": aborted and not responded, "generation_stopped_aborted": aborted, "forbidden_response_produced": responded}
+
+
 @dataclass
 class _PtyProcess:
     process: subprocess.Popen[bytes]
@@ -305,7 +362,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 "--cwd",
                 str(workspace),
                 "--permission-mode",
-                "remote_approve",
+                getattr(args, "permission_mode", "remote_approve"),
                 "--",
                 "--model",
                 args.model,
@@ -329,6 +386,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
         state = _wait_until(new_state, timeout=args.timeout, description="Cursor Helm managed state")
         session_id = str(state["session_id"])
         report["session_id"] = session_id
+        report["cursor_pid"] = state.get("cursor_pid")
         claim_path = root / "binding-probes" / f"{session_id}.json"
         claim = _wait_until(
             lambda: json.loads(claim_path.read_text()) if claim_path.exists() else None,
@@ -447,6 +505,176 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
         )
         second_archive_lag = (datetime.now(UTC) - _response_observed_at(_hook_rows(root, session_id), marker_two)).total_seconds()
         settled(args.timeout)
+
+        if getattr(args, "lifecycle_only", False):
+            lifecycle: dict[str, Any] = {
+                "launch_registration": {
+                    "state_ready": True,
+                    "native_binding_claimed": bool(claim.get("conversation_uuid")),
+                    "first_reply_archived": True,
+                },
+                "send_idle": {"remote_reply_archived": True},
+            }
+            report["lifecycle"] = lifecycle
+            fault = os.environ.get("LH_QA_FAULT") or None
+            report["negative_control"] = fault
+
+            # Steer: aim at a generation that is mid-way through three slow
+            # sequential shell steps, then prove the steer landed inside it.
+            steer_token = uuid4().hex[:10]
+            step = f"LONGHOUSE_CURSOR_STEP_{steer_token}"
+            steered = f"LONGHOUSE_CURSOR_STEERED_{steer_token}"
+            done = f"LONGHOUSE_CURSOR_UNSTEERED_{steer_token}"
+            steer_hook_start = len(_hook_rows(root, session_id))
+            send_live(
+                "Run these three shell commands, each as its own separate Shell tool call, one after another, "
+                f"never in parallel: `sleep 6; echo {step}_1`, then `sleep 6; echo {step}_2`, then "
+                f"`sleep 6; echo {step}_3`. After all three, reply with exactly {done}"
+            )
+            first_step = _wait_until(
+                lambda: next(
+                    (
+                        row
+                        for row in _hook_rows(root, session_id)[steer_hook_start:]
+                        if row.get("event") == "beforeShellExecution" and f"{step}_1" in str(row.get("command") or "")
+                    ),
+                    None,
+                ),
+                timeout=args.timeout,
+                description="first slow Cursor shell step",
+            )
+            steer_generation = str(first_step.get("generation_id") or "")
+            time.sleep(1.0)
+            steer_response = httpx.post(
+                f"{url}/api/agents/sessions/{session_id}/input",
+                headers=headers,
+                json={
+                    "text": f"Stop the remaining steps now. Do not run any more commands. Reply with exactly {steered}",
+                    "intent": "steer",
+                },
+                timeout=30,
+            )
+            lifecycle["steer_dispatch"] = {"status_code": steer_response.status_code, "body": steer_response.text[:500]}
+            if steer_response.is_error:
+                raise RuntimeError(f"Runtime Host steer failed HTTP {steer_response.status_code}: {steer_response.text[:1000]}")
+            _wait_until(
+                lambda: any(
+                    row.get("event") == "stop" and row.get("generation_id") == steer_generation
+                    for row in _hook_rows(root, session_id)[steer_hook_start:]
+                ),
+                timeout=args.timeout,
+                description="steered Cursor generation completing",
+            )
+            # A shell running when the steer lands is backgrounded, and its
+            # completion can start one more generation. Let that settle, and let
+            # a queued (unsteered) follow-up answer, before judging.
+            time.sleep(15.0)
+            settled(args.timeout)
+            steer_rows = _hook_rows(root, session_id)[steer_hook_start:]
+            steer_verdict = steer_landed_in_generation(
+                steer_rows,
+                generation_id=steer_generation,
+                steered_marker=steered,
+                done_marker=done,
+                later_step_command=f"{step}_3",
+            )
+            steer_verdict["qa_fault_receipt"] = (
+                json.loads(fault_path.read_text()) if (fault_path := root / f"{session_id}.qa-fault.json").exists() else None
+            )
+            lifecycle["steer_active"] = steer_verdict
+            if fault is not None:
+                report.update({"status": "negative_control_observed", "finished_at": _now()})
+                return report
+            if not steer_verdict["passed"]:
+                raise RuntimeError(f"Cursor steer oracle failed: {steer_verdict}")
+
+            # Abort: cancel an active generation, keep the TUI, and prove the
+            # surviving session completes a following turn.
+            abort_hook_start = len(_hook_rows(root, session_id))
+            send_live(f"Use the Shell tool to run sleep 30, then reply with {forbidden}")
+            shell = _wait_until(
+                lambda: next(
+                    (
+                        row
+                        for row in _hook_rows(root, session_id)[abort_hook_start:]
+                        if row.get("event") == "beforeShellExecution" and row.get("command") == "sleep 30"
+                    ),
+                    None,
+                ),
+                timeout=args.timeout,
+                description="active Cursor shell generation to abort",
+            )
+            abort_generation = str(shell.get("generation_id") or "")
+            time.sleep(0.5)
+            interrupt_live()
+            _wait_until(
+                lambda: any(
+                    row.get("event") == "stop" and row.get("generation_id") == abort_generation
+                    for row in _hook_rows(root, session_id)[abort_hook_start:]
+                ),
+                timeout=args.timeout,
+                description="aborted Cursor generation stop",
+            )
+            time.sleep(0.5)
+            abort_verdict = abort_stopped_generation(
+                _hook_rows(root, session_id)[abort_hook_start:], generation_id=abort_generation, forbidden_marker=forbidden
+            )
+            abort_verdict["tui_alive_after_abort"] = session.process.poll() is None
+            settled(args.timeout)
+            send_live(f"Reply with exactly {recovery}")
+            _wait_until(
+                lambda: (payload if recovery in _assistant_texts(payload) else None) if (payload := hosted_events()) else None,
+                timeout=args.timeout,
+                description="post-abort Cursor turn in hosted archive",
+            )
+            abort_verdict["following_turn_completed"] = True
+            abort_verdict["passed"] = bool(abort_verdict["passed"] and abort_verdict["tui_alive_after_abort"])
+            lifecycle["abort_native"] = abort_verdict
+            if not abort_verdict["passed"]:
+                raise RuntimeError(f"Cursor abort oracle failed: {abort_verdict}")
+            settled(args.timeout)
+
+            # Terminate through the Runtime Host, then prove the owned provider
+            # process is gone and the run ended.
+            cursor_pid = int(state["cursor_pid"])
+            terminate = httpx.post(f"{url}/api/agents/sessions/{session_id}/terminate-live", headers=headers, timeout=30)
+            if terminate.is_error or terminate.json().get("terminate_dispatched") is not True:
+                raise RuntimeError(f"Runtime Host terminate-live failed HTTP {terminate.status_code}: {terminate.text[:1000]}")
+            ended = _wait_until(
+                lambda: (current if _run_lifecycle(current) == "ended" else None) if (current := session_state()) else None,
+                timeout=args.timeout,
+                description="Cursor run reaching ended after remote terminate",
+            )
+
+            def provider_gone() -> bool:
+                try:
+                    os.kill(cursor_pid, 0)
+                except ProcessLookupError:
+                    return True
+                except PermissionError:
+                    return False
+                return False
+
+            _wait_until(provider_gone, timeout=args.timeout, description="terminated Cursor provider process exit")
+            lifecycle["terminate_owned"] = {
+                "passed": True,
+                "terminate_dispatched": True,
+                "run_lifecycle": _run_lifecycle(ended),
+                "provider_process_dead": True,
+            }
+            report.update(
+                {
+                    "status": "passed",
+                    "run_lifecycle_after_teardown": "ended",
+                    "activity_after_teardown": _activity_state(ended),
+                    "finished_at": _now(),
+                    "session_id": session_id,
+                    "provider_conversation_id": claim["conversation_uuid"],
+                    "cursor_pid": cursor_pid,
+                    "qualification_scope": "lifecycle",
+                }
+            )
+            return report
 
         # Assertion-scoped factory qualification only needs two independent
         # turn boundaries plus clean teardown. Keep the release canary's
@@ -694,6 +922,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--agents-token", default=os.environ.get("LONGHOUSE_RUNTIME_AGENTS_TOKEN"))
     parser.add_argument("--skip-machine-agent-restart", action="store_true")
     parser.add_argument("--turn-boundary-only", action="store_true")
+    parser.add_argument("--lifecycle-only", action="store_true")
+    parser.add_argument("--permission-mode", default="remote_approve")
     return parser
 
 
