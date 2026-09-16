@@ -285,6 +285,23 @@ impl OmpHelmServer {
             && frame.get("session_id").and_then(Value::as_str)
                 == Some(state.state.session_id.as_str())
     }
+    fn extension_base_authority_matches(&self, connection_id: &str, frame: &Value) -> bool {
+        let state = self.shared.lock().expect("OMP state mutex poisoned");
+        extension_base_authority_matches_locked(&state, connection_id, frame)
+    }
+
+    fn extension_identity_matches(&self, frame: &Value) -> bool {
+        let state = self.shared.lock().expect("OMP state mutex poisoned");
+        extension_identity_matches_locked(&state, frame)
+    }
+
+    fn activity_identity_reconciliation_allowed(&self) -> bool {
+        let state = self.shared.lock().expect("OMP state mutex poisoned");
+        !state.state.pending_transition
+            && state.state.status != "stopped"
+            && state.state.terminal_reason.as_deref()
+                != Some("native_session_transition_not_committed")
+    }
 
     fn extension_authority_matches(&self, connection_id: &str, frame: &Value) -> bool {
         let kind = frame
@@ -292,16 +309,7 @@ impl OmpHelmServer {
             .and_then(Value::as_str)
             .unwrap_or_default();
         let state = self.shared.lock().expect("OMP state mutex poisoned");
-        let base = state.extension_connection_id.as_deref() == Some(connection_id)
-            && frame.get("auth_token").and_then(Value::as_str)
-                == Some(state.state.channel_token.as_str())
-            && frame.get("session_id").and_then(Value::as_str)
-                == Some(state.state.session_id.as_str())
-            && frame.get("connection_id").and_then(Value::as_str)
-                == Some(state.state.connection_id.as_str())
-            && frame.get("lease_generation").and_then(Value::as_str)
-                == Some(state.state.lease_generation.as_str());
-        if !base {
+        if !extension_base_authority_matches_locked(&state, connection_id, frame) {
             return false;
         }
         if matches!(kind, "session_start" | "session_reconnect") {
@@ -317,11 +325,7 @@ impl OmpHelmServer {
                 && frame.get("session_file").and_then(Value::as_str)
                     == Some(state.state.session_file.as_str());
         }
-        state.state.native_session_id.is_empty()
-            || (frame.get("native_session_id").and_then(Value::as_str)
-                == Some(state.state.native_session_id.as_str())
-                && frame.get("session_file").and_then(Value::as_str)
-                    == Some(state.state.session_file.as_str()))
+        extension_identity_matches_locked(&state, frame)
     }
 
     fn disconnect_extension(&self, connection_id: &str) {
@@ -515,8 +519,26 @@ impl OmpHelmServer {
             .get("kind")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        let identity_drift =
+            is_activity_frame_kind(kind) && !self.extension_identity_matches(&frame);
         if !self.extension_authority_matches(connection_id, &frame) {
-            return;
+            if !identity_drift
+                || !self.extension_base_authority_matches(connection_id, &frame)
+                || !self.activity_identity_reconciliation_allowed()
+                || !has_native_session_identity(&frame)
+            {
+                return;
+            }
+            if let Err(error) = self.update_identity(connection_id, &frame, false) {
+                eprintln!("Longhouse: OMP activity identity binding failed: {error:#}");
+                return;
+            }
+            // The binding performs its own connection/lease checks. Recheck
+            // the full frame authority before publishing activity in case the
+            // extension was replaced while SQLite/header I/O was in flight.
+            if !self.extension_authority_matches(connection_id, &frame) {
+                return;
+            }
         }
         if matches!(kind, "session_before_switch" | "session_before_branch") {
             let mut state = self.shared.lock().expect("OMP state mutex poisoned");
@@ -1023,6 +1045,55 @@ impl OmpHelmServer {
     }
 }
 
+fn extension_base_authority_matches_locked(
+    state: &SharedState,
+    connection_id: &str,
+    frame: &Value,
+) -> bool {
+    state.extension_connection_id.as_deref() == Some(connection_id)
+        && frame.get("auth_token").and_then(Value::as_str)
+            == Some(state.state.channel_token.as_str())
+        && frame.get("session_id").and_then(Value::as_str) == Some(state.state.session_id.as_str())
+        && frame.get("connection_id").and_then(Value::as_str)
+            == Some(state.state.connection_id.as_str())
+        && frame.get("lease_generation").and_then(Value::as_str)
+            == Some(state.state.lease_generation.as_str())
+}
+
+fn extension_identity_matches_locked(state: &SharedState, frame: &Value) -> bool {
+    state.state.native_session_id.is_empty()
+        || (frame.get("native_session_id").and_then(Value::as_str)
+            == Some(state.state.native_session_id.as_str())
+            && frame.get("session_file").and_then(Value::as_str)
+                == Some(state.state.session_file.as_str()))
+}
+
+fn is_activity_frame_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "activity"
+            | "agent_start"
+            | "tool_execution_start"
+            | "tool_execution_update"
+            | "tool_execution_end"
+            | "message_start"
+            | "message_end"
+            | "message_update"
+            | "agent_end"
+    )
+}
+
+fn has_native_session_identity(frame: &Value) -> bool {
+    frame
+        .get("native_session_id")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+        && frame
+            .get("session_file")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
 fn remote_authority_matches_locked(state: &SharedState, frame: &Value) -> bool {
     state.state.ready
         && state.extension_sender.is_some()
@@ -1492,7 +1563,8 @@ fn reserve_source_degrading(
     session_id: &str,
     native_id: Option<&str>,
 ) {
-    let conn = match crate::state::db::open_client_connection(db_path, SOURCE_BINDING_BUSY_TIMEOUT) {
+    let conn = match crate::state::db::open_client_connection(db_path, SOURCE_BINDING_BUSY_TIMEOUT)
+    {
         Ok(conn) => conn,
         Err(error) => {
             eprintln!(
@@ -2032,6 +2104,164 @@ mod tests {
         });
         assert!(!remote_authority_matches_locked(&shared, &frame));
     }
+    #[test]
+    fn ordinary_activity_reconciles_native_drift_before_publishing_phase() {
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let source_a = temp.path().join("session-a.jsonl");
+        let source_b = temp.path().join("session-b.jsonl");
+        fs::write(
+            &source_b,
+            b"{\"type\":\"session\",\"id\":\"native-b\",\"cwd\":\"/tmp\"}\n",
+        )
+        .unwrap();
+        let mut initial = state();
+        initial.session_id = Uuid::new_v4().to_string();
+        initial.native_session_id = "native-a".into();
+        initial.session_file = source_a.display().to_string();
+        let socket_dir = temp.path().join("socket");
+        let socket_path = socket_dir.join("channel.sock");
+        let state_path = temp.path().join("state.json");
+
+        temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
+            let server =
+                OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
+            let (sender, _receiver) = mpsc::channel();
+            {
+                let mut shared = server.shared.lock().unwrap();
+                shared.extension_sender = Some(sender);
+                shared.extension_connection_id = Some("connection".into());
+            }
+            server.handle_extension_frame(
+                "connection",
+                json!({
+                    "kind": "agent_start",
+                    "event": {"type": "agent_start"},
+                    "auth_token": "token",
+                    "session_id": server.current_state().session_id,
+                    "native_session_id": "native-b",
+                    "session_file": source_b.display().to_string(),
+                    "connection_id": "connection",
+                    "lease_generation": "generation"
+                }),
+            );
+            let current = server.current_state();
+            assert_eq!(current.native_session_id, "native-b");
+            assert_eq!(current.session_file, source_b.display().to_string());
+            assert_eq!(current.phase, "running");
+            assert!(current.ready);
+            assert_eq!(current.status, "ready");
+            server.shutdown();
+        });
+    }
+
+    #[test]
+    fn activity_identity_drift_is_refused_during_pending_transition() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut initial = state();
+        initial.session_id = Uuid::new_v4().to_string();
+        initial.session_file = temp.path().join("session-a.jsonl").display().to_string();
+        let socket_dir = temp.path().join("socket");
+        let socket_path = socket_dir.join("channel.sock");
+        let state_path = temp.path().join("state.json");
+        let server = OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
+        let (sender, _receiver) = mpsc::channel();
+        {
+            let mut shared = server.shared.lock().unwrap();
+            shared.extension_sender = Some(sender);
+            shared.extension_connection_id = Some("connection".into());
+        }
+        let before = server.current_state();
+        server.handle_extension_frame(
+            "connection",
+            json!({
+                "kind": "session_before_switch",
+                "auth_token": "token",
+                "session_id": before.session_id,
+                "native_session_id": before.native_session_id,
+                "session_file": before.session_file,
+                "connection_id": "connection",
+                "lease_generation": before.lease_generation
+            }),
+        );
+        let switching = server.current_state();
+        server.handle_extension_frame(
+            "connection",
+            json!({
+                "kind": "agent_start",
+                "event": {"type": "agent_start"},
+                "auth_token": "token",
+                "session_id": switching.session_id,
+                "native_session_id": "late-native",
+                "session_file": temp.path().join("late-session.jsonl"),
+                "connection_id": "connection",
+                "lease_generation": switching.lease_generation
+            }),
+        );
+        let after = server.current_state();
+        assert_eq!(after.native_session_id, before.native_session_id);
+        assert_eq!(after.session_file, before.session_file);
+        assert!(after.pending_transition);
+        assert!(!after.ready);
+        assert_eq!(after.phase, "idle");
+        server.shutdown();
+    }
+    #[test]
+    fn ordinary_activity_rejects_native_drift_at_an_owned_source_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let source = temp.path().join("session.jsonl");
+        fs::write(
+            &source,
+            b"{\"type\":\"session\",\"id\":\"native-a\",\"cwd\":\"/tmp\"}\n",
+        )
+        .unwrap();
+        let session_id = Uuid::new_v4().to_string();
+        let db_path = longhouse_home.join("agent/longhouse-shipper.db");
+        let conn = open_agent_binding_connection(&db_path).unwrap();
+        crate::omp_session::bind_source_for_thread(&conn, &source, &session_id, "native-a")
+            .unwrap();
+        drop(conn);
+
+        let mut initial = state();
+        initial.session_id = session_id.clone();
+        initial.native_session_id = "native-a".into();
+        initial.session_file = source.display().to_string();
+        let socket_dir = temp.path().join("socket");
+        let socket_path = socket_dir.join("channel.sock");
+        let state_path = temp.path().join("state.json");
+
+        temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
+            let server =
+                OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
+            let (sender, _receiver) = mpsc::channel();
+            {
+                let mut shared = server.shared.lock().unwrap();
+                shared.extension_sender = Some(sender);
+                shared.extension_connection_id = Some("connection".into());
+            }
+            server.handle_extension_frame(
+                "connection",
+                json!({
+                    "kind": "agent_start",
+                    "event": {"type": "agent_start"},
+                    "auth_token": "token",
+                    "session_id": session_id,
+                    "native_session_id": "native-b",
+                    "session_file": source.display().to_string(),
+                    "connection_id": "connection",
+                    "lease_generation": "generation"
+                }),
+            );
+            let current = server.current_state();
+            assert_eq!(current.native_session_id, "native-a");
+            assert_eq!(current.session_file, source.display().to_string());
+            assert_eq!(current.phase, "idle");
+            assert!(current.ready);
+            assert_eq!(current.status, "ready");
+            server.shutdown();
+        });
+    }
 
     #[test]
     fn replacement_fence_fails_queued_commands() {
@@ -2162,6 +2392,25 @@ mod tests {
             assert!(!after.ready);
             assert_eq!(after.status, "degraded");
         }
+        server.handle_extension_frame(
+            "connection",
+            json!({
+                "kind": "agent_start",
+                "event": {"type": "agent_start"},
+                "auth_token": "token",
+                "session_id": "session",
+                "native_session_id": "late-native",
+                "session_file": "/tmp/late-session.jsonl",
+                "connection_id": "connection",
+                "lease_generation": degraded.lease_generation
+            }),
+        );
+        let after_activity = server.current_state();
+        assert_eq!(after_activity.native_session_id, "native");
+        assert_eq!(after_activity.session_file, "/tmp/session.jsonl");
+        assert!(!after_activity.ready);
+        assert_eq!(after_activity.status, "degraded");
+        assert_eq!(after_activity.phase, "idle");
         server.shutdown();
     }
 
