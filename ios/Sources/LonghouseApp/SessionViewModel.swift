@@ -224,6 +224,8 @@ final class SessionViewModel: ObservableObject {
             10_000_000_000,
         ]
     ) {
+        self.apiFactory = apiFactory
+        self.streamFactory = streamFactory
         self.enableRealtime = enableRealtime
         self.snapshotStore = snapshotStore ?? (enableRealtime ? .shared : nil)
         self.pendingInputStore = pendingInputStore
