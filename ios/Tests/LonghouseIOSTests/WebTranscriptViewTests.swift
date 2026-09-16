@@ -298,6 +298,8 @@ final class WebTranscriptViewTests: XCTestCase {
             byteSize: 1024,
             blobUrl: "/api/media/abc123/blob",
             thumbUrl: "/api/media/abc123/thumb",
+            width: 2880,
+            height: 1800,
             sourcePath: nil,
             sourceOffset: nil,
             jsonPointer: nil,
@@ -324,6 +326,9 @@ final class WebTranscriptViewTests: XCTestCase {
         XCTAssertEqual(rows.first?.media?.first?.sha256, "abc123def456abc123def456abc123def456abc123def456abc123def456abcd")
         XCTAssertEqual(rows.first?.media?.first?.url, "https://david010.longhouse.ai/api/media/abc123/thumb")
         XCTAssertEqual(rows.first?.media?.first?.blobUrl, "https://david010.longhouse.ai/api/media/abc123/blob")
+        // The intrinsic size reaches the transcript so the row reserves layout.
+        XCTAssertEqual(rows.first?.media?.first?.width, 2880)
+        XCTAssertEqual(rows.first?.media?.first?.height, 1800)
     }
 
     private func makeSubmittedInput(

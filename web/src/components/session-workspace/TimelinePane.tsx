@@ -240,6 +240,9 @@ function MediaStrip({
   mediaRefs: AgentEventMediaRef[];
   variant?: "message" | "tool";
 }) {
+  // A preview that cannot load is a state the row has to show, not a broken
+  // image glyph. Keyed per rendering, so a re-render retries once.
+  const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
   if (mediaRefs.length === 0) return null;
   return (
     <div className={`tl-media tl-media--${variant}`} data-testid="session-event-media">
@@ -247,7 +250,7 @@ function MediaStrip({
         const key = `${ref.sha256}:${ref.blob_url}:${ref.thumb_url || ""}`;
         const present = ref.media_state === "present";
         const imageLike = !ref.mime_type || ref.mime_type.startsWith("image/");
-        if (!present || !imageLike) {
+        if (!present || !imageLike || failed.has(key)) {
           return (
             <span key={key} className="tl-media__placeholder">
               {ref.media_state === "pending" ? "Media pending" : "Media unavailable"}
@@ -255,6 +258,8 @@ function MediaStrip({
           );
         }
         const src = mediaRefSource(ref);
+        // A preview of an animated image is only its first frame.
+        const animatedStill = ref.mime_type === "image/gif";
         return (
           <a
             key={key}
@@ -268,7 +273,13 @@ function MediaStrip({
               src={src}
               alt={`Session media ${ref.sha256.slice(0, 12)}`}
               loading="lazy"
+              // The intrinsic size reserves the row's layout, so the page does
+              // not jump as images arrive. The preview keeps the same aspect.
+              width={ref.width ?? undefined}
+              height={ref.height ?? undefined}
+              onError={() => setFailed((previous) => new Set(previous).add(key))}
             />
+            {animatedStill ? <span className="tl-media__note">Animated · first frame</span> : null}
           </a>
         );
       })}

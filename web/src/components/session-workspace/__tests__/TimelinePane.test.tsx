@@ -82,6 +82,8 @@ const mediaMessageItem: TimelineItem = {
         byte_size: 1024,
         blob_url: "/api/media/abc123/blob",
         thumb_url: "/api/media/abc123/thumb",
+        width: 2880,
+        height: 1800,
         original_kind: "data_url_backfill",
       },
     ],
@@ -637,6 +639,84 @@ describe("TimelinePane", () => {
     const image = screen.getByAltText("Session media abc123def456");
     expect(image).toHaveAttribute("src", "/api/media/abc123/thumb");
     expect(image.closest("a")).toHaveAttribute("href", "/api/media/abc123/blob");
+  });
+
+  it("reserves the row's layout from the image's intrinsic size", () => {
+    render(
+      <TimelinePane
+        items={[mediaMessageItem]}
+        totalEntries={1}
+        loadedEntries={1}
+        abandonedEvents={0}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        loading={false}
+        error={null}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+      />,
+    );
+
+    const image = screen.getByAltText("Session media abc123def456");
+    expect(image).toHaveAttribute("width", "2880");
+    expect(image).toHaveAttribute("height", "1800");
+  });
+
+  it("shows a preview it could not load as unavailable, not as a broken image", () => {
+    render(
+      <TimelinePane
+        items={[mediaMessageItem]}
+        totalEntries={1}
+        loadedEntries={1}
+        abandonedEvents={0}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        loading={false}
+        error={null}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+      />,
+    );
+
+    fireEvent.error(screen.getByAltText("Session media abc123def456"));
+
+    expect(screen.queryByAltText("Session media abc123def456")).not.toBeInTheDocument();
+    expect(screen.getByText("Media unavailable")).toBeInTheDocument();
+  });
+
+  it("marks an animated image's preview as a still", () => {
+    const animated: TimelineItem = {
+      kind: "message",
+      event: {
+        ...mediaMessageItem.event,
+        media_refs: [{ ...mediaMessageItem.event.media_refs![0], mime_type: "image/gif" }],
+      },
+    };
+    render(
+      <TimelinePane
+        items={[animated]}
+        totalEntries={1}
+        loadedEntries={1}
+        abandonedEvents={0}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        loading={false}
+        error={null}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Animated · first frame")).toBeInTheDocument();
   });
 
   it("suppresses media refs when rendering shared read-only timelines", () => {

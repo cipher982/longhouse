@@ -1738,6 +1738,13 @@
   object-fit: contain;
   background: rgba(5, 4, 3, 0.62);
 }
+.tl-media__note {
+  display: block;
+  padding: 4px 6px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  line-height: 1.2;
+}
 .tl-media__placeholder {
   display: inline-flex;
   align-items: center;

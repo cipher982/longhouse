@@ -915,7 +915,9 @@ struct WebTranscriptView: UIViewRepresentable {
                 url: visibleURL,
                 blobUrl: absoluteMediaURL(ref.blobUrl, serverURL: serverURL),
                 mediaState: ref.mediaState,
-                mimeType: ref.mimeType
+                mimeType: ref.mimeType,
+                width: ref.width,
+                height: ref.height
             )
         }
         return media.isEmpty ? nil : media
@@ -2163,6 +2165,8 @@ struct WebTranscriptMediaRef: Encodable {
     let blobUrl: String?
     let mediaState: String
     let mimeType: String?
+    let width: Int?
+    let height: Int?
 }
 
 private extension SessionInputAuthoredVia {
@@ -2407,6 +2411,14 @@ private extension WebTranscriptView {
       max-height: 240px;
       object-fit: contain;
       background: rgba(0, 0, 0, 0.16);
+    }
+
+    .media-animated {
+      display: block;
+      padding: 4px 8px;
+      color: var(--secondary);
+      font-size: 11px;
+      font-weight: 600;
     }
 
     .media-placeholder {
@@ -3181,9 +3193,18 @@ private extension WebTranscriptView {
         }
         const href = ref.blobUrl || ref.url;
         const alt = 'Session media ' + String(ref.sha256 || '').slice(0, 12);
+        const hasDimensions = Number.isInteger(ref.width) && ref.width > 0
+          && Number.isInteger(ref.height) && ref.height > 0;
+        const dimensions = hasDimensions
+          ? ` width="${ref.width}" height="${ref.height}"`
+          : '';
+        const animated = String(ref.mimeType || '').toLowerCase().startsWith('image/gif')
+          ? '<span class="media-animated">Animated still</span>'
+          : '';
         return `
           <a class="media-item" href="${escapeHtml(href)}" target="_blank" rel="noreferrer noopener">
-            <img src="${escapeHtml(ref.url)}" alt="${escapeHtml(alt)}" loading="lazy">
+            <img src="${escapeHtml(ref.url)}" alt="${escapeHtml(alt)}" loading="lazy"${dimensions} onerror="this.outerHTML='&lt;span class=&quot;media-placeholder&quot;&gt;Media unavailable&lt;/span&gt;'">
+            ${animated}
           </a>
         `;
       }).join('');
