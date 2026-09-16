@@ -458,3 +458,40 @@ def test_machine_session_list_query_uses_searchd_without_legacy_db(monkeypatch):
 
     assert response.total == 0
     assert observed["owner_id"] == 9
+
+
+def test_machine_search_hit_carries_the_matched_event_role(monkeypatch):
+    session_id = "22222222-2222-4222-8222-222222222222"
+
+    class _Session:
+        user_hidden_from_timeline = False
+        environment = "test"
+        user_messages = 1
+        device_id = "device"
+
+        def model_copy(self, *, update):
+            return update
+
+    async def search_v2(**_kwargs):
+        return [{"session_id": session_id, "content_snippet": "joined marker", "role": "assistant", "rank": 0.0}]
+
+    def read_sessions(requested, *, owner_id):
+        return [(_Session(), None, "9") for _ in requested]
+
+    monkeypatch.setattr(agents_search, "search_storage_v2_rows", search_v2)
+    monkeypatch.setattr(agents_search, "read_live_catalog_sessions", read_sessions)
+
+    result = asyncio.run(
+        agents_search.search_storage_v2_sessions(
+            owner_id=7,
+            query="joined marker",
+            project=None,
+            provider=None,
+            environment=None,
+            days_back=1,
+            limit=10,
+            include_test=True,
+        )
+    )
+
+    assert result == [{"match_snippet": "joined marker", "match_role": "assistant", "match_score": 1.0}]

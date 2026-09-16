@@ -623,7 +623,11 @@ async def search_storage_v2_sessions(
             continue
         snippet = str(row.get("content_snippet") or row.get("tool_output_snippet") or "") or None
         rank = abs(float(row.get("rank") or 0.0))
-        sessions.append(session.model_copy(update={"match_snippet": snippet, "match_score": 1.0 / (1.0 + rank)}))
+        # The fallback row projection already names the matched role; the
+        # catalog projection must too, or a caller cannot tell an assistant
+        # reply from a user prompt that merely quoted the same words.
+        role = str(row["role"]) if row.get("role") is not None else None
+        sessions.append(session.model_copy(update={"match_snippet": snippet, "match_role": role, "match_score": 1.0 / (1.0 + rank)}))
         if len(sessions) >= limit:
             break
     return sessions

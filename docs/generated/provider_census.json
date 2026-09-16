@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 277,
+  "file_count": 279,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1452,6 +1452,17 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_search_ingest_oracle.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "omp",
+        "opencode",
+        "pi"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_search_v2_projector.py",
       "providers": [
         "claude",
@@ -1965,6 +1976,17 @@
       "providers": [
         "claude",
         "opencode"
+      ]
+    },
+    {
+      "path": "server/zerg/qa/transcript_search_producer.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "omp",
+        "opencode",
+        "pi"
       ]
     },
     {

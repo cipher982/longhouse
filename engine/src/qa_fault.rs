@@ -37,17 +37,43 @@ pub fn codex_fault() -> Option<CodexFault> {
     None
 }
 
+/// Ingest fault: the Machine Agent ships the transcript normally but blanks one
+/// marker token out of every render record before the envelope is persisted.
+/// The raw bytes, envelope identity and acknowledgement are untouched, so the
+/// session looks healthy while served search can no longer find the marker --
+/// the silent-ingest-loss shape a search oracle must catch.
+#[cfg(feature = "qa-fault-injection")]
+pub fn ingest_redact_marker() -> Option<String> {
+    if std::env::var("LONGHOUSE_QA_FAULT").ok()?.as_str() != "ingest_redact_marker" {
+        return None;
+    }
+    std::env::var("LONGHOUSE_QA_FAULT_MARKER")
+        .ok()
+        .map(|marker| marker.trim().to_string())
+        .filter(|marker| !marker.is_empty())
+}
+
+#[cfg(not(feature = "qa-fault-injection"))]
+pub fn ingest_redact_marker() -> Option<String> {
+    None
+}
+
 /// Append one JSON line to `LONGHOUSE_QA_FAULT_RECEIPT`. A fault that cannot
 /// write its receipt still fires; the producer then reports inconclusive.
 #[cfg(feature = "qa-fault-injection")]
 pub fn record_fired(fault: CodexFault, session_id: &str, detail: serde_json::Value) {
+    record_fired_named(&format!("{fault:?}"), session_id, detail);
+}
+
+#[cfg(feature = "qa-fault-injection")]
+pub fn record_fired_named(fault: &str, session_id: &str, detail: serde_json::Value) {
     use std::io::Write;
     let Ok(path) = std::env::var("LONGHOUSE_QA_FAULT_RECEIPT") else {
         return;
     };
     let line = serde_json::json!({
         "schema_version": 1,
-        "fault": format!("{fault:?}"),
+        "fault": fault,
         "session_id": session_id,
         "fired_at": chrono::Utc::now().to_rfc3339(),
         "detail": detail,
@@ -63,3 +89,6 @@ pub fn record_fired(fault: CodexFault, session_id: &str, detail: serde_json::Val
 
 #[cfg(not(feature = "qa-fault-injection"))]
 pub fn record_fired(_fault: CodexFault, _session_id: &str, _detail: serde_json::Value) {}
+
+#[cfg(not(feature = "qa-fault-injection"))]
+pub fn record_fired_named(_fault: &str, _session_id: &str, _detail: serde_json::Value) {}

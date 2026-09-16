@@ -116,6 +116,31 @@
       "live_proof": false,
       "startup_coordination_context": false,
       "capabilities": {
+        "session.transcript.search": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.codex.transcript_search",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "transcript_ingested_searchable",
+              "scenario_id": "codex_transcript_search",
+              "oracle_source": "server/zerg/qa/search_ingest_oracle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "c3dc533bf3917a889ed949201a718691d777bfc5163853b29e98a333246ee8ca"
+            }
+          ]
+        },
         "session.activity.turn_boundary": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -756,7 +781,7 @@
           "owner_action": "render reasoning as collapsed thinking records"
         }
       },
-      "adapter_digest": "34538f81062462edefdd57966de46a19182de979706626a75aaba2aa0a5e1589"
+      "adapter_digest": "49d059f2f0f8d98f50065c76e2e0ec68256dc8565abfbdd692b50f1fe70d353e"
     },
     {
       "provider": "claude",
@@ -2037,7 +2062,7 @@
           "owner_action": "render reasoning parts as collapsed thinking records"
         }
       },
-      "adapter_digest": "edf164a0b9dfe5702fb04945e38a52b6a64089b8d3b2b5d2c900250784868f12"
+      "adapter_digest": "e45bd7bd4df3dc3b3f6a116bd20551f6591996315dd2e25221f70f0db0263a77"
     },
     {
       "provider": "antigravity",
@@ -2529,6 +2554,31 @@
       "live_proof": false,
       "startup_coordination_context": false,
       "capabilities": {
+        "session.transcript.search": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.cursor.transcript_search",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "transcript_ingested_searchable",
+              "scenario_id": "cursor_transcript_search",
+              "oracle_source": "server/zerg/qa/search_ingest_oracle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "c3dc533bf3917a889ed949201a718691d777bfc5163853b29e98a333246ee8ca"
+            }
+          ]
+        },
         "session.activity.turn_boundary": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -3085,7 +3135,7 @@
           "owner_action": "run the transcript census for cursor and name the raw source"
         }
       },
-      "adapter_digest": "b537015e0ab1dfdd0e3d9c0bb68e9d3757dd64eaca9f3ea94992b80e3b044f99"
+      "adapter_digest": "d7fc1c3beee3cef6ebbac9e1f1a4513a7edd13ac85d6913cc238180b6b82b268"
     },
     {
       "provider": "pi",
@@ -3220,6 +3270,31 @@
       "live_proof": false,
       "startup_coordination_context": false,
       "capabilities": {
+        "session.transcript.search": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.pi.transcript_search",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "transcript_ingested_searchable",
+              "scenario_id": "pi_transcript_search",
+              "oracle_source": "server/zerg/qa/search_ingest_oracle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "c3dc533bf3917a889ed949201a718691d777bfc5163853b29e98a333246ee8ca"
+            }
+          ]
+        },
         "session.launch.helm": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -4150,7 +4225,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "1e199cd87e0b32d9bd5e77c4230f6be9bd69137b315b6be030539f6c1a763972"
+      "adapter_digest": "120e54afd074a57758a4159513b68877af7626607c6863013d3f9a860c2795bf"
     }
   ]
 }

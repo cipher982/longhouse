@@ -107,6 +107,24 @@ providers:
   # context. This avoids Codex's deferred post-compaction SessionStart cards.
   startup_coordination_context: false
   capabilities:
+    session.transcript.search:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.codex.transcript_search
+      action_gate: ceiling
+      contexts:
+        modes: [console]
+      runtime_prerequisites: []
+      required_assertions:
+      # A marker only the model's own output holds is shipped by the real
+      # Machine Agent and returned by served lexical search on the exact
+      # session, matched on an assistant event.
+      - id: transcript_ingested_searchable
+        scenario_id: codex_transcript_search
+        oracle_source: server/zerg/qa/search_ingest_oracle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
     session.activity.turn_boundary:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -1656,6 +1674,24 @@ providers:
   live_proof: false
   startup_coordination_context: false
   capabilities:
+    session.transcript.search:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.cursor.transcript_search
+      action_gate: ceiling
+      contexts:
+        modes: [console]
+      runtime_prerequisites: []
+      required_assertions:
+      # A marker only the model's own output holds is shipped by the real
+      # Machine Agent and returned by served lexical search on the exact
+      # session, matched on an assistant event.
+      - id: transcript_ingested_searchable
+        scenario_id: cursor_transcript_search
+        oracle_source: server/zerg/qa/search_ingest_oracle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
     session.activity.turn_boundary:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -2034,6 +2070,24 @@ providers:
   live_proof: false
   startup_coordination_context: false
   capabilities:
+    session.transcript.search:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.pi.transcript_search
+      action_gate: ceiling
+      contexts:
+        modes: [console]
+      runtime_prerequisites: []
+      required_assertions:
+      # A marker only the model's own output holds is shipped by the real
+      # Machine Agent and returned by served lexical search on the exact
+      # session, matched on an assistant event.
+      - id: transcript_ingested_searchable
+        scenario_id: pi_transcript_search
+        oracle_source: server/zerg/qa/search_ingest_oracle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
     session.launch.helm:
       disposition: implemented
       reason_code: semantic_proof_missing

@@ -211,6 +211,7 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
         "session.branch.console",
         "session.launch.helm",
         "session.resume.helm",
+        "session.transcript.search",
         "session.turn.start",
     }
     assert set(opencode.capabilities) == turn_boundary | {
@@ -231,6 +232,7 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
         "coordination.directed_input.receive",
         "session.launch.helm",
         "session.resume.helm",
+        "session.transcript.search",
         "session.turn.start",
     }
     assert set(antigravity.capabilities) == turn_boundary | {

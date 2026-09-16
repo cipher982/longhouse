@@ -673,7 +673,7 @@ class TranscriptShipper:
             start_new_session=True,
             close_fds=True,
         )
-        deadline = time.monotonic() + 30
+        deadline = time.monotonic() + _SHIPPER_READY_SECONDS
         while time.monotonic() < deadline:
             if socket_path.exists():
                 return
@@ -897,6 +897,12 @@ def _provision_transcript_roots(home: Path, environment: dict[str, str]) -> None
         path.mkdir(mode=0o700, parents=True, exist_ok=True)
 
 
+# The readiness socket appears only after every provider watcher is armed. On a
+# loaded macOS host FSEvents registration alone took ~20s per run, so 30s turned
+# a slow start into a false harness failure. Still bounded.
+_SHIPPER_READY_SECONDS = 90
+
+
 def start_transcript_shipper(
     provider: str,
     args: argparse.Namespace,
@@ -970,7 +976,7 @@ def start_transcript_shipper(
         start_new_session=True,
         close_fds=True,
     )
-    deadline = time.monotonic() + 30
+    deadline = time.monotonic() + _SHIPPER_READY_SECONDS
     while time.monotonic() < deadline:
         if socket_path.exists():
             receipt = {
