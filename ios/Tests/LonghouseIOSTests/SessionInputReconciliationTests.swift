@@ -80,4 +80,47 @@ struct SessionInputReconciliationTests {
         )
         #expect(resolved.isEmpty)
     }
-}
+
+    @Test
+    func pendingIntentRoundTripsAttachmentBytesAndIsAccountScoped() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-pending-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = PendingInputStore(directory: directory)
+        let intent = PendingInputIntent(
+            clientRequestId: "ios-request-1",
+            serverURL: "https://tenant.example",
+            authGeneration: "login-1",
+            sessionId: "session-1",
+            text: "keep this",
+            intent: "auto",
+            attachments: [
+                PendingInputIntent.Attachment(
+                    id: UUID(),
+                    filename: "note.txt",
+                    data: Data("attachment bytes".utf8),
+                    mimeType: "text/plain"
+                ),
+            ],
+            createdAt: Date(timeIntervalSince1970: 1_000)
+        )
+
+        #expect(store.save(intent))
+        #expect(store.load(
+            serverURL: "https://tenant.example/",
+            sessionId: "session-1",
+            authGeneration: "login-1"
+        ) == [intent])
+        #expect(store.load(
+            serverURL: "https://tenant.example",
+            sessionId: "session-1",
+            authGeneration: "login-2"
+        ).isEmpty)
+        #expect(store.load(
+            serverURL: "https://other.example",
+            sessionId: "session-1",
+            authGeneration: "login-1"
+        ).isEmpty)
+    }
+
+    }

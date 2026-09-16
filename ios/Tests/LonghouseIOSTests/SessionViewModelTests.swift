@@ -1083,15 +1083,26 @@ struct SessionViewModelTests {
         ])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let pendingDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-pending-input-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: pendingDirectory) }
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            pendingInputStore: PendingInputStore(directory: pendingDirectory)
+        )
 
         await model.start(sessionId: "session-1", appState: appState)
         let failed = await model.send(text: "retry me", sessionId: "session-1", appState: appState)
         #expect(!failed)
         #expect(model.submittedInputs.first?.phase == .couldNotConfirm)
 
-        let retried = await model.send(text: "retry me", sessionId: "session-1", appState: appState)
-
+        let requestId = try #require(model.submittedInputs.first?.clientRequestId)
+        let retried = await model.retryPendingInput(
+            clientRequestId: requestId,
+            sessionId: "session-1",
+            appState: appState
+        )
         #expect(retried)
         #expect(model.submittedInputs.count == 1)
         #expect(model.submittedInputs.first?.phase == .sent)
@@ -1586,7 +1597,14 @@ struct SessionViewModelTests {
         await api.setSendSteps([.requestFailed])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let pendingDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-pending-input-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: pendingDirectory) }
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            pendingInputStore: PendingInputStore(directory: pendingDirectory)
+        )
 
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
@@ -2210,7 +2228,7 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
         return workspaces[0]
     }
 
-    func sendInput(id: String, text: String, intent: String, clientRequestId: String?) async throws -> SessionInputResponse {
+    func sendInput(id: String, text: String, intent: String, clientRequestId: String) async throws -> SessionInputResponse {
         sentInputs.append("\(text):\(intent)")
         lastClientRequestId = clientRequestId
         if !sendSteps.isEmpty {
@@ -2230,8 +2248,14 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
         return sendResponse
     }
 
-    func sendInputMultipart(id: String, text: String, attachments: [ComposerAttachment], clientRequestId: String?) async throws -> SessionInputResponse {
-        try await sendInput(id: id, text: text, intent: "auto", clientRequestId: clientRequestId)
+    func sendInputMultipart(
+        id: String,
+        text: String,
+        intent: String,
+        attachments: [ComposerAttachment],
+        clientRequestId: String
+    ) async throws -> SessionInputResponse {
+        try await sendInput(id: id, text: text, intent: intent, clientRequestId: clientRequestId)
     }
 
     func respondToPauseRequest(

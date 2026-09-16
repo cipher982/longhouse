@@ -10,8 +10,12 @@ on:
         required: true
         type: string
       runtime_image_tag:
-        description: "Runtime image tag selected by the deployment"
+        description: "Image tag selected by the deployment"
         required: true
+        type: string
+      deployment_id:
+        description: "Durable deployment receipt to observe before QA"
+        required: false
         type: string
   workflow_dispatch:
     inputs:
@@ -23,13 +27,15 @@ on:
         description: "Image tag; defaults to source_sha or the observed clean build"
         required: false
         type: string
-
+      deployment_id:
+        description: "Durable deployment receipt to observe before QA"
+        required: false
+        type: string
 permissions:
   contents: read
-
 concurrency:
-  group: hosted-live-qa-${{ github.repository }}
-  cancel-in-progress: true
+  group: hosted-live-qa-${{ github.repository }}-${{ inputs.source_sha || github.sha }}-${{ github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   hosted-live-qa:
@@ -65,6 +71,13 @@ jobs:
             fi
           done
 
+      - name: Observe durable deployment receipt
+        if: ${{ inputs.deployment_id != '' }}
+        run: |
+          set -euo pipefail
+          . scripts/lib/hosted-instance.sh
+          lh_hosted_wait_for_deployment "${{ inputs.deployment_id }}" 60
+
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
@@ -88,14 +101,15 @@ jobs:
               --format '{{json .Image}}' |
               jq --exit-status --raw-output '.config.Labels["org.opencontainers.image.revision"] | select(type == "string" and test("^[0-9a-f]{40}$"))')"
           fi
-          health="$(curl --fail --silent --show-error --max-time 15 "https://${QA_INSTANCE_SUBDOMAIN}.longhouse.ai/api/health")"
-          printf '%s\n' "$health" | jq '{build}'
-          actual_sha="$(printf '%s\n' "$health" | jq --exit-status --raw-output '.build | select(.dirty == false) | .commit | select(type == "string" and test("^[0-9a-f]{40}$"))')"
+          printf '%s\n' "$health" | jq '{source_sha,build_identity,build}'
+          actual_sha="$(printf '%s\n' "$health" | jq --exit-status --raw-output '(.source_sha // .build.source_sha // .build.commit) | select(type == "string" and test("^[0-9a-f]{40}$"))')"
+          actual_build_identity="$(printf '%s\n' "$health" | jq --raw-output '(.build_identity // .build.build_identity // "-")')"
           if [[ -n "$EXPECTED_RUNTIME_TAG" && "$actual_sha" != "$EXPECTED_RUNTIME_TAG" ]]; then
-            echo "Deployed runtime $actual_sha does not match requested image $EXPECTED_RUNTIME_TAG" >&2
+            echo "Deployed runtime source $actual_sha does not match requested image $EXPECTED_RUNTIME_TAG (build identity $actual_build_identity)" >&2
             exit 1
           fi
           printf 'runtime_sha=%s\n' "$actual_sha" >> "$GITHUB_OUTPUT"
+          printf 'runtime_build_identity=%s\n' "$actual_build_identity" >> "$GITHUB_OUTPUT"
 
       - name: Run hosted live QA
         id: qa_live

@@ -205,7 +205,7 @@ async def test_send_uses_session_scoped_authority(monkeypatch):
         "zerg.mcp_server.server.LonghouseAPIClient.post",
         new=AsyncMock(return_value=response),
     ) as mock_post:
-        result = await tool.run({"session_id": "22222222-2222-2222-2222-222222222222", "text": "hello"})
+        result = await tool.run({"session_id": "22222222-2222-2222-2222-222222222222", "text": "hello", "client_request_id": "send-test-1"})
 
     assert result == '{"id":1,"input_receipt":{"status":"queued"}}'
     mock_post.assert_awaited_once_with(
@@ -213,6 +213,7 @@ async def test_send_uses_session_scoped_authority(monkeypatch):
         json={
             "target_session_id": "22222222-2222-2222-2222-222222222222",
             "text": "hello",
+            "client_request_id": "send-test-1",
         },
         headers={
             "X-Longhouse-Session-Id": "11111111-1111-1111-1111-111111111111",
@@ -276,12 +277,12 @@ async def test_reply_uses_session_scoped_authority(monkeypatch):
         "zerg.mcp_server.server.LonghouseAPIClient.post",
         new=AsyncMock(return_value=response),
     ) as mock_post:
-        result = await tool.run({"input_id": 42, "text": "done"})
+        result = await tool.run({"input_id": 42, "text": "done", "client_request_id": "reply-test-1"})
 
     assert result == '{"id":43,"reply_to_id":42}'
     mock_post.assert_awaited_once_with(
         "/api/agents/directed-inputs/42/reply",
-        json={"text": "done"},
+        json={"text": "done", "client_request_id": "reply-test-1"},
         headers={
             "X-Longhouse-Session-Id": "11111111-1111-1111-1111-111111111111",
             "X-Agents-Token": "zst_coordination",

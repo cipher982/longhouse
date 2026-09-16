@@ -4,6 +4,7 @@
 # look at the rendered frame instead of trusting an assertion.
 #
 # Usage: scripts/ci/ios_ui_shot.sh SessionChatUITests/testTurnFooterRendersUnderTheProviderReply
+# HTTP outbox proof: make ios-ui-shot TEST=HTTPOutboxUITests/testRealHTTPOutboxPhotosPickerSurvivesTerminateAndReopen
 # Live-session proof: export LONGHOUSE_FIDELITY_{SERVER_URL,AUTH_TOKEN,SESSION_ID,MARKERS_JSON}
 # first, then select LiveSessionFidelityUITests/testRealSessionColdOpenAndReopen.
 # Credentials travel only through process environment, never xctestrun/plist files.
@@ -24,6 +25,9 @@ if [[ "$TEST" == LiveSessionFidelityUITests* ]]; then
       exit 2
     fi
   done
+fi
+if [[ "$TEST" == HTTPOutboxUITests/* ]]; then
+  exec "$(dirname "${BASH_SOURCE[0]}")/ios_http_outbox_proof.sh" "$TEST"
 fi
 PROJECT="ios/XcodeHarness/LonghouseIOS.xcodeproj"
 SCHEME="LonghouseSmoke"

@@ -620,8 +620,12 @@ export interface TimelineSessionRemoveEvent {
   has_real_sessions?: boolean;
 }
 
+export interface TimelineSessionStreamConnected {
+  stream_epoch?: string;
+}
+
 export interface TimelineSessionStreamHandlers {
-  onConnected?: () => void;
+  onConnected?: (data: TimelineSessionStreamConnected) => void;
   onHeartbeat?: (timestamp: string) => void;
   onSessionUpsert?: (event: TimelineSessionUpsertEvent) => void;
   onSessionRemove?: (event: TimelineSessionRemoveEvent) => void;
@@ -760,9 +764,12 @@ export function connectTimelineSessionsStream(
   );
   const eventSource = new EventSource(url, { withCredentials: true });
 
-  eventSource.addEventListener("connected", () => {
-    dispatchTimelineStreamEvent("connected");
-    handlers.onConnected?.();
+  eventSource.addEventListener("connected", (event: MessageEvent) => {
+    const data = parseStreamEventData<TimelineSessionStreamConnected>(event) ?? {};
+    dispatchTimelineStreamEvent("connected", {
+      stream_epoch: data.stream_epoch,
+    });
+    handlers.onConnected?.(data);
   });
 
   eventSource.addEventListener("heartbeat", (event: MessageEvent) => {
@@ -808,6 +815,7 @@ export function connectTimelineSessionsStream(
 
 export interface SessionWorkspaceStreamConnected {
   session_id: string;
+  stream_epoch?: string;
   server_now_ms?: number;
 }
 
@@ -817,6 +825,7 @@ export interface SessionWorkspaceStreamReplayGap {
   earliest_seq: number | null;
   latest_seq: number;
   reason: string;
+  stream_epoch?: string;
 }
 
 export interface SessionWorkspaceStreamChange {
@@ -852,6 +861,7 @@ export function connectSessionWorkspaceStream(
   options: {
     skipInitial?: boolean;
     knownWorkspaceFingerprint?: string | null;
+    streamEpoch?: string | null;
   } = {},
 ): () => void {
   const params = new URLSearchParams();
@@ -863,6 +873,9 @@ export function connectSessionWorkspaceStream(
       "known_workspace_fingerprint",
       options.knownWorkspaceFingerprint,
     );
+  }
+  if (options.streamEpoch) {
+    params.set("stream_epoch", options.streamEpoch);
   }
   const queryString = params.toString();
   const url = buildUrl(

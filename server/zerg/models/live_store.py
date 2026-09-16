@@ -793,6 +793,7 @@ class LiveSessionInputReceipt(LiveBase):
     intent = Column(String(32), nullable=False)
     status = Column(String(32), nullable=False, index=True)
     text = Column(Text, nullable=False)
+    payload_digest = Column(String(64), nullable=True, index=True)
     archive_session_input_id = Column(Integer, nullable=True, index=True)
     # The durable transcript event this send became, linked at ingest by
     # text and time. It is how a client resolves its optimistic bubble by

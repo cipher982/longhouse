@@ -59,7 +59,7 @@ Good:
 
 ```bash
 gh run watch <id> --exit-status
-./scripts/ops/coolify-deploy.sh longhouse-demo --timeout 900
+make ship-watch SHA="<full-sha>"
 ```
 
 Bad:
@@ -76,9 +76,11 @@ while true; do curl .../health; sleep 5; done
 Changed paths typically include `server/**`, `web/**`, `engine/**`, `config/**`, `docker/runtime.dockerfile`.
 
 What ships:
-- GHCR runtime image tagged as `latest` plus the full commit SHA
-- Public demo runtime via Coolify using that shared image
-- Hosted canary tenant via reprovision
+- GHCR runtime image tagged with the full source SHA (and `latest` only as a registry convenience)
+- Public demo, canary, cohort, and explicit dogfood mutations through the durable
+  private deployment API, using the exact immutable digest
+- Canary smoke/functional acceptance before demo or any later ring; personal
+  dogfood promotion is manual and names the selected verified release
 
 Primary automation:
 
@@ -110,18 +112,17 @@ When the maintainer says `cowbell`, the agent owns the whole ship loop:
 - run `make ship SHA="<task-sha>"`
 - read the start banner and confirm the exact target SHA + commit subject
 - stay in the foreground until `make ship` exits
-- do not wrap `make ship` in a short outer shell timeout; the monitor already has its own timeout, but the normal runtime lane is designed to return in a few minutes
-- deploys are latest-wins on `main`: a newer main push cancels older in-flight deploy verification instead of waiting behind it
-- cite exact SHAs and workflow run ids when reporting status
+- do not wrap `make ship` in a short outer shell timeout; the monitor already has its own timeout
+- cite exact SHAs, immutable image digests, deployment receipt IDs, and workflow run IDs
 
-`deploy-and-verify.yml` waits for the exact-SHA runtime image, deploys that
-image to demo and canary in parallel, runs fast health/config/auth gate smoke,
-and dispatches full hosted live QA asynchronously. Full CI remains an async
-quality signal on normal pushes so the hot ship path is image, parallel deploy,
-and fast smoke; set the repo variable `DEPLOY_WAIT_FULL_CI=true` only when a
-temporary conservative gate is needed. Workflow/script-only deploy verification
-reuses the current `latest` image. Manual dispatch stays isolated for recovery
-use.
+`deploy-and-verify.yml` waits for exact-SHA image publication before it submits
+the canary candidate. The canary is functionally qualified before the public
+demo submission. The fast smoke is the release completion signal; broad
+`hosted-live-qa.yml` is dispatched asynchronously with the durable deployment
+receipt and observes that receipt without owning or cancelling it. Full CI
+remains an optional source gate (`DEPLOY_WAIT_FULL_CI=true`) rather than a
+post-deploy sleep/poll loop. Every rapid-push outcome is explicit: deployed,
+queued, superseded, rejected, or failed.
 
 Before pushing runtime/UI work, run the cheapest load-bearing local tier you can:
 usually `make test-e2e-core` for launch-surface changes plus the matching unit
@@ -131,20 +132,12 @@ on to the next useful task.
 
 If `make ship` returns non-zero for the target SHA, ship failed. You may explain why you think it failed, including suspected pre-existing drift, but do not relabel that outcome as success.
 
-When releasing a held push through `workflow_dispatch`, also dispatch
-`runtime-image.yml` at the same ref/SHA. The deploy's image wait filters by event
-type; a successful push-triggered image run does not satisfy a manual deploy.
-
-Manual fallback:
-
-```bash
-./scripts/ops/coolify-deploy.sh longhouse-demo \
-  --docker-image ghcr.io/cipher982/longhouse-runtime \
-  --docker-tag <full-commit-sha> \
-  --timeout 900
-make reprovision IMAGE="ghcr.io/cipher982/longhouse-runtime:<full-commit-sha>"
-make qa-live
-```
+When releasing a held push through `workflow_dispatch`, dispatch
+`runtime-image.yml` and `deploy-and-verify.yml` at the same exact SHA. Do not
+use direct Coolify, SSH, Docker Compose, or host reprovision commands as a
+deployment fallback; those bypass durable receipts and target fencing. If a
+deployment is pending, use the deployment receipt/API observer or
+`make ship-watch SHA="<full-sha>"`.
 
 ### Hosted Control Plane
 
@@ -190,28 +183,37 @@ Two auth systems:
 
 ## Reprovision Hosted Tenant
 
+Use the helper only as an API client: it resolves the explicitly selected
+target and submits a durable deployment with the immutable digest. It does not
+SSH to a host, run Compose, or mutate a container directly.
+
 ```bash
-make reprovision
-make reprovision SUBDOMAIN=other
+make reprovision SUBDOMAIN=other \
+  IMAGE="ghcr.io/cipher982/longhouse-runtime@sha256:<verified-digest>"
 ```
 
-Data survives reprovision. Hosted tenant SQLite lives at `/var/app-data/longhouse/<subdomain>/longhouse.db` on the host and `/data/longhouse.db` in the container.
+Data survives deployment. Hosted tenant SQLite lives at
+`/var/app-data/longhouse/<subdomain>/longhouse.db` on the runtime host and
+`/data/longhouse.db` in the container; access those paths only for diagnosis,
+not deployment mutation.
 
 ## Logs When Things Break
 
 ```bash
 ssh <runtime-host> 'docker logs longhouse-<subdomain> --tail 50'
-coolify app logs longhouse-demo
-coolify app logs longhouse-control-plane
 ```
+
+SSH and provider log commands are read-only diagnostics. They are not an
+alternate release path; all canary, demo, cohort, and dogfood changes go
+through the private deployment API.
 
 ## Local Dogfood Refresh (MANDATORY for machine-side changes)
 
 **Hosted ship does NOT update the maintainer's laptop.** The `longhouse` CLI,
-`longhouse-engine` daemon, and `Longhouse.app` menu bar are installed
-into his system and only move when rebuilt locally. If you forget this
-step, the menu bar will show "restart pending" and the maintainer is stuck
-dogfooding old code.
+`longhouse-engine` daemon, and `Longhouse.app` menu bar are installed into his
+system and only move when rebuilt locally. Automatic hosted promotion of this
+personal dogfood surface is prohibited; any hosted dogfood promotion must name
+the exact selected, canary-verified release.
 
 After a successful `make ship`, run this when the task changes a locally
 installed Longhouse component: CLI/package code, engine, Desktop App,

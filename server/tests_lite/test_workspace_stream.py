@@ -79,6 +79,7 @@ async def _run_stream(
     skip_initial: bool = False,
     last_event_id: int | None = None,
     known_workspace_fingerprint: str | None = None,
+    stream_epoch: str | None = None,
 ) -> list[dict]:
     request = _DisconnectAfterNCycles(cycles)
     events: list[dict] = []
@@ -89,6 +90,7 @@ async def _run_stream(
         skip_initial=skip_initial,
         last_event_id=last_event_id,
         known_workspace_fingerprint=known_workspace_fingerprint,
+        stream_epoch=stream_epoch,
     ):
         events.append(event)
     return events
@@ -488,6 +490,7 @@ def test_workspace_stream_emits_pubsub_seq_and_id(tmp_path):
 def test_workspace_stream_emits_replay_gap_for_unavailable_cursor(tmp_path):
     """Old process-local pubsub cursors must be explicit, not silently ignored."""
     from zerg.services.session_pubsub import reset_pubsub_for_test
+    from zerg.services.session_pubsub import get_pubsub
 
     reset_pubsub_for_test()
     sf = _make_db(tmp_path, name="workspace_stream_replay_gap.db")
@@ -507,7 +510,7 @@ def test_workspace_stream_emits_replay_gap_for_unavailable_cursor(tmp_path):
         db.refresh(session)
         session_id = session.id
 
-    events = asyncio.run(_run_stream(sf, session_id, cycles=2, last_event_id=777))
+    events = asyncio.run(_run_stream(sf, session_id, cycles=2, last_event_id=777, stream_epoch=get_pubsub().stream_epoch))
     grouped = _collect_stream_events(events)
 
     assert "connected" in grouped

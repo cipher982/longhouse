@@ -1503,6 +1503,54 @@ struct SessionInputReceipt: Codable, Hashable, Sendable {
     let eventId: String?
 }
 
+enum SessionInputReceiptDisposition: String, Codable, Sendable {
+    case accepted
+    case rejected
+    case couldNotConfirm
+
+    static func from(status: String?) -> Self {
+        switch status?.lowercased() {
+        case "delivered", "accepted", "queued", "delivering", "sent", "working":
+            return .accepted
+        case "failed", "rejected", "cancelled", "canceled":
+            return .rejected
+        default:
+            return .couldNotConfirm
+        }
+    }
+}
+
+/// Authoritative outcome for one operation identity. `couldNotConfirm` is
+/// intentionally distinct from rejection: a missing receipt after transport
+/// loss is not permission to send the side effect again.
+struct SessionInputReceiptState: Codable, Sendable, Equatable {
+    let clientRequestId: String
+    let intent: String?
+    let status: String?
+    let disposition: SessionInputReceiptDisposition
+    let inputId: Int?
+    let eventId: String?
+    let error: String?
+
+    init(
+        clientRequestId: String,
+        intent: String? = nil,
+        status: String? = nil,
+        disposition: SessionInputReceiptDisposition,
+        inputId: Int? = nil,
+        eventId: String? = nil,
+        error: String? = nil
+    ) {
+        self.clientRequestId = clientRequestId
+        self.intent = intent
+        self.status = status
+        self.disposition = disposition
+        self.inputId = inputId
+        self.eventId = eventId
+        self.error = error
+    }
+}
+
 struct SessionInputOrigin: Codable, Hashable, Sendable {
     let authoredVia: SessionInputAuthoredVia
     let sessionInputId: Int?

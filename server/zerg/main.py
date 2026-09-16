@@ -32,6 +32,7 @@ from fastapi import Depends
 from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 # Logging configuration
@@ -120,6 +121,7 @@ from zerg.routers.bug_reports import router as bug_reports_router
 from zerg.routers.device_tokens import router as device_tokens_router
 from zerg.routers.health import router as health_router
 from zerg.routers.heartbeat import router as heartbeat_router
+from zerg.routers.internal_deployments import router as internal_deployments_router
 from zerg.routers.metrics import router as metrics_router
 from zerg.routers.models import router as models_router
 from zerg.routers.observability import agents_router as agents_observability_router
@@ -171,6 +173,30 @@ app = FastAPI(
     redoc_url="/redoc" if _docs_enabled else None,
     openapi_url="/openapi.json" if _docs_enabled else None,
 )
+
+
+@app.middleware("http")
+async def runtime_write_admission_middleware(request, call_next):
+    """Fence mutating HTTP requests during an authenticated cutover drain."""
+    path = request.url.path
+    is_internal_control = path.startswith("/internal/deployments/")
+    mutating = request.method in {"POST", "PUT", "PATCH", "DELETE"} and not is_internal_control
+    admitted = False
+    if mutating:
+        from zerg.services.runtime_admission import runtime_admission
+
+        admitted, details = await runtime_admission().try_admit(path=path)
+        if not admitted:
+            return JSONResponse(status_code=503, content=details)
+    try:
+        return await call_next(request)
+    finally:
+        if admitted:
+            from zerg.services.runtime_admission import runtime_admission
+
+            await runtime_admission().release()
+
+
 api_app = FastAPI(
     redirect_slashes=True,
     docs_url="/docs" if _docs_enabled else None,
@@ -311,6 +337,7 @@ api_app.include_router(health_router)
 # metrics on parent app (Prometheus expects /metrics at root)
 app.include_router(metrics_router)
 
+api_app.include_router(internal_deployments_router)
 app.mount("/api", api_app)
 
 # ---------------------------------------------------------------------------

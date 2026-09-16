@@ -396,14 +396,18 @@ def health_check(request: Request):
             # graded, so an incompatible catalogd passed and only readyz
             # noticed. Deploy gates and QA scripts read this endpoint.
             compatible = catalogd_ping_is_compatible(catalog_ping)
-            checks["catalogd"] = {
+            catalog_check = {
                 "status": "pass" if compatible else "fail",
                 "ready": catalog_ping.get("ready") is True,
                 "schema_version": catalog_ping.get("schema_version"),
                 "schema_generation": catalog_ping.get("schema_generation"),
                 "commit_seq": catalog_ping.get("commit_seq"),
+                "pid": catalog_ping.get("pid"),
+                # Catalogd bounds label cardinality and timing windows; this
+                # stays in the trusted detail path with the rest of checks.
                 "writer_admission": catalog_ping.get("writer_admission"),
             }
+            checks["catalogd"] = catalog_check
             if not compatible:
                 health_status["status"] = "unhealthy"
                 health_status["message"] = "Catalog service is incompatible"

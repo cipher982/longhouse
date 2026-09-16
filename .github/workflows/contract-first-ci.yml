@@ -17,7 +17,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # A new commit has a different identity and must not cancel the gates for an
+  # older release candidate. Reruns of the same commit may still coalesce.
+  group: ci-${{ github.repository }}-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
 env:
@@ -33,7 +35,7 @@ jobs:
   # -----------------------------------------------------------------------
   changes:
     timeout-minutes: 10
-    runs-on: ubuntu-latest
+    runs-on: cube
     name: "Changed paths"
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
@@ -63,7 +65,7 @@ jobs:
     # subset of paths is another list to drift out of date, which is exactly how
     # twelve of its members went dark. The whole target runs in about a minute.
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: ubuntu-latest
+    runs-on: cube
     name: "Validation"
     # Must exceed the sum of the step budgets below, or the job kills a healthy
     # run before any step reaches its own limit.
@@ -158,7 +160,7 @@ jobs:
     timeout-minutes: 30
     needs: changes
     if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-latest
+    runs-on: cube
     name: "Backend tests"
 
     steps:
@@ -196,7 +198,7 @@ jobs:
     # proves the source-only provider assertions that do not belong in the
     # provider-launch factory matrix.
     timeout-minutes: 15
-    runs-on: ubuntu-latest
+    runs-on: cube
     name: "Provider contract tests"
 
     steps:
@@ -222,7 +224,7 @@ jobs:
     timeout-minutes: 45
     needs: changes
     if: ${{ needs.changes.outputs.engine == 'true' || needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-latest
+    runs-on: cube
     name: "Engine tests"
     env:
       CARGO_PROFILE: ci
@@ -326,7 +328,7 @@ jobs:
     timeout-minutes: 20
     needs: changes
     if: ${{ needs.changes.outputs.packaging == 'true' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-latest
+    runs-on: cube
     name: "CLI wheel packaging"
 
     steps:
@@ -413,7 +415,7 @@ jobs:
     timeout-minutes: 20
     needs: changes
     if: ${{ needs.changes.outputs.models == 'true' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-latest
+    runs-on: cube
     name: "Model smoke tests"
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -437,7 +439,7 @@ jobs:
     timeout-minutes: 30
     needs: changes
     if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch' }}
-    runs-on: ubuntu-latest
+    runs-on: cube
     name: "OSS onboarding smoke"
     env:
       CI: "1"

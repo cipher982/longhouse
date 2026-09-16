@@ -3599,6 +3599,99 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/internal/deployments/{attempt_id}/drain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Runtime Drain */
+        get: operations["get_runtime_drain_internal_deployments__attempt_id__drain_get"];
+        put?: never;
+        /** Drain Runtime */
+        post: operations["drain_runtime_internal_deployments__attempt_id__drain_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/internal/deployments/{attempt_id}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reopen Runtime */
+        post: operations["reopen_runtime_internal_deployments__attempt_id__reopen_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/internal/deployments/evidence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Runtime Evidence */
+        get: operations["runtime_evidence_internal_deployments_evidence_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/internal/deployments/{attempt_id}/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Runtime Readiness */
+        get: operations["runtime_readiness_internal_deployments__attempt_id__readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/internal/deployments/{attempt_id}/read-consistency": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Consistency
+         * @description Concrete authenticated catalog read used by cutover verification.
+         *
+         *     This is deliberately not a generic health/probe route: it reads the
+         *     catalog's actual metadata and schema through the same Unix-socket gateway
+         *     used by application reads and verifies a comparable commit coordinate.
+         */
+        get: operations["read_consistency_internal_deployments__attempt_id__read_consistency_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3851,7 +3944,7 @@ export interface components {
              */
             intent: string;
             /** Client Request Id */
-            client_request_id?: string | null;
+            client_request_id: string;
             /** Attachments */
             attachments: string[];
         };
@@ -4140,6 +4233,23 @@ export interface components {
              */
             created_at: string;
         };
+        /** DeploymentFenceRequest */
+        DeploymentFenceRequest: {
+            /** Request Id */
+            request_id: string;
+            /** Deployment Id */
+            deployment_id: string;
+            /** Target Id */
+            target_id: string;
+            /** Generation */
+            generation: string;
+            /** Deadline Utc */
+            deadline_utc: string;
+            /** Grace Seconds */
+            grace_seconds: number;
+            /** Runtime Epoch */
+            runtime_epoch?: string | null;
+        };
         /**
          * DirectedInputCreate
          * @description Create provider-neutral input for another managed session.
@@ -4153,7 +4263,7 @@ export interface components {
             /** Text */
             text: string;
             /** Client Request Id */
-            client_request_id?: string | null;
+            client_request_id: string;
         };
         /**
          * DirectedInputReply
@@ -4163,7 +4273,7 @@ export interface components {
             /** Text */
             text: string;
             /** Client Request Id */
-            client_request_id?: string | null;
+            client_request_id: string;
         };
         /**
          * EnrollTokenResponse
@@ -6259,6 +6369,8 @@ export interface components {
             id?: number | null;
             /** Live Input Id */
             live_input_id?: string | null;
+            /** Client Request Id */
+            client_request_id?: string | null;
             /** Text */
             text: string;
             /**
@@ -6275,6 +6387,35 @@ export interface components {
             last_error?: string | null;
             /** Created At */
             created_at?: string | null;
+        };
+        /** ReadConsistencyResponse */
+        ReadConsistencyResponse: {
+            /** Attempt Id */
+            attempt_id: string;
+            /** Runtime Epoch */
+            runtime_epoch: string;
+            /** Outcome */
+            outcome: string;
+            /** Snapshot Id */
+            snapshot_id?: string | null;
+            /** Catalog Revision */
+            catalog_revision?: string | null;
+            /** Served Session Revision */
+            served_session_revision?: string | null;
+            /** Machine Read Revision */
+            machine_read_revision?: string | null;
+            /** Build Identity */
+            build_identity?: {
+                [key: string]: unknown;
+            } | null;
+            /** Observed Epoch */
+            observed_epoch: string;
+            /** Checked At */
+            checked_at: string;
+            /** Receipt Id */
+            receipt_id?: string | null;
+            /** Detail */
+            detail?: string | null;
         };
         /** ReadinessEvidenceIn */
         ReadinessEvidenceIn: {
@@ -8003,9 +8144,9 @@ export interface components {
             intent: "auto" | "queue" | "steer";
             /**
              * Client Request Id
-             * @description Optional client idempotency key for this submitted input
+             * @description Caller-owned idempotency key for this submitted input
              */
-            client_request_id?: string | null;
+            client_request_id: string;
             /**
              * Report Id
              * @description Optional immutable bug report to stage before a Console turn
@@ -13710,6 +13851,8 @@ export interface operations {
                 skip_initial?: boolean;
                 /** @description Fingerprint from the client's rendered workspace snapshot; when stale, skip_initial is ignored. */
                 known_workspace_fingerprint?: string | null;
+                /** @description Process epoch paired with Last-Event-ID; mismatches force durable snapshot reconciliation. */
+                stream_epoch?: string | null;
             };
             header?: never;
             path: {
@@ -17008,6 +17151,219 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    get_runtime_drain_internal_deployments__attempt_id__drain_get: {
+        parameters: {
+            query: {
+                request_id: string;
+                runtime_epoch?: string | null;
+            };
+            header?: {
+                "X-Internal-Token"?: string | null;
+            };
+            path: {
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    drain_runtime_internal_deployments__attempt_id__drain_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Internal-Token"?: string | null;
+            };
+            path: {
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeploymentFenceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reopen_runtime_internal_deployments__attempt_id__reopen_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Internal-Token"?: string | null;
+            };
+            path: {
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeploymentFenceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    runtime_evidence_internal_deployments_evidence_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Internal-Token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    runtime_readiness_internal_deployments__attempt_id__readiness_get: {
+        parameters: {
+            query?: {
+                expected_generation?: string | null;
+                expected_schema_version?: string | null;
+                runtime_epoch?: string | null;
+            };
+            header?: {
+                "X-Internal-Token"?: string | null;
+            };
+            path: {
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_consistency_internal_deployments__attempt_id__read_consistency_get: {
+        parameters: {
+            query: {
+                runtime_epoch: string;
+            };
+            header?: {
+                "X-Internal-Token"?: string | null;
+            };
+            path: {
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadConsistencyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

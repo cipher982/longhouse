@@ -1,134 +1,81 @@
 #!/usr/bin/env bash
-# deploy-status.sh — print deployed SHA, uptime, and health for all Longhouse surfaces.
+# deploy-status.sh — observe served release identity without host mutation access.
 set -euo pipefail
 
-# SSH alias for the runtime host (configured by scripts/ci/setup-deploy-ssh.sh)
-RUNTIME_HOST="${RUNTIME_HOST:-runtime-host}"
-# The owner's dogfood instance (david010 by default). This row used to be
-# labelled "Canary", which made an agent read the owner's instance as the
-# canary and report the wrong thing; the label now says what it is.
 DOGFOOD_SUBDOMAIN="${LONGHOUSE_DEFAULT_SUBDOMAIN:-david010}"
-CANARY_CONTAINER_NAME="${CANARY_CONTAINER_NAME:-longhouse-${DOGFOOD_SUBDOMAIN}}"
-CANARY_HEALTH_URL="${CANARY_HEALTH_URL:-https://${DOGFOOD_SUBDOMAIN}.longhouse.ai/api/health}"
-# The real hosted canary lives behind its own control plane on another host,
-# so it is read from its health endpoint only.
 HOSTED_CANARY_SUBDOMAIN="${HOSTED_CANARY_SUBDOMAIN:-kernel-canary}"
+DOGFOOD_HEALTH_URL="${DOGFOOD_HEALTH_URL:-https://${DOGFOOD_SUBDOMAIN}.longhouse.ai/api/health}"
 HOSTED_CANARY_HEALTH_URL="${HOSTED_CANARY_HEALTH_URL:-https://${HOSTED_CANARY_SUBDOMAIN}.longhouse.ai/api/health}"
+DEMO_HEALTH_URL="${DEMO_HEALTH_URL:-https://longhouse.ai/api/health}"
+CP_HEALTH_URL="${CP_HEALTH_URL:-https://control.longhouse.ai/health}"
 
-# --- Gather container state from zerg ----------------------------------------
-
-read_container() {
-    local name_or_label="$1"
-    local filter="$2"
-    local info
-    info=$(ssh "$RUNTIME_HOST" "docker ps --format '{{.Image}} {{.Status}}' $filter" 2>/dev/null | head -1 || true)
-    if [[ -z "$info" ]]; then
-        echo "- - -"
-        return
-    fi
-    local image status
-    image=$(echo "$info" | awk '{print $1}')
-    status=$(echo "$info" | cut -d' ' -f2-)
-    local sha="${image##*:}"
-    [[ ${#sha} -gt 12 ]] && sha="${sha:0:10}"
-    echo "$sha $status"
+health_json() {
+  curl -sf --max-time 10 "$1" 2>/dev/null || printf '{}'
+}
+health_field() {
+  local body="$1"
+  local field="$2"
+  python3 -c '
+import json
+import sys
+try:
+    value = json.load(sys.stdin)
+except Exception:
+    value = {}
+field = sys.argv[1]
+build = value.get("build") or {}
+if field == "status":
+    print(value.get("status", "unreachable"))
+elif field == "source_sha":
+    print(
+        value.get("source_sha")
+        or build.get("source_sha")
+        or build.get("commit")
+        or value.get("commit")
+        or "-"
+    )
+elif field == "build_identity":
+    print(value.get("build_identity") or build.get("build_identity") or "-")
+else:
+    print(value.get(field) or build.get(field) or "-")
+' "$field" <<<"$body"
 }
 
-# Demo runtime — direct container
-demo_raw=$(read_container "demo" "--filter 'name=^longhouse-demo$'")
-demo_sha=$(echo "$demo_raw" | awk '{print $1}')
-demo_uptime=$(echo "$demo_raw" | cut -d' ' -f2-)
-
-# Control plane — direct container
-cp_raw=$(read_container "control-plane" "--filter 'name=^longhouse-control-plane$'")
-cp_sha=$(echo "$cp_raw" | awk '{print $1}')
-cp_uptime=$(echo "$cp_raw" | cut -d' ' -f2-)
-
-# Canary — direct container name
-if [[ -n "$CANARY_CONTAINER_NAME" ]]; then
-    canary_raw=$(ssh "$RUNTIME_HOST" "docker ps --format '{{.Image}} {{.Status}}' --filter 'name=$CANARY_CONTAINER_NAME'" 2>/dev/null | head -1 || true)
-else
-    canary_raw=""
-fi
-if [[ -n "$canary_raw" ]]; then
-    canary_image=$(echo "$canary_raw" | awk '{print $1}')
-    canary_sha="${canary_image##*:}"
-    [[ ${#canary_sha} -gt 12 ]] && canary_sha="${canary_sha:0:10}"
-    canary_uptime=$(echo "$canary_raw" | cut -d' ' -f2-)
-else
-    canary_sha="-"
-    canary_uptime="-"
-fi
-
-# --- Gather health -----------------------------------------------------------
-
-health_status() {
-    local url="$1"
-    local result
-    result=$(curl -sf --max-time 5 "$url" 2>/dev/null) || { echo "unreachable"; return; }
-    echo "$result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','unknown'))" 2>/dev/null || echo "unknown"
+short_sha() {
+  local value="$1"
+  if [[ "$value" != "-" && ${#value} -gt 12 ]]; then
+    printf '%s\n' "${value:0:10}"
+  else
+    printf '%s\n' "$value"
+  fi
 }
 
-health_sha() {
-    local url="$1"
-    local result
-    local sha
-    result=$(curl -sf --max-time 5 "$url" 2>/dev/null) || { echo "-"; return; }
-    sha=$(echo "$result" | python3 -c "import sys,json; data=json.load(sys.stdin); print((data.get('build') or {}).get('commit') or data.get('commit') or '-')" 2>/dev/null || echo "-")
-    if [[ "$sha" != "-" && ${#sha} -gt 12 ]]; then
-        sha="${sha:0:10}"
-    fi
-    echo "$sha"
+observe_surface() {
+  local url="$1"
+  local body status source_sha build_identity
+  body="$(health_json "$url")"
+  status="$(health_field "$body" status)"
+  source_sha="$(short_sha "$(health_field "$body" source_sha)")"
+  build_identity="$(health_field "$body" build_identity)"
+  printf '%s\t%s\t%s\n' "$source_sha" "$status" "$build_identity"
 }
 
-demo_health=$(health_status "https://longhouse.ai/api/health")
-cp_health=$(health_status "https://control.longhouse.ai/health")
-if [[ -n "$CANARY_HEALTH_URL" ]]; then
-    canary_health=$(health_status "$CANARY_HEALTH_URL")
-else
-    canary_health="-"
-fi
+IFS=$'\t' read -r demo_sha demo_health demo_identity <<<"$(observe_surface "$DEMO_HEALTH_URL")"
+IFS=$'\t' read -r cp_sha cp_health cp_identity <<<"$(observe_surface "$CP_HEALTH_URL")"
+IFS=$'\t' read -r dogfood_sha dogfood_health dogfood_identity <<<"$(observe_surface "$DOGFOOD_HEALTH_URL")"
+IFS=$'\t' read -r canary_sha canary_health canary_identity <<<"$(observe_surface "$HOSTED_CANARY_HEALTH_URL")"
+local_sha="$(git rev-parse --short=10 HEAD 2>/dev/null || echo '-')"
 
-demo_health_sha="-"
-if [[ "$demo_health" != "unreachable" ]]; then
-    demo_health_sha=$(health_sha "https://longhouse.ai/api/health")
-fi
-if [[ "$demo_health_sha" != "-" ]]; then
-    demo_sha="$demo_health_sha"
-fi
+printf '\n'
+printf '%-24s %-12s %-14s %-28s %s\n' 'Surface' 'SHA' 'Health' 'Build identity' 'Uptime'
+printf '%-24s %-12s %-14s %-28s %s\n' '-------' '---' '------' '-------------' '------'
+printf '%-24s %-12s %-14s %-28s %s\n' 'Demo runtime' "$demo_sha" "$demo_health" "$demo_identity" '-'
+printf '%-24s %-12s %-14s %-28s %s\n' 'Control plane' "$cp_sha" "$cp_health" "$cp_identity" '-'
+printf '%-24s %-12s %-14s %-28s %s\n' "Dogfood $DOGFOOD_SUBDOMAIN" "$dogfood_sha" "$dogfood_health" "$dogfood_identity" '-'
+printf '%-24s %-12s %-14s %-28s %s\n' "Canary $HOSTED_CANARY_SUBDOMAIN" "$canary_sha" "$canary_health" "$canary_identity" '-'
+printf '%-24s %-12s\n' 'Local HEAD' "$local_sha"
+printf '\n'
 
-canary_health_sha="-"
-if [[ "$canary_health" != "unreachable" && "$CANARY_HEALTH_URL" != "" ]]; then
-    canary_health_sha=$(health_sha "$CANARY_HEALTH_URL")
-fi
-if [[ "$canary_health_sha" != "-" ]]; then
-    canary_sha="$canary_health_sha"
-fi
-
-hosted_canary_health=$(health_status "$HOSTED_CANARY_HEALTH_URL")
-hosted_canary_sha="-"
-if [[ "$hosted_canary_health" != "unreachable" ]]; then
-    hosted_canary_sha=$(health_sha "$HOSTED_CANARY_HEALTH_URL")
-fi
-
-# --- Local HEAD for comparison ------------------------------------------------
-
-local_sha=$(git rev-parse --short=10 HEAD 2>/dev/null || echo "-")
-
-# --- Print table --------------------------------------------------------------
-
-printf "\n"
-printf "%-24s %-12s %-10s %s\n" "Surface" "SHA" "Health" "Uptime"
-printf "%-24s %-12s %-10s %s\n" "-------" "---" "------" "------"
-printf "%-24s %-12s %-10s %s\n" "Demo runtime"    "$demo_sha"   "$demo_health"   "$demo_uptime"
-printf "%-24s %-12s %-10s %s\n" "Control plane"   "$cp_sha"     "$cp_health"     "$cp_uptime"
-printf "%-24s %-12s %-10s %s\n" "Dogfood $DOGFOOD_SUBDOMAIN" "$canary_sha" "$canary_health" "$canary_uptime"
-printf "%-24s %-12s %-10s %s\n" "Canary $HOSTED_CANARY_SUBDOMAIN" "$hosted_canary_sha" "$hosted_canary_health" "-"
-printf "%-24s %-12s\n"          "Local HEAD"       "$local_sha"
-printf "\n"
-
-# --- Drift warning ------------------------------------------------------------
-
-if [[ "$demo_sha" != "-" && "$demo_sha" != "$local_sha" ]]; then
-    echo "⚠  Local HEAD ($local_sha) differs from deployed demo ($demo_sha)"
+if [[ "$demo_sha" != '-' && "$demo_sha" != "$local_sha" ]]; then
+  echo "Local HEAD ($local_sha) differs from deployed demo ($demo_sha)"
 fi

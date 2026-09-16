@@ -18,8 +18,25 @@ on:
       # script + recordings from @longhouse/video (workspace source).
       - 'video/src/**'
       - 'video/package.json'
+      - 'scripts/ops/runtime-schema.py'
+      - 'scripts/ops/release-artifacts.py'
       - '.github/workflows/runtime-image.yml'
   workflow_dispatch: {}
+
+concurrency:
+  # Image preparation is immutable per source SHA. Keep a rerun for the same
+  # source ordered, but never serialize unrelated pushes behind main.
+  group: runtime-image-${{ github.repository }}-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  # The private runner provisions these ordinary environment values from its
+  # scoped archive authority. Public code never names a secret manager.
+  RUNTIME_ARTIFACT_S3_ENDPOINT: ${{ secrets.RUNTIME_ARTIFACT_S3_ENDPOINT }}
+  RUNTIME_ARTIFACT_S3_BUCKET: ${{ secrets.RUNTIME_ARTIFACT_S3_BUCKET }}
+  RUNTIME_ARTIFACT_S3_PREFIX: ${{ secrets.RUNTIME_ARTIFACT_S3_PREFIX }}
+  RUNTIME_ARTIFACT_S3_ACCESS_KEY_ID: ${{ secrets.RUNTIME_ARTIFACT_S3_ACCESS_KEY_ID }}
+  RUNTIME_ARTIFACT_S3_SECRET_ACCESS_KEY: ${{ secrets.RUNTIME_ARTIFACT_S3_SECRET_ACCESS_KEY }}
 
 permissions:
   contents: read
@@ -29,7 +46,7 @@ jobs:
   changes:
     timeout-minutes: 10
     name: "Detect runtime image scope"
-    runs-on: ubuntu-latest
+    runs-on: cube
     outputs:
       runtime_image: ${{ steps.decide.outputs.runtime_image }}
     steps:
@@ -54,7 +71,7 @@ jobs:
   gate:
     timeout-minutes: 15
     name: "Gate image on push to main"
-    runs-on: ubuntu-latest
+    runs-on: cube
     needs: changes
     if: ${{ needs.changes.outputs.runtime_image == 'true' }}
     outputs:
@@ -68,7 +85,7 @@ jobs:
 
   build-and-push:
     timeout-minutes: 45
-    runs-on: ubuntu-latest
+    runs-on: cube
     needs: gate
     steps:
       - name: Checkout
@@ -80,8 +97,13 @@ jobs:
       - name: Stage build identity for runtime image
         run: python3 scripts/build/generate_build_identity.py
 
+      - name: Resolve exact candidate catalog schema
+        id: schema
+        run: python3 scripts/ops/runtime-schema.py --source-root . --github-output "$GITHUB_OUTPUT"
+
+
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0 # v4.3.0
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -109,6 +131,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
@@ -119,5 +142,57 @@ jobs:
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ needs.gate.outputs.head_sha }}
+            org.longhouse.catalog-schema.version=${{ steps.schema.outputs.schema_version }}
+            org.longhouse.catalog-schema.min-reader=${{ steps.schema.outputs.schema_min_reader }}
+            org.longhouse.catalog-schema.max-reader=${{ steps.schema.outputs.schema_max_reader }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Write immutable qualification metadata
+        env:
+          SOURCE_SHA: ${{ needs.gate.outputs.head_sha }}
+          SOURCE_WORKFLOW: ${{ github.workflow }}
+          SOURCE_ORDER: ${{ github.run_number }}
+          QUALIFICATION_ID: runtime-image-${{ github.run_id }}-${{ github.run_attempt }}
+          SCHEMA_VERSION: ${{ steps.schema.outputs.schema_version }}
+          SCHEMA_MIN_READER: ${{ steps.schema.outputs.schema_min_reader }}
+          SCHEMA_MAX_READER: ${{ steps.schema.outputs.schema_max_reader }}
+        run: |
+          python3 - "$RUNNER_TEMP/qualification.json" <<'PY'
+          import json
+          import os
+          import sys
+          with open(sys.argv[1], "w", encoding="utf-8") as handle:
+              json.dump(
+                  {
+                      "source_workflow": os.environ["SOURCE_WORKFLOW"],
+                      "source_order": int(os.environ["SOURCE_ORDER"]),
+                      "source_sha": os.environ["SOURCE_SHA"],
+                      "qualification_id": os.environ["QUALIFICATION_ID"],
+                      "schema_version": int(os.environ["SCHEMA_VERSION"]),
+                      "schema_min_reader": int(os.environ["SCHEMA_MIN_READER"]),
+                      "schema_max_reader": int(os.environ["SCHEMA_MAX_READER"]),
+                      "gates": {"image_build": "success"},
+                  },
+                  handle,
+                  sort_keys=True,
+              )
+          PY
+
+      - name: Publish immutable OCI archive
+        env:
+          IMAGE_REF: ghcr.io/${{ github.repository_owner }}/longhouse-runtime@${{ steps.build.outputs.digest }}
+          SOURCE_SHA: ${{ needs.gate.outputs.head_sha }}
+          BUILD_RUN_ID: ${{ github.run_id }}
+          BUILD_ATTEMPT: ${{ github.run_attempt }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          uv run --project server python scripts/ops/release-artifacts.py publish \
+            --image "$IMAGE_REF" \
+            --source-sha "$SOURCE_SHA" \
+            --build-run-id "$BUILD_RUN_ID" \
+            --build-attempt "$BUILD_ATTEMPT" \
+            --build-identity .build/build-identity.json \
+            --qualification-json "$RUNNER_TEMP/qualification.json" \
+            --qualification-id "runtime-image-${{ github.run_id }}-${{ github.run_attempt }}"

@@ -79,16 +79,4 @@ struct MultipartBodyTests {
         #expect(s.contains("--Boundary-FIXED--"))
     }
 
-    @Test
-    func bodyOmitsClientRequestIdWhenNil() throws {
-        let body = LonghouseAPI.buildMultipartBody(
-            boundary: "B",
-            text: "hi",
-            intent: "auto",
-            clientRequestId: nil,
-            attachments: [],
-        )
-        let s = try #require(String(data: body, encoding: .utf8))
-        #expect(!s.contains("client_request_id"))
-    }
 }

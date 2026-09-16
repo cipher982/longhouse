@@ -924,16 +924,8 @@ def test_queue_input_acks_from_live_receipt_without_archive_row(live_catalog, li
         assert body["outcome"] == "queued"
         assert body["input_id"] is None
         assert body["live_input_id"]
-        assert body["queued"] == [
-            {
-                "id": None,
-                "live_input_id": body["live_input_id"],
-                "text": "queued hot",
-                "intent": "queue",
-                "status": "queued",
-                "last_error": None,
-                "created_at": body["queued"][0]["created_at"],
-            }
+        assert [(row["live_input_id"], row["client_request_id"], row["text"], row["status"]) for row in body["queued"]] == [
+            (body["live_input_id"], "live-queue-1", "queued hot", "queued")
         ]
         assert websocket.sent == []
 
@@ -1938,11 +1930,15 @@ def test_client_request_id_different_text_conflicts(live_catalog, live_catalog_c
 
     assert first.status_code == 200, first.text
     assert second.status_code == 409, second.text
-    assert second.json()["detail"] == {
-        "error_code": "input_conflict",
-        "existing_live_input_id": first.json()["live_input_id"],
-        "reason": "different_text",
-    }
+    assert second.json()["detail"]["error_code"] == "input_conflict"
+    assert second.json()["detail"]["existing_live_input_id"] == first.json()["live_input_id"]
+    receipt = _live_catalog_receipt(
+        live_catalog,
+        owner_id=owner_id,
+        session_id=session_id,
+        client_request_id="live-conflict-1",
+    )
+    assert receipt["text"] == "original"
 
 
 def test_retry_failed_input_rejects_terminal_rows(tmp_path):

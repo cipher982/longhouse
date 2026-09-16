@@ -157,6 +157,7 @@ export function useSessionWorkspace(
   const [streamTranscriptPreview, setStreamTranscriptPreview] = useState<
     SessionTranscriptPreview | null | undefined
   >(undefined);
+  const streamEpochRef = useRef<string | null>(null);
   const pendingRenderBeaconRef = useRef<PendingRenderBeacon | null>(null);
   const pendingStateRenderBeaconRef = useRef<PendingStateRenderBeacon | null>(
     null,
@@ -295,8 +296,14 @@ export function useSessionWorkspace(
       sessionId,
       {
         onConnected: (data) => {
+          const previousEpoch = streamEpochRef.current;
+          const nextEpoch = data?.stream_epoch ?? null;
+          streamEpochRef.current = nextEpoch;
           recordServerClockSkew(data?.server_now_ms);
           armFreshnessDeadline();
+          if (previousEpoch && nextEpoch && previousEpoch !== nextEpoch) {
+            refreshWorkspaceQueries(true);
+          }
         },
         onHeartbeat: () => {
           activityFeed.markHeartbeat();
@@ -394,6 +401,9 @@ export function useSessionWorkspace(
       {
         skipInitial: workspaceReady,
         knownWorkspaceFingerprint: knownWorkspaceFingerprintRef.current,
+        ...(streamEpochRef.current
+          ? { streamEpoch: streamEpochRef.current }
+          : {}),
       },
     );
 

@@ -645,6 +645,7 @@ struct APIConsoleTurnReceiptResponse: Codable, Hashable, Sendable {
 struct APIQueuedInputSummary: Codable, Hashable, Sendable {
     let id: Int?
     let liveInputId: String?
+    let clientRequestId: String?
     let text: String
     let intent: String
     let status: String

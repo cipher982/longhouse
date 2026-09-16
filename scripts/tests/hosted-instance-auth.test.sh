@@ -12,6 +12,15 @@ unset CP_URL
 # shellcheck disable=SC1091
 source "$ROOT_DIR/lib/hosted-instance.sh"
 
+# The deployment transport test isolates control-plane authentication from the
+# registry inspector; exact-image metadata is covered by release-artifacts.test.py.
+_lh_hosted_resolve_image_metadata() {
+  export LH_DEPLOYMENT_SOURCE_SHA="0123456789abcdef0123456789abcdef01234567"
+  export LH_DEPLOYMENT_SCHEMA_VERSION="5"
+  export LH_DEPLOYMENT_SCHEMA_MIN_READER="5"
+  export LH_DEPLOYMENT_SCHEMA_MAX_READER="5"
+}
+
 # Keep this test focused on explicit env-token fallback behavior instead of
 # ambient operator access to the control plane via `ssh runtime-host`.
 ssh() {
@@ -43,7 +52,7 @@ if [[ "$json_payload" != '{"email":"quote\"@example.com","subdomain":"demo\\slas
 fi
 
 temp_json="$(mktemp)"
-trap 'rm -f "$temp_json" "$temp_json.request" "$temp_json.body" "$temp_json.attempts" "$temp_json.health-request"' EXIT
+trap 'rm -f "$temp_json"' EXIT
 
 cat >"$temp_json" <<'JSON'
 {"access_token":"access-123"}
@@ -79,174 +88,60 @@ curl() {
   local request_url=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -d)
-        data="$2"
-        shift 2
-        ;;
-      -o)
-        output_file="$2"
-        shift 2
-        ;;
-      -w|-H|-X|--connect-timeout|--max-time)
-        shift 2
-        ;;
-      *)
-        request_url="$1"
-        shift
-        ;;
+      -d) data="$2"; shift 2 ;;
+      -o) output_file="$2"; shift 2 ;;
+      -w|-H|-X|--connect-timeout|--max-time) shift 2 ;;
+      *) request_url="$1"; shift ;;
     esac
   done
 
   case "$request_url" in
-    */api/instances/7/reprovision)
-      printf '%s' "$request_url" >"$temp_json.request"
-      printf '%s' "$data" >"$temp_json.body"
-      printf '200'
-      ;;
-    */api/health)
-      printf '%s' "$request_url" >"$temp_json.health-request"
-      printf '{"build":{"commit":"deadbeef"}}' >"$output_file"
-      printf '200'
-      ;;
-    *)
-      echo "Unexpected curl URL in reprovision success wait test: $request_url" >&2
-      return 1
-      ;;
-  esac
-}
-
-export INSTANCE_SUBDOMAIN="demo"
-lh_hosted_reprovision "7" "ghcr.io/cipher982/longhouse-runtime:deadbeef"
-
-if [[ "$(cat "$temp_json.request")" != 'https://control.longhouse.ai/api/instances/7/reprovision' ]]; then
-  echo "Expected reprovision helper to target the instance reprovision endpoint"
-  exit 1
-fi
-
-if [[ "$(cat "$temp_json.body")" != '{"image":"ghcr.io/cipher982/longhouse-runtime:deadbeef"}' ]]; then
-  echo "Expected reprovision helper to send image override JSON"
-  exit 1
-fi
-
-if [[ "$(cat "$temp_json.health-request")" != 'https://demo.longhouse.ai/api/health' ]]; then
-  echo "Expected successful reprovision to wait until hosted runtime health reports the image"
-  exit 1
-fi
-
-sleep() {
-  :
-}
-
-printf '0' >"$temp_json.attempts"
-curl() {
-  local data=""
-  local output_file=""
-  local request_url=""
-  local attempts=0
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      -d)
-        data="$2"
-        shift 2
-        ;;
-      -o)
-        output_file="$2"
-        shift 2
-        ;;
-      -w|-H|-X|--connect-timeout|--max-time)
-        shift 2
-        ;;
-      *)
-        request_url="$1"
-        shift
-        ;;
-    esac
-  done
-
-  case "$request_url" in
-    */api/instances/7/reprovision)
-      attempts="$(cat "$temp_json.attempts")"
-      attempts=$((attempts + 1))
-      printf '%s' "$attempts" >"$temp_json.attempts"
-      printf '%s' "$request_url" >"$temp_json.request"
-      printf '%s' "$data" >"$temp_json.body"
-      if [[ "$attempts" -eq 1 ]]; then
-        printf 'instance locked' >"$output_file"
-        printf '409'
-      else
-        printf '200'
+    https://control.longhouse.ai/api/deployments)
+      if [[ "$data" != *'"target_instance_ids":[7]'* || "$data" != *'"ready":true'* ]]; then
+        echo "Expected durable submission to persist explicit target membership and readiness" >&2
+        return 1
       fi
+      if [[ "$data" != *'"schema_version":"5"'* || "$data" != *'"schema_min_reader":"5"'* || "$data" != *'"schema_max_reader":"5"'* ]]; then
+        echo "Expected exact candidate schema metadata in durable submission" >&2
+        return 1
+      fi
+      printf '{"id":"d-test-1","status":"queued","image_digest":"ghcr.io/cipher982/longhouse-runtime@sha256:%064d"}' 1 >"$output_file"
+      printf '201'
       ;;
-    */api/health)
-      printf '%s' "$request_url" >"$temp_json.health-request"
-      printf '{"build":{"commit":"facefeed"}}' >"$output_file"
+    https://control.longhouse.ai/api/deployments/d-test-1)
+      printf '{"id":"d-test-1","status":"success","image_digest":"ghcr.io/cipher982/longhouse-runtime@sha256:%064d"}' 1 >"$output_file"
       printf '200'
       ;;
     *)
-      echo "Unexpected curl URL in reprovision lock retry test: $request_url" >&2
+      echo "Unexpected deployment API URL: $request_url" >&2
       return 1
       ;;
   esac
 }
 
-export LH_HOSTED_REPROVISION_MAX_ATTEMPTS=2
-lh_hosted_reprovision "7" "ghcr.io/cipher982/longhouse-runtime:facefeed"
-unset LH_HOSTED_REPROVISION_MAX_ATTEMPTS
+export CONTROL_PLANE_URL="https://control.longhouse.ai"
+export CONTROL_PLANE_ADMIN_TOKEN="admin-token-from-env"
+export INSTANCE_SUBDOMAIN="demo"
+export LH_HOSTED_DEPLOYMENT_POLL_SECONDS=0
+export LH_DEPLOYMENT_IDEMPOTENCY_KEY="deployment-test-1"
+export LH_DEPLOYMENT_SCHEMA_VERSION="5"
+export LH_DEPLOYMENT_SCHEMA_MIN_READER="5"
+export LH_DEPLOYMENT_SCHEMA_MAX_READER="5"
+image="ghcr.io/cipher982/longhouse-runtime@sha256:$(printf '1%.0s' {1..64})"
+lh_hosted_reprovision "7" "$image"
 
-if [[ "$(cat "$temp_json.attempts")" -ne 2 ]]; then
-  echo "Expected reprovision helper to retry once after HTTP 409"
+if [[ "$LH_DEPLOYMENT_ID" != "d-test-1" || "$LH_DEPLOYMENT_STATUS" != "success" ]]; then
+  echo "Expected durable deployment receipt to be observed to terminal success"
   exit 1
 fi
 
-curl() {
-  local data=""
-  local output_file=""
-  local request_url=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      -d)
-        data="$2"
-        shift 2
-        ;;
-      -o)
-        output_file="$2"
-        shift 2
-        ;;
-      -w|-H|-X|--connect-timeout|--max-time)
-        shift 2
-        ;;
-      *)
-        request_url="$1"
-        shift
-        ;;
-    esac
-  done
-
-  case "$request_url" in
-    */api/instances/7/reprovision)
-      printf '%s' "$request_url" >"$temp_json.request"
-      printf '%s' "$data" >"$temp_json.body"
-      printf 'cloudflare timeout' >"$output_file"
-      printf '524'
-      ;;
-    */api/health)
-      printf '%s' "$request_url" >"$temp_json.health-request"
-      printf '{"build":{"commit":"deadbeefcafebabedeadbeefcafebabedeadbeef"}}' >"$output_file"
-      printf '200'
-      ;;
-    *)
-      echo "Unexpected curl URL in reprovision timeout fallback test: $request_url" >&2
-      return 1
-      ;;
-  esac
-}
-
-lh_hosted_reprovision "7" "ghcr.io/cipher982/longhouse-runtime:deadbeefcafebabedeadbeefcafebabedeadbeef"
-
-if [[ "$(cat "$temp_json.health-request")" != 'https://demo.longhouse.ai/api/health' ]]; then
-  echo "Expected reprovision timeout fallback to poll hosted runtime health"
+if lh_hosted_reprovision "7" "ghcr.io/cipher982/longhouse-runtime:mutable-tag" >/dev/null 2>&1; then
+  echo "Expected mutable deployment image to be rejected before API submission"
   exit 1
 fi
+
+unset LH_DEPLOYMENT_IDEMPOTENCY_KEY LH_HOSTED_DEPLOYMENT_POLL_SECONDS
+unset LH_DEPLOYMENT_SCHEMA_VERSION LH_DEPLOYMENT_SCHEMA_MIN_READER LH_DEPLOYMENT_SCHEMA_MAX_READER
 
 # Exercise the real entrypoints with a stale runner-local dotenv. The helper is
 # deliberately absent in the scratch checkout: no network action can follow.

@@ -28,13 +28,13 @@ RUNTIME_HEALTH = {"healthy", "degraded"}
 DEPLOY_AND_VERIFY = "Deploy and Verify"
 CI_WORKFLOW = "CI"
 DEPLOY_DEMO_JOB = "Deploy public demo runtime"
-DEPLOY_AND_VERIFY_JOB = "Fast smoke + hosted QA dispatch"
+DEPLOY_AND_VERIFY_JOB = "Canary qualification smoke"
+NO_RUNTIME_CHANGE_JOB = "No runtime mutation required"
 DEPLOY_GATE_JOB = "Resolve exact-SHA deploy metadata"
 RUNTIME_IMAGE_WORKFLOW = "Publish Runtime Image"
 RUNTIME_IMAGE_JOB = "build-and-push"
-CANARY_SURFACE = "Canary"
 DEFAULT_CANARY_SUBDOMAIN = os.environ.get("HOSTED_CANARY_SUBDOMAIN", "kernel-canary")
-DEFAULT_CANARY_CONTAINER_NAME = "longhouse-" + DEFAULT_CANARY_SUBDOMAIN
+CANARY_SURFACE = f"Canary {DEFAULT_CANARY_SUBDOMAIN}"
 DEFAULT_CANARY_HEALTH_URL = f"https://{DEFAULT_CANARY_SUBDOMAIN}.longhouse.ai/api/health"
 RUNTIME_IMAGE_PATHS = (
     ".dockerignore",
@@ -69,12 +69,12 @@ class RunInfo:
     createdAt: str | None = None
     event: str | None = None
 
-
 @dataclass(frozen=True)
 class SurfaceInfo:
     sha: str
     health: str
-    raw: str
+    build_identity: str = "-"
+    raw: str = ""
 
 
 def parse_args() -> argparse.Namespace:
@@ -294,6 +294,15 @@ def failed_runs(runs: list[RunInfo]) -> list[RunInfo]:
         for run in runs
         if run.status == "completed" and run.conclusion not in ACCEPTED_CONCLUSIONS
     ]
+
+
+def job_succeeded(repo: str, run: RunInfo, expected_job_name: str) -> bool:
+    if run.status != "completed" or run.conclusion != "success":
+        return False
+    return any(
+        job.get("name") == expected_job_name and job.get("conclusion") == "success"
+        for job in fetch_run_jobs(repo, run.databaseId)
+    )
 
 
 def select_load_bearing_runs(runs: list[RunInfo]) -> tuple[list[RunInfo], list[str]]:
@@ -594,7 +603,6 @@ def wait_for_workflows(args: argparse.Namespace, sha: str) -> list[RunInfo]:
 
         time.sleep(args.poll)
 
-
 def parse_deploy_status(output: str) -> dict[str, SurfaceInfo]:
     surfaces: dict[str, SurfaceInfo] = {}
     for raw_line in output.splitlines():
@@ -605,7 +613,7 @@ def parse_deploy_status(output: str) -> dict[str, SurfaceInfo]:
         if stripped.startswith("Surface") or stripped.startswith("-------") or stripped.startswith("⚠"):
             continue
         parts = re.split(r"\s{2,}", stripped)
-        if len(parts) < 2:
+        if len(parts) < 3:
             continue
         surface = parts[0]
         if surface.startswith("Canary "):
@@ -614,9 +622,13 @@ def parse_deploy_status(output: str) -> dict[str, SurfaceInfo]:
             surface = CANARY_SURFACE
         if surface == "Local HEAD":
             continue
-        if len(parts) < 3:
-            continue
-        surfaces[surface] = SurfaceInfo(sha=parts[1], health=parts[2], raw=stripped)
+        build_identity = parts[3] if len(parts) >= 4 else "-"
+        surfaces[surface] = SurfaceInfo(
+            sha=parts[1],
+            health=parts[2],
+            build_identity=build_identity,
+            raw=stripped,
+        )
     return surfaces
 
 
@@ -665,8 +677,9 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
         run.workflowName == RUNTIME_IMAGE_WORKFLOW and job_succeeded(run, RUNTIME_IMAGE_JOB)
         for run in runs
     )
-
     expected_runtime_sha = latest_runtime_affecting_sha(root, sha)
+    if runtime_image_published:
+        expected_runtime_sha = sha
     expected_runtime_short = expected_runtime_sha[:10] if expected_runtime_sha else None
 
     def read_deploy_status() -> tuple[dict[str, SurfaceInfo], str]:
@@ -674,15 +687,11 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
             [str(root / "scripts" / "ops" / "deploy-status.sh")],
             cwd=root,
             env={
-                "CANARY_CONTAINER_NAME": os.environ.get("CANARY_CONTAINER_NAME") or DEFAULT_CANARY_CONTAINER_NAME,
-                "CANARY_HEALTH_URL": os.environ.get("CANARY_HEALTH_URL") or DEFAULT_CANARY_HEALTH_URL,
+                "HOSTED_CANARY_HEALTH_URL": os.environ.get("HOSTED_CANARY_HEALTH_URL")
+                or DEFAULT_CANARY_HEALTH_URL,
             },
         )
         raw = proc.stdout
-        if not runtime_image_published:
-            raw = "\n".join(
-                line for line in raw.splitlines() if not line.strip().startswith("⚠")
-            ).rstrip() + "\n"
         return parse_deploy_status(raw), raw
 
     def require_surface(
@@ -720,8 +729,12 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
         run.workflowName == DEPLOY_AND_VERIFY and job_succeeded(run, DEPLOY_AND_VERIFY_JOB)
         for run in runs
     )
+    no_runtime_change = any(
+        run.workflowName == DEPLOY_AND_VERIFY and job_succeeded(run, NO_RUNTIME_CHANGE_JOB)
+        for run in runs
+    )
     expected_runtime_shas = {expected_runtime_short} if expected_runtime_short else set()
-    if deploy_job_succeeded or deploy_run_succeeded:
+    if (deploy_job_succeeded or deploy_run_succeeded) and not no_runtime_change:
         expected_runtime_shas = runtime_reuse_accepted_shas(root, expected_runtime_sha, sha)
 
     def live_status_retryable(surfaces: dict[str, SurfaceInfo]) -> bool:
@@ -737,7 +750,7 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
     for attempt in range(3):
         surfaces, raw = read_deploy_status()
         errors = []
-        if deploy_run_completed or deploy_job_succeeded:
+        if (deploy_run_completed or deploy_job_succeeded) and not no_runtime_change:
             require_surface(errors, surfaces, "Demo runtime", RUNTIME_HEALTH, expected_shas=expected_runtime_shas)
             require_surface(errors, surfaces, CANARY_SURFACE, RUNTIME_HEALTH, expected_shas=expected_runtime_shas)
         if not errors or not live_status_retryable(surfaces) or attempt == 2:
@@ -811,6 +824,15 @@ def main() -> int:
     monitored_runs, required_names = select_load_bearing_runs(runs)
     workflow_payload = [asdict(run) for run in runs]
     monitored_payload = [asdict(run) for run in monitored_runs]
+    runtime_disposition = (
+        "no_runtime_change"
+        if any(
+            run.workflowName == DEPLOY_AND_VERIFY
+            and job_succeeded(args.repo, run, NO_RUNTIME_CHANGE_JOB)
+            for run in runs
+        )
+        else "unverified"
+    )
 
     if not runs_succeeded(monitored_runs):
         failures = failed_runs(monitored_runs)
@@ -818,6 +840,7 @@ def main() -> int:
             "repo": args.repo,
             "target_sha": target_sha,
             "result": "workflow_failure",
+            "runtime_disposition": runtime_disposition,
             "workflows": workflow_payload,
             "monitored_workflows": monitored_payload,
             "required_workflow_names": required_names,
@@ -852,6 +875,7 @@ def main() -> int:
                 "repo": args.repo,
                 "target_sha": target_sha,
                 "result": "live_drift",
+                "runtime_disposition": runtime_disposition,
                 "workflows": workflow_payload,
                 "live": live_surfaces,
                 "live_errors": live_errors,
@@ -866,11 +890,18 @@ def main() -> int:
                     print("", file=sys.stderr)
                     print(live_output.rstrip(), file=sys.stderr)
             return EXIT_LIVE_DRIFT
+        if runtime_disposition == "unverified" and any(
+            run.workflowName == DEPLOY_AND_VERIFY
+            and job_succeeded(args.repo, run, DEPLOY_AND_VERIFY_JOB)
+            for run in runs
+        ):
+            runtime_disposition = "deployed"
 
     payload = {
         "repo": args.repo,
         "target_sha": target_sha,
         "result": "success",
+        "runtime_disposition": runtime_disposition,
         "workflows": workflow_payload,
         "monitored_workflows": monitored_payload,
         "required_workflow_names": required_names,

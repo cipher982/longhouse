@@ -1144,6 +1144,7 @@ async def _session_workspace_stream(
     skip_initial: bool,
     last_event_id: int | None = None,
     known_workspace_fingerprint: str | None = None,
+    stream_epoch: str | None = None,
 ):
     """SSE generator that emits workspace_changed when a session's data mutates.
 
@@ -1160,21 +1161,22 @@ async def _session_workspace_stream(
 
     previous_sig: tuple | None = None
     last_heartbeat = monotonic()
+    bus = get_pubsub()
+    topic = topic_session(str(session_id))
 
     yield {
         "event": "connected",
         "data": json.dumps(
             {
                 "session_id": str(session_id),
+                "stream_epoch": bus.stream_epoch,
                 "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
             }
         ),
     }
 
     wait_start: float | None = None
-    bus = get_pubsub()
-    topic = topic_session(str(session_id))
-    replay_gap = bus.replay_gap(topic, since_seq=last_event_id)
+    replay_gap = bus.replay_gap(topic, since_seq=last_event_id, stream_epoch=stream_epoch)
     # Highest pubsub seq actually consumed by this subscription. Used as the
     # SSE id: so reconnects never skip an event the client hadn't seen.
     consumed_seq: int = 0
@@ -1215,6 +1217,7 @@ async def _session_workspace_stream(
                         "earliest_seq": replay_gap.earliest_seq,
                         "latest_seq": replay_gap.latest_seq,
                         "reason": replay_gap.reason,
+                        "stream_epoch": replay_gap.stream_epoch or bus.stream_epoch,
                     }
                 ),
             }
@@ -1367,9 +1370,10 @@ async def _live_catalog_workspace_stream(
     *,
     session_id: UUID,
     skip_initial: bool,
-    last_event_id: int | None,
     known_workspace_fingerprint: str | None = None,
     owner_id: int | None = None,
+    last_event_id: int | None = None,
+    stream_epoch: str | None = None,
 ):
     """Live-only invalidation stream; archive detail is fetched via a child.
 
@@ -1386,18 +1390,20 @@ async def _live_catalog_workspace_stream(
     from zerg.services.session_pubsub import get_pubsub
     from zerg.services.session_pubsub import topic_session
 
+    bus = get_pubsub()
+    topic = topic_session(str(session_id))
+    current_stream_epoch = bus.stream_epoch
     yield {
         "event": "connected",
         "data": json.dumps(
             {
                 "session_id": str(session_id),
+                "stream_epoch": current_stream_epoch,
                 "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
             }
         ),
     }
-    bus = get_pubsub()
-    topic = topic_session(str(session_id))
-    replay_gap = bus.replay_gap(topic, since_seq=last_event_id)
+    replay_gap = bus.replay_gap(topic, since_seq=last_event_id, stream_epoch=stream_epoch)
     subscribe_since_seq = None if replay_gap else last_event_id
     with bus.subscribe(topic, since_seq=subscribe_since_seq) as subscription:
         if skip_initial and last_event_id is None:
@@ -1417,6 +1423,7 @@ async def _live_catalog_workspace_stream(
                         "earliest_seq": replay_gap.earliest_seq,
                         "latest_seq": replay_gap.latest_seq,
                         "reason": replay_gap.reason,
+                        "stream_epoch": replay_gap.stream_epoch or current_stream_epoch,
                     }
                 ),
             }
@@ -1426,6 +1433,7 @@ async def _live_catalog_workspace_stream(
                 "data": json.dumps(
                     {
                         "session_id": str(session_id),
+                        "stream_epoch": current_stream_epoch,
                         "latest_event_id": 0,
                         "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
                         "pubsub_seq": 0,
@@ -1462,6 +1470,7 @@ async def _live_catalog_workspace_stream(
                 "data": json.dumps(
                     {
                         "session_id": str(session_id),
+                        "stream_epoch": current_stream_epoch,
                         "change_kind": _workspace_change_kind(message.payload),
                         "latest_event_id": latest_event_id,
                         "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
@@ -1485,6 +1494,11 @@ async def stream_session_workspace(
     known_workspace_fingerprint: str | None = Query(
         None,
         description="Fingerprint from the client's rendered workspace snapshot; when stale, skip_initial is ignored.",
+    ),
+    stream_epoch: str | None = Query(
+        None,
+        max_length=128,
+        description="Process epoch paired with Last-Event-ID; mismatches force durable snapshot reconciliation.",
     ),
     caller: Caller = Depends(get_current_browser_caller_short_lived),
 ) -> EventSourceResponse:
@@ -1526,5 +1540,6 @@ async def stream_session_workspace(
             last_event_id=last_event_id,
             known_workspace_fingerprint=known_workspace_fingerprint,
             owner_id=caller.owner_id,
+            stream_epoch=stream_epoch,
         )
     )

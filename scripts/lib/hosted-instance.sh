@@ -119,115 +119,173 @@ print("\t".join(
 PY
 }
 
-_lh_hosted_parse_health_commit() {
+
+
+_lh_hosted_parse_deployment_payload() {
   local response_file="$1"
   local python_bin
   python_bin="$(_lh_hosted_python_bin)" || return 1
-
   "$python_bin" - "$response_file" <<'PY'
 import json
 import sys
 
-try:
-    with open(sys.argv[1], encoding="utf-8") as handle:
-        payload = json.load(handle)
-except Exception:
-    print("", end="")
-    raise SystemExit(0)
-
-build = payload.get("build") or {}
-print(str(build.get("commit") or build.get("commit_short") or ""), end="")
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+deployment_id = payload.get("id")
+if not deployment_id:
+    raise SystemExit(3)
+print("\t".join(str(value or "") for value in (deployment_id, payload.get("status"), payload.get("image_digest"))))
 PY
 }
 
-_lh_hosted_image_tag() {
-  local image="$1"
-  local tag="${image##*:}"
-
-  if [[ -z "$image" || "$tag" == "$image" || "$image" == *@* ]]; then
-    printf ''
-    return 0
-  fi
-
-  printf '%s' "$tag"
-}
-
-_lh_hosted_commit_matches_image_tag() {
-  local commit="$1"
-  local tag="$2"
-
-  if [[ -z "$tag" || "$tag" == "latest" ]]; then
-    return 0
-  fi
-
-  [[ -n "$commit" && ( "$commit" == "$tag"* || "$tag" == "$commit"* ) ]]
-}
-
-_lh_hosted_reprovision_api_url() {
-  local subdomain="${LH_TARGET_SUBDOMAIN:-${LH_INSTANCE_SUBDOMAIN:-${INSTANCE_SUBDOMAIN:-}}}"
-
-  if [[ -n "${LH_TARGET_API_URL:-}" ]]; then
-    printf '%s\n' "$LH_TARGET_API_URL"
-  elif [[ -n "${LH_INSTANCE_URL:-}" ]]; then
-    printf '%s\n' "$LH_INSTANCE_URL"
-  elif [[ -n "${API_URL:-}" ]]; then
-    printf '%s\n' "$API_URL"
-  elif [[ -n "${INSTANCE_URL:-}" ]]; then
-    printf '%s\n' "$INSTANCE_URL"
-  elif [[ -n "$subdomain" ]]; then
-    printf 'https://%s.longhouse.ai\n' "$subdomain"
-  fi
-}
-
-_lh_hosted_wait_for_runtime_image() {
-  local api_url="$1"
-  local image="$2"
-  local timeout="${3:-240}"
-  local expected_tag=""
-  local deadline=0
+lh_hosted_submit_deployment() {
+  local payload="${1:-}"
+  local submission_key="${2:-}"
   local response_file=""
   local http_code=""
-  local commit=""
-  local last_error=""
+  local parsed=""
+  local attempt=1
+  local max_attempts="${LH_HOSTED_DEPLOYMENT_MAX_ATTEMPTS:-5}"
 
-  if [[ -z "$api_url" ]]; then
-    echo "Cannot poll reprovision result without an instance API URL" >&2
+  if [[ -z "$payload" ]]; then
+    echo "Usage: lh_hosted_submit_deployment <json-payload> [idempotency-key]" >&2
     return 1
   fi
+  lh_hosted_prepare_control_plane_auth || return 1
+  if [[ -z "$submission_key" ]]; then
+    submission_key="hosted-deploy-$(printf '%s' "$payload" | shasum -a 256 | awk '{print $1}')"
+  fi
+  while [[ "$attempt" -le "$max_attempts" ]]; do
+    response_file="$(mktemp)"
+    if ! http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
+      --connect-timeout 10 --max-time "${LH_HOSTED_DEPLOYMENT_MAX_TIME:-75}" \
+      -X POST \
+      -H "Content-Type: application/json" \
+      -H "X-Admin-Token: ${CONTROL_PLANE_ADMIN_TOKEN}" \
+      -H "Idempotency-Key: ${submission_key}" \
+      -d "$payload" \
+      "${CONTROL_PLANE_URL%/}/api/deployments")"; then
+      http_code="000"
+    fi
+    if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
+      parsed="$(_lh_hosted_parse_deployment_payload "$response_file")" || {
+        echo "Deployment submission response missing id" >&2
+        rm -f "$response_file"
+        return 1
+      }
+      rm -f "$response_file"
+      IFS=$'\t' read -r LH_DEPLOYMENT_ID LH_DEPLOYMENT_STATUS LH_DEPLOYMENT_IMAGE_DIGEST <<< "$parsed"
+      export LH_DEPLOYMENT_ID LH_DEPLOYMENT_STATUS LH_DEPLOYMENT_IMAGE_DIGEST
+      return 0
+    fi
+    if [[ "$attempt" -lt "$max_attempts" ]] && _lh_hosted_is_retryable_http_code "$http_code"; then
+      echo "Transient deployment submission failure (HTTP ${http_code}); retrying (${attempt}/${max_attempts})..." >&2
+      rm -f "$response_file"
+      _lh_hosted_retry_sleep "$attempt"
+      attempt=$((attempt + 1))
+      continue
+    fi
+    echo "Failed to submit deployment (HTTP ${http_code})" >&2
+    cat "$response_file" >&2
+    rm -f "$response_file"
+    return 1
+  done
+}
 
-  expected_tag="$(_lh_hosted_image_tag "$image")"
-  deadline=$(( $(date +%s) + timeout ))
-
+lh_hosted_wait_for_deployment() {
+  local deployment_id="${1:-${LH_DEPLOYMENT_ID:-}}"
+  local timeout="${2:-900}"
+  local deadline=$(( $(date +%s) + timeout ))
+  local response_file=""
+  local http_code=""
+  local state=""
+  local python_bin=""
+  if [[ -z "$deployment_id" ]]; then
+    echo "Missing deployment id to observe" >&2
+    return 1
+  fi
+  lh_hosted_prepare_control_plane_auth || return 1
   while [[ "$(date +%s)" -lt "$deadline" ]]; do
     response_file="$(mktemp)"
     if ! http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
-      --connect-timeout 5 --max-time 10 \
-      "${api_url%/}/api/health")"; then
+      --connect-timeout 10 --max-time 30 \
+      -H "X-Admin-Token: ${CONTROL_PLANE_ADMIN_TOKEN}" \
+      "${CONTROL_PLANE_URL%/}/api/deployments/${deployment_id}")"; then
       http_code="000"
     fi
-
     if [[ "$http_code" == "200" ]]; then
-      commit="$(_lh_hosted_parse_health_commit "$response_file")"
-      if _lh_hosted_commit_matches_image_tag "$commit" "$expected_tag"; then
-        rm -f "$response_file"
-        return 0
-      fi
-      last_error="healthy commit=${commit:-unknown}, expected image tag=${expected_tag:-any}"
+      python_bin="$(_lh_hosted_python_bin)" || return 1
+      state="$("$python_bin" - "$response_file" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    print(json.load(handle).get("status") or "")
+PY
+)"
+      rm -f "$response_file"
+      LH_DEPLOYMENT_STATUS="$state"
+      export LH_DEPLOYMENT_STATUS
+      case "$state" in
+        success|completed) return 0 ;;
+        superseded) echo "Deployment ${deployment_id} was superseded." >&2; return 3 ;;
+        failure|failed|paused) echo "Deployment ${deployment_id} ended ${state}." >&2; return 1 ;;
+      esac
     else
-      last_error="HTTP ${http_code}"
+      rm -f "$response_file"
+      if ! _lh_hosted_is_retryable_http_code "$http_code"; then
+        echo "Failed to observe deployment ${deployment_id} (HTTP ${http_code})" >&2
+        return 1
+      fi
     fi
-
-    rm -f "$response_file"
-    sleep 3
+    sleep "${LH_HOSTED_DEPLOYMENT_POLL_SECONDS:-3}"
   done
-
-  echo "Timed out waiting for ${api_url%/}/api/health to report image ${image:-unknown}: ${last_error}" >&2
-  return 1
+  echo "Timed out waiting for deployment ${deployment_id}." >&2
+  return 2
 }
 
-lh_wait_for_runtime_image() {
-  _lh_hosted_wait_for_runtime_image "$@"
+_lh_hosted_reprovision_payload() {
+  local instance_id="$1"
+  local image="$2"
+  local python_bin
+  python_bin="$(_lh_hosted_python_bin)" || return 1
+  "$python_bin" - "$instance_id" "$image" \
+    "${LH_DEPLOYMENT_SOURCE_SHA:-}" \
+    "${LH_DEPLOYMENT_BUILD_IDENTITY:-}" \
+    "${LH_DEPLOYMENT_SOURCE_WORKFLOW:-}" \
+    "${LH_DEPLOYMENT_SOURCE_ORDER:-}" \
+    "${LH_DEPLOYMENT_QUALIFICATION_ID:-}" \
+    "${LH_DEPLOYMENT_SCHEMA_VERSION:-}" \
+    "${LH_DEPLOYMENT_SCHEMA_MIN_READER:-}" \
+    "${LH_DEPLOYMENT_SCHEMA_MAX_READER:-}" \
+    "${LH_DEPLOYMENT_REASON:-hosted release}" <<'PY'
+import json
+import re
+import sys
+
+instance_id, image, source_sha, build_identity, workflow, source_order, qualification_id, schema, minimum, maximum, reason = sys.argv[1:]
+payload = {
+    "image": image,
+    "target_instance_ids": [int(instance_id)],
+    "reason": reason,
+    "ready": True,
 }
+for key, value in (
+    ("source_sha", source_sha),
+    ("build_identity", build_identity),
+    ("source_workflow", workflow),
+    ("qualification_id", qualification_id),
+    ("schema_version", schema),
+    ("schema_min_reader", minimum),
+    ("schema_max_reader", maximum),
+):
+    if value:
+        payload[key] = value
+if source_order:
+    payload["source_order"] = int(source_order)
+print(json.dumps(payload, separators=(",", ":")), end="")
+PY
+}
+
 
 _lh_hosted_export_instance_payload() {
   local parsed="$1"
@@ -358,21 +416,7 @@ lh_hosted_default_control_plane_url() {
 lh_hosted_prepare_control_plane_auth() {
   lh_hosted_default_control_plane_url
   CONTROL_PLANE_ADMIN_TOKEN="${CONTROL_PLANE_ADMIN_TOKEN:-${ADMIN_TOKEN:-}}"
-
-  # Auto-fetch from the control-plane container on zerg when running locally.
-  # Silent no-op if SSH or the container is unavailable (e.g. CI with explicit token).
-  if [[ -z "${CONTROL_PLANE_ADMIN_TOKEN:-}" ]] && command -v ssh &>/dev/null; then
-    local _container
-    _container="$(ssh -o ConnectTimeout=3 -o BatchMode=yes zerg \
-      "docker ps --filter name=^longhouse-control-plane$ --format '{{.Names}}' | head -1" 2>/dev/null || true)"
-    if [[ -n "$_container" ]]; then
-      CONTROL_PLANE_ADMIN_TOKEN="$(ssh -o ConnectTimeout=3 -o BatchMode=yes zerg \
-        "docker exec $_container python -c 'from control_plane.config import settings; print(settings.admin_token)'" 2>/dev/null || true)"
-    fi
-  fi
-
   export CONTROL_PLANE_ADMIN_TOKEN
-
   if ! lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN; then
     echo "Set CONTROL_PLANE_ADMIN_TOKEN or ADMIN_TOKEN before using hosted control-plane helpers. Secret loading is intentionally external so Longhouse stays provider-agnostic." >&2
     return 1
@@ -667,51 +711,97 @@ _lh_hosted_post_instance_action() {
   rm -f "$response_file"
 }
 
+_lh_hosted_resolve_image_metadata() {
+  local image="$1"
+  local helper_root=""
+  local inspector=""
+  local metadata=""
+  local resolved=""
+  helper_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+  inspector="$helper_root/scripts/ops/release-artifacts.py"
+  if [[ ! -f "$inspector" ]]; then
+    echo "Missing OCI metadata inspector; bootstrap historical images before deployment." >&2
+    return 1
+  fi
+  metadata="$(python3 "$inspector" inspect --image "$image")" || {
+    echo "Unable to inspect selected image metadata; bootstrap historical images with OCI source/schema labels before deployment." >&2
+    return 1
+  }
+  resolved="$(
+    SELECTED_METADATA="$metadata" \
+    SELECTED_IMAGE="$image" \
+    python3 - <<'PY'
+import json
+import os
+import re
+
+metadata = json.loads(os.environ["SELECTED_METADATA"])
+image = os.environ["SELECTED_IMAGE"]
+selected_digest = image.rsplit("@", 1)[-1]
+if metadata.get("image_digest") != selected_digest:
+    raise SystemExit("selected image metadata digest does not match the deployment digest")
+source_sha = metadata.get("source_sha")
+if not isinstance(source_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+    raise SystemExit("selected image has no full source revision label; bootstrap historical images before deployment")
+for field in ("schema_version", "schema_min_reader", "schema_max_reader"):
+    value = metadata.get(field)
+    if type(value) is not int or value < 0:
+        raise SystemExit(f"selected image has no numeric {field}; bootstrap historical images before deployment")
+expected_source = (
+    os.environ.get("LH_DEPLOYMENT_SOURCE_SHA", "").strip().lower()
+    or os.environ.get("RUNTIME_SOURCE_SHA", "").strip().lower()
+)
+if expected_source and expected_source != source_sha:
+    raise SystemExit(f"deployment source {expected_source} does not match selected image source {source_sha}")
+for env_names, field in (
+    (("LH_DEPLOYMENT_SCHEMA_VERSION", "RUNTIME_SCHEMA_VERSION"), "schema_version"),
+    (("LH_DEPLOYMENT_SCHEMA_MIN_READER", "RUNTIME_SCHEMA_MIN_READER"), "schema_min_reader"),
+    (("LH_DEPLOYMENT_SCHEMA_MAX_READER", "RUNTIME_SCHEMA_MAX_READER"), "schema_max_reader"),
+):
+    expected = next((os.environ.get(name, "").strip() for name in env_names if os.environ.get(name, "").strip()), "")
+    if expected and expected != str(metadata[field]):
+        raise SystemExit(f"{env_names[0]} does not match selected image metadata")
+print(source_sha, metadata["schema_version"], metadata["schema_min_reader"], metadata["schema_max_reader"])
+PY
+  )" || {
+    echo "Selected image metadata does not match deployment metadata; refusing mixed digest/source/schema submission." >&2
+    return 1
+  }
+  read -r LH_DEPLOYMENT_SOURCE_SHA LH_DEPLOYMENT_SCHEMA_VERSION LH_DEPLOYMENT_SCHEMA_MIN_READER LH_DEPLOYMENT_SCHEMA_MAX_READER <<< "$resolved"
+  export LH_DEPLOYMENT_SOURCE_SHA LH_DEPLOYMENT_SCHEMA_VERSION LH_DEPLOYMENT_SCHEMA_MIN_READER LH_DEPLOYMENT_SCHEMA_MAX_READER
+}
+
+_lh_hosted_require_schema_metadata() {
+  local name=""
+  local value=""
+  for name in LH_DEPLOYMENT_SCHEMA_VERSION LH_DEPLOYMENT_SCHEMA_MIN_READER LH_DEPLOYMENT_SCHEMA_MAX_READER; do
+    value="${!name:-}"
+    if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+      echo "Missing exact selected-image ${name}; bootstrap historical images with OCI schema labels before deployment." >&2
+      return 1
+    fi
+  done
+}
+
 lh_hosted_reprovision() {
   local instance_id="${1:-${LH_INSTANCE_ID:-}}"
   local image="${2:-}"
   local payload=""
-  local api_url=""
-  local http_code=""
-  local attempt=1
-  local max_attempts="${LH_HOSTED_REPROVISION_MAX_ATTEMPTS:-50}"
-
-  if [[ -n "$image" ]]; then
-    payload="$(_lh_hosted_json_object image "$image")" || return 1
+  local key="${LH_DEPLOYMENT_IDEMPOTENCY_KEY:-}"
+  if [[ -z "$instance_id" || -z "$image" ]]; then
+    echo "Usage: lh_hosted_reprovision <instance-id> <immutable-image>" >&2
+    return 1
   fi
-
-  while true; do
-    if _lh_hosted_post_instance_action "$instance_id" "reprovision" "$payload"; then
-      if [[ -n "$image" ]]; then
-        api_url="$(_lh_hosted_reprovision_api_url)"
-        echo "Waiting for hosted runtime health to report the requested image..." >&2
-        _lh_hosted_wait_for_runtime_image "$api_url" "$image" 240
-        return $?
-      fi
-      return 0
-    fi
-
-    http_code="${LH_HOSTED_LAST_HTTP_CODE:-}"
-    case "$http_code" in
-      409|425|429|502|503|504)
-        if [[ "$attempt" -lt "$max_attempts" ]]; then
-          echo "Hosted reprovision is temporarily unavailable (HTTP ${http_code}); retrying (${attempt}/${max_attempts})..." >&2
-          _lh_hosted_retry_sleep "$attempt"
-          attempt=$((attempt + 1))
-          continue
-        fi
-        ;;
-    esac
-
-    if [[ "$http_code" != "524" && "$http_code" != "000" ]]; then
-      return 1
-    fi
-
-    api_url="$(_lh_hosted_reprovision_api_url)"
-    echo "Reprovision returned HTTP ${http_code}; polling hosted runtime health for the requested image..." >&2
-    _lh_hosted_wait_for_runtime_image "$api_url" "$image" 240
-    return $?
-  done
+  if [[ ! "$image" =~ @sha256:[0-9a-f]{64}$ ]]; then
+    echo "Refusing non-immutable deployment image; resolve a sha256 digest first." >&2
+    return 1
+  fi
+  _lh_hosted_resolve_image_metadata "$image" || return 1
+  _lh_hosted_require_schema_metadata || return 1
+  payload="$(_lh_hosted_reprovision_payload "$instance_id" "$image")" || return 1
+  lh_hosted_submit_deployment "$payload" "$key" || return 1
+  echo "Submitted durable deployment ${LH_DEPLOYMENT_ID} for instance ${instance_id}." >&2
+  lh_hosted_wait_for_deployment "$LH_DEPLOYMENT_ID" "${LH_HOSTED_REPROVISION_TIMEOUT:-900}"
 }
 
 lh_hosted_deprovision() {
