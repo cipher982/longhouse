@@ -261,7 +261,9 @@ async fn upload_preview(
         .replace("{sha256}", &preview_hash);
     match client
         .put_bytes_with_timeout(
-            &preview_path,
+            // The preview names the image it came from; the read requires the
+            // parent and the preview to agree about that.
+            &format!("{preview_path}?derived_from={}", media.sha256),
             PREVIEW_MIME_TYPE,
             lane_headers.to_vec(),
             preview.bytes,

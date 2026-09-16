@@ -1065,3 +1065,77 @@ async def test_media_manifest_records_the_derived_preview_and_survives_a_replay(
     finally:
         await client.close()
         await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_naming_someone_elses_preview_grants_nothing(daemon_paths):
+    """A content hash is an identifier, not authority.
+
+    The attack: take a hash you happen to know, name it as your own image's
+    preview, and read it. The preview only answers to the parent it was derived
+    from, so a parent that merely names it does not reach it.
+    """
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    victim_parent = "e" * 64
+    victim_preview = "f" * 64
+    attacker_parent = "a" * 64
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        engine = create_catalog_engine(database_path)
+        with Session(engine) as db:
+            db.add(
+                StorageSession(
+                    session_id=session_id,
+                    tenant_id="default",
+                    owner_id="1",
+                    provider="codex",
+                    environment="test",
+                    machine_id="test",
+                    started_at=now,
+                    last_activity_at=now,
+                    raw_state="durable",
+                    render_state="ready",
+                    media_state="complete",
+                    commit_seq=0,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            db.commit()
+        engine.dispose()
+
+        async def commit(media_hash, **overrides):
+            params = _media_params(
+                media_hash=media_hash,
+                state="present",
+                observed_at=now,
+                session_id=overrides.pop("session_id", None),
+            )
+            params.update(overrides)
+            return await client.call("storage.media.commit.v2", params)
+
+        async def read(media_hash):
+            return await client.call(
+                "storage.media.read.v2",
+                {"media_hash": media_hash, "session_id": None, "owner_id": "1", "limit": 1},
+            )
+
+        # The victim's image names its preview, and that preview names it back.
+        await commit(victim_parent, session_id=session_id, thumb_hash=victim_preview)
+        await commit(victim_preview, derived_from=victim_parent)
+        assert (await read(victim_preview))["found"] is True, "the honest parent reaches its own preview"
+
+        # The attacker's image names the same preview, but the preview was not
+        # derived from the attacker's image, so the read stays refused.
+        await commit(attacker_parent, session_id=session_id, thumb_hash=victim_preview)
+        assert (await read(victim_preview))["found"] is True, "the honest parent still reaches it"
+        stranger = "3" * 64
+        await commit(stranger, derived_from=attacker_parent)
+        assert (await read(stranger))["found"] is False, "a preview is not reachable through a parent it never came from"
+    finally:
+        await client.close()
+        await daemon.close()

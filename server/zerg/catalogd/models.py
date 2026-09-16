@@ -457,6 +457,10 @@ class MediaObject(CatalogBase):
     # object. Nullable: an image small enough to serve as-is has no preview, and
     # a non-image never has one.
     thumb_hash = Column(String(64), nullable=True)
+    # Set on a preview: the image it was derived from. A preview is reachable
+    # only through a parent that names it *and* that it names back, so naming
+    # someone else's bytes as your own preview grants nothing.
+    derived_from = Column(String(64), nullable=True)
     commit_seq = Column(BigInteger, nullable=False)
     observed_at = Column(DateTime(timezone=True), nullable=False)
     verified_at = Column(DateTime(timezone=True), nullable=True)

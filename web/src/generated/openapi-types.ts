@@ -888,6 +888,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload Bug Report
+         * @description Publish the reviewed phone report before any Console execution starts.
+         */
+        post: operations["upload_bug_report_reports_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/reports/{report_id}/manifest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Bug Report Manifest */
+        get: operations["get_bug_report_manifest_agents_reports__report_id__manifest_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/reports/{report_id}/files/{filename}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Bug Report File */
+        get: operations["get_bug_report_file_agents_reports__report_id__files__filename__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/observability/checks": {
         parameters: {
             query?: never;
@@ -3801,6 +3855,23 @@ export interface components {
             /** Attachments */
             attachments: string[];
         };
+        /** Body_upload_bug_report_reports_post */
+        Body_upload_bug_report_reports_post: {
+            /** Description */
+            description: string;
+            /**
+             * Context Json
+             * @default {}
+             */
+            context_json: string;
+            /** Source Session Id */
+            source_session_id?: string | null;
+            /**
+             * Files
+             * @default []
+             */
+            files: string[];
+        };
         /** Body_upload_current_user_avatar_users_me_avatar_post */
         Body_upload_current_user_avatar_users_me_avatar_post: {
             /**
@@ -3809,6 +3880,19 @@ export interface components {
              * @description Avatar image file (PNG/JPEG/WebP ≤2 MB)
              */
             file: string;
+        };
+        /** BugReportResponse */
+        BugReportResponse: {
+            /** Report Id */
+            report_id: string;
+            /** Created At */
+            created_at: string;
+            /** Source Session Id */
+            source_session_id: string | null;
+            /** Files */
+            files: {
+                [key: string]: unknown;
+            }[];
         };
         /** CLILoginRequest */
         CLILoginRequest: {
@@ -7906,6 +7990,11 @@ export interface components {
              * @description Optional client idempotency key for this submitted input
              */
             client_request_id?: string | null;
+            /**
+             * Report Id
+             * @description Optional immutable bug report to stage before a Console turn
+             */
+            report_id?: string | null;
         };
         /**
          * SessionInputResponse
@@ -11932,6 +12021,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    upload_bug_report_reports_post: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_bug_report_reports_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BugReportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_bug_report_manifest_agents_reports__report_id__manifest_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                report_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_bug_report_file_agents_reports__report_id__files__filename__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                report_id: string;
+                filename: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -15999,6 +16189,7 @@ export interface operations {
         parameters: {
             query?: {
                 thumb_sha256?: string | null;
+                derived_from?: string | null;
             };
             header?: never;
             path: {
