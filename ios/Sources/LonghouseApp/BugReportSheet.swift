@@ -134,6 +134,18 @@ struct BugReportSheet: View {
                     }
                 }
             }
+            .alert(
+                "Couldn’t send report",
+                isPresented: Binding(
+                    get: { errorMessage != nil && !isUploading && !isSending },
+                    set: { if !$0 { errorMessage = nil } }
+                )
+            ) {
+                Button("Retry") { Task { await sendReport() } }
+                Button("Close", role: .cancel) {}
+            } message: {
+                Text(errorMessage ?? "The report could not be sent.")
+            }
             .task {
                 restoreDraft()
             }
@@ -161,7 +173,10 @@ struct BugReportSheet: View {
                     onLaunched: { sessionID in
                         showingLaunchPicker = false
                         targetSessionID = sessionID
-                        Task { await sendReport() }
+                        // Pass the launch result explicitly. SwiftUI state writes
+                        // are not a safe synchronization point for the task
+                        // that starts the first report turn.
+                        Task { await sendReport(sessionID: sessionID) }
                     }
                 )
             }
@@ -190,8 +205,14 @@ struct BugReportSheet: View {
         }
     }
 
-    private func sendReport() async {
-        guard let reportID, let sessionID = targetSessionID, let api = LonghouseAPI(host: appState.serverURL) else { return }
+    private func sendReport(sessionID explicitSessionID: String? = nil) async {
+        guard let reportID,
+              let sessionID = explicitSessionID ?? targetSessionID,
+              let api = LonghouseAPI(host: appState.serverURL)
+        else {
+            errorMessage = "The report handoff is incomplete. Choose an agent again."
+            return
+        }
         isSending = true
         errorMessage = nil
         statusMessage = nil
@@ -236,6 +257,10 @@ struct BugReportSheet: View {
             }
             errorMessage = (error as? LocalizedError)?.errorDescription ?? "The report was saved, but the agent could not be started. Retry without choosing a new target."
         }
+    }
+
+    private func sendReport() async {
+        await sendReport(sessionID: nil)
     }
 
     private func saveHandoffForRetry() {

@@ -257,6 +257,55 @@ struct LonghouseAPITests {
     }
 
     @Test
+    func reportTurnCarriesReportAndIdempotencyIdentities() async throws {
+        let capture = APIRequestCapture()
+        APIRequestMockURLProtocol.handler = { request in
+            capture.store(request)
+            let body = """
+            {
+              "outcome": "sent",
+              "input_id": null,
+              "live_input_id": "turn-1",
+              "client_request_id": "report-request-1",
+              "turn": {"turn_id": "turn-1", "run_id": "run-1", "state": "active"},
+              "intent": "auto",
+              "queued": []
+            }
+            """
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(body.utf8))
+        }
+        defer { APIRequestMockURLProtocol.handler = nil }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [APIRequestMockURLProtocol.self]
+        let api = LonghouseAPI(
+            baseURL: try #require(URL(string: "https://demo.longhouse.ai")),
+            allowsAuthRefresh: false,
+            urlSession: URLSession(configuration: configuration)
+        )
+
+        _ = try await api.sendInput(
+            id: "session-1",
+            text: "Investigate the report",
+            intent: "auto",
+            clientRequestId: "report-request-1",
+            reportID: "report-1"
+        )
+
+        let request = try #require(capture.load())
+        let body = try #require(request.httpBody)
+        let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(object["report_id"] as? String == "report-1")
+        #expect(object["client_request_id"] as? String == "report-request-1")
+    }
+
+    @Test
     func launchErrorParsingAcceptsErrorCodeField() throws {
         let data = try #require("""
         {
@@ -520,4 +569,50 @@ struct LonghouseAPITests {
 
         #expect(LonghouseAPI.parseStructuredError(statusCode: 409, data: data) == nil)
     }
+}
+
+private final class APIRequestCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedRequest: URLRequest?
+
+    func store(_ request: URLRequest) {
+        lock.lock()
+        storedRequest = request
+        lock.unlock()
+    }
+
+    func load() -> URLRequest? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedRequest
+    }
+}
+
+private final class APIRequestMockURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var handler: (@Sendable (URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let handler = Self.handler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        do {
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
 }
