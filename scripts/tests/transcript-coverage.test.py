@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import sys
 import tempfile
@@ -131,9 +133,7 @@ class CoverageReportTests(unittest.TestCase):
             served_event("rec-a-tool-call-1", "assistant", tool_name="bash", tool_call_id="call-1"),
             served_event("rec-b", "tool", tool_name="bash", tool_call_id="call-1", tool_output_text="output"),
         ]
-        report = coverage.coverage_report(
-            native, served, provider="omp", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS
-        )
+        report = coverage.coverage_report(native, served, provider="omp", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS)
         self.assertEqual(report["verdict"], "pass")
         self.assertEqual(report["classes"]["thinking"]["coverage"], 1.0)
         self.assertEqual(report["classes"]["tool_call"]["coverage"], 1.0)
@@ -144,9 +144,7 @@ class CoverageReportTests(unittest.TestCase):
         native = [coverage.NativeEvent("thinking", f"rec-{i}", OBSERVED_AT_MS - 1_000, 100) for i in range(3)]
         native.append(coverage.NativeEvent("tool_call", "call-1", OBSERVED_AT_MS - 1_000, 0))
         served = [served_event("rec-0-tool-call-1", "assistant", tool_name="bash", tool_call_id="call-1")]
-        report = coverage.coverage_report(
-            native, served, provider="omp", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS
-        )
+        report = coverage.coverage_report(native, served, provider="omp", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS)
         self.assertEqual(report["verdict"], "partial")
         self.assertEqual(report["classes"]["thinking"]["provider"], 3)
         self.assertEqual(report["classes"]["thinking"]["served"], 0)
@@ -157,9 +155,7 @@ class CoverageReportTests(unittest.TestCase):
     def test_tool_events_join_on_provider_call_id_not_event_id_shape(self) -> None:
         native = [coverage.NativeEvent("tool_result", "call_00_abc|fc_tmp_xyz", OBSERVED_AT_MS - 1_000, 5)]
         served = [served_event("deadbeef", "tool", tool_name="bash", tool_call_id="call_00_abc|fc_tmp_xyz")]
-        report = coverage.coverage_report(
-            native, served, provider="omp", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS
-        )
+        report = coverage.coverage_report(native, served, provider="omp", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS)
         self.assertEqual(report["classes"]["tool_result"]["coverage"], 1.0)
 
     def test_a_stale_backlog_is_a_gap_not_a_stall(self) -> None:
@@ -212,13 +208,8 @@ class CoverageReportTests(unittest.TestCase):
 
     def test_an_in_flight_tail_is_not_a_partial_gap(self) -> None:
         native = [coverage.NativeEvent("tool_call", f"call-{i}", OBSERVED_AT_MS - 1_000, 0) for i in range(100)]
-        served = [
-            served_event(f"rec-tool-call-{i}", "assistant", tool_name="bash", tool_call_id=f"call-{i}")
-            for i in range(99)
-        ]
-        report = coverage.coverage_report(
-            native, served, provider="omp", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS
-        )
+        served = [served_event(f"rec-tool-call-{i}", "assistant", tool_name="bash", tool_call_id=f"call-{i}") for i in range(99)]
+        report = coverage.coverage_report(native, served, provider="omp", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS)
         self.assertEqual(report["classes"]["tool_call"]["coverage"], 0.99)
         self.assertEqual(report["verdict"], "pass")
         self.assertIn("tool_call", report["totals"]["incomplete_classes"])
@@ -255,9 +246,7 @@ class CoverageReportTests(unittest.TestCase):
         self.assertEqual(report["verdict"], "pass")
 
     def test_empty_provider_transcript_is_empty_not_failed(self) -> None:
-        report = coverage.coverage_report(
-            [], [], provider="omp", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS
-        )
+        report = coverage.coverage_report([], [], provider="omp", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS)
         self.assertEqual(report["verdict"], "empty")
 
     def test_unmapped_served_events_are_counted_not_silently_dropped(self) -> None:
@@ -273,9 +262,7 @@ class CoverageReportTests(unittest.TestCase):
 
     def test_text_report_names_every_class_and_the_missing_sample(self) -> None:
         native = [coverage.NativeEvent("thinking", "rec-1", OBSERVED_AT_MS - 90_000, 42)]
-        report = coverage.coverage_report(
-            native, [], provider="omp", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS
-        )
+        report = coverage.coverage_report(native, [], provider="omp", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS)
         text = coverage.render_text(report)
         for name in coverage.EVENT_CLASSES:
             self.assertIn(name, text)
@@ -289,8 +276,6 @@ class ServedPayloadTests(unittest.TestCase):
         self.assertEqual(coverage.served_events_from_payload([{"id": "a"}]), [{"id": "a"}])
         self.assertEqual(coverage.served_events_from_payload({"events": "nope"}), [])
         self.assertEqual(coverage.served_events_from_payload(None), [])
-
-
 
 
 class ServeLatencyTests(unittest.TestCase):
@@ -396,12 +381,26 @@ class ManagedDiscoveryTests(unittest.TestCase):
             root = Path(tmp)
             transcript = root / "session.jsonl"
             transcript.write_text("", encoding="utf-8")
-            self._state(root, "omp-helm", "live.json", {
-                "session_id": "s-live", "session_file": str(transcript), "status": "degraded",
-            })
-            self._state(root, "omp-helm", "stopped.json", {
-                "session_id": "s-stopped", "session_file": str(transcript), "status": "stopped",
-            })
+            self._state(
+                root,
+                "omp-helm",
+                "live.json",
+                {
+                    "session_id": "s-live",
+                    "session_file": str(transcript),
+                    "status": "degraded",
+                },
+            )
+            self._state(
+                root,
+                "omp-helm",
+                "stopped.json",
+                {
+                    "session_id": "s-stopped",
+                    "session_file": str(transcript),
+                    "status": "stopped",
+                },
+            )
 
             discovered = coverage.discover_managed_sessions(root)
 
@@ -415,9 +414,16 @@ class ManagedDiscoveryTests(unittest.TestCase):
     def test_launches_without_a_readable_transcript_are_not_claimed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            self._state(root, "omp-helm", "gone.json", {
-                "session_id": "s-gone", "session_file": str(root / "missing.jsonl"), "status": "ready",
-            })
+            self._state(
+                root,
+                "omp-helm",
+                "gone.json",
+                {
+                    "session_id": "s-gone",
+                    "session_file": str(root / "missing.jsonl"),
+                    "status": "ready",
+                },
+            )
             self._state(root, "omp-helm", "nameless.json", {"session_file": "/tmp/x.jsonl"})
 
             self.assertEqual(coverage.discover_managed_sessions(root), [])
@@ -447,6 +453,125 @@ class SweepVerdictTests(unittest.TestCase):
 def main() -> int:
     result = unittest.main(module=__name__, exit=False, verbosity=2)
     return 0 if result.result.wasSuccessful() else 1
+
+
+class MediaCoverageTests(unittest.TestCase):
+    """An image has no event identity, so provider truth and served truth are
+    joined by the bytes themselves."""
+
+    def test_claude_image_block_becomes_media_truth(self) -> None:
+        """The shape a generic data-URL scan misses: nested source, no data: URL."""
+
+        raw = b"\x89PNG\r\nclaude-pasted-screenshot"
+        digest = hashlib.sha256(raw).hexdigest()
+        record = {
+            "type": "user",
+            "uuid": "u-1",
+            "timestamp": "2026-09-13T14:08:48.525Z",
+            "message": {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "look at this"},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": base64.b64encode(raw).decode("ascii"),
+                        },
+                    },
+                ],
+            },
+        }
+        path = write_transcript([record])
+        try:
+            events = coverage.extract_native_events("claude", path)
+        finally:
+            path.unlink()
+        self.assertEqual([(event.event_class, event.key) for event in events], [("media", digest)])
+        self.assertEqual(events[0].chars, len(raw))
+
+    def test_omp_blob_reference_is_verified_against_the_store(self) -> None:
+        """The oracle hashes the file the reference names, not the reference."""
+
+        raw = b"\x89PNG\r\nomp-pasted"
+        digest = hashlib.sha256(raw).hexdigest()
+        root = Path(tempfile.mkdtemp())
+        session_dir = root / "agent" / "sessions" / "cwd"
+        session_dir.mkdir(parents=True)
+        blob_dir = root / "agent" / "blobs"
+        blob_dir.mkdir(parents=True)
+        (blob_dir / digest).write_bytes(raw)
+        record = {
+            "type": "message",
+            "id": "omp-user",
+            "timestamp": "2026-09-13T14:08:48.525Z",
+            "message": {
+                "role": "user",
+                "content": [{"type": "image", "data": f"blob:sha256:{digest}", "mimeType": "image/png"}],
+            },
+        }
+        path = session_dir / "session.jsonl"
+        path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        events = coverage.extract_native_events("omp", path)
+        self.assertEqual([event.key for event in events], [digest])
+
+    def test_a_served_image_is_joined_by_hash_not_by_event_id(self) -> None:
+        digest = "a" * 64
+        native = [coverage.media_event(digest, OBSERVED_AT_MS - 2_000, 604_054)]
+        served = [served_event("rec-user", "user", content_text="look", media_refs=[{"sha256": digest}])]
+        report = coverage.coverage_report(native, served, provider="claude", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS)
+        self.assertEqual(report["classes"]["media"]["coverage"], 1.0)
+        self.assertEqual(report["verdict"], "pass")
+
+    def test_an_image_the_provider_showed_and_longhouse_never_served_is_a_gap(self) -> None:
+        """The Claude defect: the transcript had the picture, nothing served it."""
+
+        digest = "b" * 64
+        native = [coverage.media_event(digest, OBSERVED_AT_MS - 2_000, 604_054)]
+        served = [served_event("rec-user", "user", content_text="look at this")]
+        report = coverage.coverage_report(native, served, provider="claude", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS)
+        self.assertEqual(report["classes"]["media"]["coverage"], 0.0)
+        self.assertEqual(report["classes"]["media"]["missing_sample"], [digest])
+        self.assertNotEqual(report["verdict"], "pass")
+
+    def test_the_same_image_shown_twice_counts_once(self) -> None:
+        digest = "c" * 64
+        native = [
+            coverage.media_event(digest, OBSERVED_AT_MS - 2_000, 100),
+            coverage.media_event(digest, OBSERVED_AT_MS - 1_000, 100),
+        ]
+        served = [
+            served_event("e-1", "user", media_refs=[{"sha256": digest}]),
+            served_event("e-2", "tool", media_refs=[{"sha256": digest}]),
+        ]
+        report = coverage.coverage_report(native, served, provider="omp", session_id="s", transcript="/t", observed_at_ms=OBSERVED_AT_MS)
+        self.assertEqual(report["classes"]["media"]["provider"], 2)
+        self.assertEqual(report["classes"]["media"]["coverage"], 1.0)
+
+    def test_images_nested_in_a_tool_result_and_mirrored_are_one_fact(self) -> None:
+        """A tool's screenshot appears twice in one record and once in an
+        attachment record; the bytes are the same image."""
+
+        raw = b"\x89PNG\r\ntool-produced-screenshot"
+        digest = hashlib.sha256(raw).hexdigest()
+        encoded = base64.b64encode(raw).decode("ascii")
+        image = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": encoded}}
+        record = {
+            "type": "user",
+            "uuid": "u-2",
+            "timestamp": "2026-09-13T14:09:48.525Z",
+            "message": {"role": "user", "content": [{"type": "tool_result", "content": [image]}]},
+            "toolUseResult": image,
+        }
+        attachment = {"type": "attachment", "uuid": "a-1", "attachment": {"prompt": [image]}}
+        path = write_transcript([record, attachment])
+        try:
+            events = coverage.extract_native_events("claude", path)
+        finally:
+            path.unlink()
+        self.assertEqual([event.key for event in events], [digest])
+        self.assertEqual(events[0].chars, len(raw))
 
 
 if __name__ == "__main__":

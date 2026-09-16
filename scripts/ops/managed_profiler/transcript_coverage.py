@@ -25,6 +25,8 @@ Usage (offline, from a saved events payload):
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
 import math
 import os
@@ -46,7 +48,7 @@ SCHEMA_VERSION = 1
 # python-urllib agent, so identify this client explicitly.
 USER_AGENT = "longhouse-provider-fidelity-coverage/1"
 
-EVENT_CLASSES = ("user", "assistant_text", "thinking", "tool_call", "tool_result")
+EVENT_CLASSES = ("user", "assistant_text", "thinking", "tool_call", "tool_result", "media")
 
 DEFAULT_STALL_AGE_MS = 60_000
 # A class below this share of its provider records is a real gap, not an
@@ -90,6 +92,53 @@ def _parse_timestamp_ms(value: Any) -> int | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return int(parsed.timestamp() * 1000)
+
+
+SESSIONS_DIR_NAME = "sessions"
+BLOBS_DIR_NAME = "blobs"
+SHA256_HEX_CHARS = 64
+BLOB_REF_PREFIX = "blob:sha256:"
+
+
+def provider_blob_root(transcript: Path) -> Path | None:
+    """The provider's content-addressed image store, beside its transcripts.
+
+    Mirrors where Pi and OMP write pasted images; the oracle needs the same
+    location rule the engine uses, but not the engine's parsing.
+    """
+    for parent in transcript.parents:
+        if parent.name == SESSIONS_DIR_NAME and parent.parent.name:
+            return parent.parent / BLOBS_DIR_NAME
+    return None
+
+
+def media_event(digest: str, timestamp_ms: int | None, byte_size: int = 0) -> NativeEvent:
+    """One image the provider's terminal showed, keyed by the bytes it is.
+
+    An image has no provider event identity of its own, so the only honest join
+    between what the provider showed and what Longhouse served is the content
+    hash both sides can compute independently.
+    """
+    return NativeEvent("media", digest, timestamp_ms, byte_size)
+
+
+def pi_image_digest(part: dict[str, Any], blob_root: Path | None) -> str | None:
+    """The digest of a Pi/OMP image part, verified against the bytes on disk.
+
+    The reference states a digest; hashing the file it names is what makes this
+    an oracle rather than a restatement of the parser's claim.
+    """
+    data = part.get("data")
+    if not isinstance(data, str) or not data.startswith(BLOB_REF_PREFIX):
+        return None
+    declared = data[len(BLOB_REF_PREFIX) :].strip().lower()
+    if len(declared) != SHA256_HEX_CHARS:
+        return None
+    if blob_root is not None:
+        candidate = blob_root / declared
+        if candidate.is_file():
+            return hashlib.sha256(candidate.read_bytes()).hexdigest()
+    return declared
 
 
 def _content_parts(message: dict[str, Any]) -> list[dict[str, Any]]:
@@ -163,6 +212,10 @@ def extract_omp_transcript(path: Path) -> list[NativeEvent]:
                     # of the same record carry an explicit suffix.
                     key = record_id if index == 0 else f"{record_id}-thinking-{index}"
                     events.append(NativeEvent("thinking", key, timestamp_ms, len(text)))
+                elif kind == "image":
+                    digest = pi_image_digest(part, provider_blob_root(path))
+                    if digest:
+                        events.append(media_event(digest, timestamp_ms))
                 elif kind == "toolCall":
                     call_id = part.get("id")
                     key = str(call_id) if isinstance(call_id, str) and call_id.strip() else f"{record_id}-tool-{index}"
@@ -170,18 +223,83 @@ def extract_omp_transcript(path: Path) -> list[NativeEvent]:
     return events
 
 
+def _walk_images(node: Any, found: list[tuple[str, int]]) -> None:
+    """Every base64 image anywhere in a record, whatever shape wraps it.
+
+    Claude carries a pasted image directly under ``message.content``, but a
+    screenshot produced by a tool sits nested inside that block's own
+    ``content``, mirrored again under the record's ``toolUseResult``, and an
+    ``attachment`` record keeps one under ``prompt``. An oracle that walked only
+    the first shape would report a fraction of what the terminal showed.
+    """
+
+    if isinstance(node, dict):
+        if node.get("type") == "image":
+            source = node.get("source")
+            if isinstance(source, dict) and source.get("type") == "base64":
+                encoded = source.get("data")
+                if isinstance(encoded, str) and encoded:
+                    try:
+                        raw = base64.b64decode(encoded, validate=False)
+                    except (ValueError, TypeError):
+                        raw = b""
+                    if raw:
+                        found.append((hashlib.sha256(raw).hexdigest(), len(raw)))
+        for value in node.values():
+            _walk_images(value, found)
+    elif isinstance(node, list):
+        for value in node:
+            _walk_images(value, found)
+
+
+def extract_claude_transcript(path: Path) -> list[NativeEvent]:
+    """Extract the images a Claude transcript carries.
+
+    Claude nests a pasted image one level deeper than the Pi family
+    (``message.content[].source = {type: base64, media_type, data}``) and never
+    writes a ``data:`` URL, which is exactly the shape a generic data-URL scan
+    misses. Only media is extracted here: an image's identity is the bytes it is,
+    so this oracle needs no agreement about event-id schemes, and a wrong guess
+    about those could not produce a false alarm in another class.
+
+    The same bytes appear more than once in one record (a tool result is mirrored
+    under ``toolUseResult``), and the content hash makes that a single fact.
+    """
+
+    seen: set[str] = set()
+    events: list[NativeEvent] = []
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            timestamp_ms = _parse_timestamp_ms(record.get("timestamp"))
+            found: list[tuple[str, int]] = []
+            _walk_images(record, found)
+            for digest, byte_size in found:
+                if digest in seen:
+                    continue
+                seen.add(digest)
+                events.append(media_event(digest, timestamp_ms, byte_size))
+    return events
+
+
 EXTRACTORS: dict[str, Callable[[Path], list[NativeEvent]]] = {
     "omp": extract_omp_transcript,
+    "claude": extract_claude_transcript,
 }
 
 
 def extract_native_events(provider: str, path: Path) -> list[NativeEvent]:
     extractor = EXTRACTORS.get(provider.strip().lower())
     if extractor is None:
-        raise SystemExit(
-            f"no transcript extractor for provider {provider!r}; "
-            f"implemented: {', '.join(sorted(EXTRACTORS))}"
-        )
+        raise SystemExit(f"no transcript extractor for provider {provider!r}; implemented: {', '.join(sorted(EXTRACTORS))}")
     return extractor(path)
 
 
@@ -212,6 +330,21 @@ def classify_served_event(event: dict[str, Any]) -> tuple[str, str] | None:
     if role == "user":
         return ("user", event_id) if event_id else None
     return None
+
+
+def media_keys_of_served_event(event: dict[str, Any]) -> list[str]:
+    """Content hashes this event shows, however many it carries."""
+
+    refs = event.get("media_refs")
+    if not isinstance(refs, list):
+        return []
+    keys: list[str] = []
+    for ref in refs:
+        if isinstance(ref, dict):
+            sha = ref.get("sha256")
+            if isinstance(sha, str) and sha.strip():
+                keys.append(sha.strip().lower())
+    return keys
 
 
 def served_events_from_payload(payload: Any) -> list[dict[str, Any]]:
@@ -277,9 +410,7 @@ def _coverage_for_class(
     matched = [event for event in provider_events if event.key in served_keys]
     missing = [event for event in provider_events if event.key not in served_keys]
     ages = [
-        observed_at_ms - event.timestamp_ms
-        for event in missing
-        if event.timestamp_ms is not None and observed_at_ms >= event.timestamp_ms
+        observed_at_ms - event.timestamp_ms for event in missing if event.timestamp_ms is not None and observed_at_ms >= event.timestamp_ms
     ]
     missing_chars = sum(event.chars for event in missing)
     return {
@@ -312,9 +443,12 @@ def coverage_report(
     served_keys: dict[str, set[str]] = {name: set() for name in EVENT_CLASSES}
     unmapped = 0
     for event in served:
+        for key in media_keys_of_served_event(event):
+            served_keys["media"].add(key)
         classified = classify_served_event(event)
         if classified is None:
-            unmapped += 1
+            if not media_keys_of_served_event(event):
+                unmapped += 1
             continue
         served_keys[classified[0]].add(classified[1])
 
@@ -333,11 +467,7 @@ def coverage_report(
     provider_total = len(native)
     served_total = sum(len(keys) for keys in served_keys.values())
     oldest_age = max(
-        (
-            entry["max_unpropagated_age_ms"]
-            for entry in by_class.values()
-            if entry["max_unpropagated_age_ms"] is not None
-        ),
+        (entry["max_unpropagated_age_ms"] for entry in by_class.values() if entry["max_unpropagated_age_ms"] is not None),
         default=None,
     )
     incomplete = [name for name in EVENT_CLASSES if by_class[name]["provider"] and by_class[name]["coverage"] not in (None, 1.0)]
@@ -363,11 +493,7 @@ def coverage_report(
     # stream. Here, old unpropagated records are a gap.
     stalled = False
     gapped = oldest_age is not None and oldest_age >= stall_age_ms
-    lagging = [
-        name
-        for name in incomplete
-        if (by_class[name]["coverage"] or 0.0) < coverage_floor
-    ]
+    lagging = [name for name in incomplete if (by_class[name]["coverage"] or 0.0) < coverage_floor]
     if provider_total == 0:
         verdict = "empty"
     elif stalled:
@@ -395,7 +521,7 @@ def coverage_report(
             "served_mapped_events": served_total,
             "served_unmapped_events": unmapped,
             "incomplete_classes": incomplete,
-        "lagging_classes": lagging,
+            "lagging_classes": lagging,
         },
         "liveness": {
             "provider_alive": provider_alive,
@@ -603,10 +729,7 @@ def discover_managed_sessions(
     return discovered
 
 
-VERDICT_SEVERITY = {
-    name: index
-    for index, name in enumerate(("pass", "empty", "partial", "gap", "missing", "stalled"))
-}
+VERDICT_SEVERITY = {name: index for index, name in enumerate(("pass", "empty", "partial", "gap", "missing", "stalled"))}
 
 
 def worst_verdict(reports: list[dict[str, Any]]) -> str:
@@ -789,8 +912,6 @@ def main(argv: list[str] | None = None) -> int:
         return run_all_live(args)
     if not args.provider or not args.transcript:
         raise SystemExit("--provider and --transcript are required unless --all-live is given")
-    if not args.session:
-        raise SystemExit("--session is required when reading the served projection from the API")
     transcript = Path(args.transcript).expanduser()
     if not transcript.is_file():
         raise SystemExit(f"transcript not found: {transcript}")
