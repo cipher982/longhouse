@@ -109,10 +109,10 @@ export const DEMO_DURATION_SEC =
 export const REPLAY_WINDOWS = {
   /** 64x14 claude tile — beat-1 dense work window. */
   claudeTile: { startSec: 4.0, endSec: 8.7 },
-  /** 64x14 codex tile — beat-1 dense work window. */
-  codexTile: { startSec: 2.6, endSec: 7.5 },
-  /** 64x14 opencode tile — read, diagnose, edit, tests pass. */
-  opencodeTile: { startSec: 5.09, endSec: 7.96 },
+  /** 64x14 codex tile — busiest_shelf empty case. */
+  codexTile: { startSec: 2.68, endSec: 6.5 },
+  /** 64x14 opencode tile — type hints, import check. */
+  opencodeTile: { startSec: 2.19, endSec: 7.0 },
 } as const;
 
 /* ── Steer windows: derived from the recording, never hand-picked ────── */

@@ -4,7 +4,10 @@
   "argv": [
     "opencode"
   ],
-  "prompt": "Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py",
+  "prompt": "Add type hints to inventory.py",
+  "prompts": [
+    "Add type hints to inventory.py"
+  ],
   "cols": 64,
   "rows": 14,
   "term": "xterm-256color",
@@ -34,7 +37,7 @@
       "denied": true
     },
     "mock_health": {
-      "url": "http://127.0.0.1:51197/health",
+      "url": "http://127.0.0.1:50673/health",
       "exit": 0,
       "http_code": "200",
       "reachable": true
@@ -69,17 +72,17 @@
     "mock_completions_match_fixture": true
   },
   "gate_failures": [],
-  "captured_at": "2026-08-10T20:31:53.162564+00:00",
-  "cast_sha256": "cd0c4783c357e8f9e9edffb3ef3a14f3219a3ef34d23139db238fc1c20f1a474",
+  "captured_at": "2026-09-16T16:28:37.221004+00:00",
+  "cast_sha256": "d7193254789d10601d5f89adb2abfca3c0c5ca2cb9d41413f6f673ad79168c98",
   "exit_status": 0,
   "phase_log": [
-    "[   0.002] spawned pid=2584 argv=['/tmp/demo-home-t_7w31yf/bin/opencode'] 64x14",
-    "[   2.345] sentinel hit: composer-ready",
-    "[   4.372] typing prompt: 'Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py'",
-    "[   6.928] prompt submitted",
-    "[   7.013] sentinel hit: working-spinner",
-    "[  21.401] sentinel hit: task-complete",
-    "[  23.413] sending exit sequence ['text:/exit', 'enter']",
-    "[  24.725] process exit status: 0"
+    "[   0.002] spawned pid=83350 argv=['/tmp/demo-home-054whbz_/bin/opencode'] 64x14",
+    "[   4.840] sentinel hit: composer-ready",
+    "[   6.860] typing prompt: 'Add type hints to inventory.py'",
+    "[   8.286] prompt submitted",
+    "[   8.368] sentinel hit: working-spinner",
+    "[  22.729] sentinel hit: task-complete",
+    "[  24.755] sending exit sequence ['text:/exit', 'enter']",
+    "[  26.052] process exit status: 0"
   ]
 }

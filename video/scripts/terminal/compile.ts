@@ -197,39 +197,50 @@ const sha256 = createHash("sha256").update(raw).digest("hex");
 // window from the artifact itself — a display string that could drift from
 // the recording must not exist.
 const sidecarPath = input.replace(/\.(retimed\.)?cast$/, "") + ".meta.json";
-let prompt: string | undefined;
+let prompts: string[] = [];
 try {
-  prompt = JSON.parse(await Bun.file(sidecarPath).text()).prompt;
+  const sidecar = JSON.parse(await Bun.file(sidecarPath).text());
+  prompts = sidecar.prompts ?? (sidecar.prompt ? [sidecar.prompt] : []);
 } catch {
   // no sidecar (e.g. ad-hoc casts): grid simply omits prompt metadata
 }
-let promptIdleSec: number | undefined;
-let promptTypedSec: number | undefined;
-if (prompt) {
-  // Whitespace-stripped containment: ink wraps the prompt across rows and
-  // elides spaces, so compare on the joined, space-free text.
-  const strip = (s: string) => s.replace(/\s+/g, "");
+
+interface PromptAnchor {
+  prompt: string;
+  idleSec?: number;
+  typedSec?: number;
+}
+
+// Whitespace-stripped containment: ink wraps the prompt across rows and
+// elides spaces, so compare on the joined, space-free text. Follow-up
+// prompts search only after the previous prompt was fully typed.
+const strip = (s: string) => s.replace(/\s+/g, "");
+const stateText = (st: State) =>
+  strip(st.rows.map((i) => rowPool[i].map((r) => r.text).join("")).join(""));
+const turns: PromptAnchor[] = [];
+let searchFrom = 0;
+for (const prompt of prompts) {
   const target = strip(prompt);
   const seed = target.slice(0, 4); // first typed chars; screens are prompt-free before typing
-  const stateText = (st: State) =>
-    strip(st.rows.map((i) => rowPool[i].map((r) => r.text).join("")).join(""));
-  const firstSeedIdx = states.findIndex((st) => stateText(st).includes(seed));
+  const anchor: PromptAnchor = { prompt };
+  const firstSeedIdx = states.findIndex((st, i) => i >= searchFrom && stateText(st).includes(seed));
   if (firstSeedIdx > 0) {
     // Pre-send hold: the seed match fires only once `seed.length` chars are
     // on screen, so step back past the burst that typed them (recorder types
     // ~20 chars/s; a paste arrives in one state). 0.3s clears both.
     const seedT = states[firstSeedIdx].t;
     let idleIdx = firstSeedIdx - 1;
-    while (idleIdx > 0 && states[idleIdx].t > seedT - 0.3) idleIdx--;
-    promptIdleSec = states[idleIdx].t;
-  }
-  for (const st of states) {
-    if (stateText(st).includes(target)) {
-      promptTypedSec = st.t;
-      break;
+    while (idleIdx > searchFrom && states[idleIdx].t > seedT - 0.3) idleIdx--;
+    anchor.idleSec = states[idleIdx].t;
+    const typedIdx = states.findIndex((st, i) => i >= firstSeedIdx && stateText(st).includes(target));
+    if (typedIdx >= 0) {
+      anchor.typedSec = states[typedIdx].t;
+      searchFrom = typedIdx + 1;
     }
   }
+  turns.push(anchor);
 }
+const [first] = turns;
 
 // Deterministic output: same cast in, byte-identical grid out. The cast's
 // sha256 is the provenance link; no absolute paths or wall-clock stamps.
@@ -242,9 +253,10 @@ const doc = {
     events,
     statesEmitted: states.length,
     rowPoolSize: rowPool.length,
-    ...(prompt !== undefined ? { prompt } : {}),
-    ...(promptIdleSec !== undefined ? { promptIdleSec } : {}),
-    ...(promptTypedSec !== undefined ? { promptTypedSec } : {}),
+    ...(first ? { prompt: first.prompt } : {}),
+    ...(first?.idleSec !== undefined ? { promptIdleSec: first.idleSec } : {}),
+    ...(first?.typedSec !== undefined ? { promptTypedSec: first.typedSec } : {}),
+    ...(turns.length > 1 ? { turns } : {}),
   },
   rowPool,
   states,

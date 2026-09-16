@@ -1,0 +1,113 @@
+{
+  "binary": "@anthropic-ai/claude-code@2.1.226",
+  "binary_version": "2.1.226 (Claude Code)",
+  "argv": [
+    "claude",
+    "--permission-mode",
+    "acceptEdits",
+    "--allowedTools",
+    "Bash"
+  ],
+  "prompt": "Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py",
+  "prompts": [
+    "Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py",
+    "Add a test for an empty shelf, then rerun the tests"
+  ],
+  "cols": 64,
+  "rows": 14,
+  "term": "xterm-256color",
+  "cwd": "/tmp/demo-repo",
+  "sandbox": true,
+  "isolation": "srt",
+  "aborted": false,
+  "auth_mode": "mock",
+  "canary": {
+    "egress_ip_http": {
+      "url": "http://1.1.1.1",
+      "exit": 0,
+      "http_code": "403",
+      "proxy_blocked": true,
+      "blocked": true
+    },
+    "egress_ip_https": {
+      "url": "https://1.1.1.1",
+      "exit": 56,
+      "http_code": "000",
+      "proxy_blocked": true,
+      "blocked": true
+    },
+    "egress_nonallowlisted": {
+      "url": "https://example.com",
+      "exit": 56,
+      "http_code": "000",
+      "proxy_blocked": true,
+      "blocked": true
+    },
+    "operator_read": {
+      "path": "~/.claude/settings.json",
+      "exit": 1,
+      "denied": true
+    },
+    "mock_health": {
+      "url": "http://127.0.0.1:50185/health",
+      "exit": 0,
+      "http_code": "200",
+      "reachable": true
+    },
+    "passed": true
+  },
+  "browser_attempts": [],
+  "mock_requests": 13,
+  "mock_stats": {
+    "main_requests": 13,
+    "utility_requests": 0,
+    "by_kind": {
+      "anthropic-main": 13
+    },
+    "main_turns_served": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "distinct_main_turns": 7,
+    "expected_turns": 7
+  },
+  "completion": "quiet-sentinel",
+  "gates": {
+    "exit_status_observed": true,
+    "composer_ready": true,
+    "working_seen": true,
+    "completion_reached": true,
+    "no_browser_attempts": true,
+    "mock_requests_present": true,
+    "mock_completions_match_fixture": true
+  },
+  "gate_failures": [],
+  "captured_at": "2026-09-16T16:24:46.480036+00:00",
+  "cast_sha256": "c7ed333db6712335c93363c77e1f944fa5fae3e36aa8e4b863e1e6b85a716408",
+  "exit_status": 0,
+  "phase_log": [
+    "[   0.002] spawned pid=71677 argv=['/tmp/demo-home-lh9j19wo/bin/claude', '--permission-mode', 'acceptEdits', '--allowedTools', 'Bash'] 64x14",
+    "[   4.002] dialog 'theme' detected -> keys ['enter']",
+    "[   8.522] dialog 'theme' answer produced no output -> resending",
+    "[  10.595] dialog 'api-key' detected -> keys ['up', 'enter']",
+    "[  13.105] dialog 'security-notes' detected -> keys ['enter']",
+    "[  15.178] dialog 'trust' detected -> keys ['enter']",
+    "[  17.140] sentinel hit: composer-ready",
+    "[  19.168] typing prompt: 'Fix the off-by-one bug in count_items in inventory.py, then run: python3 test_inventory.py'",
+    "[  20.977] prompt submitted",
+    "[  21.005] sentinel hit: working-spinner",
+    "[  36.527] sentinel hit: task-complete",
+    "[  38.674] sentinel hit: composer-ready",
+    "[  40.684] typing prompt: 'Add a test for an empty shelf, then rerun the tests'",
+    "[  42.018] prompt submitted",
+    "[  42.054] sentinel hit: working-spinner",
+    "[  54.955] sentinel hit: task-complete",
+    "[  56.979] sending exit sequence ['text:/exit', 'enter']",
+    "[  58.275] process exit status: 0"
+  ]
+}

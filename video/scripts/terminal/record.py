@@ -351,7 +351,7 @@ class Recorder:
             return True
         return False
 
-    def run_session(self, prompt, require_ready=False):
+    def run_session(self, prompt, require_ready=False, follow_up=False):
         tmo = self.timeouts
         # Phase 1: composer ready
         ok = self.wait_for(self._composer_ready, tmo["composer_timeout"], "composer-ready")
@@ -366,6 +366,15 @@ class Recorder:
         self.pump(2.0)  # let the UI settle for the recording
         # A dialog may have appeared during the settle (e.g. trust after theme).
         self._handle_dialogs()
+
+        if follow_up:
+            # The previous turn's "(Ns · tokens" line is still in the rolling
+            # tail; clear it so this turn's working/done phases observe only
+            # its own output.
+            self.tail = ""
+            self.saw_working = False
+            self.last_working_at = None
+            self.completion = None
 
         # Phase 2: type the task
         self.log(f"typing prompt: {prompt!r}")
@@ -811,7 +820,8 @@ def main():
     ap.add_argument("--cols", type=int, default=None)
     ap.add_argument("--rows", type=int, default=None)
     ap.add_argument("--cwd", default=None)
-    ap.add_argument("--prompt", default=None)
+    ap.add_argument("--prompt", action="append", default=None,
+                    help="repeat for follow-up turns in the same session")
     ap.add_argument("--bin", default="claude")
     ap.add_argument("--arg", action="append", default=[],
                     help="extra argv entries for the binary (repeatable)")
@@ -839,7 +849,7 @@ def main():
         prov = manifest["providers"][args.provider]
         cols = args.cols or defaults.get("cols", 100)
         rows = args.rows or defaults.get("rows", 16)
-        prompt = args.prompt or prov.get("prompt") or defaults["prompt"]
+        prompts = args.prompt or [prov.get("prompt") or defaults["prompt"]]
         profile = prov["sentinels"]
         timeouts = {k: float(prov.get(k, defaults.get(k, DEFAULTS[k])))
                     for k in DEFAULTS}
@@ -888,7 +898,7 @@ def main():
         rows = args.rows or 16
         if not args.cwd or not args.prompt:
             raise SystemExit("legacy mode requires --cwd and --prompt")
-        prompt = args.prompt
+        prompts = args.prompt
         profile = DEFAULT_PROFILE
         timeouts = dict(DEFAULTS)
         env = dict(os.environ)
@@ -917,7 +927,10 @@ def main():
             while time.monotonic() < end and rec.proc.poll() is None:
                 rec._drain(0.1)
         else:
-            rec.run_session(prompt, require_ready=bool(args.sandbox))
+            for i, prompt in enumerate(prompts):
+                if rec.aborted:
+                    break
+                rec.run_session(prompt, require_ready=bool(args.sandbox), follow_up=i > 0)
         rc = rec.shutdown()
 
         # Query the mock's request stats BEFORE tearing it down: the take gate
@@ -981,7 +994,8 @@ def main():
             "binary": binary_label,
             "binary_version": version,
             "argv": [os.path.basename(argv[0])] + argv[1:],
-            "prompt": prompt,
+            "prompt": prompts[0],
+            "prompts": prompts,
             "cols": cols,
             "rows": rows,
             "term": env["TERM"],
