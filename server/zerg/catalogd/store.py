@@ -760,6 +760,7 @@ def _session_read_media_refs(connection: Connection, *, session_id: str) -> list
                 media.c.byte_size,
                 media.c.thumb_hash,
                 thumb.c.state.label("thumb_state"),
+                thumb.c.derived_from.label("thumb_derived_from"),
             )
             .select_from(
                 refs.outerjoin(media, media.c.media_hash == refs.c.media_hash).outerjoin(thumb, thumb.c.media_hash == media.c.thumb_hash)
@@ -782,7 +783,12 @@ def _session_media_ref_dto(row) -> dict[str, Any]:
         "media_state": row["media_state"],
         "mime_type": row["mime_type"],
         "byte_size": int(row["byte_size"]) if row["byte_size"] is not None else None,
-        "thumb_hash": row["thumb_hash"] if row["thumb_state"] == "present" else None,
+        "thumb_hash": (
+            row["thumb_hash"]
+            if row["thumb_state"] == "present"
+            and row["thumb_derived_from"] == row["media_hash"]
+            else None
+        ),
     }
 
 
