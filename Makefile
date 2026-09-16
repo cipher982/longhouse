@@ -41,7 +41,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: validate-dogfood-runtime test-storage-v2-b2 test-shipper-synthetic-live-bench
 .PHONY: phone-shot phone-deploy phone-logs sim-deploy sim-shot sim-logs simlab-run ios-ui-shot ios-previews
 .PHONY: validate-playwright-install
-.PHONY: test-engine-single build-health build-clean
+.PHONY: test-engine-single test-engine-omp-helm build-health build-clean
 .PHONY: test-engine-projection-failure
 .PHONY: provider-interaction-probe
 .PHONY: test-cursor-console-product-e2e cursor-observed-install-qualification
@@ -368,7 +368,7 @@ test-ios-helper: ## iOS simulator helper script tests
 test-frontend: ## Frontend unit tests + type-check (~15s)
 	@cd web && bun run validate:types && bun run test -- --run --runInBand
 
-test-engine: test-engine-projection-failure ## Rust engine tests (~20s)
+test-engine: test-engine-projection-failure test-engine-omp-helm ## Rust engine tests (~20s)
 	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release)
 	@# --bin longhouse is load-bearing: engine/src/longhouse.rs is a second bin
 	@# target holding launch_managed_claude/opencode/codex, and every cargo test
@@ -392,6 +392,9 @@ test-engine: test-engine-projection-failure ## Rust engine tests (~20s)
 	fi; \
 	rm -f "$$engine_test_log"
 	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse --test managed_teardown --test golden_parser_contract --test adversarial_parser --test coordination_mcp_handshake --test cursor_native_hooks
+
+test-engine-omp-helm: ## OMP Helm extension contract tests
+	@cd engine && bun test assets/longhouse-omp-helm.test.ts
 
 test-engine-projection-failure: ## Isolated real-daemon failed-observation recovery
 	@python3 scripts/build/generate_build_identity.py
