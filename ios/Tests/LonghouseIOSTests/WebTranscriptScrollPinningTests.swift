@@ -17,7 +17,6 @@ final class WebTranscriptScrollPinningTests: XCTestCase {
     private var nativeViewportCoordinator: WebTranscriptView.Coordinator?
 
     override func setUp() async throws {
-        try super.setUp()
         window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 640))
         webView = TranscriptWebView(frame: CGRect(x: 0, y: 0, width: 320, height: 400))
         webView.scrollView.contentInsetAdjustmentBehavior = .never
@@ -32,7 +31,6 @@ final class WebTranscriptScrollPinningTests: XCTestCase {
         webView = nil
         window.isHidden = true
         window = nil
-        try super.tearDown()
     }
 
     /// Recreate the exact native failure state: the viewport has shrunk but
