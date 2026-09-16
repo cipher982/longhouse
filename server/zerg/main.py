@@ -28,6 +28,10 @@ if _settings.e2e_log_suppress:
 import logging
 from pathlib import Path
 
+from zerg.utils.media_types import register_missing_media_types
+
+register_missing_media_types()
+
 from fastapi import Depends
 from fastapi import FastAPI
 from fastapi import HTTPException
