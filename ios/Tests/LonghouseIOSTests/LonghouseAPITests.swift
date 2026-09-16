@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 @testable import Longhouse
-
+@Suite(.serialized)
 struct LonghouseAPITests {
     @Test
     func resumeIntentDecodesTerminalHandoff() throws {
@@ -260,7 +260,7 @@ struct LonghouseAPITests {
     func reportTurnCarriesReportAndIdempotencyIdentities() async throws {
         let capture = APIRequestCapture()
         APIRequestMockURLProtocol.handler = { request in
-            capture.store(request)
+            capture.store(request, body: requestBody(request))
             let body = """
             {
               "outcome": "sent",
@@ -299,7 +299,7 @@ struct LonghouseAPITests {
         )
 
         let request = try #require(capture.load())
-        let body = try #require(request.httpBody)
+        let body = try #require(capture.loadBody())
         let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
         #expect(object["report_id"] as? String == "report-1")
         #expect(object["client_request_id"] as? String == "report-request-1")
@@ -574,10 +574,12 @@ struct LonghouseAPITests {
 private final class APIRequestCapture: @unchecked Sendable {
     private let lock = NSLock()
     private var storedRequest: URLRequest?
+    private var storedBody: Data?
 
-    func store(_ request: URLRequest) {
+    func store(_ request: URLRequest, body: Data?) {
         lock.lock()
         storedRequest = request
+        storedBody = body
         lock.unlock()
     }
 
@@ -586,6 +588,33 @@ private final class APIRequestCapture: @unchecked Sendable {
         defer { lock.unlock() }
         return storedRequest
     }
+
+    func loadBody() -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedBody
+    }
+}
+
+private func requestBody(_ request: URLRequest) -> Data? {
+    if let body = request.httpBody {
+        return body
+    }
+    guard let stream = request.httpBodyStream else {
+        return nil
+    }
+    stream.open()
+    defer { stream.close() }
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 4096)
+    while stream.hasBytesAvailable {
+        let count = stream.read(&buffer, maxLength: buffer.count)
+        if count <= 0 {
+            break
+        }
+        data.append(buffer, count: count)
+    }
+    return data
 }
 
 private final class APIRequestMockURLProtocol: URLProtocol {
