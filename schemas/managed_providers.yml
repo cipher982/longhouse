@@ -255,6 +255,30 @@ providers:
         minimum_scenario_revision: 1
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
+      - id: codex_helm_send_idle
+        scenario_id: codex_helm_lifecycle
+        oracle_source: server/zerg/qa/codex_helm_lifecycle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
+      - id: codex_helm_steer_active
+        scenario_id: codex_helm_lifecycle
+        oracle_source: server/zerg/qa/codex_helm_lifecycle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
+      - id: codex_helm_abort_native
+        scenario_id: codex_helm_lifecycle
+        oracle_source: server/zerg/qa/codex_helm_lifecycle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
+      - id: codex_helm_terminate_owned
+        scenario_id: codex_helm_lifecycle
+        oracle_source: server/zerg/qa/codex_helm_lifecycle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
     coordination.awareness.create:
       disposition: implemented
       reason_code: semantic_proof_missing
