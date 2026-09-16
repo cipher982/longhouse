@@ -1660,17 +1660,14 @@ async def _retry_runtime_draining_catalog_input(
 
         admitted, details = await runtime_admission().try_admit(path="/managed-control-dispatch")
         if not admitted:
-            try:
-                await mark_runtime_draining(
-                    {
-                        "error_code": details.get("code", "runtime_draining"),
-                        "error": details.get("message", "Runtime is restarting"),
-                        "request_id": delivery_request_id,
-                        "runtime_epoch": details.get("runtime_epoch"),
-                    }
-                )
-            finally:
-                await runtime_admission().release()
+            await mark_runtime_draining(
+                {
+                    "error_code": details.get("code", "runtime_draining"),
+                    "error": details.get("message", "Runtime is restarting"),
+                    "request_id": delivery_request_id,
+                    "runtime_epoch": details.get("runtime_epoch"),
+                }
+            )
         try:
             result = await steer_text_to_managed_local_session(
                 db=db,
