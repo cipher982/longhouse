@@ -93,12 +93,110 @@ pub async fn send_text(session_id: &str, text: &str) -> Result<OpenCodeControlRe
     })
 }
 
+/// Active-turn steer. The delivery is the same request as `send_text`; it is a
+/// separate entry point so a QA build can substitute the wrong semantic here
+/// and nowhere else.
+pub async fn steer_text(session_id: &str, text: &str) -> Result<OpenCodeControlResult> {
+    let state = read_bridge_state(session_id, None)?;
+    #[cfg(feature = "qa-fault-injection")]
+    if qa_fault::active("opencode_steer_as_queued_follow_up") {
+        qa_fault::wait_until_idle(&state).await?;
+        qa_fault::record("opencode_steer_as_queued_follow_up", &state)?;
+    }
+    post_prompt_async(&state, text).await?;
+    Ok(OpenCodeControlResult {
+        provider_session_id: state.provider_session_id,
+    })
+}
+
 pub async fn interrupt(session_id: &str) -> Result<OpenCodeControlResult> {
     let state = read_bridge_state(session_id, None)?;
+    #[cfg(feature = "qa-fault-injection")]
+    if qa_fault::active("opencode_abort_noop") {
+        qa_fault::record("opencode_abort_noop", &state)?;
+        return Ok(OpenCodeControlResult {
+            provider_session_id: state.provider_session_id,
+        });
+    }
     post_abort(&state).await?;
     Ok(OpenCodeControlResult {
         provider_session_id: state.provider_session_id,
     })
+}
+
+/// Negative controls for `zerg.qa.opencode_helm_lifecycle`. Compiled only with
+/// the `qa-fault-injection` feature, so the environment variable below has no
+/// meaning in a shipped engine. Each fault substitutes a plausible wrong
+/// behavior at the real dispatch boundary and appends a receipt proving it
+/// fired, so a producer can show its oracle fails for the right reason.
+#[cfg(feature = "qa-fault-injection")]
+mod qa_fault {
+    use super::*;
+    use std::io::Write;
+
+    const FAULT_ENV: &str = "LONGHOUSE_QA_FAULT";
+    const RECEIPT_ENV: &str = "LONGHOUSE_QA_FAULT_RECEIPT";
+
+    pub(super) fn active(fault: &str) -> bool {
+        std::env::var(FAULT_ENV).is_ok_and(|value| value.trim() == fault)
+    }
+
+    pub(super) fn record(fault: &str, state: &OpenCodeControlState) -> Result<()> {
+        let path = std::env::var(RECEIPT_ENV)
+            .with_context(|| format!("{RECEIPT_ENV} is required when {FAULT_ENV} is set"))?;
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .with_context(|| format!("QA fault receipt {path} could not be opened"))?;
+        let line = json!({
+            "fault": fault,
+            "provider": "opencode",
+            "session_id": state.session_id,
+            "provider_session_id": state.provider_session_id,
+            "fired_at_ms": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_millis() as u64)
+                .unwrap_or_default(),
+        });
+        // One write per receipt, so concurrent faults cannot interleave a line.
+        file.write_all(format!("{line}\n").as_bytes())
+            .context("QA fault receipt could not be written")
+    }
+
+    /// Hold a steer until the running turn has finished, which is exactly the
+    /// queued-follow-up shape a steer oracle must reject.
+    pub(super) async fn wait_until_idle(state: &OpenCodeControlState) -> Result<()> {
+        let mut url = Url::parse(state.server_url.trim())?;
+        validate_local_server_url(&url)?;
+        url.set_path("/session/status");
+        if let Some(cwd) = state.cwd.as_deref() {
+            url.query_pairs_mut().append_pair("directory", cwd);
+        }
+        let client = Client::builder().timeout(REQUEST_TIMEOUT).build()?;
+        let deadline = std::time::Instant::now() + Duration::from_secs(600);
+        loop {
+            let body: Value = client
+                .get(url.clone())
+                .basic_auth(&state.username, Some(&state.password))
+                .send()
+                .await?
+                .json()
+                .await?;
+            let busy = body
+                .get(&state.provider_session_id)
+                .and_then(|status| status.get("type"))
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind != "idle");
+            if !busy {
+                return Ok(());
+            }
+            if std::time::Instant::now() >= deadline {
+                bail!("QA fault steer_as_queued_follow_up timed out waiting for idle");
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
 }
 
 pub async fn permission_reply(
@@ -400,13 +498,17 @@ fn terminate_pid(pid: u32) -> Result<()> {
     Err(err).context("Could not terminate OpenCode server")
 }
 
+/// One delivery for both send and steer. OpenCode's prompt loop re-reads the
+/// session before every model call, so a prompt posted while a turn runs joins
+/// that turn at its next step boundary, and one posted to an idle session
+/// starts a turn. `noReply` must stay unset: with it, an idle session stores
+/// the message and never answers (verified live against 1.17.20).
 async fn post_prompt_async(state: &OpenCodeControlState, text: &str) -> Result<()> {
     request_opencode_json(
         state,
         Method::POST,
         "prompt_async",
         Some(json!({
-            "noReply": true,
             "parts": [{"type": "text", "text": text}],
         })),
     )
@@ -599,7 +701,6 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Value>(&request.body).unwrap(),
             json!({
-                "noReply": true,
                 "parts": [{"type": "text", "text": "hello opencode"}],
             })
         );

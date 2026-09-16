@@ -94,7 +94,7 @@ def test_live_executing_claude_channel_bridge_uses_steer_intent():
 
 
 def test_live_executing_non_steerable_transport_uses_queue_intent():
-    affordance = _project(_caps(control_plane="opencode_server_bridge"), provider_label="OpenCode", is_executing=True)
+    affordance = _project(_caps(control_plane="antigravity_hook_inbox"), provider_label="Antigravity", is_executing=True)
 
     assert affordance.input_mode == "live"
     assert affordance.default_input_intent == "queue"

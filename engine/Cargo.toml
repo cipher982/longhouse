@@ -16,7 +16,7 @@ path = "src/longhouse.rs"
 [features]
 # Negative-control builds only. Never enabled in release artifacts: it lets a
 # qualification producer prove its oracle fails when an operation is broken.
-# Codex dispatch seam: src/qa_fault.rs.
+# Codex dispatch seam: src/qa_fault.rs. OpenCode: opencode_control::qa_fault.
 qa-fault-injection = []
 
 [dependencies]

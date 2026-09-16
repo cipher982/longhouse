@@ -1620,11 +1620,19 @@ async fn execute_command(
                 return Ok(claude_channel_control_result(summary.provider_session_id));
             }
             if provider == "opencode" {
-                return Err(CommandError {
-                    code: "unsupported_command".to_string(),
-                    message: "OpenCode server bridge does not support active-turn steer"
-                        .to_string(),
-                });
+                // Same delivery as send: OpenCode picks a prompt posted into a
+                // running turn up at that turn's next step boundary.
+                let summary = crate::opencode_control::steer_text(&session_id, &text)
+                    .await
+                    .map_err(CommandError::command_failed)?;
+                return Ok(json!({
+                    "exit_code": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "provider": "opencode",
+                    "transport": crate::opencode_control::OPENCODE_SERVER_BRIDGE_TRANSPORT,
+                    "provider_session_id": summary.provider_session_id,
+                }));
             }
             if provider == "cursor" {
                 let summary = crate::cursor_helm_control::steer(&session_id, &text, None)
@@ -3578,6 +3586,7 @@ mod tests {
         ("claude", "turn_interrupt", COMMAND_TURN_INTERRUPT),
         ("opencode", "send", COMMAND_SEND_TEXT),
         ("opencode", "interrupt", COMMAND_INTERRUPT),
+        ("opencode", "steer", COMMAND_STEER_TEXT),
         ("opencode", "terminate", COMMAND_TERMINATE),
         ("antigravity", "send", COMMAND_SEND_TEXT),
         ("antigravity", "turn_start", COMMAND_TURN_START),
@@ -4252,7 +4261,6 @@ mod tests {
     fn unsupported_engine_dispatch_paths_stay_unadvertised() {
         let supports = manifest_machine_control_supports();
         for (provider, operation) in [
-            ("opencode", "steer"),
             ("opencode", "run_once"),
             ("opencode", "resume_run_once"),
             ("opencode", "launch"),
@@ -4314,6 +4322,7 @@ mod tests {
                 "archive.backlog_control.v2".to_string(),
                 "opencode.send".to_string(),
                 "opencode.interrupt".to_string(),
+                "opencode.steer".to_string(),
                 "opencode.answer_pause".to_string(),
                 "opencode.terminate".to_string(),
                 "opencode.turn_start".to_string(),
@@ -4330,6 +4339,7 @@ mod tests {
                 "archive.backlog_control.v2".to_string(),
                 "opencode.send".to_string(),
                 "opencode.interrupt".to_string(),
+                "opencode.steer".to_string(),
                 "opencode.answer_pause".to_string(),
                 "opencode.terminate".to_string(),
                 "opencode.turn_start".to_string(),
@@ -4772,8 +4782,65 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Value>(&request.body).unwrap(),
             json!({
-                "noReply": true,
                 "parts": [{"type": "text", "text": "hello native"}],
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_command_frame_routes_opencode_steer_through_native_control() {
+        let _guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let temp = tempfile::TempDir::new().unwrap();
+        let empty_path = temp.path().join("empty-path");
+        let config_dir = temp.path().join("claude-config");
+        std::fs::create_dir_all(&empty_path).unwrap();
+        let (server_url, request_rx) = spawn_single_http_request_server().await;
+        let session_id = "11111111-1111-4111-8111-111111111111";
+        write_opencode_control_state(&config_dir, session_id, &server_url);
+
+        let old_path = std::env::var_os("PATH");
+        let old_claude_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
+        std::env::set_var("PATH", empty_path.as_os_str());
+        std::env::set_var("CLAUDE_CONFIG_DIR", config_dir.as_os_str());
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-opencode-native-steer",
+                "session_id": session_id,
+                "command_type": COMMAND_STEER_TEXT,
+                "payload": {"provider": "opencode", "text": "change course"},
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+        if let Some(value) = old_path {
+            std::env::set_var("PATH", value);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(value) = old_claude_config_dir {
+            std::env::set_var("CLAUDE_CONFIG_DIR", value);
+        } else {
+            std::env::remove_var("CLAUDE_CONFIG_DIR");
+        }
+
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["result"]["provider"], "opencode");
+        assert_eq!(result["result"]["transport"], "opencode_server_bridge");
+        assert_eq!(result["result"]["provider_session_id"], "ses_native");
+        let request = request_rx.await.unwrap();
+        assert_eq!(
+            request.target,
+            "/session/ses_native/prompt_async?directory=%2Ftmp%2Fnative+opencode"
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&request.body).unwrap(),
+            json!({
+                "parts": [{"type": "text", "text": "change course"}],
             })
         );
     }
@@ -5131,18 +5198,6 @@ exit 1
     #[tokio::test]
     async fn handle_command_frame_rejects_unproven_provider_steer_paths() {
         let mut cache = command_cache();
-        let opencode = handle_command_frame(
-            json!({
-                "type": "command",
-                "command_id": "cmd-opencode-steer",
-                "session_id": "session-1",
-                "command_type": COMMAND_STEER_TEXT,
-                "payload": {"provider": "opencode", "text": "change course"},
-            }),
-            &mut cache,
-            &test_config(),
-        )
-        .await;
         let antigravity = handle_command_frame(
             json!({
                 "type": "command",
@@ -5156,8 +5211,6 @@ exit 1
         )
         .await;
 
-        assert_eq!(opencode["ok"], false);
-        assert_eq!(opencode["error"]["code"], "unsupported_command");
         assert_eq!(antigravity["ok"], false);
         // Refused for lacking an active-turn steer path, not for being
         // Antigravity. The hook inbox delivers a turn; it cannot redirect one.

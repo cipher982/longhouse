@@ -41,7 +41,7 @@ operators install `longhouse-server` in that server environment.
 ```bash
 longhouse claude       # managed channel session: send, interrupt, steer, resume
 longhouse codex        # managed app-server session: send, interrupt, steer, resume
-longhouse opencode     # managed server session: send, interrupt, reattach (not active-turn steer)
+longhouse opencode     # managed server session: send, interrupt, step-boundary steer, reattach
 longhouse cursor       # managed PTY session: send, steer at the next tool boundary, interrupt, reattach
 longhouse pi           # stock Pi TUI: send, interrupt, boundary steer, cold resume
 longhouse omp          # stock Oh My Pi TUI: send, interrupt, steer, cold resume
@@ -69,7 +69,7 @@ Keep Pi's Node runtime current: Node 23.6.1 lacks the Zstandard API used by
 some model HTTP responses and can crash stock Pi. Longhouse does not replace
 your Pi or Node installation.
 
-OpenCode Helm supports send, interrupt, terminate, and pause-answer but not active-turn steer. Cursor Helm supports send, active-turn steer (delivered at the next tool boundary), interrupt, terminate, and reattach, but not pause-answer. OMP supports send, interrupt, native active-turn steer, terminate, and exact-file cold resume. Antigravity is the narrowest of the seven: it launches under Longhouse's hook inbox and accepts send, but not interrupt, terminate, or reattach — and it refuses to start at all if its hook is not installed, rather than opening an unmanaged session wearing a managed session id.
+OpenCode Helm supports send, interrupt, terminate, pause-answer, and active-turn steer that lands at the next step boundary. Cursor Helm supports send, active-turn steer (delivered at the next tool boundary), interrupt, terminate, and reattach, but not pause-answer. OMP supports send, interrupt, native active-turn steer, terminate, and exact-file cold resume. Antigravity is the narrowest of the seven: it launches under Longhouse's hook inbox and accepts send, but not interrupt, terminate, or reattach — and it refuses to start at all if its hook is not installed, rather than opening an unmanaged session wearing a managed session id.
 
 Bare provider CLI sessions still get ingested into the timeline — they stay unmanaged: searchable and observable, but without Longhouse-owned remote control.
 

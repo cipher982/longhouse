@@ -125,7 +125,7 @@ describe("providers launch support", () => {
     expect(getLaunchProviderSupport("opencode")).toMatchObject({
       launchAndSend: true,
       interrupt: true,
-      steerMidTurn: false,
+      steerMidTurn: true,
       resume: true,
       cloudSessionStart: "live",
       hooksSupport: "none",

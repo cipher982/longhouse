@@ -149,9 +149,9 @@ longhouse codex`}
       </CodeBlock>
       <p>
         <strong>OpenCode</strong> takes send, interrupt, terminate, and
-        pause-answer through its permission reply endpoint. Mid-turn steer is
-        not advertised because OpenCode exposes no stable mid-turn injection
-        semantic. Pass <code>--model</code> when a session must stay on a
+        pause-answer through its permission reply endpoint. Mid-turn steer lands
+        at the next step boundary: after the running tool call finishes, before
+        the next model call. Pass <code>--model</code> when a session must stay on a
         specific model; Longhouse carries that choice through the initial launch
         and a later cold reattach.
       </p>

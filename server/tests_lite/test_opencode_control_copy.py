@@ -7,17 +7,16 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 EXPECTED_COPY = {
     "README.md": [
-        "OpenCode Helm supports send, interrupt, terminate, and pause-answer but not active-turn steer",
+        "OpenCode Helm supports send, interrupt, terminate, pause-answer, and active-turn steer that lands at the next step boundary",
     ],
     "web/src/pages/docs/IntegrationsPage.tsx": [
         "send, interrupt, terminate, and pause-answer",
         "permission reply endpoint",
-        "Mid-turn steer is not advertised",
+        "Mid-turn steer lands at the next step boundary",
     ],
     "web/src/pages/docs/QuickStartPage.tsx": [
-        "OpenCode Helm supports managed send, interrupt, terminate, and",
-        "pause-answer but not active-turn steer",
-        "not active-turn steer",
+        "OpenCode Helm supports managed send, interrupt, terminate, pause-answer, and",
+        "active-turn steer that lands at the next step boundary",
     ],
     # CLIReferencePage no longer restates the matrix in prose -- it renders a
     # table generated from schemas/managed_providers.yml, which cannot drift

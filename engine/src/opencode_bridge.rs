@@ -341,18 +341,19 @@ pub fn attach(
     let monitor_password = state.password.clone();
     let monitor_cwd = state.cwd.clone();
     let monitor_session_id = normalize_uuid(session_id, "session_id")?;
+    let monitor_state_path = state_path.clone();
     let monitor = thread::spawn(move || {
         monitor_opencode_session_rollovers(
             &monitor_server_url,
             &monitor_username,
             &monitor_password,
             &monitor_cwd,
-            &state_path,
+            &monitor_state_path,
             &monitor_session_id,
             stop_rx,
         )
     });
-    let status = child.wait().context("wait for stock OpenCode TUI")?;
+    let status = wait_for_tui_or_bridge_stop(&mut child, &state_path)?;
     let _ = stop_tx.send(true);
     match monitor.join() {
         Ok(Ok(())) => {}
@@ -362,6 +363,48 @@ pub fn attach(
         Err(_) => tracing::warn!("OpenCode session rollover monitor panicked"),
     }
     Ok(status.code().unwrap_or(1))
+}
+
+/// Wait for the attached TUI, ending it when the bridge it attaches to is gone.
+///
+/// A managed terminate stops the server and removes the bridge state. The stock
+/// TUI does not exit when its server disappears: it kept the user's terminal
+/// and this wrapper alive, retrying a dead event stream, so a terminated
+/// session left a live-looking owner behind.
+fn wait_for_tui_or_bridge_stop(
+    child: &mut std::process::Child,
+    state_path: &Path,
+) -> Result<std::process::ExitStatus> {
+    let mut missing_polls = 0;
+    loop {
+        if let Some(status) = child.try_wait().context("wait for stock OpenCode TUI")? {
+            return Ok(status);
+        }
+        missing_polls = if state_path.exists() {
+            0
+        } else {
+            missing_polls + 1
+        };
+        if missing_polls >= 2 {
+            #[cfg(unix)]
+            // SAFETY: signals only the TUI child this wrapper spawned and still owns.
+            unsafe {
+                libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
+            }
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                if let Some(status) = child.try_wait()? {
+                    return Ok(status);
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            let _ = child.kill();
+            return child
+                .wait()
+                .context("wait for stock OpenCode TUI after bridge stop");
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
 }
 
 fn configured_model(explicit: Option<&str>) -> Option<String> {
@@ -510,6 +553,16 @@ async fn monitor_opencode_events_once(
                         Some(&provider_binding_path(longhouse_session_id)?),
                     )?;
                 }
+                if let Some((provider_session_id, phase)) = status_phase(&event) {
+                    if let Err(error) = publish_phase_signal(
+                        state_path,
+                        longhouse_session_id,
+                        provider_session_id,
+                        phase,
+                    ) {
+                        tracing::warn!(error = %error, phase, "OpenCode phase signal was not enqueued");
+                    }
+                }
                 if let Some(provider_session_id) = idle_session_id(&event) {
                     let longhouse_session_id = longhouse_session_id.to_string();
                     let provider_session_id = provider_session_id.to_string();
@@ -552,6 +605,96 @@ fn top_level_created_session_id(event: &Value) -> Option<&str> {
         .and_then(Value::as_str)
         .or_else(|| info.get("id").and_then(Value::as_str))
         .filter(|value| !value.trim().is_empty())
+}
+
+/// Map OpenCode's session status stream onto the managed phase contract.
+///
+/// Without these signals the Runtime Host never sees an OpenCode Helm turn end:
+/// the send lock waited out its full timeout, so a second message within five
+/// minutes sat queued, and the composer never offered steer because the served
+/// session never read as executing.
+fn status_phase(event: &Value) -> Option<(&str, &'static str)> {
+    let payload = event.get("payload")?;
+    let properties = payload.get("properties")?;
+    let session_id = properties
+        .get("sessionID")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())?;
+    let phase = match payload.get("type").and_then(Value::as_str)? {
+        "session.idle" => crate::managed_phase_contract::PHASE_IDLE,
+        "session.status" => match properties
+            .get("status")
+            .and_then(|status| status.get("type"))
+            .and_then(Value::as_str)?
+        {
+            "idle" => crate::managed_phase_contract::PHASE_IDLE,
+            "busy" | "retry" => crate::managed_phase_contract::PHASE_RUNNING,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some((session_id, phase))
+}
+
+/// Enqueue one phase signal for the bound provider session only; child
+/// sessions (subagents) share the event stream but not the Longhouse turn.
+fn publish_phase_signal(
+    state_path: &Path,
+    longhouse_session_id: &str,
+    provider_session_id: &str,
+    phase: &str,
+) -> Result<()> {
+    let state: Value = serde_json::from_slice(&fs::read(state_path)?)?;
+    if state.get("provider_session_id").and_then(Value::as_str) != Some(provider_session_id) {
+        return Ok(());
+    }
+    let Some(run_id) = state
+        .get("run_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(());
+    };
+    let occurred_at = chrono::Utc::now();
+    let event = phase_signal_event(
+        longhouse_session_id,
+        run_id,
+        provider_session_id,
+        phase,
+        occurred_at,
+    );
+    crate::outbox::enqueue_runtime_event(
+        &crate::config::get_agent_runtime_events_outbox_dir()?,
+        &event,
+    )
+}
+
+fn phase_signal_event(
+    longhouse_session_id: &str,
+    run_id: &str,
+    provider_session_id: &str,
+    phase: &str,
+    occurred_at: chrono::DateTime<chrono::Utc>,
+) -> Value {
+    json!({
+        "runtime_key": format!("opencode:{longhouse_session_id}"),
+        "session_id": longhouse_session_id,
+        "run_id": run_id,
+        "provider": "opencode",
+        "device_id": std::env::var("HOSTNAME").ok(),
+        "source": "opencode_server_bridge",
+        "kind": "phase_signal",
+        "phase": phase,
+        "occurred_at": occurred_at.to_rfc3339(),
+        "dedupe_key": format!(
+            "opencode-phase:{longhouse_session_id}:{run_id}:{phase}:{}",
+            occurred_at.timestamp_micros()
+        ),
+        "payload": {
+            "managed_transport": "opencode_server_bridge",
+            "provider_session_id": provider_session_id,
+        },
+    })
 }
 
 fn idle_session_id(event: &Value) -> Option<&str> {
@@ -1129,6 +1272,59 @@ mod tests {
         assert_eq!(idle_session_id(&legacy), Some("ses_legacy"));
         assert_eq!(idle_session_id(&current), Some("ses_current"));
         assert_eq!(idle_session_id(&busy), None);
+    }
+
+    #[test]
+    fn status_events_map_onto_wire_phases() {
+        let status = |kind: &str| json!({"payload": {"type": "session.status", "properties": {"sessionID": "ses_1", "status": {"type": kind}}}});
+        assert_eq!(status_phase(&status("busy")), Some(("ses_1", "running")));
+        assert_eq!(status_phase(&status("retry")), Some(("ses_1", "running")));
+        assert_eq!(status_phase(&status("idle")), Some(("ses_1", "idle")));
+        assert_eq!(status_phase(&status("mystery")), None);
+        let legacy =
+            json!({"payload": {"type": "session.idle", "properties": {"sessionID": "ses_1"}}});
+        assert_eq!(status_phase(&legacy), Some(("ses_1", "idle")));
+        let event = phase_signal_event("lh-1", "run-1", "ses_1", "running", chrono::Utc::now());
+        assert_eq!(event["kind"], "phase_signal");
+        assert!(crate::managed_phase_contract::is_wire_phase(
+            event["phase"].as_str().unwrap()
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn attached_tui_ends_when_bridge_state_is_removed() {
+        let temp = tempfile::tempdir().unwrap();
+        let state_path = temp.path().join("state.json");
+        std::fs::write(&state_path, "{}").unwrap();
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let remover_path = state_path.clone();
+        let remover = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            std::fs::remove_file(remover_path).unwrap();
+        });
+        let started = Instant::now();
+        let status = wait_for_tui_or_bridge_stop(&mut child, &state_path).unwrap();
+        remover.join().unwrap();
+        assert!(!status.success());
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn phase_signals_ignore_unbound_provider_sessions() {
+        let temp = tempfile::tempdir().unwrap();
+        let state_path = temp.path().join("state.json");
+        std::fs::write(
+            &state_path,
+            r#"{"provider_session_id":"ses_bound","run_id":"run-1"}"#,
+        )
+        .unwrap();
+        // A child session shares the stream; it must not enqueue anything, so no
+        // outbox directory is resolved or created for it.
+        publish_phase_signal(&state_path, "lh-1", "ses_child", "running").unwrap();
     }
 
     #[cfg(unix)]

@@ -24,6 +24,7 @@ CLAUDE_LIVE_CONTROL_OPERATIONS = [
 OPENCODE_LIVE_CONTROL_OPERATIONS = [
     "send",
     "interrupt",
+    "steer",
     "launch",
     "terminate",
     "turn_start",
@@ -417,7 +418,7 @@ def test_support_state_reports_missing_provider_cli_without_collapsing_contract(
     assert opencode["state"] == "provider_cli_missing"
     assert opencode["cli"]["state"] == "missing"
     assert "send_input" in opencode["capabilities"]["supported_operations"]
-    assert "steer_active_turn" in opencode["capabilities"]["unsupported_operations"]
+    assert "steer_active_turn" in opencode["capabilities"]["supported_operations"]
 
 
 def test_support_state_reports_partial_live_control_operations() -> None:

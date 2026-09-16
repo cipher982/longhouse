@@ -1025,7 +1025,7 @@ providers:
   reattach: true
   send_input: true
   interrupt: true
-  steer_active_turn: false
+  steer_active_turn: true
   answer_pause: true
   terminate: true
   tail_output: true
@@ -1088,6 +1088,21 @@ providers:
         minimum_scenario_revision: 1
         acceptable_evidence: [live_no_token]
         max_age_seconds: 604800
+      - &opencode_helm_lifecycle_assertion
+        id: opencode_helm_launch_registration
+        scenario_id: opencode_helm_lifecycle
+        oracle_source: server/zerg/qa/opencode_helm_lifecycle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
+      - <<: *opencode_helm_lifecycle_assertion
+        id: opencode_helm_send_idle
+      - <<: *opencode_helm_lifecycle_assertion
+        id: opencode_helm_steer_active
+      - <<: *opencode_helm_lifecycle_assertion
+        id: opencode_helm_abort_native
+      - <<: *opencode_helm_lifecycle_assertion
+        id: opencode_helm_terminate_owned
     session.reattach.helm:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -1115,13 +1130,8 @@ providers:
     launch_local:
       disposition: "implemented"
       required_assertions:
-      - id: serve_session_contract_preserved
-        scenario_id: opencode_server_contract
-        oracle_source: server/zerg/qa/provider_release_semantic_oracles.py
-        minimum_scenario_revision: 1
-        acceptable_evidence:
-        - live_no_token
-        max_age_seconds: 604800
+      - <<: *opencode_helm_lifecycle_assertion
+        id: opencode_helm_launch_registration
     run_once:
       level: none
       source: OpenCode Console uses turn_start; session.run_once is not supported by the engine
@@ -1139,24 +1149,21 @@ providers:
         - live_no_token
         max_age_seconds: 604800
     send_input:
-      level: live_no_token
-      source: longhouse provider-live canary OpenCode prompt_async noReply delivery
-        through session.messages
       disposition: "implemented"
-      owner_action: "opencode release-canary assistant response proof"
-      blocker: "budget"
+      required_assertions:
+      - <<: *opencode_helm_lifecycle_assertion
+        id: opencode_helm_send_idle
     interrupt:
-      level: live_no_token
-      source: longhouse provider-live canary OpenCode abort endpoint against a created
-        session
       disposition: "implemented"
-      owner_action: "opencode release-canary active-turn abort proof"
-      blocker: "budget"
+      required_assertions:
+      - <<: *opencode_helm_lifecycle_assertion
+        id: opencode_helm_abort_native
     steer_active_turn:
-      level: none
-      source: unsupported until OpenCode active-turn injection semantics are proven
-      disposition: "upstream_absent"
-      reason: "The OpenCode server API exposes session.prompt, prompt_async, and session.abort with no steer method. The Steer/Queue pull request closed unmerged in 2026-06 and mid-run delivery remains an open upstream request."
+      disposition: "implemented"
+      required_assertions:
+      - <<: *opencode_helm_lifecycle_assertion
+        id: opencode_helm_steer_active
+      reason: "Bounded, not immediate. prompt_async into a running turn is picked up before the turn's next model call, so a steer lands after the current tool call finishes; one long tool call delays it. Verified 2026-09-16 on 1.17.20: a steer after tool call 2 of 5 prevented calls 3-5 and replaced the final answer."
       observed_provider_version: "1.17.20"
     answer_pause:
       level: hermetic
@@ -1164,10 +1171,10 @@ providers:
       disposition: "implemented"
       owner_action: "opencode_bridge permission.reply live canary"
     terminate:
-      level: hermetic
-      source: OpenCode server bridge stop/cleanup tests
       disposition: "implemented"
-      owner_action: "opencode live terminate canary"
+      required_assertions:
+      - <<: *opencode_helm_lifecycle_assertion
+        id: opencode_helm_terminate_owned
     tail_output:
       level: hermetic
       source: OpenCode plugin transcript observation tests
@@ -1175,7 +1182,7 @@ providers:
       owner_action: "opencode live transcript assertion"
     runtime_phase:
       level: hermetic
-      source: OpenCode plugin runtime event tests
+      source: engine OpenCode bridge maps the server session.status stream to phase signals
       disposition: "implemented"
       owner_action: "opencode live active-turn phase freshness canary"
     transcript_binding:
@@ -1194,6 +1201,7 @@ providers:
   machine_control_supports:
   - opencode.send
   - opencode.interrupt
+  - opencode.steer
   - opencode.answer_pause
   - opencode.terminate
   - opencode.turn_start

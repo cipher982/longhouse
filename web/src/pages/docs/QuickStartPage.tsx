@@ -94,8 +94,8 @@ longhouse antigravity  # Antigravity CLI, send only`}
         local observation path. All six providers ship today; what they can do
         after launch differs. Claude and Codex can be steered mid-turn. Cursor
         Agent takes send and interrupt but not mid-turn steer. OpenCode Helm
-        supports managed send, interrupt, terminate, and pause-answer but not
-        active-turn steer. Pi runs one-shot Console turns: you can start a turn
+        supports managed send, interrupt, terminate, pause-answer, and
+        active-turn steer that lands at the next step boundary. Pi runs one-shot Console turns: you can start a turn
         and interrupt it, but there is no live session to send into. Antigravity
         takes send alone, and refuses to start if its Longhouse hook is not
         installed. The{" "}

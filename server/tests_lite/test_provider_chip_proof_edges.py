@@ -32,10 +32,6 @@ UNPROVEN_RUNTIME_CLAIMS = frozenset(
         ("claude", "interrupt"),
         ("claude", "terminate"),
         ("claude", "steer_active_turn"),
-        ("opencode", "launch_local"),
-        ("opencode", "send_input"),
-        ("opencode", "interrupt"),
-        ("opencode", "terminate"),
     }
 )
 

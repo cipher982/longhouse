@@ -1065,10 +1065,11 @@ def test_action_matrix_marks_provider_specific_unsupported_actions(tmp_path: Pat
     by_provider = {result["provider"]: {row["action_id"]: row for row in result["data"]["actions"]} for result in payload["results"]}
     assert by_provider["claude"]["external_event_channel"]["status"] == "pass"
     assert by_provider["claude"]["external_event_channel"]["canary"] == "claude_development_channels_contract"
-    # OpenCode has no upstream steer method, so this is a settled fact rather than
-    # a gap. Permission answering is a supported managed control operation.
-    assert by_provider["opencode"]["steer_active_turn"]["status"] == "not_applicable"
-    assert by_provider["opencode"]["steer_active_turn"]["disposition"] == "upstream_absent"
+    # OpenCode steer is implemented but needs live_token proof, which this
+    # no-token harness cannot produce: it is blocked here, exactly like Claude's,
+    # and proven by opencode_helm_lifecycle. Permission answering is a supported
+    # managed control operation.
+    assert by_provider["opencode"]["steer_active_turn"]["status"] == by_provider["claude"]["steer_active_turn"]["status"] == "blocked"
     assert by_provider["opencode"]["answer_pause_request"]["status"] == "pass"
     assert by_provider["opencode"]["external_event_channel"]["status"] == "unsupported_gap"
     assert by_provider["antigravity"]["interrupt_cancel"]["status"] == "unsupported_gap"
@@ -1318,7 +1319,7 @@ def test_control_surface_keeps_unsupported_and_live_token_rows_explicit(tmp_path
     )
 
     by_provider = {result["provider"]: {row["action_id"]: row for row in result["data"]["actions"]} for result in payload["results"]}
-    assert by_provider["opencode"]["steer_active_turn"]["status"] == "not_applicable"
+    assert by_provider["opencode"]["steer_active_turn"]["status"] == "blocked"
     assert by_provider["opencode"]["resume_reattach"]["status"] == "pass"
     assert by_provider["opencode"]["resume_reattach"]["evidence_level"] == "live_no_token"
     assert by_provider["antigravity"]["interrupt_cancel"]["status"] == "unsupported_gap"
@@ -2535,12 +2536,11 @@ def test_steer_active_turn_reports_explicit_provider_gaps(tmp_path: Path) -> Non
         "transport_is_codex_app_server": True,
     }
     assert Path(codex["data"]["raw_steer_dispatch_path"]).is_file()
-    # OpenCode proved the absence upstream; Antigravity's is merely unproven, so
-    # one is a settled fact and the other stays Longhouse backlog.
+    # OpenCode steer is implemented and needs live_token proof this no-token
+    # harness cannot produce (opencode_helm_lifecycle owns it); Antigravity's
+    # stays Longhouse backlog.
     opencode = by_provider["opencode"]
-    assert opencode["status"] == "not_applicable"
-    assert opencode["data"]["disposition"] == "upstream_absent"
-    assert opencode["data"]["operation_evidence"]["steer_active_turn"]["status"] == "not_applicable"
+    assert opencode["status"] == "blocked"
 
     antigravity = by_provider["antigravity"]
     assert antigravity["status"] == "unsupported_gap"
@@ -3986,7 +3986,7 @@ def test_script_entrypoint_runs_all_provider_action_e2e(tmp_path: Path) -> None:
     assert support_rows["send_message"]["providers"]["claude"]["status"] == "pass"
     assert support_rows["steer_active_turn"]["providers"]["codex"]["status"] == "pass"
     assert support_rows["steer_active_turn"]["providers"]["codex"]["canary"] == "codex_managed_local_steer_dispatch"
-    assert support_rows["steer_active_turn"]["providers"]["opencode"]["status"] == "not_applicable"
+    assert support_rows["steer_active_turn"]["providers"]["opencode"]["status"] == "blocked"
     assert support_rows["permission_prompt"]["providers"]["codex"]["status"] == "pass"
     assert support_rows["permission_prompt"]["providers"]["codex"]["canary"] == "codex_fake_app_server_permission_approval"
     assert support_rows["permission_prompt"]["providers"]["opencode"]["status"] == "blocked"

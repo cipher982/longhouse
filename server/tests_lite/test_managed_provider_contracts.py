@@ -467,22 +467,23 @@ def test_claude_contract_is_first_class_channel_control_provider():
     )
 
 
-def test_opencode_contract_is_server_bridge_control_provider_without_active_turn_steer():
+def test_opencode_contract_is_server_bridge_control_provider_with_active_turn_steer():
     opencode = contract_for_provider("opencode")
 
     assert opencode is not None
     assert opencode.launch_local is True
     assert opencode.send_input is True
     assert opencode.interrupt is True
-    assert opencode.steer_active_turn is False
+    assert opencode.steer_active_turn is True
     assert opencode.answer_pause is True
     assert opencode.reattach is True
     assert opencode.can_resume is True
     assert opencode.turn_start is True
-    assert opencode.operation_evidence_for("terminate")["level"] == "hermetic"
+    assert opencode.operation_evidence_for("terminate")["level"] == "live_token"
     assert opencode.machine_control_supports == (
         "opencode.send",
         "opencode.interrupt",
+        "opencode.steer",
         "opencode.answer_pause",
         "opencode.terminate",
         "opencode.turn_start",
@@ -560,7 +561,7 @@ def test_control_plane_aliases_are_explicit_contract_not_scattered_literals():
     assert provider_for_control_plane("codex_app_server") == "codex"
     assert "codex_app_server" in steer_control_planes()
     assert "claude_channel_bridge" in steer_control_planes()
-    assert "opencode_server_bridge" not in steer_control_planes()
+    assert "opencode_server_bridge" in steer_control_planes()
     assert "opencode_process" not in steer_control_planes()
     assert "antigravity_hook_inbox" not in steer_control_planes()
     assert "antigravity_process" not in steer_control_planes()
@@ -603,7 +604,7 @@ def test_codex_exec_is_direct_one_shot_control_not_a_steer_alias():
         ("claude", "session.turn.interrupt", "claude.turn_interrupt"),
         ("opencode", "session.send_text", "opencode.send"),
         ("opencode", "session.interrupt", "opencode.interrupt"),
-        ("opencode", "session.steer_text", None),
+        ("opencode", "session.steer_text", "opencode.steer"),
         ("opencode", "session.answer_pause", "opencode.answer_pause"),
         ("opencode", "session.terminate", "opencode.terminate"),
         ("opencode", "session.turn.start", "opencode.turn_start"),
