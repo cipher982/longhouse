@@ -3790,7 +3790,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "fc0ad425b279d7f524cf64ad89ae906aa5ed6339f82d2d99c78d8273f0fc281c"
+              "oracle_digest": "b41f3e243db2d7cef35cb3bfefd184644ed7582beb691dae6031fa307b3e2204"
             }
           ],
           "level": "live_token",
@@ -3815,7 +3815,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "fc0ad425b279d7f524cf64ad89ae906aa5ed6339f82d2d99c78d8273f0fc281c"
+              "oracle_digest": "b41f3e243db2d7cef35cb3bfefd184644ed7582beb691dae6031fa307b3e2204"
             }
           ],
           "level": "live_token",
@@ -3833,7 +3833,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "fc0ad425b279d7f524cf64ad89ae906aa5ed6339f82d2d99c78d8273f0fc281c"
+              "oracle_digest": "b41f3e243db2d7cef35cb3bfefd184644ed7582beb691dae6031fa307b3e2204"
             }
           ],
           "level": "live_token",
@@ -3851,7 +3851,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "fc0ad425b279d7f524cf64ad89ae906aa5ed6339f82d2d99c78d8273f0fc281c"
+              "oracle_digest": "b41f3e243db2d7cef35cb3bfefd184644ed7582beb691dae6031fa307b3e2204"
             }
           ],
           "level": "live_token",
@@ -3869,7 +3869,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "fc0ad425b279d7f524cf64ad89ae906aa5ed6339f82d2d99c78d8273f0fc281c"
+              "oracle_digest": "b41f3e243db2d7cef35cb3bfefd184644ed7582beb691dae6031fa307b3e2204"
             }
           ],
           "level": "live_token",
@@ -3895,7 +3895,7 @@
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "fc0ad425b279d7f524cf64ad89ae906aa5ed6339f82d2d99c78d8273f0fc281c"
+              "oracle_digest": "b41f3e243db2d7cef35cb3bfefd184644ed7582beb691dae6031fa307b3e2204"
             }
           ],
           "level": "live_token",
