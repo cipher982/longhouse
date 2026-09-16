@@ -17,9 +17,10 @@
     --inbox-repo-pad-y: 7px;
     --inbox-meta-font: 13px;
     --inbox-col-lead: 16px;
+    --inbox-col-glyph: 20px;
     --inbox-col-activity: 132px;
     --inbox-col-mode: 120px;
-    --inbox-col-source: 170px;
+    --inbox-col-source: 150px;
     --inbox-col-age: 96px;
     --inbox-row-gap: 14px;
     --inbox-group-gap: 0px;
@@ -251,8 +252,8 @@
   }
 
   /* ---------- Row ----------
-   * Compact, dense, single-line: 16px lead dot, title+summary, activity,
-   * mode chip, provider cartouche, tabular age. Fixed meta tracks — never
+   * Compact, dense, single-line: 16px lead dot, provider glyph,
+   * title+summary, activity, mode chip, machine + branch, tabular age. Fixed meta tracks — never
    * shrink for short labels like "idle" / "Reattach", or the whole right
    * cluster drifts left of neighboring rows. Ember spec, Phase 3 §2.
    */
@@ -269,12 +270,13 @@
     display: grid;
     grid-template-columns:
       var(--inbox-col-lead)
+      var(--inbox-col-glyph)
       minmax(0, 1fr)
       var(--inbox-col-activity)
       var(--inbox-col-mode)
       var(--inbox-col-source)
       var(--inbox-col-age);
-    grid-template-areas: "lead main activity mode source age";
+    grid-template-areas: "lead glyph main activity mode source age";
     align-items: center;
     gap: var(--inbox-row-gap);
     padding: 0 var(--space-2);
@@ -341,6 +343,16 @@
 
   .inbox-row-lead {
     grid-area: lead;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Provider identity: the brand glyph, its own column so the left edge reads
+   * as a scannable run of logos (same as the iOS row). Status stays on the
+   * lead dot — the glyph never carries runtime color. */
+  .inbox-row-glyph {
+    grid-area: glyph;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -417,7 +429,7 @@
   }
 
   /* .inbox-row-source and .inbox-row-time are flex containers with more than
-   * one child (cartouche + machine + branch; time text + hide button) — a
+   * one child (machine + branch; time text + hide button) — a
    * single overflow/ellipsis rule on the container doesn't ellipsize multi-
    * child flex content, and on a flex-end-justified box like the age column
    * it clips the START of the text instead (the overflow spills toward the
@@ -558,7 +570,7 @@
     white-space: nowrap;
   }
 
-  /* ---------- Source column (provider cartouche + machine + branch) ---------- */
+  /* ---------- Source column (machine + branch) ---------- */
 
   .inbox-row-source {
     grid-area: source;
@@ -569,23 +581,7 @@
     overflow: hidden;
   }
 
-  .inbox-row-cartouche {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex: none;
-    height: 18px;
-    padding: 0 9px;
-    border-radius: 999px;
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-brand-primary) 50%, transparent);
-    color: color-mix(in srgb, var(--color-brand-primary) 95%, transparent);
-    font-size: 11px;
-    font-weight: 500;
-    letter-spacing: 0.03em;
-    white-space: nowrap;
-  }
-
-  /* The one column allowed to shrink and ellipsize when the cartouche +
+  /* The one column allowed to shrink and ellipsize when the
    * machine + branch don't all fit the fixed source column — flex items
    * default to min-width: auto (refuse to shrink below content), which
    * silently defeats text-overflow: ellipsis and lets the parent's
@@ -612,7 +608,7 @@
     white-space: nowrap;
   }
 
-  /* Below 1280px there isn't room for cartouche + machine + branch without
+  /* Below 1280px there isn't room for machine + branch without
    * squeezing the machine label to nothing; drop the branch first — it's the
    * least load-bearing of the three (the row already names the machine). */
   @media (max-width: 1279px) {
@@ -828,8 +824,8 @@
   }
 
   /* ---------- Mobile ----------
-   * Title stacks over meta: lead dot + title/summary on their own line, then
-   * activity, mode chip and age on the line below. Provider/machine/branch
+   * Title stacks over meta: lead dot + glyph + title/summary on their own
+   * line, then activity, mode chip and age on the line below. Machine/branch
    * (the source column) drops out — it's the one thing narrow screens can't
    * afford. No horizontal scroll: every meta column can shrink or is
    * max-content-sized off a handful of short words.
@@ -837,10 +833,10 @@
 
   @media (max-width: 720px) {
     .inbox-row {
-      grid-template-columns: var(--inbox-col-lead) minmax(0, 1fr) max-content max-content;
+      grid-template-columns: var(--inbox-col-lead) var(--inbox-col-glyph) minmax(0, 1fr) max-content max-content;
       grid-template-areas:
-        "lead main   main main"
-        ".    activity mode age";
+        "lead glyph main     main main"
+        ".    .     activity mode age";
       height: auto;
       min-height: var(--inbox-row-min-h);
       padding: var(--space-1) var(--space-2);

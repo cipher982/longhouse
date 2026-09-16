@@ -22,7 +22,7 @@ import {
   getSessionCardText,
   renderHighlightedText,
 } from "../../lib/sessionUtils";
-import { getProviderLabel } from "../../lib/providers";
+import { ProviderGlyph } from "../ProviderGlyph";
 
 const HOVER_PREFETCH_DELAY_MS = 180;
 
@@ -234,6 +234,10 @@ export function SessionRow({
         />
       </span>
 
+      <span className="inbox-row-glyph">
+        <ProviderGlyph provider={provider} size={20} />
+      </span>
+
       <div className="inbox-row-main">
         <div
           className="inbox-row-title"
@@ -274,9 +278,6 @@ export function SessionRow({
       </span>
 
       <span className="inbox-row-source">
-        <span className="inbox-row-cartouche" title={getProviderLabel(provider)}>
-          {getProviderLabel(provider)}
-        </span>
         {machine ? <span className="inbox-row-machine" title={`on ${machine}`}>on {machine}</span> : null}
         {branch ? <span className="inbox-row-branch">{branch}</span> : null}
       </span>

@@ -293,6 +293,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.session-workspace-header__provider-glyph {
+  vertical-align: -3px;
+  margin-right: 5px;
+}
 
 /* --- Header state: dot + sentence, right of the title --- */
 .session-state-line {
@@ -1482,7 +1486,8 @@
   .tl-noise__head::before,
   .tl-noise__head::after,
   .tl-reasoning__head::before,
-  .tl-reasoning__head::after {
+  .tl-reasoning__head::after,
+  .tl-msg__node {
     display: none;
   }
 }
@@ -1684,12 +1689,35 @@
   margin-inline: 0;
 }
 .tl-msg__head {
+  position: relative;
   display: flex;
+  /* Clearance for the trace node (.tl-msg__node) straddling the conductor. */
+  padding-left: 4px;
   align-items: center;
   gap: var(--space-2);
   font-size: 12px;
   line-height: 1.3;
   margin-bottom: 2px;
+}
+/* Turn nodes on the trace: assistant turns carry the provider's glyph, the
+   ask carries a hollow ring. Same joint geometry as the tool-row nodes
+   (.tl-action__head::after); the page-colored backing hides the conductor
+   behind the translucent glyph chip. Hidden with the trace below 640px. */
+.tl-msg__node {
+  position: absolute;
+  left: calc(-1 * var(--trace-inset, 8px) - 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  border-radius: 4px;
+  background: var(--color-surface-page);
+}
+.tl-msg__node-ring {
+  width: 9px;
+  height: 9px;
+  margin: 3.5px;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px var(--color-text-secondary);
 }
 .tl-msg__who {
   font-family: var(--font-family-base);

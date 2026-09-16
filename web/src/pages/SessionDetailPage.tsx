@@ -21,6 +21,7 @@ import {
 import { toast } from "react-hot-toast";
 import { Button, EmptyState, Spinner } from "../components/ui";
 import { SessionChat, type SessionChatTarget } from "../components/SessionChat";
+import { ProviderGlyph } from "../components/ProviderGlyph";
 import { SessionContextPane } from "../components/session-workspace/SessionContextPane";
 import { SessionInfoDrawer } from "../components/session-workspace/SessionInfoDrawer";
 import { SessionOverflowMenu } from "../components/session-workspace/SessionOverflowMenu";
@@ -501,6 +502,14 @@ function SessionDetailWorkspaceRoute({
             data-testid="session-identity"
             title={identityLabel}
           >
+            {displaySession.provider ? (
+              <ProviderGlyph
+                provider={displaySession.provider}
+                size={15}
+                variant="bare"
+                className="session-workspace-header__provider-glyph"
+              />
+            ) : null}
             {metaSentenceParts ? (
               <>
                 {metaSentenceParts.before}
@@ -660,6 +669,7 @@ function SessionDetailWorkspaceRoute({
       <div className="session-workspace-shell">
         <TimelinePane
           items={items}
+          provider={displaySession.provider}
           totalEntries={totalEntries}
           loadedEntries={loadedEntryCount}
           abandonedEvents={abandonedEvents}

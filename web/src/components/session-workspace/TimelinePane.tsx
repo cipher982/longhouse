@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import { EmptyState, Spinner } from "../ui";
 import { FunnelIcon } from "../icons";
+import { ProviderGlyph } from "../ProviderGlyph";
 import { ReasoningRow } from "./ReasoningRow";
 import type {
   ActivityGroup,
@@ -106,6 +107,8 @@ interface TimelinePaneProps {
   dock?: ReactNode;
   listRef?: (node: HTMLDivElement | null) => void;
   renderMedia?: boolean;
+  /** Session provider; its glyph marks assistant turns on the transcript trace. */
+  provider?: string | null;
 }
 
 function nonEmptyText(value: unknown): string | null {
@@ -362,9 +365,11 @@ function turnEndForInteraction(interaction: ToolInteraction): AgentEventTurnEnd 
 function MessageRow({
   event,
   renderMedia,
+  provider,
 }: {
   event: Extract<TimelineItem, { kind: "message" }>["event"];
   renderMedia: boolean;
+  provider: string | null;
 }) {
   const preview = getTimelineMessagePreview(event);
   const outside = isOutsideActiveContext(event);
@@ -387,6 +392,15 @@ function MessageRow({
       className={`tl-msg tl-msg--${event.role}`}
     >
       <div className="tl-msg__head">
+        {isAssistant || isUser ? (
+          <span className="tl-msg__node" aria-hidden="true">
+            {isAssistant ? (
+              <ProviderGlyph provider={provider} size={16} />
+            ) : (
+              <span className="tl-msg__node-ring" />
+            )}
+          </span>
+        ) : null}
         {isUser ? (
           <span
             className="tl-msg__who"
@@ -1094,6 +1108,7 @@ export function TimelinePane({
   dock = null,
   listRef,
   renderMedia = true,
+  provider = null,
 }: TimelinePaneProps) {
   const [eventFilter, setEventFilter] = useState<EventFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -1509,7 +1524,7 @@ export function TimelinePane({
             }
 
             if (item.kind === "message") {
-              return <MessageRow key={item.event.id} event={item.event} renderMedia={renderMedia} />;
+              return <MessageRow key={item.event.id} event={item.event} renderMedia={renderMedia} provider={provider} />;
             }
 
             if (item.kind === "tool") {
