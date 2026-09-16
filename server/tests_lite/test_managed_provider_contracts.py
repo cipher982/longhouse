@@ -452,15 +452,15 @@ def test_claude_contract_is_first_class_channel_control_provider():
     assert claude.interrupt is True
     assert claude.steer_active_turn is True
     assert claude.answer_pause is True
-    assert claude.operation_evidence_for("steer_active_turn")["level"] == "live_token"
     steer = claude.operation_evidence_for("steer_active_turn")
     assert steer["disposition"] == "implemented"
-    assert "scheduled claude steer live-token canary" in steer["owner_action"]
+    assert [item["id"] for item in steer["required_assertions"]] == ["claude_helm_steer_active"]
     assert claude.can_resume is True
     assert claude.machine_control_supports == (
         "claude.send",
         "claude.interrupt",
         "claude.steer",
+        "claude.terminate",
         "claude.answer_pause",
         "claude.turn_start",
         "claude.turn_interrupt",
@@ -598,7 +598,7 @@ def test_codex_exec_is_direct_one_shot_control_not_a_steer_alias():
         ("claude", "session.interrupt", "claude.interrupt"),
         ("claude", "session.steer_text", "claude.steer"),
         ("claude", "session.answer_pause", "claude.answer_pause"),
-        ("claude", "session.terminate", None),
+        ("claude", "session.terminate", "claude.terminate"),
         ("claude", "session.run_once", None),
         ("claude", "session.turn.start", "claude.turn_start"),
         ("claude", "session.turn.interrupt", "claude.turn_interrupt"),

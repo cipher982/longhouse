@@ -322,6 +322,9 @@ def _simple_operation_evidence(
             canaries=canaries,
             required=list(required),
             canary_name=canary_name,
+            # These groups never spend a model turn. The contract's own proof
+            # edge may demand live-token evidence, which this canary is not.
+            level="live_no_token",
         )
         if entry:
             evidence[operation] = entry

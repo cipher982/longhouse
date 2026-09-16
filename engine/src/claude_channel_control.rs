@@ -57,7 +57,16 @@ pub struct ClaudeChannelSendSummary {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClaudeChannelInterruptSummary {
     pub pid: i32,
+    pub tool_process_group: Option<i32>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaudeChannelTerminateSummary {
+    pub pid: i32,
+    pub forced: bool,
+}
+
+const TERMINATE_GRACE: Duration = Duration::from_secs(10);
 
 #[derive(Deserialize)]
 struct ClaudeChannelState {
@@ -91,7 +100,8 @@ pub async fn send_text(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| not_attached(&config.session_id, "state is missing channel auth token"))?;
+        .ok_or_else(|| not_attached(&config.session_id, "state is missing channel auth token"))?
+        .to_string();
 
     let mut meta = serde_json::Map::new();
     meta.insert("injected_by".to_string(), json!("longhouse"));
@@ -106,6 +116,46 @@ pub async fn send_text(
         }
     }
 
+    // Negative control: accept the steer, then deliver it only after the
+    // active turn has had time to finish, the shape of a queued follow-up.
+    // The lifecycle producer's steer oracle must then fail.
+    #[cfg(feature = "qa-fault-injection")]
+    if meta.get("intent").and_then(serde_json::Value::as_str) == Some("steer")
+        && qa_fault_active("claude_steer_after_turn")
+    {
+        let delay = Duration::from_secs(
+            std::env::var("LH_QA_FAULT_DELAY_SECS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(75),
+        );
+        write_qa_fault_receipt(
+            &config.session_id,
+            config.state_root.as_deref(),
+            json!({"fault": "claude_steer_after_turn", "delay_secs": delay.as_secs()}),
+        );
+        let text = config.text.clone();
+        tokio::spawn(async move {
+            sleep(delay).await;
+            let _ = inject(port, &auth_token, &text, meta).await;
+        });
+        return Ok(ClaudeChannelSendSummary {
+            provider_session_id: state.provider_session_id,
+        });
+    }
+
+    inject(port, &auth_token, &config.text, meta).await?;
+    Ok(ClaudeChannelSendSummary {
+        provider_session_id: state.provider_session_id,
+    })
+}
+
+async fn inject(
+    port: u16,
+    auth_token: &str,
+    text: &str,
+    meta: serde_json::Map<String, serde_json::Value>,
+) -> Result<(), ClaudeChannelControlError> {
     let client = reqwest::Client::builder()
         .timeout(DEFAULT_HTTP_TIMEOUT)
         .build()
@@ -115,7 +165,7 @@ pub async fn send_text(
         .post(url)
         .header("X-Longhouse-Channel-Token", auth_token)
         .json(&json!({
-            "content": config.text,
+            "content": text,
             "meta": meta,
         }))
         .send()
@@ -131,12 +181,18 @@ pub async fn send_text(
             response.status().as_u16()
         )));
     }
-
-    Ok(ClaudeChannelSendSummary {
-        provider_session_id: state.provider_session_id,
-    })
+    Ok(())
 }
 
+/// Stop Claude's active turn without ending the session.
+///
+/// Claude Code treats SIGINT as a shutdown signal, so signaling the process
+/// ends the whole session. A turn stop instead goes through Claude's own hook
+/// contract: this records an interrupt request that the lifecycle hook turns
+/// into `{"continue": false}` at the next tool boundary, and it terminates the
+/// foreground Bash tool that is running now, so that boundary arrives at once.
+/// A turn that is only generating text stops at its next tool call or ends on
+/// its own.
 pub async fn interrupt(
     config: ClaudeChannelInterruptConfig,
 ) -> Result<ClaudeChannelInterruptSummary, ClaudeChannelControlError> {
@@ -157,12 +213,253 @@ pub async fn interrupt(
         pid,
         state.started_at.as_deref().and_then(parse_rfc3339),
     )?;
-    signal_interrupt(pid).map_err(|err| {
+    // Negative control: report a delivered interrupt without stopping anything.
+    #[cfg(feature = "qa-fault-injection")]
+    if qa_fault_active("claude_interrupt_noop") {
+        write_qa_fault_receipt(
+            &config.session_id,
+            config.state_root.as_deref(),
+            json!({"fault": "claude_interrupt_noop", "pid": pid}),
+        );
+        return Ok(ClaudeChannelInterruptSummary {
+            pid,
+            tool_process_group: None,
+        });
+    }
+    let state_path = state_file_path(&config.session_id, config.state_root.as_deref())?;
+    std::fs::write(
+        state_path.with_extension(INTERRUPT_REQUEST_EXTENSION),
+        serde_json::to_vec(&json!({"requested_at": Utc::now().to_rfc3339()})).unwrap_or_default(),
+    )
+    .map_err(|err| {
         ClaudeChannelControlError::CommandFailed(format!(
-            "failed to interrupt Claude process {pid}: {err}"
+            "failed to record Claude interrupt request: {err}"
         ))
     })?;
-    Ok(ClaudeChannelInterruptSummary { pid })
+    let tool_process_group = std::fs::read(state_path.with_extension(FOREGROUND_TOOL_EXTENSION))
+        .ok()
+        .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
+        .and_then(|tool| {
+            tool.get("command")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .and_then(|command| terminate_foreground_tool(pid, &command));
+    Ok(ClaudeChannelInterruptSummary {
+        pid,
+        tool_process_group,
+    })
+}
+
+/// Claude runs each Bash tool call in its own session whose shell `eval`s the
+/// command. Match that shell among Claude's direct children by the exact
+/// command the PreToolUse hook recorded, and terminate its process group.
+#[cfg(unix)]
+fn terminate_foreground_tool(claude_pid: i32, command: &str) -> Option<i32> {
+    let wanted = shell_words_key(command);
+    if wanted.is_empty() {
+        return None;
+    }
+    let output = std::process::Command::new("ps")
+        .args(["-A", "-o", "pid=,ppid=,pgid=,args="])
+        .output()
+        .ok()?;
+    let listing = String::from_utf8_lossy(&output.stdout);
+    let group = listing
+        .lines()
+        .find_map(|line| foreground_tool_group(line, claude_pid, &wanted))?;
+    (unsafe { libc::kill(-group, libc::SIGTERM) } == 0).then_some(group)
+}
+
+/// Claude quotes the command inside `eval '...'`, so compare with every quote
+/// and escape removed and whitespace collapsed on both sides.
+fn shell_words_key(text: &str) -> String {
+    text.chars()
+        .filter(|c| !matches!(c, '\'' | '"' | '\\'))
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn foreground_tool_group(line: &str, claude_pid: i32, wanted: &str) -> Option<i32> {
+    let mut fields = line.split_whitespace();
+    let pid: i32 = fields.next()?.parse().ok()?;
+    let ppid: i32 = fields.next()?.parse().ok()?;
+    let pgid: i32 = fields.next()?.parse().ok()?;
+    let args = shell_words_key(&fields.collect::<Vec<_>>().join(" "));
+    (ppid == claude_pid && pid == pgid && args.contains("eval") && args.contains(wanted))
+        .then_some(pgid)
+}
+
+#[cfg(not(unix))]
+fn terminate_foreground_tool(_claude_pid: i32, _command: &str) -> Option<i32> {
+    None
+}
+
+const INTERRUPT_REQUEST_EXTENSION: &str = "interrupt.json";
+const FOREGROUND_TOOL_EXTENSION: &str = "tool.json";
+
+/// What the lifecycle hook tells Claude for one hook event of a managed session.
+///
+/// Returns the hook output that stops the turn when an interrupt request is
+/// pending. Turn boundaries clear stale requests so an interrupt that arrived
+/// while Claude was idle never stops the next turn.
+pub fn lifecycle_hook_turn_control(
+    session_id: &str,
+    event: &str,
+    input: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    turn_control_at(session_id, event, input, None)
+}
+
+fn turn_control_at(
+    session_id: &str,
+    event: &str,
+    input: &serde_json::Value,
+    state_root: Option<&Path>,
+) -> Option<serde_json::Value> {
+    let state_path = state_file_path(session_id, state_root).ok()?;
+    let request = state_path.with_extension(INTERRUPT_REQUEST_EXTENSION);
+    let tool = state_path.with_extension(FOREGROUND_TOOL_EXTENSION);
+    match event {
+        "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
+            let _ = std::fs::remove_file(&tool);
+            if request.exists() {
+                // A request stays pending until the turn ends: Claude does not
+                // honour `continue: false` after every tool event, so each
+                // boundary repeats it and PreToolUse also denies the next tool.
+                let mut output = json!({
+                    "continue": false,
+                    "stopReason": "Interrupted from Longhouse",
+                });
+                if event == "PreToolUse" {
+                    output["hookSpecificOutput"] = json!({
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "Interrupted from Longhouse",
+                    });
+                }
+                return Some(output);
+            }
+            let foreground_bash = event == "PreToolUse"
+                && input.get("tool_name").and_then(serde_json::Value::as_str) == Some("Bash")
+                && input
+                    .pointer("/tool_input/run_in_background")
+                    .and_then(serde_json::Value::as_bool)
+                    != Some(true);
+            if foreground_bash {
+                if let Some(command) = input
+                    .pointer("/tool_input/command")
+                    .and_then(serde_json::Value::as_str)
+                {
+                    let _ = std::fs::write(
+                        &tool,
+                        serde_json::to_vec(&json!({"command": command})).unwrap_or_default(),
+                    );
+                }
+            }
+            None
+        }
+        "SessionStart" | "UserPromptSubmit" | "Stop" => {
+            let _ = std::fs::remove_file(&request);
+            let _ = std::fs::remove_file(&tool);
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Stop the recorded Claude process: SIGTERM, then SIGKILL after a grace period.
+///
+/// Only the recorded Claude pid is signaled, for the same reason as interrupt:
+/// the channel bridge can share its process group. Claude's own exit tears
+/// down the bridge and the `longhouse claude` launcher.
+pub async fn terminate(
+    config: ClaudeChannelInterruptConfig,
+) -> Result<ClaudeChannelTerminateSummary, ClaudeChannelControlError> {
+    let wait_timeout = config.wait_timeout.unwrap_or(DEFAULT_READY_WAIT);
+    let state = wait_for_ready_state(
+        &config.session_id,
+        config.state_root.as_deref(),
+        wait_timeout,
+        DEFAULT_POLL_INTERVAL,
+    )
+    .await?;
+    let pid = state
+        .claude_pid
+        .filter(|pid| *pid > 0)
+        .ok_or_else(|| not_attached(&config.session_id, "state is missing claude_pid"))?;
+    verify_claude_interrupt_target(
+        &config.session_id,
+        pid,
+        state.started_at.as_deref().and_then(parse_rfc3339),
+    )?;
+    let forced = stop_process(pid, TERMINATE_GRACE).await.map_err(|err| {
+        ClaudeChannelControlError::CommandFailed(format!(
+            "failed to terminate Claude process {pid}: {err}"
+        ))
+    })?;
+    Ok(ClaudeChannelTerminateSummary { pid, forced })
+}
+
+#[cfg(unix)]
+async fn stop_process(pid: i32, grace: Duration) -> std::io::Result<bool> {
+    if unsafe { libc::kill(pid, libc::SIGTERM) } != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(false);
+        }
+        return Err(error);
+    }
+    let deadline = Instant::now() + grace;
+    while Instant::now() < deadline {
+        if !process_alive(pid) {
+            return Ok(false);
+        }
+        sleep(DEFAULT_POLL_INTERVAL).await;
+    }
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+    }
+    Ok(true)
+}
+
+#[cfg(not(unix))]
+async fn stop_process(_pid: i32, _grace: Duration) -> std::io::Result<bool> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "Claude terminate is unsupported on this platform",
+    ))
+}
+
+/// Alive and not a zombie awaiting its parent's reap.
+#[cfg(unix)]
+fn process_alive(pid: i32) -> bool {
+    if unsafe { libc::kill(pid, 0) } != 0 {
+        return false;
+    }
+    let Ok(pid) = u32::try_from(pid) else {
+        return false;
+    };
+    collect_process_facts_by_pid()
+        .get(&pid)
+        .is_some_and(|fact| !fact.stat.starts_with('Z'))
+}
+
+#[cfg(feature = "qa-fault-injection")]
+fn qa_fault_active(fault: &str) -> bool {
+    std::env::var("LH_QA_FAULT").as_deref() == Ok(fault)
+}
+
+#[cfg(feature = "qa-fault-injection")]
+fn write_qa_fault_receipt(session_id: &str, state_root: Option<&Path>, receipt: serde_json::Value) {
+    if let Ok(path) = state_file_path(session_id, state_root) {
+        let _ = std::fs::write(
+            path.with_extension("qa-fault.json"),
+            serde_json::to_vec(&receipt).unwrap_or_default(),
+        );
+    }
 }
 
 pub async fn inspect_state(
@@ -310,27 +607,6 @@ fn claude_interrupt_target_matches(
 ) -> bool {
     command_contains_basename(&fact.command, "claude")
         && started_before_or_near_recorded(fact, recorded_start)
-}
-
-fn signal_interrupt(pid: i32) -> std::io::Result<()> {
-    #[cfg(unix)]
-    unsafe {
-        // The Claude MCP bridge can share a process group with Claude when the
-        // provider launches the server, so interrupt only the recorded Claude
-        // process. Group signaling can destroy the bridge/control channel.
-        if libc::kill(pid, libc::SIGINT) == 0 {
-            return Ok(());
-        }
-        Err(std::io::Error::last_os_error())
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "Claude interrupt is unsupported on this platform",
-        ))
-    }
 }
 
 fn not_attached(session_id: &str, message: &str) -> ClaudeChannelControlError {
@@ -600,32 +876,67 @@ mod tests {
         assert!(claude_interrupt_target_matches(&fact, recorded_start));
     }
 
-    #[cfg(unix)]
     #[test]
-    fn interrupt_signals_only_target_child() {
-        use std::os::unix::process::ExitStatusExt;
-        use std::process::Command;
+    fn pending_interrupt_stops_every_tool_boundary_until_the_turn_ends() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = state_file_path(SESSION_ID, Some(temp.path())).unwrap();
+        std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+        let bash = json!({"tool_name": "Bash", "tool_input": {"command": "sleep 30"}});
 
-        let mut child = Command::new("/bin/sh")
-            .arg("-c")
-            .arg("trap 'exit 42' INT; while :; do sleep 1; done")
-            .spawn()
-            .unwrap();
-        let mut sibling = Command::new("/bin/sh")
-            .arg("-c")
-            .arg("trap 'exit 43' INT; while :; do sleep 1; done")
-            .spawn()
-            .unwrap();
-        let pid = i32::try_from(child.id()).unwrap();
+        assert_eq!(
+            turn_control_at(SESSION_ID, "PreToolUse", &bash, Some(temp.path())),
+            None
+        );
+        let tool = state.with_extension(FOREGROUND_TOOL_EXTENSION);
+        assert!(tool.exists());
 
-        signal_interrupt(pid).unwrap();
-        let status = child.wait().unwrap();
+        std::fs::write(state.with_extension(INTERRUPT_REQUEST_EXTENSION), b"{}").unwrap();
+        let stop =
+            turn_control_at(SESSION_ID, "PostToolUseFailure", &bash, Some(temp.path())).unwrap();
+        assert_eq!(stop["continue"], false);
+        assert!(!tool.exists());
+        let deny = turn_control_at(SESSION_ID, "PreToolUse", &bash, Some(temp.path())).unwrap();
+        assert_eq!(deny["hookSpecificOutput"]["permissionDecision"], "deny");
+        assert_eq!(
+            turn_control_at(SESSION_ID, "Stop", &json!({}), Some(temp.path())),
+            None
+        );
+        assert_eq!(
+            turn_control_at(SESSION_ID, "PreToolUse", &bash, Some(temp.path())),
+            None
+        );
+    }
 
-        assert!(status.signal() == Some(libc::SIGINT) || status.code() == Some(42));
-        assert!(sibling.try_wait().unwrap().is_none());
-        unsafe {
-            libc::kill(i32::try_from(sibling.id()).unwrap(), libc::SIGTERM);
-        }
-        let _ = sibling.wait();
+    #[test]
+    fn interrupt_requested_while_idle_never_stops_the_next_turn() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = state_file_path(SESSION_ID, Some(temp.path())).unwrap();
+        std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+        std::fs::write(state.with_extension(INTERRUPT_REQUEST_EXTENSION), b"{}").unwrap();
+
+        assert_eq!(
+            turn_control_at(
+                SESSION_ID,
+                "UserPromptSubmit",
+                &json!({}),
+                Some(temp.path())
+            ),
+            None
+        );
+        let background = json!({"tool_name": "Bash", "tool_input": {"command": "make dev", "run_in_background": true}});
+        assert_eq!(
+            turn_control_at(SESSION_ID, "PreToolUse", &background, Some(temp.path())),
+            None
+        );
+        assert!(!state.with_extension(FOREGROUND_TOOL_EXTENSION).exists());
+    }
+
+    #[test]
+    fn foreground_tool_matches_claude_eval_quoting() {
+        let command = "python3 -c \"import select; select.select([], [], [], 45); print('lh_x')\"";
+        let line = "  5690  5641  5690 /bin/bash -c source snap.sh && eval 'python3 -c \"import select; select.select([], [], [], 45); print('\\''lh_x'\\'')\"' < /dev/null && pwd -P";
+        let wanted = shell_words_key(command);
+        assert_eq!(foreground_tool_group(line, 5641, &wanted), Some(5690));
+        assert_eq!(foreground_tool_group(line, 1, &wanted), None);
     }
 }

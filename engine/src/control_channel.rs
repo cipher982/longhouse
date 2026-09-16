@@ -28,7 +28,8 @@ use crate::antigravity_print::{
 use crate::build_identity;
 use crate::claude_channel_control::{
     interrupt as claude_channel_interrupt, send_text as claude_channel_send_text,
-    ClaudeChannelControlError, ClaudeChannelInterruptConfig, ClaudeChannelSendConfig,
+    terminate as claude_channel_terminate, ClaudeChannelControlError, ClaudeChannelInterruptConfig,
+    ClaudeChannelSendConfig,
 };
 use crate::claude_print::{start_claude_print_turn, ClaudePrintRunConfig, CLAUDE_PRINT_ADAPTER};
 use crate::codex_bridge::{
@@ -1522,6 +1523,19 @@ async fn execute_command(
         COMMAND_TERMINATE => {
             let provider = payload_optional_string(&payload, "provider")
                 .unwrap_or_else(|| DEFAULT_COMMAND_PROVIDER.to_string());
+            if provider == "claude" {
+                let summary = claude_channel_terminate(ClaudeChannelInterruptConfig {
+                    session_id,
+                    state_root: None,
+                    wait_timeout: None,
+                })
+                .await
+                .map_err(claude_channel_error_to_command_error)?;
+                let mut result = claude_channel_control_result(None);
+                result["pid"] = json!(summary.pid);
+                result["forced"] = json!(summary.forced);
+                return Ok(result);
+            }
             if provider == "opencode" {
                 let summary = crate::opencode_control::stop_server_bridge(&session_id)
                     .await
@@ -3581,6 +3595,7 @@ mod tests {
         ("claude", "send", COMMAND_SEND_TEXT),
         ("claude", "interrupt", COMMAND_INTERRUPT),
         ("claude", "steer", COMMAND_STEER_TEXT),
+        ("claude", "terminate", COMMAND_TERMINATE),
         ("claude", "answer_pause", COMMAND_ANSWER_PAUSE),
         ("claude", "turn_start", COMMAND_TURN_START),
         ("claude", "turn_interrupt", COMMAND_TURN_INTERRUPT),

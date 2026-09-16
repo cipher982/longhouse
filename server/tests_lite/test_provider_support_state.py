@@ -14,6 +14,7 @@ CLAUDE_LIVE_CONTROL_OPERATIONS = [
     "send",
     "interrupt",
     "steer",
+    "terminate",
     "answer_pause",
     "turn_start",
     "turn_interrupt",
@@ -379,6 +380,7 @@ def test_support_state_keeps_claude_first_class_with_mixed_proof() -> None:
                     "send",
                     "interrupt",
                     "steer",
+                    "terminate",
                     "answer_pause",
                     "turn_start",
                     "turn_interrupt",
@@ -393,6 +395,7 @@ def test_support_state_keeps_claude_first_class_with_mixed_proof() -> None:
         "send",
         "interrupt",
         "steer",
+        "terminate",
         "answer_pause",
         "turn_interrupt",
     ]
@@ -438,6 +441,7 @@ def test_support_state_reports_partial_live_control_operations() -> None:
     assert claude["capabilities"]["missing_live_control_operations"] == [
         "interrupt",
         "steer",
+        "terminate",
         "answer_pause",
         "turn_interrupt",
     ]

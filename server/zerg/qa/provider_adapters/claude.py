@@ -192,7 +192,7 @@ def claude_channel_control_raw_events(canary: Mapping[str, Any]) -> list[dict[st
             {
                 "type": "system",
                 "role": "system",
-                "text": "Claude channel interrupt delivered SIGINT to the owned fake provider process.",
+                "text": "Claude channel interrupt recorded a turn-stop request and left the owned fake provider process running.",
                 "provider_session_id": session_id,
                 "source_canary": "claude_channel_control",
                 "interrupt_marker": canary.get("interrupt_marker"),
