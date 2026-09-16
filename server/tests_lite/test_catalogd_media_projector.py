@@ -37,6 +37,7 @@ def _media_params(
     observed_at: datetime,
     session_id: str | None = None,
     thumb_hash: str | None = None,
+    derived_from: str | None = None,
 ) -> dict:
     present = state == "present"
     params = {
@@ -50,6 +51,8 @@ def _media_params(
     }
     if thumb_hash is not None:
         params["thumb_hash"] = thumb_hash
+    if derived_from is not None:
+        params["derived_from"] = derived_from
     return params
 
 
@@ -1136,6 +1139,63 @@ async def test_naming_someone_elses_preview_grants_nothing(daemon_paths):
         stranger = "3" * 64
         await commit(stranger, derived_from=attacker_parent)
         assert (await read(stranger))["found"] is False, "a preview is not reachable through a parent it never came from"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_a_preview_a_live_image_still_names_cannot_be_retired(daemon_paths):
+    """A preview carries no session reference, so nothing else would stop a
+    reaper from deleting bytes a live image still advertises."""
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    parent_hash = "5" * 64
+    preview_hash = "6" * 64
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        engine = create_catalog_engine(database_path)
+        with Session(engine) as db:
+            db.add(
+                StorageSession(
+                    session_id=session_id,
+                    tenant_id="default",
+                    owner_id="1",
+                    provider="codex",
+                    environment="test",
+                    machine_id="test",
+                    started_at=now,
+                    last_activity_at=now,
+                    raw_state="durable",
+                    render_state="ready",
+                    media_state="complete",
+                    commit_seq=0,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            db.commit()
+        engine.dispose()
+
+        await client.call(
+            "storage.media.commit.v2",
+            _media_params(media_hash=parent_hash, state="present", observed_at=now, session_id=session_id, thumb_hash=preview_hash),
+        )
+        await client.call(
+            "storage.media.commit.v2",
+            _media_params(media_hash=preview_hash, state="present", observed_at=now, derived_from=parent_hash),
+        )
+
+        # The preview has no session reference of its own, so without this
+        # guard a reaper would delete bytes a live image still advertises.
+        with pytest.raises(CatalogRemoteError):
+            await client.call(
+                "storage.media.commit.v2",
+                _media_params(media_hash=preview_hash, state="deleted", observed_at=now),
+            )
     finally:
         await client.close()
         await daemon.close()

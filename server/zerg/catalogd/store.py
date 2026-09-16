@@ -10993,6 +10993,15 @@ class CatalogStore:
                     ).first()
                     if active_ref is not None:
                         return {"manifest_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                    # A preview is named by no session, so the reference check
+                    # above cannot see it. Anything a still-live image points at
+                    # is still in use: retiring it would leave that image
+                    # advertising bytes nobody has.
+                    still_named = connection.execute(
+                        select(media.c.media_hash).where(media.c.thumb_hash == media_hash, media.c.state != "deleted").limit(1)
+                    ).first()
+                    if still_named is not None:
+                        return {"manifest_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
 
             existing_refs: dict[tuple[str, str | None, str], Any] = {}
             if session_refs:
