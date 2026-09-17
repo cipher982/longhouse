@@ -334,6 +334,22 @@ jobs:
 
 
 
+      - name: Resolve the deployed image build identity
+        env:
+          IMAGE_REF: ${{ needs.gate.outputs.runtime_image_ref }}
+        run: |
+          set -euo pipefail
+          # Same identity contract as the canary: the control plane refuses a
+          # ready deployment that carries no build identity, and compares the
+          # submitted value with what the served runtime reports.
+          identity="$(docker run --rm --network none --entrypoint cat "$IMAGE_REF" /app/zerg/build_identity.json | jq -c .)"
+          [[ "$identity" == "{"*"}" ]] || {
+            echo "Runtime image $IMAGE_REF carries no readable build identity" >&2
+            exit 1
+          }
+          echo "RUNTIME_BUILD_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "resolved build identity for $IMAGE_REF"
+
       - name: Verify runtime image exists
         run: docker manifest inspect "${{ needs.gate.outputs.runtime_image_ref }}" >/dev/null
 
@@ -391,6 +407,22 @@ jobs:
 
       - name: Wait for control plane
         run: ./scripts/ci/wait-for-http.sh "$CONTROL_PLANE_URL/health" "Control plane"
+
+      - name: Resolve the deployed image build identity
+        env:
+          IMAGE_REF: ${{ needs.gate.outputs.runtime_image_ref }}
+        run: |
+          set -euo pipefail
+          # The control plane compares the submitted build identity against the
+          # one the served runtime reports, and refuses a ready deployment that
+          # carries none. Read it from the image being deployed.
+          identity="$(docker run --rm --network none --entrypoint cat "$IMAGE_REF" /app/zerg/build_identity.json | jq -c .)"
+          [[ "$identity" == "{"*"}" ]] || {
+            echo "Runtime image $IMAGE_REF carries no readable build identity" >&2
+            exit 1
+          }
+          echo "LH_DEPLOYMENT_BUILD_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "resolved build identity for $IMAGE_REF"
 
 
       - name: Resolve hosted canary instance
