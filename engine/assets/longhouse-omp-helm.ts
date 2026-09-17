@@ -143,10 +143,9 @@ export default function (pi: any) {
       }
     }
 
-    for (const key of ["success", "isError"]) {
+    for (const key of ["success", "isError", "provider_idle"]) {
       if (typeof event[key] === "boolean") compact[key] = event[key];
     }
-    if (typeof event.status === "string") compact.status = event.status.slice(0, MAX_METADATA_STRING_LENGTH);
     return compact;
   };
 
@@ -235,8 +234,16 @@ export default function (pi: any) {
       reconnectAttempts += 1;
       try {
         await connectChannel(ctx);
+        // A reconnect can cross a provider turn boundary while the channel
+        // is down. Re-sample the provider instead of carrying the old
+        // terminal agent_end decision into the new turn.
+        lastAgentEndTerminal = undefined;
         reconnectAttempts = 0;
-        sendEvent("session_reconnect", { type: "session_reconnect" }, ctx);
+        sendEvent(
+          "session_reconnect",
+          { type: "session_reconnect", provider_idle: Boolean(ctx.isIdle()) },
+          ctx,
+        );
       } catch {
         scheduleReconnect(ctx);
       }

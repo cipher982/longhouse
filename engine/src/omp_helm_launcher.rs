@@ -203,28 +203,6 @@ impl OmpHelmServer {
         write_json_private(&self.state_path, &state)
     }
 
-    fn mutate_and_persist_state<F>(&self, update: F) -> Option<OmpHelmStateFile>
-    where
-        F: FnOnce(&mut OmpHelmStateFile),
-    {
-        let _persist_lock = self
-            .persist_lock
-            .lock()
-            .expect("OMP state persist mutex poisoned");
-        let mut shared = self.shared.lock().expect("OMP state mutex poisoned");
-        if shared.state.status == "stopped" || shared.state.terminal_state.is_some() {
-            return None;
-        }
-        update(&mut shared.state);
-        let snapshot = shared.state.clone();
-        if let Err(error) = write_json_private(&self.state_path, &snapshot) {
-            eprintln!(
-                "[omp-helm] state persistence failed for {}: {error}",
-                snapshot.session_id
-            );
-        }
-        Some(snapshot)
-    }
 
     fn handle_connection(&self, stream: std::os::unix::net::UnixStream) {
         let _ = stream.set_read_timeout(Some(SOCKET_TIMEOUT));
@@ -330,6 +308,14 @@ impl OmpHelmServer {
             && state.state.terminal_state.is_none()
             && state.state.terminal_reason.as_deref()
                 != Some("native_session_transition_not_committed")
+    }
+    fn terminal_turn_is_latched(&self) -> bool {
+        self.shared
+            .lock()
+            .expect("OMP state mutex poisoned")
+            .state
+            .agent_end_is_terminal
+            == Some(true)
     }
 
     fn extension_authority_matches(&self, connection_id: &str, frame: &Value) -> bool {
@@ -511,6 +497,17 @@ impl OmpHelmServer {
             state.live_assistant_text.clear();
             state.live_text_seq = 0;
         }
+        if replacement {
+            state.state.agent_end_observed = false;
+            state.state.agent_end_is_terminal = None;
+            state.state.agent_end_will_continue = None;
+            state.state.agent_end_is_terminal_present = false;
+            state.state.agent_end_will_continue_present = false;
+            state.state.live_message_seq = 0;
+            state.live_message_seq = 0;
+            state.live_assistant_text.clear();
+            state.live_text_seq = 0;
+        }
         state.state.updated_at = Utc::now().to_rfc3339();
         drop(state);
         self.persist_state()?;
@@ -552,6 +549,12 @@ impl OmpHelmServer {
             .get("kind")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        if is_activity_frame_kind(kind)
+            && kind != "agent_start"
+            && self.terminal_turn_is_latched()
+        {
+            return;
+        }
         let identity_drift =
             is_activity_frame_kind(kind) && !self.extension_identity_matches(&frame);
         if !self.extension_authority_matches(connection_id, &frame) {
@@ -599,6 +602,14 @@ impl OmpHelmServer {
                         self.mark_degraded(&error);
                     }
                     eprintln!("Longhouse: OMP native identity binding failed: {error:#}");
+                } else if kind == "session_reconnect" {
+                    if let Some(provider_idle) = frame
+                        .get("event")
+                        .and_then(|event| event.get("provider_idle"))
+                        .and_then(Value::as_bool)
+                    {
+                        self.record_reconnect(provider_idle);
+                    }
                 }
             }
             "initial_prompt_request" => {
@@ -790,6 +801,13 @@ impl OmpHelmServer {
         if state.state.status == "stopped" || state.state.terminal_state.is_some() {
             return;
         }
+        // A terminal agent_end is the settled boundary for this turn. OMP can
+        // emit delayed activity/tool/message frames while the TUI is draining;
+        // reject them before touching live-message state, persistence, or
+        // publication. The next agent_start re-opens the latch below.
+        if state.state.agent_end_is_terminal == Some(true) && kind != "agent_start" {
+            return;
+        }
         if kind == "agent_start" {
             state.live_turn_seq = state.live_turn_seq.saturating_add(1);
             state.live_message_seq = 0;
@@ -818,15 +836,6 @@ impl OmpHelmServer {
                 .and_then(Value::as_bool);
             state.state.agent_end_will_continue_present =
                 event.and_then(|value| value.get("willContinue")).is_some();
-        }
-        // A terminal agent_end is the settled boundary for this turn. OMP can
-        // emit delayed activity/tool frames while the TUI is draining; those
-        // frames must not revive the mirrored phase until the next agent_start.
-        if state.state.agent_end_is_terminal == Some(true)
-            && kind != "agent_start"
-            && kind != "agent_end"
-        {
-            return;
         }
         if let Some(delta) = live_delta.as_deref() {
             Self::append_live_text(&mut state.live_assistant_text, delta);
@@ -901,32 +910,69 @@ impl OmpHelmServer {
         }
     }
 
+
     /// Refresh canonical activity evidence from the extension without
     /// manufacturing a lifecycle event. Keepalive observations are frequent:
-    /// they must preserve an active tool/phase, refresh already-idle evidence,
-    /// and never revive a terminal launcher.
-
+    /// they preserve the current phase and never reopen a settled turn.
     fn record_keepalive(&self, provider_idle: bool) {
-        let Some(state) = self.mutate_and_persist_state(|state| {
-            let terminal_turn = state.agent_end_is_terminal == Some(true);
-            state.phase = if terminal_turn || provider_idle {
+        self.record_keepalive_with_policy(provider_idle, false);
+    }
+
+    /// A reconnect re-samples the provider after the extension may have
+    /// crossed a turn boundary while disconnected. Only this authenticated
+    /// boundary may reopen a terminal latch without a fresh agent_start.
+    fn record_reconnect(&self, provider_idle: bool) {
+        self.record_keepalive_with_policy(provider_idle, true);
+    }
+
+    fn record_keepalive_with_policy(&self, provider_idle: bool, allow_terminal_reopen: bool) {
+        let (state, phase, tool) = {
+            let _persist_lock = self
+                .persist_lock
+                .lock()
+                .expect("OMP state persist mutex poisoned");
+            let mut shared = self.shared.lock().expect("OMP state mutex poisoned");
+            if shared.state.status == "stopped" || shared.state.terminal_state.is_some() {
+                return;
+            }
+            let terminal_turn = shared.state.agent_end_is_terminal == Some(true);
+            if allow_terminal_reopen && terminal_turn && !provider_idle {
+                shared.live_turn_seq = shared.live_turn_seq.saturating_add(1);
+                shared.live_message_seq = 0;
+                shared.state.live_turn_seq = shared.live_turn_seq;
+                shared.state.live_message_seq = 0;
+                shared.state.agent_end_observed = false;
+                shared.state.agent_end_is_terminal = None;
+                shared.state.agent_end_will_continue = None;
+                shared.state.agent_end_is_terminal_present = false;
+                shared.state.agent_end_will_continue_present = false;
+                shared.live_assistant_text.clear();
+                shared.live_text_seq = 0;
+            }
+            shared.state.phase = if provider_idle {
                 "idle".into()
-            } else if state.phase == "thinking" {
+            } else if shared.state.phase == "thinking" {
                 "thinking".into()
             } else {
                 "running".into()
             };
-            state.tool_name = if terminal_turn || provider_idle {
+            shared.state.tool_name = if provider_idle {
                 None
             } else {
-                state.tool_name.clone()
+                shared.state.tool_name.clone()
             };
-            state.updated_at = Utc::now().to_rfc3339();
-        }) else {
-            return;
+            shared.state.updated_at = Utc::now().to_rfc3339();
+            let snapshot = shared.state.clone();
+            if let Err(error) = write_json_private(&self.state_path, &snapshot) {
+                eprintln!(
+                    "[omp-helm] state persistence failed for {}: {error}",
+                    snapshot.session_id
+                );
+            }
+            (snapshot, shared.state.phase.clone(), shared.state.tool_name.clone())
         };
-        let phase = state.phase.as_str();
-        let tool = state.tool_name.as_deref();
+        let phase = phase.as_str();
+        let tool = tool.as_deref();
         if let Ok(db_path) = crate::config::get_agent_db_path() {
             if let Err(error) = crate::hook_outbox::enqueue_local_phase(
                 &db_path,
@@ -2500,12 +2546,97 @@ mod tests {
             assert_eq!(terminal.phase, "idle");
             assert_eq!(terminal.tool_name, None);
             assert_eq!(terminal.agent_end_is_terminal, Some(true));
-            server.handle_extension_frame("connection", keepalive(false));
+            server.handle_extension_frame("connection", keepalive(true));
             let terminal_keepalive = server.current_state();
             assert_eq!(terminal_keepalive.phase, "idle");
-            assert_eq!(terminal_keepalive.tool_name, None);
             assert_eq!(terminal_keepalive.agent_end_is_terminal, Some(true));
+            let delayed_frame = |kind: &str, event: Value| {
+                json!({
+                    "kind": kind,
+                    "event": event,
+                    "auth_token": "token",
+                    "session_id": "session",
+                    "native_session_id": "native",
+                    "session_file": "/tmp/session.jsonl",
+                    "connection_id": "connection",
+                    "lease_generation": "generation"
+                })
+            };
+            let before_delayed = server.current_state();
+            let before_delayed_live = {
+                let shared = server.shared.lock().unwrap();
+                (
+                    shared.live_message_seq,
+                    shared.live_text_seq,
+                    shared.live_assistant_text.clone(),
+                )
+            };
+            let local_before_delayed = read_json_files(&local_outbox);
+            let runtime_before_delayed = read_json_files(&runtime_outbox);
+            for (kind, event) in [
+                (
+                    "message_start",
+                    json!({"type": "message_start", "message_id": "late"}),
+                ),
+                (
+                    "message_update",
+                    json!({
+                        "type": "message_update",
+                        "message_event_type": "text_delta",
+                        "delta": "late text"
+                    }),
+                ),
+                (
+                    "message_end",
+                    json!({"type": "message_end", "message_id": "late"}),
+                ),
+                (
+                    "agent_end",
+                    json!({"type": "agent_end", "isTerminal": false, "willContinue": true}),
+                ),
+                (
+                    "tool_execution_start",
+                    json!({"type": "tool_execution_start", "toolName": "late_tool"}),
+                ),
+                (
+                    "tool_execution_update",
+                    json!({"type": "tool_execution_update", "toolName": "late_tool"}),
+                ),
+                (
+                    "tool_execution_end",
+                    json!({"type": "tool_execution_end", "toolName": "late_tool"}),
+                ),
+            ] {
+                server.handle_extension_frame("connection", delayed_frame(kind, event));
+            }
+            let delayed_frames = server.current_state();
+            assert_eq!(delayed_frames.phase, before_delayed.phase);
+            assert_eq!(delayed_frames.tool_name, before_delayed.tool_name);
+            assert_eq!(delayed_frames.updated_at, before_delayed.updated_at);
+            assert_eq!(
+                delayed_frames.agent_end_is_terminal,
+                before_delayed.agent_end_is_terminal
+            );
+            let delayed_live = {
+                let shared = server.shared.lock().unwrap();
+                (
+                    shared.live_message_seq,
+                    shared.live_text_seq,
+                    shared.live_assistant_text.clone(),
+                )
+            };
+            assert_eq!(delayed_live, before_delayed_live);
+            assert_eq!(
+                read_json_files(&local_outbox).len(),
+                local_before_delayed.len()
+            );
+            assert_eq!(
+                read_json_files(&runtime_outbox).len(),
+                runtime_before_delayed.len()
+            );
             assert_eq!(persisted()["phase"], "idle");
+            assert_eq!(persisted()["updated_at"], before_delayed.updated_at);
+
             server.handle_extension_frame(
                 "connection",
                 json!({
@@ -2570,6 +2701,80 @@ mod tests {
                 stopped_runtime_count
             );
             assert_eq!(read_json_files(&local_outbox).len(), stopped_local_count);
+            server.shutdown();
+        });
+    }
+
+    #[test]
+    fn reconnect_resamples_active_provider_after_terminal_turn() {
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let source = temp.path().join("session.jsonl");
+        fs::write(
+            &source,
+            b"{\"type\":\"session\",\"id\":\"native\",\"cwd\":\"/tmp\"}\n",
+        )
+        .unwrap();
+        let session_id = Uuid::new_v4().to_string();
+        let mut initial = state();
+        initial.session_id = session_id.clone();
+        initial.session_file = source.display().to_string();
+        let socket_dir = temp.path().join("socket");
+        let socket_path = socket_dir.join("channel.sock");
+        let state_path = temp.path().join("state.json");
+
+        temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
+            let server =
+                OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
+            let (sender, _receiver) = mpsc::channel();
+            {
+                let mut shared = server.shared.lock().unwrap();
+                shared.extension_sender = Some(sender);
+                shared.extension_connection_id = Some("connection".into());
+            }
+            let frame = |kind: &str, event: Value| {
+                json!({
+                    "kind": kind,
+                    "event": event,
+                    "auth_token": "token",
+                    "session_id": session_id,
+                    "native_session_id": "native",
+                    "session_file": source,
+                    "connection_id": "connection",
+                    "lease_generation": "generation"
+                })
+            };
+            server.handle_extension_frame(
+                "connection",
+                frame("agent_end", json!({"type": "agent_end", "isTerminal": true})),
+            );
+            assert_eq!(server.current_state().agent_end_is_terminal, Some(true));
+
+            server.handle_extension_frame(
+                "connection",
+                frame(
+                    "session_reconnect",
+                    json!({"type": "session_reconnect", "provider_idle": false}),
+                ),
+            );
+            let reconnected = server.current_state();
+            assert_eq!(reconnected.phase, "running");
+            assert_eq!(reconnected.tool_name, None);
+            assert_eq!(reconnected.agent_end_is_terminal, None);
+            assert!(reconnected.ready);
+            assert_eq!(reconnected.status, "ready");
+
+            server.handle_extension_frame(
+                "connection",
+                frame(
+                    "activity",
+                    json!({"type": "activity", "toolName": "next_tool"}),
+                ),
+            );
+            let active = server.current_state();
+            assert_eq!(active.phase, "running");
+            assert_eq!(active.tool_name.as_deref(), Some("next_tool"));
+            assert_eq!(active.agent_end_is_terminal, None);
             server.shutdown();
         });
     }
