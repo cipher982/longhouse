@@ -134,6 +134,7 @@ jobs:
       runtime_source_run_id: ${{ steps.source.outputs.source_run_id }}
       runtime_source_attempt: ${{ steps.source.outputs.source_attempt }}
       runtime_source_workflow: ${{ steps.source.outputs.source_workflow }}
+      runtime_qualification_id: ${{ steps.source.outputs.qualification_id }}
       runtime_schema_version: ${{ steps.artifact_schema.outputs.schema_version }}
       runtime_schema_min_reader: ${{ steps.artifact_schema.outputs.schema_min_reader }}
       runtime_schema_max_reader: ${{ steps.artifact_schema.outputs.schema_max_reader }}
@@ -231,6 +232,10 @@ jobs:
           SOURCE_SHA: ${{ steps.meta.outputs.runtime_image_tag }}
         run: |
           set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || {
+            echo "Runtime image tag must be a full source SHA for deployment metadata: $SOURCE_SHA" >&2
+            exit 1
+          }
           run_info="$(curl --fail-with-body --silent --show-error \
             --header "Authorization: Bearer $GH_TOKEN" \
             --header "Accept: application/vnd.github+json" \
@@ -265,6 +270,7 @@ jobs:
             echo "source_attempt=$run_attempt"
             echo "source_artifact_id=$artifact_id"
             echo "source_workflow=Publish Runtime Image"
+            echo "qualification_id=runtime-image-${run_id}-${run_attempt}"
           } >> "$GITHUB_OUTPUT"
       - name: Resolve immutable runtime image from publication receipt
         id: digest
@@ -366,7 +372,7 @@ jobs:
       RUNTIME_BUILD_IDENTITY: ${{ needs.gate.outputs.runtime_build_identity }}
       RUNTIME_SOURCE_WORKFLOW: ${{ needs.gate.outputs.runtime_source_workflow }}
       RUNTIME_SOURCE_ORDER: ${{ needs.gate.outputs.runtime_source_order }}
-      RUNTIME_QUALIFICATION_ID: canary-${{ needs.reprovision_canary.outputs.deployment_id }}
+      RUNTIME_QUALIFICATION_ID: ${{ needs.gate.outputs.runtime_qualification_id }}
       RUNTIME_SCHEMA_VERSION: ${{ needs.gate.outputs.runtime_schema_version }}
       RUNTIME_SCHEMA_MIN_READER: ${{ needs.gate.outputs.runtime_schema_min_reader }}
       RUNTIME_SCHEMA_MAX_READER: ${{ needs.gate.outputs.runtime_schema_max_reader }}
@@ -382,6 +388,22 @@ jobs:
           show-progress: false
 
 
+
+      - name: Resolve the deployed image build identity
+        env:
+          IMAGE_REF: ${{ needs.gate.outputs.runtime_image_ref }}
+        run: |
+          set -euo pipefail
+          # Same identity contract as the canary: the control plane refuses a
+          # ready deployment that carries no build identity, and compares the
+          # submitted value with what the served runtime reports.
+          identity="$(docker run --rm --network none --entrypoint cat "$IMAGE_REF" /app/zerg/build_identity.json | jq -c .)"
+          [[ "$identity" == "{"*"}" ]] || {
+            echo "Runtime image $IMAGE_REF carries no readable build identity" >&2
+            exit 1
+          }
+          echo "RUNTIME_BUILD_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "resolved build identity for $IMAGE_REF"
 
       - name: Verify runtime image exists
         run: docker manifest inspect "${{ needs.gate.outputs.runtime_image_ref }}" >/dev/null
@@ -414,7 +436,7 @@ jobs:
       LH_DEPLOYMENT_BUILD_IDENTITY: ${{ needs.gate.outputs.runtime_build_identity }}
       LH_DEPLOYMENT_SOURCE_WORKFLOW: ${{ needs.gate.outputs.runtime_source_workflow }}
       LH_DEPLOYMENT_SOURCE_ORDER: ${{ needs.gate.outputs.runtime_source_order }}
-      LH_DEPLOYMENT_QUALIFICATION_ID: deploy-gate-${{ github.run_id }}-${{ github.run_attempt }}
+      LH_DEPLOYMENT_QUALIFICATION_ID: ${{ needs.gate.outputs.runtime_qualification_id }}
       LH_DEPLOYMENT_SCHEMA_VERSION: ${{ needs.gate.outputs.runtime_schema_version }}
       LH_DEPLOYMENT_SCHEMA_MIN_READER: ${{ needs.gate.outputs.runtime_schema_min_reader }}
       LH_DEPLOYMENT_SCHEMA_MAX_READER: ${{ needs.gate.outputs.runtime_schema_max_reader }}
@@ -441,6 +463,22 @@ jobs:
 
       - name: Wait for control plane
         run: ./scripts/ci/wait-for-http.sh "$CONTROL_PLANE_URL/health" "Control plane"
+
+      - name: Resolve the deployed image build identity
+        env:
+          IMAGE_REF: ${{ needs.gate.outputs.runtime_image_ref }}
+        run: |
+          set -euo pipefail
+          # The control plane compares the submitted build identity against the
+          # one the served runtime reports, and refuses a ready deployment that
+          # carries none. Read it from the image being deployed.
+          identity="$(docker run --rm --network none --entrypoint cat "$IMAGE_REF" /app/zerg/build_identity.json | jq -c .)"
+          [[ "$identity" == "{"*"}" ]] || {
+            echo "Runtime image $IMAGE_REF carries no readable build identity" >&2
+            exit 1
+          }
+          echo "LH_DEPLOYMENT_BUILD_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "resolved build identity for $IMAGE_REF"
 
 
       - name: Resolve hosted canary instance

@@ -329,8 +329,16 @@ struct MachinePresencePostResult {
 
 struct OutboxCollectResult {
     presence: outbox::OutboxLocalDrainResult,
-    runtime_posts: Vec<outbox::PendingRuntimeEventPost>,
     elapsed_ms: u64,
+}
+
+/// Runtime status collection is its own lane. It shares no gate with presence,
+/// because a runtime backlog used to stop Claude presence and local-phase
+/// collection outright: one flooded producer starved every other provider.
+struct RuntimeCollectResult {
+    posts: Vec<outbox::PendingRuntimeEventPost>,
+    elapsed_ms: u64,
+    saturated: bool,
 }
 
 struct UnmanagedBindingRefreshResult {
@@ -1162,6 +1170,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
     let mut outbox_collect_tasks: JoinSet<OutboxCollectResult> = JoinSet::new();
+    let mut runtime_collect_tasks: JoinSet<RuntimeCollectResult> = JoinSet::new();
+    let mut runtime_sweep_tasks: JoinSet<outbox::RuntimeOutboxSweep> = JoinSet::new();
     let mut outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut runtime_outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
@@ -1532,7 +1542,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             tracing::warn!(
                                 elapsed_ms = result.elapsed_ms,
                                 presence_posts = result.presence.posts.len(),
-                                runtime_posts = result.runtime_posts.len(),
                                 "Outbox collection was slow"
                             );
                         }
@@ -1597,10 +1606,42 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 );
                             }
                         }
-                        if !result.runtime_posts.is_empty() {
+                    }
+                    Some(Err(err)) => {
+                        tracing::warn!("Outbox collection task failed: {}", err);
+                    }
+                    None => {}
+                }
+            }
+
+            runtime_collect_result = runtime_collect_tasks.join_next(), if !runtime_collect_tasks.is_empty() => {
+                match runtime_collect_result {
+                    Some(Ok(result)) => {
+                        // A saturated pass means the directory holds more than
+                        // one pass can inspect, so the newest observation is
+                        // not reliably in it. Reduce it to current status in a
+                        // task of its own: the live lane must keep collecting
+                        // and posting while that runs.
+                        if result.saturated && runtime_sweep_tasks.is_empty() {
+                            let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
+                            runtime_sweep_tasks.spawn_blocking(move || {
+                                outbox::sweep_runtime_event_outbox(
+                                    &runtime_events_outbox_dir,
+                                    outbox::RUNTIME_EVENT_SWEEP_LIMIT,
+                                )
+                            });
+                        }
+                        if result.elapsed_ms > 100 {
+                            tracing::warn!(
+                                elapsed_ms = result.elapsed_ms,
+                                runtime_posts = result.posts.len(),
+                                "Runtime-event collection was slow"
+                            );
+                        }
+                        if !result.posts.is_empty() {
                             if runtime_outbox_post_tasks.is_empty() {
                                 let client = client.clone();
-                                let runtime_posts = result.runtime_posts;
+                                let runtime_posts = result.posts;
                                 let post_count = runtime_posts.len();
                                 // spawn, not spawn_local: see the presence path
                                 // above. This is the live-transcript lane, so a
@@ -1639,14 +1680,42 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 });
                             } else {
                                 tracing::debug!(
-                                    pending_posts = result.runtime_posts.len(),
+                                    pending_posts = result.posts.len(),
                                     "Skipping outbox runtime-event POST while previous POST is still in flight"
                                 );
                             }
                         }
                     }
                     Some(Err(err)) => {
-                        tracing::warn!("Outbox collection task failed: {}", err);
+                        tracing::warn!("Runtime-event collection task failed: {}", err);
+                    }
+                    None => {}
+                }
+            }
+
+            runtime_sweep_result = runtime_sweep_tasks.join_next(), if !runtime_sweep_tasks.is_empty() => {
+                match runtime_sweep_result {
+                    Some(Ok(sweep)) => {
+                        tracing::warn!(
+                            inspected = sweep.inspected,
+                            discarded = sweep.discarded,
+                            more = sweep.more,
+                            "Swept superseded runtime status out of a flooded outbox"
+                        );
+                        // One sweep is capped. Keep going until the directory
+                        // holds only current status; a flood outlives a pass.
+                        if sweep.more {
+                            let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
+                            runtime_sweep_tasks.spawn_blocking(move || {
+                                outbox::sweep_runtime_event_outbox(
+                                    &runtime_events_outbox_dir,
+                                    outbox::RUNTIME_EVENT_SWEEP_LIMIT,
+                                )
+                            });
+                        }
+                    }
+                    Some(Err(err)) => {
+                        tracing::warn!("Runtime-event outbox sweep task failed: {}", err);
                     }
                     None => {}
                 }
@@ -2709,12 +2778,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 // Files remain durable while a POST is in flight. Do not scan,
                 // parse, and persist them again every 100ms until that attempt
                 // has either removed them or made them eligible for retry.
-                if outbox_collect_tasks.is_empty()
-                    && outbox_post_tasks.is_empty()
-                    && runtime_outbox_post_tasks.is_empty()
-                {
+                if outbox_collect_tasks.is_empty() && outbox_post_tasks.is_empty() {
                     let outbox_dir = outbox_dir.clone();
-                    let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
                     let db_path = config.shipper_config.db_path.clone();
                     outbox_collect_tasks.spawn_blocking(move || {
                         let started = Instant::now();
@@ -2722,12 +2787,22 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &outbox_dir,
                             db_path.as_deref(),
                         );
-                        let runtime_posts =
-                            outbox::collect_runtime_event_outbox(&runtime_events_outbox_dir);
                         OutboxCollectResult {
                             presence,
-                            runtime_posts,
                             elapsed_ms: started.elapsed().as_millis() as u64,
+                        }
+                    });
+                }
+                if runtime_collect_tasks.is_empty() && runtime_outbox_post_tasks.is_empty() {
+                    let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
+                    runtime_collect_tasks.spawn_blocking(move || {
+                        let started = Instant::now();
+                        let pass =
+                            outbox::collect_runtime_event_outbox_pass(&runtime_events_outbox_dir);
+                        RuntimeCollectResult {
+                            posts: pass.posts,
+                            elapsed_ms: started.elapsed().as_millis() as u64,
+                            saturated: pass.saturated,
                         }
                     });
                 }
