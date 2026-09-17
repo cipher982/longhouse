@@ -53,15 +53,24 @@ final class LaunchProviderPickerTests: XCTestCase {
     }
 
     /// The machine chooser is the same list-of-rows shape inside the same flow.
-    func testMachineRowAcceptsTapOnItsTrailingHalf() {
+    func testMachineRowAcceptsTapOnItsTrailingHalf() throws {
         let app = launchLaunchSheet()
 
         let machineRow = summaryRow("Ready", in: app)
-        XCTAssertNotNil(machineRow, "Launch sheet did not render its machine row.")
+        XCTAssertNotNil(machineRow, "Launch sheet did not render its machine row. \(app.debugDescription)")
         machineRow?.tap()
+        XCTAssertTrue(
+            app.navigationBars["Choose Machine"].waitForExistence(timeout: 5),
+            "Machine row did not open the machine chooser. \(app.debugDescription)"
+        )
 
-        let cinder = app.buttons["cinder, Ready"]
-        XCTAssertTrue(cinder.waitForExistence(timeout: 5), "Machine chooser did not list cinder.")
+        // The launch sheet keeps its own "cinder, Ready" row in the tree behind
+        // the pushed chooser; only the chooser's copy is on screen.
+        let cinder = try XCTUnwrap(
+            app.buttons.matching(NSPredicate(format: "label == %@", "cinder, Ready"))
+                .allElementsBoundByIndex.first { $0.isHittable },
+            "Machine chooser did not expose a hittable cinder row."
+        )
         attach(app.screenshot(), name: "machine-chooser")
 
         let row = cinder.frame
@@ -95,6 +104,7 @@ final class LaunchProviderPickerTests: XCTestCase {
 
     /// The launch sheet's summary rows combine their title and subtitle into one
     /// accessibility element, so they are addressed by the half they carry.
+    /// Elements behind a pushed screen stay in the tree; prefer the one on screen.
     private func summaryRow(_ containedText: String, in app: XCUIApplication) -> XCUIElement? {
         let predicate = NSPredicate(format: "label CONTAINS %@", containedText)
         let candidates = [
@@ -103,7 +113,8 @@ final class LaunchProviderPickerTests: XCTestCase {
             app.otherElements.matching(predicate).firstMatch,
             app.staticTexts[containedText],
         ]
-        return candidates.first { $0.exists }
+        let present = candidates.filter { $0.exists }
+        return present.first { $0.isHittable } ?? present.first
     }
 
     private func waitUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
