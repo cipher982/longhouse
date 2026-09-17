@@ -184,6 +184,7 @@ struct LaunchSessionSheet: View {
                         )
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("launch-machine-picker")
                 }
 
                 launchSectionTitle("Session")
@@ -206,6 +207,7 @@ struct LaunchSessionSheet: View {
                             )
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier("launch-provider-picker")
                     } else {
                         LaunchSummaryRow(
                             title: providerDisplayName(selectedProvider),
@@ -638,6 +640,7 @@ private struct MachineSelectionView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier("launch-machine-row-\(machine.deviceId)")
                         .accessibilityLabel("\(machine.machineName), Ready")
                         .accessibilityAddTraits(machine.deviceId == selectedDeviceId ? .isSelected : [])
                     }
@@ -690,6 +693,7 @@ private struct ProviderSelectionView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("launch-provider-row-\(provider)")
             .accessibilityAddTraits(provider == selectedProvider ? .isSelected : [])
         }
         .navigationTitle("Choose Agent")
