@@ -148,6 +148,8 @@ struct BugReportSheet: View {
                                 showingDiscardConfirmation = true
                             }
                         }
+                    } else if didSend {
+                        Button("Done") { dismiss() }
                     } else if failureAction == .reportInProgress {
                         Button("Done") { dismiss() }
                     } else if failureAction == .chooseAgent {
