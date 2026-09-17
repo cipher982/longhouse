@@ -950,6 +950,31 @@
       "live_proof": true,
       "startup_coordination_context": true,
       "capabilities": {
+        "session.transcript.search": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.claude.transcript_search",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "transcript_ingested_searchable",
+              "scenario_id": "claude_transcript_search",
+              "oracle_source": "server/zerg/qa/search_ingest_oracle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "c3dc533bf3917a889ed949201a718691d777bfc5163853b29e98a333246ee8ca"
+            }
+          ]
+        },
         "session.activity.turn_boundary": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -1739,6 +1764,31 @@
       "live_proof": true,
       "startup_coordination_context": false,
       "capabilities": {
+        "session.transcript.search": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.opencode.transcript_search",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "transcript_ingested_searchable",
+              "scenario_id": "opencode_transcript_search",
+              "oracle_source": "server/zerg/qa/search_ingest_oracle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "c3dc533bf3917a889ed949201a718691d777bfc5163853b29e98a333246ee8ca"
+            }
+          ]
+        },
         "session.activity.turn_boundary": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
