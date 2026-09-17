@@ -25,6 +25,9 @@ def _schema_cells() -> dict[str, dict[str, Any]]:
         provider="opencode",
         capability="session.reattach.helm",
     )
+    # session.launch.helm also lists the live Helm lifecycle assertions; this
+    # producer owns only the serve contract cell.
+    launch = [cell for cell in launch if cell["scenario_id"] == m.REGISTRATION.scenario_id]
     assert len(launch) == 1
     assert len(reattach) == 1
     return {"session.launch.helm": launch[0], "session.reattach.helm": reattach[0]}

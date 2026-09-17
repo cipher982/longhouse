@@ -125,7 +125,11 @@ def test_cursor_observed_install_keeps_native_resume_unqualified_until_direct_pr
     assert result["full_column_gate"]["coverage_gap_kind_counts"] == {
         "passed": 27,
         "no_token_safety_gate": 1,
-        "not_applicable": 2,
+        # Cursor Helm steer is implemented now, so an observed install whose
+        # Gate 0 artifact has no steer evidence reads as a missing live canary
+        # rather than an inapplicable scenario.
+        "missing_live_canary": 1,
+        "not_applicable": 1,
         "provider_contract_unsupported": 1,
         "unexpected_failure": 1,
     }

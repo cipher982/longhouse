@@ -59,6 +59,11 @@ def _toy_schema_entry(adapter_source: str) -> dict[str, object]:
         }
     )
     item.pop("adapter_digest", None)
+    # Cursor's operation proof edges name Cursor oracle sources, which do not
+    # exist under the synthetic source root; a new provider starts unproven.
+    for operation in (item.get("operation_evidence") or {}).values():
+        if isinstance(operation, dict):
+            operation.pop("required_assertions", None)
     item["machine_control_supports"] = [str(support).replace("cursor.", f"{PROVIDER}.") for support in item["machine_control_supports"]]
     return item
 
@@ -112,7 +117,7 @@ def test_schema_and_adapter_directory_onboard_a_sixth_product_provider(tmp_path,
     toy_item = normalized["providers"][0]
     toy_contract = managed_provider_contract_from_item(toy_item)
     assert toy_contract.display_name == "Toy Sixth"
-    assert toy_contract.machine_control_operations == ("send", "interrupt", "terminate", "turn_start", "turn_interrupt")
+    assert toy_contract.machine_control_operations == ("send", "interrupt", "steer", "terminate", "turn_start", "turn_interrupt")
 
     # A schema-only provider receives default visuals and canonical labels in
     # every generated client; provider-brands.json needs no provider entry.
