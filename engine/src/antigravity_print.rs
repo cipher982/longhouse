@@ -104,13 +104,9 @@ pub async fn start_antigravity_print_turn(
     let stderr_path = run_dir.join("stderr.log");
     let stdout_file = private_output_file(&stdout_path)?;
     let stderr_file = private_output_file(&stderr_path)?;
-    // Fail before launching if durable ownership cannot be recorded. Discovery
-    // can also reconstruct this binding from the claim and structured stdout.
-    let db_path = config
-        .local_db_path
-        .as_deref()
-        .context("Antigravity Console requires a local source binding database")?;
-    crate::state::db::open_client_connection(db_path, Duration::from_millis(500))?;
+    // Ownership is recorded as a local claim, so the launch no longer needs the
+    // archive database to open first — a locked archive used to fail this turn
+    // before the provider ever started.
     if let Some(conversation_id) = normalized_optional(&config.conversation_id) {
         validate_uuid(&conversation_id, "conversation_id")?;
         persist_transcript_binding(

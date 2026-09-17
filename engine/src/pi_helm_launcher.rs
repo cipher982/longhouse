@@ -344,13 +344,21 @@ impl PiHelmServer {
                 guard.state.provider_session_id.clone(),
             )
         };
-        let db_path = crate::config::get_agent_db_path()?;
-        let conn = crate::state::db::open_client_connection(&db_path, Duration::from_millis(500))?;
-        crate::pi_session::bind_source_for_thread(
-            &conn,
-            Path::new(session_file),
+        // A local claim, projected by the daemon before discovery runs: the
+        // archive database is not on this path, so a busy archive cannot fail a
+        // Pi Helm launch.
+        crate::managed_source_claim::ensure_bindable(
             &session_id,
+            Path::new(session_file),
             provider_session_id,
+        )?;
+        crate::managed_source_claim::confirm_identity(
+            &session_id,
+            "pi",
+            Path::new(session_file),
+            provider_session_id,
+            None,
+            None,
         )?;
         let source_path = PathBuf::from(session_file);
         let mut guard = self.shared.lock().expect("Pi Helm state mutex poisoned");

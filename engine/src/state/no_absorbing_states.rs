@@ -189,6 +189,37 @@ mod tests {
     }
 
     #[test]
+    fn no_launcher_opens_the_archive_database() {
+        // A launcher that opens the shipper database puts a cold process with a
+        // fresh busy timeout in front of one WAL writer. On 2026-09-17 that made
+        // a required identity bind lose the lock and left sessions degraded for
+        // good. Launch authority is a local claim now; opening the database
+        // again from any of these files is how the incident comes back.
+        for (name, source) in [
+            ("omp_helm_launcher.rs", include_str!("../omp_helm_launcher.rs")),
+            ("omp_print.rs", include_str!("../omp_print.rs")),
+            ("codex_exec.rs", include_str!("../codex_exec.rs")),
+            ("pi_print.rs", include_str!("../pi_print.rs")),
+            ("pi_helm_launcher.rs", include_str!("../pi_helm_launcher.rs")),
+            ("antigravity_print.rs", include_str!("../antigravity_print.rs")),
+            ("cursor_helm_launcher.rs", include_str!("../cursor_helm_launcher.rs")),
+            ("cursor_print.rs", include_str!("../cursor_print.rs")),
+        ] {
+            // Only production code counts: a fixture may hold the database to
+            // prove that a locked archive no longer blocks a launch.
+            let production = source
+                .split("#[cfg(test)]")
+                .next()
+                .unwrap_or_default();
+            assert!(
+                !production.contains("open_client_connection"),
+                "{name} opens the archive database from a launcher path; launch authority is a \
+                 claim (managed_source_claim), not a row"
+            );
+        }
+    }
+
+    #[test]
     fn a_dead_range_whose_source_survives_is_never_deleted() {
         // The bug: cleanup() hard-deleted dead rows after 30 days. A spool row
         // is a pointer into the user's own transcript, not a copy, so deleting
