@@ -3,7 +3,12 @@
 set -euo pipefail
 
 DOGFOOD_SUBDOMAIN="${LONGHOUSE_DEFAULT_SUBDOMAIN:-david010}"
-HOSTED_CANARY_SUBDOMAIN="${HOSTED_CANARY_SUBDOMAIN:-kernel-canary}"
+# Authority is the repo variable of the same name (the deploy workflows read
+# vars.HOSTED_CANARY_SUBDOMAIN). A hardcoded fallback here silently drifts: it
+# kept reporting the retired kernel-canary as "unreachable" after the ring had
+# already moved, which read as a dead canary and invited agents to keep
+# cancelling deploys that had no target problem at all.
+HOSTED_CANARY_SUBDOMAIN="${HOSTED_CANARY_SUBDOMAIN:-release-canary-a}"
 DOGFOOD_HEALTH_URL="${DOGFOOD_HEALTH_URL:-https://${DOGFOOD_SUBDOMAIN}.longhouse.ai/api/health}"
 HOSTED_CANARY_HEALTH_URL="${HOSTED_CANARY_HEALTH_URL:-https://${HOSTED_CANARY_SUBDOMAIN}.longhouse.ai/api/health}"
 DEMO_HEALTH_URL="${DEMO_HEALTH_URL:-https://longhouse.ai/api/health}"
