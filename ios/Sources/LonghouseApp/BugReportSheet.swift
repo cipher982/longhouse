@@ -11,6 +11,8 @@ struct BugReportSheet: View {
     let initialContextJSON: Data
     let initialScreenshot: Data?
     let onSent: ((String) -> Void)?
+    let onSaved: (() -> Void)?
+    let autoStartFix: Bool
 
     private enum FailureAction: Equatable {
         case retryHandoff
@@ -41,12 +43,16 @@ struct BugReportSheet: View {
         sourceSessionID: String?,
         contextJSON: Data,
         screenshotData: Data?,
-        onSent: ((String) -> Void)? = nil
+        autoStartFix: Bool = false,
+        onSent: ((String) -> Void)? = nil,
+        onSaved: (() -> Void)? = nil
     ) {
         self.sourceSessionID = sourceSessionID
         self.initialContextJSON = contextJSON
         self.initialScreenshot = screenshotData
+        self.autoStartFix = autoStartFix
         self.onSent = onSent
+        self.onSaved = onSaved
         _screenshotData = State(initialValue: screenshotData)
     }
 
@@ -163,6 +169,20 @@ struct BugReportSheet: View {
             }
             .task {
                 restoreDraft()
+                guard autoStartFix else { return }
+                await Task.yield()
+                if reportID != nil {
+                    showingLaunchPicker = true
+                }
+            }
+            .onChange(of: showingLaunchPicker) { _, isPresented in
+                guard !isPresented,
+                      autoStartFix,
+                      reportID != nil,
+                      targetSessionID == nil,
+                      !isSending
+                else { return }
+                dismiss()
             }
             .onChange(of: description) { _, _ in scheduleDraftSave() }
             .onChange(of: photoItems) { _, items in
@@ -238,7 +258,10 @@ struct BugReportSheet: View {
             draftSaveTask?.cancel()
             draftSaveTask = nil
             saveDraft()
-            statusMessage = "Report saved. Start a fix when you’re ready."
+            // A successful save ends the form task. The parent owns the
+            // confirmation and any optional handoff action.
+            dismiss()
+            onSaved?()
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? "Could not save the bug report."
         }
@@ -288,7 +311,7 @@ struct BugReportSheet: View {
             BugReportLocalStore.clearDraft()
             BugReportLocalStore.clearHandoff()
             didSend = true
-            statusMessage = "Sent to Console. The agent has the screenshot and diagnostics."
+            dismiss()
             onSent?(sessionID)
         } catch {
             if let apiError = error as? LonghouseAPIError, apiError.structuredCode == "report_in_progress" {
@@ -480,6 +503,45 @@ struct BugReportSheet: View {
     }
 }
 
+struct BugReportSavedBanner: View {
+    let onStartFix: () -> Void
+    let onDone: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(.green)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Report saved")
+                        .font(.headline)
+                    Text("Your screenshot and diagnostics are attached.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 10) {
+                Spacer(minLength: 0)
+                Button("Done", action: onDone)
+                    .buttonStyle(.bordered)
+                Button("Start a fix", action: onStartFix)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(.white.opacity(0.18))
+        }
+        .shadow(color: .black.opacity(0.2), radius: 18, y: 8)
+        .accessibilityIdentifier("bug-report-saved-banner")
+    }
+}
+
 #Preview("Bug report handoff") {
     BugReportSheet(
         sourceSessionID: "session-preview",
@@ -496,4 +558,18 @@ struct BugReportSheet: View {
         screenshotData: nil
     )
     .environmentObject(AppState())
+}
+
+#Preview("Report saved confirmation") {
+    ZStack(alignment: .bottom) {
+        Color(.systemBackground)
+            .ignoresSafeArea()
+        BugReportSavedBanner(
+            onStartFix: {},
+            onDone: {}
+        )
+        .padding(16)
+    }
+    .preferredColorScheme(.dark)
+    .frame(width: 390, height: 844)
 }

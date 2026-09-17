@@ -36,6 +36,7 @@ import { useComposerAttachments } from "../lib/useComposerAttachments";
 import { Badge, Button } from "./ui";
 import { AttachmentTray } from "./AttachmentTray";
 import { ManagedLaunchHintCard } from "./session-workspace/ManagedLaunchHintCard";
+import type { OutboxEntry } from "./session-workspace/OutboxRow";
 import { Nixie } from "./instruments/Nixie";
 import { getRunningTurnStartMs } from "./instruments/toolActivity";
 import {
@@ -58,8 +59,20 @@ interface PendingManagedLocalInput {
   serverInputId: number | null;
   intent: "auto" | "queue" | "steer";
   attachments: { blob: Blob; filename: string }[];
-  phase: "submitting" | "queued" | "unknown";
+  /** `delivered`: the server confirmed handoff; the row stays until the
+   *  transcript echoes it so the message never blinks out in between. */
+  phase: "submitting" | "queued" | "unknown" | "delivered";
+  deliveredAt?: number;
+  /** Same-text user rows that cannot be this send's echo: those loaded when
+   *  it started, plus rows other sends have already claimed. */
+  echoExcludedRowIds?: string[];
 }
+
+/** A delivered message normally echoes within seconds. If the echo never
+ *  lands in the loaded transcript, stop showing the provisional row. */
+const DELIVERED_ECHO_GRACE_MS = 60_000;
+const UNCONFIRMED_DELIVERY_ERROR =
+  "Delivery is not confirmed; retry with the same request.";
 
 interface SessionChatProps {
   session: SessionChatTarget;
@@ -103,6 +116,12 @@ interface SessionChatProps {
    * not as a separate heading above the composer.
    */
   composerHeaderAccessory?: ReactNode;
+  /**
+   * When provided, in-flight, queued, and failed sends are reported here for
+   * the transcript to render at its tail instead of stacking inside the
+   * composer.
+   */
+  onOutboxChange?: (entries: OutboxEntry[]) => void;
 }
 
 export type SessionChatTarget = Pick<
@@ -321,11 +340,11 @@ async function loadInputOutboxes(
   }
   return loaded;
 }
-function timelineHasDurableSubmittedInput(
+function durableSubmittedInputRowId(
   timelineItems: TimelineItem[],
   pendingInput: PendingManagedLocalInput,
-): boolean {
-  return timelineItems.some((item) => {
+): string | null {
+  const match = timelineItems.find((item) => {
     if (item.kind !== "message") return false;
     const { event } = item;
     if (event.role !== "user" || event.is_head_branch === false) return false;
@@ -342,7 +361,53 @@ function timelineHasDurableSubmittedInput(
       origin.client_request_id === pendingInput.clientRequestId,
     );
   });
+  return match?.kind === "message" ? String(match.event.id) : null;
 }
+function normalizeInputText(value: string | null | undefined): string {
+  return (value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function userRowIdsWithText(
+  timelineItems: TimelineItem[] | undefined,
+  text: string,
+): string[] {
+  const target = normalizeInputText(text);
+  if (!target || !timelineItems) return [];
+  const ids: string[] = [];
+  for (const item of timelineItems) {
+    if (item.kind !== "message") continue;
+    const { event } = item;
+    if (event.role !== "user" || event.is_head_branch === false) continue;
+    if (normalizeInputText(event.content_text) === target) {
+      ids.push(String(event.id));
+    }
+  }
+  return ids;
+}
+
+/** Delivery is already confirmed, so only the visible row is at stake: the
+ *  receipt-to-event link lands after ingest, and a new same-text user row
+ *  nobody else has claimed is this message seen before its identity is
+ *  stamped. Returns that row's id. */
+function deliveredTextEchoRowId(
+  timelineItems: TimelineItem[],
+  pendingInput: PendingManagedLocalInput,
+  claimedRowIds: Set<string>,
+): string | null {
+  if (
+    pendingInput.phase !== "delivered" ||
+    pendingInput.echoExcludedRowIds == null
+  ) {
+    return null;
+  }
+  const excluded = new Set(pendingInput.echoExcludedRowIds);
+  return (
+    userRowIdsWithText(timelineItems, pendingInput.text).find(
+      (id) => !excluded.has(id) && !claimedRowIds.has(id),
+    ) ?? null
+  );
+}
+
 function inputErrorCode(error?: string | null): string | null {
   const normalized = error?.trim().toLowerCase();
   if (!normalized) return null;
@@ -392,7 +457,9 @@ export function SessionChat({
   canSteerActiveTurn = false,
   timelineItems,
   composerHeaderAccessory,
+  onOutboxChange,
 }: SessionChatProps) {
+  const outboxInTranscript = Boolean(onOutboxChange);
   const activity = session.session_state.activity;
   const renderNowMs = Date.now();
   const activityNowMs = Math.max(
@@ -465,6 +532,8 @@ export function SessionChat({
   }, [session.id]);
 
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const timelineItemsRef = useRef(timelineItems);
+  timelineItemsRef.current = timelineItems;
   const sentConfirmationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -513,23 +582,92 @@ export function SessionChat({
 
   useEffect(() => {
     if (pendingManagedLocalInputs.length === 0 || !timelineItems) return;
-    const resolvedIds = pendingManagedLocalInputs
-      .filter(
-        (pending) =>
-          pending.attachments.length === 0 &&
-          timelineHasDurableSubmittedInput(timelineItems, pending),
-      )
-      .map((pending) => pending.clientRequestId);
+    // Oldest first, and each echo row resolves exactly one send: a row
+    // claimed here is excluded for every later same-text send, now and in
+    // later passes, so one echo never clears two identical sends.
+    const claimedRowIds = new Set<string>();
+    const resolvedIds: string[] = [];
+    for (const pending of pendingManagedLocalInputs) {
+      const identityRow =
+        pending.attachments.length === 0 || pending.phase === "delivered"
+          ? durableSubmittedInputRowId(timelineItems, pending)
+          : null;
+      const echoRow =
+        identityRow ??
+        deliveredTextEchoRowId(timelineItems, pending, claimedRowIds);
+      if (echoRow == null) continue;
+      resolvedIds.push(pending.clientRequestId);
+      claimedRowIds.add(echoRow);
+    }
     if (resolvedIds.length === 0) return;
     for (const clientRequestId of resolvedIds) {
       clearInputOutbox(session.id, clientRequestId);
     }
     setPendingManagedLocalInputs((current) =>
-      current.filter(
-        (pending) => !resolvedIds.includes(pending.clientRequestId),
-      ),
+      current
+        .filter((pending) => !resolvedIds.includes(pending.clientRequestId))
+        .map((pending) =>
+          pending.echoExcludedRowIds == null
+            ? pending
+            : {
+                ...pending,
+                echoExcludedRowIds: [
+                  ...new Set([
+                    ...pending.echoExcludedRowIds,
+                    ...claimedRowIds,
+                  ]),
+                ],
+              },
+        ),
     );
   }, [pendingManagedLocalInputs, session.id, timelineItems]);
+
+  // Delivery is settled once the server confirms it, so the durable retry
+  // slot is released immediately; only the visible row waits for the echo.
+  const markInputDelivered = useCallback(
+    (clientRequestId: string, serverInputId: number | null | undefined) => {
+      clearInputOutbox(session.id, clientRequestId);
+      const deliveredAt = Date.now();
+      setPendingManagedLocalInputs((current) =>
+        current.map((pending) =>
+          pending.clientRequestId === clientRequestId &&
+          pending.phase !== "delivered"
+            ? {
+                ...pending,
+                phase: "delivered",
+                deliveredAt,
+                serverInputId: serverInputId ?? pending.serverInputId,
+              }
+            : pending,
+        ),
+      );
+    },
+    [session.id],
+  );
+
+  useEffect(() => {
+    const delivered = pendingManagedLocalInputs.filter(
+      (pending) => pending.phase === "delivered",
+    );
+    if (delivered.length === 0) return;
+    const oldest = Math.min(
+      ...delivered.map((pending) => pending.deliveredAt ?? Date.now()),
+    );
+    const timer = setTimeout(
+      () => {
+        const cutoff = Date.now() - DELIVERED_ECHO_GRACE_MS;
+        setPendingManagedLocalInputs((current) =>
+          current.filter(
+            (pending) =>
+              pending.phase !== "delivered" ||
+              (pending.deliveredAt ?? 0) > cutoff,
+          ),
+        );
+      },
+      Math.max(0, oldest + DELIVERED_ECHO_GRACE_MS - Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [pendingManagedLocalInputs]);
 
   const lockStatusQuery = useQuery<SessionLockInfo | null>({
     queryKey: ["session-lock", session.id],
@@ -589,10 +727,15 @@ export function SessionChat({
         const receipt = queuedInputsQuery.data.find(
           (row) => row.client_request_id === pending.clientRequestId,
         );
-        if (!receipt) return pending;
+        if (!receipt || pending.phase === "delivered") return pending;
         if (receipt.status === "delivered") {
-          resolvedIds.push(pending.clientRequestId);
-          return pending;
+          clearInputOutbox(session.id, pending.clientRequestId);
+          return {
+            ...pending,
+            phase: "delivered",
+            deliveredAt: Date.now(),
+            serverInputId: receipt.id ?? pending.serverInputId,
+          };
         }
         if (
           receipt.status === "cancelled" ||
@@ -689,6 +832,10 @@ export function SessionChat({
         intent,
         attachments,
         phase: "submitting",
+        echoExcludedRowIds: userRowIdsWithText(
+          timelineItemsRef.current,
+          message,
+        ),
       };
       setPendingManagedLocalInputs((current) => {
         const existing = current.some(
@@ -724,8 +871,11 @@ export function SessionChat({
           (row) => row.client_request_id === clientRequestId,
         );
         const terminalStatus = receipt?.status;
+        if (terminalStatus === "delivered") {
+          markInputDelivered(clientRequestId, result.input_id ?? receipt?.id);
+          return true;
+        }
         if (
-          terminalStatus === "delivered" ||
           terminalStatus === "cancelled" ||
           (terminalStatus === "failed" &&
             !hasUnknownDeliveryError(receipt?.last_error))
@@ -736,15 +886,13 @@ export function SessionChat({
               (pending) => pending.clientRequestId !== clientRequestId,
             ),
           );
-          if (terminalStatus !== "delivered") {
-            setError(
-              receipt?.last_error ||
-                (terminalStatus === "cancelled"
-                  ? "Input was cancelled before delivery."
-                  : "Input delivery failed."),
-            );
-          }
-          return terminalStatus === "delivered";
+          setError(
+            receipt?.last_error ||
+              (terminalStatus === "cancelled"
+                ? "Input was cancelled before delivery."
+                : "Input delivery failed."),
+          );
+          return false;
         }
         if (result.outcome === "unknown") {
           setPendingManagedLocalInputs((current) =>
@@ -754,7 +902,7 @@ export function SessionChat({
                 : pending,
             ),
           );
-          setError("Delivery is not confirmed; retry with the same request.");
+          setError(UNCONFIRMED_DELIVERY_ERROR);
           return false;
         }
         if (
@@ -769,7 +917,7 @@ export function SessionChat({
                 : pending,
             ),
           );
-          setError("Delivery is not confirmed; retry with the same request.");
+          setError(UNCONFIRMED_DELIVERY_ERROR);
           return false;
         }
         if (result.outcome === "sent") {
@@ -790,12 +938,7 @@ export function SessionChat({
             2000,
           );
           void refreshCurrentSessionWorkspace();
-          clearInputOutbox(session.id, clientRequestId);
-          setPendingManagedLocalInputs((current) =>
-            current.filter(
-              (pending) => pending.clientRequestId !== clientRequestId,
-            ),
-          );
+          markInputDelivered(clientRequestId, result.input_id ?? receipt?.id);
         } else if (
           receipt?.status !== "cancelled" &&
           hasUnknownDeliveryError(receipt?.last_error)
@@ -807,7 +950,7 @@ export function SessionChat({
                 : pending,
             ),
           );
-          setError("Delivery is not confirmed; retry with the same request.");
+          setError(UNCONFIRMED_DELIVERY_ERROR);
           return false;
         } else if (receipt?.status === "queued") {
           setPendingManagedLocalInputs((current) =>
@@ -846,7 +989,7 @@ export function SessionChat({
                 : pending,
             ),
           );
-          setError("Delivery is not confirmed; retry with the same request.");
+          setError(UNCONFIRMED_DELIVERY_ERROR);
           return false;
         }
         return true;
@@ -865,12 +1008,7 @@ export function SessionChat({
           // Preserve the request error when the receipt cannot be refreshed.
         }
         if (persistedReceipt?.status === "delivered") {
-          clearInputOutbox(session.id, clientRequestId);
-          setPendingManagedLocalInputs((current) =>
-            current.filter(
-              (pending) => pending.clientRequestId !== clientRequestId,
-            ),
-          );
+          markInputDelivered(clientRequestId, persistedReceipt.id);
           return true;
         }
         if (
@@ -884,7 +1022,7 @@ export function SessionChat({
                 : pending,
             ),
           );
-          setError("Delivery is not confirmed; retry with the same request.");
+          setError(UNCONFIRMED_DELIVERY_ERROR);
           return false;
         }
         if (
@@ -943,8 +1081,8 @@ export function SessionChat({
         } else {
           setError(
             e instanceof Error
-              ? `${e.message}. Delivery is not confirmed; retry with the same request.`
-              : "Delivery is not confirmed; retry with the same request.",
+              ? `${e.message}. ${UNCONFIRMED_DELIVERY_ERROR}`
+              : UNCONFIRMED_DELIVERY_ERROR,
           );
           setPendingManagedLocalInputs((current) =>
             current.map((pending) =>
@@ -959,7 +1097,12 @@ export function SessionChat({
         setIsSubmitting(false);
       }
     },
-    [queryClient, refreshCurrentSessionWorkspace, session.id],
+    [
+      markInputDelivered,
+      queryClient,
+      refreshCurrentSessionWorkspace,
+      session.id,
+    ],
   );
 
   const handleCancelQueuedInput = useCallback(
@@ -976,6 +1119,15 @@ export function SessionChat({
                 : row.id !== input.id,
             ),
         );
+        const clientRequestId = input.client_request_id;
+        if (clientRequestId) {
+          clearInputOutbox(session.id, clientRequestId);
+          setPendingManagedLocalInputs((current) =>
+            current.filter(
+              (pending) => pending.clientRequestId !== clientRequestId,
+            ),
+          );
+        }
         void queuedInputsQuery.refetch();
       } catch (e) {
         setError(
@@ -1172,6 +1324,155 @@ export function SessionChat({
     if (!sent) setTurnEndedDraft(text);
   }, [turnEndedDraft, handleManagedLocalSend]);
 
+  // Actions go through a ref so the reported entries only change when what
+  // the user sees changes, not whenever a handler closure is rebuilt.
+  const outboxActionsRef = useRef({
+    retry: handleManagedLocalSend,
+    cancel: handleCancelQueuedInput,
+    queueInstead: handleQueueInsteadAfterTurnEnded,
+  });
+  outboxActionsRef.current = {
+    retry: handleManagedLocalSend,
+    cancel: handleCancelQueuedInput,
+    queueInstead: handleQueueInsteadAfterTurnEnded,
+  };
+  const outboxEntries = useMemo<OutboxEntry[]>(() => {
+    if (!isManagedLocal) return [];
+    const rows = queuedInputsQuery.data ?? [];
+    const receiptFor = (clientRequestId: string) =>
+      rows.find((row) => row.client_request_id === clientRequestId);
+    const pendingIds = new Set(
+      pendingManagedLocalInputs.map((pending) => pending.clientRequestId),
+    );
+    const cancelAction = (row: QueuedInputSummary) => ({
+      label: "Cancel",
+      onClick: () => void outboxActionsRef.current.cancel(row),
+    });
+    const failed: OutboxEntry[] = [];
+    const inFlight: OutboxEntry[] = [];
+    const queued: OutboxEntry[] = [];
+
+    for (const row of rows) {
+      if (row.client_request_id && pendingIds.has(row.client_request_id))
+        continue;
+      const key = `receipt:${row.client_request_id ?? row.live_input_id ?? row.id ?? row.text}`;
+      if (row.intent === "steer" && row.last_error === "turn_ended") continue;
+      if (hasUnknownDeliveryError(row.last_error)) {
+        inFlight.push({
+          key,
+          text: row.text,
+          state: "unconfirmed",
+          detail: hasRuntimeDrainingError(row.last_error)
+            ? "runtime restarting"
+            : null,
+        });
+      } else if (row.status === "delivering") {
+        inFlight.push({ key, text: row.text, state: "sending" });
+      } else if (row.status === "queued") {
+        queued.push({
+          key,
+          text: row.text,
+          state: "queued",
+          actions: [cancelAction(row)],
+        });
+      } else if (
+        row.status === "failed" ||
+        // A cancel the user asked for needs no tombstone; one with a reason
+        // was the system's call and stays visible.
+        (row.status === "cancelled" && row.last_error)
+      ) {
+        failed.push({
+          key,
+          text: row.text,
+          state: "failed",
+          detail: row.last_error || null,
+        });
+      }
+    }
+
+    for (const pending of pendingManagedLocalInputs) {
+      const key = `pending:${pending.clientRequestId}`;
+      const receipt = receiptFor(pending.clientRequestId);
+      // A queued send the server is draining right now is mid-delivery, not
+      // ambiguous; the reconciler files it under `unknown` only for lack of
+      // a closer phase.
+      const serverDelivering =
+        receipt?.status === "delivering" &&
+        !hasUnknownDeliveryError(receipt.last_error);
+      if (pending.phase === "unknown" && !serverDelivering) {
+        inFlight.push({
+          key,
+          text: pending.text,
+          state: "unconfirmed",
+          detail: hasRuntimeDrainingError(receipt?.last_error)
+            ? "runtime restarting"
+            : null,
+          actions: [
+            {
+              label: "Retry",
+              disabled: isSubmitting,
+              onClick: () =>
+                void outboxActionsRef.current.retry(
+                  pending.text,
+                  pending.intent,
+                  pending.attachments,
+                  pending.clientRequestId,
+                ),
+            },
+          ],
+        });
+      } else if (pending.phase === "queued") {
+        queued.push({
+          key,
+          text: pending.text,
+          state: "queued",
+          actions:
+            receipt?.status === "queued" ? [cancelAction(receipt)] : undefined,
+        });
+      } else {
+        inFlight.push({ key, text: pending.text, state: "sending" });
+      }
+    }
+
+    if (turnEndedDraft) {
+      failed.push({
+        key: "turn-ended",
+        text: turnEndedDraft,
+        state: "failed",
+        detail: "the turn ended before it arrived",
+        actions: [
+          {
+            label: "Queue instead",
+            onClick: () => void outboxActionsRef.current.queueInstead(),
+          },
+          { label: "Dismiss", onClick: () => setTurnEndedDraft(null) },
+        ],
+      });
+    }
+    return [...failed, ...inFlight, ...queued];
+  }, [
+    isManagedLocal,
+    isSubmitting,
+    pendingManagedLocalInputs,
+    queuedInputsQuery.data,
+    turnEndedDraft,
+  ]);
+  useEffect(() => {
+    onOutboxChange?.(outboxEntries);
+  }, [onOutboxChange, outboxEntries]);
+  useEffect(() => {
+    if (!onOutboxChange) return;
+    return () => onOutboxChange([]);
+  }, [onOutboxChange]);
+  // The transcript row already says "Not confirmed" / "Not delivered" with
+  // its own Retry or Queue-instead action; repeating it above the composer
+  // is noise.
+  const errorShownInTranscript =
+    outboxInTranscript &&
+    Boolean(error) &&
+    (Boolean(turnEndedDraft) ||
+      (error?.endsWith(UNCONFIRMED_DELIVERY_ERROR) ?? false));
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -1247,7 +1548,7 @@ export function SessionChat({
   // separate block floating above it. Non-dock (panel) layout keeps it
   // above the composer, where it has always lived.
   const queuedBanner =
-    isManagedLocal && activeQueuedInputs.length > 0 ? (
+    isManagedLocal && !outboxInTranscript && activeQueuedInputs.length > 0 ? (
       <div className="session-chat-queued" data-testid="session-chat-queued">
         <div className="session-chat-queued__label">
           {activeQueuedInputs.some((row) =>
@@ -1339,7 +1640,7 @@ export function SessionChat({
         </div>
       )}
 
-      {error && (
+      {error && !errorShownInTranscript && (
         <div className="session-chat-error">
           <span>{error}</span>
           <button type="button" onClick={() => setError(null)}>
@@ -1380,7 +1681,7 @@ export function SessionChat({
         </div>
       )}
 
-      {turnEndedDraft ? (
+      {turnEndedDraft && !outboxInTranscript ? (
         <div
           className="session-chat-queued session-chat-queued--failed"
           data-testid="session-chat-turn-ended"
@@ -1408,7 +1709,7 @@ export function SessionChat({
 
       {!isDock ? queuedBanner : null}
 
-      {isManagedLocal && failedInputs.length > 0 ? (
+      {isManagedLocal && !outboxInTranscript && failedInputs.length > 0 ? (
         <div
           className="session-chat-queued session-chat-queued--failed"
           data-testid="session-chat-queued-failed"
@@ -1588,8 +1889,10 @@ export function SessionChat({
                 aria-hidden="true"
               />
             )}
-            {isManagedLocal && pendingManagedLocalInputs.length > 0
-              ? pendingManagedLocalInputs.map((pendingInput) => (
+            {isManagedLocal && !outboxInTranscript
+              ? pendingManagedLocalInputs
+                  .filter((pendingInput) => pendingInput.phase !== "delivered")
+                  .map((pendingInput) => (
                   <div
                     className="session-chat-pending-message"
                     key={pendingInput.clientRequestId}
@@ -1652,7 +1955,7 @@ export function SessionChat({
                   disabled={isSubmitting}
                   rows={1}
                 />
-                {isManagedLocal && sentConfirmation ? (
+                {isManagedLocal && sentConfirmation && !outboxInTranscript ? (
                   <span className="session-chat-sent-notice">Sent</span>
                 ) : null}
                 {showInlineInterrupt ? (

@@ -79,6 +79,22 @@ def test_mirrored_v4_proofs_certify_a_chip_without_exposing_evidence(monkeypatch
             assert response.status_code == 201, response.text
         assert resolver.calls, "publication must verify the referenced bytes"
 
+        controls = {
+            "schema_version": 1,
+            "artifact_kind": "provider_negative_control_snapshot",
+            "epoch_digest": "sha256:" + "e" * 64,
+            "published_at": "2026-09-17T00:55:00Z",
+            "controls": [
+                {"provider": "pi", "target_assertion": a.assertion_id, "fault": f"fault-{a.assertion_id}", "verdict": "pass"} for a in edge
+            ],
+        }
+        published = client.post(
+            "/api/internal/provider-negative-controls",
+            headers={"X-Provider-Capability-Factory-Token": "fixture-factory-token"},
+            json=controls,
+        )
+        assert published.status_code == 201, published.text
+
         reads_after_publication = list(resolver.calls)
         payload = routes.build_chip_certification_payload(now=NOW)
         chip = next(row for row in payload["providers"] if row["provider"] == "pi")["chips"]["steerMidTurn"]
@@ -98,3 +114,26 @@ def test_demo_host_without_a_resolver_refuses_v4_publication(monkeypatch, tmp_pa
         response = _publish(client, bundle)
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "provider_capability_blob_store_unavailable"
+
+
+def test_demo_guard_admits_only_the_token_gated_factory_publication_writes() -> None:
+    import asyncio
+
+    from zerg.middleware.demo_guard import DemoGuardMiddleware
+
+    reached: list[str] = []
+
+    async def app(scope, receive, send):
+        reached.append(scope["path"])
+
+    async def send(message):
+        pass
+
+    guard = DemoGuardMiddleware(app)
+    for path in (
+        "/api/internal/provider-capability-proofs",
+        "/api/internal/provider-negative-controls",
+        "/api/agents/sessions",
+    ):
+        asyncio.run(guard({"type": "http", "method": "POST", "path": path}, None, send))
+    assert reached == ["/api/internal/provider-capability-proofs", "/api/internal/provider-negative-controls"]

@@ -66,6 +66,8 @@ struct TimelineView: View {
     @State private var settingsPresented = false
     @State private var path: [SessionRoute] = []
     @State private var isShowingBugReport = false
+    @State private var bugReportAutoStartFix = false
+    @State private var isShowingBugReportSavedAlert = false
     @State private var bugReportScreenshot: Data?
     @State private var bugReportContextJSON = Data("{}".utf8)
     @State private var searchText = ""
@@ -228,10 +230,31 @@ struct TimelineView: View {
                     sourceSessionID: nil,
                     contextJSON: bugReportContextJSON,
                     screenshotData: bugReportScreenshot,
+                    autoStartFix: bugReportAutoStartFix,
                     onSent: { sessionID in
                         path.append(SessionRoute(sessionId: sessionID, fallbackTitle: "Bug report"))
+                    },
+                    onSaved: {
+                        showBugReportSavedAlert()
                     }
                 )
+            }
+            .overlay(alignment: .bottom) {
+                if isShowingBugReportSavedAlert {
+                    BugReportSavedBanner(
+                        onStartFix: {
+                            isShowingBugReportSavedAlert = false
+                            bugReportAutoStartFix = true
+                            isShowingBugReport = true
+                        },
+                        onDone: {
+                            isShowingBugReportSavedAlert = false
+                        }
+                    )
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 16)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
             .refreshable {
                 if normalizedSearch.isEmpty {
@@ -299,11 +322,20 @@ struct TimelineView: View {
         }
     }
     private func presentBugReport() {
+        bugReportAutoStartFix = false
         bugReportContextJSON = BugReportContext.timeline(serverURL: appState.serverURL)
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 350_000_000)
             bugReportScreenshot = BugReportScreenCapture.captureJPEG()
             isShowingBugReport = true
+        }
+    }
+
+    private func showBugReportSavedAlert() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            isShowingBugReportSavedAlert = true
         }
     }
 

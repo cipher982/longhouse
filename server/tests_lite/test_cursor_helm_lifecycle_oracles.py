@@ -86,6 +86,27 @@ def test_abort_requires_aborted_stop_without_response() -> None:
     assert abort_stopped_generation(finished, generation_id="c1", forbidden_marker="FORBIDDEN")["passed"] is False
 
 
+def test_abort_passes_only_when_a_following_generation_completes() -> None:
+    aborted = [{"event": "stop", "generation_id": "c1", "status": "aborted"}]
+    recovered = [
+        {"event": "afterAgentResponse", "generation_id": "c2", "text": "RECOVERED"},
+        {"event": "stop", "generation_id": "c2", "status": "completed"},
+    ]
+    passed = abort_stopped_generation(aborted + recovered, generation_id="c1", forbidden_marker="FORBIDDEN", recovery_marker="RECOVERED")
+    assert passed["passed"] is True
+    assert passed["following_turn_completed"] is True
+
+    # The abort stopped the generation, but the surviving session never
+    # finished a following turn.
+    never_recovered = abort_stopped_generation(aborted, generation_id="c1", forbidden_marker="FORBIDDEN", recovery_marker="RECOVERED")
+    assert never_recovered["passed"] is False
+    assert never_recovered["following_turn_completed"] is False
+    unfinished = abort_stopped_generation(
+        aborted + recovered[:1], generation_id="c1", forbidden_marker="FORBIDDEN", recovery_marker="RECOVERED"
+    )
+    assert unfinished["passed"] is False
+
+
 def _report(*, status: str, steer: dict) -> dict:
     return {
         "status": status,
