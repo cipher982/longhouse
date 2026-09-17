@@ -969,7 +969,7 @@ struct SessionViewModelTests {
             sendResponse: SessionInputResponse(
                 outcome: .sent,
                 inputId: nil,
-                clientRequestId: "request-console",
+                clientRequestId: nil,
                 turn: ConsoleTurnReceipt(
                     turnId: "turn-1",
                     runId: "run-1",

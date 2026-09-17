@@ -231,42 +231,42 @@ final class HTTPOutboxUITests: XCTestCase {
     }
 
     private func chooseSeededPhoto(in app: XCUIApplication) {
-        let pickerButtons = app.buttons["Add"]
-        let pickerImage = app.images.firstMatch
-        let pickerCells = app.collectionViews.cells
-        if pickerImage.waitForExistence(timeout: 10) {
-            pickerImage.tap()
-            XCTAssertTrue(pickerButtons.waitForExistence(timeout: 5), "PhotosPicker did not expose its Add action")
-            pickerButtons.tap()
-            return
-        }
-        if pickerCells.firstMatch.waitForExistence(timeout: 5) {
-            pickerCells.firstMatch.tap()
-            XCTAssertTrue(pickerButtons.waitForExistence(timeout: 5), "PhotosPicker did not expose its Add action")
-            pickerButtons.tap()
+        // PHPicker's photo tiles are collection-view cells. The host app still
+        // exposes the composer's plus glyph while PhotosPicker is presented,
+        // so querying app.images would select the wrong element.
+        let pickerApplications: [(String, XCUIApplication)] = [
+            ("PhotosUIService", XCUIApplication(bundleIdentifier: "com.apple.PhotosUIService")),
+            ("PhotosViewService", XCUIApplication(bundleIdentifier: "com.apple.PhotosViewService")),
+            ("host app", app),
+        ]
+
+        for (name, picker) in pickerApplications {
+            let photo = picker.collectionViews.cells.firstMatch
+            guard photo.waitForExistence(timeout: 5) else { continue }
+            guard waitUntilHittable(photo, timeout: 5) else {
+                XCTFail("\(name) PhotosPicker seeded photo was not hittable")
+                return
+            }
+            photo.tap()
+
+            let add = picker.buttons["Add"]
+            guard add.waitForExistence(timeout: 5) else {
+                XCTFail("\(name) PhotosPicker did not expose its Add action")
+                return
+            }
+            add.tap()
             return
         }
 
-        // PHPicker may be hosted in a PhotosUI service rather than the app's
-        // accessibility tree on a particular simulator runtime.
-        for bundleIdentifier in ["com.apple.PhotosUIService", "com.apple.PhotosViewService"] {
-            let photos = XCUIApplication(bundleIdentifier: bundleIdentifier)
-            let photosImage = photos.images.firstMatch
-            if photosImage.waitForExistence(timeout: 5) {
-                photosImage.tap()
-            } else {
-                let cells = photos.collectionViews.cells
-                guard cells.firstMatch.waitForExistence(timeout: 5) else { continue }
-                cells.firstMatch.tap()
-            }
-            XCTAssertTrue(
-                photos.buttons["Add"].waitForExistence(timeout: 5),
-                "\(bundleIdentifier) did not expose its Add action"
-            )
-            photos.buttons["Add"].tap()
-            return
-        }
-        XCTFail("seeded simulator Photos asset was not visible in PHPicker")
+        XCTFail("seeded simulator Photos asset was not visible in the PhotosPicker grid")
+    }
+
+    private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hittable == true"),
+            object: element
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
     }
 
     private func waitForWebViewText(

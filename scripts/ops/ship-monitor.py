@@ -39,6 +39,9 @@ DEFAULT_CANARY_HEALTH_URL = f"https://{DEFAULT_CANARY_SUBDOMAIN}.longhouse.ai/ap
 RUNTIME_IMAGE_PATHS = (
     ".dockerignore",
     "bun.lock",
+    "package.json",
+    "e2e/package.json",
+    "runner/package.json",
     "config",
     "docker/entrypoint.sh",
     "docker/runtime.dockerfile",
@@ -46,6 +49,9 @@ RUNTIME_IMAGE_PATHS = (
     "schemas",
     "server",
     "web",
+    "video/src",
+    "video/scripts",
+    "video/package.json",
     ".github/workflows/runtime-image.yml",
 )
 

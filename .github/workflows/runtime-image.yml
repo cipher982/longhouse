@@ -8,15 +8,20 @@ on:
     paths:
       - '.dockerignore'
       - 'bun.lock'
+      - 'package.json'
+      - 'e2e/package.json'
+      - 'runner/package.json'
       - 'config/**'
       - 'docker/entrypoint.sh'
       - 'docker/runtime.dockerfile'
       - 'engine/**'
+      - 'schemas/**'
       - 'server/**'
       - 'web/**'
       # video/src is a web-runtime input: the landing hero imports the demo
       # script + recordings from @longhouse/video (workspace source).
       - 'video/src/**'
+      - 'video/scripts/**'
       - 'video/package.json'
       - 'scripts/ops/runtime-schema.py'
       - 'scripts/ops/release-artifacts.py'

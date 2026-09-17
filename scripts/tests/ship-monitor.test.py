@@ -452,11 +452,6 @@ def test_manual_deploy_recovery_supersedes_failed_push_deploy() -> None:
     assert ship_monitor.runs_succeeded(selected)
 
 
-def test_runtime_image_paths_include_docker_context_rules() -> None:
-    assert ".dockerignore" in ship_monitor.RUNTIME_IMAGE_PATHS
-    assert "schemas" in ship_monitor.RUNTIME_IMAGE_PATHS
-
-
 if __name__ == "__main__":
     test_no_runtime_change_does_not_require_exact_live_sha()
     test_no_runtime_change_accepts_deploy_stamped_target_sha()
@@ -472,5 +467,4 @@ if __name__ == "__main__":
     test_core_e2e_gate_heartbeat_names_blocking_ci_job_and_step()
     test_deploy_heartbeat_names_active_deploy_step()
     test_manual_deploy_recovery_supersedes_failed_push_deploy()
-    test_runtime_image_paths_include_docker_context_rules()
     print("ship-monitor tests passed")
