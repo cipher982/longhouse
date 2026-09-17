@@ -819,6 +819,15 @@ impl OmpHelmServer {
             state.state.agent_end_will_continue_present =
                 event.and_then(|value| value.get("willContinue")).is_some();
         }
+        // A terminal agent_end is the settled boundary for this turn. OMP can
+        // emit delayed activity/tool frames while the TUI is draining; those
+        // frames must not revive the mirrored phase until the next agent_start.
+        if state.state.agent_end_is_terminal == Some(true)
+            && kind != "agent_start"
+            && kind != "agent_end"
+        {
+            return;
+        }
         if let Some(delta) = live_delta.as_deref() {
             Self::append_live_text(&mut state.live_assistant_text, delta);
             state.live_text_seq = state.live_text_seq.saturating_add(1);
@@ -2497,7 +2506,24 @@ mod tests {
             assert_eq!(terminal_keepalive.tool_name, None);
             assert_eq!(terminal_keepalive.agent_end_is_terminal, Some(true));
             assert_eq!(persisted()["phase"], "idle");
-
+            server.handle_extension_frame(
+                "connection",
+                json!({
+                    "kind": "activity",
+                    "event": {"type": "activity", "toolName": "late_tool"},
+                    "auth_token": "token",
+                    "session_id": "session",
+                    "native_session_id": "native",
+                    "session_file": "/tmp/session.jsonl",
+                    "connection_id": "connection",
+                    "lease_generation": "generation"
+                }),
+            );
+            let delayed = server.current_state();
+            assert_eq!(delayed.phase, "idle");
+            assert_eq!(delayed.tool_name, None);
+            assert_eq!(delayed.agent_end_is_terminal, Some(true));
+            assert_eq!(persisted()["phase"], "idle");
             server.mark_stopped(None, "provider_exit").unwrap();
             let stopped_runtime_count = read_json_files(&runtime_outbox).len();
             let stopped_local_count = read_json_files(&local_outbox).len();
