@@ -120,8 +120,9 @@ async def test_catalogd_owns_machine_presence_and_apns_registration(daemon_paths
 
 
 @pytest.mark.asyncio
-async def test_catalogd_bootstraps_single_tenant_owner_idempotently(daemon_paths):
+async def test_catalogd_bootstraps_single_tenant_owner_idempotently(daemon_paths, monkeypatch):
     database_path, socket_path = daemon_paths
+    monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_PENDING", "1")
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
     client = CatalogClient(socket_path)
@@ -137,6 +138,21 @@ async def test_catalogd_bootstraps_single_tenant_owner_idempotently(daemon_paths
         assert created["user"]["role"] == "ADMIN"
         assert replay["created"] is False
         assert replay["user"]["id"] == created["user"]["id"]
+        ping = await client.call("ping.v2")
+        assert ping["writer_admission"]["accepting"] is False
+        with pytest.raises(CatalogRemoteError) as closed_exc:
+            await client.call(
+                "auth.device.create.v2",
+                {
+                    "owner_id": created["user"]["id"],
+                    "token_id": str(uuid4()),
+                    "device_id": "closed-admission-test",
+                    "token_hash": "a" * 64,
+                },
+            )
+        assert closed_exc.value.code == "admission_closed"
+        assert closed_exc.value.retryable is True
+        assert closed_exc.value.details == {}
 
         with pytest.raises(CatalogRemoteError) as exc_info:
             await client.call(

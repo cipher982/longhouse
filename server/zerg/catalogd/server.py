@@ -987,7 +987,7 @@ class CatalogDaemon:
         if params["provider_user_id"] is not None and not _is_string(params["provider_user_id"], maximum=255):
             return self._error(request, "invalid_request", "provider_user_id must be a non-empty string or null")
         assert self._store is not None
-        result = await self._run_store(self._store.ensure_single_tenant_owner, **params)
+        result = await self._run_store(self._store.ensure_single_tenant_owner, allow_closed=True, **params)
         if conflict := result.get("conflict"):
             return self._error(
                 request,
