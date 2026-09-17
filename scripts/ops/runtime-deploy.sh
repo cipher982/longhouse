@@ -14,11 +14,17 @@ Required environment:
   CONTROL_PLANE_ADMIN_TOKEN     Deployment API admin token
   INSTANCE_SUBDOMAIN            Explicit hosted target (or LH_TARGET_SUBDOMAIN)
 
-Optional metadata:
-  RUNTIME_SOURCE_SHA, RUNTIME_BUILD_IDENTITY, RUNTIME_SOURCE_WORKFLOW
-  RUNTIME_SOURCE_ORDER, RUNTIME_QUALIFICATION_ID
+Required release provenance:
+  RUNTIME_SOURCE_WORKFLOW, RUNTIME_SOURCE_ORDER, RUNTIME_QUALIFICATION_ID
+  RUNTIME_DEPLOYMENT_IDEMPOTENCY_KEY
+
+Image metadata (read from the immutable image when omitted):
+  RUNTIME_SOURCE_SHA, RUNTIME_BUILD_IDENTITY (full JSON build identity)
   RUNTIME_SCHEMA_VERSION, RUNTIME_SCHEMA_MIN_READER, RUNTIME_SCHEMA_MAX_READER
-  RUNTIME_DEPLOYMENT_IDEMPOTENCY_KEY, RUNTIME_DEPLOYMENT_TIMEOUT
+Optional: RUNTIME_DEPLOY_TIMEOUT
+
+For an explicit operator-selected image, use make reprovision SUBDOMAIN=... IMAGE=...@sha256:...
+That records operator image-metadata qualification, not a canary-pass claim.
 USAGE
 }
 

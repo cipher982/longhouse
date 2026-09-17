@@ -128,6 +128,7 @@ jobs:
       runtime_image_tag: ${{ steps.meta.outputs.runtime_image_tag }}
       runtime_image_ref: ${{ steps.digest.outputs.image_ref }}
       runtime_source_sha: ${{ steps.artifact_schema.outputs.source_sha }}
+      runtime_build_identity: ${{ steps.identity.outputs.build_identity }}
       runtime_source_order: ${{ steps.source.outputs.source_order }}
       runtime_source_workflow: ${{ steps.source.outputs.source_workflow }}
       runtime_schema_version: ${{ steps.artifact_schema.outputs.schema_version }}
@@ -138,6 +139,7 @@ jobs:
         with:
           sparse-checkout: |
             .github/actions
+            scripts/lib/hosted-instance.sh
             scripts/ops/release-artifacts.py
           sparse-checkout-cone-mode: false
           fetch-depth: 1
@@ -153,12 +155,20 @@ jobs:
           IMAGE_TAG=""
 
           if [[ "${{ github.event_name }}" == "push" ]]; then
-          PREDECESSOR_SHA="${{ github.event.before }}"
-          if [[ "$PREDECESSOR_SHA" =~ ^0+$ ]]; then
-            PREDECESSOR_SHA=""
-          fi
+            PREDECESSOR_SHA="${{ github.event.before }}"
+            if [[ "$PREDECESSOR_SHA" =~ ^0+$ ]]; then
+              PREDECESSOR_SHA=""
+            fi
           else
             IMAGE_TAG="${{ github.event.inputs.runtime_image_tag || '' }}"
+            if [[ -z "$IMAGE_TAG" ]]; then
+              IMAGE_TAG="$HEAD_SHA"
+            fi
+            # A manual override selects its own immutable source. Every
+            # downstream checkout and gate must use that same source rather
+            # than silently qualifying the workflow dispatch commit.
+            HEAD_SHA="$IMAGE_TAG"
+            HEAD_BRANCH=""
           fi
 
           if [[ -z "$IMAGE_TAG" ]]; then
@@ -256,13 +266,12 @@ jobs:
         env:
           IMAGE_REF: ${{ steps.digest.outputs.image_ref }}
           HEAD_SHA: ${{ steps.meta.outputs.head_sha }}
-          EVENT_NAME: ${{ github.event_name }}
           REGISTRY_USERNAME: ${{ github.actor }}
           REGISTRY_PASSWORD: ${{ github.token }}
         run: |
           set -euo pipefail
           metadata="$(python3 scripts/ops/release-artifacts.py inspect --image "$IMAGE_REF")"
-          SCHEMA_METADATA="$metadata" HEAD_SHA="$HEAD_SHA" EVENT_NAME="$EVENT_NAME" python3 - "$GITHUB_OUTPUT" <<'PY'
+          SCHEMA_METADATA="$metadata" HEAD_SHA="$HEAD_SHA" python3 - "$GITHUB_OUTPUT" <<'PY'
           import json
           import os
           import re
@@ -272,9 +281,9 @@ jobs:
           source_sha = metadata.get("source_sha")
           if not isinstance(source_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", source_sha):
               raise SystemExit("selected immutable image has no full source revision label; bootstrap historical images before deployment")
-          if os.environ["EVENT_NAME"] == "push" and source_sha != os.environ["HEAD_SHA"]:
+          if source_sha != os.environ["HEAD_SHA"]:
               raise SystemExit(
-                  f"selected immutable image source {source_sha} does not match workflow SHA {os.environ['HEAD_SHA']}"
+                  f"selected immutable image source {source_sha} does not match selected workflow source {os.environ['HEAD_SHA']}"
               )
           with open(sys.argv[1], "a", encoding="utf-8") as output:
               print(f"source_sha={source_sha}", file=output)
@@ -284,6 +293,20 @@ jobs:
                       raise SystemExit(f"artifact schema metadata {name} is not a non-negative integer")
                   print(f"{name}={value}", file=output)
           PY
+      - name: Resolve immutable runtime build identity
+        id: identity
+        env:
+          IMAGE_REF: ${{ steps.digest.outputs.image_ref }}
+          EXPECTED_SOURCE_SHA: ${{ steps.artifact_schema.outputs.source_sha }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          . scripts/lib/hosted-instance.sh
+          _lh_hosted_resolve_build_identity "$IMAGE_REF"
+          normalized="$(_lh_hosted_normalize_build_identity \
+            "$EXPECTED_SOURCE_SHA" "$LH_DEPLOYMENT_BUILD_IDENTITY")"
+          printf 'build_identity=%s\n' "$normalized" >> "$GITHUB_OUTPUT"
 
 
   deploy_demo:
@@ -291,7 +314,7 @@ jobs:
     runs-on: cube-deploy
     if: github.repository == 'cipher982/longhouse'
     timeout-minutes: 60
-    needs: [changes, gate, fast_smoke]
+    needs: [changes, gate, fast_smoke, reprovision_canary]
     outputs:
       deployment_id: ${{ steps.submit_demo.outputs.deployment_id }}
     env:
@@ -302,8 +325,10 @@ jobs:
       CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
       INSTANCE_SUBDOMAIN: demo
       RUNTIME_SOURCE_SHA: ${{ needs.gate.outputs.runtime_source_sha }}
+      RUNTIME_BUILD_IDENTITY: ${{ needs.gate.outputs.runtime_build_identity }}
       RUNTIME_SOURCE_WORKFLOW: ${{ needs.gate.outputs.runtime_source_workflow }}
       RUNTIME_SOURCE_ORDER: ${{ needs.gate.outputs.runtime_source_order }}
+      RUNTIME_QUALIFICATION_ID: canary-${{ needs.reprovision_canary.outputs.deployment_id }}
       RUNTIME_SCHEMA_VERSION: ${{ needs.gate.outputs.runtime_schema_version }}
       RUNTIME_SCHEMA_MIN_READER: ${{ needs.gate.outputs.runtime_schema_min_reader }}
       RUNTIME_SCHEMA_MAX_READER: ${{ needs.gate.outputs.runtime_schema_max_reader }}
@@ -348,8 +373,10 @@ jobs:
       CONTROL_PLANE_URL: ${{ vars.HOSTED_CANARY_CONTROL_PLANE_URL }}
       INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
       LH_DEPLOYMENT_SOURCE_SHA: ${{ needs.gate.outputs.runtime_source_sha }}
+      LH_DEPLOYMENT_BUILD_IDENTITY: ${{ needs.gate.outputs.runtime_build_identity }}
       LH_DEPLOYMENT_SOURCE_WORKFLOW: ${{ needs.gate.outputs.runtime_source_workflow }}
       LH_DEPLOYMENT_SOURCE_ORDER: ${{ needs.gate.outputs.runtime_source_order }}
+      LH_DEPLOYMENT_QUALIFICATION_ID: deploy-gate-${{ github.run_id }}-${{ github.run_attempt }}
       LH_DEPLOYMENT_SCHEMA_VERSION: ${{ needs.gate.outputs.runtime_schema_version }}
       LH_DEPLOYMENT_SCHEMA_MIN_READER: ${{ needs.gate.outputs.runtime_schema_min_reader }}
       LH_DEPLOYMENT_SCHEMA_MAX_READER: ${{ needs.gate.outputs.runtime_schema_max_reader }}

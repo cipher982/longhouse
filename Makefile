@@ -1038,15 +1038,20 @@ provider-live-route-e2e-opencode-transcript: ## Hosted OpenCode route E2E requir
 qa-unmanaged: ## Local smoke for bare Claude/Codex compatibility ingest
 	@./scripts/qa/qa-unmanaged.sh
 
-reprovision: ## Reprovision hosted instance (SUBDOMAIN=$LONGHOUSE_DEFAULT_SUBDOMAIN, optional IMAGE=...)
-	@bash -c 'source scripts/lib/hosted-instance.sh && \
+reprovision: ## Reprovision an explicit immutable image (SUBDOMAIN=..., IMAGE=...@sha256:...)
+	@TARGET_SUBDOMAIN="$(or $(SUBDOMAIN),$(LONGHOUSE_DEFAULT_SUBDOMAIN),demo)" TARGET_IMAGE="$(IMAGE)" bash -c '\
+		source scripts/lib/hosted-instance.sh && \
 		lh_hosted_prepare_control_plane_auth && \
-		lh_hosted_resolve_instance "$(or $(SUBDOMAIN),$(LONGHOUSE_DEFAULT_SUBDOMAIN),demo)" && \
-		lh_hosted_reprovision "$$LH_INSTANCE_ID" "$(IMAGE)" && \
-		echo "Reprovisioned $$LH_INSTANCE_SUBDOMAIN — waiting for health..." && \
-		./scripts/ci/wait-for-http.sh "https://$$LH_INSTANCE_SUBDOMAIN.longhouse.ai/api/health" "$$LH_INSTANCE_SUBDOMAIN health" 30 2 && \
-		curl -sf "https://$$LH_INSTANCE_SUBDOMAIN.longhouse.ai/api/health" | \
-			python3 -c "import sys,json; print(json.load(sys.stdin)[\"status\"])"'
+		lh_hosted_resolve_instance "$$TARGET_SUBDOMAIN" && \
+		_lh_hosted_resolve_image_metadata "$$TARGET_IMAGE" && \
+		LH_DEPLOYMENT_SOURCE_WORKFLOW="$${LH_DEPLOYMENT_SOURCE_WORKFLOW:-manual-reprovision}" && \
+		LH_DEPLOYMENT_SOURCE_ORDER="$${LH_DEPLOYMENT_SOURCE_ORDER:-$$(date +%s)}" && \
+		LH_DEPLOYMENT_QUALIFICATION_ID="$${LH_DEPLOYMENT_QUALIFICATION_ID:-operator-image-$${TARGET_IMAGE##*@sha256:}}" && \
+		LH_DEPLOYMENT_IDEMPOTENCY_KEY="$${LH_DEPLOYMENT_IDEMPOTENCY_KEY:-manual-$$(python3 -c "import uuid; print(uuid.uuid4().hex)")}" && \
+		LH_DEPLOYMENT_REASON="$${LH_DEPLOYMENT_REASON:-operator-requested immutable image metadata qualification}" && \
+		export LH_DEPLOYMENT_SOURCE_WORKFLOW LH_DEPLOYMENT_SOURCE_ORDER LH_DEPLOYMENT_QUALIFICATION_ID \
+			LH_DEPLOYMENT_IDEMPOTENCY_KEY LH_DEPLOYMENT_REASON && \
+		lh_hosted_reprovision "$$LH_INSTANCE_ID" "$$TARGET_IMAGE"'
 
 .PHONY: promote-dogfood
 promote-dogfood: ## Promote a canary-verified runtime image to the dogfood instance (SHA=newest verified main)

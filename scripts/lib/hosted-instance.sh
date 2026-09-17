@@ -354,41 +354,175 @@ _lh_hosted_reprovision_payload() {
   local python_bin
   python_bin="$(_lh_hosted_python_bin)" || return 1
   "$python_bin" - "$instance_id" "$image" \
-    "${LH_DEPLOYMENT_SOURCE_SHA:-}" \
-    "${LH_DEPLOYMENT_BUILD_IDENTITY:-}" \
-    "${LH_DEPLOYMENT_SOURCE_WORKFLOW:-}" \
-    "${LH_DEPLOYMENT_SOURCE_ORDER:-}" \
-    "${LH_DEPLOYMENT_QUALIFICATION_ID:-}" \
-    "${LH_DEPLOYMENT_SCHEMA_VERSION:-}" \
-    "${LH_DEPLOYMENT_SCHEMA_MIN_READER:-}" \
-    "${LH_DEPLOYMENT_SCHEMA_MAX_READER:-}" \
+    "${LH_DEPLOYMENT_SOURCE_SHA}" \
+    "${LH_DEPLOYMENT_BUILD_IDENTITY}" \
+    "${LH_DEPLOYMENT_SOURCE_WORKFLOW}" \
+    "${LH_DEPLOYMENT_SOURCE_ORDER}" \
+    "${LH_DEPLOYMENT_QUALIFICATION_ID}" \
+    "${LH_DEPLOYMENT_SCHEMA_VERSION}" \
+    "${LH_DEPLOYMENT_SCHEMA_MIN_READER}" \
+    "${LH_DEPLOYMENT_SCHEMA_MAX_READER}" \
     "${LH_DEPLOYMENT_REASON:-hosted release}" <<'PY'
 import json
-import re
 import sys
 
 instance_id, image, source_sha, build_identity, workflow, source_order, qualification_id, schema, minimum, maximum, reason = sys.argv[1:]
 payload = {
     "image": image,
     "target_instance_ids": [int(instance_id)],
-    "reason": reason,
+    "source_sha": source_sha,
+    "build_identity": build_identity,
+    "source_workflow": workflow,
+    "source_order": int(source_order),
+    "qualification_id": qualification_id,
     "ready": True,
+    "schema_version": int(schema),
+    "schema_min_reader": int(minimum),
+    "schema_max_reader": int(maximum),
+    "reason": reason,
 }
-for key, value in (
-    ("source_sha", source_sha),
-    ("build_identity", build_identity),
-    ("source_workflow", workflow),
-    ("qualification_id", qualification_id),
-    ("schema_version", schema),
-    ("schema_min_reader", minimum),
-    ("schema_max_reader", maximum),
-):
-    if value:
-        payload[key] = value
-if source_order:
-    payload["source_order"] = int(source_order)
 print(json.dumps(payload, separators=(",", ":")), end="")
 PY
+}
+
+
+_lh_hosted_resolve_build_identity() {
+  local image="$1"
+  local identity=""
+  if [[ -n "${LH_DEPLOYMENT_BUILD_IDENTITY:-}" ]]; then
+    return 0
+  fi
+  if [[ -n "${REGISTRY_USERNAME:-}" && -n "${REGISTRY_PASSWORD:-}" ]]; then
+    printf '%s' "$REGISTRY_PASSWORD" | docker login ghcr.io \
+      --username "$REGISTRY_USERNAME" --password-stdin >/dev/null
+  fi
+  identity="$(
+    IMAGE_REF="$image" IDENTITY_TIMEOUT_SECONDS="${LH_HOSTED_BUILD_IDENTITY_TIMEOUT_SECONDS:-180}" \
+      python3 - <<'PY'
+import os
+import signal
+import subprocess
+import uuid
+
+def terminate(signum, _frame):
+    raise SystemExit(128 + signum)
+
+signal.signal(signal.SIGTERM, terminate)
+container_name = "longhouse-image-identity-" + uuid.uuid4().hex
+
+try:
+    result = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--name",
+            container_name,
+            "--pull=always",
+            "--platform",
+            "linux/amd64",
+            "--network",
+            "none",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges:true",
+            "--entrypoint",
+            "/bin/cat",
+            os.environ["IMAGE_REF"],
+            "/app/zerg/build_identity.json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=float(os.environ["IDENTITY_TIMEOUT_SECONDS"]),
+    )
+except subprocess.TimeoutExpired as exc:
+    raise SystemExit(f"timed out reading published build identity: {exc}") from exc
+finally:
+    subprocess.run(
+        ["docker", "rm", "--force", container_name],
+        capture_output=True, text=True, timeout=30,
+    )
+    remaining = subprocess.run(
+        ["docker", "container", "ls", "--all", "--filter", f"name=^/{container_name}$", "--format", "{{.ID}}"],
+        check=True, capture_output=True, text=True, timeout=30,
+    )
+    if remaining.stdout.strip():
+        raise RuntimeError(f"build identity container cleanup failed: {container_name}")
+print(result.stdout, end="")
+PY
+  )" || {
+    echo "Unable to read the selected image's published build identity; refusing deployment without immutable identity evidence." >&2
+    return 1
+  }
+  LH_DEPLOYMENT_BUILD_IDENTITY="$identity"
+  export LH_DEPLOYMENT_BUILD_IDENTITY
+}
+
+
+_lh_hosted_normalize_build_identity() {
+  local source_sha="$1"
+  local build_identity="$2"
+  BUILD_IDENTITY="$build_identity" SOURCE_SHA="$source_sha" python3 - <<'PY'
+import json
+import os
+
+source_sha = os.environ["SOURCE_SHA"]
+try:
+    identity = json.loads(os.environ["BUILD_IDENTITY"])
+except json.JSONDecodeError as exc:
+    raise SystemExit(f"LH_DEPLOYMENT_BUILD_IDENTITY is not a JSON object: {exc}")
+if not isinstance(identity, dict) or not identity:
+    raise SystemExit("LH_DEPLOYMENT_BUILD_IDENTITY must be a non-empty JSON object")
+required = ("built_at", "channel", "commit", "commit_short", "dirty", "version")
+missing = [key for key in required if key not in identity]
+if missing:
+    raise SystemExit(f"LH_DEPLOYMENT_BUILD_IDENTITY is missing normalized fields: {', '.join(missing)}")
+if identity["commit"] != source_sha or identity["commit_short"] != source_sha[:8]:
+    raise SystemExit("LH_DEPLOYMENT_BUILD_IDENTITY commit does not match the selected image source SHA")
+if identity.get("source_sha") is not None and identity["source_sha"] != source_sha:
+    raise SystemExit("LH_DEPLOYMENT_BUILD_IDENTITY.source_sha does not match the selected image source SHA")
+if not isinstance(identity["built_at"], str) or not identity["built_at"]:
+    raise SystemExit("LH_DEPLOYMENT_BUILD_IDENTITY.built_at must be a non-empty string")
+if not isinstance(identity["channel"], str) or not identity["channel"]:
+    raise SystemExit("LH_DEPLOYMENT_BUILD_IDENTITY.channel must be a non-empty string")
+if not isinstance(identity["dirty"], bool):
+    raise SystemExit("LH_DEPLOYMENT_BUILD_IDENTITY.dirty must be boolean")
+if not isinstance(identity["version"], str) or not identity["version"]:
+    raise SystemExit("LH_DEPLOYMENT_BUILD_IDENTITY.version must be a non-empty string")
+print(json.dumps({key: identity[key] for key in required}, separators=(",", ":"), sort_keys=True))
+PY
+}
+
+
+_lh_hosted_require_deployment_provenance() {
+  local source_sha="${LH_DEPLOYMENT_SOURCE_SHA:-}"
+  local build_identity="${LH_DEPLOYMENT_BUILD_IDENTITY:-}"
+  local workflow="${LH_DEPLOYMENT_SOURCE_WORKFLOW:-}"
+  local source_order="${LH_DEPLOYMENT_SOURCE_ORDER:-}"
+  local qualification_id="${LH_DEPLOYMENT_QUALIFICATION_ID:-}"
+  if [[ ! "$source_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Missing exact selected-image LH_DEPLOYMENT_SOURCE_SHA; refusing deployment without immutable source provenance." >&2
+    return 1
+  fi
+  if [[ -z "$build_identity" ]]; then
+    echo "Missing published image build identity; refusing deployment without immutable identity evidence." >&2
+    return 1
+  fi
+  build_identity="$(_lh_hosted_normalize_build_identity "$source_sha" "$build_identity")" || return 1
+  if [[ -z "$workflow" ]]; then
+    echo "Missing LH_DEPLOYMENT_SOURCE_WORKFLOW; refusing deployment without publication provenance." >&2
+    return 1
+  fi
+  if [[ ! "$source_order" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Missing exact LH_DEPLOYMENT_SOURCE_ORDER; refusing deployment without publication provenance." >&2
+    return 1
+  fi
+  if [[ -z "$qualification_id" || "${#qualification_id}" -gt 128 ]]; then
+    echo "LH_DEPLOYMENT_QUALIFICATION_ID must be non-empty and at most 128 characters." >&2
+    return 1
+  fi
+  export LH_DEPLOYMENT_BUILD_IDENTITY="$build_identity"
 }
 
 
@@ -886,13 +1020,17 @@ _lh_hosted_require_schema_metadata() {
       return 1
     fi
   done
+  if (( LH_DEPLOYMENT_SCHEMA_MIN_READER > LH_DEPLOYMENT_SCHEMA_MAX_READER )); then
+    echo "Selected image schema reader bounds are invalid: minimum exceeds maximum." >&2
+    return 1
+  fi
 }
 
 lh_hosted_reprovision() {
   local instance_id="${1:-${LH_INSTANCE_ID:-}}"
   local image="${2:-}"
   local payload=""
-  local key="${LH_DEPLOYMENT_IDEMPOTENCY_KEY:-}"
+  local key="${LH_DEPLOYMENT_IDEMPOTENCY_KEY:-${RUNTIME_DEPLOYMENT_IDEMPOTENCY_KEY:-}}"
   if [[ -z "$instance_id" || -z "$image" ]]; then
     echo "Usage: lh_hosted_reprovision <instance-id> <immutable-image>" >&2
     return 1
@@ -901,8 +1039,14 @@ lh_hosted_reprovision() {
     echo "Refusing non-immutable deployment image; resolve a sha256 digest first." >&2
     return 1
   fi
+  if [[ -z "$key" ]]; then
+    echo "Missing deployment idempotency key; refusing an untracked deployment submission." >&2
+    return 1
+  fi
   _lh_hosted_resolve_image_metadata "$image" || return 1
   _lh_hosted_require_schema_metadata || return 1
+  _lh_hosted_resolve_build_identity "$image" || return 1
+  _lh_hosted_require_deployment_provenance || return 1
   payload="$(_lh_hosted_reprovision_payload "$instance_id" "$image")" || return 1
   lh_hosted_submit_deployment "$payload" "$key" || return 1
   echo "Submitted durable deployment ${LH_DEPLOYMENT_ID} for instance ${instance_id}." >&2

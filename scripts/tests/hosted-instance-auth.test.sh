@@ -89,23 +89,41 @@ curl() {
   local output_file=""
   local request_url=""
   local deployment_id=""
+  local idempotency_key=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -d) data="$2"; shift 2 ;;
       -o) output_file="$2"; shift 2 ;;
-      -w|-H|-X|--connect-timeout|--max-time) shift 2 ;;
+      -H)
+        if [[ "$2" == Idempotency-Key:* ]]; then
+          idempotency_key="${2#Idempotency-Key: }"
+        fi
+        shift 2
+        ;;
+      -w|-X|--connect-timeout|--max-time) shift 2 ;;
       *) request_url="$1"; shift ;;
     esac
   done
-
   case "$request_url" in
     https://control.longhouse.ai/api/deployments)
+      if [[ "$idempotency_key" != "deployment-test-1" ]]; then
+        echo "Expected durable submission to carry its explicit idempotency key" >&2
+        return 1
+      fi
       if [[ "$data" != *'"target_instance_ids":[7]'* || "$data" != *'"ready":true'* ]]; then
         echo "Expected durable submission to persist explicit target membership and readiness" >&2
         return 1
       fi
-      if [[ "$data" != *'"schema_version":"5"'* || "$data" != *'"schema_min_reader":"5"'* || "$data" != *'"schema_max_reader":"5"'* ]]; then
-        echo "Expected exact candidate schema metadata in durable submission" >&2
+      if [[ "$data" != *'"source_sha":"0123456789abcdef0123456789abcdef01234567"'* ||
+            "$data" != *'"build_identity":"{\"built_at\":\"2026-09-17T17:06:26Z\",\"channel\":\"dev\",\"commit\":\"0123456789abcdef0123456789abcdef01234567\",\"commit_short\":\"01234567\",\"dirty\":false,\"version\":\"0.1.49\"}"'* ||
+            "$data" != *'"source_workflow":"Publish Runtime Image"'* ||
+            "$data" != *'"source_order":13'* ||
+            "$data" != *'"qualification_id":"runtime-image-test-1"'* ]]; then
+        echo "Expected complete immutable source and qualification provenance" >&2
+        return 1
+      fi
+      if [[ "$data" != *'"schema_version":5'* || "$data" != *'"schema_min_reader":5'* || "$data" != *'"schema_max_reader":5'* ]]; then
+        echo "Expected exact candidate schema metadata in durable submission"
         return 1
       fi
       case "$DEPLOYMENT_SCENARIO" in
@@ -147,7 +165,7 @@ curl() {
       printf '200'
       ;;
     *)
-      echo "Unexpected deployment API URL: $request_url" >&2
+      echo "Unexpected deployment API URL: $request_url"
       return 1
       ;;
   esac
@@ -158,6 +176,10 @@ export CONTROL_PLANE_ADMIN_TOKEN="admin-token-from-env"
 export INSTANCE_SUBDOMAIN="demo"
 export LH_HOSTED_DEPLOYMENT_POLL_SECONDS=0
 export LH_DEPLOYMENT_IDEMPOTENCY_KEY="deployment-test-1"
+export LH_DEPLOYMENT_BUILD_IDENTITY='{"built_at":"2026-09-17T17:06:26Z","channel":"dev","commit":"0123456789abcdef0123456789abcdef01234567","commit_short":"01234567","dirty":false,"version":"0.1.49"}'
+export LH_DEPLOYMENT_SOURCE_WORKFLOW="Publish Runtime Image"
+export LH_DEPLOYMENT_SOURCE_ORDER="13"
+export LH_DEPLOYMENT_QUALIFICATION_ID="runtime-image-test-1"
 export LH_DEPLOYMENT_SCHEMA_VERSION="5"
 export LH_DEPLOYMENT_SCHEMA_MIN_READER="5"
 export LH_DEPLOYMENT_SCHEMA_MAX_READER="5"
@@ -195,6 +217,7 @@ if lh_hosted_reprovision "7" "ghcr.io/cipher982/longhouse-runtime:mutable-tag" >
 fi
 
 unset LH_DEPLOYMENT_IDEMPOTENCY_KEY LH_HOSTED_DEPLOYMENT_POLL_SECONDS
+unset LH_DEPLOYMENT_BUILD_IDENTITY LH_DEPLOYMENT_SOURCE_WORKFLOW LH_DEPLOYMENT_SOURCE_ORDER LH_DEPLOYMENT_QUALIFICATION_ID
 unset LH_DEPLOYMENT_SCHEMA_VERSION LH_DEPLOYMENT_SCHEMA_MIN_READER LH_DEPLOYMENT_SCHEMA_MAX_READER
 
 # Exercise the real entrypoints with a stale runner-local dotenv. The helper is
