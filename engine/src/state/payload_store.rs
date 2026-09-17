@@ -26,8 +26,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 
-/// Directory holding sealed payloads, relative to the Longhouse home.
-const PAYLOAD_DIR: &str = "agent/outbox-v2";
+/// Directory holding sealed payloads, as a sibling of the database that
+/// references them.
+///
+/// Beside the database, not under a global home: a test database and its
+/// payloads then isolate together by construction, and a machine with a custom
+/// `--db-path` keeps its outbox with its ledger rather than in a second place
+/// that can drift.
+const PAYLOAD_DIR: &str = "outbox-v2";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SealedPayload {
@@ -37,9 +43,25 @@ pub struct SealedPayload {
     pub len: u64,
 }
 
-/// Where sealed payloads live for this machine.
-pub fn payload_root() -> Result<PathBuf> {
-    Ok(crate::config::get_longhouse_home()?.join(PAYLOAD_DIR))
+/// Where sealed payloads live for a given shipper database.
+pub fn root_for_db(db_path: &Path) -> PathBuf {
+    db_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .join(PAYLOAD_DIR)
+}
+
+/// The payload root of the connection that is reading or writing the row.
+///
+/// A connection without a path (`:memory:`) has nowhere to put a payload, and
+/// every production and test path names a file; saying so beats inventing a
+/// location.
+pub fn root_for_connection(conn: &rusqlite::Connection) -> Result<PathBuf> {
+    let path = conn
+        .path()
+        .context("the shipper database has no path, so frozen payloads have nowhere to live")?;
+    Ok(root_for_db(Path::new(path)))
 }
 
 pub fn hash_bytes(bytes: &[u8]) -> String {

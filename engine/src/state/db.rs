@@ -409,6 +409,26 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
         conn.execute_batch("ALTER TABLE session_binding ADD COLUMN last_seen_at TEXT;")?;
     }
 
+    // Media objects move out of the database as files: the row keeps the
+    // reference, the payload store keeps the bytes. `media_objects_len` is what
+    // the outbox cap counts, so a file-backed row and a legacy blob row are
+    // measured the same way.
+    let pending_envelope_columns: std::collections::HashSet<String> = conn
+        .prepare("PRAGMA table_info(pending_source_envelope)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<_, _>>()?;
+    for (column, ddl) in [
+        ("media_objects_path", "TEXT"),
+        ("media_objects_sha256", "TEXT"),
+        ("media_objects_len", "INTEGER"),
+    ] {
+        if !pending_envelope_columns.contains(column) {
+            conn.execute_batch(&format!(
+                "ALTER TABLE pending_source_envelope ADD COLUMN {column} {ddl};"
+            ))?;
+        }
+    }
+
     // Deletion migration, not a rewrite: `live_file_state` had no reader or
     // writer anywhere in the engine (only its own DDL), and its rows describe
     // v1 per-file offsets that `source_epoch_lane_state` owns now. Dropping it

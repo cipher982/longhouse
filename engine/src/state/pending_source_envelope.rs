@@ -5,6 +5,7 @@
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
+use std::path::Path;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
 use uuid::Uuid;
@@ -35,7 +36,8 @@ fn pending_outbox_has_capacity(current_bytes: u64, candidate_bytes: u64, byte_li
 
 fn retained_envelope_bytes(conn: &Connection) -> Result<u64> {
     let bytes: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(length(request_body_zstd) + length(media_objects_zstd)), 0)
+        "SELECT COALESCE(SUM(length(request_body_zstd)
+                                 + COALESCE(media_objects_len, length(media_objects_zstd))), 0)
          FROM pending_source_envelope",
         [],
         |row| row.get(0),
@@ -180,6 +182,11 @@ pub struct PendingSourceEnvelope {
     pub envelope_id: String,
     pub request_body_zstd: Vec<u8>,
     pub media_objects_zstd: Vec<u8>,
+    /// Where the media payload is sealed, when it is file-backed. `None` means
+    /// the bytes in `media_objects_zstd` are the stored copy (a row written
+    /// before payloads moved out of the database).
+    pub media_objects_path: Option<String>,
+    pub media_objects_sha256: Option<String>,
     pub raw_bytes: u64,
     pub event_count: usize,
     pub has_reply_evidence: bool,
@@ -222,6 +229,8 @@ impl PendingSourceEnvelope {
             envelope_id,
             request_body_zstd,
             media_objects_zstd,
+            media_objects_path: None,
+            media_objects_sha256: None,
             raw_bytes,
             event_count,
             has_reply_evidence,
@@ -240,11 +249,12 @@ pub fn load_for_path(
     conn: &Connection,
     source_path: &str,
 ) -> Result<Option<PendingSourceEnvelope>> {
-    conn.query_row(
+    let loaded = conn.query_row(
         "SELECT source_epoch, source_path, range_start, range_end, envelope_id,
                 request_body_zstd, media_objects_zstd, raw_bytes, event_count,
                 has_reply_evidence, has_more, created_at, attempt_count,
-                last_attempt_at, blocked_at, block_kind, block_detail
+                last_attempt_at, blocked_at, block_kind, block_detail,
+                media_objects_path, media_objects_sha256
          FROM pending_source_envelope
          WHERE source_path = ?1
          ORDER BY (blocked_at IS NOT NULL), created_at, source_epoch
@@ -253,7 +263,8 @@ pub fn load_for_path(
         row_to_pending,
     )
     .optional()
-    .context("loading pending storage-v2 envelope by source path")
+    .context("loading pending storage-v2 envelope by source path")?;
+    loaded.map(|envelope| hydrate_media(conn, envelope)).transpose()
 }
 
 pub fn load_for_source(
@@ -261,7 +272,7 @@ pub fn load_for_source(
     provider: &str,
     opaque_source_id: &str,
 ) -> Result<Option<PendingSourceEnvelope>> {
-    conn.query_row(
+    let loaded = conn.query_row(
         "SELECT pending.source_epoch, pending.source_path, pending.range_start,
                 pending.range_end, pending.envelope_id,
                 pending.request_body_zstd, pending.media_objects_zstd,
@@ -269,7 +280,8 @@ pub fn load_for_source(
                 pending.has_reply_evidence, pending.has_more,
                 pending.created_at, pending.attempt_count,
                 pending.last_attempt_at, pending.blocked_at,
-                pending.block_kind, pending.block_detail
+                pending.block_kind, pending.block_detail,
+                pending.media_objects_path, pending.media_objects_sha256
          FROM pending_source_envelope AS pending
          JOIN source_epoch_registry AS epoch
            ON epoch.source_epoch = pending.source_epoch
@@ -280,25 +292,28 @@ pub fn load_for_source(
         row_to_pending,
     )
     .optional()
-    .context("loading pending storage-v2 envelope by source identity")
+    .context("loading pending storage-v2 envelope by source identity")?;
+    loaded.map(|envelope| hydrate_media(conn, envelope)).transpose()
 }
 
 pub fn load_for_epoch(
     conn: &Connection,
     source_epoch: Uuid,
 ) -> Result<Option<PendingSourceEnvelope>> {
-    conn.query_row(
+    let loaded = conn.query_row(
         "SELECT source_epoch, source_path, range_start, range_end, envelope_id,
                 request_body_zstd, media_objects_zstd, raw_bytes, event_count,
                 has_reply_evidence, has_more, created_at, attempt_count,
-                last_attempt_at, blocked_at, block_kind, block_detail
+                last_attempt_at, blocked_at, block_kind, block_detail,
+                media_objects_path, media_objects_sha256
          FROM pending_source_envelope
          WHERE source_epoch = ?1",
         [source_epoch.to_string()],
         row_to_pending,
     )
     .optional()
-    .context("loading pending storage-v2 envelope by source epoch")
+    .context("loading pending storage-v2 envelope by source epoch")?;
+    loaded.map(|envelope| hydrate_media(conn, envelope)).transpose()
 }
 
 /// List exact-retry work that must be rescheduled after a process restart.
@@ -368,7 +383,8 @@ fn persist_or_load_with_limit(
             "SELECT source_epoch, source_path, range_start, range_end, envelope_id,
                     request_body_zstd, media_objects_zstd, raw_bytes, event_count,
                     has_reply_evidence, has_more, created_at, attempt_count,
-                    last_attempt_at, blocked_at, block_kind, block_detail
+                    last_attempt_at, blocked_at, block_kind, block_detail,
+                    media_objects_path, media_objects_sha256
              FROM pending_source_envelope
              WHERE source_epoch = ?1",
             [candidate.source_epoch.to_string()],
@@ -376,8 +392,9 @@ fn persist_or_load_with_limit(
         )
         .optional()?;
     if let Some(existing) = existing {
+        let root = crate::state::payload_store::root_for_connection(&tx)?;
         tx.commit()?;
-        return Ok(existing);
+        return hydrate_media_from(&root, existing);
     }
     // Blocked rows retain the same compressed evidence as active rows. Exempting
     // them made the cap disappear precisely when repeated host refusals caused
@@ -389,13 +406,29 @@ fn persist_or_load_with_limit(
     if !pending_outbox_has_capacity(current_bytes, candidate_bytes, byte_limit) {
         bail!("storage-v2 pending outbox byte limit exceeded ({byte_limit} bytes)");
     }
+    // Seal the media payload outside the row: an orphan left by a failed insert
+    // is swept, while a row without its payload would be an unshippable intent.
+    let (media_blob, media_path, media_sha256, media_len) = if candidate.media_objects_zstd.is_empty() {
+        (Vec::new(), None, None, 0_i64)
+    } else {
+        let sealed = crate::state::payload_store::seal(
+            &crate::state::payload_store::root_for_connection(&tx)?,
+            &candidate.media_objects_zstd,
+        )?;
+        (
+            Vec::new(),
+            Some(sealed.relative_path),
+            Some(sealed.sha256),
+            i64::try_from(sealed.len).context("media payload exceeds SQLite INTEGER")?,
+        )
+    };
     tx.execute(
         "INSERT INTO pending_source_envelope (
             source_epoch, source_path, range_start, range_end, envelope_id,
             request_body_zstd, media_objects_zstd, raw_bytes, event_count,
             has_reply_evidence, has_more, created_at, attempt_count,
-            last_attempt_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, NULL)
+            last_attempt_at, media_objects_path, media_objects_sha256, media_objects_len
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, NULL, ?13, ?14, ?15)
          ON CONFLICT(source_epoch) DO NOTHING",
         params![
             candidate.source_epoch.to_string(),
@@ -404,12 +437,15 @@ fn persist_or_load_with_limit(
             to_sql_u64(candidate.range_end)?,
             candidate.envelope_id,
             candidate.request_body_zstd,
-            candidate.media_objects_zstd,
+            media_blob,
             to_sql_u64(candidate.raw_bytes)?,
             i64::try_from(candidate.event_count).context("event count exceeds SQLite INTEGER")?,
             candidate.has_reply_evidence,
             candidate.has_more,
             candidate.created_at,
+            media_path,
+            media_sha256,
+            media_len,
         ],
     )?;
     let persisted = tx
@@ -417,15 +453,17 @@ fn persist_or_load_with_limit(
             "SELECT source_epoch, source_path, range_start, range_end, envelope_id,
                     request_body_zstd, media_objects_zstd, raw_bytes, event_count,
                     has_reply_evidence, has_more, created_at, attempt_count,
-                    last_attempt_at, blocked_at, block_kind, block_detail
+                    last_attempt_at, blocked_at, block_kind, block_detail,
+                    media_objects_path, media_objects_sha256
              FROM pending_source_envelope
              WHERE source_epoch = ?1",
             [candidate.source_epoch.to_string()],
             row_to_pending,
         )
         .context("reloading persisted storage-v2 envelope")?;
+    let root = crate::state::payload_store::root_for_connection(&tx)?;
     tx.commit()?;
-    Ok(persisted)
+    hydrate_media_from(&root, persisted)
 }
 
 pub fn mark_attempt(conn: &Connection, source_epoch: Uuid) -> Result<()> {
@@ -580,11 +618,13 @@ pub fn snapshot(conn: &Connection) -> Result<StorageV2OutboxSnapshot> {
         "SELECT
             COALESCE(SUM(CASE WHEN blocked_at IS NULL THEN 1 ELSE 0 END), 0),
             COALESCE(SUM(CASE WHEN blocked_at IS NULL
-                THEN length(request_body_zstd) + length(media_objects_zstd) ELSE 0 END), 0),
+                THEN length(request_body_zstd)
+                     + COALESCE(media_objects_len, length(media_objects_zstd)) ELSE 0 END), 0),
             MIN(CASE WHEN blocked_at IS NULL THEN created_at END),
             COALESCE(SUM(CASE WHEN blocked_at IS NOT NULL THEN 1 ELSE 0 END), 0),
             COALESCE(SUM(CASE WHEN blocked_at IS NOT NULL
-                THEN length(request_body_zstd) + length(media_objects_zstd) ELSE 0 END), 0),
+                THEN length(request_body_zstd)
+                     + COALESCE(media_objects_len, length(media_objects_zstd)) ELSE 0 END), 0),
             MIN(blocked_at)
          FROM pending_source_envelope",
         [],
@@ -1692,6 +1732,15 @@ pub fn acknowledge_and_delete(
     if changed != 1 {
         bail!("source epoch lane cursor changed before acknowledgement");
     }
+    let media_path: Option<String> = tx
+        .query_row(
+            "SELECT media_objects_path FROM pending_source_envelope
+             WHERE source_epoch = ?1 AND envelope_id = ?2",
+            params![source_epoch.to_string(), expected_envelope_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
     let deleted = tx.execute(
         "DELETE FROM pending_source_envelope
          WHERE source_epoch = ?1 AND envelope_id = ?2",
@@ -1701,6 +1750,14 @@ pub fn acknowledge_and_delete(
         bail!("pending storage-v2 envelope disappeared during acknowledgement");
     }
     tx.commit()?;
+    // Only now, with the row gone, may the payload go: the reverse order could
+    // delete the only copy of a range the host has not acknowledged.
+    if let Some(relative_path) = media_path {
+        crate::state::payload_store::remove(
+            &crate::state::payload_store::root_for_connection(conn)?,
+            &relative_path,
+        )?;
+    }
     Ok(())
 }
 
@@ -1767,14 +1824,30 @@ pub fn reconcile_proven_prefix(
         bail!("pending envelope disappeared during reconciliation");
     }
     if let Some(replacement) = replacement {
+        let (media_blob, media_path, media_sha256, media_len) =
+            if replacement.media_objects_zstd.is_empty() {
+                (Vec::new(), None, None, 0_i64)
+            } else {
+                let sealed = crate::state::payload_store::seal(
+                    &crate::state::payload_store::root_for_connection(&tx)?,
+                    &replacement.media_objects_zstd,
+                )?;
+                (
+                    Vec::new(),
+                    Some(sealed.relative_path),
+                    Some(sealed.sha256),
+                    i64::try_from(sealed.len).context("media payload exceeds SQLite INTEGER")?,
+                )
+            };
         tx.execute(
             "INSERT INTO pending_source_envelope (
                 source_epoch, source_path, range_start, range_end, envelope_id,
                 request_body_zstd, media_objects_zstd, raw_bytes, event_count,
                 has_reply_evidence, has_more, created_at, attempt_count,
-                last_attempt_at, blocked_at, block_kind, block_detail
+                last_attempt_at, blocked_at, block_kind, block_detail,
+                media_objects_path, media_objects_sha256, media_objects_len
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                       0, NULL, NULL, NULL, NULL)",
+                       0, NULL, NULL, NULL, NULL, ?13, ?14, ?15)",
             params![
                 replacement.source_epoch.to_string(),
                 replacement.source_path,
@@ -1782,13 +1855,16 @@ pub fn reconcile_proven_prefix(
                 to_sql_u64(replacement.range_end)?,
                 replacement.envelope_id,
                 replacement.request_body_zstd,
-                replacement.media_objects_zstd,
+                media_blob,
                 to_sql_u64(replacement.raw_bytes)?,
                 i64::try_from(replacement.event_count)
                     .context("event count exceeds SQLite INTEGER")?,
                 replacement.has_reply_evidence,
                 replacement.has_more,
                 replacement.created_at,
+                media_path,
+                media_sha256,
+                media_len,
             ],
         )?;
     }
@@ -1802,6 +1878,35 @@ pub fn count(conn: &Connection) -> Result<u64> {
         row.get(0)
     })?;
     u64::try_from(value).context("pending envelope count is negative")
+}
+
+/// Load a file-backed media payload, leaving a legacy blob row untouched.
+///
+/// A row whose payload is missing is an error the caller must see: the only
+/// other explanation is a bug, because nothing deletes a payload before its row.
+fn hydrate_media(conn: &Connection, envelope: PendingSourceEnvelope) -> Result<PendingSourceEnvelope> {
+    let root = crate::state::payload_store::root_for_connection(conn)?;
+    hydrate_media_from(&root, envelope)
+}
+
+/// Same, with the payload root already resolved: a transaction that is about to
+/// be committed can no longer be borrowed for its path.
+fn hydrate_media_from(root: &Path, envelope: PendingSourceEnvelope) -> Result<PendingSourceEnvelope> {
+    let (Some(path), Some(sha256)) = (
+        envelope.media_objects_path.clone(),
+        envelope.media_objects_sha256.clone(),
+    ) else {
+        return Ok(envelope);
+    };
+    let mut hydrated = envelope;
+    hydrated.media_objects_zstd = crate::state::payload_store::read(root, &path, &sha256)?;
+    // The reference is storage, not identity: a loaded envelope must compare
+    // equal to the candidate that produced it, and every consumer works from the
+    // bytes. Reads of the reference itself (the acknowledgement unlink and the
+    // sweep) go to the row, which is where it is authoritative.
+    hydrated.media_objects_path = None;
+    hydrated.media_objects_sha256 = None;
+    Ok(hydrated)
 }
 
 fn row_to_pending(row: &rusqlite::Row<'_>) -> rusqlite::Result<PendingSourceEnvelope> {
@@ -1825,6 +1930,8 @@ fn row_to_pending(row: &rusqlite::Row<'_>) -> rusqlite::Result<PendingSourceEnve
         envelope_id: row.get(4)?,
         request_body_zstd: row.get(5)?,
         media_objects_zstd: row.get(6)?,
+        media_objects_path: row.get(17)?,
+        media_objects_sha256: row.get(18)?,
         raw_bytes: from_sql_u64(7, raw_bytes)?,
         event_count: usize::try_from(event_count).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
@@ -2390,6 +2497,67 @@ mod tests {
     }
 
     #[test]
+    fn media_objects_live_in_the_payload_store_not_the_row() {
+        // The row keeps a reference; the bytes are a file. This is the shape
+        // that lets the database stay small enough to answer a launch-time
+        // write, and the ordering that keeps it safe: payloads go only after the
+        // row that named them is gone.
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+            let epoch = Uuid::new_v4();
+            register_epoch(&conn, epoch, "claude");
+            // The acknowledgement compare-and-swaps the durable lane cursor, so
+            // the lane has to exist, exactly as it does in production.
+            conn.execute(
+                "INSERT INTO source_epoch_lane_state (source_epoch, lane, last_position, updated_at)
+                 VALUES (?1, 'durable', 0, '2026-07-15T00:00:00Z')",
+                [epoch.to_string()],
+            )
+            .unwrap();
+            let candidate = candidate(epoch, "/tmp/media.jsonl");
+            let media = candidate.media_objects_zstd.clone();
+
+            let persisted = persist_or_load(&mut conn, &candidate).unwrap();
+            assert_eq!(
+                persisted.media_objects_zstd, media,
+                "the round trip must return the exact bytes"
+            );
+
+            let (blob_len, path, sha, len): (i64, Option<String>, Option<String>, Option<i64>) =
+                conn.query_row(
+                    "SELECT length(media_objects_zstd), media_objects_path,
+                            media_objects_sha256, media_objects_len
+                     FROM pending_source_envelope WHERE source_epoch = ?1",
+                    [epoch.to_string()],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .unwrap();
+            assert_eq!(blob_len, 0, "the row must not keep a second copy");
+            assert_eq!(len, Some(media.len() as i64), "the cap counts the real bytes");
+            let path = path.expect("a file-backed row names its payload");
+            let sha = sha.expect("a file-backed row records its payload hash");
+            let root = crate::state::payload_store::root_for_connection(&conn).unwrap();
+            assert!(root.join(&path).exists(), "the payload must be on disk");
+            assert!(sha.len() == 64, "the recorded hash identifies the bytes");
+
+            super::acknowledge_and_delete(
+                &mut conn,
+                epoch,
+                &persisted.envelope_id,
+                persisted.range_start,
+                persisted.range_end,
+            )
+            .unwrap();
+
+            assert!(
+                !root.join(&path).exists(),
+                "an acknowledged payload must be removed, and only after its row"
+            );
+        }
+    }
+
+    #[test]
     fn quarantined_bytes_remain_inside_the_outbox_cap() {
         let dir = tempfile::tempdir().unwrap();
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
@@ -2710,6 +2878,8 @@ mod tests {
             envelope_id: "a".repeat(64),
             request_body_zstd: vec![1],
             media_objects_zstd: vec![2],
+            media_objects_path: None,
+            media_objects_sha256: None,
             raw_bytes: 1,
             event_count: 1,
             has_reply_evidence: true,
