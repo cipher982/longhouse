@@ -148,8 +148,22 @@ pub struct PendingPresencePost {
 #[derive(Debug)]
 #[derive(Clone)]
 pub struct PendingRuntimeEventPost {
-    path: PathBuf,
+    /// The durable file this event came from, if it came from one. Status read
+    /// from a session's slot has no file to delete: the slot is the durable
+    /// copy, and the next tick simply sends the newer value.
+    path: Option<PathBuf>,
     event: Value,
+}
+
+impl PendingRuntimeEventPost {
+    /// An event to deliver that owns no file.
+    pub fn from_event(event: Value) -> Self {
+        Self { path: None, event }
+    }
+
+    pub fn session_id(&self) -> String {
+        text_field(self.event.get("session_id"))
+    }
 }
 
 /// Is this event's phase one an adapter is allowed to ship?
@@ -608,7 +622,7 @@ fn handle_oversized_runtime_event(path: &Path, file_bytes: usize) {
         return;
     }
     let post = PendingRuntimeEventPost {
-        path: path.to_path_buf(),
+        path: Some(path.to_path_buf()),
         event: Value::Null,
     };
     match write_runtime_event_dead_letter(
@@ -653,6 +667,22 @@ fn is_critical_runtime_event(event: &Value) -> bool {
         .get("kind")
         .and_then(Value::as_str)
         .is_some_and(|kind| CRITICAL_RUNTIME_EVENT_KINDS.contains(&kind))
+}
+
+/// Remove the durable file behind a post, if it has one. Status sent from a
+/// session's slot owns no file.
+fn remove_post_file(post: &PendingRuntimeEventPost) -> bool {
+    post.path
+        .as_ref()
+        .map(|path| std::fs::remove_file(path).is_ok())
+        .unwrap_or(false)
+}
+
+fn post_path_display(post: &PendingRuntimeEventPost) -> String {
+    post.path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "<status slot>".to_string())
 }
 
 fn text_field(value: Option<&Value>) -> String {
@@ -774,7 +804,7 @@ fn reduce_ready_runtime_events(
         bytes_held = bytes_held.saturating_add(bytes.len());
 
         let Some(key) = duplicate_statement_key(&event) else {
-            let post = PendingRuntimeEventPost { path, event };
+            let post = PendingRuntimeEventPost { path: Some(path), event };
             if is_critical_runtime_event(&post.event) {
                 reduced.critical.push(post);
             } else {
@@ -783,18 +813,18 @@ fn reduce_ready_runtime_events(
             continue;
         };
         let occurred_at = occurred_at_utc(&event);
-        let candidate = PendingRuntimeEventPost { path, event };
+        let candidate = PendingRuntimeEventPost { path: Some(path), event };
         match reduced.repeated.get(&key) {
             Some((existing_at, _)) if *existing_at >= occurred_at => {
                 // Count removals, not attempts: "this pass made progress" is
                 // what stops the sweep rescheduling itself forever, so a
                 // failed removal must not look like progress.
-                if std::fs::remove_file(&candidate.path).is_ok() {
+                if remove_post_file(&candidate) {
                     reduced.discarded += 1;
                 }
             }
             Some((_, existing)) => {
-                if std::fs::remove_file(&existing.path).is_ok() {
+                if remove_post_file(existing) {
                     reduced.discarded += 1;
                 }
                 reduced.repeated.insert(key, (occurred_at, candidate));
@@ -1128,7 +1158,7 @@ async fn post_one_runtime_event_request(
         {
             Ok(_) => {
                 for post in chunk {
-                    let _ = std::fs::remove_file(&post.path);
+                    remove_post_file(post);
                 }
                 sent += chunk.len();
             }
@@ -1160,7 +1190,7 @@ async fn isolate_permanent_runtime_event_rejection(
             Ok(body) => body,
             Err(error) => {
                 tracing::warn!(
-                    path = %post.path.display(),
+                    path = %post_path_display(post),
                     error = %error,
                     "Runtime event could not be serialized for rejection isolation"
                 );
@@ -1178,7 +1208,7 @@ async fn isolate_permanent_runtime_event_rejection(
             .await
         {
             Ok(()) => {
-                let _ = std::fs::remove_file(&post.path);
+                remove_post_file(post);
                 sent += 1;
             }
             Err(error) if error.permanent_status_code().is_some() => {
@@ -1189,7 +1219,7 @@ async fn isolate_permanent_runtime_event_rejection(
                 match dead_letter_runtime_event(post, status, response_body, &error) {
                     Ok(path) => {
                         tracing::error!(
-                            source = %post.path.display(),
+                            source = %post_path_display(post),
                             dead_letter = %path.display(),
                             status,
                             "Runtime event permanently rejected and dead-lettered"
@@ -1197,7 +1227,7 @@ async fn isolate_permanent_runtime_event_rejection(
                     }
                     Err(dead_letter_error) => {
                         tracing::warn!(
-                            source = %post.path.display(),
+                            source = %post_path_display(post),
                             error = %dead_letter_error,
                             "Runtime event rejection could not be dead-lettered; keeping for retry"
                         );
@@ -1207,7 +1237,7 @@ async fn isolate_permanent_runtime_event_rejection(
             }
             Err(error) => {
                 tracing::warn!(
-                    path = %post.path.display(),
+                    path = %post_path_display(post),
                     error = %error,
                     "Runtime event rejection isolation hit a transient failure"
                 );
@@ -1235,7 +1265,8 @@ fn write_runtime_event_dead_letter(
 ) -> anyhow::Result<PathBuf> {
     let parent = post
         .path
-        .parent()
+        .as_deref()
+        .and_then(Path::parent)
         .ok_or_else(|| anyhow::anyhow!("runtime event path has no parent"))?;
     let dead_letter_dir = parent.join(RUNTIME_EVENT_DEAD_LETTER_DIR);
     std::fs::create_dir_all(&dead_letter_dir)?;
@@ -1245,7 +1276,7 @@ fn write_runtime_event_dead_letter(
     let evidence = serde_json::json!({
         "schema": "runtime_event_dead_letter.v1",
         "dead_lettered_at": Utc::now().to_rfc3339(),
-        "source_file": post.path,
+        "source_file": post.path.clone(),
         "status_code": status,
         "error": error,
         "response_body": response_body,
@@ -1261,7 +1292,9 @@ fn write_runtime_event_dead_letter(
     drop(file);
     std::fs::rename(&temporary, &ready)?;
     sync_directory(&dead_letter_dir)?;
-    std::fs::remove_file(&post.path)?;
+    if let Some(path) = post.path.as_ref() {
+        std::fs::remove_file(path)?;
+    }
     sync_directory(parent)?;
     Ok(ready)
 }
@@ -3135,7 +3168,7 @@ mod runtime_status_collection_tests {
                 &format!("2026-09-17T15:{:02}:{:02}Z", index / 60, index % 60),
             );
             posts.push(PendingRuntimeEventPost {
-                path: dir.join(format!("{index}.json")),
+                path: Some(dir.join(format!("{index}.json"))),
                 event,
             });
         }
