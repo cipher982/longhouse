@@ -52,6 +52,7 @@ mod managed_phase_contract;
 mod managed_pi_helm_scan;
 mod managed_process_janitor;
 mod managed_resume_scan;
+mod managed_source_claim;
 mod managed_scan;
 mod managed_terminal;
 mod media_redaction;

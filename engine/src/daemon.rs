@@ -1026,6 +1026,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let startup_archive_replay_delay =
         archive_startup_replay_warmup_delay(startup_archive_mode, rand::random::<f64>());
     maybe_start_managed_observation_scan(
+        projection_db_path.clone(),
         &mut managed_observation_scan_tasks,
         "startup",
         true,
@@ -1971,6 +1972,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 {
                     if pending_wake_reconciliation
                         && maybe_start_managed_observation_scan(
+                            projection_db_path.clone(),
                             &mut managed_observation_scan_tasks,
                             "wake",
                             true,
@@ -1984,6 +1986,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         );
                     } else if pending_full_reconciliation
                         && maybe_start_managed_observation_scan(
+                            projection_db_path.clone(),
                             &mut managed_observation_scan_tasks,
                             "full_reconciliation",
                             true,
@@ -1997,6 +2000,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         );
                     } else if pending_periodic_observation
                         && maybe_start_managed_observation_scan(
+                            projection_db_path.clone(),
                             &mut managed_observation_scan_tasks,
                             "periodic",
                             last_resume_contracts.is_none(),
@@ -2093,6 +2097,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             );
                             if pending_wake_reconciliation {
                                 if maybe_start_managed_observation_scan(
+                                    projection_db_path.clone(),
                                     &mut managed_observation_scan_tasks,
                                     "wake",
                                     true,
@@ -2102,6 +2107,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 }
                             } else if pending_full_reconciliation
                                 && maybe_start_managed_observation_scan(
+                                    projection_db_path.clone(),
                                     &mut managed_observation_scan_tasks,
                                     "full_reconciliation",
                                     true,
@@ -2228,6 +2234,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         if pending_wake_reconciliation
                             && unmanaged_binding_refresh_tasks.is_empty()
                             && maybe_start_managed_observation_scan(
+                                projection_db_path.clone(),
                                 &mut managed_observation_scan_tasks,
                                 "wake",
                                 true,
@@ -2242,6 +2249,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         } else if pending_full_reconciliation
                             && unmanaged_binding_refresh_tasks.is_empty()
                             && maybe_start_managed_observation_scan(
+                                projection_db_path.clone(),
                                 &mut managed_observation_scan_tasks,
                                 "full_reconciliation",
                                 true,
@@ -2255,6 +2263,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             );
                         } else if pending_periodic_observation
                             && maybe_start_managed_observation_scan(
+                                projection_db_path.clone(),
                                 &mut managed_observation_scan_tasks,
                                 "periodic",
                                 last_resume_contracts.is_none(),
@@ -2576,6 +2585,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         // publish the new managed child as Shadow ownership.
                         projection_generation = projection_generation.saturating_add(1);
                         if maybe_start_managed_observation_scan(
+                            projection_db_path.clone(),
                             &mut managed_observation_scan_tasks,
                             "managed_state_discovery",
                             true,
@@ -2800,6 +2810,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     shipping_progress.reset_after_sleep(Instant::now());
                     tracing::info!(wake_gap_ms = gap.as_millis() as u64, "Detected system wake gap");
                     if maybe_start_managed_observation_scan(
+                        projection_db_path.clone(),
                         &mut managed_observation_scan_tasks,
                         "wake",
                         true,
@@ -2838,6 +2849,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             _ = managed_full_reconciliation_timer.tick() => {
                 if maybe_start_managed_observation_scan(
+                    projection_db_path.clone(),
                     &mut managed_observation_scan_tasks,
                     "full_reconciliation",
                     true,
@@ -2858,6 +2870,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             _ = managed_observation_timer.tick() => {
                 if maybe_start_managed_observation_scan(
+                    projection_db_path.clone(),
                     &mut managed_observation_scan_tasks,
                     "periodic",
                     last_resume_contracts.is_none(),
@@ -4040,6 +4053,7 @@ fn codex_contract_must_be_retained(
 }
 
 fn maybe_start_managed_observation_scan(
+    db_path: PathBuf,
     scan_tasks: &mut JoinSet<ManagedObservationScanResult>,
     reason: &'static str,
     full_reconciliation: bool,
@@ -4051,6 +4065,26 @@ fn maybe_start_managed_observation_scan(
 
     let previous = previous.clone();
     scan_tasks.spawn_blocking(move || {
+        // Claims are projected **before** any provider source is enumerated: a
+        // discovery pass that ran first would mint a Shadow session for a path a
+        // live managed session is about to own. This is the only place the
+        // ordering is guaranteed, so it happens here rather than after the scan.
+        match crate::managed_source_claim::project_claims(&db_path) {
+            Ok(report) if report.applied > 0 => tracing::info!(
+                applied = report.applied,
+                failed = report.failed,
+                "Projected managed source claims before discovery"
+            ),
+            Ok(report) if report.failed > 0 => tracing::warn!(
+                failed = report.failed,
+                "Some managed source claims could not be projected"
+            ),
+            Ok(_) => {}
+            Err(error) => tracing::warn!(
+                error = %format!("{error:#}"),
+                "Managed source claim projection failed; discovery runs without it"
+            ),
+        }
         let previous = if full_reconciliation {
             previous
         } else {

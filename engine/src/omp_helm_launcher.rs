@@ -42,18 +42,6 @@ const TRANSITION_RECONCILE_GRACE: Duration = Duration::from_secs(5);
 const MAX_FRAME_BYTES: usize = 512 * 1024;
 const MAX_PENDING_COMMANDS: usize = 64;
 const MAX_LIVE_TEXT_BYTES: usize = 16 * 1024;
-/// The daemon writes the agent DB continuously, and every statement on this
-/// connection — the open, the source reservation, and the final bind — shares
-/// this window. Measured on `cinder` with five managed sessions live:
-/// write-lock waits up to 3.7 s, so the 2 s this used to allow lost often
-/// enough to leave live sessions marked `degraded` with an empty native
-/// identity. A reservation is a launch-gap guard rather than a precondition,
-/// so a real budget costs latency only when the database is genuinely busy.
-const SOURCE_BINDING_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-/// Attempts and spacing for the *required* native identity binding: a busy DB
-/// must not become a permanently degraded session.
-const SOURCE_BINDING_ATTEMPTS: usize = 3;
-const SOURCE_BINDING_RETRY_DELAY: Duration = Duration::from_millis(250);
 /// Spacing between late native-identity reconciliation attempts.
 ///
 /// A binding that fails leaves no committed identity, and nothing re-binds it
@@ -65,16 +53,12 @@ const SOURCE_BINDING_RETRY_DELAY: Duration = Duration::from_millis(250);
 /// discovery and never granted their initial prompt. Retrying is spaced so a
 /// database that stays unavailable cannot hold the activity channel.
 const IDENTITY_RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
-/// Busy budget for a *repair* attempt on an otherwise working channel.
-///
-/// The launch-critical binding may spend its full budget (three opens of five
-/// seconds) because the session is unusable until it lands. A repair runs on the
-/// session's activity reader thread, so every step of it is bounded: one open,
-/// one header wait, and the reservation and bind writes that share the
-/// connection's timeout. Worst case is roughly four seconds on a thread that is
-/// otherwise idle, and the next reconciliation window retries.
-const RECONCILE_BINDING_BUSY_TIMEOUT: Duration = Duration::from_secs(1);
 /// How long a repair waits for the provider to materialize its session header.
+
+/// The claim itself is a local file write, so the only shared resource left on
+/// this path is the provider's own session file: a repair runs on the session's
+/// activity reader thread and must not hold it while a provider is slow to
+/// materialize its header.
 const RECONCILE_HEADER_TIMEOUT: Duration = Duration::from_secs(1);
 
 const EXTENSION_ASSET: &str = include_str!("../assets/longhouse-omp-helm.ts");
@@ -571,19 +555,10 @@ impl OmpHelmServer {
                 );
             }
         }
-        // Reserve the exact replacement path before waiting for OMP to finish
-        // materializing its header. Discovery then keeps the path pending
-        // instead of minting a Shadow session in this transition window.
-        let db_path = crate::config::get_agent_db_path()?;
-        let conn = match attempt {
-            BindingAttempt::Launch => open_agent_binding_connection(&db_path)?,
-            BindingAttempt::Reconcile => open_agent_binding_connection_with(
-                &db_path,
-                RECONCILE_BINDING_BUSY_TIMEOUT,
-                1,
-                SOURCE_BINDING_RETRY_DELAY,
-            )?,
-        };
+        // Claim the exact replacement path before waiting for OMP to finish
+        // materializing its header. Discovery then sees it claimed instead of
+        // minting a Shadow session in this transition window. This is a local
+        // file, so the archive database is not on the path to `ready` at all.
         {
             let state = self.shared.lock().expect("OMP state mutex poisoned");
             identity_commit_authority_matches_locked(
@@ -592,13 +567,16 @@ impl OmpHelmServer {
                 &expected_generation,
                 expected_pending,
             )?;
-            crate::omp_session::reserve_source_for_thread(
-                &conn,
-                Path::new(source),
-                &session_id,
-                Some(native_id),
-            )?;
         }
+        let snapshot = self.current_state();
+        crate::managed_source_claim::reserve(
+            &session_id,
+            "omp",
+            Path::new(source),
+            Path::new(&snapshot.cwd),
+            snapshot.provider_pid,
+            snapshot.provider_process_start_time.clone(),
+        )?;
         // A repair may not inherit the launch header budget: it runs on the
         // session's activity reader thread, so its whole operation is bounded.
         let header_budget = match attempt {
@@ -630,11 +608,16 @@ impl OmpHelmServer {
         // The lease check and the final source bind share one state lock. A
         // timeout can therefore either revoke the lease first, or linearize
         // after this commit, but it cannot turn a late replacement ready.
-        crate::omp_session::bind_source_for_thread(
-            &conn,
-            Path::new(source),
+        // `state` is held here, so read the fields directly rather than taking
+        // the lock again (a std mutex is not reentrant).
+        crate::managed_source_claim::confirm_identity(
             &session_id,
+            "omp",
+            Path::new(source),
+            Path::new(&state.state.cwd),
             native_id,
+            state.state.provider_pid,
+            state.state.provider_process_start_time.clone(),
         )?;
         // A late reconcile repairs the degradation it recovered from:
         // `mark_degraded` left the bind error in `terminal_reason`, and a
@@ -1394,6 +1377,17 @@ impl OmpHelmServer {
         state.state.updated_at = Utc::now().to_rfc3339();
         let snapshot = state.state.clone();
         drop(state);
+        // The claim is a lease over the transcript path. Releasing it on exit
+        // lets the daemon retire the binding on its next pass instead of waiting
+        // out the claim's expiry, and keeps a finished session from holding a
+        // path that a later launch may want.
+        if let Err(error) = crate::managed_source_claim::release(&snapshot.session_id) {
+            tracing::warn!(
+                session_id = %snapshot.session_id,
+                error = %format!("{error:#}"),
+                "releasing the OMP source claim failed"
+            );
+        }
         write_json_private(&self.state_path, &snapshot)
     }
 
@@ -1975,76 +1969,6 @@ fn run_provider(
     Ok(exit)
 }
 
-/// Reserve a source path before stock OMP materializes its header.
-///
-/// Discovery then keeps the path pending instead of minting a Shadow session in
-/// the transition window. The daemon writes the agent DB continuously, so a
-/// transient busy open must not end the launch: this is a launch-gap guard, not
-/// a precondition. The Codex launch path degrades the same way.
-fn reserve_source_degrading(
-    db_path: &Path,
-    path: &Path,
-    session_id: &str,
-    native_id: Option<&str>,
-) {
-    let conn = match crate::state::db::open_client_connection(db_path, SOURCE_BINDING_BUSY_TIMEOUT)
-    {
-        Ok(conn) => conn,
-        Err(error) => {
-            eprintln!(
-                "Longhouse: OMP agent DB unavailable; continuing without a source reservation: {error:#}"
-            );
-            return;
-        }
-    };
-    if let Err(error) =
-        crate::omp_session::reserve_source_for_thread(&conn, path, session_id, native_id)
-    {
-        eprintln!("Longhouse: OMP source reservation failed; continuing: {error:#}");
-    }
-}
-
-/// Open the agent DB for a native identity binding.
-///
-/// The daemon writes this DB continuously, and the binding decides whether the
-/// session is usable at all, so a transient busy open must be retried rather
-/// than turned into a permanent `degraded` state. A lock held longer than every
-/// attempt is still an error: the binding genuinely cannot be proven then.
-fn open_agent_binding_connection(db_path: &Path) -> Result<rusqlite::Connection> {
-    open_agent_binding_connection_with(
-        db_path,
-        SOURCE_BINDING_BUSY_TIMEOUT,
-        SOURCE_BINDING_ATTEMPTS,
-        SOURCE_BINDING_RETRY_DELAY,
-    )
-}
-
-fn open_agent_binding_connection_with(
-    db_path: &Path,
-    busy_timeout: Duration,
-    attempts: usize,
-    retry_delay: Duration,
-) -> Result<rusqlite::Connection> {
-    let mut attempt = 0;
-    loop {
-        attempt += 1;
-        match crate::state::db::open_client_connection(db_path, busy_timeout) {
-            Ok(conn) => return Ok(conn),
-            Err(error) => {
-                if attempt >= attempts {
-                    return Err(error);
-                }
-                // eprintln, not tracing: the launcher path has no subscriber, so
-                // a tracing event here would be invisible in the terminal.
-                eprintln!(
-                    "Longhouse: OMP agent DB busy; retrying the native identity binding ({attempt}/{attempts})"
-                );
-            }
-        }
-        thread::sleep(retry_delay);
-    }
-}
-
 pub fn launch(config: LaunchConfig) -> Result<i32> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         anyhow::bail!(
@@ -2078,18 +2002,19 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         .map(|state| state.native_session_id.clone())
         .unwrap_or_default();
     // Claim the exact path before stock OMP can materialize its header. The
-    // parser will keep the path pending until the native identity appears,
-    // while the reservation prevents a launch-gap Shadow session.
-    match crate::config::get_agent_db_path() {
-        Ok(db_path) => reserve_source_degrading(
-            &db_path,
-            &session_file,
-            &session_id,
-            (!native_id.is_empty()).then_some(native_id.as_str()),
-        ),
-        Err(error) => {
-            eprintln!("Longhouse: OMP agent DB path unavailable; continuing: {error:#}")
-        }
+    // daemon projects the claim into the binding discovery reads, before it
+    // enumerates sources, so the path cannot be minted as a Shadow session in
+    // the launch gap — and, unlike the hidden database write this replaced, a
+    // busy archive cannot fail the claim.
+    if let Err(error) = crate::managed_source_claim::reserve(
+        &session_id,
+        "omp",
+        &session_file,
+        &cwd,
+        None,
+        None,
+    ) {
+        eprintln!("Longhouse: OMP source claim could not be written; continuing unclaimed: {error:#}");
     }
     let (url, token, machine_name) = registration_credentials(&config)?;
     let resume_attempt_id = resume_state.as_ref().map(|_| Uuid::new_v4().to_string());
@@ -2708,10 +2633,10 @@ mod tests {
 
     #[test]
     fn a_locked_archive_database_cannot_make_the_bind_permanent() {
-        // The 2026-09-17 incident, reproduced: another writer holds the archive
-        // database while the session is live and unbound. The repair must lose
-        // the attempt without degrading anything, and the next attempt after the
-        // lock is released must bind the session and restore it to ready.
+        // The 2026-09-17 incident, reproduced and then made unreachable: another
+        // writer holds the archive database for the whole test while the session
+        // is live and unbound. The identity is a local claim now, so the lock
+        // cannot even delay the bind, let alone make it permanent.
         let temp = tempfile::tempdir().unwrap();
         let longhouse_home = temp.path().join("longhouse");
         let source = temp.path().join("session-b.jsonl");
@@ -2758,30 +2683,24 @@ mod tests {
 
             holder.execute_batch("BEGIN IMMEDIATE").unwrap();
             server.handle_extension_frame("connection", frame(&server));
-            let current = server.current_state();
-            assert!(
-                current.native_session_id.is_empty(),
-                "the locked database must refuse the bind"
-            );
+
+            let bound = server.current_state();
             assert_eq!(
-                current.status, "degraded",
-                "a failed repair must not invent a different state"
+                bound.native_session_id, "native-b",
+                "a locked archive must not delay the identity bind"
             );
+            assert!(bound.ready, "the session must serve while the archive is locked");
+            assert_eq!(bound.status, "ready");
+            assert_eq!(bound.terminal_reason, None);
+
+            // The claim is what discovery reads, and it exists on disk.
+            let claim = crate::managed_source_claim::read_claim(&bound.session_id)
+                .expect("read claim")
+                .expect("a launched session must own a claim");
+            assert_eq!(claim.native_session_id.as_deref(), Some("native-b"));
 
             holder.execute_batch("ROLLBACK").unwrap();
             drop(holder);
-
-            // The reconciliation window is thirty seconds by design; the fixture
-            // moves it rather than sleeping through it.
-            server.shared.lock().unwrap().identity_retry_after =
-                Some(Instant::now() - Duration::from_secs(1));
-            server.handle_extension_frame("connection", frame(&server));
-
-            let recovered = server.current_state();
-            assert_eq!(recovered.native_session_id, "native-b");
-            assert!(recovered.ready, "the recovered session must serve again");
-            assert_eq!(recovered.status, "ready");
-            assert_eq!(recovered.terminal_reason, None);
             server.shutdown();
         });
     }
@@ -3824,12 +3743,6 @@ mod tests {
         )
         .unwrap();
         let session_id = Uuid::new_v4().to_string();
-        let db_path = longhouse_home.join("agent/longhouse-shipper.db");
-        let conn = open_agent_binding_connection(&db_path).unwrap();
-        crate::omp_session::bind_source_for_thread(&conn, &source, &session_id, "native-a")
-            .unwrap();
-        drop(conn);
-
         let mut initial = state();
         initial.session_id = session_id.clone();
         initial.native_session_id = "native-a".into();
@@ -3847,6 +3760,9 @@ mod tests {
                 shared.extension_sender = Some(sender);
                 shared.extension_connection_id = Some("connection".into());
             }
+            // The frame claims a different native identity than the session's own
+            // source file carries, so the header check refuses it and the
+            // session keeps the identity it committed.
             server.handle_extension_frame(
                 "connection",
                 json!({
@@ -4311,77 +4227,5 @@ mod tests {
         // The deadline must be comfortably longer than the extension's own
         // interval, or a healthy channel would be reconnected on a timer.
         assert!(EXTENSION_SILENCE_DEADLINE >= Duration::from_secs(60));
-    }
-
-    #[test]
-    fn source_reservation_still_lands_on_a_healthy_agent_db() {
-        // Degrading on a busy agent DB must not quietly retire the launch-gap
-        // guard: a healthy DB still records the reservation.
-        let temp = tempfile::tempdir().unwrap();
-        let db_path = temp.path().join("agent/longhouse-shipper.db");
-        let source = temp.path().join("session.jsonl");
-        std::fs::write(&source, "{}\n").unwrap();
-        let session_id = Uuid::new_v4().to_string();
-
-        reserve_source_degrading(&db_path, &source, &session_id, None);
-
-        let conn =
-            crate::state::db::open_client_connection(&db_path, Duration::from_millis(500)).unwrap();
-        let (bound_session, provider) = conn
-            .query_row(
-                "SELECT session_id, provider FROM session_binding",
-                [],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-            )
-            .unwrap();
-        assert_eq!(bound_session, session_id);
-        assert_eq!(provider, "omp");
-    }
-
-    #[test]
-    fn identity_binding_retries_a_transiently_locked_agent_db() {
-        // A lock that outlives the busy timeout must be retried, not turned
-        // into a permanently degraded session.
-        let temp = tempfile::tempdir().unwrap();
-        let db_path = temp.path().join("agent/longhouse-shipper.db");
-        let holder =
-            crate::state::db::open_client_connection(&db_path, Duration::from_millis(500)).unwrap();
-        holder.execute_batch("BEGIN IMMEDIATE").unwrap();
-        let releaser = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(200));
-            holder.execute_batch("ROLLBACK").unwrap();
-            holder
-        });
-
-        let opened = open_agent_binding_connection_with(
-            &db_path,
-            Duration::from_millis(20),
-            10,
-            Duration::from_millis(50),
-        );
-
-        let _holder = releaser.join().unwrap();
-        assert!(
-            opened.is_ok(),
-            "a transient lock must be retried to success: {:?}",
-            opened.err()
-        );
-    }
-
-    #[test]
-    fn identity_binding_gives_up_after_bounded_attempts() {
-        // An agent DB that can never open must return, not retry forever.
-        let temp = tempfile::tempdir().unwrap();
-        let db_path = temp.path().join("agent/longhouse-shipper.db");
-        std::fs::create_dir_all(&db_path).unwrap();
-
-        let opened = open_agent_binding_connection_with(
-            &db_path,
-            Duration::from_millis(20),
-            3,
-            Duration::from_millis(1),
-        );
-
-        assert!(opened.is_err(), "an unopenable agent DB must not succeed");
     }
 }
