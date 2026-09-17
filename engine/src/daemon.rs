@@ -760,52 +760,6 @@ fn archive_startup_replay_warmup_delay(
 ///
 /// Best-effort by construction: the process is already exiting on a real error,
 /// and failing to write the explanation must not replace it with an I/O error.
-/// Attempts and spacing for the startup capability negotiation.
-///
-/// The window is deliberately short: it exists to survive a deploy or a blip,
-/// not to hold the daemon open against a host that is genuinely gone. Covering
-/// a long outage requires capturing locally without a negotiated capability,
-/// which needs cached capabilities and a renegotiation path so a cached tenant
-/// can never outlive the tenant it was issued for.
-const STARTUP_NEGOTIATION_ATTEMPTS: usize = 4;
-const STARTUP_NEGOTIATION_BACKOFF: Duration = Duration::from_secs(5);
-const STARTUP_NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(5);
-
-async fn negotiate_storage_v2_with_retries(
-    client: &ShipperClient,
-    machine_name: &str,
-) -> anyhow::Result<Option<StorageV2Capabilities>> {
-    let mut last_error = None;
-    for attempt in 1..=STARTUP_NEGOTIATION_ATTEMPTS {
-        match client
-            .storage_v2_capabilities(machine_name, Some(STARTUP_NEGOTIATION_TIMEOUT))
-            .await
-        {
-            Ok(negotiated) => {
-                // A host that answered and does not offer storage-v2 is a
-                // refusal, not a blip: retrying cannot change its mind.
-                if attempt > 1 && negotiated.is_some() {
-                    tracing::info!(attempt, "Runtime Host answered after a startup retry");
-                }
-                return Ok(negotiated);
-            }
-            Err(error) => {
-                tracing::warn!(
-                    attempt,
-                    attempts = STARTUP_NEGOTIATION_ATTEMPTS,
-                    error = %error,
-                    "Runtime Host capability negotiation failed"
-                );
-                last_error = Some(error);
-                if attempt < STARTUP_NEGOTIATION_ATTEMPTS {
-                    tokio::time::sleep(STARTUP_NEGOTIATION_BACKOFF).await;
-                }
-            }
-        }
-    }
-    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("capability negotiation never ran")))
-}
-
 fn record_startup_refusal(reason: &str, message: &str) {
     let Ok(status_path) = config::get_agent_status_path() else {
         return;
@@ -882,7 +836,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // inside a bounded window first; a host that is genuinely gone still gets a
     // refusal rather than a shipping loop that drops history in silence.
     let negotiated =
-        match negotiate_storage_v2_with_retries(&client, &config.shipper_config.machine_name).await
+        match client
+            .negotiate_storage_v2_at_startup(&config.shipper_config.machine_name)
+            .await
         {
             Ok(negotiated) => negotiated,
             Err(error) => {
@@ -1702,17 +1658,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             more = sweep.more,
                             "Swept superseded runtime status out of a flooded outbox"
                         );
-                        // One sweep is capped. Keep going until the directory
-                        // holds only current status; a flood outlives a pass.
-                        if sweep.more {
-                            let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
-                            runtime_sweep_tasks.spawn_blocking(move || {
-                                outbox::sweep_runtime_event_outbox(
-                                    &runtime_events_outbox_dir,
-                                    outbox::RUNTIME_EVENT_SWEEP_LIMIT,
-                                )
-                            });
-                        }
+                        // More work does not mean another pass right now. The
+                        // next saturated collection arms the next sweep on the
+                        // ordinary tick; chaining blocking passes back to back
+                        // would starve every other lane on this loop.
                     }
                     Some(Err(err)) => {
                         tracing::warn!("Runtime-event outbox sweep task failed: {}", err);

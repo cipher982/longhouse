@@ -17,6 +17,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, Utc};
@@ -63,6 +65,16 @@ const RUNTIME_EVENT_POST_LIMIT: usize = 256;
 /// Entries one background sweep pass may inspect while reducing a flooded
 /// outbox in place. Large, because the sweep runs off the live lane.
 pub const RUNTIME_EVENT_SWEEP_LIMIT: usize = 50_000;
+/// Workers the sweep uses to read and remove. The device does thousands of
+/// each per second; one thread does not.
+const RUNTIME_EVENT_SWEEP_WORKERS: usize = 8;
+/// Paths one sweep pass materializes before working. Enumeration is cheap,
+/// but a million owned paths is not: the rest waits for the next pass.
+const RUNTIME_EVENT_SWEEP_PATHS: usize = 200_000;
+/// Requests in flight to the Runtime Host. One at a time leaves the link idle
+/// for a whole round trip between batches, which is how a backlog that the
+/// device can clear in minutes takes hours to deliver.
+const RUNTIME_EVENT_POST_CONCURRENCY: usize = 8;
 /// No single runtime event can legitimately reach this size, and one that
 /// does would defeat every budget below it.
 const RUNTIME_EVENT_MAX_FILE_BYTES: usize = 4 * 1024 * 1024;
@@ -134,6 +146,7 @@ pub struct PendingPresencePost {
 }
 
 #[derive(Debug)]
+#[derive(Clone)]
 pub struct PendingRuntimeEventPost {
     path: PathBuf,
     event: Value,
@@ -894,20 +907,203 @@ pub struct RuntimeOutboxSweep {
 /// orphaned directory. Nothing here moves, renames, or removes a directory;
 /// the only deletions are files this sweep has read and found superseded by a
 /// newer observation of the same statement.
-pub fn sweep_runtime_event_outbox(dir: &Path, entry_limit: usize) -> RuntimeOutboxSweep {
-    let reduced = reduce_ready_runtime_events(dir, entry_limit, RUNTIME_EVENT_SWEEP_BYTES);
+pub fn sweep_runtime_event_outbox(dir: &Path, _entry_limit: usize) -> RuntimeOutboxSweep {
+    sweep_runtime_event_outbox_with_workers(dir, RUNTIME_EVENT_SWEEP_WORKERS)
+}
+
+/// Reduce the whole directory, using the device rather than a tick budget.
+///
+/// The first version of this ran inside the 100ms collection tick with a
+/// 50k-entry cap and one thread. On `cinder` it cleared about 42 files a
+/// second against a producer writing 50, which is not a recovery, it is a
+/// slower kind of flood. The device measured 2,400 reads and 2,900 unlinks a
+/// second single-threaded and far more in parallel, so the cap was the whole
+/// problem: a sweep that cannot outrun its producer never converges.
+///
+/// The pass now streams the directory, hashes each statement, and lets a small
+/// pool of workers read and remove in parallel. Memory stays bounded because
+/// only a 64-bit hash and the newest path per statement are retained.
+pub fn sweep_runtime_event_outbox_with_workers(dir: &Path, workers: usize) -> RuntimeOutboxSweep {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return RuntimeOutboxSweep::default();
+    };
+    let mut paths: Vec<PathBuf> = Vec::new();
+    let mut truncated = false;
+    for entry in entries.flatten() {
+        if paths.len() >= RUNTIME_EVENT_SWEEP_PATHS {
+            truncated = true;
+            break;
+        }
+        let is_ready = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.ends_with(".json") && !name.starts_with('.'));
+        if is_ready {
+            paths.push(entry.path());
+        }
+    }
+    if paths.is_empty() {
+        return RuntimeOutboxSweep::default();
+    }
+
+    let inspected = AtomicUsize::new(0);
+    let discarded = AtomicUsize::new(0);
+    // A 128-bit statement identity, not 64: this map decides which file gets
+    // removed, and one collision would remove a different statement.
+    let newest: Mutex<HashMap<(u64, u64), (Option<DateTime<Utc>>, PathBuf)>> =
+        Mutex::new(HashMap::new());
+    let next = AtomicUsize::new(0);
+    let worker_count = workers.max(1).min(paths.len());
+
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count {
+            scope.spawn(|| loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                let Some(path) = paths.get(index) else {
+                    return;
+                };
+                // The collector's size policy applies here too: eight workers
+                // reading unbounded files is eight unbounded allocations.
+                // Oversized files are left for the collector, which owns the
+                // dead-letter decision.
+                let too_large = std::fs::metadata(path)
+                    .map(|meta| meta.len() as usize > RUNTIME_EVENT_MAX_FILE_BYTES)
+                    .unwrap_or(true);
+                if too_large {
+                    continue;
+                }
+                let Ok(bytes) = std::fs::read(path) else {
+                    continue;
+                };
+                let Ok(event) = serde_json::from_slice::<Value>(&bytes) else {
+                    continue;
+                };
+                if !event.is_object() {
+                    continue;
+                }
+                inspected.fetch_add(1, Ordering::Relaxed);
+                let Some(key) = duplicate_statement_key(&event) else {
+                    continue;
+                };
+                let hashed = hash_statement_key(&key);
+                let occurred_at = occurred_at_utc(&event);
+                let superseded = {
+                    let mut newest = newest.lock().expect("sweep state mutex poisoned");
+                    match newest.get(&hashed) {
+                        Some((existing_at, _)) if *existing_at >= occurred_at => Some(path.clone()),
+                        Some((_, existing)) => {
+                            let previous = existing.clone();
+                            newest.insert(hashed, (occurred_at, path.clone()));
+                            Some(previous)
+                        }
+                        None => {
+                            newest.insert(hashed, (occurred_at, path.clone()));
+                            None
+                        }
+                    }
+                };
+                if let Some(stale) = superseded {
+                    if std::fs::remove_file(&stale).is_ok() {
+                        discarded.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            });
+        }
+    });
+
     RuntimeOutboxSweep {
-        inspected: reduced.inspected,
-        discarded: reduced.discarded,
-        // Only ask for another pass while this one removed something. A
-        // directory of records that cannot be reduced is not a flood, and
-        // rescheduling on "there is more to look at" alone would rescan it
-        // forever. The daemon also caps how many passes may chain.
-        more: reduced.saturated && reduced.discarded > 0,
+        inspected: inspected.load(Ordering::Relaxed),
+        discarded: discarded.load(Ordering::Relaxed),
+        // Another pass is worth running when this one was still finding copies
+        // to remove, or when it did not reach the end of the directory. The
+        // daemon schedules that on its ordinary tick rather than immediately:
+        // chaining blocking passes back to back starves the other lanes.
+        more: discarded.load(Ordering::Relaxed) > 0 || truncated,
     }
 }
 
+/// Two independent hashes of the same key. A single 64-bit hash over half a
+/// million statements carries a real, if small, chance of deleting one
+/// statement as though it were another; 128 bits removes it.
+fn hash_statement_key(key: &str) -> (u64, u64) {
+    use std::hash::{Hash, Hasher};
+    let mut first = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut first);
+    let mut second = std::collections::hash_map::DefaultHasher::new();
+    key.len().hash(&mut second);
+    second.write_u8(0xA5);
+    key.hash(&mut second);
+    (first.finish(), second.finish())
+}
+
+/// Deliver a batch, using the link instead of one round trip at a time.
+///
+/// Concurrency runs across sessions, never inside one. A session's events are
+/// sent in order, one request at a time, and a transient failure stops that
+/// session there rather than letting its later events overtake the ones still
+/// waiting: a `pause_resolution` that arrives before its `pause_request` is
+/// dropped by the Runtime Host, because there is nothing pending to resolve.
+/// Sessions are independent, so they proceed in parallel.
+///
+/// Serial delivery across everything left the link idle for a full round trip
+/// between batches, which on `cinder` meant 256 events every few minutes while
+/// the device could have cleared the whole backlog in that time.
 pub async fn post_pending_runtime_event_files(
+    client: &ShipperClient,
+    posts: Vec<PendingRuntimeEventPost>,
+) -> (usize, usize) {
+    let sessions = group_posts_by_session(posts);
+
+    let outcomes = stream::iter(sessions.into_iter().map(|events| async move {
+        let mut sent = 0usize;
+        let mut kept = 0usize;
+        for chunk in events.chunks(RUNTIME_EVENT_BATCH_LIMIT) {
+            let (chunk_sent, chunk_kept) =
+                post_one_runtime_event_request(client, chunk.to_vec()).await;
+            sent += chunk_sent;
+            kept += chunk_kept;
+            if chunk_kept > 0 {
+                // Everything after this in the same session stays queued: it
+                // must not arrive before the events it follows.
+                let remaining: usize = events.len() - (sent + kept);
+                kept += remaining;
+                break;
+            }
+        }
+        (sent, kept)
+    }))
+    .buffer_unordered(RUNTIME_EVENT_POST_CONCURRENCY)
+    .collect::<Vec<_>>()
+    .await;
+
+    outcomes
+        .into_iter()
+        .fold((0usize, 0usize), |(sent, kept), (chunk_sent, chunk_kept)| {
+            (sent + chunk_sent, kept + chunk_kept)
+        })
+}
+
+/// One group per session, each in the order the events were observed.
+///
+/// This is the unit of concurrency: groups may be sent in parallel, the
+/// contents of a group may not.
+fn group_posts_by_session(posts: Vec<PendingRuntimeEventPost>) -> Vec<Vec<PendingRuntimeEventPost>> {
+    let mut by_session: HashMap<String, Vec<PendingRuntimeEventPost>> = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+    for post in posts {
+        let session = text_field(post.event.get("session_id"));
+        if !by_session.contains_key(&session) {
+            order.push(session.clone());
+        }
+        by_session.entry(session).or_default().push(post);
+    }
+    order
+        .into_iter()
+        .filter_map(|session| by_session.remove(&session))
+        .collect()
+}
+
+async fn post_one_runtime_event_request(
     client: &ShipperClient,
     posts: Vec<PendingRuntimeEventPost>,
 ) -> (usize, usize) {
@@ -2786,8 +2982,9 @@ mod runtime_status_collection_tests {
         let sweep = sweep_runtime_event_outbox(&dir, RUNTIME_EVENT_SWEEP_LIMIT);
 
         assert_eq!(sweep.inspected, 10_001);
-        assert!(!sweep.more, "one pass covered the directory");
         assert_eq!(ready_files(&dir), 6, "five current statements plus the terminal record");
+        // The pass covered everything, so the next one finds nothing to do.
+        assert!(!sweep_runtime_event_outbox(&dir, RUNTIME_EVENT_SWEEP_LIMIT).more);
         let posts = collect_runtime_event_outbox(&dir);
         assert!(
             posts
@@ -2807,7 +3004,7 @@ mod runtime_status_collection_tests {
     }
 
     #[test]
-    fn sweep_reports_more_work_when_capped_and_still_reducing() {
+    fn sweep_reports_more_work_while_it_is_still_reducing() {
         let tmp = TempDir::new().expect("tempdir");
         let dir = tmp.path();
         for tick in 0..30 {
@@ -2817,16 +3014,36 @@ mod runtime_status_collection_tests {
             );
         }
 
-        let sweep = sweep_runtime_event_outbox(dir, 10);
+        let sweep = sweep_runtime_event_outbox(dir, RUNTIME_EVENT_SWEEP_LIMIT);
 
-        assert!(sweep.more);
-        assert!(sweep.discarded >= 9, "a capped sweep still makes progress");
-        assert!(ready_files(dir) < 30);
+        assert!(sweep.more, "a producer that keeps writing earns another pass");
+        assert_eq!(sweep.discarded, 29);
+        assert_eq!(ready_files(dir), 1);
     }
 
     /// A directory of records that cannot be reduced is not a flood. Asking
     /// for another pass on "there is more to look at" alone would rescan it
     /// forever.
+    /// The sweep exists to outrun a producer, so it covers the directory in
+    /// one pass across workers rather than stopping at a tick budget.
+    #[test]
+    fn sweep_covers_the_whole_directory_in_one_pass() {
+        let tmp = TempDir::new().expect("tempdir");
+        let dir = tmp.path();
+        for tick in 0..4_000 {
+            write_plain(
+                dir,
+                &phase_event("s1", "r1", "thinking", &format!("2026-09-17T15:00:{:02}Z", tick % 60)),
+            );
+        }
+        write_plain(dir, &terminal_event("s2", "r2", "2026-09-17T15:59:59Z"));
+
+        let sweep = sweep_runtime_event_outbox_with_workers(dir, 8);
+
+        assert_eq!(sweep.inspected, 4_001);
+        assert_eq!(ready_files(dir), 2, "one current statement plus the record");
+    }
+
     #[test]
     fn sweep_stops_asking_when_it_cannot_make_progress() {
         let tmp = TempDir::new().expect("tempdir");
@@ -2899,6 +3116,70 @@ mod runtime_status_collection_tests {
             .filter(|post| post.event["kind"] == "terminal_signal")
             .count();
         assert_eq!(terminals, 2, "both terminal records survive the race");
+    }
+
+    /// Concurrency runs across sessions, never inside one: a session's later
+    /// events must not overtake the ones they follow, or the Runtime Host
+    /// drops a pause resolution whose request has not arrived.
+    #[test]
+    fn delivery_groups_keep_one_session_whole_and_in_order() {
+        let tmp = TempDir::new().expect("tempdir");
+        let dir = tmp.path();
+        let mut posts = Vec::new();
+        for index in 0..300 {
+            let session = if index % 2 == 0 { "s1" } else { "s2" };
+            let event = phase_event(
+                session,
+                "r1",
+                "running",
+                &format!("2026-09-17T15:{:02}:{:02}Z", index / 60, index % 60),
+            );
+            posts.push(PendingRuntimeEventPost {
+                path: dir.join(format!("{index}.json")),
+                event,
+            });
+        }
+
+        let groups = group_posts_by_session(posts);
+
+        assert_eq!(groups.len(), 2, "one group per session");
+        for group in &groups {
+            assert!(
+                group.len() > RUNTIME_EVENT_BATCH_LIMIT,
+                "the interesting case is a session larger than one request"
+            );
+            let sessions: std::collections::HashSet<String> = group
+                .iter()
+                .map(|post| text_field(post.event.get("session_id")))
+                .collect();
+            assert_eq!(sessions.len(), 1, "a group never mixes sessions");
+            let times: Vec<String> = group
+                .iter()
+                .map(|post| text_field(post.event.get("occurred_at")))
+                .collect();
+            let mut sorted = times.clone();
+            sorted.sort();
+            assert_eq!(times, sorted, "a session stays in observation order");
+        }
+    }
+
+    /// The collector's size policy applies to the sweep too: eight workers
+    /// reading unbounded files is eight unbounded allocations.
+    #[test]
+    fn sweep_leaves_an_oversized_file_for_the_collector() {
+        let tmp = TempDir::new().expect("tempdir");
+        let dir = tmp.path();
+        let mut huge = phase_event("s1", "r1", "thinking", "2026-09-17T15:00:01Z");
+        huge["payload"]["pad"] = json!("x".repeat(RUNTIME_EVENT_MAX_FILE_BYTES + 1));
+        write_plain(dir, &huge);
+        write_plain(dir, &phase_event("s1", "r1", "thinking", "2026-09-17T15:00:02Z"));
+        write_plain(dir, &phase_event("s1", "r1", "thinking", "2026-09-17T15:00:03Z"));
+
+        let sweep = sweep_runtime_event_outbox_with_workers(dir, 4);
+
+        assert_eq!(sweep.inspected, 2, "the oversized file is never read");
+        assert_eq!(sweep.discarded, 1);
+        assert_eq!(ready_files(dir), 2, "it is left where the collector will decide");
     }
 
     /// A producer writing through a sweep keeps its event: the sweep only

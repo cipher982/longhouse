@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -241,10 +242,30 @@ def test_native_rate_limit_uses_trusted_proxy_client_ip(monkeypatch):
     assert auth_sso.get_client_ip(request) == "198.51.100.7"
 
 
+@pytest.fixture(scope="module")
+def _schema_template(tmp_path_factory):
+    """Pay the schema DDL once, not once per test.
+
+    Every test here still gets its own database file; only the CREATE TABLE
+    work is shared. Building the whole of `Base.metadata` per test is what put
+    these trivial auth assertions over the 10s per-test cap on a loaded CI
+    runner, where the timeout landed inside `create_all` and failed the suite.
+    """
+
+    template = tmp_path_factory.mktemp("hosted-identity-schema") / "template.db"
+    engine = create_engine(f"sqlite:///{template}")
+    try:
+        Base.metadata.create_all(bind=engine)
+    finally:
+        engine.dispose()
+    return template
+
+
 @pytest.fixture()
-def db_session(tmp_path):
-    engine = create_engine(f"sqlite:///{tmp_path}/test.db")
-    Base.metadata.create_all(bind=engine)
+def db_session(tmp_path, _schema_template):
+    database = tmp_path / "test.db"
+    shutil.copyfile(_schema_template, database)
+    engine = create_engine(f"sqlite:///{database}")
     SessionLocal = sessionmaker(bind=engine)
     db = SessionLocal()
     try:
