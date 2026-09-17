@@ -4,9 +4,10 @@
 This is intentionally an external fixture, not an app test seam. It accepts the
 same REST/SSE routes used by the normal authenticated client, drops the first
 multipart acknowledgement after recording the request, and only serves the
-receipt after the driver enables it on relaunch. The fixture records attachment
-hashes and request identities so the XCTest can prove that no new operation was
-allocated while the pending intent crossed a process restart.
+receipt and its authoritative durable user-event echo after the driver enables
+it on relaunch. The fixture records attachment hashes and request identities so
+the XCTest can prove that no new operation was allocated while the pending
+intent crossed a process restart.
 """
 from __future__ import annotations
 
@@ -99,6 +100,11 @@ class ProofState:
             self.persist()
             return index
 
+    def first_post(self) -> dict[str, Any] | None:
+        with self.lock:
+            return None if not self.posts else dict(self.posts[0])
+
+
     def receipt(self) -> dict[str, Any] | None:
         with self.lock:
             if not self.receipt_enabled or not self.posts:
@@ -108,6 +114,8 @@ class ProofState:
                 "client_request_id": post["client_request_id"],
                 "intent": post["intent"],
                 "status": "accepted",
+                "created_at": NOW,
+                "input_id": 7,
                 "event_id": "proof-event-1",
             }
 
@@ -183,10 +191,12 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 self.send_json(200, {"subagents": []})
             elif suffix == "workspace":
                 self.proof.record_workspace_read()
-                self.send_json(200, workspace(self.proof.session_id, self.proof.receipt()))
+                receipt = self.proof.receipt()
+                self.send_json(200, workspace(self.proof.session_id, receipt, self.proof.first_post()))
             elif suffix == "mobile-tail":
                 self.proof.record_workspace_read()
-                self.send_json(200, mobile_tail(self.proof.session_id, self.proof.receipt()))
+                receipt = self.proof.receipt()
+                self.send_json(200, mobile_tail(self.proof.session_id, receipt, self.proof.first_post()))
             else:
                 self.proof.record_workspace_read()
                 self.send_json(200, session_detail(self.proof.session_id, self.proof.receipt()))
@@ -300,15 +310,16 @@ class FixtureHandler(BaseHTTPRequestHandler):
             "server_now_ms": int(time.time() * 1000),
             "stream_epoch": epoch,
         }
+        accepted = self.proof.receipt() is not None
         changed = {
             "session_id": self.proof.session_id,
-            "latest_event_id": 1,
-            "change_kind": "runtime",
+            "latest_event_id": 2 if accepted else 1,
+            "change_kind": "ingest" if accepted else "runtime",
             "thread_session_count": 1,
             "latest_event_emitted_at_ms": int(time.time() * 1000),
             "server_fanout_at_ms": int(time.time() * 1000),
             "server_now_ms": int(time.time() * 1000),
-            "catalog_commit_seq": 1,
+            "catalog_commit_seq": 2 if accepted else 1,
             "pubsub_seq": stream_number,
             "stream_epoch": epoch,
             "transcript_preview": None,
@@ -368,8 +379,8 @@ def base_session(session_id: str, receipt: dict[str, Any] | None) -> dict[str, A
         "provider": "claude",
         "provider_session_id": "proof-provider-session",
         "project": "ios-http-proof",
-        "device_id": "proof-device",
-        "environment": "test",
+        "user_messages": 2 if receipt is not None else 1,
+        "assistant_messages": 1,
         "cwd": "/tmp/ios-http-proof",
         "git_repo": None,
         "git_branch": None,
@@ -586,7 +597,74 @@ def event_item(session_id: str) -> dict[str, Any]:
     }
 
 
-def workspace(session_id: str, receipt: dict[str, Any] | None) -> dict[str, Any]:
+def accepted_event_item(
+    session_id: str,
+    receipt: dict[str, Any],
+    post: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "kind": "event",
+        "session_id": session_id,
+        "timestamp": NOW,
+        "event": {
+            "id": receipt["event_id"],
+            "role": "user",
+            "content_text": post["text"],
+            "interaction_kind": None,
+            "raw_content_text": None,
+            "input_origin": {
+                "authored_via": "longhouse",
+                "session_input_id": receipt["input_id"],
+                "client_request_id": receipt["client_request_id"],
+            },
+            "turn_end": None,
+            "tool_name": None,
+            "tool_input_json": None,
+            "tool_output_text": None,
+            "tool_output_truncated": None,
+            "tool_output_original_chars": None,
+            "tool_call_id": None,
+            "tool_presentation": None,
+            "timestamp": NOW,
+            "in_active_context": True,
+            "branch_id": None,
+            "is_head_branch": True,
+            "event_origin": "durable",
+            "provisional_state": None,
+            "provisional_cursor": None,
+            "provisional_complete": None,
+            "reconciled_event_id": None,
+            "tool_call_state": None,
+            "media_refs": [],
+        },
+        "action": None,
+        "continued_from_session_id": None,
+        "continuation_kind": None,
+        "origin_label": "HTTP fixture",
+        "parent_origin_label": None,
+        "parent_continuation_kind": None,
+        "branched_from_event_id": None,
+    }
+
+
+def event_items(
+    session_id: str,
+    receipt: dict[str, Any] | None,
+    post: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    items = [event_item(session_id)]
+    if receipt is not None and post is not None:
+        items.append(accepted_event_item(session_id, receipt, post))
+    return items
+
+
+def workspace(
+    session_id: str,
+    receipt: dict[str, Any] | None,
+    post: dict[str, Any] | None,
+) -> dict[str, Any]:
+    items = event_items(session_id, receipt, post)
+    latest_event_id = items[-1]["event"]["id"]
     return {
         "session": base_session(session_id, receipt),
         "thread": {"root_session_id": session_id, "head_session_id": session_id, "sessions": [base_session(session_id, receipt)]},
@@ -595,8 +673,8 @@ def workspace(session_id: str, receipt: dict[str, Any] | None) -> dict[str, Any]
             "focus_session_id": session_id,
             "head_session_id": session_id,
             "path_session_ids": [session_id],
-            "items": [event_item(session_id)],
-            "total": 1,
+            "items": items,
+            "total": len(items),
             "page_offset": 0,
             "branch_mode": "head",
             "abandoned_events": 0,
@@ -605,7 +683,7 @@ def workspace(session_id: str, receipt: dict[str, Any] | None) -> dict[str, Any]
             "has_more": False,
         },
         "workspace_revision": {
-            "latest_event_id": 1,
+            "latest_event_id": latest_event_id,
             "latest_session_updated_at": NOW,
             "latest_runtime_signal_at": NOW,
             "runtime_version_sum": 1,
@@ -615,18 +693,22 @@ def workspace(session_id: str, receipt: dict[str, Any] | None) -> dict[str, Any]
             "managed_control_fingerprint": "proof-control",
             "live_preview_updated_at": NOW,
             "thread_session_count": 1,
-            "fingerprint": "proof-fingerprint",
+            "fingerprint": "proof-fingerprint-accepted" if receipt is not None else "proof-fingerprint",
         },
         "control_only": False,
     }
 
 
-def mobile_tail(session_id: str, receipt: dict[str, Any] | None) -> dict[str, Any]:
-    value = workspace(session_id, receipt)
+def mobile_tail(
+    session_id: str,
+    receipt: dict[str, Any] | None,
+    post: dict[str, Any] | None,
+) -> dict[str, Any]:
+    value = workspace(session_id, receipt, post)
     return {
         "session": value["session"],
         "projection": value["projection"],
-        "snapshot_event_id": 1,
+        "snapshot_event_id": value["projection"]["items"][-1]["event"]["id"],
         "workspace_revision": value["workspace_revision"],
     }
 

@@ -37,6 +37,7 @@ final class HTTPOutboxUITests: XCTestCase {
         let clientRequestId: String
         let intent: String
         let status: String
+        let inputId: Int?
         let eventId: String
     }
 
@@ -113,6 +114,16 @@ final class HTTPOutboxUITests: XCTestCase {
         XCTAssertGreaterThan(firstPost.attachmentBytes, 0)
         XCTAssertEqual(firstPost.mimeType, "image/jpeg")
         XCTAssertFalse(firstPost.clientRequestId.isEmpty)
+
+        let pendingWebView = app.webViews.firstMatch
+        XCTAssertTrue(pendingWebView.waitForExistence(timeout: 5), "pending outbox state did not expose its WebView transcript")
+        XCTAssertTrue(
+            waitForWebViewText(pendingWebView, containing: "Not confirmed", timeout: Self.timeout),
+            "ambiguous transport outcome was not rendered as Not confirmed before termination"
+        )
+        // The fixture has recorded the complete multipart body, but has not
+        // enabled the server-owned receipt. Keep this genuinely unknown frame
+        // as evidence before crossing the process boundary.
         let pendingFrame = XCTAttachment(screenshot: app.screenshot())
         pendingFrame.name = "http-outbox-unknown-before-termination"
         pendingFrame.lifetime = .keepAlways
@@ -150,6 +161,26 @@ final class HTTPOutboxUITests: XCTestCase {
         XCTAssertEqual(servedReceipt.clientRequestId, firstPost.clientRequestId)
         XCTAssertEqual(servedReceipt.intent, "auto")
         XCTAssertEqual(servedReceipt.status, "accepted")
+        XCTAssertEqual(servedReceipt.inputId, 7)
+        XCTAssertEqual(servedReceipt.eventId, "proof-event-1")
+
+        // A durable user event, not the optimistic outbox row, is the
+        // confirmation. Its Longhouse origin and prompt text prove that the
+        // epoch-2 workspace reconciliation rendered the accepted event; the
+        // absence of the old status proves the unknown row was replaced.
+        XCTAssertTrue(
+            waitForWebViewText(reopenedWebView, containing: message, timeout: Self.timeout),
+            "accepted prompt did not survive relaunch in the rendered transcript"
+        )
+        XCTAssertTrue(
+            waitForWebViewText(reopenedWebView, containing: "Sent via Longhouse", timeout: Self.timeout),
+            "accepted prompt was not rendered as an authoritative Longhouse event"
+        )
+        let finalSnapshot = try XCTUnwrap(reopenedWebView.snapshot())
+        XCTAssertFalse(
+            snapshotContains(finalSnapshot, value: "Not confirmed"),
+            "reopened transcript still rendered the unknown outbox status after authoritative reconciliation"
+        )
 
         let evidence: [String: Any] = [
             "proof": "real-app-http-fixture",
@@ -164,6 +195,7 @@ final class HTTPOutboxUITests: XCTestCase {
             "posts_recorded": finalState.posts.count,
             "receipt_enabled_after_relaunch": finalState.receiptEnabled,
             "receipt_status": servedReceipt.status,
+            "receipt_event_id": servedReceipt.eventId,
         ]
         let evidenceData = try JSONSerialization.data(withJSONObject: evidence, options: [.prettyPrinted, .sortedKeys])
         let attachment = XCTAttachment(data: evidenceData, uniformTypeIdentifier: "public.json")
