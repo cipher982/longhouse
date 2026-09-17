@@ -203,14 +203,22 @@ struct SessionView: View {
                 }
             )
         }
-        .alert("Report saved", isPresented: $isShowingBugReportSavedAlert) {
-            Button("Start a fix") {
-                bugReportAutoStartFix = true
-                isShowingBugReport = true
+        .overlay(alignment: .bottom) {
+            if isShowingBugReportSavedAlert {
+                BugReportSavedBanner(
+                    onStartFix: {
+                        isShowingBugReportSavedAlert = false
+                        bugReportAutoStartFix = true
+                        isShowingBugReport = true
+                    },
+                    onDone: {
+                        isShowingBugReportSavedAlert = false
+                    }
+                )
+                .padding(.horizontal, 16)
+                .padding(.bottom, 96)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            Button("Done", role: .cancel) {}
-        } message: {
-            Text("Your screenshot and diagnostics are attached. Start a fix now or return to this session.")
         }
     }
 

@@ -503,6 +503,45 @@ struct BugReportSheet: View {
     }
 }
 
+struct BugReportSavedBanner: View {
+    let onStartFix: () -> Void
+    let onDone: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.title3)
+                    .foregroundStyle(.green)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Report saved")
+                        .font(.headline)
+                    Text("Your screenshot and diagnostics are attached.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 10) {
+                Spacer(minLength: 0)
+                Button("Done", action: onDone)
+                    .buttonStyle(.bordered)
+                Button("Start a fix", action: onStartFix)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(.white.opacity(0.18))
+        }
+        .shadow(color: .black.opacity(0.2), radius: 18, y: 8)
+        .accessibilityIdentifier("bug-report-saved-banner")
+    }
+}
+
 #Preview("Bug report handoff") {
     BugReportSheet(
         sourceSessionID: "session-preview",
@@ -522,12 +561,15 @@ struct BugReportSheet: View {
 }
 
 #Preview("Report saved confirmation") {
-    Color(.systemBackground)
-        .ignoresSafeArea()
-        .alert("Report saved", isPresented: .constant(true)) {
-            Button("Start a fix") {}
-            Button("Done", role: .cancel) {}
-        } message: {
-            Text("Your screenshot and diagnostics are attached. Start a fix now or return to Timeline.")
-        }
+    ZStack(alignment: .bottom) {
+        Color(.systemBackground)
+            .ignoresSafeArea()
+        BugReportSavedBanner(
+            onStartFix: {},
+            onDone: {}
+        )
+        .padding(16)
+    }
+    .preferredColorScheme(.dark)
+    .frame(width: 390, height: 844)
 }

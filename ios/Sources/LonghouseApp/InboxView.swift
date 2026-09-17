@@ -239,14 +239,22 @@ struct TimelineView: View {
                     }
                 )
             }
-            .alert("Report saved", isPresented: $isShowingBugReportSavedAlert) {
-                Button("Start a fix") {
-                    bugReportAutoStartFix = true
-                    isShowingBugReport = true
+            .overlay(alignment: .bottom) {
+                if isShowingBugReportSavedAlert {
+                    BugReportSavedBanner(
+                        onStartFix: {
+                            isShowingBugReportSavedAlert = false
+                            bugReportAutoStartFix = true
+                            isShowingBugReport = true
+                        },
+                        onDone: {
+                            isShowingBugReportSavedAlert = false
+                        }
+                    )
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 16)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
-                Button("Done", role: .cancel) {}
-            } message: {
-                Text("Your screenshot and diagnostics are attached. Start a fix now or return to Timeline.")
             }
             .refreshable {
                 if normalizedSearch.isEmpty {
