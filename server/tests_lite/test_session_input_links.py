@@ -156,6 +156,7 @@ def test_workspace_envelope_stamps_input_origin_and_lists_receipts():
         _event("reply-1", "c2", "assistant", "on it"),
     ]
     envelope = _workspace_envelope(
+        owner_id=7,
         session_id=str(session_id),
         session=session,
         session_commit_seq="7",

@@ -9,9 +9,11 @@ from fastapi import Request
 from fastapi import status
 
 from zerg.auth.caller import Caller
+from zerg.auth.media_url_tokens import parse_media_url_token
 from zerg.config import get_settings
 from zerg.dependencies.auth import _auth_compat_db
 from zerg.dependencies.auth import _get_strategy
+from zerg.dependencies.browser_auth import _get_browser_session_user
 from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.dependencies.form_post_origin import require_browser_auth_header
 
@@ -59,7 +61,64 @@ def get_current_browser_route_caller(
     return Caller(owner_id=owner_id, principal=user)
 
 
+def get_optional_browser_route_caller(
+    request: Request,
+    token: str | None = Query(
+        None,
+        description="Optional JWT token (used by EventSource/SSE which can't send Authorization headers).",
+    ),
+    db=Depends(_auth_compat_db),
+) -> Caller | None:
+    """Resolve the browser credential when the request carries one, else None."""
+
+    if token:
+        if getattr(get_settings(), "control_plane_url", None) and not token.startswith("zdt_"):
+            return None
+        user = _get_strategy().validate_ws_token(token, db)
+    else:
+        user = _get_browser_session_user(request, db)
+    if user is None:
+        return None
+    try:
+        owner_id = int(user.id)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return Caller(owner_id=owner_id, principal=user)
+
+
+def get_media_route_caller(
+    sha256: str,
+    mt: str | None = Query(
+        None,
+        description="Owner-scoped media URL token minted into served media URLs.",
+    ),
+    ambient: Caller | None = Depends(get_optional_browser_route_caller),
+) -> Caller:
+    """Resolve a reader of one media object.
+
+    Media renders inside a document, so the request cannot carry a header: an
+    ambient browser credential or a signed URL token bound to this exact object
+    are the only credentials available. The token resolves to an owner and the
+    read path keeps enforcing that owner's view of the sessions that reference
+    the blob -- a signed URL is narrower than the session it came from, never
+    wider.
+    """
+
+    if mt:
+        owner_id = parse_media_url_token(mt, sha256=sha256)
+        if owner_id is not None:
+            return Caller(owner_id=owner_id)
+    if ambient is not None:
+        return ambient
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Not authenticated",
+    )
+
+
 __all__ = [
     "get_current_browser_route_caller",
+    "get_media_route_caller",
+    "get_optional_browser_route_caller",
     "get_current_browser_route_user",
 ]

@@ -676,6 +676,7 @@ async def test_storage_v2_abandoned_prose_has_generation_counts_and_full_head_pa
                 session_id=session_id, owner_id="42", cursor=cursor, anchor=anchor, limit=2, branch_mode=branch_mode
             )
             workspace = _workspace_envelope(
+                owner_id=42,
                 session_id=session_id,
                 session=session,
                 session_commit_seq="1",

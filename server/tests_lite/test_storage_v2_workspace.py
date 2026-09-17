@@ -12,6 +12,8 @@ os.environ.setdefault("TESTING", "1")
 
 import zerg.routers.session_chat as session_chat_module
 import zerg.services.storage_v2_workspace as workspace_module
+from zerg.auth.media_url_tokens import MEDIA_URL_TOKEN_PARAMETER
+from zerg.auth.media_url_tokens import parse_media_url_token
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.store import CatalogStore
@@ -22,6 +24,16 @@ from zerg.routers.agents_storage_v2 import _claude_abandoned_event_ids
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.live_control_catalog import load_live_control_session_snapshot
 from zerg.storage_v2.render_objects import RenderRecord
+
+
+def _media_url_owner(url: str | None, *, sha256: str) -> int | None:
+    """The owner a served media URL authorizes for this exact blob."""
+    if not url:
+        return None
+    _, _, query = url.partition("?")
+    prefix = f"{MEDIA_URL_TOKEN_PARAMETER}="
+    assert query.startswith(prefix), url
+    return parse_media_url_token(query[len(prefix) :], sha256=sha256)
 
 
 class _Catalog:
@@ -736,36 +748,35 @@ async def test_workspace_places_media_on_the_event_that_owns_the_line(monkeypatc
 
     assert result is not None
     events = {item["event"]["id"]: item["event"] for item in result["projection"]["items"]}
-    assert events["owner"]["media_refs"] == [
-        {
-            "sha256": owner_hash,
-            "media_state": "present",
-            "mime_type": "image/png",
-            "byte_size": 4096,
-            "blob_url": f"/api/media/{owner_hash}/blob",
-            # A derived preview is an ordinary content-addressed object, so it
-            # is offered through the same route.
-            "thumb_url": f"/api/media/{'9' * 64}/blob",
-            # The row can reserve its layout before the bytes arrive.
-            "width": 2880,
-            "height": 1800,
-            "source_path": None,
-            "source_offset": 40,
-            "json_pointer": None,
-            "original_kind": "inline_data_url",
-        }
-    ]
+    owner_ref = events["owner"]["media_refs"][0]
+    assert {key: owner_ref[key] for key in owner_ref if key not in {"blob_url", "thumb_url"}} == {
+        "sha256": owner_hash,
+        "media_state": "present",
+        "mime_type": "image/png",
+        "byte_size": 4096,
+        # The row can reserve its layout before the bytes arrive.
+        "width": 2880,
+        "height": 1800,
+        "source_path": None,
+        "source_offset": 40,
+        "json_pointer": None,
+        "original_kind": "inline_data_url",
+    }
+    # An image renders inside a document, so its URL carries a credential the
+    # reader can present without a header -- scoped to this owner and this blob.
+    assert _media_url_owner(owner_ref["blob_url"], sha256=owner_hash) == 42
+    # A derived preview is an ordinary content-addressed object: same route,
+    # and its own credential for its own hash.
+    assert _media_url_owner(owner_ref["thumb_url"], sha256="9" * 64) == 42
+    assert _media_url_owner(owner_ref["blob_url"], sha256="9" * 64) is None
     assert events["sibling"]["media_refs"] == []
-    assert events["same-offset-other-envelope"]["media_refs"] == [
-        {
-            **events["owner"]["media_refs"][0],
-            "sha256": other_envelope_hash,
-            "blob_url": f"/api/media/{other_envelope_hash}/blob",
-            "thumb_url": None,
-            "width": 2880,
-            "height": 1800,
-        }
-    ]
+    other_ref = events["same-offset-other-envelope"]["media_refs"][0]
+    assert other_ref["sha256"] == other_envelope_hash
+    assert other_ref["thumb_url"] is None
+    assert other_ref["width"] == 2880
+    assert other_ref["height"] == 1800
+    assert owner_ref["blob_url"] != other_ref["blob_url"]
+    assert _media_url_owner(other_ref["blob_url"], sha256=other_envelope_hash) == 42
     assert events["unrelated-line"]["media_refs"] == []
     assert [ref["sha256"] for ref in events["first-line"]["media_refs"]] == [first_line_hash]
     assert events["first-line"]["media_refs"][0]["source_offset"] == 0
