@@ -667,8 +667,14 @@ mod tests {
             Some("/usr/bin/other"),
             &facts,
         ));
-        assert!(command_names_opencode(&format!("{binary} serve --port 0"), Some(binary)));
-        assert!(!command_names_opencode(&format!("{binary} serve --port 0"), None));
+        assert!(command_names_opencode(
+            &format!("{binary} serve --port 0"),
+            Some(binary)
+        ));
+        assert!(!command_names_opencode(
+            &format!("{binary} serve --port 0"),
+            None
+        ));
     }
 
     fn spawn_health_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
