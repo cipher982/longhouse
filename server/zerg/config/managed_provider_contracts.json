@@ -781,7 +781,7 @@
           "owner_action": "render reasoning as collapsed thinking records"
         }
       },
-      "adapter_digest": "49d059f2f0f8d98f50065c76e2e0ec68256dc8565abfbdd692b50f1fe70d353e"
+      "adapter_digest": "e343ddc22fbda6c140f3c69b39bf19c2cf4c51c6bdfe01c1ed6d39e3d3718154"
     },
     {
       "provider": "claude",
@@ -950,6 +950,31 @@
       "live_proof": true,
       "startup_coordination_context": true,
       "capabilities": {
+        "session.transcript.search": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.claude.transcript_search",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "transcript_ingested_searchable",
+              "scenario_id": "claude_transcript_search",
+              "oracle_source": "server/zerg/qa/search_ingest_oracle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "c3dc533bf3917a889ed949201a718691d777bfc5163853b29e98a333246ee8ca"
+            }
+          ]
+        },
         "session.activity.turn_boundary": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -1739,6 +1764,31 @@
       "live_proof": true,
       "startup_coordination_context": false,
       "capabilities": {
+        "session.transcript.search": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.opencode.transcript_search",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "transcript_ingested_searchable",
+              "scenario_id": "opencode_transcript_search",
+              "oracle_source": "server/zerg/qa/search_ingest_oracle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "c3dc533bf3917a889ed949201a718691d777bfc5163853b29e98a333246ee8ca"
+            }
+          ]
+        },
         "session.activity.turn_boundary": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -3516,100 +3566,100 @@
               "id": "pi_helm_launch_registration",
               "scenario_id": "pi_helm_lifecycle",
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+              "oracle_digest": "2cef006a58bb3172d72d098d3aa8270c76360cadeccf4d49e320f34a5ac99469"
             },
             {
               "id": "pi_helm_native_tool_taxonomy",
               "scenario_id": "pi_helm_lifecycle",
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+              "oracle_digest": "2cef006a58bb3172d72d098d3aa8270c76360cadeccf4d49e320f34a5ac99469"
             },
             {
               "id": "pi_helm_send_idle",
               "scenario_id": "pi_helm_lifecycle",
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+              "oracle_digest": "2cef006a58bb3172d72d098d3aa8270c76360cadeccf4d49e320f34a5ac99469"
             },
             {
               "id": "pi_helm_steer_active",
               "scenario_id": "pi_helm_lifecycle",
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+              "oracle_digest": "2cef006a58bb3172d72d098d3aa8270c76360cadeccf4d49e320f34a5ac99469"
             },
             {
               "id": "pi_helm_follow_up_native",
               "scenario_id": "pi_helm_lifecycle",
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+              "oracle_digest": "2cef006a58bb3172d72d098d3aa8270c76360cadeccf4d49e320f34a5ac99469"
             },
             {
               "id": "pi_helm_abort_native",
               "scenario_id": "pi_helm_lifecycle",
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+              "oracle_digest": "2cef006a58bb3172d72d098d3aa8270c76360cadeccf4d49e320f34a5ac99469"
             },
             {
               "id": "pi_helm_terminate_owned",
               "scenario_id": "pi_helm_lifecycle",
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+              "oracle_digest": "2cef006a58bb3172d72d098d3aa8270c76360cadeccf4d49e320f34a5ac99469"
             },
             {
               "id": "pi_helm_reload_rebind",
               "scenario_id": "pi_helm_lifecycle",
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+              "oracle_digest": "2cef006a58bb3172d72d098d3aa8270c76360cadeccf4d49e320f34a5ac99469"
             },
             {
               "id": "pi_helm_session_replacement_rebind",
               "scenario_id": "pi_helm_lifecycle",
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+              "oracle_digest": "2cef006a58bb3172d72d098d3aa8270c76360cadeccf4d49e320f34a5ac99469"
             }
           ]
         },
@@ -3631,23 +3681,23 @@
               "id": "pi_helm_cold_resume_exact_file",
               "scenario_id": "pi_helm_lifecycle",
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+              "oracle_digest": "2cef006a58bb3172d72d098d3aa8270c76360cadeccf4d49e320f34a5ac99469"
             },
             {
               "id": "pi_helm_stale_owner_refused",
               "scenario_id": "pi_helm_lifecycle",
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+              "oracle_digest": "2cef006a58bb3172d72d098d3aa8270c76360cadeccf4d49e320f34a5ac99469"
             }
           ]
         },
@@ -3696,12 +3746,12 @@
               "id": "pi_helm_launch_registration",
               "scenario_id": "pi_helm_lifecycle",
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+              "oracle_digest": "2cef006a58bb3172d72d098d3aa8270c76360cadeccf4d49e320f34a5ac99469"
             }
           ],
           "level": "live_token",
@@ -3721,12 +3771,12 @@
               "id": "pi_helm_cold_resume_exact_file",
               "scenario_id": "pi_helm_lifecycle",
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+              "oracle_digest": "2cef006a58bb3172d72d098d3aa8270c76360cadeccf4d49e320f34a5ac99469"
             }
           ],
           "level": "live_token",
@@ -3739,12 +3789,12 @@
               "id": "pi_helm_send_idle",
               "scenario_id": "pi_helm_lifecycle",
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+              "oracle_digest": "2cef006a58bb3172d72d098d3aa8270c76360cadeccf4d49e320f34a5ac99469"
             }
           ],
           "level": "live_token",
@@ -3757,12 +3807,12 @@
               "id": "pi_helm_abort_native",
               "scenario_id": "pi_helm_lifecycle",
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+              "oracle_digest": "2cef006a58bb3172d72d098d3aa8270c76360cadeccf4d49e320f34a5ac99469"
             }
           ],
           "level": "live_token",
@@ -3775,12 +3825,12 @@
               "id": "pi_helm_steer_active",
               "scenario_id": "pi_helm_lifecycle",
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+              "oracle_digest": "2cef006a58bb3172d72d098d3aa8270c76360cadeccf4d49e320f34a5ac99469"
             }
           ],
           "level": "live_token",
@@ -3800,12 +3850,12 @@
               "id": "pi_helm_terminate_owned",
               "scenario_id": "pi_helm_lifecycle",
               "oracle_source": "server/zerg/qa/pi_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "cf7ebc94490fa71bd8a5506313d6337ab7faf7edda2218bead3307ec630c2a27"
+              "oracle_digest": "2cef006a58bb3172d72d098d3aa8270c76360cadeccf4d49e320f34a5ac99469"
             }
           ],
           "level": "live_token",
@@ -3898,7 +3948,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "723cf03f3ade5cebcae2369330af6fc55fa3a265698b0a77e6e0b306b8425c55"
+      "adapter_digest": "772a5e742e3198021c4a83f2ddb44ded2167f6591538a5e1ad59a18cda111b51"
     },
     {
       "provider": "omp",
@@ -4065,12 +4115,12 @@
               "id": "omp_helm_launch_registration",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 8,
+              "minimum_scenario_revision": 9,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b41f3e243db2d7cef35cb3bfefd184644ed7582beb691dae6031fa307b3e2204"
+              "oracle_digest": "135751bf5670e5408f208575b2c79a7468442b0ffc1b9972b3d538720003a2df"
             }
           ],
           "level": "live_token",
@@ -4090,12 +4140,12 @@
               "id": "omp_helm_cold_resume_exact_file",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 8,
+              "minimum_scenario_revision": 9,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b41f3e243db2d7cef35cb3bfefd184644ed7582beb691dae6031fa307b3e2204"
+              "oracle_digest": "135751bf5670e5408f208575b2c79a7468442b0ffc1b9972b3d538720003a2df"
             }
           ],
           "level": "live_token",
@@ -4108,12 +4158,12 @@
               "id": "omp_helm_send_idle",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 8,
+              "minimum_scenario_revision": 9,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b41f3e243db2d7cef35cb3bfefd184644ed7582beb691dae6031fa307b3e2204"
+              "oracle_digest": "135751bf5670e5408f208575b2c79a7468442b0ffc1b9972b3d538720003a2df"
             }
           ],
           "level": "live_token",
@@ -4126,12 +4176,12 @@
               "id": "omp_helm_abort_native",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 8,
+              "minimum_scenario_revision": 9,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b41f3e243db2d7cef35cb3bfefd184644ed7582beb691dae6031fa307b3e2204"
+              "oracle_digest": "135751bf5670e5408f208575b2c79a7468442b0ffc1b9972b3d538720003a2df"
             }
           ],
           "level": "live_token",
@@ -4144,12 +4194,12 @@
               "id": "omp_helm_steer_active",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 8,
+              "minimum_scenario_revision": 9,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b41f3e243db2d7cef35cb3bfefd184644ed7582beb691dae6031fa307b3e2204"
+              "oracle_digest": "135751bf5670e5408f208575b2c79a7468442b0ffc1b9972b3d538720003a2df"
             }
           ],
           "level": "live_token",
@@ -4170,12 +4220,12 @@
               "id": "omp_helm_terminate_owned",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 8,
+              "minimum_scenario_revision": 9,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b41f3e243db2d7cef35cb3bfefd184644ed7582beb691dae6031fa307b3e2204"
+              "oracle_digest": "135751bf5670e5408f208575b2c79a7468442b0ffc1b9972b3d538720003a2df"
             }
           ],
           "level": "live_token",
@@ -4215,6 +4265,31 @@
         }
       },
       "capabilities": {
+        "session.transcript.search": {
+          "disposition": "implemented",
+          "reason_code": "semantic_proof_missing",
+          "policy_key": "provider.omp.transcript_search",
+          "action_gate": "ceiling",
+          "contexts": {
+            "modes": [
+              "console"
+            ]
+          },
+          "runtime_prerequisites": [],
+          "required_assertions": [
+            {
+              "id": "transcript_ingested_searchable",
+              "scenario_id": "omp_transcript_search",
+              "oracle_source": "server/zerg/qa/search_ingest_oracle.py",
+              "minimum_scenario_revision": 1,
+              "acceptable_evidence": [
+                "live_token"
+              ],
+              "max_age_seconds": 604800,
+              "oracle_digest": "c3dc533bf3917a889ed949201a718691d777bfc5163853b29e98a333246ee8ca"
+            }
+          ]
+        },
         "session.launch.helm": {
           "disposition": "implemented",
           "reason_code": "semantic_proof_missing",
@@ -4231,78 +4306,78 @@
               "id": "omp_helm_launch_registration",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 8,
+              "minimum_scenario_revision": 9,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b41f3e243db2d7cef35cb3bfefd184644ed7582beb691dae6031fa307b3e2204"
+              "oracle_digest": "135751bf5670e5408f208575b2c79a7468442b0ffc1b9972b3d538720003a2df"
             },
             {
               "id": "omp_helm_send_idle",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 8,
+              "minimum_scenario_revision": 9,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b41f3e243db2d7cef35cb3bfefd184644ed7582beb691dae6031fa307b3e2204"
+              "oracle_digest": "135751bf5670e5408f208575b2c79a7468442b0ffc1b9972b3d538720003a2df"
             },
             {
               "id": "omp_helm_follow_up_native",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 8,
+              "minimum_scenario_revision": 9,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b41f3e243db2d7cef35cb3bfefd184644ed7582beb691dae6031fa307b3e2204"
+              "oracle_digest": "135751bf5670e5408f208575b2c79a7468442b0ffc1b9972b3d538720003a2df"
             },
             {
               "id": "omp_helm_steer_active",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 8,
+              "minimum_scenario_revision": 9,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b41f3e243db2d7cef35cb3bfefd184644ed7582beb691dae6031fa307b3e2204"
+              "oracle_digest": "135751bf5670e5408f208575b2c79a7468442b0ffc1b9972b3d538720003a2df"
             },
             {
               "id": "omp_helm_abort_native",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 8,
+              "minimum_scenario_revision": 9,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b41f3e243db2d7cef35cb3bfefd184644ed7582beb691dae6031fa307b3e2204"
+              "oracle_digest": "135751bf5670e5408f208575b2c79a7468442b0ffc1b9972b3d538720003a2df"
             },
             {
               "id": "omp_helm_terminate_owned",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 8,
+              "minimum_scenario_revision": 9,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b41f3e243db2d7cef35cb3bfefd184644ed7582beb691dae6031fa307b3e2204"
+              "oracle_digest": "135751bf5670e5408f208575b2c79a7468442b0ffc1b9972b3d538720003a2df"
             },
             {
               "id": "omp_helm_native_replacement_bound",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 8,
+              "minimum_scenario_revision": 9,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b41f3e243db2d7cef35cb3bfefd184644ed7582beb691dae6031fa307b3e2204"
+              "oracle_digest": "135751bf5670e5408f208575b2c79a7468442b0ffc1b9972b3d538720003a2df"
             }
           ]
         },
@@ -4324,23 +4399,23 @@
               "id": "omp_helm_cold_resume_exact_file",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 8,
+              "minimum_scenario_revision": 9,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b41f3e243db2d7cef35cb3bfefd184644ed7582beb691dae6031fa307b3e2204"
+              "oracle_digest": "135751bf5670e5408f208575b2c79a7468442b0ffc1b9972b3d538720003a2df"
             },
             {
               "id": "omp_helm_stale_owner_refused",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 8,
+              "minimum_scenario_revision": 9,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "b41f3e243db2d7cef35cb3bfefd184644ed7582beb691dae6031fa307b3e2204"
+              "oracle_digest": "135751bf5670e5408f208575b2c79a7468442b0ffc1b9972b3d538720003a2df"
             }
           ]
         },
@@ -4430,7 +4505,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "120e54afd074a57758a4159513b68877af7626607c6863013d3f9a860c2795bf"
+      "adapter_digest": "c1d284681c1c0cd64a9b4f70770b89b2099177517e0a9f78fd3e86b47e2b5ef2"
     }
   ]
 }

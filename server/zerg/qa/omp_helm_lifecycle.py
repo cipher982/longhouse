@@ -30,6 +30,15 @@ from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import retire_qualification_session
 from zerg.qa.live_session_toolkit import start_transcript_shipper
 from zerg.qa.omp_console_producer import omp_native_model_evidence
+from zerg.qa.pi_family_turn_oracle import NEGATIVE_CONTROLS
+from zerg.qa.pi_family_turn_oracle import abort_then_send_verdict
+from zerg.qa.pi_family_turn_oracle import fault_name
+from zerg.qa.pi_family_turn_oracle import negative_control_verdict
+from zerg.qa.pi_family_turn_oracle import read_fault_receipts
+from zerg.qa.pi_family_turn_oracle import read_session_entries
+from zerg.qa.pi_family_turn_oracle import steer_turn_verdict
+from zerg.qa.pi_family_turn_oracle import step_task_prompt
+from zerg.qa.pi_family_turn_oracle import task_tool_boundary
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
 from zerg.qa.provider_release_identity import artifact_manifest
 from zerg.qa.provider_release_identity import now
@@ -83,7 +92,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="omp.helm_lifecycle.v1",
     producer_revision=9,
     scenario_id=SCENARIO_ID,
-    scenario_revision=8,
+    scenario_revision=9,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -222,6 +231,7 @@ def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str
         ),
         "omp_helm_steer_active": (
             observation.get("steer_active") is True
+            and (observation.get("steer_turn_verdict") or {}).get("passed") is True
             and steer.get("native_source_bound") is True
             and steer.get("marker_count") == 1
             and steer.get("channel_ack_bound") is True
@@ -233,6 +243,7 @@ def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str
         ),
         "omp_helm_abort_native": (
             observation.get("abort_native") is True
+            and (observation.get("abort_turn_verdict") or {}).get("passed") is True
             and abort.get("channel_source_bound") is True
             and abort.get("terminal") is True
             and abort.get("channel_ack_bound") is True
@@ -1704,6 +1715,25 @@ def _helm_cleanup_ready(cleanup: Mapping[str, Any]) -> bool:
     )
 
 
+def _wait_task_tool_boundary(session_file: Path, task_marker: str, *, timeout: float = 90) -> dict[str, Any]:
+    """Wait until the task turn has returned at least one tool result."""
+
+    def observe() -> dict[str, Any] | None:
+        if not session_file.is_file():
+            return None
+        boundary = task_tool_boundary(read_session_entries(session_file), task_marker)
+        return {"tool_result_id": boundary} if boundary else None
+
+    return _wait(observe, timeout=timeout, description=f"tool boundary in task {task_marker}")
+
+
+def _wait_idle_quietly(home: Path, session_id: str, *, timeout: float = 120) -> dict[str, Any]:
+    try:
+        return _wait_state(home, session_id=session_id, predicate=lambda value: value.get("phase") == "idle", timeout=timeout)
+    except RuntimeError:
+        return {}
+
+
 def _exact_marker_prompt(marker: str) -> str:
     """Make sequential marker probes distinguish a fresh request."""
 
@@ -1756,6 +1786,10 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
                 "LONGHOUSE_OMP_SESSION_DIR": str(provider_home / ".local" / "share" / "omp" / "sessions"),
             }
         )
+        negative_control = getattr(args, "negative_control", None)
+        if negative_control:
+            env["LONGHOUSE_QA_FAULT"] = fault_name("omp", negative_control)
+            env["LONGHOUSE_QA_FAULT_RECEIPT"] = str(root / "qa-fault-receipt.jsonl")
     except BaseException:
         shutil.rmtree(isolation)
         raise
@@ -2061,16 +2095,15 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             timeout=30,
         )
         steer_active_offset = _read_source_size(current_session_file)
-        steer_active_marker = f"OMP_HELM_STEER_ACTIVE_{os.urandom(8).hex()}"
+        steer_task_marker = f"OMP_HELM_STEER_TASK_{os.urandom(8).hex()}"
+        observation["control_session_id"] = current_session_id
+        steer_done_marker = f"OMP_HELM_STEER_TASK_DONE_{os.urandom(8).hex()}"
         steer_active = _run_engine(
             args.engine,
             "send",
             current_session_id,
             env,
-            text=_setup_marker_prompt(
-                steer_active_marker,
-                setup="Use the bash tool to run `sleep 8`, then",
-            ),
+            text=step_task_prompt(steer_task_marker, steer_done_marker),
         )
         steer_active_state = _wait_state(
             longhouse_home,
@@ -2078,9 +2111,17 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             predicate=lambda value: value.get("phase") in {"running", "thinking"},
             timeout=30,
         )
-        steer_prompt = _exact_marker_prompt(steer_marker)
+        observation["steer_tool_boundary"] = _wait_task_tool_boundary(current_session_file, steer_task_marker)
+        steer_prompt = f"Stop: skip every remaining step and reply with exactly {steer_marker} and no other text."
         steer = _run_engine(args.engine, "steer", current_session_id, env, text=steer_prompt)
-        steer_row = _wait_native_marker(current_session_file, steer_marker, minimum_offset=steer_active_offset)
+        steer_row = _wait_native_marker(current_session_file, steer_marker, minimum_offset=steer_active_offset, timeout=150)
+        _wait_idle_quietly(longhouse_home, current_session_id)
+        observation["steer_turn_verdict"] = steer_turn_verdict(
+            read_session_entries(current_session_file),
+            task_marker=steer_task_marker,
+            steer_marker=steer_marker,
+            task_done_marker=steer_done_marker,
+        )
         steer_evidence = _native_marker_evidence(
             steer_row,
             current_session_file,
@@ -2111,6 +2152,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             and steer_evidence["channel_ack_bound"]
             and steer_evidence["native_source_bound"]
             and steer_evidence["marker_count"] == 1
+            and observation["steer_turn_verdict"]["passed"] is True
         )
         observation["steer_evidence"] = steer_evidence
 
@@ -2120,16 +2162,15 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             predicate=lambda value: value.get("phase") == "idle",
             timeout=30,
         )
-        abort_marker = f"OMP_HELM_ABORT_{os.urandom(8).hex()}"
+        abort_task_marker = f"OMP_HELM_ABORT_TASK_{os.urandom(8).hex()}"
+        abort_done_marker = f"OMP_HELM_ABORT_TASK_DONE_{os.urandom(8).hex()}"
+        abort_after_marker = f"OMP_HELM_AFTER_ABORT_{os.urandom(8).hex()}"
         active_for_abort = _run_engine(
             args.engine,
             "send",
             current_session_id,
             env,
-            text=_setup_marker_prompt(
-                abort_marker,
-                setup="Use the bash tool to run `sleep 15`, then",
-            ),
+            text=step_task_prompt(abort_task_marker, abort_done_marker),
         )
         abort_active_state = _wait_state(
             longhouse_home,
@@ -2140,6 +2181,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             timeout=30,
         )
         abort_offset = _read_source_size(current_session_file)
+        observation["abort_tool_boundary"] = _wait_task_tool_boundary(current_session_file, abort_task_marker)
         abort = _run_engine(args.engine, "abort", current_session_id, env)
         abort_end, abort_channel_state = _wait_channel_terminal(
             longhouse_home,
@@ -2165,7 +2207,32 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "agent_end": abort_end,
             "evidence": abort_evidence,
         }
-        observation["abort_native"] = abort_evidence["channel_ack_bound"] and abort_evidence["channel_source_bound"]
+        # An abort proves nothing if the session cannot take the next turn.
+        _wait_idle_quietly(longhouse_home, current_session_id)
+        try:
+            after_abort = _run_engine(args.engine, "send", current_session_id, env, text=_exact_marker_prompt(abort_after_marker))
+        except RuntimeError as exc:
+            after_abort = {"accepted": False, "error": f"{type(exc).__name__}: {exc}"}
+        try:
+            _wait_native_marker(current_session_file, abort_after_marker, minimum_offset=abort_offset, timeout=150)
+        except RuntimeError as exc:
+            observation["after_abort_wait_error"] = f"{type(exc).__name__}: {exc}"
+        _wait_idle_quietly(longhouse_home, current_session_id)
+        observation["abort_turn_verdict"] = {
+            **abort_then_send_verdict(
+                read_session_entries(current_session_file),
+                task_marker=abort_task_marker,
+                task_done_marker=abort_done_marker,
+                after_marker=abort_after_marker,
+            ),
+            "after_send_accepted": after_abort.get("accepted") is True,
+        }
+        observation["abort_native"] = (
+            abort_evidence["channel_ack_bound"]
+            and abort_evidence["channel_source_bound"]
+            and observation["abort_turn_verdict"]["passed"] is True
+            and observation["abort_turn_verdict"]["after_send_accepted"] is True
+        )
         observation["abort_evidence"] = abort_evidence
 
         # No retirement wait here. Abort ends the turn, not the run: the managed
@@ -2254,9 +2321,7 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         # Pi's wording. The two-part "Then\n\nNew machine-check request" frame
         # read as a prompt injection to the qualification model, which refused
         # it or went exploring the workspace instead of replying.
-        replacement_prompt = (
-            f"Remember this context phrase: {context_phrase}. Do not read any file for it. Then reply with exactly {replacement_marker}."
-        )
+        replacement_prompt = f"Remember this context phrase for later: {context_phrase}. Do not read any file for it and do not repeat it now. Reply with exactly {replacement_marker} and no other text."
         replacement = _run_engine(
             args.engine,
             "send",
@@ -2919,6 +2984,17 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         },
         "artifact_manifest": final_manifest,
     }
+    if negative_control:
+        control_verdict = negative_control_verdict(
+            negative_control,
+            provider="omp",
+            assertions=assertions,
+            observation=observation,
+            fault_receipts=read_fault_receipts(root / "qa-fault-receipt.jsonl"),
+            session_id=str(observation.get("control_session_id") or ""),
+        )
+        result["negative_control"] = control_verdict
+        result["status"] = "pass" if control_verdict["status"] == "pass" else "fail"
     lifecycle.write_json(root / "result.json", result)
     return result
 
@@ -3011,6 +3087,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     add_factory_provider_arguments(parser, variants=_VARIANTS)
     parser.add_argument("--model", required=False)
+    parser.add_argument("--negative-control", choices=tuple(NEGATIVE_CONTROLS))
     parser.add_argument("--api-url", default=os.environ.get("LONGHOUSE_RUNTIME_API_URL"))
     parser.add_argument("--agents-token", default=os.environ.get("LONGHOUSE_RUNTIME_AGENTS_TOKEN"))
     return parser

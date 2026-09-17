@@ -32,6 +32,15 @@ from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.live_session_toolkit import retire_qualification_session
 from zerg.qa.live_session_toolkit import start_transcript_shipper
+from zerg.qa.pi_family_turn_oracle import NEGATIVE_CONTROLS
+from zerg.qa.pi_family_turn_oracle import abort_then_send_verdict
+from zerg.qa.pi_family_turn_oracle import fault_name
+from zerg.qa.pi_family_turn_oracle import negative_control_verdict
+from zerg.qa.pi_family_turn_oracle import read_fault_receipts
+from zerg.qa.pi_family_turn_oracle import read_session_entries
+from zerg.qa.pi_family_turn_oracle import steer_turn_verdict
+from zerg.qa.pi_family_turn_oracle import step_task_prompt
+from zerg.qa.pi_family_turn_oracle import task_tool_boundary
 from zerg.qa.pi_native import pi_native_shadow_taxonomy
 from zerg.qa.pi_native import pi_transcript_rows
 from zerg.qa.provider_factory_invocation import add_factory_provider_arguments
@@ -74,7 +83,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="pi.helm_lifecycle.v1",
     producer_revision=3,
     scenario_id=SCENARIO_ID,
-    scenario_revision=3,
+    scenario_revision=4,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -765,6 +774,30 @@ def _wait_native_abort(
     return _wait(observe, timeout=timeout, description="native Pi aborted message")
 
 
+def _wait_task_tool_boundary(session_file: Path, task_marker: str, *, timeout: float = 90) -> dict[str, Any]:
+    """Wait until the task turn has returned at least one tool result."""
+
+    def observe() -> dict[str, Any] | None:
+        if not session_file.is_file():
+            return None
+        boundary = task_tool_boundary(read_session_entries(session_file), task_marker)
+        return {"tool_result_id": boundary} if boundary else None
+
+    return _wait(observe, timeout=timeout, description=f"tool boundary in task {task_marker}")
+
+
+def _wait_idle(home: Path, session_id: str, *, timeout: float = 120) -> dict[str, Any]:
+    try:
+        return _wait_state(
+            home,
+            session_id=session_id,
+            predicate=lambda item: item.get("phase") not in {"running", "thinking"},
+            timeout=timeout,
+        )
+    except RuntimeError:
+        return {}
+
+
 def _process_record(pid: object, expected_birth: object, label: str) -> dict[str, Any]:
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return {"label": label, "pid": pid, "birth_matches": False, "pgid": None, "alive": False}
@@ -1008,6 +1041,7 @@ def pi_helm_lifecycle_assertions(observation: dict[str, Any]) -> dict[str, bool]
             and steer_runtime.get("active_turn_observed") is True
             and steer_active_state.get("phase") in {"running", "thinking"}
             and steer_native.get("assistant_marker_rows") == 1
+            and (observation.get("steer_turn_verdict") or {}).get("passed") is True
         ),
         "pi_helm_follow_up_native": (
             observation.get("follow_up_native") is True
@@ -1025,6 +1059,7 @@ def pi_helm_lifecycle_assertions(observation: dict[str, Any]) -> dict[str, bool]
         ),
         "pi_helm_abort_native": (
             observation.get("abort_native") is True
+            and (observation.get("abort_turn_verdict") or {}).get("passed") is True
             and cleanup_ok
             and abort_receipt.get("accepted") is True
             and abort_native.get("observed") is True
@@ -1079,7 +1114,8 @@ def _parser() -> argparse.ArgumentParser:
     add_factory_provider_arguments(parser, variants=_VARIANTS)
     parser.add_argument("--api-url", default=os.environ.get("LONGHOUSE_RUNTIME_API_URL"))
     parser.add_argument("--agents-token", default=os.environ.get("LONGHOUSE_RUNTIME_AGENTS_TOKEN"))
-    parser.add_argument("--model", default=os.environ.get("LONGHOUSE_PI_QUALIFICATION_MODEL", "deepseek/deepseek-v4-flash-0731"))
+    parser.add_argument("--model", default=os.environ.get("LONGHOUSE_PI_QUALIFICATION_MODEL", "anthropic/claude-haiku-4.5:off"))
+    parser.add_argument("--negative-control", choices=tuple(NEGATIVE_CONTROLS))
     return parser
 
 
@@ -1114,6 +1150,10 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
                 "LONGHOUSE_LAUNCH_SURFACE": "qa",
             }
         )
+        negative_control = getattr(args, "negative_control", None)
+        if negative_control:
+            env["LONGHOUSE_QA_FAULT"] = fault_name("pi", negative_control)
+            env["LONGHOUSE_QA_FAULT_RECEIPT"] = str(root / "qa-fault-receipt.jsonl")
     except BaseException:
         shutil.rmtree(isolation)
         raise
@@ -1343,12 +1383,14 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             str(current_state.get("provider_session_id") or ""),
             follow_marker,
         )
+        steer_task_marker = f"PI_HELM_STEER_TASK_{os.urandom(8).hex()}"
+        steer_done_marker = f"PI_HELM_STEER_TASK_DONE_{os.urandom(8).hex()}"
         steer_active = _run_engine(
             args.engine,
             "send",
             session_id,
             env,
-            text=f"Use the read tool repeatedly on {proof_file}, then reply with a new active turn marker.",
+            text=step_task_prompt(steer_task_marker, steer_done_marker),
         )
         try:
             steer_active_state = _wait_state(
@@ -1361,8 +1403,22 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             steer_active_state = {}
         steer_marker = f"PI_HELM_STEER_{os.urandom(8).hex()}"
         steer_offset = session_file.stat().st_size
-        steer = _run_engine(args.engine, "steer", session_id, env, text=f"Change direction and finish with {steer_marker}.")
-        steer_native = _wait_native_marker(session_file, steer_marker, minimum_source_offset=steer_offset)
+        observations["steer_tool_boundary"] = _wait_task_tool_boundary(session_file, steer_task_marker)
+        steer = _run_engine(
+            args.engine,
+            "steer",
+            session_id,
+            env,
+            text=f"Stop: skip every remaining step and reply only with {steer_marker}.",
+        )
+        steer_native = _wait_native_marker(session_file, steer_marker, minimum_source_offset=steer_offset, timeout=150)
+        observations["steer_settled_state"] = _state_identity(_wait_idle(home, session_id))
+        observations["steer_turn_verdict"] = steer_turn_verdict(
+            read_session_entries(session_file),
+            task_marker=steer_task_marker,
+            steer_marker=steer_marker,
+            task_done_marker=steer_done_marker,
+        )
         steer_runtime = _wait_runtime_convergence(
             args.api_url,
             args.agents_token,
@@ -1394,6 +1450,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             and steer["accepted"]
             and bool(steer_native["invocation_rows"])
             and steer_native["assistant_marker_rows"] == 1
+            and observations["steer_turn_verdict"]["passed"] is True
         )
         observations["follow_up_native"] = (
             active["accepted"]
@@ -1600,9 +1657,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         # Pi reserves the path at /new and materializes it on the first turn.
         replacement_offset = session_file.stat().st_size if session_file.is_file() else 0
         replacement_control_identity = _wait_runtime_control_identity(args.api_url, args.agents_token, session_id, replaced)
-        replacement_prompt = (
-            f"Remember this context phrase: {context_phrase}. Do not read any file for it. Then reply with exactly {replacement_marker}."
-        )
+        replacement_prompt = f"Remember this context phrase for later: {context_phrase}. Do not read any file for it and do not repeat it now. Reply with exactly {replacement_marker} and no other text."
         replacement_send = _send_live(args.api_url, args.agents_token, session_id, replacement_prompt)
         replacement_native = _wait_native_marker(
             session_file,
@@ -1696,12 +1751,15 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
 
         terminated_native_file = _native_file_identity(session_file)
         terminated_native_header_id = replacement_native["metadata"].get("provider_session_id")
+        abort_task_marker = f"PI_HELM_ABORT_TASK_{os.urandom(8).hex()}"
+        abort_done_marker = f"PI_HELM_ABORT_TASK_DONE_{os.urandom(8).hex()}"
+        abort_after_marker = f"PI_HELM_AFTER_ABORT_{os.urandom(8).hex()}"
         abort_started = _run_engine(
             args.engine,
             "send",
             session_id,
             env,
-            text=f"Use the read tool repeatedly on {proof_file} before replying with PI_HELM_ABORT_{os.urandom(8).hex()}.",
+            text=step_task_prompt(abort_task_marker, abort_done_marker),
         )
         try:
             abort_active_state = _wait_state(
@@ -1713,6 +1771,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         except RuntimeError:
             abort_active_state = {}
         abort_offset = session_file.stat().st_size
+        observations["abort_tool_boundary"] = _wait_task_tool_boundary(session_file, abort_task_marker)
         abort = _run_engine(args.engine, "abort", session_id, env)
         try:
             aborted_state = _wait_state(
@@ -1729,6 +1788,23 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             abort_native = None
             observations["abort_native_wait_error"] = f"{type(exc).__name__}: {exc}"
         observations["abort_native_evidence"] = abort_native
+        # An abort proves nothing if the session cannot take the next turn.
+        _wait_idle(home, session_id)
+        after_abort = _run_engine(args.engine, "send", session_id, env, text=f"Reply only with {abort_after_marker}.")
+        try:
+            _wait_native_marker(session_file, abort_after_marker, minimum_source_offset=abort_offset, timeout=150)
+        except RuntimeError as exc:
+            observations["after_abort_wait_error"] = f"{type(exc).__name__}: {exc}"
+        _wait_idle(home, session_id)
+        observations["abort_turn_verdict"] = {
+            **abort_then_send_verdict(
+                read_session_entries(session_file),
+                task_marker=abort_task_marker,
+                task_done_marker=abort_done_marker,
+                after_marker=abort_after_marker,
+            ),
+            "after_send_accepted": after_abort["accepted"],
+        }
         observations["abort_native"] = (
             abort_started["accepted"]
             and bool(abort_active_state)
@@ -1736,6 +1812,8 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             and bool(aborted_state)
             and aborted_state.get("phase") not in {"running", "thinking"}
             and abort_native is not None
+            and observations["abort_turn_verdict"]["passed"] is True
+            and observations["abort_turn_verdict"]["after_send_accepted"] is True
         )
         observations["control_receipts"]["abort"] = _control_receipt(
             "abort",
@@ -2192,6 +2270,19 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         "provider_binary": provider_binary,
         "artifact_manifest": artifact_manifest(root),
     }
+    if negative_control:
+        control_verdict = negative_control_verdict(
+            negative_control,
+            provider="pi",
+            assertions=assertions,
+            observation=observations,
+            fault_receipts=read_fault_receipts(root / "qa-fault-receipt.jsonl"),
+            session_id=str(observations.get("session_id") or ""),
+        )
+        result["negative_control"] = control_verdict
+        result["status"] = "pass" if control_verdict["status"] == "pass" and observations["cleanup"].get("status") == "pass" else "fail"
+        _write_json(root / "result.json", result)
+        return result
     if failure is not None:
         result["failure_code"] = "pi_helm_lifecycle_failed"
         result["error"] = f"{type(failure).__name__}: {failure}"

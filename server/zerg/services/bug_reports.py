@@ -86,13 +86,17 @@ def _replay_bundle_or_conflict(
     *,
     owner_id: int,
     payload_sha256: str,
+    legacy_payload_sha256: str | None = None,
 ) -> BugReportBundle:
     try:
         manifest = read_manifest(report_id, owner_id=owner_id)
     except (FileNotFoundError, ValueError) as exc:
         raise _report_error("report_id_conflict", "The report could not be reused.", status.HTTP_409_CONFLICT) from exc
     stored_sha256 = str(manifest.get("payload_sha256") or "")
-    if stored_sha256 and stored_sha256 != payload_sha256:
+    accepted_digests = {payload_sha256}
+    if legacy_payload_sha256 is not None:
+        accepted_digests.add(legacy_payload_sha256)
+    if stored_sha256 and stored_sha256 not in accepted_digests:
         raise _report_error(
             "report_id_conflict",
             "This report id was already used for different evidence.",
@@ -120,9 +124,19 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _payload_sha256(description: str, context_bytes: bytes, uploads: list[BugReportUpload]) -> str:
+def _payload_sha256(
+    description: str,
+    context_bytes: bytes,
+    source_session_id: str | None,
+    uploads: list[BugReportUpload],
+    *,
+    include_source_session: bool = True,
+) -> str:
     digest = hashlib.sha256()
-    for value in (description.encode("utf-8"), context_bytes):
+    values = [description.encode("utf-8"), context_bytes]
+    if include_source_session:
+        values.append((source_session_id or "").encode("utf-8"))
+    for value in values:
         digest.update(len(value).to_bytes(8, "big"))
         digest.update(value)
     for upload in uploads:
@@ -227,7 +241,7 @@ def create_bug_report(
     context_bytes = _validate_context(context_json)
     _validate_uploads(uploads)
     description_data = clean_description.encode("utf-8")
-    payload_sha256 = _payload_sha256(clean_description, context_bytes, uploads)
+    payload_sha256 = _payload_sha256(clean_description, context_bytes, source_session_id, uploads)
     if len(description_data) + len(context_bytes) + sum(len(upload.data) for upload in uploads) > MAX_REPORT_TOTAL_BYTES:
         raise _report_error("report_too_large", "The bug report is too large.", status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
     if client_report_id:
@@ -241,7 +255,19 @@ def create_bug_report(
     root.mkdir(parents=True, exist_ok=True)
     final_dir = root / report_id
     if final_dir.exists():
-        return _replay_bundle_or_conflict(report_id, owner_id=owner_id, payload_sha256=payload_sha256)
+        legacy_payload_sha256 = _payload_sha256(
+            clean_description,
+            context_bytes,
+            source_session_id,
+            uploads,
+            include_source_session=False,
+        )
+        return _replay_bundle_or_conflict(
+            report_id,
+            owner_id=owner_id,
+            payload_sha256=payload_sha256,
+            legacy_payload_sha256=legacy_payload_sha256,
+        )
     created_at = datetime.now(timezone.utc).isoformat()
     try:
         root.chmod(0o700)
@@ -290,7 +316,19 @@ def create_bug_report(
             if exc.errno not in {errno.EEXIST, errno.ENOTEMPTY, errno.EISDIR}:
                 raise
             shutil.rmtree(temporary_dir, ignore_errors=True)
-            return _replay_bundle_or_conflict(report_id, owner_id=owner_id, payload_sha256=payload_sha256)
+            legacy_payload_sha256 = _payload_sha256(
+                clean_description,
+                context_bytes,
+                source_session_id,
+                uploads,
+                include_source_session=False,
+            )
+            return _replay_bundle_or_conflict(
+                report_id,
+                owner_id=owner_id,
+                payload_sha256=payload_sha256,
+                legacy_payload_sha256=legacy_payload_sha256,
+            )
     except BaseException:
         shutil.rmtree(temporary_dir, ignore_errors=True)
         raise

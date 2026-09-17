@@ -126,6 +126,58 @@ def _load_capability_assertions() -> tuple[CapabilityAssertion, ...]:
     return tuple(out)
 
 
+def _edge_assertion(provider: str, capability: str, disposition: str, assertion: dict) -> CapabilityAssertion:
+    return CapabilityAssertion(
+        scenario_id=assertion["scenario_id"],
+        assertion_id=assertion["id"],
+        variant=assertion.get("variant"),
+        minimum_scenario_revision=int(assertion["minimum_scenario_revision"]),
+        provider=provider,
+        capability=capability,
+        oracle_source=assertion["oracle_source"],
+        acceptable_evidence=tuple(assertion.get("acceptable_evidence") or ()),
+        max_age_seconds=int(assertion["max_age_seconds"]),
+        disposition=disposition,
+        assurance_priority=str(assertion.get("assurance_priority") or "release_gate"),
+    )
+
+
+def load_chip_edge_assertions() -> dict[str, dict[str, tuple[CapabilityAssertion, ...] | None]]:
+    """Provider -> landing chip -> the live-token assertions behind it.
+
+    None marks a chip with no proof edge at all. Operation edges carry the
+    capability label ``operation.<name>`` so a projection row names where its
+    requirement was declared.
+    """
+
+    from zerg.services.provider_chip_edges import CHIP_CAPABILITIES
+    from zerg.services.provider_chip_edges import CHIP_OPERATIONS
+    from zerg.services.provider_chip_edges import chip_edges
+
+    out: dict[str, dict[str, tuple[CapabilityAssertion, ...] | None]] = {}
+    for entry in _load_schema()["providers"]:
+        provider = str(entry["provider"])
+        chips: dict[str, tuple[CapabilityAssertion, ...] | None] = {}
+        for chip, assertions in chip_edges(entry).items():
+            if assertions is None:
+                chips[chip] = None
+                continue
+            if chip in CHIP_CAPABILITIES:
+                labels = [CHIP_CAPABILITIES[chip]] * len(assertions)
+            else:
+                labels = [
+                    f"operation.{operation}"
+                    for operation in CHIP_OPERATIONS[chip]
+                    for _ in ((entry.get("operation_evidence") or {}).get(operation) or {}).get("required_assertions") or ()
+                ]
+            chips[chip] = tuple(
+                _edge_assertion(provider, label, "implemented", dict(assertion))
+                for label, assertion in zip(labels, assertions, strict=True)
+            )
+        out[provider] = chips
+    return out
+
+
 def load_capability_assertions() -> tuple[CapabilityAssertion, ...]:
     """Public, narrow entry point for callers that only need the declared
     capability -> assertion mapping (schemas/managed_providers.yml), not the

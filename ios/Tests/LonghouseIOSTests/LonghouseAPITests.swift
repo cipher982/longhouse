@@ -241,9 +241,22 @@ struct LonghouseAPITests {
             ).isRetryableReportHandoff
         )
         #expect(LonghouseAPIError.serviceUnavailable.isRetryableReportHandoff)
-        #expect(!LonghouseAPIError.upstreamFailed.isRetryableReportHandoff)
+        #expect(LonghouseAPIError.upstreamFailed.isRetryableReportHandoff)
         #expect(!LonghouseAPIError.conflict.isRetryableReportHandoff)
         #expect(!LonghouseAPIError.requestFailed.isRetryableReportHandoff)
+
+        if case .serviceUnavailable = LonghouseAPIError.from(statusCode: 408) {
+        } else {
+            Issue.record("408 should be retryable service unavailability")
+        }
+        if case .serviceUnavailable = LonghouseAPIError.from(statusCode: 429) {
+        } else {
+            Issue.record("429 should be retryable service unavailability")
+        }
+        if case .upstreamFailed = LonghouseAPIError.from(statusCode: 500) {
+        } else {
+            Issue.record("bodyless 500 should be retryable upstream failure")
+        }
     }
 
     @Test
@@ -615,6 +628,21 @@ struct LonghouseAPITests {
 
         #expect(LonghouseAPI.parseStructuredError(statusCode: 409, data: data) == nil)
     }
+    @Test
+    @MainActor
+    func timelineBugReportContextCarriesSurfaceWithoutSession() throws {
+        let context = try #require(
+            JSONSerialization.jsonObject(
+                with: BugReportContext.timeline(serverURL: "https://demo.longhouse.ai")
+            ) as? [String: Any]
+        )
+
+        #expect(context["surface"] as? String == "timeline")
+        #expect(context["server_url"] as? String == "https://demo.longhouse.ai")
+        #expect(context["source_session_id"] == nil)
+        #expect(context["diagnostics"] is [Any])
+    }
+
 }
 
 private final class APIRequestCapture: @unchecked Sendable {

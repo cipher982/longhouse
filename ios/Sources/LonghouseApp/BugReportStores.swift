@@ -2,8 +2,9 @@ import Foundation
 
 struct BugReportDraft: Codable, Sendable {
     let serverURL: String
-    let sourceSessionID: String
+    let sourceSessionID: String?
     var clientReportID: String?
+    var reportID: String?
     var description: String
     var screenshotData: Data?
     var additionalImages: [Data]
