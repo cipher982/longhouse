@@ -341,6 +341,7 @@ jobs:
       instance_url: ${{ steps.instance.outputs.instance_url }}
       frontend_url: ${{ steps.instance.outputs.frontend_url }}
       api_url: ${{ steps.instance.outputs.api_url }}
+      deployment_id: ${{ steps.submit_canary.outputs.deployment_id }}
     env:
       CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.HOSTED_CANARY_CONTROL_PLANE_ADMIN_TOKEN }}
       CONTROL_PLANE_URL: ${{ vars.HOSTED_CANARY_CONTROL_PLANE_URL }}
@@ -389,9 +390,12 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Reprovision hosted canary
+        id: submit_canary
         run: |
           . scripts/lib/hosted-instance.sh
           lh_hosted_reprovision "${{ steps.instance.outputs.instance_id }}" "${{ needs.gate.outputs.runtime_image_ref }}"
+          printf 'deployment_id=%s\n' "$LH_DEPLOYMENT_ID" >> "$GITHUB_OUTPUT"
+
 
   fast_smoke:
     name: "Canary qualification smoke"
@@ -408,6 +412,7 @@ jobs:
       API_URL: ${{ needs.reprovision_canary.outputs.api_url }}
       FRONTEND_URL: ${{ needs.reprovision_canary.outputs.frontend_url }}
       INSTANCE_URL: ${{ needs.reprovision_canary.outputs.instance_url }}
+      CANARY_DEPLOYMENT_ID: ${{ needs.reprovision_canary.outputs.deployment_id }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -426,7 +431,8 @@ jobs:
         id: fast_smoke
         run: |
           . scripts/lib/hosted-instance.sh
-          lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN INSTANCE_SUBDOMAIN SMOKE_RUNTIME_TOKEN
+          lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN INSTANCE_SUBDOMAIN SMOKE_RUNTIME_TOKEN CANARY_DEPLOYMENT_ID
+          echo "Qualifying hosted canary deployment receipt $CANARY_DEPLOYMENT_ID"
           ./scripts/qa/smoke-prod.sh --fast --no-llm
 
       - name: Summary
@@ -440,6 +446,7 @@ jobs:
             echo "- **Control plane:** $CONTROL_PLANE_URL"
             echo "- **Commit:** ${{ needs.gate.outputs.head_sha }}"
             echo "- **Candidate image:** \`${{ needs.gate.outputs.runtime_image_name }}:${{ needs.gate.outputs.runtime_image_tag }}\`"
+            echo "- **Canary deployment receipt:** \`$CANARY_DEPLOYMENT_ID\`"
             echo "- **canary smoke:** \`${{ steps.fast_smoke.outcome || 'skipped' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 

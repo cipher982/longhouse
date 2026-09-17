@@ -82,10 +82,13 @@ if [[ "$parsed" != $'7\thttps://demo.longhouse.ai\tdemo\tactive\tlonghouse-demo\
   exit 1
 fi
 
+DEPLOYMENT_SCENARIO="success"
+
 curl() {
   local data=""
   local output_file=""
   local request_url=""
+  local deployment_id=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -d) data="$2"; shift 2 ;;
@@ -105,11 +108,42 @@ curl() {
         echo "Expected exact candidate schema metadata in durable submission" >&2
         return 1
       fi
-      printf '{"id":"d-test-1","status":"queued","image_digest":"ghcr.io/cipher982/longhouse-runtime@sha256:%064d"}' 1 >"$output_file"
+      case "$DEPLOYMENT_SCENARIO" in
+        success) deployment_id="d-test-1" ;;
+        wrong-receipt) deployment_id="d-wrong-receipt" ;;
+        wrong-digest) deployment_id="d-wrong-digest" ;;
+        wrong-target) deployment_id="d-wrong-target" ;;
+        failed-target) deployment_id="d-failed-target" ;;
+        *) echo "Unknown deployment scenario: $DEPLOYMENT_SCENARIO" >&2; return 1 ;;
+      esac
+      printf '{"id":"%s","status":"queued","image":"%s","image_digest":"%s"}' \
+        "$deployment_id" "$image" "$image" >"$output_file"
       printf '201'
       ;;
-    https://control.longhouse.ai/api/deployments/d-test-1)
-      printf '{"id":"d-test-1","status":"success","image_digest":"ghcr.io/cipher982/longhouse-runtime@sha256:%064d"}' 1 >"$output_file"
+    https://control.longhouse.ai/api/deployments/*)
+      deployment_id="${request_url##*/}"
+      case "$DEPLOYMENT_SCENARIO" in
+        success)
+          printf '{"id":"%s","status":"success","image":"%s","image_digest":"%s","targets":[{"id":7,"deploy_state":"success"}]}' \
+            "$deployment_id" "$image" "$image" >"$output_file"
+          ;;
+        wrong-receipt)
+          printf '{"id":"d-not-the-requested-receipt","status":"success","image":"%s","image_digest":"%s","targets":[{"id":7,"deploy_state":"success"}]}' \
+            "$image" "$image" >"$output_file"
+          ;;
+        wrong-digest)
+          printf '{"id":"%s","status":"success","image":"%s","image_digest":"ghcr.io/cipher982/longhouse-runtime@sha256:%064d","targets":[{"id":7,"deploy_state":"success"}]}' \
+            "$deployment_id" "$image" 2 >"$output_file"
+          ;;
+        wrong-target)
+          printf '{"id":"%s","status":"success","image":"%s","image_digest":"%s","targets":[{"id":8,"deploy_state":"success"}]}' \
+            "$deployment_id" "$image" "$image" >"$output_file"
+          ;;
+        failed-target)
+          printf '{"id":"%s","status":"success","image":"%s","image_digest":"%s","targets":[{"id":7,"deploy_state":"failure"}]}' \
+            "$deployment_id" "$image" "$image" >"$output_file"
+          ;;
+      esac
       printf '200'
       ;;
     *)
@@ -130,11 +164,31 @@ export LH_DEPLOYMENT_SCHEMA_MAX_READER="5"
 image="ghcr.io/cipher982/longhouse-runtime@sha256:$(printf '1%.0s' {1..64})"
 lh_hosted_reprovision "7" "$image"
 
-if [[ "$LH_DEPLOYMENT_ID" != "d-test-1" || "$LH_DEPLOYMENT_STATUS" != "success" ]]; then
-  echo "Expected durable deployment receipt to be observed to terminal success"
+if [[ "$LH_DEPLOYMENT_ID" != "d-test-1" ||
+      "$LH_DEPLOYMENT_STATUS" != "success" ||
+      "$LH_DEPLOYMENT_IMAGE" != "$image" ||
+      "$LH_DEPLOYMENT_IMAGE_DIGEST" != "$image" ||
+      "$LH_DEPLOYMENT_TARGET_ID" != "7" ||
+      "$LH_DEPLOYMENT_TARGET_STATE" != "success" ]]; then
+  echo "Expected durable deployment receipt to prove exact image and target success"
   exit 1
 fi
 
+expect_reprovision_failure() {
+  local scenario="$1"
+  DEPLOYMENT_SCENARIO="$scenario"
+  if lh_hosted_reprovision "7" "$image" >/dev/null 2>&1; then
+    echo "Expected ${scenario} deployment receipt to be rejected"
+    exit 1
+  fi
+}
+
+expect_reprovision_failure wrong-receipt
+expect_reprovision_failure wrong-digest
+expect_reprovision_failure wrong-target
+expect_reprovision_failure failed-target
+
+DEPLOYMENT_SCENARIO="success"
 if lh_hosted_reprovision "7" "ghcr.io/cipher982/longhouse-runtime:mutable-tag" >/dev/null 2>&1; then
   echo "Expected mutable deployment image to be rejected before API submission"
   exit 1

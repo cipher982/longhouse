@@ -138,6 +138,47 @@ print("\t".join(str(value or "") for value in (deployment_id, payload.get("statu
 PY
 }
 
+_lh_hosted_parse_deployment_status() {
+  local response_file="$1"
+  local expected_target="${2:-}"
+  local python_bin
+  python_bin="$(_lh_hosted_python_bin)" || return 1
+  "$python_bin" - "$response_file" "$expected_target" <<'PY'
+import json
+import sys
+
+response_file, expected_target = sys.argv[1], sys.argv[2]
+with open(response_file, encoding="utf-8") as handle:
+    payload = json.load(handle)
+deployment_id = payload.get("id")
+if not deployment_id:
+    raise SystemExit(3)
+target_found = "unchecked"
+target_state = ""
+if expected_target:
+    target_found = "no"
+    for target in payload.get("targets") or []:
+        if isinstance(target, dict) and str(target.get("id")) == expected_target:
+            target_found = "yes"
+            target_state = str(target.get("deploy_state") or "")
+            break
+print(
+    "\t".join(
+        str(value or "")
+        for value in (
+            deployment_id,
+            payload.get("status"),
+            payload.get("image"),
+            payload.get("image_digest"),
+            target_found,
+            target_state,
+        )
+    )
+)
+PY
+}
+
+
 lh_hosted_submit_deployment() {
   local payload="${1:-}"
   local submission_key="${2:-}"
@@ -195,11 +236,18 @@ lh_hosted_submit_deployment() {
 lh_hosted_wait_for_deployment() {
   local deployment_id="${1:-${LH_DEPLOYMENT_ID:-}}"
   local timeout="${2:-900}"
+  local expected_image="${3:-}"
+  local expected_target="${4:-}"
   local deadline=$(( $(date +%s) + timeout ))
   local response_file=""
   local http_code=""
+  local parsed=""
+  local receipt_id=""
   local state=""
-  local python_bin=""
+  local receipt_image=""
+  local receipt_digest=""
+  local target_found=""
+  local target_state=""
   if [[ -z "$deployment_id" ]]; then
     echo "Missing deployment id to observe" >&2
     return 1
@@ -214,21 +262,78 @@ lh_hosted_wait_for_deployment() {
       http_code="000"
     fi
     if [[ "$http_code" == "200" ]]; then
-      python_bin="$(_lh_hosted_python_bin)" || return 1
-      state="$("$python_bin" - "$response_file" <<'PY'
-import json
-import sys
-with open(sys.argv[1], encoding="utf-8") as handle:
-    print(json.load(handle).get("status") or "")
-PY
-)"
+      parsed="$(_lh_hosted_parse_deployment_status "$response_file" "$expected_target")" || {
+        echo "Deployment ${deployment_id} response was missing a durable receipt id" >&2
+        rm -f "$response_file"
+        return 1
+      }
       rm -f "$response_file"
+      IFS=$'\t' read -r receipt_id state receipt_image receipt_digest target_found target_state <<< "$parsed"
       LH_DEPLOYMENT_STATUS="$state"
-      export LH_DEPLOYMENT_STATUS
+      LH_DEPLOYMENT_IMAGE="$receipt_image"
+      LH_DEPLOYMENT_IMAGE_DIGEST="$receipt_digest"
+      LH_DEPLOYMENT_TARGET_ID="$expected_target"
+      LH_DEPLOYMENT_TARGET_STATE="$target_state"
+      export LH_DEPLOYMENT_STATUS LH_DEPLOYMENT_IMAGE LH_DEPLOYMENT_IMAGE_DIGEST
+      export LH_DEPLOYMENT_TARGET_ID LH_DEPLOYMENT_TARGET_STATE
+
+      if [[ "$receipt_id" != "$deployment_id" ]]; then
+        echo "Deployment observer returned receipt ${receipt_id}, expected ${deployment_id}." >&2
+        return 1
+      fi
       case "$state" in
-        success|completed) return 0 ;;
-        superseded) echo "Deployment ${deployment_id} was superseded." >&2; return 3 ;;
-        failure|failed|paused) echo "Deployment ${deployment_id} ended ${state}." >&2; return 1 ;;
+        superseded)
+          echo "Deployment ${deployment_id} was superseded." >&2
+          return 3
+          ;;
+        failure|failed|paused|rolled_back)
+          echo "Deployment ${deployment_id} ended ${state}." >&2
+          return 1
+          ;;
+      esac
+
+      if [[ -n "$expected_target" && "$target_found" == "yes" ]]; then
+        case "$target_state" in
+          superseded)
+            echo "Deployment ${deployment_id} target ${expected_target} was superseded." >&2
+            return 3
+            ;;
+          failure|failed|paused|rolled_back)
+            echo "Deployment ${deployment_id} target ${expected_target} ended ${target_state}." >&2
+            return 1
+            ;;
+        esac
+      fi
+
+      if [[ -n "$expected_image" && -n "$receipt_image" && "$receipt_image" != "$expected_image" ]]; then
+        echo "Deployment ${deployment_id} receipt image ${receipt_image} does not match requested ${expected_image}." >&2
+        return 1
+      fi
+      if [[ -n "$expected_image" && -n "$receipt_digest" && "$receipt_digest" != "$expected_image" ]]; then
+        echo "Deployment ${deployment_id} receipt digest ${receipt_digest} does not match requested ${expected_image}." >&2
+        return 1
+      fi
+
+      case "$state" in
+        success|completed)
+          if [[ -n "$expected_image" ]]; then
+            if [[ "$receipt_image" != "$expected_image" || "$receipt_digest" != "$expected_image" ]]; then
+              echo "Deployment ${deployment_id} succeeded without the requested image identity." >&2
+              return 1
+            fi
+          fi
+          if [[ -n "$expected_target" ]]; then
+            if [[ "$target_found" != "yes" ]]; then
+              echo "Deployment ${deployment_id} succeeded without requested target ${expected_target}." >&2
+              return 1
+            fi
+            if [[ "$target_state" != "success" ]]; then
+              echo "Deployment ${deployment_id} target ${expected_target} ended ${target_state:-unknown}, not success." >&2
+              return 1
+            fi
+          fi
+          return 0
+          ;;
       esac
     else
       rm -f "$response_file"
@@ -801,7 +906,7 @@ lh_hosted_reprovision() {
   payload="$(_lh_hosted_reprovision_payload "$instance_id" "$image")" || return 1
   lh_hosted_submit_deployment "$payload" "$key" || return 1
   echo "Submitted durable deployment ${LH_DEPLOYMENT_ID} for instance ${instance_id}." >&2
-  lh_hosted_wait_for_deployment "$LH_DEPLOYMENT_ID" "${LH_HOSTED_REPROVISION_TIMEOUT:-900}"
+  lh_hosted_wait_for_deployment "$LH_DEPLOYMENT_ID" "${LH_HOSTED_REPROVISION_TIMEOUT:-900}" "$image" "$instance_id"
 }
 
 lh_hosted_deprovision() {
