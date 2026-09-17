@@ -12,6 +12,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
@@ -583,6 +584,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 json={
                     "text": f"Stop the remaining steps now. Do not run any more commands. Reply with exactly {steered}",
                     "intent": "steer",
+                    "client_request_id": uuid.uuid4().hex,
                 },
                 timeout=30,
             )
