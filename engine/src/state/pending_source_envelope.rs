@@ -2747,6 +2747,81 @@ mod tests {
     }
 
     #[test]
+    fn a_rejected_envelope_leaves_no_payload_behind() {
+        // The capacity check runs before sealing, so a refused candidate costs a
+        // decision and nothing else. Sealing first would leave a file per
+        // rejection for the sweep to clean.
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let epoch = Uuid::new_v4();
+        register_epoch(&conn, epoch, "claude");
+        let root = crate::state::payload_store::root_for_connection(&conn).unwrap();
+
+        let refused = persist_or_load_with_limit(
+            &mut conn,
+            &candidate(epoch, "/tmp/too-big.jsonl"),
+            1,
+        );
+        assert!(refused.is_err(), "the candidate must be refused");
+        let leftovers = std::fs::read_dir(&root).map(|entries| entries.count()).unwrap_or(0);
+        assert_eq!(leftovers, 0, "a refused candidate must not seal anything");
+        assert_eq!(super::count(&conn).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_payload_left_after_acknowledgement_is_swept() {
+        // An unlink that never happened (a crash between commit and removal, or a
+        // failed remove) leaves a file no row references. That is exactly the
+        // orphan shape, and the next reconciliation deletes it.
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let epoch = Uuid::new_v4();
+        register_epoch(&conn, epoch, "claude");
+        conn.execute(
+            "INSERT INTO source_epoch_lane_state (source_epoch, lane, last_position, updated_at)
+             VALUES (?1, 'durable', 0, '2026-07-15T00:00:00Z')",
+            [epoch.to_string()],
+        )
+        .unwrap();
+        let persisted = persist_or_load(&mut conn, &candidate(epoch, "/tmp/sweep.jsonl")).unwrap();
+        let root = crate::state::payload_store::root_for_connection(&conn).unwrap();
+        let (media_path, request_path): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT media_objects_path, request_body_path FROM pending_source_envelope
+                 WHERE source_epoch = ?1",
+                [epoch.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let paths: Vec<String> = [media_path, request_path].into_iter().flatten().collect();
+        assert_eq!(paths.len(), 2);
+
+        // Acknowledgement removes the row and its payloads...
+        super::acknowledge_and_delete(
+            &mut conn,
+            epoch,
+            &persisted.envelope_id,
+            persisted.range_start,
+            persisted.range_end,
+        )
+        .unwrap();
+        assert_eq!(super::count(&conn).unwrap(), 0);
+
+        // ...but a removal that did not happen leaves an orphan, and nothing may
+        // ship from it.
+        for relative in &paths {
+            std::fs::create_dir_all(root.join(relative).parent().unwrap()).ok();
+            std::fs::write(root.join(relative), b"leftover").unwrap();
+        }
+        let report = super::reconcile_frozen_payloads(&conn).unwrap();
+        assert_eq!(report.orphans_removed, paths.len());
+        assert_eq!(report.missing_blocked, 0);
+        for relative in &paths {
+            assert!(!root.join(relative).exists());
+        }
+    }
+
+    #[test]
     fn reconciliation_removes_orphans_and_holds_a_row_whose_payload_is_gone() {
         let dir = tempfile::tempdir().unwrap();
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
