@@ -466,6 +466,62 @@ def test_browser_media_read_accepts_a_signed_url_without_ambient_credentials(tmp
         cleanup()
 
 
+def test_browser_media_read_keeps_a_signed_url_inside_its_owners_view(tmp_path, monkeypatch):
+    """A URL credential names an owner and a blob, and the owner's view still decides.
+
+    The signature is not a master key: it authorizes the reader as one owner, and
+    the manifest read that resolves the bytes is scoped to that owner. A token
+    minted for another owner must not reach this owner's blob.
+    """
+
+    _factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
+    client = TestClient(api_app)
+    digest = "c" * 64
+    seen_owners = []
+
+    class _OwnerScopedCatalog:
+        async def call(self, method, params, *, timeout_seconds=None):
+            assert method == "storage.media.read.v2"
+            seen_owners.append(params["owner_id"])
+            found = params["owner_id"] == "1"
+            return {
+                "found": found,
+                "media": (
+                    {
+                        "media_hash": digest,
+                        "state": "present",
+                        "mime_type": "image/png",
+                        "byte_size": 8,
+                        "object_path": f"media/v2/sha256/cc/cc/{digest}.bin",
+                    }
+                    if found
+                    else None
+                ),
+            }
+
+    monkeypatch.setattr(agents_storage_v2, "get_catalogd_client", lambda: _OwnerScopedCatalog())
+
+    class _Pool:
+        async def read_media(self, object_path, media_hash):
+            return SimpleNamespace(data=b"\x89PNG\r\nxx")
+
+    monkeypatch.setattr(agents_storage_v2, "get_raw_object_worker_pool", lambda: _Pool())
+    api_app.dependency_overrides[get_optional_browser_route_caller] = lambda: None
+
+    try:
+        own = media_url_token(owner_id=1, sha256=digest)
+        assert client.get(f"/media/{digest}/blob?{MEDIA_URL_TOKEN_PARAMETER}={own}").status_code == 200
+
+        other_owner = media_url_token(owner_id=2, sha256=digest)
+        denied = client.get(f"/media/{digest}/blob?{MEDIA_URL_TOKEN_PARAMETER}={other_owner}")
+        assert denied.status_code == 404, denied.text
+        # Owner 2 was resolved and refused; the blob was never served for it.
+        assert seen_owners == ["1", "2"]
+    finally:
+        api_app.dependency_overrides.pop(get_optional_browser_route_caller, None)
+        cleanup()
+
+
 # Event media-ref projection is covered by the storage-v2 workspace tests
 # (`tests_lite/test_storage_v2_workspace.py`), where refs ride the session read
 # and are placed on the event that owns their source line. The legacy

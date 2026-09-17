@@ -3876,41 +3876,6 @@ export interface components {
             /** Search Indexes Removed */
             search_indexes_removed: number;
         };
-        /** ActivityEvidenceIn */
-        ActivityEvidenceIn: {
-            /** Authority Class */
-            authority_class?: "provider_runtime" | null;
-            /** Provider */
-            provider: string;
-            /** Session Id */
-            session_id: string;
-            /** Run Id */
-            run_id?: string | null;
-            /** Kind */
-            kind: string;
-            /** Raw Kind */
-            raw_kind: string;
-            /** Tool Name */
-            tool_name?: string | null;
-            /** Detail */
-            detail?: string | null;
-            /** Source */
-            source: string;
-            /**
-             * Observed At
-             * Format: date-time
-             */
-            observed_at: string;
-            /**
-             * Valid Until
-             * Format: date-time
-             */
-            valid_until: string;
-            /** Raw Locator */
-            raw_locator?: string | null;
-            /** Reason Codes */
-            reason_codes?: string[];
-        };
         /**
          * ActivityRecency
          * @enum {string}
@@ -4145,93 +4110,6 @@ export interface components {
             run_id?: string | null;
             /** State */
             state: string;
-        };
-        /** ContinuationEvidenceIn */
-        ContinuationEvidenceIn: {
-            /** Authority Class */
-            authority_class?: "retained_launch_contract" | null;
-            /**
-             * Provider
-             * @enum {string}
-             */
-            provider: "codex" | "claude" | "cursor" | "opencode" | "pi" | "omp";
-            /** Session Id */
-            session_id: string;
-            /** Provider Session Id */
-            provider_session_id?: string | null;
-            /** Cwd */
-            cwd?: string | null;
-            /**
-             * Contract State
-             * @enum {string}
-             */
-            contract_state: "valid" | "invalid";
-            /** Unavailable Reason */
-            unavailable_reason?: ("contract_invalid" | "workspace_missing" | "provider_incompatible" | "provider_state_missing" | "execution_owner_alive" | "owner_unverifiable") | null;
-            /**
-             * Observed At
-             * Format: date-time
-             */
-            observed_at: string;
-            /**
-             * Valid Until
-             * Format: date-time
-             */
-            valid_until: string;
-            /**
-             * Source
-             * @constant
-             */
-            source: "managed_resume_contract_scan";
-            /** Raw Locator */
-            raw_locator: string;
-        };
-        /** ControlEvidenceIn */
-        ControlEvidenceIn: {
-            /** Authority Class */
-            authority_class?: "provider_control" | null;
-            /**
-             * Provider
-             * @enum {string}
-             */
-            provider: "codex" | "claude" | "opencode" | "cursor" | "antigravity" | "pi" | "omp";
-            /** Session Id */
-            session_id: string;
-            /** Connection Id */
-            connection_id?: string | null;
-            /** Lease Generation */
-            lease_generation?: string | null;
-            /** Run Id */
-            run_id?: string | null;
-            /** Granted Operations */
-            granted_operations?: ("send_input" | "interrupt" | "terminate" | "tail_output" | "resume")[];
-            /** Provider Session Id */
-            provider_session_id?: string | null;
-            /**
-             * Ownership
-             * @constant
-             */
-            ownership: "managed";
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "attached" | "detached" | "degraded";
-            /** Terminal Attached */
-            terminal_attached?: boolean | null;
-            /** Bridge Status */
-            bridge_status?: string | null;
-            /** Thread Subscription Status */
-            thread_subscription_status?: string | null;
-            /** Lease Ttl Ms */
-            lease_ttl_ms: number;
-            /** Source */
-            source: string;
-            /**
-             * Observed At
-             * Format: date-time
-             */
-            observed_at: string;
         };
         /**
          * ControlPath
@@ -4581,30 +4459,6 @@ export interface components {
              */
             has_more: boolean;
         };
-        /** EvidenceIdentityIn */
-        EvidenceIdentityIn: {
-            /**
-             * Fact Family
-             * @enum {string}
-             */
-            fact_family: "run" | "process" | "activity" | "control" | "transcript" | "readiness" | "continuation";
-            /** Fact Index */
-            fact_index: number;
-            /** Subject Key */
-            subject_key: string;
-            /** Source */
-            source: string;
-            /** Source Epoch */
-            source_epoch?: string | null;
-            /** Source Seq */
-            source_seq?: number | null;
-            /** Sequenced */
-            sequenced: boolean;
-            /** Dedupe Key */
-            dedupe_key: string;
-            /** Evidence Hash */
-            evidence_hash: string;
-        };
         /**
          * FactHeadDiagnostic
          * @description Winning reducer coordinate used by the pure projection.
@@ -4815,7 +4669,8 @@ export interface components {
             managed_sessions?: components["schemas"]["ManagedSessionLeaseIn"][];
             /** Unmanaged Session Bindings */
             unmanaged_session_bindings?: components["schemas"]["UnmanagedSessionBindingIn"][];
-            machine_evidence?: components["schemas"]["MachineEvidenceIn"] | null;
+            /** Machine Evidence */
+            machine_evidence?: unknown;
             /** Sessions */
             sessions?: components["schemas"]["ResolvedLocalSessionIn"][];
             /** Sessions Digest */
@@ -5092,37 +4947,6 @@ export interface components {
         MachineDirectoryResponse: {
             /** Machines */
             machines?: components["schemas"]["MachineDirectoryEntry"][];
-        };
-        /** MachineEvidenceIn */
-        MachineEvidenceIn: {
-            /**
-             * Schema Version
-             * @enum {integer}
-             */
-            schema_version: 1 | 2 | 3;
-            /**
-             * Observed At
-             * Format: date-time
-             */
-            observed_at: string;
-            /** Identities */
-            identities?: components["schemas"]["EvidenceIdentityIn"][];
-            /** Run */
-            run?: components["schemas"]["RunEvidenceIn"][];
-            /** Process */
-            process?: components["schemas"]["ProcessEvidenceIn"][];
-            /** Activity */
-            activity?: components["schemas"]["ActivityEvidenceIn"][];
-            /** Control */
-            control?: components["schemas"]["ControlEvidenceIn"][];
-            /** Transcript */
-            transcript?: components["schemas"]["TranscriptEvidenceIn"][];
-            /** Process Snapshot Scopes */
-            process_snapshot_scopes?: components["schemas"]["ProcessSnapshotScopeIn"][];
-            /** Readiness */
-            readiness?: components["schemas"]["ReadinessEvidenceIn"][];
-            /** Continuation */
-            continuation?: components["schemas"]["ContinuationEvidenceIn"][];
         };
         /** MachineHealthItemResponse */
         MachineHealthItemResponse: {
@@ -6060,60 +5884,6 @@ export interface components {
          * @enum {string}
          */
         PresenceState: "thinking" | "running" | "idle" | "needs_user" | "blocked" | "stalled";
-        /** ProcessEvidenceIn */
-        ProcessEvidenceIn: {
-            /** Authority Class */
-            authority_class?: "exact_process_identity" | null;
-            /** Provider */
-            provider: string;
-            /** Session Id */
-            session_id?: string | null;
-            /** Provider Session Id */
-            provider_session_id?: string | null;
-            /**
-             * Role
-             * @enum {string}
-             */
-            role: "provider" | "bridge" | "app_server" | "launcher";
-            /** Pid */
-            pid?: number | null;
-            /** Process Start Time */
-            process_start_time?: string | null;
-            /** Boot Id */
-            boot_id?: string | null;
-            /** Cwd */
-            cwd?: string | null;
-            /** Alive */
-            alive: boolean;
-            /** Source */
-            source: string;
-            /**
-             * Observed At
-             * Format: date-time
-             */
-            observed_at: string;
-        };
-        /** ProcessSnapshotScopeIn */
-        ProcessSnapshotScopeIn: {
-            /**
-             * Scope
-             * @enum {string}
-             */
-            scope: "managed_state_files" | "unmanaged_provider_processes";
-            /** Complete */
-            complete: boolean;
-            /**
-             * Captured At
-             * Format: date-time
-             */
-            captured_at: string;
-            /** Machine Boot Id */
-            machine_boot_id?: string | null;
-            /** Source */
-            source: string;
-            /** Failure Reason */
-            failure_reason?: string | null;
-        };
         /** ProductHealthCheckEvidenceRefResponse */
         ProductHealthCheckEvidenceRefResponse: {
             /** Kind */
@@ -6461,63 +6231,6 @@ export interface components {
             receipt_id?: string | null;
             /** Detail */
             detail?: string | null;
-        };
-        /** ReadinessEvidenceIn */
-        ReadinessEvidenceIn: {
-            /** Authority Class */
-            authority_class?: "operation_proof" | null;
-            /**
-             * Provider
-             * @constant
-             */
-            provider: "antigravity";
-            /** Session Id */
-            session_id: string;
-            /**
-             * Operation
-             * @constant
-             */
-            operation: "send_input";
-            /** Hook Installed */
-            hook_installed: boolean;
-            /** Recent Hook Observed */
-            recent_hook_observed: boolean;
-            /** Claim Observed */
-            claim_observed: boolean;
-            /** Response Observed */
-            response_observed: boolean;
-            /** Continuation Observed */
-            continuation_observed: boolean;
-            /** Hook Event */
-            hook_event?: string | null;
-            /** Hook Observed At */
-            hook_observed_at?: string | null;
-            /** Claim Message Id */
-            claim_message_id?: string | null;
-            /** Claimed At */
-            claimed_at?: string | null;
-            /** Response Event */
-            response_event?: string | null;
-            /** Response At */
-            response_at?: string | null;
-            /** Response Status */
-            response_status?: string | null;
-            /**
-             * Observed At
-             * Format: date-time
-             */
-            observed_at: string;
-            /**
-             * Valid Until
-             * Format: date-time
-             */
-            valid_until: string;
-            /** Source */
-            source: string;
-            /** Raw Locator */
-            raw_locator?: string | null;
-            /** Reason Codes */
-            reason_codes?: string[];
         };
         /** RealtimePropagationBottleneckResponse */
         RealtimePropagationBottleneckResponse: {
@@ -6998,45 +6711,6 @@ export interface components {
             label?: string | null;
             /** Branch */
             branch?: string | null;
-        };
-        /** RunEvidenceIn */
-        RunEvidenceIn: {
-            /** Authority Class */
-            authority_class?: "exact_process_exit" | null;
-            /** Provider */
-            provider: string;
-            /** Session Id */
-            session_id: string;
-            /** Run Id */
-            run_id: string;
-            /**
-             * State
-             * @constant
-             */
-            state: "ended";
-            /**
-             * End Reason
-             * @constant
-             */
-            end_reason: "process_gone";
-            /**
-             * Process Role
-             * @enum {string}
-             */
-            process_role: "provider" | "app_server" | "launcher";
-            /** Pid */
-            pid: number;
-            /** Process Start Time */
-            process_start_time: string;
-            /** Boot Id */
-            boot_id: string;
-            /** Source */
-            source: string;
-            /**
-             * Observed At
-             * Format: date-time
-             */
-            observed_at: string;
         };
         /**
          * RunnerDoctorCheck
@@ -10462,34 +10136,6 @@ export interface components {
              */
             event_id?: number | null;
         };
-        /** TranscriptEvidenceIn */
-        TranscriptEvidenceIn: {
-            /** Authority Class */
-            authority_class?: "source_cursor" | null;
-            /** Provider */
-            provider: string;
-            /** Session Id */
-            session_id?: string | null;
-            /** Provider Session Id */
-            provider_session_id: string;
-            /** Source Path */
-            source_path?: string | null;
-            /** Source Inode */
-            source_inode?: number | null;
-            /** Source Device */
-            source_device?: number | null;
-            /** Source Offset */
-            source_offset?: number | null;
-            /** Source Mtime */
-            source_mtime?: string | null;
-            /** Source */
-            source: string;
-            /**
-             * Observed At
-             * Format: date-time
-             */
-            observed_at: string;
-        };
         /**
          * TruthTier
          * @enum {string}
@@ -12827,6 +12473,8 @@ export interface operations {
     get_browser_media_blob_media__sha256__blob_get: {
         parameters: {
             query?: {
+                /** @description Owner-scoped media URL token minted into served media URLs. */
+                mt?: string | null;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -12861,6 +12509,8 @@ export interface operations {
     head_browser_media_blob_media__sha256__head: {
         parameters: {
             query?: {
+                /** @description Owner-scoped media URL token minted into served media URLs. */
+                mt?: string | null;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };

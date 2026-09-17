@@ -45,6 +45,8 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: test-engine-projection-failure
 .PHONY: provider-interaction-probe
 .PHONY: test-cursor-console-product-e2e cursor-observed-install-qualification
+.PHONY: ios-project ios-project-check
+
 .PHONY: profile-ios-live-console
 .PHONY: validate-native-device-entrypoints
 .PHONY: perf-proof validate-perf-proof cohort-journey validate-cohort-journey
@@ -151,34 +153,36 @@ test-session-state: ## @internal Focused canonical session-state and Phase 7 fau
 IOS_MERGE_TEST_SCHEMES ?= Longhouse LonghouseSmoke
 IOS_PERF_TEST_SCHEMES ?= LonghouseChatStress
 
-test-ios: ## iOS unit + smoke tests (simulator) — the merge gate
+ios-project: ## Regenerate the local Xcode project and freshness stamp
 	@python3 scripts/build/generate_build_identity.py
 	@bash scripts/build/stage_ios_build_identity.sh
 	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
+	@shasum -a 256 ios/XcodeHarness/project.yml | cut -d ' ' -f 1 > ios/XcodeHarness/.project-source-sha256
+
+ios-project-check: ## Regenerate and verify Xcode source membership
+	@$(MAKE) ios-project
+	@scripts/build/check_ios_project_fresh.sh
+
+test-ios: ## iOS unit + smoke tests (simulator) — the merge gate
+	@$(MAKE) ios-project
 	@DESTINATION="$${IOS_DESTINATION:-$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)}"; \
 	IOS_TEST_SCHEMES="$(IOS_MERGE_TEST_SCHEMES)" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
 
 ios-ui-shot: ## Run one iOS UI test and export its screenshots (TEST=SessionChatUITests/testName)
 	@test -n "$(TEST)" || (echo "TEST is required, e.g. TEST=SessionChatUITests/testTurnFooterRendersUnderTheProviderReply" >&2; exit 2)
-	@python3 scripts/build/generate_build_identity.py
-	@bash scripts/build/stage_ios_build_identity.sh
-	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
+	@$(MAKE) ios-project
 	@scripts/ci/ios_ui_shot.sh "$(TEST)"
 
 ios-previews: ## Render every SwiftUI #Preview to PNG under artifacts/ios-previews/<timestamp>/
 	@out="$(CURDIR)/artifacts/ios-previews/$$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$$out"; ios/scripts/render-previews.sh "$$out"
 
 test-ios-perf: ## iOS wall-clock benchmarks (simulator) — never gates a merge
-	@python3 scripts/build/generate_build_identity.py
-	@bash scripts/build/stage_ios_build_identity.sh
-	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
+	@$(MAKE) ios-project
 	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)"; \
 	IOS_TEST_SCHEMES="$(IOS_PERF_TEST_SCHEMES)" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
 
 test-ios-session-open: ## iOS simulator timeline tap-to-transcript benchmark
-	@python3 scripts/build/generate_build_identity.py
-	@bash scripts/build/stage_ios_build_identity.sh
-	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
+	@$(MAKE) ios-project
 	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj LonghouseChatStress)"; \
 	DERIVED_DATA_PATH="$${IOS_DERIVED_DATA_PATH:-$$HOME/Library/Developer/Xcode/DerivedData/LonghouseIOS-SessionOpen}"; \
 	mkdir -p "$$DERIVED_DATA_PATH"; \
@@ -197,9 +201,7 @@ test-ios-session-open: ## iOS simulator timeline tap-to-transcript benchmark
 
 profile-ios-live-cold: ## Side-effect-free cold-launch/scroll profile on a physical iPhone (IOS_DEVICE_ID required)
 	@test -n "$(IOS_DEVICE_ID)" || (echo "Set IOS_DEVICE_ID to the physical iPhone UDID" >&2; exit 2)
-	@python3 scripts/build/generate_build_identity.py
-	@bash scripts/build/stage_ios_build_identity.sh
-	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
+	@$(MAKE) ios-project
 	@STAMP="$$(date -u +%Y%m%dT%H%M%SZ)"; \
 	RESULT="artifacts/ios-live-profile/$$STAMP-cold-launch.xcresult"; \
 	mkdir -p artifacts/ios-live-profile; \
@@ -219,9 +221,7 @@ profile-ios-live-cold: ## Side-effect-free cold-launch/scroll profile on a physi
 profile-ios-live-console: ## Physical launch/workspace/Console/composer profile (creates one session)
 	@test -n "$(IOS_DEVICE_ID)" || (echo "Set IOS_DEVICE_ID to the physical iPhone UDID" >&2; exit 2)
 	@test -n "$(IOS_WORKSPACE_PATH)" || (echo "Set IOS_WORKSPACE_PATH to an absolute workspace path" >&2; exit 2)
-	@python3 scripts/build/generate_build_identity.py
-	@bash scripts/build/stage_ios_build_identity.sh
-	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
+	@$(MAKE) ios-project
 	@STAMP="$$(date -u +%Y%m%dT%H%M%SZ)"; \
 	RESULT="artifacts/ios-live-profile/$$STAMP-console-focus.xcresult"; \
 	mkdir -p artifacts/ios-live-profile; \
@@ -240,15 +240,11 @@ profile-ios-live-console: ## Physical launch/workspace/Console/composer profile 
 	exit $$STATUS
 
 benchmark-ios-transcript: ## Deterministic iOS streaming transcript renderer benchmark
-	@python3 scripts/build/generate_build_identity.py
-	@bash scripts/build/stage_ios_build_identity.sh
-	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
+	@$(MAKE) ios-project
 	@ios/scripts/run-transcript-renderer-benchmark.sh
 
 ios-marketing: ## Capture iOS marketing screenshots to /tmp/lh-shots/ (session-light.png, session-dark.png)
-	@python3 scripts/build/generate_build_identity.py
-	@bash scripts/build/stage_ios_build_identity.sh
-	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
+	@$(MAKE) ios-project
 	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj LonghouseMarketingCaptures)"; \
 	rm -rf /tmp/lh-shots; \
 	UDID="$$(printf '%s' "$$DESTINATION" | sed -n 's/.*id=\([0-9A-Fa-f-]*\).*/\1/p')"; \
@@ -322,9 +318,7 @@ historical-convergence-check: ## Read-only historical publication diagnosis or b
 
 test-mobile-chat: ## Focused mobile chat validation (web telemetry + iOS unit tests)
 	@cd web && bun run test -- --run src/components/session-workspace/__tests__/RenderTelemetryPanel.test.tsx src/pages/__tests__/SessionDetailPage.test.tsx
-	@python3 scripts/build/generate_build_identity.py
-	@bash scripts/build/stage_ios_build_identity.sh
-	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
+	@$(MAKE) ios-project
 	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)"; \
 	DERIVED_DATA_PATH="$${IOS_DERIVED_DATA_PATH:-$$HOME/Library/Developer/Xcode/DerivedData/LonghouseIOS-MobileChat}"; \
 	mkdir -p "$$DERIVED_DATA_PATH"; \
@@ -336,17 +330,13 @@ test-mobile-chat: ## Focused mobile chat validation (web telemetry + iOS unit te
 		test
 
 test-mobile-chat-stress: ## Holistic iOS mobile chat fixture stress test
-	@python3 scripts/build/generate_build_identity.py
-	@bash scripts/build/stage_ios_build_identity.sh
-	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
+	@$(MAKE) ios-project
 	@rm -f /tmp/longhouse-chat-replay.json
 	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj LonghouseChatStress)"; \
 	IOS_TEST_SCHEMES="LonghouseChatStress" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
 
 test-mobile-chat-replay: ## Replay a local SQLite transcript through the iOS mobile chat stress test
-	@python3 scripts/build/generate_build_identity.py
-	@bash scripts/build/stage_ios_build_identity.sh
-	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
+	@$(MAKE) ios-project
 	@REPLAY_PATH="/tmp/longhouse-chat-replay.json"; \
 	trap 'rm -f "$$REPLAY_PATH"' EXIT; \
 	SESSION_ARGS=""; \
