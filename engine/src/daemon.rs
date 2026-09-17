@@ -1171,7 +1171,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
     let mut outbox_collect_tasks: JoinSet<OutboxCollectResult> = JoinSet::new();
     let mut runtime_collect_tasks: JoinSet<RuntimeCollectResult> = JoinSet::new();
-    let mut runtime_recovery_tasks: JoinSet<Option<outbox::RuntimeOutboxRecovery>> = JoinSet::new();
+    let mut runtime_sweep_tasks: JoinSet<outbox::RuntimeOutboxSweep> = JoinSet::new();
     let mut outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut runtime_outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
@@ -1622,12 +1622,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         // not reliably in it. Reduce it to current status in a
                         // task of its own: the live lane must keep collecting
                         // and posting while that runs.
-                        if result.saturated && runtime_recovery_tasks.is_empty() {
+                        if result.saturated && runtime_sweep_tasks.is_empty() {
                             let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
-                            runtime_recovery_tasks.spawn_blocking(move || {
-                                outbox::recover_runtime_event_outbox(
+                            runtime_sweep_tasks.spawn_blocking(move || {
+                                outbox::sweep_runtime_event_outbox(
                                     &runtime_events_outbox_dir,
-                                    outbox::RUNTIME_EVENT_RECOVERY_THRESHOLD,
+                                    outbox::RUNTIME_EVENT_SWEEP_LIMIT,
                                 )
                             });
                         }
@@ -1693,19 +1693,29 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            runtime_recovery_result = runtime_recovery_tasks.join_next(), if !runtime_recovery_tasks.is_empty() => {
-                match runtime_recovery_result {
-                    Some(Ok(Some(recovery))) => {
+            runtime_sweep_result = runtime_sweep_tasks.join_next(), if !runtime_sweep_tasks.is_empty() => {
+                match runtime_sweep_result {
+                    Some(Ok(sweep)) => {
                         tracing::warn!(
-                            inspected = recovery.inspected,
-                            kept = recovery.kept,
-                            discarded = recovery.discarded,
-                            "Reduced a flooded runtime-event outbox to current status"
+                            inspected = sweep.inspected,
+                            discarded = sweep.discarded,
+                            more = sweep.more,
+                            "Swept superseded runtime status out of a flooded outbox"
                         );
+                        // One sweep is capped. Keep going until the directory
+                        // holds only current status; a flood outlives a pass.
+                        if sweep.more {
+                            let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
+                            runtime_sweep_tasks.spawn_blocking(move || {
+                                outbox::sweep_runtime_event_outbox(
+                                    &runtime_events_outbox_dir,
+                                    outbox::RUNTIME_EVENT_SWEEP_LIMIT,
+                                )
+                            });
+                        }
                     }
-                    Some(Ok(None)) => {}
                     Some(Err(err)) => {
-                        tracing::warn!("Runtime-event outbox recovery task failed: {}", err);
+                        tracing::warn!("Runtime-event outbox sweep task failed: {}", err);
                     }
                     None => {}
                 }
