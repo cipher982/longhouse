@@ -1120,7 +1120,8 @@ test.describe("Session Detail Page", () => {
         async (route) => {
           chatRequests += 1;
           expect(route.request().method()).toBe("POST");
-          expect(route.request().postDataJSON()).toMatchObject({
+          const requestBody = route.request().postDataJSON();
+          expect(requestBody).toMatchObject({
             text: "Continue locally",
             intent: "auto",
           });
@@ -1137,6 +1138,7 @@ test.describe("Session Detail Page", () => {
             body: JSON.stringify({
               outcome: "sent",
               input_id: 1,
+              client_request_id: requestBody.client_request_id,
               intent: "auto",
               queued: [],
             }),

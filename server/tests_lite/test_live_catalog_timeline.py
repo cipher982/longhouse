@@ -128,6 +128,7 @@ def test_live_catalog_timeline_does_not_rescan_on_pubsub_timeout(monkeypatch):
 
     class Bus:
         stream_epoch = "test"
+
         def peek_latest_seq(self, _topic):
             return 0
 
@@ -191,6 +192,7 @@ def test_live_catalog_timeline_coalesces_queued_pubsub_wakes(monkeypatch):
 
     class Bus:
         stream_epoch = "test"
+
         def peek_latest_seq(self, _topic):
             return 0
 
@@ -249,6 +251,7 @@ def test_live_catalog_timeline_survives_catalog_pressure_after_headers(monkeypat
 
     class Bus:
         stream_epoch = "test"
+
         def peek_latest_seq(self, _topic):
             return 0
 
