@@ -355,9 +355,11 @@ class RuntimeAdmission:
                     "runtime_epoch": self.runtime_epoch,
                 }
             if existing_fingerprint is not None:
-                admission = await self._catalog_operation(catalog_probe, "close")
-                if admission is not None:
-                    self._set_catalog_admission_unlocked(admission)
+                # Reopen completed this fence; replaying it must not close the newly opened catalog.
+                if self._state != "reopened":
+                    admission = await self._catalog_operation(catalog_probe, "close")
+                    if admission is not None:
+                        self._set_catalog_admission_unlocked(admission)
                 existing = dict(self._request_results[request_id])
                 if self._state == "draining" and self._is_drained_unlocked():
                     self._state = "drained"
@@ -369,7 +371,8 @@ class RuntimeAdmission:
                     self._request_results[request_id] = dict(existing)
                 existing["replayed"] = True
                 return existing
-            if self._fence is not None and self._fence.fingerprint != fingerprint:
+            # Keep the completed fence for identity checks, but let the next cutover claim a new one.
+            if self._fence is not None and self._fence.fingerprint != fingerprint and self._state != "reopened":
                 return {
                     "state": "conflict",
                     "code": "different_active_fence",
