@@ -1774,29 +1774,21 @@ impl CodexExecRuntimeSink {
         let source_path = known_source_path
             .map(PathBuf::from)
             .or_else(|| codex_rollout_path(provider_thread_id));
-        if let Some(db_path) = self.local_db_path.as_deref() {
-            if let Some(source_path) = source_path.as_deref() {
-                match crate::state::db::open_client_connection(
-                    Path::new(db_path),
-                    Duration::from_millis(500),
-                ) {
-                    Ok(conn) => {
-                        let binding = crate::state::session_binding::SessionBinding::new(&conn);
-                        // Record the thread this binding was made for. Without
-                        // it the shipper cannot tell a fork Longhouse started
-                        // from one a managed parent left behind, and it must
-                        // assume the latter.
-                        if let Err(err) = binding.bind_for_thread(
-                            &source_path.to_string_lossy(),
-                            &self.session_id,
-                            "codex",
-                            Some(provider_thread_id),
-                        ) {
-                            eprintln!("[codex-exec] persist transcript binding failed: {err}");
-                        }
-                    }
-                    Err(err) => eprintln!("[codex-exec] open transcript binding DB failed: {err}"),
-                }
+        if let Some(source_path) = source_path.as_deref() {
+            // A local claim, not a database row: the daemon projects it into the
+            // binding discovery reads, and the claim records the thread this
+            // binding was made for. Without that thread the shipper cannot tell
+            // a fork Longhouse started from one a managed parent left behind,
+            // and it must assume the latter.
+            if let Err(error) = crate::managed_source_claim::confirm_identity(
+                &self.session_id,
+                "codex",
+                source_path,
+                provider_thread_id,
+                None,
+                None,
+            ) {
+                eprintln!("[codex-exec] persist transcript claim failed: {error:#}");
             }
         }
         if let Ok(registry) = crate::turn_claims::default_registry() {

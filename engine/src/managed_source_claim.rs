@@ -141,6 +141,23 @@ pub fn reserve(
     provider_pid: Option<u32>,
     provider_start_time: Option<String>,
 ) -> Result<SourceClaim> {
+    // One path, one managed owner. The archive binding used to enforce this in
+    // the database; the claim is the authority now, so it enforces it here.
+    let normalized = crate::storage_v2_shipper::stable_source_path(source_path);
+    for existing in active_claims()? {
+        if existing.session_id == session_id {
+            continue;
+        }
+        if crate::storage_v2_shipper::stable_source_path(Path::new(&existing.source_path))
+            == normalized
+        {
+            anyhow::bail!(
+                "source {} is already claimed by managed session {}",
+                source_path.display(),
+                existing.session_id
+            );
+        }
+    }
     let timestamp = now().to_rfc3339();
     let claim = SourceClaim {
         schema_version: CLAIM_SCHEMA_VERSION,
@@ -296,33 +313,7 @@ pub fn project_claims(db_path: &Path) -> Result<ProjectionReport> {
     })?;
     let mut report = ProjectionReport::default();
     for claim in claims {
-        let path = Path::new(&claim.source_path);
-        let outcome: Result<()> = match claim.state {
-            ClaimState::Reserved => crate::omp_session::reserve_source_for_thread(
-                &conn,
-                path,
-                &claim.session_id,
-                claim.native_session_id.as_deref(),
-            ),
-            ClaimState::Bound => match claim.native_session_id.as_deref() {
-                Some(native_id) => crate::omp_session::reserve_source_for_thread(
-                    &conn,
-                    path,
-                    &claim.session_id,
-                    Some(native_id),
-                )
-                .and_then(|_| {
-                    crate::omp_session::bind_source_for_thread(
-                        &conn,
-                        path,
-                        &claim.session_id,
-                        native_id,
-                    )
-                }),
-                None => anyhow::bail!("a bound claim carries no native identity"),
-            },
-            ClaimState::Released => continue,
-        };
+        let outcome = project_claim(&conn, &claim);
         match outcome {
             Ok(()) => report.applied += 1,
             Err(error) => {
@@ -337,6 +328,52 @@ pub fn project_claims(db_path: &Path) -> Result<ProjectionReport> {
         }
     }
     Ok(report)
+}
+
+/// Project one claim into the binding discovery reads.
+///
+/// The OMP family keeps its own reservation helper, which carries the source
+/// checks that provider's launchers rely on. Every other provider binds through
+/// the same `session_binding` upsert its launcher used to write directly, with
+/// the provider name taken from the claim — never assumed.
+fn project_claim(conn: &rusqlite::Connection, claim: &SourceClaim) -> Result<()> {
+    let path = Path::new(&claim.source_path);
+    let native_id = claim
+        .native_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if claim.state == ClaimState::Released {
+        return Ok(());
+    }
+    if is_omp_family(&claim.provider) {
+        return match claim.state {
+            ClaimState::Reserved => crate::omp_session::reserve_source_for_thread(
+                conn,
+                path,
+                &claim.session_id,
+                native_id,
+            ),
+            ClaimState::Bound => crate::omp_session::bind_source_for_thread(
+                conn,
+                path,
+                &claim.session_id,
+                native_id.context("a bound claim carries no native identity")?,
+            ),
+            ClaimState::Released => Ok(()),
+        };
+    }
+    let stable_path = crate::storage_v2_shipper::stable_source_path(path);
+    crate::state::session_binding::SessionBinding::new(conn).bind_for_thread(
+        &stable_path.to_string_lossy(),
+        &claim.session_id,
+        &claim.provider,
+        native_id,
+    )
+}
+
+fn is_omp_family(provider: &str) -> bool {
+    matches!(provider, "omp" | "oh-my-pi" | "pi-omp")
 }
 
 #[cfg(test)]
@@ -429,6 +466,30 @@ mod tests {
 
             release("session-1").expect("release");
             assert!(active_claims().expect("active claims").is_empty());
+        });
+    }
+
+    #[test]
+    fn a_second_session_cannot_claim_another_sessions_path() {
+        // One transcript path has one managed owner. The archive binding used to
+        // enforce this; the claim is the authority now, so overwriting another
+        // session's claim would silently hand its transcript to this one.
+        let dir = tempfile::tempdir().unwrap();
+        with_home(&dir.path().join("longhouse"), || {
+            let source = dir.path().join("session.jsonl");
+            reserve("session-1", "omp", &source, dir.path(), None, None).expect("first claim");
+
+            let second = reserve("session-2", "codex", &source, dir.path(), None, None);
+
+            assert!(
+                second.is_err(),
+                "a path already claimed by another managed session must be refused"
+            );
+            let held = read_claim("session-1").expect("read").expect("claim");
+            assert_eq!(
+                held.session_id, "session-1",
+                "the refusal must leave the owner's claim untouched"
+            );
         });
     }
 

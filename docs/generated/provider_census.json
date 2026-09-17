@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 279,
+  "file_count": 280,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -220,6 +220,13 @@
         "omp",
         "opencode",
         "pi"
+      ]
+    },
+    {
+      "path": "engine/src/managed_source_claim.rs",
+      "providers": [
+        "codex",
+        "omp"
       ]
     },
     {
