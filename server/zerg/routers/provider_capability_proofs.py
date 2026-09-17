@@ -91,6 +91,15 @@ def _verify_factory_token(request: Request) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Provider capability factory access denied")
 
 
+def _refuse_evidence_on_public_demo() -> None:
+    # The public demo runs auth-disabled, so the agents dependency admits any
+    # caller there. It holds mirrored factory proofs only to certify landing
+    # chips (`/public/provider-certification`); it never serves the records or
+    # the evidence bytes it verified at publication.
+    if getattr(get_settings(), "demo_mode", False):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+
 async def _read_capped_json(request: Request) -> dict[str, Any]:
     content_length = request.headers.get("content-length")
     if content_length:
@@ -493,7 +502,7 @@ async def publish_provider_capability_proofs(
     }
 
 
-@router.get("/agents/provider-capability-proofs")
+@router.get("/agents/provider-capability-proofs", dependencies=[Depends(_refuse_evidence_on_public_demo)])
 def list_provider_capability_proofs(
     _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
@@ -549,7 +558,10 @@ def _require_owner_capable_evidence_caller(caller: Caller = Depends(verify_agent
     return caller
 
 
-@router.get("/agents/provider-capability-proofs/blobs/{sha256}", dependencies=[Depends(require_single_tenant)])
+@router.get(
+    "/agents/provider-capability-proofs/blobs/{sha256}",
+    dependencies=[Depends(_refuse_evidence_on_public_demo), Depends(require_single_tenant)],
+)
 def get_provider_capability_proof_blob(
     sha256: str,
     _caller: Caller = Depends(_require_owner_capable_evidence_caller),
