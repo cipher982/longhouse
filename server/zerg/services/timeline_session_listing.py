@@ -2,9 +2,11 @@
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
 
 from pydantic import Field
 
+from zerg.services.session_views import MachineSearchLaneFailure
 from zerg.services.session_views import SessionResponse
 from zerg.utils.time import UTCBaseModel
 
@@ -24,6 +26,12 @@ class TimelineSessionsListResponse(UTCBaseModel):
     sessions: list[TimelineSessionCardResponse]
     total: int
     has_real_sessions: bool = True
+    # A search answer must say which lanes produced it. Without this, a
+    # hybrid request whose dense lane failed is indistinguishable from a
+    # corpus that genuinely has no paraphrase match, and the "finds by
+    # meaning" label keeps making a promise the response did not keep.
+    lanes: list[Literal["lexical", "dense"]] = Field(default_factory=list)
+    degraded: list[MachineSearchLaneFailure] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)

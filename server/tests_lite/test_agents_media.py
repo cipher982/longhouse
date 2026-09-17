@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -22,7 +23,10 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.auth.media_url_tokens import MEDIA_URL_TOKEN_PARAMETER
+from zerg.auth.media_url_tokens import media_url_token
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
+from zerg.dependencies.browser_route_auth import get_optional_browser_route_caller
 from zerg.main import api_app
 from zerg.models.agents import AgentSession
 from zerg.models.agents import MediaObject
@@ -400,6 +404,65 @@ def test_browser_media_read_streams_the_verified_storage_v2_object(tmp_path, mon
         assert head.headers["content-length"] == str(len(payload))
         assert head.headers["cache-control"] == "private, max-age=31536000, immutable"
     finally:
+        cleanup()
+
+
+def test_browser_media_read_accepts_a_signed_url_without_ambient_credentials(tmp_path, monkeypatch):
+    """A transcript image request cannot carry a header, so its URL carries one.
+
+    The hosted iOS app authenticates with a bearer runtime token and holds no
+    session cookie, so the WebView's ``<img>`` request arrives anonymous. Before
+    served media URLs carried their own credential, every such request was a 401
+    and every image rendered as "Media unavailable".
+    """
+
+    _factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
+    client = TestClient(api_app)
+    payload = b"\x89PNG\r\nwritten-into-a-transcript"
+    digest = "a" * 64
+    other_digest = "b" * 64
+    _browser_media_catalog(
+        monkeypatch,
+        {
+            "found": True,
+            "media": {
+                "media_hash": digest,
+                "state": "present",
+                "mime_type": "image/png",
+                "byte_size": len(payload),
+                "object_path": f"media/v2/sha256/aa/aa/{digest}.bin",
+            },
+        },
+    )
+
+    class _Pool:
+        async def read_media(self, object_path, media_hash):
+            return SimpleNamespace(data=payload)
+
+    monkeypatch.setattr(agents_storage_v2, "get_raw_object_worker_pool", lambda: _Pool())
+    # The page has no cookie and no bearer token: the signed URL is the only
+    # thing that can authorize the bytes.
+    api_app.dependency_overrides[get_optional_browser_route_caller] = lambda: None
+
+    try:
+        assert client.get(f"/media/{digest}/blob").status_code == 401
+
+        signed = media_url_token(owner_id=1, sha256=digest)
+        allowed = client.get(f"/media/{digest}/blob?{MEDIA_URL_TOKEN_PARAMETER}={signed}")
+        assert allowed.status_code == 200, allowed.text
+        assert allowed.content == payload
+
+        # The credential names one blob, so it cannot fetch a sibling hash.
+        assert client.get(f"/media/{other_digest}/blob?{MEDIA_URL_TOKEN_PARAMETER}={signed}").status_code == 401
+
+        expired = media_url_token(
+            owner_id=1,
+            sha256=digest,
+            now=datetime.now(timezone.utc) - timedelta(days=2),
+        )
+        assert client.get(f"/media/{digest}/blob?{MEDIA_URL_TOKEN_PARAMETER}={expired}").status_code == 401
+    finally:
+        api_app.dependency_overrides.pop(get_optional_browser_route_caller, None)
         cleanup()
 
 

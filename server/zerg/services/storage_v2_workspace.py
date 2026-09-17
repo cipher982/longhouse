@@ -10,6 +10,9 @@ from uuid import UUID
 from fastapi import HTTPException
 from fastapi import status
 
+from zerg.auth.media_url_tokens import MEDIA_URL_TOKEN_PARAMETER
+from zerg.auth.media_url_tokens import MediaUrlTokenError
+from zerg.auth.media_url_tokens import media_url_token
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.config import get_settings
@@ -56,7 +59,27 @@ def _media_ref_source_position(ref_key: object) -> int | None:
         return None
 
 
-def _served_media_ref(ref: dict[str, object], *, source_position: int) -> dict[str, object]:
+def _media_url(sha256: str, *, owner_id: int) -> str:
+    """One media URL carrying its own scoped read credential.
+
+    An image renders inside a document, so the request cannot carry a header.
+    The credential is a signature over this owner, this blob and an expiry:
+    enough for the browser route to resolve the owner, and nothing that a
+    leaked URL turns into account access.
+    """
+
+    path = f"/api/media/{sha256}/blob"
+    try:
+        token = media_url_token(owner_id=owner_id, sha256=sha256)
+    except MediaUrlTokenError:
+        # A host with no signing secret still serves the object; readers then
+        # need an ambient credential, which is what they needed before the URL
+        # could carry one.
+        return path
+    return f"{path}?{MEDIA_URL_TOKEN_PARAMETER}={token}"
+
+
+def _served_media_ref(ref: dict[str, object], *, source_position: int, owner_id: int) -> dict[str, object]:
     """One media reference in the shape the clients already render."""
     media_hash = str(ref.get("media_hash") or "")
     thumb_hash = ref.get("thumb_hash")
@@ -65,10 +88,10 @@ def _served_media_ref(ref: dict[str, object], *, source_position: int) -> dict[s
         "media_state": "present" if ref.get("media_state") == "present" else "missing",
         "mime_type": ref.get("mime_type"),
         "byte_size": ref.get("byte_size"),
-        "blob_url": f"/api/media/{media_hash}/blob",
+        "blob_url": _media_url(media_hash, owner_id=owner_id),
         # The preview is an ordinary content-addressed object, so it is served
         # by the same route - and cached just as hard.
-        "thumb_url": f"/api/media/{thumb_hash}/blob" if isinstance(thumb_hash, str) and thumb_hash else None,
+        "thumb_url": _media_url(thumb_hash, owner_id=owner_id) if isinstance(thumb_hash, str) and thumb_hash else None,
         # Intrinsic size, so a row can reserve its layout before the bytes land.
         "width": ref.get("width"),
         "height": ref.get("height"),
@@ -79,7 +102,7 @@ def _served_media_ref(ref: dict[str, object], *, source_position: int) -> dict[s
     }
 
 
-def _media_refs_by_owner(refs: list[dict[str, object]]) -> dict[tuple[str, int], list[dict[str, object]]]:
+def _media_refs_by_owner(refs: list[dict[str, object]], *, owner_id: int) -> dict[tuple[str, int], list[dict[str, object]]]:
     """Group session media refs by the event that owns each image.
 
     A media reference is stamped with the provider source position of the line
@@ -96,7 +119,7 @@ def _media_refs_by_owner(refs: list[dict[str, object]]) -> dict[tuple[str, int],
         position = _media_ref_source_position(ref.get("ref_key"))
         if not isinstance(envelope_id, str) or position is None:
             continue
-        by_owner.setdefault((envelope_id, position), []).append(_served_media_ref(ref, source_position=position))
+        by_owner.setdefault((envelope_id, position), []).append(_served_media_ref(ref, source_position=position, owner_id=owner_id))
     return by_owner
 
 
@@ -182,6 +205,7 @@ def _event_projection(
 
 def _workspace_envelope(
     *,
+    owner_id: int,
     session_id: UUID,
     session,
     session_commit_seq: str,
@@ -199,7 +223,7 @@ def _workspace_envelope(
     control_only = storage is None
     input_origins = input_origins_by_event(receipts)
     facts = facts or []
-    media_by_owner = _media_refs_by_owner(media_refs or [])
+    media_by_owner = _media_refs_by_owner(media_refs or [], owner_id=owner_id)
     events = page.get("events") if page is not None else []
     if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The render projection is invalid.")
@@ -386,6 +410,7 @@ async def build_storage_v2_workspace(
         # catalog that predates the key simply has no images to place.
         media_refs = storage_result.get("media_refs")
         return _workspace_envelope(
+            owner_id=owner_id,
             session_id=session_id,
             session=session,
             session_commit_seq=session_commit_seq,
@@ -403,6 +428,7 @@ async def build_storage_v2_workspace(
         session_provider_facts(catalogd, session_id),
     )
     return _workspace_envelope(
+        owner_id=owner_id,
         session_id=session_id,
         session=session,
         session_commit_seq=session_commit_seq,

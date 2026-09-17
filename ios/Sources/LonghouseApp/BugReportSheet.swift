@@ -16,7 +16,7 @@ struct BugReportSheet: View {
 
     private enum FailureAction: Equatable {
         case retryHandoff
-        case chooseAgent
+        case chooseTarget
         case reportInProgress
     }
 
@@ -158,8 +158,8 @@ struct BugReportSheet: View {
                         Button("Done") { dismiss() }
                     } else if failureAction == .reportInProgress {
                         Button("Done") { dismiss() }
-                    } else if failureAction == .chooseAgent {
-                        Button("Choose agent") { showingLaunchPicker = true }
+                    } else if failureAction == .chooseTarget {
+                        Button("Choose target") { showingLaunchPicker = true }
                     } else {
                         Button(failureAction == .retryHandoff ? "Try again" : "Send to Console") {
                             Task { await sendReport() }
@@ -174,15 +174,6 @@ struct BugReportSheet: View {
                 if reportID != nil {
                     showingLaunchPicker = true
                 }
-            }
-            .onChange(of: showingLaunchPicker) { _, isPresented in
-                guard !isPresented,
-                      autoStartFix,
-                      reportID != nil,
-                      targetSessionID == nil,
-                      !isSending
-                else { return }
-                dismiss()
             }
             .onChange(of: description) { _, _ in scheduleDraftSave() }
             .onChange(of: photoItems) { _, items in
@@ -231,6 +222,7 @@ struct BugReportSheet: View {
             } message: {
                 Text("The saved report will remain available, but this screen will start a fresh draft.")
             }
+            .interactiveDismissDisabled(isUploading || isSending)
         }
     }
 
@@ -258,12 +250,16 @@ struct BugReportSheet: View {
             draftSaveTask?.cancel()
             draftSaveTask = nil
             saveDraft()
-            // A successful save ends the form task. The parent owns the
-            // confirmation and any optional handoff action.
-            dismiss()
+            // Let the parent mark the presentation as finished before the
+            // environment dismissal settles. Its onDismiss callback owns the
+            // confirmation surface, so it cannot race this callback.
             onSaved?()
+            dismiss()
         } catch {
-            errorMessage = (error as? LocalizedError)?.errorDescription ?? "Could not save the bug report."
+            errorMessage = reportErrorMessage(
+                for: error,
+                fallback: "Could not save the bug report."
+            )
         }
     }
 
@@ -273,8 +269,8 @@ struct BugReportSheet: View {
               let sessionID = explicitSessionID ?? targetSessionID,
               let api = LonghouseAPI(host: appState.serverURL)
         else {
-            errorMessage = "The report handoff is incomplete. Choose an agent again."
-            failureAction = .chooseAgent
+            errorMessage = "The report handoff is incomplete. Choose a target again."
+            failureAction = .chooseTarget
             return
         }
         isSending = true
@@ -311,18 +307,25 @@ struct BugReportSheet: View {
             BugReportLocalStore.clearDraft()
             BugReportLocalStore.clearHandoff()
             didSend = true
-            dismiss()
+            // Queue navigation before dismissing. The parent performs the
+            // actual push from the sheet's onDismiss callback.
             onSent?(sessionID)
+            dismiss()
         } catch {
-            if let apiError = error as? LonghouseAPIError, apiError.structuredCode == "report_in_progress" {
+            if let apiError = error as? LonghouseAPIError,
+               apiError.structuredCode?.lowercased() == "report_in_progress"
+            {
                 BugReportLocalStore.clearHandoff()
                 failureAction = .reportInProgress
                 statusMessage = "This report is already being handled. Open Timeline to follow it."
                 errorMessage = nil
             } else {
                 saveHandoffForRetry()
-                failureAction = isRetryableHandoffError(error) ? .retryHandoff : .chooseAgent
-                errorMessage = (error as? LocalizedError)?.errorDescription ?? "The report was saved, but the agent could not be started."
+                failureAction = isRetryableHandoffError(error) ? .retryHandoff : .chooseTarget
+                errorMessage = reportErrorMessage(
+                    for: error,
+                    fallback: "The report was saved, but the selected target could not be started."
+                )
             }
         }
     }
@@ -364,6 +367,20 @@ struct BugReportSheet: View {
             .networkConnectionLost,
             .notConnectedToInternet
         ].contains(urlError.code)
+    }
+
+    private func reportErrorMessage(for error: Error, fallback: String) -> String {
+        if let apiError = error as? LonghouseAPIError {
+            switch apiError.structuredCode?.lowercased() {
+            case "idempotency_conflict":
+                return "This report request was already used."
+            case "report_stage_failed":
+                return "Longhouse couldn't prepare the report."
+            default:
+                break
+            }
+        }
+        return (error as? LocalizedError)?.errorDescription ?? fallback
     }
 
     private func reportFiles() throws -> [BugReportUploadFile] {

@@ -234,9 +234,7 @@ def test_schema_v2_evidence_is_retained_but_not_shadow_reduced():
     evidence = _schema_v3_evidence(session_id=str(uuid4()), run_id=str(uuid4()), observed_at=datetime.now(UTC))
     evidence["schema_version"] = 2
 
-    status, facts = catalog_store._shadow_facts_from_heartbeat(
-        {"raw_json": json.dumps({"machine_evidence": evidence})},
-    )
+    status, facts = catalog_store._shadow_facts_from_heartbeat(machine_evidence=evidence)
 
     assert status == "unsupported_schema"
     assert facts == []
@@ -471,9 +469,9 @@ async def test_shadow_reducer_uses_heartbeat_transaction_and_one_commit_sequence
     run_id = str(uuid4())
     evidence = _schema_v3_evidence(session_id=session_id, run_id=run_id, observed_at=now)
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="digest-1")
-    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
     params = {
         "heartbeat": heartbeat,
+        "machine_evidence": evidence,
         "managed_leases": [_lease(session_id=session_id, observed_at=now)],
         "managed_leases_present": True,
         "owner_id": 7,
@@ -590,9 +588,9 @@ async def test_shadow_reducer_ends_exact_run_from_execution_owner_process_exit(d
         observed_at=observed_at,
     )
     heartbeat = _heartbeat(device_id="cinder", received_at=observed_at, digest="run-terminal")
-    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
     params = {
         "heartbeat": heartbeat,
+        "machine_evidence": evidence,
         "managed_leases": [],
         "managed_leases_present": True,
         "owner_id": 7,
@@ -689,7 +687,6 @@ async def test_shadow_reducer_binds_control_identity_in_heartbeat_transaction(da
 
     evidence = _schema_v3_control_evidence(session_id=session_id, run_id=run_id, observed_at=now)
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="control-identity")
-    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
     client = CatalogClient(socket_path)
@@ -698,6 +695,7 @@ async def test_shadow_reducer_binds_control_identity_in_heartbeat_transaction(da
             "machine.heartbeat.apply.v2",
             {
                 "heartbeat": heartbeat,
+                "machine_evidence": evidence,
                 "managed_leases": [_lease(session_id=session_id, observed_at=now)],
                 "managed_leases_present": True,
                 "owner_id": 7,
@@ -801,8 +799,9 @@ async def test_shadow_reducer_rebinds_only_new_same_run_generation(daemon_paths,
                 {
                     "heartbeat": {
                         **_heartbeat(device_id="cinder", received_at=observed_at, digest=f"rotation-{index}"),
-                        "raw_json": json.dumps({"machine_evidence": evidence}),
+                        "raw_json": "{}",
                     },
+                    "machine_evidence": evidence,
                     "managed_leases": [_lease(session_id=session_id, observed_at=observed_at, provider="pi")],
                     "managed_leases_present": True,
                     "owner_id": 7,
@@ -832,9 +831,9 @@ async def test_shadow_reducer_validation_failure_preserves_legacy_heartbeat(daem
     evidence = _schema_v3_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
     evidence["identities"][0]["evidence_hash"] = "0" * 64
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="invalid-evidence")
-    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
     params = {
         "heartbeat": heartbeat,
+        "machine_evidence": evidence,
         "managed_leases": [_lease(session_id=session_id, observed_at=now)],
         "managed_leases_present": True,
         "owner_id": 7,
@@ -888,9 +887,9 @@ async def test_shadow_reducer_statement_failure_aborts_the_whole_observation(dae
     session_id = str(uuid4())
     evidence = _schema_v3_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="statement-failure")
-    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
     params = {
         "heartbeat": heartbeat,
+        "machine_evidence": evidence,
         "managed_leases": [_lease(session_id=session_id, observed_at=now)],
         "managed_leases_present": True,
         "owner_id": 7,
@@ -937,9 +936,9 @@ async def test_unusable_evidence_still_lets_the_heartbeat_commit(daemon_paths, m
     session_id = str(uuid4())
     evidence = _schema_v3_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="invalid-evidence")
-    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
     params = {
         "heartbeat": heartbeat,
+        "machine_evidence": evidence,
         "managed_leases": [_lease(session_id=session_id, observed_at=now)],
         "managed_leases_present": True,
         "owner_id": 7,
@@ -983,9 +982,9 @@ async def test_shadow_reducer_invalidated_connection_aborts_outer_heartbeat(daem
     session_id = str(uuid4())
     evidence = _schema_v3_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="invalidated")
-    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
     params = {
         "heartbeat": heartbeat,
+        "machine_evidence": evidence,
         "managed_leases": [_lease(session_id=session_id, observed_at=now)],
         "managed_leases_present": True,
         "owner_id": 7,
@@ -1017,9 +1016,9 @@ async def test_shadow_reducer_has_no_source_disable_kill_switch(daemon_paths, mo
     session_id = str(uuid4())
     evidence = _schema_v3_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="disabled-source")
-    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
     params = {
         "heartbeat": heartbeat,
+        "machine_evidence": evidence,
         "managed_leases": [_lease(session_id=session_id, observed_at=now)],
         "managed_leases_present": True,
         "owner_id": 7,
@@ -1054,9 +1053,9 @@ async def test_shadow_parity_is_independent_and_upserts_bounded_candidate_delta(
     evidence["control"][0]["state"] = "degraded"
     evidence["identities"][0]["evidence_hash"] = canonical_evidence_hash(evidence["control"][0])
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="parity-seed")
-    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
     params = {
         "heartbeat": heartbeat,
+        "machine_evidence": evidence,
         "managed_leases": [_lease(session_id=session_id, observed_at=now)],
         "managed_leases_present": True,
         "owner_id": 7,
@@ -1097,8 +1096,8 @@ async def test_shadow_parity_is_independent_and_upserts_bounded_candidate_delta(
                 **heartbeat,
                 "received_at": (now + timedelta(seconds=3)).isoformat(),
                 "sessions_digest": "parity-stale",
-                "raw_json": json.dumps({"machine_evidence": stale_evidence}),
             },
+            "machine_evidence": stale_evidence,
         }
         stale = await client.call("machine.heartbeat.apply.v2", stale_params)
         exact_replay = await client.call("machine.heartbeat.apply.v2", stale_params)
@@ -1144,9 +1143,9 @@ async def test_shadow_parity_uses_normalized_legacy_control_rows(daemon_paths, m
     session_id = str(uuid4())
     evidence = _schema_v3_control_evidence(session_id=session_id, observed_at=now)
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="normalized-parity")
-    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
     params = {
         "heartbeat": heartbeat,
+        "machine_evidence": evidence,
         "managed_leases": [
             _lease(
                 session_id=session_id,
@@ -1189,9 +1188,9 @@ async def test_shadow_parity_skips_when_legacy_snapshot_is_unavailable(daemon_pa
     session_id = str(uuid4())
     evidence = _schema_v3_control_evidence(session_id=session_id, observed_at=now)
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="snapshot-seed")
-    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
     seed = {
         "heartbeat": heartbeat,
+        "machine_evidence": evidence,
         "managed_leases": [_lease(session_id=session_id, observed_at=now)],
         "managed_leases_present": True,
         "owner_id": 7,
@@ -1247,9 +1246,9 @@ async def test_shadow_parity_failure_rolls_back_only_parity_savepoint(daemon_pat
     evidence["control"][0]["state"] = "degraded"
     evidence["identities"][0]["evidence_hash"] = canonical_evidence_hash(evidence["control"][0])
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="parity-failure")
-    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
     params = {
         "heartbeat": heartbeat,
+        "machine_evidence": evidence,
         "managed_leases": [_lease(session_id=session_id, observed_at=now)],
         "managed_leases_present": True,
         "owner_id": 7,
@@ -1286,9 +1285,9 @@ async def test_outer_rollback_does_not_advance_shadow_parity_count_cache(daemon_
     evidence["control"][0]["state"] = "degraded"
     evidence["identities"][0]["evidence_hash"] = canonical_evidence_hash(evidence["control"][0])
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="outer-rollback")
-    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
     params = {
         "heartbeat": heartbeat,
+        "machine_evidence": evidence,
         "managed_leases": [_lease(session_id=session_id, observed_at=now)],
         "managed_leases_present": True,
         "owner_id": 7,
@@ -1331,9 +1330,9 @@ async def test_shadow_parity_explicitly_reports_activity_as_unsupported(daemon_p
     session_id = str(uuid4())
     evidence = _schema_v3_evidence(session_id=session_id, run_id=str(uuid4()), observed_at=now)
     heartbeat = _heartbeat(device_id="cinder", received_at=now, digest="activity-unsupported")
-    heartbeat["raw_json"] = json.dumps({"machine_evidence": evidence})
     params = {
         "heartbeat": heartbeat,
+        "machine_evidence": evidence,
         "managed_leases": [_lease(session_id=session_id, observed_at=now)],
         "managed_leases_present": True,
         "owner_id": 7,

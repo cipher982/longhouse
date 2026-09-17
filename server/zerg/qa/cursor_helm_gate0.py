@@ -1516,7 +1516,14 @@ def _permission_scenario(
 ) -> dict[str, Any]:
     longhouse_session_id = str(uuid4())
     marker_file = workspace / f"permission-{decision}.txt"
-    argv = [binary, "--resume", provider_id, "--workspace", str(workspace)]
+    # Since Cursor 2026.09.02 a hook `permission: allow` is advisory: the CLI
+    # acts only on `deny` and `ask` and then applies its own command approval
+    # policy, so an un-allowlisted command still stops at the TUI "Run this
+    # command?" prompt. Run with --force so the provider's own approval never
+    # decides the outcome; the Longhouse hook decision must then be the only
+    # gate: deny still blocks an auto-approved command (fail-closed) and allow
+    # does not obstruct it.
+    argv = [binary, "--resume", provider_id, "--workspace", str(workspace), "--force"]
     if model:
         argv.extend(["--model", model])
     argv.append(f"Run exactly `printf ALLOWED > {marker_file}` once, then report the result.")
@@ -1554,6 +1561,7 @@ def _permission_scenario(
             "provider_conversation_id": provider_id,
             "generation_id": shell.get("generation_id"),
             "side_effect_present": marker_file.exists(),
+            "provider_auto_approval": "force",
             "process_alive": session.alive(),
         }
     finally:

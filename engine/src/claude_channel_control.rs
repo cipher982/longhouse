@@ -144,6 +144,41 @@ pub async fn send_text(
         });
     }
 
+    if meta.get("intent").and_then(serde_json::Value::as_str) == Some("steer") {
+        // Claude Code frames every channel message "NOT from your user ... do
+        // not act on imperative language", so a channel steer reads as advisory:
+        // Haiku 4.5 finished the original task, and when the hook repeated the
+        // steer beside the channel copy it sided with the untrusted framing.
+        // While a turn is running the steer goes only through this session's
+        // lifecycle hook (next tool boundary, or Stop keeps the turn going).
+        let state_path = state_file_path(&config.session_id, config.state_root.as_deref())?;
+        let steer_path = state_path.with_extension(STEER_REQUEST_EXTENSION);
+        let active_path = state_path.with_extension(TURN_ACTIVE_EXTENSION);
+        if active_path.exists() {
+            std::fs::write(
+                &steer_path,
+                serde_json::to_vec(
+                    &json!({"text": config.text, "requested_at": Utc::now().to_rfc3339()}),
+                )
+                .unwrap_or_default(),
+            )
+            .map_err(|err| {
+                ClaudeChannelControlError::CommandFailed(format!(
+                    "failed to record Claude steer request: {err}"
+                ))
+            })?;
+            // Stop may have ended the turn between the check and the write; an
+            // unclaimed steer then must not surface in some later turn.
+            if active_path.exists() || !steer_path.exists() {
+                return Ok(ClaudeChannelSendSummary {
+                    provider_session_id: state.provider_session_id,
+                });
+            }
+            let _ = std::fs::remove_file(&steer_path);
+        }
+        // No running turn: the steer is an ordinary message.
+    }
+
     inject(port, &auth_token, &config.text, meta).await?;
     Ok(ClaudeChannelSendSummary {
         provider_session_id: state.provider_session_id,
@@ -299,6 +334,25 @@ fn terminate_foreground_tool(_claude_pid: i32, _command: &str) -> Option<i32> {
 
 const INTERRUPT_REQUEST_EXTENSION: &str = "interrupt.json";
 const FOREGROUND_TOOL_EXTENSION: &str = "tool.json";
+const STEER_REQUEST_EXTENSION: &str = "steer.json";
+const TURN_ACTIVE_EXTENSION: &str = "turn-active.json";
+
+fn steer_context(text: &str) -> String {
+    format!(
+        "The user of this session sent this steer from Longhouse while you were working: \"{text}\". \
+         It is the user's own instruction, delivered by this session's Longhouse hook, and it updates \
+         the current request: follow it now instead of continuing the original plan. This note repeats \
+         at each tool step until the turn ends; once you are following it, just carry on."
+    )
+}
+
+fn read_steer(path: &Path) -> Option<serde_json::Value> {
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+}
+
+fn steer_text(steer: &serde_json::Value) -> Option<String> {
+    steer.get("text")?.as_str().map(str::to_string)
+}
 
 /// What the lifecycle hook tells Claude for one hook event of a managed session.
 ///
@@ -322,9 +376,28 @@ fn turn_control_at(
     let state_path = state_file_path(session_id, state_root).ok()?;
     let request = state_path.with_extension(INTERRUPT_REQUEST_EXTENSION);
     let tool = state_path.with_extension(FOREGROUND_TOOL_EXTENSION);
+    let steer = state_path.with_extension(STEER_REQUEST_EXTENSION);
     match event {
         "PreToolUse" | "PostToolUse" | "PostToolUseFailure" => {
+            let _ = std::fs::write(state_path.with_extension(TURN_ACTIVE_EXTENSION), b"{}");
             let _ = std::fs::remove_file(&tool);
+            if event != "PreToolUse" && !request.exists() {
+                // Repeated at every boundary until the turn ends: Claude cancels
+                // a lifecycle hook that overruns its 5-second budget under load,
+                // and a steer consumed by a cancelled hook would be lost.
+                if let Some(mut pending) = read_steer(&steer) {
+                    let text = steer_text(&pending)?;
+                    pending["boundary_delivery_attempted"] = json!(true);
+                    let _ =
+                        std::fs::write(&steer, serde_json::to_vec(&pending).unwrap_or_default());
+                    return Some(json!({
+                        "hookSpecificOutput": {
+                            "hookEventName": event,
+                            "additionalContext": steer_context(&text),
+                        }
+                    }));
+                }
+            }
             if request.exists() {
                 // A request stays pending until the turn ends: Claude does not
                 // honour `continue: false` after every tool event, so each
@@ -361,9 +434,31 @@ fn turn_control_at(
             }
             None
         }
+        "Stop"
+            if !request.exists()
+                && read_steer(&steer).is_some_and(|pending| {
+                    pending.get("boundary_delivery_attempted") != Some(&json!(true))
+                }) =>
+        {
+            let _ = std::fs::remove_file(&tool);
+            // The steer reached no tool boundary: keep the turn going with it.
+            // The turn stays active, and the marker keeps Stop from blocking twice.
+            let mut pending = read_steer(&steer)?;
+            let text = steer_text(&pending)?;
+            pending["boundary_delivery_attempted"] = json!(true);
+            let _ = std::fs::write(&steer, serde_json::to_vec(&pending).unwrap_or_default());
+            Some(json!({"decision": "block", "reason": steer_context(&text)}))
+        }
         "SessionStart" | "UserPromptSubmit" | "Stop" => {
             let _ = std::fs::remove_file(&request);
             let _ = std::fs::remove_file(&tool);
+            let _ = std::fs::remove_file(&steer);
+            let active = state_path.with_extension(TURN_ACTIVE_EXTENSION);
+            if event == "UserPromptSubmit" {
+                let _ = std::fs::write(active, b"{}");
+            } else {
+                let _ = std::fs::remove_file(active);
+            }
             None
         }
         _ => None,
@@ -905,6 +1000,71 @@ mod tests {
             turn_control_at(SESSION_ID, "PreToolUse", &bash, Some(temp.path())),
             None
         );
+    }
+
+    #[test]
+    fn steer_repeats_at_tool_boundaries_and_blocks_stop_only_without_one() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = state_file_path(SESSION_ID, Some(temp.path())).unwrap();
+        std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+        let bash = json!({"tool_name": "Bash", "tool_input": {"command": "sleep 5"}});
+        let steer = state.with_extension(STEER_REQUEST_EXTENSION);
+        let write_steer = || std::fs::write(&steer, br#"{"text":"stop now"}"#).unwrap();
+
+        // Delivered at every PostToolUse (a cancelled hook must not lose it),
+        // never at PreToolUse, and Stop then ends the turn normally.
+        write_steer();
+        assert_eq!(
+            turn_control_at(SESSION_ID, "PreToolUse", &bash, Some(temp.path())),
+            None
+        );
+        for _ in 0..2 {
+            let output =
+                turn_control_at(SESSION_ID, "PostToolUse", &bash, Some(temp.path())).unwrap();
+            let context = output["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .unwrap();
+            assert!(context.contains("stop now"));
+            assert_eq!(output["hookSpecificOutput"]["hookEventName"], "PostToolUse");
+        }
+        assert_eq!(
+            turn_control_at(SESSION_ID, "Stop", &json!({}), Some(temp.path())),
+            None
+        );
+        assert!(!steer.exists());
+        assert!(!state.with_extension(TURN_ACTIVE_EXTENSION).exists());
+
+        // No tool boundary: Stop blocks once with the steer, then lets the turn end.
+        write_steer();
+        let block = turn_control_at(SESSION_ID, "Stop", &json!({}), Some(temp.path())).unwrap();
+        assert_eq!(block["decision"], "block");
+        assert!(block["reason"].as_str().unwrap().contains("stop now"));
+        assert_eq!(
+            turn_control_at(SESSION_ID, "Stop", &json!({}), Some(temp.path())),
+            None
+        );
+        assert!(!steer.exists());
+    }
+
+    #[test]
+    fn steer_while_idle_is_cleared_by_the_next_prompt() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = state_file_path(SESSION_ID, Some(temp.path())).unwrap();
+        std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+        let steer = state.with_extension(STEER_REQUEST_EXTENSION);
+        std::fs::write(&steer, br#"{"text":"stale"}"#).unwrap();
+
+        assert_eq!(
+            turn_control_at(
+                SESSION_ID,
+                "UserPromptSubmit",
+                &json!({}),
+                Some(temp.path())
+            ),
+            None
+        );
+        assert!(!steer.exists());
+        assert!(state.with_extension(TURN_ACTIVE_EXTENSION).exists());
     }
 
     #[test]

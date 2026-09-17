@@ -1366,6 +1366,35 @@ def _stale_frame(old_state: Mapping[str, Any], *, text: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+_MANAGED_CONTROL_UNAVAILABLE = "Managed control channel is not connected or does not advertise this capability"
+
+
+def _control_channel_reconnecting(status: int, detail: str) -> bool:
+    """True only when the Runtime Host refused before dispatching anything.
+
+    Input answers 409 while no live channel exists. Interrupt/terminate answer
+    502 with the managed-control-unavailable message, which the dispatcher
+    returns only when transport selection or grant preparation refused: the
+    command never reached the Machine Agent. A dispatched failure carries a
+    different message and is never retried.
+    """
+
+    if status == 409:
+        return "live longhouse control channel" in detail.lower()
+    if status != 502:
+        return False
+    try:
+        body = json.loads(detail)
+    except json.JSONDecodeError:
+        return False
+    error = body.get("detail") if isinstance(body, dict) else None
+    return (
+        isinstance(error, dict)
+        and (error.get("error_code") or error.get("code")) in {"interrupt_failed", "terminate_failed"}
+        and error.get("message") == _MANAGED_CONTROL_UNAVAILABLE
+    )
+
+
 def _runtime_post(api_url: str, token: str, path: str, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
     body = None if payload is None else json.dumps(dict(payload)).encode("utf-8")
     headers = {
@@ -1391,7 +1420,7 @@ def _runtime_post(api_url: str, token: str, path: str, payload: Mapping[str, Any
             # the storage proof. The control websocket can take a few seconds
             # to re-register; do not mistake that bounded reconnect window for
             # a failed provider control path.
-            if exc.code == 409 and "live longhouse control channel" in detail.lower() and attempt < 59:
+            if _control_channel_reconnecting(exc.code, detail) and attempt < 59:
                 time.sleep(0.5)
                 continue
             raise RuntimeError(f"Runtime Host HTTP {exc.code}: {detail[:500]}") from exc

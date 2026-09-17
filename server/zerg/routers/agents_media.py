@@ -20,7 +20,7 @@ from zerg.auth.caller import Caller
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_caller
-from zerg.dependencies.browser_route_auth import get_current_browser_route_caller
+from zerg.dependencies.browser_route_auth import get_media_route_caller
 from zerg.models.agents import MediaObject
 from zerg.models.agents import SessionMediaRef
 from zerg.routers.agents_storage_v2 import media_blob_headers
@@ -349,7 +349,7 @@ async def head_media_blob(
 @browser_router.get("/{sha256}/blob")
 async def get_browser_media_blob(
     sha256: str,
-    current_user: Caller = Depends(get_current_browser_route_caller),
+    current_user: Caller = Depends(get_media_route_caller),
 ) -> Response:
     """Fetch a browser-visible media blob by hash.
 
@@ -373,7 +373,7 @@ async def get_browser_media_blob(
 @browser_router.head("/{sha256}")
 async def head_browser_media_blob(
     sha256: str,
-    current_user: Caller = Depends(get_current_browser_route_caller),
+    current_user: Caller = Depends(get_media_route_caller),
 ) -> Response:
     """Cheap browser integrity probe for a visible media blob."""
 

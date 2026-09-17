@@ -852,18 +852,64 @@ def test_heartbeat_accepts_and_retains_typed_machine_evidence_without_reducing_i
     )
     assert response.status_code == 204, response.text
 
-    retained = json.loads(_one_stamp()["raw_json"])["machine_evidence"]
-    assert retained["schema_version"] == 1
-    assert {fact["provider"] for fact in retained["process"]} == {
-        "codex",
-        "claude",
-        "opencode",
-        "cursor",
-        "antigravity",
-    }
-    assert retained["process"][0]["process_start_time"] == "Thu May  8 11:59:00 2026"
+    # Evidence travels as its own field and is deliberately NOT duplicated into
+    # the stamp's size-capped forensic copy: a machine whose evidence outgrew
+    # that cap used to have every heartbeat refused, which reads as a machine
+    # that went offline.
+    retained = json.loads(_one_stamp()["raw_json"])
+    assert "machine_evidence" not in retained
+    assert retained["version"] == "phase-2"
     # Typed control evidence is validation-only. It must not silently become a
     # second lifecycle/control reducer.
+    assert _leases() == []
+
+
+def test_heartbeat_lands_when_machine_evidence_outgrows_the_stamp_copy(live_catalog, live_catalog_client):
+    """A large evidence payload must not cost the machine its liveness.
+
+    Evidence used to ride the stamp's ``raw_json``, which catalogd validates
+    against a 512 KiB cap. A real machine's evidence crossed that cap (hosted
+    ``cinder`` on 2026-09-17 sent 562 KiB) and every heartbeat became a
+    non-retryable catalog failure, so the machine read as offline for as long
+    as its evidence stayed large.
+    """
+
+    evidence = _machine_evidence_payload()
+    template = evidence["process"][0]
+    evidence["process"] = [
+        {**template, "provider": "codex", "pid": 1_000 + index, "cwd": f"/tmp/oversize/{index:05d}"} for index in range(2_000)
+    ]
+    assert len(json.dumps(evidence)) > 512 * 1024
+
+    response = live_catalog_client.post(
+        "/agents/heartbeat",
+        headers=_headers(live_catalog),
+        json={"version": "oversize-evidence", "daemon_pid": 42, "machine_evidence": evidence},
+    )
+    assert response.status_code == 204, response.text
+
+    stamp = _one_stamp()
+    assert stamp["version"] == "oversize-evidence"
+    assert "machine_evidence" not in json.loads(stamp["raw_json"])
+
+
+def test_heartbeat_drops_evidence_over_the_transport_budget_and_still_lands(live_catalog, live_catalog_client, monkeypatch):
+    headers = _headers(live_catalog)
+    evidence = _machine_evidence_payload()
+    # A budget this small stands in for a machine whose evidence outgrew the
+    # real one; the heartbeat must still commit without it.
+    monkeypatch.setattr("zerg.routers.heartbeat.MAX_MACHINE_EVIDENCE_BYTES", 256)
+
+    response = live_catalog_client.post(
+        "/agents/heartbeat",
+        headers=headers,
+        json={"version": "over-budget", "daemon_pid": 42, "machine_evidence": evidence},
+    )
+    assert response.status_code == 204, response.text
+
+    stamp = _one_stamp()
+    assert stamp["version"] == "over-budget"
+    assert "machine_evidence" not in json.loads(stamp["raw_json"])
     assert _leases() == []
 
 
@@ -882,10 +928,9 @@ def test_heartbeat_accepts_reducer_grade_identity_without_promoting_authority(li
     )
     assert response.status_code == 204, response.text
 
-    retained = json.loads(_one_stamp()["raw_json"])["machine_evidence"]
-    assert retained["schema_version"] == 2
-    assert retained["identities"][0]["subject_key"].startswith("process:")
-    assert len(validate_machine_evidence_identities(retained)) == 1
+    retained = json.loads(_one_stamp()["raw_json"])
+    assert "machine_evidence" not in retained
+    assert len(validate_machine_evidence_identities(evidence)) == 1
     assert _leases() == []
 
 
@@ -962,11 +1007,13 @@ def test_heartbeat_admits_omp_evidence_and_omp_process_exit_authority():
         }
     )
 
+    # The heartbeat parser treats evidence as opaque bulk data; it is typed
+    # only when something is going to use it (`_accepted_machine_evidence`).
     evidence = payload.machine_evidence
     assert evidence is not None
-    assert evidence.control[0].provider == "omp"
-    assert evidence.continuation[0].provider == "omp"
-    assert evidence.run[0].source == "omp_helm_scan"
+    assert evidence["control"][0]["provider"] == "omp"
+    assert evidence["continuation"][0]["provider"] == "omp"
+    assert evidence["run"][0]["source"] == "omp_helm_scan"
 
 
 @pytest.mark.parametrize("unavailable_reason", ("execution_owner_alive", "owner_unverifiable"))
@@ -1056,8 +1103,9 @@ def test_heartbeat_accepts_live_omp_owner_with_invalid_resume_reason(live_catalo
     )
     assert response.status_code == 204, response.text
 
-    retained = json.loads(_one_stamp()["raw_json"])["machine_evidence"]
-    assert retained["continuation"][0]["unavailable_reason"] == unavailable_reason
+    retained = json.loads(_one_stamp()["raw_json"])
+    assert "machine_evidence" not in retained
+    assert evidence["continuation"][0]["unavailable_reason"] == unavailable_reason
     heads = [row for row in _catalog_rows(FactHead.__table__) if row["family"] == "control" and row["session_id"] == session_id]
     assert len(heads) == 1
     assert heads[0]["subject_key"] == f"connection:{connection_id}:{lease_generation}"
@@ -1068,7 +1116,14 @@ def test_heartbeat_accepts_live_omp_owner_with_invalid_resume_reason(live_catalo
     assert connections[0]["lease_generation"] == lease_generation
 
 
-def test_heartbeat_machine_evidence_rejects_invalid_and_unbounded_claims(live_catalog, live_catalog_client):
+def test_heartbeat_lands_and_drops_machine_evidence_it_cannot_use(live_catalog, live_catalog_client):
+    """Unusable evidence costs evidence, never the machine's liveness.
+
+    Every payload here was refused with a 422 before this contract: one bad
+    evidence document silenced the machine it came from, and a machine that
+    stops beating reads as offline to every client.
+    """
+
     headers = _headers(live_catalog)
     invalid_evidence = []
 
@@ -1122,16 +1177,26 @@ def test_heartbeat_machine_evidence_rejects_invalid_and_unbounded_claims(live_ca
     oversized["process"] = [process[1]] * 2_049
     invalid_evidence.append(oversized)
 
-    for evidence in invalid_evidence:
+    # Any JSON value: a machine that sends a list where a document belongs has
+    # still told Longhouse it is alive.
+    invalid_evidence.append([{"process": []}])
+    invalid_evidence.append("not-a-document")
+
+    for index, evidence in enumerate(invalid_evidence):
         response = live_catalog_client.post(
             "/agents/heartbeat",
             headers=headers,
-            json={"version": "phase-2", "daemon_pid": 42, "machine_evidence": evidence},
+            json={"version": f"phase-2-{index}", "daemon_pid": 42, "machine_evidence": evidence},
         )
-        assert response.status_code == 422
+        assert response.status_code == 204, response.text
 
-    # A rejected payload never reaches the catalog.
-    assert _stamps() == []
+    # Every heartbeat landed, none retained the evidence it could not use, and
+    # none of that evidence reached the catalog as authority.
+    stamps = _stamps()
+    assert sorted(stamp["version"] for stamp in stamps) == [f"phase-2-{index}" for index in range(len(invalid_evidence))]
+    assert all("machine_evidence" not in json.loads(stamp["raw_json"]) for stamp in stamps)
+    assert _leases() == []
+    assert [row for row in _catalog_rows(FactHead.__table__)] == []
 
 
 def test_heartbeat_rejects_null_resolved_sessions(live_catalog, live_catalog_client):

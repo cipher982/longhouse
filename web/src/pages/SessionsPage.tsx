@@ -280,6 +280,9 @@ export default function SessionsPage() {
   const total = data?.total || 0;
   const hasRealSessions = data?.has_real_sessions ?? true;
   const groupedQueryMode = data?.query_grouping_mode === "grouped_results";
+  // A partial answer is a fact about the result, not a detail: without this the
+  // AI toggle keeps claiming meaning search while showing keyword matches.
+  const denseLaneDegraded = aiSearch && (data?.degraded ?? []).some((failure) => failure.lane === "dense");
   // Non-grouped browse is capped at MAX_SESSION_LIMIT by the API; once we've
   // loaded that many, hide "Load More" rather than dead-ending (the click would
   // clamp back to the same limit and fetch nothing new).
@@ -527,6 +530,12 @@ export default function SessionsPage() {
           </div>
         )}
 
+        {denseLaneDegraded && (
+          <div className="sessions-llm-hint">
+            Meaning search is unavailable, so these results are keyword matches.
+          </div>
+        )}
+
         {/* Compact Toolbar */}
         <div className="sessions-toolbar">
           <div className="sessions-search-row">
@@ -542,7 +551,13 @@ export default function SessionsPage() {
               className={`sessions-ai-toggle${aiSearch ? " sessions-ai-toggle--active" : ""}`}
               onClick={handleAiSearchToggle}
               aria-pressed={aiSearch}
-              title={aiSearch ? "AI search on — finds by meaning (slower)" : "AI search — finds sessions by meaning"}
+              title={
+                aiSearch
+                  ? denseLaneDegraded
+                    ? "AI search unavailable — these are keyword matches"
+                    : "AI search on — finds by meaning (slower)"
+                  : "AI search — finds sessions by meaning"
+              }
             >
               {aiSearch && (isLoading || aiSearchPending) ? (
                 <Spinner size="sm" />

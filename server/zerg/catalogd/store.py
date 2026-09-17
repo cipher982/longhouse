@@ -69,7 +69,9 @@ from zerg.catalogd.models import StorageSession
 from zerg.catalogd.schema import catalog_meta
 from zerg.catalogd.schema import storage_telemetry_counters
 from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
+from zerg.machine_evidence import MAX_MACHINE_EVIDENCE_BYTES
 from zerg.machine_evidence import canonical_evidence_hash
+from zerg.machine_evidence import machine_evidence_bytes
 from zerg.models.live_store import LiveAPNSDeviceRegistration
 from zerg.models.live_store import LiveAPNSLiveActivityRegistration
 from zerg.models.live_store import LiveArchiveOutbox
@@ -155,6 +157,29 @@ def _has_durable_timeline_content(row) -> Any:
         row.c.assistant_messages > 0,
         row.c.tool_calls > 0,
     )
+
+
+def _timeline_window_order_at(session_id_column, activity_at) -> Any:
+    """Newest live-evidence observation, falling back to transcript activity.
+
+    The page window decides which sessions a client ever sees, and the client
+    ranks what it receives by the card anchor the projector derives from these
+    same heads. Ordering the window by transcript recency alone dropped a
+    live-but-quiet Helm session below the page cut — terminal attached, no
+    transcript write for a day — so it left Live now entirely while the browser
+    would have ranked it first. ``_empty_human_helm_is_open`` already consults
+    these heads for admission; this makes the window *order* agree with the same
+    evidence. ``max`` here is SQLite's two-argument scalar function, and the
+    head term is coalesced first so both arguments are non-null.
+    """
+
+    head = FactHead.__table__
+    live_at = (
+        select(func.max(head.c.observed_at))
+        .where(head.c.session_id == session_id_column, head.c.family.in_(("activity", "control")))
+        .scalar_subquery()
+    )
+    return func.max(func.coalesce(live_at, activity_at), activity_at)
 
 
 def _empty_human_helm_is_open(*, session_id, thread_id, observed_at: datetime) -> Any:
@@ -2308,6 +2333,7 @@ class CatalogStore:
         managed_leases: list[dict[str, Any]],
         managed_leases_present: bool,
         owner_id: int | None,
+        machine_evidence: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Atomically persist and reconcile one hosted Machine Agent heartbeat.
 
@@ -2431,6 +2457,7 @@ class CatalogStore:
             shadow_reducer = _apply_shadow_reducer(
                 connection,
                 heartbeat=heartbeat,
+                machine_evidence=machine_evidence,
                 received_at=received_at,
                 commit_seq=commit_seq,
             )
@@ -2438,6 +2465,7 @@ class CatalogStore:
             shadow_parity, next_shadow_parity_delta_count = _apply_shadow_parity(
                 connection,
                 heartbeat=heartbeat,
+                machine_evidence=machine_evidence,
                 managed_leases_present=managed_leases_present,
                 received_at=received_at,
                 commit_seq=commit_seq,
@@ -5623,13 +5651,21 @@ class CatalogStore:
                     storage.c.last_console_result_at > storage.c.last_read_at,
                 ),
             )
+            legacy_order_at = _timeline_window_order_at(
+                card.c.session_id,
+                func.coalesce(card.c.last_activity_at, card.c.started_at),
+            )
+            storage_order_at = _timeline_window_order_at(
+                storage.c.session_id,
+                func.coalesce(storage.c.last_activity_at, storage.c.started_at),
+            )
             legacy_where = [
-                or_(func.coalesce(card.c.last_activity_at, card.c.started_at) >= since, legacy_unread),
+                or_(legacy_order_at >= since, legacy_unread),
                 catalog.c.user_state.notin_(("archived", "snoozed", "deleted")),
                 ~select(storage.c.session_id).where(storage.c.session_id == card.c.session_id).exists(),
             ]
             storage_where = [
-                or_(storage.c.last_activity_at >= since, storage_unread),
+                or_(storage_order_at >= since, storage_unread),
                 storage.c.user_state.notin_(("archived", "snoozed", "deleted")),
                 ~select(tombstones.c.session_id).where(tombstones.c.session_id == storage.c.session_id).exists(),
             ]
@@ -5761,22 +5797,24 @@ class CatalogStore:
             candidates = union_all(
                 select(
                     card.c.session_id.label("session_id"),
-                    func.coalesce(card.c.last_activity_at, card.c.started_at).label("order_at"),
+                    legacy_order_at.label("order_at"),
                     case((legacy_unread, 1), else_=0).label("unread"),
                 )
                 .select_from(joined)
                 .where(*legacy_where),
                 select(
                     storage.c.session_id.label("session_id"),
-                    storage.c.last_activity_at.label("order_at"),
+                    storage_order_at.label("order_at"),
                     case((storage_unread, 1), else_=0).label("unread"),
                 )
                 .select_from(storage_joined)
                 .where(*storage_where),
             ).subquery()
             total = int(connection.execute(select(func.count()).select_from(candidates)).scalar_one())
-            # Unread first so acknowledgement-pending sessions can never be
-            # paged out of the first window; clients do their own visual sort.
+            # Unread first, then the newest live evidence: a session the served
+            # state calls open, or whose Console result nobody has read, must
+            # never be paged out of the first window. Clients keep doing their
+            # own visual sort.
             session_ids = [
                 str(value)
                 for value in connection.execute(
@@ -6142,13 +6180,21 @@ class CatalogStore:
                         raise ValueError("shadow outcome is missing")
                     reducer_status = reducer.get("status")
                     parity_status = parity.get("status")
-                    if reducer_status not in {"disabled", "no_evidence", "unsupported_schema", "applied", "failed"}:
+                    if reducer_status not in {
+                        "disabled",
+                        "no_evidence",
+                        "unsupported_schema",
+                        "oversize_evidence",
+                        "applied",
+                        "failed",
+                    }:
                         raise ValueError("unknown shadow reducer status")
                     if parity_status not in {
                         "disabled",
                         "legacy_unavailable",
                         "no_evidence",
                         "unsupported_schema",
+                        "oversize_evidence",
                         "compared",
                         "failed",
                     }:
@@ -14647,6 +14693,7 @@ def _apply_shadow_reducer(
     connection,
     *,
     heartbeat: dict[str, Any],
+    machine_evidence: dict[str, Any] | None,
     received_at: datetime,
     commit_seq: int,
 ) -> dict[str, Any]:
@@ -14655,7 +14702,9 @@ def _apply_shadow_reducer(
     timer = _StageTimer("shadow_reducer")
     try:
         with connection.begin_nested():
-            evidence_status, facts = _shadow_facts_from_heartbeat(heartbeat)
+            evidence_status, facts = _shadow_facts_from_heartbeat(
+                machine_evidence=machine_evidence,
+            )
             if evidence_status != "ready":
                 return {"status": evidence_status}
             timer.mark("extract_facts")
@@ -14918,6 +14967,7 @@ def _apply_shadow_parity(
     connection,
     *,
     heartbeat: dict[str, Any],
+    machine_evidence: dict[str, Any] | None,
     managed_leases_present: bool,
     received_at: datetime,
     commit_seq: int,
@@ -14932,7 +14982,9 @@ def _apply_shadow_parity(
         return {"status": "legacy_unavailable"}, known_delta_count
     try:
         with connection.begin_nested():
-            evidence_status, facts = _shadow_facts_from_heartbeat(heartbeat)
+            evidence_status, facts = _shadow_facts_from_heartbeat(
+                machine_evidence=machine_evidence,
+            )
             if evidence_status != "ready":
                 return {"status": evidence_status}, known_delta_count
             candidates = {
@@ -15045,15 +15097,27 @@ def _apply_shadow_parity(
         return {"status": "failed", "reason": "invalid_evidence"}, original_delta_count
 
 
-def _shadow_facts_from_heartbeat(heartbeat: dict[str, Any]):
-    raw_json = heartbeat.get("raw_json")
-    if not isinstance(raw_json, str) or not raw_json:
+def _shadow_facts_from_heartbeat(
+    *,
+    machine_evidence: dict[str, Any] | None,
+):
+    """Facts for this heartbeat's schema-v3 evidence, or why there are none.
+
+    Evidence arrives as its own argument. It used to ride the stamp's
+    ``raw_json``, which is a size-capped forensic copy of the payload, so a
+    machine whose evidence grew past the cap had every heartbeat refused --
+    liveness died with the evidence it carried.
+    """
+
+    evidence = machine_evidence
+    if not isinstance(evidence, dict):
         return "no_evidence", []
-    payload = json.loads(raw_json)
-    if not isinstance(payload, dict) or "machine_evidence" not in payload:
-        return "no_evidence", []
-    evidence = payload["machine_evidence"]
-    if not isinstance(evidence, dict) or evidence.get("schema_version") != 3:
+    # The Runtime Host drops oversize evidence before it reaches the wire; this
+    # repeats the bound for anyone calling the RPC directly, and reports it as
+    # evidence state rather than refusing the heartbeat.
+    if machine_evidence_bytes(evidence) > MAX_MACHINE_EVIDENCE_BYTES:
+        return "oversize_evidence", []
+    if evidence.get("schema_version") != 3:
         return "unsupported_schema", []
     facts = reducer_facts_from_machine_evidence(evidence)
     if len(facts) > MAX_REDUCER_FACTS:

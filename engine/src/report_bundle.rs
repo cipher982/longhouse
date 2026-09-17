@@ -2,14 +2,16 @@
 
 use anyhow::{bail, Context, Result};
 use futures_util::future::try_join_all;
-use reqwest::Client;
+use reqwest::{Client, Response};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use uuid::Uuid;
 
+const MAX_MANIFEST_BYTES: u64 = 256 * 1024;
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_TOTAL_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_FILES: usize = 6;
@@ -38,6 +40,7 @@ fn validate_name(name: &str) -> Result<()> {
     if name.is_empty()
         || name == "."
         || name == ".."
+        || name.eq_ignore_ascii_case("manifest.json")
         || name.contains('/')
         || name.contains('\\')
         || name
@@ -73,8 +76,15 @@ fn validate_manifest(manifest: &ReportManifest, report_id: &str) -> Result<()> {
         bail!("report_stage_failed: invalid report file count")
     }
     let mut total = 0_u64;
+    let mut names = HashSet::with_capacity(manifest.files.len());
     for file in &manifest.files {
         validate_name(&file.name)?;
+        if !names.insert(&file.name) {
+            bail!(
+                "report_stage_failed: duplicate report filename {}",
+                file.name
+            )
+        }
         if file.byte_size == 0 || file.byte_size > MAX_FILE_BYTES {
             bail!(
                 "report_stage_failed: invalid report file size for {}",
@@ -108,6 +118,78 @@ fn resolve_url(api_url: &str, report_id: &str, filename: Option<&str>) -> String
         Some(name) => format!("{base}/api/agents/reports/{report_id}/files/{name}"),
         None => format!("{base}/api/agents/reports/{report_id}/manifest"),
     }
+}
+
+async fn read_bounded_response(
+    mut response: Response,
+    max_bytes: u64,
+    context: &str,
+) -> Result<Vec<u8>> {
+    if response
+        .content_length()
+        .is_some_and(|content_length| content_length > max_bytes)
+    {
+        bail!("report_stage_failed: {context} response exceeds byte limit")
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .with_context(|| format!("report_stage_failed: reading {context} response"))?
+    {
+        let next_len = bytes.len() as u64 + chunk.len() as u64;
+        if next_len > max_bytes {
+            bail!("report_stage_failed: {context} response exceeds byte limit")
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
+fn read_manifest(path: &Path, report_id: &str) -> Result<ReportManifest> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!("report_stage_failed: manifest is not a regular file")
+    }
+    if metadata.len() > MAX_MANIFEST_BYTES {
+        bail!("report_stage_failed: staged manifest exceeds byte limit")
+    }
+    let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let manifest: ReportManifest =
+        serde_json::from_slice(&bytes).context("report_stage_failed: invalid staged manifest")?;
+    validate_manifest(&manifest, report_id)?;
+    Ok(manifest)
+}
+
+fn verify_staged_file(path: &Path, file: &ReportFile) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        bail!("report_stage_failed: staged report file is not regular")
+    }
+    if metadata.len() != file.byte_size {
+        bail!("report_stage_failed: staged report size mismatch for {}", file.name)
+    }
+    let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let actual = format!("{:x}", Sha256::digest(&bytes));
+    if actual != file.sha256.to_ascii_lowercase() {
+        bail!("report_stage_failed: staged report sha256 mismatch for {}", file.name)
+    }
+    Ok(())
+}
+
+fn verify_staged_bundle(report_dir: &Path, report_id: &str) -> Result<()> {
+    let metadata = fs::symlink_metadata(report_dir)
+        .with_context(|| format!("reading {}", report_dir.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!("report_stage_failed: staged report directory is not a regular directory")
+    }
+    let manifest = read_manifest(&report_dir.join("manifest.json"), report_id)?;
+    for file in &manifest.files {
+        verify_staged_file(&report_dir.join(&file.name), file)?;
+    }
+    Ok(())
 }
 
 fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -150,8 +232,25 @@ pub async fn stage_bug_report(
         .join(".longhouse")
         .join("bug-reports")
         .join(&normalized_report_id);
-    if report_dir.is_dir() {
-        return Ok(report_dir);
+    match fs::symlink_metadata(&report_dir) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                bail!("report_stage_failed: staged report directory is not a regular directory")
+            }
+            if verify_staged_bundle(&report_dir, &normalized_report_id).is_ok() {
+                return Ok(report_dir);
+            }
+            fs::remove_dir_all(&report_dir).with_context(|| {
+                format!(
+                    "report_stage_failed: removing corrupt staged report {}",
+                    report_dir.display()
+                )
+            })?;
+        }
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(error).with_context(|| format!("reading {}", report_dir.display()));
+        }
+        Err(_) => {}
     }
 
     let response = client
@@ -163,9 +262,9 @@ pub async fn stage_bug_report(
         .context("report_stage_failed: manifest request")?
         .error_for_status()
         .context("report_stage_failed: manifest response")?;
-    let manifest: ReportManifest = response
-        .json()
-        .await
+    let manifest_bytes =
+        read_bounded_response(response, MAX_MANIFEST_BYTES, "manifest").await?;
+    let manifest: ReportManifest = serde_json::from_slice(&manifest_bytes)
         .context("report_stage_failed: invalid manifest JSON")?;
     validate_manifest(&manifest, &normalized_report_id)?;
 
@@ -193,7 +292,7 @@ pub async fn stage_bug_report(
     let file_bytes = try_join_all(manifest.files.iter().map(|file| {
         let report_id = normalized_report_id.clone();
         async move {
-            let bytes = client
+            let response = client
                 .get(resolve_url(api_url, &report_id, Some(&file.name)))
                 .header("X-Agents-Token", api_token)
                 .timeout(FETCH_TIMEOUT)
@@ -201,10 +300,8 @@ pub async fn stage_bug_report(
                 .await
                 .with_context(|| format!("report_stage_failed: file request {}", file.name))?
                 .error_for_status()
-                .with_context(|| format!("report_stage_failed: file response {}", file.name))?
-                .bytes()
-                .await
-                .with_context(|| format!("report_stage_failed: file body {}", file.name))?;
+                .with_context(|| format!("report_stage_failed: file response {}", file.name))?;
+            let bytes = read_bounded_response(response, file.byte_size, &file.name).await?;
             if bytes.len() as u64 != file.byte_size {
                 bail!("report_stage_failed: size mismatch for {}", file.name);
             }
@@ -220,19 +317,75 @@ pub async fn stage_bug_report(
     for (name, bytes) in file_bytes {
         write_private(&staging.path.join(&name), &bytes)?;
     }
+    verify_staged_bundle(&staging.path, &normalized_report_id)?;
     match fs::rename(&staging.path, &report_dir) {
         Ok(()) => staging.published = true,
-        Err(_error) if report_dir.is_dir() => {}
         Err(error) => {
+            if fs::symlink_metadata(&report_dir).is_ok() {
+                verify_staged_bundle(&report_dir, &normalized_report_id)?;
+                return Ok(report_dir);
+            }
             return Err(error).with_context(|| format!("publishing {}", report_dir.display()));
         }
     }
+
     Ok(report_dir)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_manifest, ReportFile, ReportManifest, MAX_FILE_BYTES};
+    use super::{
+        validate_manifest, verify_staged_bundle, verify_staged_file, ReportFile, ReportManifest,
+        MAX_FILE_BYTES,
+    };
+    use sha2::{Digest, Sha256};
+    use std::fs;
+
+    #[test]
+    fn staged_file_rejects_size_mismatch() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("context.json");
+        let bytes = b"{\"ok\":true}";
+        fs::write(&path, bytes).unwrap();
+        let file = ReportFile {
+            name: "context.json".to_string(),
+            mime_type: "application/json".to_string(),
+            byte_size: bytes.len() as u64 + 1,
+            sha256: format!("{:x}", Sha256::digest(bytes)),
+            kind: "context".to_string(),
+        };
+
+        let error = verify_staged_file(&path, &file).unwrap_err();
+        assert!(error.to_string().contains("size mismatch"));
+    }
+
+    #[test]
+    fn staged_bundle_rejects_sha_mismatch() {
+        let temp = tempfile::tempdir().unwrap();
+        let report_dir = temp.path().join("report-1");
+        fs::create_dir(&report_dir).unwrap();
+        let bytes = b"{\"ok\":true}";
+        fs::write(report_dir.join("context.json"), bytes).unwrap();
+        fs::write(
+            report_dir.join("manifest.json"),
+            serde_json::json!({
+                "schema_version": 1,
+                "report_id": "report-1",
+                "files": [{
+                    "name": "context.json",
+                    "mime_type": "application/json",
+                    "byte_size": bytes.len(),
+                    "sha256": "0".repeat(64),
+                    "kind": "context",
+                }],
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let error = verify_staged_bundle(&report_dir, "report-1").unwrap_err();
+        assert!(error.to_string().contains("sha256 mismatch"));
+    }
 
     #[test]
     fn manifest_rejects_traversal_and_oversize_files() {
@@ -248,6 +401,19 @@ mod tests {
             }],
         };
         assert!(validate_manifest(&traversal, "report-1").is_err());
+        let manifest_collision = ReportManifest {
+            schema_version: 1,
+            report_id: "report-1".to_string(),
+            files: vec![ReportFile {
+                name: "manifest.json".to_string(),
+                mime_type: "application/json".to_string(),
+                byte_size: 1,
+                sha256: "0".repeat(64),
+                kind: "context".to_string(),
+            }],
+        };
+        assert!(validate_manifest(&manifest_collision, "report-1").is_err());
+
 
         let oversized = ReportManifest {
             schema_version: 1,
@@ -261,5 +427,30 @@ mod tests {
             }],
         };
         assert!(validate_manifest(&oversized, "report-1").is_err());
+    }
+
+    #[test]
+    fn manifest_rejects_duplicate_file_names() {
+        let duplicate = ReportManifest {
+            schema_version: 1,
+            report_id: "report-1".to_string(),
+            files: vec![
+                ReportFile {
+                    name: "context.json".to_string(),
+                    mime_type: "application/json".to_string(),
+                    byte_size: 1,
+                    sha256: "0".repeat(64),
+                    kind: "context".to_string(),
+                },
+                ReportFile {
+                    name: "context.json".to_string(),
+                    mime_type: "application/json".to_string(),
+                    byte_size: 1,
+                    sha256: "0".repeat(64),
+                    kind: "context".to_string(),
+                },
+            ],
+        };
+        assert!(validate_manifest(&duplicate, "report-1").is_err());
     }
 }

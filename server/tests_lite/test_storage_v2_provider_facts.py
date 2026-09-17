@@ -349,6 +349,7 @@ def test_workspace_envelope_stamps_turn_end_and_last_turn():
     events = [_event("u-1", "user", t0), _event("a-1", "assistant", t0 + timedelta(minutes=2))]
     facts = [{"kind": "turn.duration", "at": t0 + timedelta(minutes=2, seconds=9), "payload": {"duration_ms": 129_299}}]
     envelope = _workspace_envelope(
+        owner_id=7,
         session_id=session_id,
         session=session,
         session_commit_seq="7",
@@ -482,6 +483,7 @@ def test_workspace_envelope_serves_the_recap():
     )
     t0 = datetime(2026, 9, 2, 23, 10, 5, tzinfo=UTC)
     envelope = _workspace_envelope(
+        owner_id=7,
         session_id=session_id,
         session=session,
         session_commit_seq="7",

@@ -846,6 +846,58 @@ describe("SessionsPage", () => {
     });
   });
 
+  it("reports a dead AI lane instead of claiming it ran", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        ...makeSessionsResponse(),
+        lanes: ["lexical"],
+        degraded: [
+          {
+            lane: "dense",
+            status_code: 503,
+            code: "search_unavailable",
+            message: "The derived search index is unavailable.",
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline?query=provider&mode=hybrid");
+
+    expect(
+      await screen.findByText("Meaning search is unavailable, so these results are keyword matches."),
+    ).toBeInTheDocument();
+    expect(screen.getByTitle("AI search unavailable — these are keyword matches")).toBeInTheDocument();
+  });
+
+  it("does not report a degraded lane the request never asked for", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        ...makeSessionsResponse(),
+        lanes: ["lexical"],
+        degraded: [
+          {
+            lane: "dense",
+            status_code: 503,
+            code: "search_unavailable",
+            message: "The derived search index is unavailable.",
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline?query=provider");
+
+    await screen.findByPlaceholderText("Search sessions");
+    expect(screen.queryByText(/Meaning search is unavailable/)).not.toBeInTheDocument();
+  });
+
   it("opens the matched event carried by a timeline result", async () => {
     const navigate = vi.fn();
     vi.spyOn(reactRouterDom, "useNavigate").mockReturnValue(navigate);

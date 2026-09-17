@@ -16,6 +16,7 @@ import time
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from typing import Any
 from typing import Literal
 from typing import Optional
 from uuid import UUID
@@ -28,6 +29,7 @@ from fastapi import Response
 from fastapi import status
 from pydantic import BaseModel
 from pydantic import Field
+from pydantic import ValidationError
 from pydantic import field_validator
 from pydantic import model_validator
 from sqlalchemy.orm import Session
@@ -40,6 +42,8 @@ from zerg.database import catalog_db_dependency
 from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.dependencies.request_db import no_request_db
+from zerg.machine_evidence import MAX_MACHINE_EVIDENCE_BYTES
+from zerg.machine_evidence import machine_evidence_bytes
 from zerg.machine_evidence import validate_machine_evidence_identities
 from zerg.metrics import agents_heartbeat_payload_bytes
 from zerg.metrics import agents_heartbeat_requests_total
@@ -430,7 +434,12 @@ class HeartbeatIn(BaseModel):
     unmanaged_session_bindings: list[UnmanagedSessionBindingIn] = Field(default_factory=list)
     # Phase 2 typed observation envelope. Validation + raw retention only;
     # legacy session arrays remain reducer authority during shadow comparison.
-    machine_evidence: MachineEvidenceIn | None = None
+    # Opaque until something is going to use it, and deliberately any JSON
+    # value: shape, self-consistency, and size are settled by
+    # `_accepted_machine_evidence`, which drops what it cannot use instead of
+    # refusing the heartbeat that carried it. A type here would put a 422 in
+    # front of that decision and silence the machine instead.
+    machine_evidence: Any = None
     # Canonical engine-resolved local session snapshot. When present, server
     # ingest prefers this over legacy managed/unmanaged arrays for identity.
     sessions: list[ResolvedLocalSessionIn] = Field(default_factory=list)
@@ -450,11 +459,65 @@ class HeartbeatIn(BaseModel):
             return HistoryImportSnapshot.unavailable()
 
 
-def _machine_process_snapshot_complete(payload: HeartbeatIn, scope_name: str) -> bool:
-    evidence = payload.machine_evidence
+def _accepted_machine_evidence(evidence: object, *, device_id: str) -> dict | None:
+    """The machine evidence this heartbeat may ship, or None with the reason.
+
+    Evidence is bulk machine fact data and liveness outranks it: anything this
+    host cannot validate -- object shape, the typed reducer contract, or the
+    transport budget -- is dropped here so the machine keeps reporting in. The
+    catalog reducer validates the same evidence again before it trusts one
+    fact, so a drop costs evidence and never authority, and an unscannable
+    payload can no longer take a machine's liveness down with it.
+    """
+
     if evidence is None:
+        return None
+    if not isinstance(evidence, dict):
+        logger.warning("Dropping machine evidence device=%s reason=not_an_object", device_id)
+        return None
+    try:
+        parsed = MachineEvidenceIn.model_validate(evidence)
+    except ValidationError as exc:
+        logger.warning(
+            "Dropping invalid machine evidence device=%s reason=%s",
+            device_id,
+            _validation_reason(exc),
+        )
+        return None
+    serialized = parsed.model_dump(mode="json", exclude_none=True)
+    size = machine_evidence_bytes(serialized)
+    if size > MAX_MACHINE_EVIDENCE_BYTES:
+        logger.warning(
+            "Dropping oversized machine evidence device=%s bytes=%d budget=%d",
+            device_id,
+            size,
+            MAX_MACHINE_EVIDENCE_BYTES,
+        )
+        return None
+    return serialized
+
+
+def _validation_reason(exc: ValidationError) -> str:
+    """One bounded line for a rejected evidence payload."""
+
+    errors = exc.errors()
+    if not errors:
+        return "invalid"
+    first = errors[0]
+    location = ".".join(str(part) for part in first.get("loc") or ())
+    message = str(first.get("msg") or "invalid").splitlines()[0][:200]
+    return f"{location}: {message}" if location else message
+
+
+def _machine_process_snapshot_complete(machine_evidence: dict | None, scope_name: str) -> bool:
+    """Whether this heartbeat's evidence vouches for a complete process scope."""
+
+    if not isinstance(machine_evidence, dict):
         return False
-    return any(scope.scope == scope_name and scope.complete for scope in evidence.process_snapshot_scopes)
+    scopes = machine_evidence.get("process_snapshot_scopes")
+    if not isinstance(scopes, list):
+        return False
+    return any(isinstance(scope, dict) and scope.get("scope") == scope_name and scope.get("complete") for scope in scopes)
 
 
 def _managed_lease_provider_label(lease: ManagedSessionLeaseIn) -> str:
@@ -822,11 +885,18 @@ async def ingest_heartbeat(
                         pass
 
                 wire_bytes = len(await request.body())
+                # The stamp's ``raw_json`` is a bounded forensic copy of the
+                # payload (catalogd caps it at 512 KiB). Machine evidence is
+                # bulk fact data -- hundreds of kilobytes on a busy machine --
+                # so it travels as its own catalogd parameter and never rides
+                # this copy: smuggling it here made every heartbeat from a
+                # machine whose evidence outgrew the cap fail validation, and
+                # a failed heartbeat is a machine reported offline.
                 payload_for_retention = payload.model_dump(mode="json")
                 if "history_import" not in payload.model_fields_set:
                     payload_for_retention.pop("history_import", None)
-                if payload.machine_evidence is not None:
-                    payload_for_retention["machine_evidence"] = payload.machine_evidence.model_dump(mode="json", exclude_none=True)
+                payload_for_retention.pop("machine_evidence", None)
+                machine_evidence = _accepted_machine_evidence(payload.machine_evidence, device_id=device_id)
                 payload_json = json.dumps(payload_for_retention)
                 agents_heartbeat_payload_bytes.observe(wire_bytes)
                 set_span_attributes(
@@ -893,7 +963,7 @@ async def ingest_heartbeat(
             # evidence that an unobserved owner has lost control.
             _managed_leases_present = (
                 _resolved_sessions_present or "managed_sessions" in payload.model_fields_set
-            ) and _machine_process_snapshot_complete(payload, "managed_state_files")
+            ) and _machine_process_snapshot_complete(machine_evidence, "managed_state_files")
             _unmanaged_bindings = (
                 _unmanaged_bindings_from_resolved_sessions(
                     _resolved_sessions,
@@ -906,7 +976,7 @@ async def ingest_heartbeat(
             # Omission is authoritative only when the Machine Agent explicitly
             # says it enumerated the complete process scope. Legacy field
             # presence and partial/incremental scans fail open.
-            _unmanaged_bindings_present = _machine_process_snapshot_complete(payload, "unmanaged_provider_processes")
+            _unmanaged_bindings_present = _machine_process_snapshot_complete(machine_evidence, "unmanaged_provider_processes")
 
             incoming_sessions_digest = str(payload.sessions_digest or "").strip() or None
 
@@ -958,6 +1028,7 @@ async def ingest_heartbeat(
                                 key: (value.isoformat() if isinstance(value, datetime) else value)
                                 for key, value in heartbeat_stamp_kwargs.items()
                             },
+                            "machine_evidence": machine_evidence,
                             "managed_leases": [lease.model_dump(mode="json") for lease in _managed_leases],
                             "managed_leases_present": _managed_leases_present,
                             "owner_id": getattr(_token, "owner_id", None),
@@ -994,6 +1065,16 @@ async def ingest_heartbeat(
                     ) from exc
                 except CatalogRemoteError as exc:
                     request_status_label = "write_backpressure" if exc.retryable else "internal_error"
+                    # A refused heartbeat is a machine that stops looking
+                    # alive, so the reason belongs in the log next to the
+                    # device it silenced rather than only in the response.
+                    logger.warning(
+                        "Heartbeat rejected device=%s code=%s retryable=%s reason=%s",
+                        _device_id,
+                        exc.code,
+                        exc.retryable,
+                        exc,
+                    )
                     raise HTTPException(
                         status_code=(status.HTTP_503_SERVICE_UNAVAILABLE if exc.retryable else status.HTTP_500_INTERNAL_SERVER_ERROR),
                         detail={

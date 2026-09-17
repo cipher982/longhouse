@@ -616,6 +616,63 @@ def test_json_input_rejects_empty_text_by_contract(tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
+def test_console_input_idempotency_conflict_is_structured_409(monkeypatch):
+    from fastapi import HTTPException
+
+    from zerg.routers.session_chat import SessionInputRequest
+    from zerg.routers.session_chat import _create_catalog_session_input_response
+    from zerg.services.console_turns import ConsoleTurnConflict
+
+    async def conflict(**_kwargs):
+        raise ConsoleTurnConflict("client_request_id was reused with different text")
+
+    monkeypatch.setattr("zerg.routers.session_chat.enqueue_catalog_console_turn", conflict)
+    with pytest.raises(HTTPException) as raised:
+        asyncio.run(
+            _create_catalog_session_input_response(
+                source_session=SimpleNamespace(id=uuid4(), command_family="console_turn"),
+                owner_id=1,
+                body=SessionInputRequest(
+                    text="different",
+                    intent="auto",
+                    client_request_id="console-conflict-1",
+                ),
+                db=None,
+            )
+        )
+
+    assert raised.value.status_code == 409
+    assert raised.value.detail == {
+        "code": "idempotency_conflict",
+        "message": "client_request_id was reused with different text",
+    }
+
+
+def test_report_id_is_rejected_for_non_console_input():
+    from fastapi import HTTPException
+
+    from zerg.routers.session_chat import SessionInputRequest
+    from zerg.routers.session_chat import _create_catalog_session_input_response
+
+    with pytest.raises(HTTPException) as raised:
+        asyncio.run(
+            _create_catalog_session_input_response(
+                source_session=SimpleNamespace(id=uuid4(), command_family="helm"),
+                owner_id=1,
+                body=SessionInputRequest(
+                    text="not a Console turn",
+                    intent="auto",
+                    client_request_id="non-console-report-1",
+                    report_id=uuid4(),
+                ),
+                db=None,
+            )
+        )
+
+    assert raised.value.status_code == 400
+    assert raised.value.detail == "report_id is only supported for Console sessions"
+
+
 def test_intent_auto_sends_now_and_acks_from_the_live_receipt(live_catalog, live_catalog_client):  # noqa: F811
     email = "live-auto@test.local"
     owner_id = live_catalog.create_user(email)

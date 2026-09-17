@@ -2058,3 +2058,66 @@ def test_omp_cleanup_retirement_is_bound_to_the_exact_hidden_archived_session() 
         },
         "session-1",
     )
+
+
+def test_omp_native_model_evidence_binds_routed_thinking_pin_to_recorded_model(tmp_path) -> None:
+    # Factory pin `openrouter/anthropic/claude-haiku-4.5:off`; OMP 18.2.3 records
+    # message.model `anthropic/claude-haiku-4.5` with provider `openrouter`.
+    first_turn = [
+        {"type": "session", "id": "native-1"},
+        {
+            "type": "message",
+            "message": {
+                "role": "assistant",
+                "provider": "openrouter",
+                "model": "anthropic/claude-haiku-4.5",
+                "stopReason": "stop",
+                "content": [{"type": "text", "text": "OMP_WINDOW_MARKER"}],
+                "usage": {"input": 3, "output": 2},
+            },
+        },
+    ]
+    _write_omp_console_settlement_fixture(tmp_path, first_turn_events=first_turn, later_events=[])
+
+    evidence = omp_native_model_evidence(
+        tmp_path,
+        source_canary="omp_console_lifecycle",
+        qualification_model="openrouter/anthropic/claude-haiku-4.5:off",
+        api_key_configured=True,
+        first_turn_only=True,
+    )
+
+    assert evidence is not None
+    assert evidence["model"] == "anthropic/claude-haiku-4.5"
+    for mismatched in ("openrouter/anthropic/claude-haiku-4.5:batch", "openrouter/anthropic/claude-sonnet-4.5:off"):
+        assert (
+            omp_native_model_evidence(
+                tmp_path,
+                source_canary="omp_console_lifecycle",
+                qualification_model=mismatched,
+                api_key_configured=True,
+                first_turn_only=True,
+            )
+            is None
+        )
+
+
+def test_omp_helm_control_retries_only_undispatched_channel_reconnect() -> None:
+    unavailable = "Managed control channel is not connected or does not advertise this capability"
+    reconnecting = omp_helm_lifecycle._control_channel_reconnecting
+
+    # The Machine Agent restart after a transcript flush leaves a sub-second
+    # window where terminate/interrupt are refused before dispatch.
+    assert reconnecting(
+        502,
+        json.dumps({"detail": {"error_code": "terminate_failed", "message": unavailable, "exit_code": None, "released_lock": False}}),
+    )
+    assert reconnecting(502, json.dumps({"detail": {"code": "interrupt_failed", "message": unavailable}}))
+    assert reconnecting(409, "no live Longhouse control channel for this session")
+    # A dispatched failure (different message) is a real result.
+    assert not reconnecting(
+        502,
+        json.dumps({"detail": {"error_code": "terminate_failed", "message": "OMP extension did not acknowledge the command"}}),
+    )
+    assert not reconnecting(502, "not json")
+    assert not reconnecting(500, json.dumps({"detail": {"error_code": "terminate_failed", "message": unavailable}}))

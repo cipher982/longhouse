@@ -161,7 +161,10 @@ def test_console_replay_precedes_active_owner_guard(tmp_path):
     replay = store.enqueue_console_turn(data=request)
 
     assert replay["created"] is False
+    assert replay["idempotency_conflict"] is False
     assert replay["turn"]["turn_id"] == first["turn"]["turn_id"]
+    assert replay["turn"]["client_request_id"] == request["client_request_id"]
+    assert replay["turn"]["message"] == request["message"]
 
 
 def test_console_report_is_single_flight_across_request_ids(tmp_path):
@@ -212,6 +215,8 @@ def test_console_report_is_single_flight_across_request_ids(tmp_path):
     assert replay["created"] is False
     assert replay["report_conflict"] is True
     assert replay["turn"]["turn_id"] == first["turn"]["turn_id"]
+    assert replay["turn"]["client_request_id"] == "report-handoff-1"
+    assert replay["turn"]["report_id"] == str(report_id)
 
 
 def test_pi_console_continuation_forwards_exact_native_source_file(tmp_path):

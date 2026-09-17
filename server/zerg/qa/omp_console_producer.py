@@ -127,6 +127,29 @@ def _numeric_usage(value: object, prefix: str = "") -> dict[str, int | float]:
     return usage
 
 
+_THINKING_LEVEL_SUFFIXES = frozenset({"off", "minimal", "low", "medium", "high", "xhigh"})
+
+
+def model_identity(value: object) -> str | None:
+    """The model OMP actually ran, independent of launch routing syntax.
+
+    The planned pin carries launch syntax (an ``openrouter/`` route prefix and a
+    ``:off``-style thinking level) while OMP's transcript records the resolved
+    id with the route in a separate ``provider`` field. Only a thinking level is
+    stripped: ``:batch``/``:free`` name different OpenRouter endpoints. Mirrors
+    ``provider_factory.assurance._model_identity``; launch argv is still compared
+    exactly elsewhere.
+    """
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    model = value.strip().removeprefix("openrouter/")
+    base, separator, level = model.rpartition(":")
+    if separator and base and level in _THINKING_LEVEL_SUFFIXES:
+        model = base
+    return model
+
+
 def _successful_assistant_event(event: Mapping[str, Any]) -> bool:
     message = event.get("message")
     if event.get("type") != "message" or not isinstance(message, Mapping):
@@ -256,7 +279,7 @@ def omp_native_model_evidence(
     if isinstance(message_model, str) and message_model.strip() and message_model.strip() != native_model:
         return None
     requested_model = qualification_model.strip() if isinstance(qualification_model, str) and qualification_model.strip() else None
-    if requested_model is not None and native_model != requested_model:
+    if requested_model is not None and model_identity(native_model) != model_identity(requested_model):
         return None
     model = native_model
     event_digest = f"sha256:{raw_event_digest(selected_event)}"

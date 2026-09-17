@@ -26,6 +26,8 @@ struct SessionView: View {
     @State private var isShowingBugReport = false
     @State private var bugReportAutoStartFix = false
     @State private var isShowingBugReportSavedAlert = false
+    @State private var bugReportSavedPending = false
+    @State private var bugReportSessionToOpen: String?
     @State private var bugReportScreenshot: Data?
     @State private var bugReportContextJSON = Data("{}".utf8)
     @State private var isLoadingPickerItems: Bool = false
@@ -191,15 +193,21 @@ struct SessionView: View {
                 )
             )
         }
-        .sheet(isPresented: $isShowingBugReport) {
+        .sheet(isPresented: $isShowingBugReport, onDismiss: finishBugReportDismissal) {
             BugReportSheet(
                 sourceSessionID: sessionId,
                 contextJSON: bugReportContextJSON,
                 screenshotData: bugReportScreenshot,
                 autoStartFix: bugReportAutoStartFix,
-                onSent: { onOpenSession?($0) },
+                onSent: { newSessionID in
+                    bugReportSavedPending = false
+                    bugReportSessionToOpen = newSessionID
+                    isShowingBugReport = false
+                },
                 onSaved: {
-                    showBugReportSavedAlert()
+                    bugReportSessionToOpen = nil
+                    bugReportSavedPending = true
+                    isShowingBugReport = false
                 }
             )
         }
@@ -208,6 +216,7 @@ struct SessionView: View {
                 BugReportSavedBanner(
                     onStartFix: {
                         isShowingBugReportSavedAlert = false
+                        bugReportSavedPending = false
                         bugReportAutoStartFix = true
                         isShowingBugReport = true
                     },
@@ -217,10 +226,22 @@ struct SessionView: View {
                 )
                 .padding(.horizontal, 16)
                 .padding(.bottom, 96)
+                .safeAreaPadding(.bottom, 8)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
     }
+
+    private func finishBugReportDismissal() {
+        if let sessionID = bugReportSessionToOpen {
+            bugReportSessionToOpen = nil
+            onOpenSession?(sessionID)
+        } else if bugReportSavedPending {
+            bugReportSavedPending = false
+            isShowingBugReportSavedAlert = true
+        }
+    }
+
 
     // The fused Balanced signal field: status and composer share one anchored
     // material. Semantic state changes are immediate; only that material and
@@ -258,6 +279,8 @@ struct SessionView: View {
     private var overflowMenu: some View {
         Menu {
             Button {
+                bugReportSavedPending = false
+                bugReportSessionToOpen = nil
                 bugReportAutoStartFix = false
                 bugReportContextJSON = viewModel.makeBugReportContext(
                     sessionId: sessionId,
@@ -271,6 +294,7 @@ struct SessionView: View {
             } label: {
                 Label("Report a problem", systemImage: "exclamationmark.bubble")
             }
+            .accessibilityHint("Capture diagnostics for this session")
             .accessibilityIdentifier("session-report-problem")
             Divider()
             if let detail = viewModel.detail {
@@ -308,13 +332,6 @@ struct SessionView: View {
         }
         .accessibilityLabel("Session actions")
         .accessibilityIdentifier("session-overflow-menu")
-    }
-    private func showBugReportSavedAlert() {
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            guard !Task.isCancelled else { return }
-            isShowingBugReportSavedAlert = true
-        }
     }
 
     private var sessionWebURL: URL? {

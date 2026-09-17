@@ -45,6 +45,7 @@
 //! what was rejected are reported rather than swallowed.
 
 use anyhow::{bail, Context, Result};
+use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -1158,6 +1159,23 @@ pub fn prune_stale_quarantines(db_path: &Path) -> Result<QuarantinePruneReport> 
 
 pub const VACUUM_FREELIST_THRESHOLD_BYTES: u64 = 50 * 1024 * 1024; // 50 MB
 
+/// How long a maintenance pass waits for a busy database before deferring.
+///
+/// Compaction is the only thing that returns the interior free space the Cursor
+/// drain leaves behind, so losing the race must stay rare: this path used to
+/// open with 50 ms, and on a machine running several managed sessions every
+/// contended write fails well inside that window. A deferred pass stays
+/// overdue (see `run_daily_storage_maintenance`), so waiting costs one blocked
+/// maintenance thread and never the reclaim.
+pub const MAINTENANCE_BUSY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How often the daily maintenance pass must run.
+pub const DAILY_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Sibling of the shipper database, so a machine with several state databases
+/// keeps one marker per database without a second naming rule.
+const DAILY_MAINTENANCE_FILE_NAME: &str = "daily-maintenance.json";
+
 /// Bytes sitting free *inside* allocated pages.
 ///
 /// `freelist_count` only sees whole pages returned to the file. The Cursor
@@ -1201,7 +1219,7 @@ pub fn maybe_compact_database_with_threshold(
     db_path: &Path,
     threshold_bytes: u64,
 ) -> Result<Option<CompactionReport>> {
-    let conn = match crate::state::db::open_client_connection(db_path, Duration::from_millis(50)) {
+    let conn = match crate::state::db::open_client_connection(db_path, MAINTENANCE_BUSY_TIMEOUT) {
         Ok(conn) => conn,
         Err(err) => {
             return Err(err).context("opening maintenance connection for vacuum");
@@ -1251,7 +1269,74 @@ pub fn maybe_compact_database_with_threshold(
     }))
 }
 
+#[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
+struct DailyMaintenanceMarker {
+    #[serde(default)]
+    last_completed_at: Option<String>,
+}
+
+fn daily_maintenance_marker_path(db_path: &Path) -> PathBuf {
+    db_path.with_file_name(DAILY_MAINTENANCE_FILE_NAME)
+}
+
+fn read_daily_maintenance_marker(path: &Path) -> DailyMaintenanceMarker {
+    let Ok(bytes) = std::fs::read(path) else {
+        return DailyMaintenanceMarker::default();
+    };
+    serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
+fn record_daily_maintenance_completed(db_path: &Path, now: DateTime<Utc>) -> Result<()> {
+    let path = daily_maintenance_marker_path(db_path);
+    let marker = DailyMaintenanceMarker {
+        last_completed_at: Some(now.to_rfc3339()),
+    };
+    let payload = serde_json::to_vec(&marker).context("serializing the maintenance marker")?;
+    std::fs::write(&path, payload)
+        .with_context(|| format!("writing the maintenance marker {}", path.display()))
+}
+
+/// How long until the daily maintenance pass is due again.
+///
+/// Armed from the last *completed* pass rather than from process start. An
+/// interval timer that begins counting at startup is reset by every restart,
+/// and this daemon restarts several times a day (dogfood refresh, rebuilds,
+/// watchdog). Measured on `cinder` over eight days of daemon logs: not one
+/// `Daily ...` line, with `longhouse-shipper.db` at 831 MB, 626 MB of it
+/// interior free space inside `cursor_store_raw_record` — exactly what the
+/// interior threshold exists to reclaim. The file never shrank because the only
+/// path that reclaims it never ran.
+///
+/// A missing or unreadable marker means due now. Nothing here may postpone the
+/// only compaction path indefinitely, so garbage is read as "overdue".
+pub fn daily_maintenance_delay(db_path: &Path, now: DateTime<Utc>) -> Duration {
+    let marker = read_daily_maintenance_marker(&daily_maintenance_marker_path(db_path));
+    let last = marker
+        .last_completed_at
+        .as_deref()
+        .and_then(|stamp| DateTime::parse_from_rfc3339(stamp).ok());
+    let Some(last) = last else {
+        return Duration::ZERO;
+    };
+    let interval_secs = DAILY_MAINTENANCE_INTERVAL.as_secs() as i64;
+    let elapsed_secs = now
+        .signed_duration_since(last.with_timezone(&Utc))
+        .num_seconds()
+        .max(0);
+    if elapsed_secs >= interval_secs {
+        Duration::ZERO
+    } else {
+        Duration::from_secs((interval_secs - elapsed_secs) as u64)
+    }
+}
+
+/// Run one daily maintenance pass and record that it completed.
+///
+/// The marker is written only when every step finished. A pass deferred by a
+/// busy database therefore stays overdue, and the next daemon start retries it
+/// instead of waiting out another day.
 pub fn run_daily_storage_maintenance(db_path: &Path) {
+    let mut deferred = false;
     match prune_stale_quarantines(db_path) {
         Ok(report) if report.deleted_files > 0 => {
             tracing::info!(
@@ -1264,6 +1349,7 @@ pub fn run_daily_storage_maintenance(db_path: &Path) {
         }
         Ok(_) => {}
         Err(err) => {
+            deferred = true;
             tracing::warn!(error = %err, "Daily maintenance: quarantine prune error");
         }
     }
@@ -1284,8 +1370,19 @@ pub fn run_daily_storage_maintenance(db_path: &Path) {
         }
         Ok(None) => {}
         Err(err) => {
+            deferred = true;
             tracing::warn!(error = %err, "Daily maintenance: database compaction deferred");
         }
+    }
+
+    if deferred {
+        return;
+    }
+    if let Err(error) = record_daily_maintenance_completed(db_path, Utc::now()) {
+        tracing::warn!(
+            error = %format!("{error:#}"),
+            "Daily maintenance: could not record completion"
+        );
     }
 }
 
@@ -2116,6 +2213,85 @@ mod tests {
             "the rebuild must shrink the file: {} -> {}",
             report.page_bytes_before,
             report.page_bytes_after
+        );
+    }
+
+    #[test]
+    fn daily_maintenance_is_due_when_it_has_never_completed() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("longhouse-shipper.db");
+
+        assert_eq!(daily_maintenance_delay(&db_path, Utc::now()), Duration::ZERO);
+    }
+
+    #[test]
+    fn daily_maintenance_waits_out_the_remainder_of_the_interval() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("longhouse-shipper.db");
+        let now = Utc::now();
+        record_daily_maintenance_completed(&db_path, now - chrono::Duration::hours(2)).unwrap();
+
+        let delay = daily_maintenance_delay(&db_path, now);
+        assert!(
+            delay <= Duration::from_secs(22 * 3600),
+            "expected the remainder of the day, got {delay:?}"
+        );
+        assert!(
+            delay >= Duration::from_secs(21 * 3600),
+            "expected the remainder of the day, got {delay:?}"
+        );
+    }
+
+    #[test]
+    fn a_restart_does_not_postpone_maintenance_past_the_interval() {
+        // The daemon restarts many times a day, so process lifetime cannot be
+        // what decides. A pass that last completed more than a day ago is due
+        // the moment the next daemon starts.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("longhouse-shipper.db");
+        let now = Utc::now();
+        record_daily_maintenance_completed(&db_path, now - chrono::Duration::days(3)).unwrap();
+
+        assert_eq!(daily_maintenance_delay(&db_path, now), Duration::ZERO);
+    }
+
+    #[test]
+    fn an_unreadable_marker_is_overdue_rather_than_a_day_away() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("longhouse-shipper.db");
+        std::fs::write(daily_maintenance_marker_path(&db_path), b"{ not json").unwrap();
+
+        assert_eq!(daily_maintenance_delay(&db_path, Utc::now()), Duration::ZERO);
+    }
+
+    #[test]
+    fn a_completed_pass_is_not_immediately_due_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("longhouse-shipper.db");
+        Connection::open(&db_path).unwrap();
+
+        run_daily_storage_maintenance(&db_path);
+
+        assert!(
+            daily_maintenance_delay(&db_path, Utc::now()) > Duration::from_secs(23 * 3600),
+            "a pass that just ran must not be due again on the next tick"
+        );
+    }
+
+    #[test]
+    fn a_pass_that_could_not_compact_stays_due() {
+        let dir = tempfile::tempdir().unwrap();
+        // Not a database: every maintenance step that touches it fails, which
+        // is what a deferred pass looks like to the marker.
+        let db_path = dir.path().join("longhouse-shipper.db");
+        std::fs::write(&db_path, b"not a database").unwrap();
+
+        run_daily_storage_maintenance(&db_path);
+
+        assert_eq!(
+            daily_maintenance_delay(&db_path, Utc::now()),
+            Duration::ZERO,
+            "a pass that could not finish must stay due for the next daemon start"
         );
     }
 }

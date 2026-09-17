@@ -10224,6 +10224,10 @@ export interface components {
              * @default true
              */
             has_real_sessions: boolean;
+            /** Lanes */
+            lanes?: ("lexical" | "dense")[];
+            /** Degraded */
+            degraded?: components["schemas"]["MachineSearchLaneFailure"][];
         };
         /** TimelineStatusPresentationResponse */
         TimelineStatusPresentationResponse: {

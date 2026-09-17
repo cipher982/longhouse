@@ -668,6 +668,91 @@ def test_canonical_storage_timeline_filters_fall_back_to_live_owner(daemon_paths
     engine.dispose()
 
 
+def test_timeline_window_orders_by_live_evidence_not_only_transcript(daemon_paths):
+    """A session the served state calls open cannot be paged out of the window.
+
+    The browser ranks the cards it receives by the anchor the projector derives
+    from activity/control heads. Picking the window by transcript recency alone
+    dropped a Helm session whose terminal was attached but whose transcript had
+    been quiet for a day: it left Live now entirely, while the browser would
+    have ranked the same session first.
+    """
+
+    database_path, _socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC)
+    quiet_at = now - timedelta(days=1)
+    quiet_id = str(uuid4())
+    busy_ids = [str(uuid4()) for _ in range(2)]
+
+    with engine.begin() as connection:
+        for index, session_id in enumerate([quiet_id, *busy_ids]):
+            activity_at = quiet_at if session_id == quiet_id else now - timedelta(minutes=index)
+            connection.execute(
+                LiveSessionCatalog.__table__.insert().values(
+                    session_id=session_id,
+                    provider="omp",
+                    environment="development",
+                    project="zerg",
+                    device_id="cinder",
+                    device_name="cinder",
+                    cwd="/workspace/zerg",
+                    started_at=activity_at,
+                    last_activity_at=activity_at,
+                )
+            )
+            connection.execute(
+                LiveTimelineCard.__table__.insert().values(
+                    session_id=session_id,
+                    provider="omp",
+                    environment="development",
+                    project="zerg",
+                    device_id="cinder",
+                    cwd="/workspace/zerg",
+                    started_at=activity_at,
+                    last_activity_at=activity_at,
+                    user_messages=1,
+                    parser_revision="parser-v2",
+                )
+            )
+        # The quiet session's only recent evidence is its attached terminal.
+        connection.execute(
+            FactHead.__table__.insert().values(
+                family="control",
+                subject_key=f"connection:{uuid4()}",
+                source="omp_helm_scan",
+                source_epoch=str(uuid4()),
+                session_id=quiet_id,
+                ordering_mode="latest",
+                source_seq=1,
+                evidence_hash=hashlib.sha256(quiet_id.encode()).hexdigest(),
+                observed_at=now,
+                value_json=json.dumps({"authority_class": "provider_control", "observed_at": now.isoformat()}),
+                updated_commit_seq=1,
+                received_at=now,
+            )
+        )
+
+    result = CatalogStore(engine).list_session_timeline(
+        project=None,
+        provider=None,
+        environment=None,
+        include_test=False,
+        hide_autonomous=True,
+        include_automation=False,
+        device_id=None,
+        days_back=7,
+        limit=2,
+        offset=0,
+    )
+
+    page = [row["facts"]["catalog"]["session_id"] for row in result["rows"]]
+    assert result["total"] == 3
+    assert page[0] == quiet_id
+    engine.dispose()
+
+
 def test_catalog_gateway_normalizes_missing_file_backing(monkeypatch):
     monkeypatch.setattr(
         catalog_read_gateway,
@@ -1305,6 +1390,7 @@ async def test_canonical_timeline_is_owner_scoped_and_commit_coherent(daemon_pat
             "machine.heartbeat.apply.v2",
             {
                 "heartbeat": heartbeat,
+                "machine_evidence": evidence,
                 "managed_leases": [],
                 "managed_leases_present": False,
                 "owner_id": 7,

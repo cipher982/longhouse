@@ -1050,7 +1050,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let fallback_interval = Duration::from_secs(config.fallback_scan_secs.max(10));
     let failed_ship_retry_interval = Duration::from_secs(config.spool_replay_secs.max(5));
     let health_check_interval = Duration::from_secs(60);
-    let prune_interval = Duration::from_secs(24 * 3600);
+    let prune_interval = crate::state::recover::DAILY_MAINTENANCE_INTERVAL;
     let heartbeat_interval = Duration::from_secs(SERVER_HEARTBEAT_INTERVAL_SECS);
 
     let mut fallback_timer = tokio::time::interval(fallback_interval);
@@ -1067,8 +1067,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut health_timer = tokio::time::interval(health_check_interval);
     health_timer.tick().await; // consume first immediate tick
 
-    let mut prune_timer = tokio::time::interval(prune_interval);
-    prune_timer.tick().await; // consume first immediate tick
+    // Armed from the last completed pass, not from process start: an interval
+    // timer that begins counting at startup is reset by every restart, and this
+    // daemon restarts several times a day. See
+    // `state::recover::daily_maintenance_delay`.
+    let mut prune_timer = tokio::time::interval_at(
+        tokio::time::Instant::now()
+            + crate::state::recover::daily_maintenance_delay(&projection_db_path, chrono::Utc::now()),
+        prune_interval,
+    );
 
     let mut heartbeat_timer = tokio::time::interval(heartbeat_interval);
     heartbeat_timer.tick().await; // consume first immediate tick

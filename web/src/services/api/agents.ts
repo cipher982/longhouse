@@ -311,6 +311,10 @@ export interface TimelineSessionsListResponse {
   sessions: TimelineSessionCard[];
   total: number;
   has_real_sessions: boolean;
+  /** Retrieval lanes that actually ran. A search answer names what produced it. */
+  lanes?: ("lexical" | "dense")[];
+  /** Lanes that were requested and could not run; their results are missing. */
+  degraded?: SearchLaneFailure[];
   query_grouping_mode?: "grouped_results";
   query_grouping_has_more?: boolean;
   query_grouping_source_count?: number;
@@ -590,6 +594,15 @@ export interface AgentSessionFilters {
   sort?: "relevance" | "recency";
   hide_autonomous?: boolean;
   include_hidden?: boolean;
+}
+
+/** One search lane that was requested and could not contribute. */
+export interface SearchLaneFailure {
+  lane: "lexical" | "dense" | "catalog";
+  status_code: number;
+  code: string;
+  message: string;
+  reason?: string | null;
 }
 
 export interface AgentSessionSummaryFilters {

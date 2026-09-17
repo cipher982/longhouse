@@ -88,6 +88,19 @@ def _canonical_value(value: Any, field: str | None = None) -> Any:
     return value
 
 
+# Transport budget for one heartbeat's machine evidence. It sits well under
+# catalogd's 8 MiB RPC frame. Evidence over budget is dropped by itself: a
+# machine whose evidence outgrew any bound must keep reporting in, because a
+# lost heartbeat is every client reading that machine as offline.
+MAX_MACHINE_EVIDENCE_BYTES = 4 * 1024 * 1024
+
+
+def machine_evidence_bytes(evidence: object) -> int:
+    """Serialized size of one heartbeat's machine evidence."""
+
+    return len(json.dumps(evidence, separators=(",", ":"), default=str).encode("utf-8"))
+
+
 def validate_machine_evidence_identities(evidence: object) -> list[ValidatedEvidenceIdentity]:
     """Validate every reducer identity against its typed fact and content."""
 

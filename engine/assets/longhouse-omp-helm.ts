@@ -29,8 +29,14 @@ export function ompProviderIsIdle(
 }
 
 export function agentEndIsTerminal(event: Record<string, unknown>): boolean {
+  // OMP emits `willContinue: t?.willContinue` on every extension agent_end, so
+  // a final turn carries the key with the value `undefined`. Upstream reads
+  // that as terminal (`isTerminal: !decision?.willContinue`); an undefined
+  // field is absent, not malformed. Treating it as malformed made every OMP
+  // turn a continuation, so no Helm turn could ever settle. `null` and other
+  // non-boolean values stay malformed and non-terminal.
   for (const key of ["isTerminal", "willContinue"]) {
-    if (key in event && typeof event[key] !== "boolean") return false;
+    if (event[key] !== undefined && typeof event[key] !== "boolean") return false;
   }
   if (typeof event.isTerminal === "boolean") return event.isTerminal;
   if (typeof event.willContinue === "boolean") return !event.willContinue;
@@ -252,7 +258,6 @@ export default function (pi: any) {
           { type: "session_reconnect", provider_idle: providerIdle },
           ctx,
         );
-        scheduleReconnect(ctx);
       } catch {
         scheduleReconnect(ctx);
       }

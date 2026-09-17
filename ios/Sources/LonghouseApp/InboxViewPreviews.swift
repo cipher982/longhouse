@@ -566,8 +566,80 @@ private func mockSession(
     .preferredColorScheme(.dark)
 }
 
-#Preview("Timeline search — archive results") {
-    let sessions: [SessionSummary] = [
+#Preview("Timeline search — resident rows filtered") {
+    let sessions = searchPreviewSessions()
+
+    NavigationStack {
+        TimelineSessionList(
+            sessions: Array(sessions.prefix(2)),
+            connectivityBanner: .none,
+            search: TimelineSearchPresentation(
+                query: "provider channel",
+                visibleCount: 2,
+                residentCount: sessions.count,
+                remote: .idle,
+                remoteLane: nil,
+                onSearchAll: {},
+                onSearchByMeaning: {},
+                onRetry: {}
+            )
+        )
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Timeline")
+    }
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Timeline search — results from all sessions") {
+    let sessions = searchPreviewSessions()
+
+    NavigationStack {
+        TimelineSessionList(
+            sessions: Array(sessions.prefix(1)),
+            connectivityBanner: .none,
+            search: TimelineSearchPresentation(
+                query: "provider channel",
+                visibleCount: 1,
+                residentCount: sessions.count,
+                remote: .loaded(sessions),
+                remoteLane: .lexical,
+                onSearchAll: {},
+                onSearchByMeaning: {},
+                onRetry: {}
+            )
+        )
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Timeline")
+    }
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Timeline search — nothing matches") {
+    let sessions = searchPreviewSessions()
+
+    NavigationStack {
+        TimelineSessionList(
+            sessions: [],
+            connectivityBanner: .none,
+            search: TimelineSearchPresentation(
+                query: "provider channel",
+                visibleCount: 0,
+                residentCount: sessions.count,
+                remote: .empty,
+                remoteLane: .lexical,
+                onSearchAll: {},
+                onSearchByMeaning: {},
+                onRetry: {}
+            )
+        )
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Timeline")
+    }
+    .preferredColorScheme(.dark)
+}
+
+private func searchPreviewSessions() -> [SessionSummary] {
+    [
         mockSession(
             id: "search-1",
             project: "longhouse",
@@ -596,17 +668,19 @@ private func mockSession(
             anchorSecondsAgo: 7 * 24 * 3600,
             turns: 19
         ),
+        mockSession(
+            id: "search-3",
+            project: "zerg",
+            title: "Timeline search latency",
+            summary: "Chased a 40-second search round trip.",
+            provider: "claude",
+            machine: "cinder",
+            statusLabel: "Working",
+            statusTone: "active",
+            activityRecency: "live",
+            anchorSecondsAgo: 300,
+            turns: 8
+        ),
     ]
-
-    NavigationStack {
-        TimelineSearchResultsList(
-            sessions: sessions,
-            query: "provider channel",
-            connectivityBanner: .none
-        )
-        .background(Color(.systemGroupedBackground))
-        .navigationTitle("Timeline")
-    }
-    .preferredColorScheme(.dark)
 }
 #endif

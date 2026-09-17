@@ -1048,19 +1048,27 @@ async def _lexical_recall_matches(
     include_automation: bool,
     candidate_depth: int,
     timeout_seconds: float,
+    environment: Optional[str] = None,
+    include_snippets: bool = False,
 ) -> list[RecallMatch]:
-    """FTS discovery, one match per session, best row wins."""
+    """FTS discovery, one match per session, best row wins.
+
+    ``environment`` and ``include_snippets`` exist because the session-list
+    surfaces need the ranking recall does, under the scoping their caller
+    asked for. Recall passes neither: a listing that accepted an environment
+    filter and silently dropped it would return rows the caller excluded.
+    """
 
     rows = await search_storage_v2_rows(
         owner_id=owner_id,
         query=query,
         project=project,
         provider=provider,
-        environment=None,
+        environment=environment,
         days_back=since_days,
         limit=min(200, candidate_depth),
         timeout_seconds=timeout_seconds,
-        include_snippets=False,
+        include_snippets=include_snippets,
         include_origin_hidden=include_automation,
         include_test=include_test,
     )
@@ -1068,12 +1076,12 @@ async def _lexical_recall_matches(
     seen: set[str] = set()
     for row in rows:
         session_id = str(row.get("session_id") or "")
-        environment = str(row.get("environment") or "")
+        row_environment = str(row.get("environment") or "")
         if not session_id or session_id in seen:
             continue
-        if not include_test and environment in {"test", "e2e"}:
+        if not include_test and row_environment in {"test", "e2e"}:
             continue
-        if not include_automation and environment == "automation":
+        if not include_automation and row_environment == "automation":
             continue
         seen.add(session_id)
         snippet = str(row.get("content_snippet") or row.get("tool_output_snippet") or "")
@@ -1467,6 +1475,139 @@ def _rrf_merge_recall_matches(
         match.lane_ranks = {lane: ranks[sid] for lane, ranks in (("lexical", lexical_ranks), ("dense", semantic_ranks)) if sid in ranks}
         merged.append(match)
     return merged
+
+
+# Session-search modes as the API declares them. `semantic` and `dense` name the
+# same lane — the dense index is the semantic one — and both spellings are
+# already in the wild, so both resolve here rather than in each route.
+SESSION_SEARCH_MODES = ("lexical", "semantic", "dense", "hybrid")
+
+
+def normalize_session_search_mode(mode: Optional[str]) -> str:
+    """Resolve a declared search mode, or reject it.
+
+    Every session-search surface resolves the mode through this, because when
+    each route mapped it privately the same parameter meant two things: the
+    browser read ran lexical under every spelling, and the machine route ran
+    lexical and then switched to dense on a 503 — a mode switch the caller
+    never asked for and could not see.
+    """
+
+    if mode is None or not mode.strip():
+        return "lexical"
+    normalized = mode.strip().lower()
+    if normalized not in SESSION_SEARCH_MODES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "search_mode_unknown",
+                "message": f"mode must be one of: {', '.join(SESSION_SEARCH_MODES)}",
+                "mode": mode,
+            },
+        )
+    return normalized
+
+
+def _machine_lane_failures(failures: list[RecallLaneFailure]) -> list[MachineSearchLaneFailure]:
+    """Re-label recall's lane failures for the session-list surfaces.
+
+    Both models carry the same five facts. They stay separate because recall's
+    wire contract is the recall card; the session list must not inherit that
+    shape just because the lanes underneath are shared.
+    """
+
+    return [
+        MachineSearchLaneFailure(
+            lane=failure.lane,
+            status_code=failure.status_code,
+            code=failure.code,
+            message=failure.message,
+            reason=failure.reason,
+        )
+        for failure in failures
+    ]
+
+
+async def search_session_matches(
+    *,
+    owner_id: int,
+    query: str,
+    project: Optional[str],
+    provider: Optional[str],
+    environment: Optional[str],
+    days_back: int,
+    include_test: bool,
+    include_automation: bool,
+    mode: str,
+    limit: int,
+    timeout_seconds: float,
+    degraded: list[MachineSearchLaneFailure],
+) -> tuple[list[RecallMatch], list[Literal["lexical", "dense"]]]:
+    """Rank sessions by the lanes the caller named.
+
+    The one implementation of session-search lane policy, so `hybrid` cannot
+    mean one algorithm on the browser and another on the machine surface. Every
+    lane that was asked for either contributes or is reported in ``degraded``;
+    nothing here swaps one lane for another without saying so.
+    """
+
+    resolved = normalize_session_search_mode(mode)
+    candidate_depth = min(200, max(limit, limit * CANDIDATE_DEPTH_FACTOR))
+
+    async def lexical() -> list[RecallMatch]:
+        return await _lexical_recall_matches(
+            owner_id=owner_id,
+            query=query,
+            project=project,
+            provider=provider,
+            since_days=days_back,
+            include_test=include_test,
+            include_automation=include_automation,
+            candidate_depth=candidate_depth,
+            timeout_seconds=timeout_seconds,
+            environment=environment,
+            include_snippets=True,
+        )
+
+    async def dense() -> list[RecallMatch]:
+        return await _semantic_recall_matches(
+            query=query,
+            project=project,
+            provider=provider,
+            environment=environment,
+            since_days=days_back,
+            include_test=include_test,
+            include_automation=include_automation,
+            max_results=candidate_depth,
+            timeout_seconds=timeout_seconds,
+            owner_id=owner_id,
+        )
+
+    if resolved == "lexical":
+        return _rank_single_lane(await lexical(), limit=limit, lane="lexical"), ["lexical"]
+    if resolved in {"semantic", "dense"}:
+        # The caller named exactly one lane, so failing it is the whole answer.
+        # Substituting lexical here is how a "finds by meaning" request returns
+        # keyword matches under a label that promised paraphrase recall.
+        return _rank_single_lane(await dense(), limit=limit, lane="dense"), ["dense"]
+
+    lane_failures: list[RecallLaneFailure] = []
+    lexical_outcome, dense_outcome = await asyncio.gather(lexical(), dense(), return_exceptions=True)
+    lexical_matches = _lane_result(lexical_outcome, lane="lexical", degraded=lane_failures)
+    dense_matches = _lane_result(dense_outcome, lane="dense", degraded=lane_failures)
+    degraded.extend(_machine_lane_failures(lane_failures))
+    if lexical_matches is None and dense_matches is None:
+        # Both lanes are down: there is no partial answer to report, so surface
+        # the lexical fault rather than inventing an empty result set.
+        if isinstance(lexical_outcome, BaseException):
+            raise lexical_outcome
+        raise RuntimeError("session search produced no lanes")
+    served: list[Literal["lexical", "dense"]] = []
+    if lexical_matches is not None:
+        served.append("lexical")
+    if dense_matches is not None:
+        served.append("dense")
+    return _rrf_merge_recall_matches(lexical_matches or [], dense_matches or [], limit=limit), served
 
 
 @router.get("/sessions/semantic", response_model=MachineSessionsListResponse)

@@ -157,31 +157,54 @@ struct TimelineViewModelConnectivityTests {
     }
 
     @Test
-    func archiveSearchUsesDedicatedResultsState() async {
-        let session = makeSession(id: "search-result")
-        let api = FakeTimelineSessionsClient([], searchResponse: .success([session]))
-        let stream = TimelineStreamRecorder()
-        let model = makeModel(api: api, stream: stream)
+    func archiveSearchFillsTheServerLaneWithoutTouchingResidentRows() async {
+        let resident = makeSession(id: "resident")
+        let hit = makeSession(id: "search-result")
+        let api = FakeTimelineSessionsClient([.success([resident])], searchResponse: .success([hit]))
+        let model = makeModel(api: api, stream: TimelineStreamRecorder())
+        let appState = makeAppState()
 
-        await model.search(query: "provider channel", using: makeAppState())
+        await model.refresh(using: appState, force: true)
+        #expect(model.state == .loaded([resident]))
 
-        #expect(model.searchState == .loaded([session]))
+        model.searchRemote(query: "provider channel", lane: .lexical, using: appState)
+        await model.awaitRemoteSearch()
+
+        #expect(model.searchState == .loaded([hit]))
+        #expect(model.searchLane == .lexical)
+        // The resident rows are the filter's corpus. They are what the user is
+        // looking at, so a server round trip must not disturb them.
+        #expect(model.state == .loaded([resident]))
         #expect(await api.searchRequestCount() == 1)
+        #expect(await api.observedSearchLanes() == [.lexical])
+
         model.clearSearch()
         #expect(model.searchState == .idle)
+        #expect(model.searchLane == nil)
+        #expect(model.state == .loaded([resident]))
     }
 
     @Test
-    func archiveSearchInvalidatesOldRowsBeforeDebounceCompletes() async {
-        let session = makeSession(id: "old-result")
-        let api = FakeTimelineSessionsClient([], searchResponse: .success([session]))
+    func aNewQueryAbandonsThePreviousServerAnswerWithoutClearingRows() async {
+        let resident = makeSession(id: "resident")
+        let hit = makeSession(id: "old-result")
+        let api = FakeTimelineSessionsClient([.success([resident])], searchResponse: .success([hit]))
         let model = makeModel(api: api, stream: TimelineStreamRecorder())
+        let appState = makeAppState()
 
-        await model.search(query: "old query", using: makeAppState())
-        #expect(model.searchState == .loaded([session]))
+        await model.refresh(using: appState, force: true)
+        model.searchRemote(query: "old query", lane: .lexical, using: appState)
+        await model.awaitRemoteSearch()
+        #expect(model.searchState == .loaded([hit]))
 
-        model.beginSearchTransition()
-        #expect(model.searchState == .loading)
+        // What `.task(id: normalizedSearch)` does on the next keystroke.
+        model.cancelRemoteSearch()
+
+        #expect(model.searchState == .idle)
+        #expect(model.searchLane == nil)
+        // Neither a full-screen loading state nor an emptied list: the timeline
+        // the user is filtering has to survive every keystroke.
+        #expect(model.state == .loaded([resident]))
     }
 
     @Test
@@ -305,6 +328,7 @@ private actor FakeTimelineSessionsClient: TimelineSessionsClient {
     private var searchResponse: FakeTimelineResponse
     private var requests = 0
     private var searchRequests = 0
+    private var observedLanes: [TimelineSearchLane] = []
 
     init(
         _ responses: [FakeTimelineResponse],
@@ -335,8 +359,14 @@ private actor FakeTimelineSessionsClient: TimelineSessionsClient {
         }
     }
 
-    func searchSessions(query: String, limit: Int) async throws -> [SessionSummary] {
+    func searchSessions(
+        query: String,
+        lane: TimelineSearchLane,
+        daysBack: Int,
+        limit: Int
+    ) async throws -> [SessionSummary] {
         searchRequests += 1
+        observedLanes.append(lane)
         switch searchResponse {
         case .success(let sessions):
             return sessions
@@ -345,6 +375,10 @@ private actor FakeTimelineSessionsClient: TimelineSessionsClient {
         case .notAuthenticated:
             throw LonghouseAPIError.notAuthenticated
         }
+    }
+
+    func observedSearchLanes() -> [TimelineSearchLane] {
+        observedLanes
     }
 }
 

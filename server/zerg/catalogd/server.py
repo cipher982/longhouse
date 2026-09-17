@@ -1293,15 +1293,23 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _apply_machine_heartbeat(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {"heartbeat", "managed_leases", "managed_leases_present", "owner_id"}
-        if set(request.params) != expected:
+        required = {"heartbeat", "managed_leases", "managed_leases_present", "owner_id"}
+        if not required <= set(request.params) or set(request.params) - required - {"machine_evidence"}:
             return self._error(request, "invalid_request", "machine.heartbeat.apply.v2 has invalid parameters")
         heartbeat = request.params["heartbeat"]
+        # Evidence is optional bulk data the reducer consumes; its content is
+        # validated inside the reducer so a bad payload costs evidence, never
+        # liveness.
+        evidence = request.params.get("machine_evidence")
         leases = request.params["managed_leases"]
         snapshot_present = request.params["managed_leases_present"]
         owner_id = request.params["owner_id"]
         if not isinstance(heartbeat, dict):
             return self._error(request, "invalid_request", "heartbeat must be an object")
+        # Evidence is bulk data the reducer consumes; its content is validated
+        # inside the reducer so a bad payload costs evidence, never liveness.
+        if evidence is not None and not isinstance(evidence, dict):
+            return self._error(request, "invalid_request", "machine_evidence must be an object or null")
         if not isinstance(leases, list) or len(leases) > 512:
             return self._error(request, "invalid_request", "managed_leases must contain at most 512 rows")
         if type(snapshot_present) is not bool:
@@ -1317,6 +1325,7 @@ class CatalogDaemon:
         result = await self._run_store(
             self._store.apply_machine_heartbeat,
             heartbeat=parsed_heartbeat,
+            machine_evidence=evidence,
             managed_leases=parsed_leases,
             managed_leases_present=snapshot_present,
             owner_id=owner_id,

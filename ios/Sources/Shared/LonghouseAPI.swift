@@ -329,8 +329,44 @@ struct LonghouseAPI: Sendable {
         try await timelineSessions(limit: limit).filter(\.isUserActive)
     }
 
-    func searchSessions(query: String, limit: Int = 30) async throws -> [SessionSummary] {
-        let url = Self.searchSessionsURL(baseURL: baseURL, query: query, limit: limit)
+    /// Search sessions on exactly one lane. See ``TimelineSearchLane``.
+    func searchSessions(
+        query: String,
+        lane: TimelineSearchLane,
+        daysBack: Int = timelineSearchScopeDays,
+        limit: Int = 30
+    ) async throws -> [SessionSummary] {
+        switch lane {
+        case .lexical:
+            return try await lexicalSearchSessions(query: query, daysBack: daysBack, limit: limit)
+        case .semantic:
+            return try await semanticSearchSessions(query: query, daysBack: daysBack, limit: limit)
+        }
+    }
+
+    /// Keyword search over the timeline's own index.
+    ///
+    /// Reads the same route the browser timeline reads, so the phone and the
+    /// browser cannot answer one query with different lanes, and the same
+    /// visibility policy applies to both.
+    func lexicalSearchSessions(query: String, daysBack: Int, limit: Int) async throws -> [SessionSummary] {
+        let url = Self.lexicalSearchURL(baseURL: baseURL, query: query, daysBack: daysBack, limit: limit)
+        var request = URLRequest(url: url)
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, httpResponse) = try await data(for: request)
+        guard httpResponse.statusCode == 200 else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+
+        let decoded = try JSONDecoder.snakeCase.decode(APITimelineSessionsListResponse.self, from: data)
+        return decoded.sessions.map(\.sessionSummary)
+    }
+
+    /// Dense paraphrase search. Slower, and the only lane that finds a session
+    /// whose words the user did not type.
+    func semanticSearchSessions(query: String, daysBack: Int, limit: Int) async throws -> [SessionSummary] {
+        let url = Self.semanticSearchURL(baseURL: baseURL, query: query, daysBack: daysBack, limit: limit)
         var request = URLRequest(url: url)
         request.addValue("application/json", forHTTPHeaderField: "Accept")
 
@@ -343,14 +379,28 @@ struct LonghouseAPI: Sendable {
         return decoded.sessions.map(\.searchSessionSummary)
     }
 
-    static func searchSessionsURL(baseURL: URL, query: String, limit: Int = 30) -> URL {
+    static func lexicalSearchURL(baseURL: URL, query: String, daysBack: Int, limit: Int) -> URL {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("/api/timeline/sessions"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "query", value: query),
+            URLQueryItem(name: "days_back", value: String(daysBack)),
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "mode", value: TimelineSearchLane.lexical.rawValue),
+        ]
+        return components.url!
+    }
+
+    static func semanticSearchURL(baseURL: URL, query: String, daysBack: Int, limit: Int) -> URL {
         var components = URLComponents(
             url: baseURL.appendingPathComponent("/api/timeline/sessions/semantic"),
             resolvingAgainstBaseURL: false
         )!
         components.queryItems = [
             URLQueryItem(name: "query", value: query),
-            URLQueryItem(name: "days_back", value: "365"),
+            URLQueryItem(name: "days_back", value: String(daysBack)),
             URLQueryItem(name: "limit", value: String(limit)),
             URLQueryItem(name: "context_mode", value: "forensic"),
         ]

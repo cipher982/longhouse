@@ -68,6 +68,8 @@ struct TimelineView: View {
     @State private var isShowingBugReport = false
     @State private var bugReportAutoStartFix = false
     @State private var isShowingBugReportSavedAlert = false
+    @State private var bugReportSavedPending = false
+    @State private var bugReportSessionToOpen: String?
     @State private var bugReportScreenshot: Data?
     @State private var bugReportContextJSON = Data("{}".utf8)
     @State private var searchText = ""
@@ -104,31 +106,46 @@ struct TimelineView: View {
                 timelineBody(sessions: sessions)
             }
         } else {
-            searchContent
+            searchBody
         }
     }
 
-    @ViewBuilder
-    private var searchContent: some View {
-        switch viewModel.searchState {
-        case .idle, .loading:
-            nonScrollingShell {
-                ProgressView().controlSize(.large)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        case .empty:
-            nonScrollingShell {
-                ContentUnavailableView.search(text: normalizedSearch)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        case .error(let message):
-            nonScrollingShell {
-                searchErrorView(message)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        case .loaded(let sessions):
-            searchBody(sessions: sessions)
-        }
+    /// The timeline, filtered in place. Typing never replaces these rows with a
+    /// spinner: the resident sessions are the local corpus, so the filter is
+    /// synchronous and the server lane can only ever add a section below them.
+    private var searchBody: some View {
+        TimelineSessionList(
+            sessions: filteredSessions,
+            connectivityBanner: effectiveConnectionBanner,
+            search: searchPresentation
+        )
+    }
+
+    /// The rows the phone already holds. This is the whole local search corpus.
+    private var residentSessions: [SessionSummary] {
+        if case .loaded(let sessions) = viewModel.state { return sessions }
+        return []
+    }
+
+    private var filteredSessions: [SessionSummary] {
+        filterTimelineSessions(residentSessions, query: normalizedSearch)
+    }
+
+    private var searchPresentation: TimelineSearchPresentation {
+        TimelineSearchPresentation(
+            query: normalizedSearch,
+            visibleCount: filteredSessions.count,
+            residentCount: residentSessions.count,
+            remote: viewModel.searchState,
+            remoteLane: viewModel.searchLane,
+            onSearchAll: {
+                viewModel.searchRemote(query: normalizedSearch, lane: .lexical, using: appState)
+            },
+            onSearchByMeaning: {
+                viewModel.searchRemote(query: normalizedSearch, lane: .semantic, using: appState)
+            },
+            onRetry: { viewModel.retrySearch(using: appState) }
+        )
     }
 
     /// Wrap non-scroll states so the connection strip still appears at the
@@ -150,7 +167,7 @@ struct TimelineView: View {
             content
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Timeline")
-            .searchable(text: $searchText, prompt: "Search all sessions")
+            .searchable(text: $searchText, prompt: "Filter sessions")
             .navigationDestination(for: SessionRoute.self) { route in
                 SessionView(
                     sessionId: route.sessionId,
@@ -172,9 +189,10 @@ struct TimelineView: View {
                     Button {
                         presentBugReport()
                     } label: {
-                        Image(systemName: "exclamationmark.bubble")
-                            .accessibilityLabel("Report a problem")
+                        Label("Report a problem", systemImage: "exclamationmark.bubble")
+                            .labelStyle(.iconOnly)
                     }
+                    .accessibilityHint("Capture diagnostics without opening a session")
                     .accessibilityIdentifier("timeline-report-problem")
                     .transaction { transaction in
                         transaction.animation = nil
@@ -225,17 +243,21 @@ struct TimelineView: View {
                     path.append(SessionRoute(sessionId: sessionId, fallbackTitle: "New session"))
                 }
             }
-            .sheet(isPresented: $isShowingBugReport) {
+            .sheet(isPresented: $isShowingBugReport, onDismiss: finishBugReportDismissal) {
                 BugReportSheet(
                     sourceSessionID: nil,
                     contextJSON: bugReportContextJSON,
                     screenshotData: bugReportScreenshot,
                     autoStartFix: bugReportAutoStartFix,
                     onSent: { sessionID in
-                        path.append(SessionRoute(sessionId: sessionID, fallbackTitle: "Bug report"))
+                        bugReportSavedPending = false
+                        bugReportSessionToOpen = sessionID
+                        isShowingBugReport = false
                     },
                     onSaved: {
-                        showBugReportSavedAlert()
+                        bugReportSessionToOpen = nil
+                        bugReportSavedPending = true
+                        isShowingBugReport = false
                     }
                 )
             }
@@ -244,6 +266,7 @@ struct TimelineView: View {
                     BugReportSavedBanner(
                         onStartFix: {
                             isShowingBugReportSavedAlert = false
+                            bugReportSavedPending = false
                             bugReportAutoStartFix = true
                             isShowingBugReport = true
                         },
@@ -253,6 +276,7 @@ struct TimelineView: View {
                     )
                     .padding(.horizontal, 16)
                     .padding(.bottom, 16)
+                    .safeAreaPadding(.bottom, 8)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
@@ -260,21 +284,19 @@ struct TimelineView: View {
                 if normalizedSearch.isEmpty {
                     await viewModel.refresh(using: appState, reloadWidget: true, force: true)
                 } else {
-                    await viewModel.search(query: normalizedSearch, using: appState)
+                    viewModel.searchRemote(
+                        query: normalizedSearch,
+                        lane: viewModel.searchLane ?? .lexical,
+                        using: appState
+                    )
+                    await viewModel.awaitRemoteSearch()
                 }
             }
             .task(id: normalizedSearch) {
-                guard !normalizedSearch.isEmpty else {
-                    viewModel.clearSearch()
-                    return
-                }
-                viewModel.beginSearchTransition()
-                do {
-                    try await Task.sleep(nanoseconds: 300_000_000)
-                } catch {
-                    return
-                }
-                await viewModel.search(query: normalizedSearch, using: appState)
+                // Typing is local. The rows are filtered in the body, so the
+                // only thing a keystroke has to do here is abandon a server
+                // answer that no longer describes what is on screen.
+                viewModel.cancelRemoteSearch()
             }
             .task {
                 await viewModel.load(using: appState)
@@ -302,8 +324,8 @@ struct TimelineView: View {
                     Task {
                         await viewModel.refresh(using: appState, reloadWidget: true)
                         viewModel.startStream(using: appState)
-                        if !normalizedSearch.isEmpty {
-                            await viewModel.search(query: normalizedSearch, using: appState)
+                        if !normalizedSearch.isEmpty, viewModel.searchLane != nil {
+                            viewModel.retrySearch(using: appState)
                         }
                         consumePendingPushIfNeeded()
                     }
@@ -321,8 +343,21 @@ struct TimelineView: View {
             }
         }
     }
+    private func finishBugReportDismissal() {
+        if let sessionID = bugReportSessionToOpen {
+            bugReportSessionToOpen = nil
+            path.append(SessionRoute(sessionId: sessionID, fallbackTitle: "Bug report"))
+        } else if bugReportSavedPending {
+            bugReportSavedPending = false
+            isShowingBugReportSavedAlert = true
+        }
+    }
     private func presentBugReport() {
+        guard path.isEmpty else { return }
         bugReportAutoStartFix = false
+        bugReportSavedPending = false
+        bugReportSessionToOpen = nil
+        bugReportScreenshot = nil
         bugReportContextJSON = BugReportContext.timeline(serverURL: appState.serverURL)
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 350_000_000)
@@ -331,24 +366,9 @@ struct TimelineView: View {
         }
     }
 
-    private func showBugReportSavedAlert() {
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            guard !Task.isCancelled else { return }
-            isShowingBugReportSavedAlert = true
-        }
-    }
 
     private func timelineBody(sessions: [SessionSummary]) -> some View {
         TimelineSessionList(sessions: sessions, connectivityBanner: effectiveConnectionBanner)
-    }
-
-    private func searchBody(sessions: [SessionSummary]) -> some View {
-        TimelineSearchResultsList(
-            sessions: sessions,
-            query: normalizedSearch,
-            connectivityBanner: effectiveConnectionBanner
-        )
     }
 
     private var emptyView: some View {
@@ -375,22 +395,6 @@ struct TimelineView: View {
         .padding()
     }
 
-    private func searchErrorView(_ message: String) -> some View {
-        VStack(spacing: 12) {
-            Image(systemName: "wifi.exclamationmark")
-                .font(.system(size: 36))
-                .foregroundStyle(.orange)
-            Text(message)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-            Button("Try again") {
-                Task { await viewModel.search(query: normalizedSearch, using: appState) }
-            }
-            .buttonStyle(.borderedProminent)
-        }
-        .padding()
-    }
-
     private func consumePendingPushIfNeeded() {
         if let sessionID = PushNotificationStore.consumePendingSessionID(), !sessionID.isEmpty {
             openSession(sessionID: sessionID)
@@ -408,6 +412,10 @@ struct TimelineView: View {
 struct TimelineSessionList: View {
     let sessions: [SessionSummary]
     let connectivityBanner: TimelineConnectivityBanner
+    /// Present only while the user is filtering. Its presence is what makes
+    /// this a search view; the list itself, its order, and its sections do not
+    /// change, because the resident rows are the filter's corpus.
+    var search: TimelineSearchPresentation?
 
     private var layout: TimelineInboxLayout {
         buildTimelineInboxLayout(sessions)
@@ -418,15 +426,184 @@ struct TimelineSessionList: View {
             LazyVStack(alignment: .leading, spacing: 14) {
                 ConnectionStatusStrip(banner: connectivityBanner)
 
+                if let search {
+                    searchCountLine(search)
+                }
+
                 section(title: "Needs you", sessions: layout.needsYou, role: .needsYou)
                 section(title: "New results", sessions: layout.newResults, role: .newResult)
                 section(title: "Open", sessions: layout.open, role: .open)
                 section(title: "Recent", sessions: layout.recent, role: .recent)
+
+                if let search {
+                    searchFooter(search)
+                }
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
             .padding(.bottom, 18)
         }
+    }
+
+    /// What the filter currently shows, stated before the rows rather than
+    /// instead of them. Never reports absence while the server lane is still
+    /// working: "0 of 28" and "nothing to match against" are different answers.
+    private func searchCountLine(_ search: TimelineSearchPresentation) -> some View {
+        Text(
+            search.residentCount == 0
+                ? "No sessions loaded yet"
+                : "\(search.visibleCount) of \(search.residentCount) sessions"
+        )
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .textCase(.uppercase)
+        .padding(.horizontal, 2)
+        .accessibilityIdentifier("timeline-search-count")
+    }
+
+    @ViewBuilder
+    private func searchFooter(_ search: TimelineSearchPresentation) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider()
+                .padding(.top, 2)
+
+            switch search.remote {
+            case .idle:
+                searchActionRow(
+                    title: "Search all sessions",
+                    detail: "Last \(timelineSearchScopeDays) days, including sessions not loaded here",
+                    systemImage: "magnifyingglass",
+                    identifier: "timeline-search-all",
+                    action: search.onSearchAll
+                )
+            case .loading:
+                HStack(spacing: 9) {
+                    ProgressView().controlSize(.small)
+                    Text("Searching all sessions for “\(search.query)”…")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 8)
+                .accessibilityIdentifier("timeline-search-in-flight")
+            case .error(let message):
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Button("Try again", action: search.onRetry)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+                .padding(.vertical, 4)
+            case .empty:
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("No session in the last \(timelineSearchScopeDays) days matches “\(search.query)”.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    if search.remoteLane == .lexical {
+                        meaningSearchRow(search)
+                    } else {
+                        Button("Try again", action: search.onRetry)
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+                }
+                .padding(.vertical, 4)
+            case .loaded(let sessions):
+                searchResultsSection(sessions: sessions, search: search)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func searchResultsSection(
+        sessions: [SessionSummary],
+        search: TimelineSearchPresentation
+    ) -> some View {
+        HStack {
+            Text(search.remoteLane == .semantic ? "By meaning" : "From all sessions")
+                .font(.headline.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
+            Spacer(minLength: 8)
+            Text("\(sessions.count)")
+                .font(.caption.weight(.semibold))
+                .monospacedDigit()
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 2)
+        .padding(.top, 2)
+
+        ForEach(sessions) { session in
+            NavigationLink(value: SessionRoute(
+                sessionId: session.id,
+                fallbackTitle: session.title,
+                fallbackSubtitle: session.identitySubtitle
+            )) {
+                TimelineSearchResultRow(session: session, query: search.query)
+            }
+            .buttonStyle(.plain)
+        }
+
+        // Offered after a keyword answer, not only after an empty one. Meaning
+        // search earns its cost on the paraphrase the keyword lane ranked
+        // weakly, which is exactly the case an empty-result trigger misses.
+        if search.remoteLane == .lexical {
+            meaningSearchRow(search)
+        }
+    }
+
+    @ViewBuilder
+    private func meaningSearchRow(_ search: TimelineSearchPresentation) -> some View {
+        searchActionRow(
+            title: "Search by meaning instead",
+            detail: "Slower. Finds sessions that never used these words.",
+            systemImage: "sparkle.magnifyingglass",
+            identifier: "timeline-search-by-meaning",
+            action: search.onSearchByMeaning
+        )
+    }
+
+    private func searchActionRow(
+        title: String,
+        detail: String,
+        systemImage: String,
+        identifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: 11) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 6)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.vertical, 11)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                Color(.secondarySystemGroupedBackground),
+                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.secondary.opacity(0.16), lineWidth: 0.8)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(identifier)
     }
 
     @ViewBuilder
@@ -463,38 +640,25 @@ struct TimelineSessionList: View {
     }
 }
 
-struct TimelineSearchResultsList: View {
-    let sessions: [SessionSummary]
+/// What the timeline shows while the user is filtering.
+///
+/// The resident rows are the filter's corpus and stay on screen; the server
+/// lane is a separate section, never a replacement for them. This carries the
+/// counts alongside the remote state because the footer has to distinguish
+/// "nothing here matches" from "nothing has been searched yet".
+struct TimelineSearchPresentation {
     let query: String
-    let connectivityBanner: TimelineConnectivityBanner
-
-    var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
-                ConnectionStatusStrip(banner: connectivityBanner)
-                Text("\(sessions.count) \(sessions.count == 1 ? "session" : "sessions")")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .textCase(.uppercase)
-                    .padding(.horizontal, 2)
-
-                ForEach(sessions) { session in
-                    NavigationLink(value: SessionRoute(
-                        sessionId: session.id,
-                        fallbackTitle: session.title,
-                        fallbackSubtitle: session.identitySubtitle
-                    )) {
-                        TimelineSearchResultRow(session: session, query: query)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 18)
-        }
-    }
+    let visibleCount: Int
+    let residentCount: Int
+    let remote: TimelineSearchState
+    /// Which lane produced ``remote``'s results, if any. Determines whether the
+    /// meaning-search row is offered.
+    let remoteLane: TimelineSearchLane?
+    let onSearchAll: () -> Void
+    let onSearchByMeaning: () -> Void
+    let onRetry: () -> Void
 }
+
 private struct SessionRoute: Hashable {
     let sessionId: String
     let fallbackTitle: String
@@ -806,7 +970,12 @@ private struct LivenessDot: View {
 
 protocol TimelineSessionsClient: Sendable {
     func recentSessions(limit: Int) async throws -> [SessionSummary]
-    func searchSessions(query: String, limit: Int) async throws -> [SessionSummary]
+    func searchSessions(
+        query: String,
+        lane: TimelineSearchLane,
+        daysBack: Int,
+        limit: Int
+    ) async throws -> [SessionSummary]
 }
 
 extension LonghouseAPI: TimelineSessionsClient {}
@@ -847,6 +1016,9 @@ enum TimelineSearchState: Equatable {
 final class TimelineViewModel: ObservableObject {
     @Published private(set) var state: TimelineLoadState = .initial
     @Published private(set) var searchState: TimelineSearchState = .idle
+    /// Which lane produced ``searchState``'s results. Nil before the server has
+    /// been asked, and cleared whenever the query changes.
+    @Published private(set) var searchLane: TimelineSearchLane?
     @Published private(set) var connectivity = TimelineConnectivityState()
     @Published private(set) var connectivityNow = Date()
 
@@ -862,11 +1034,19 @@ final class TimelineViewModel: ObservableObject {
     private var hasReceivedFirstConnect = false
     private var streamAuthRefreshAttempted = false
     private var searchGeneration: UInt64 = 0
+    private var searchTask: Task<Void, Never>?
+    private var lastSearchQuery: String?
+    private var lastSearchLane: TimelineSearchLane?
     private let apiFactory: (String) -> TimelineSessionsClient?
     private let streamFactory: (URL, Int) -> TimelineSessionsStreamSource
     private let enableRealtime: Bool
     private let enableConnectivityClock: Bool
     private let limit = 40
+    // Search reaches the corpus the list does not hold. Bounded to the same
+    // window the timeline route allows, so the scope never silently widens past
+    // what the screen is showing.
+    private let searchDaysBack = timelineSearchScopeDays
+    private let searchLimit = 30
     private let reconcileIntervalNanoseconds: UInt64 = 120_000_000_000 // 120s safety net
     private let connectivityClockIntervalNanoseconds: UInt64 = 15_000_000_000 // 15s freshness tick
     private let persistDebounceNanoseconds: UInt64 = 250_000_000 // 250ms cache/widget coalesce
@@ -926,47 +1106,83 @@ final class TimelineViewModel: ObservableObject {
         await refresh(using: appState, reloadWidget: true)
     }
 
+    /// Back to "the server lane has not been asked". Called on every keystroke:
+    /// the answer on screen belongs to the previous query, so it is dropped
+    /// rather than left standing under a new one.
     func clearSearch() {
+        cancelRemoteSearch()
+    }
+
+    func cancelRemoteSearch() {
         searchGeneration &+= 1
+        searchTask?.cancel()
+        searchTask = nil
+        searchLane = nil
         searchState = .idle
     }
 
-    func beginSearchTransition() {
-        searchGeneration &+= 1
-        searchState = .loading
-    }
-
-    func search(query: String, using appState: AppState) async {
+    /// Ask the server lane for the query currently on screen.
+    ///
+    /// Returns immediately; the work runs in ``searchTask`` so a keystroke can
+    /// cancel it, and so the caller's button press never blocks the UI. The
+    /// timeline keeps its own rows for the whole duration of this call.
+    func searchRemote(query: String, lane: TimelineSearchLane, using appState: AppState) {
         let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else {
-            clearSearch()
+            cancelRemoteSearch()
             return
         }
+        searchTask?.cancel()
         searchGeneration &+= 1
         let generation = searchGeneration
-        guard let api = apiFactory(appState.serverURL) else {
-            searchState = .error("Invalid server URL")
-            return
-        }
-
+        lastSearchQuery = normalized
+        lastSearchLane = lane
+        searchLane = lane
         searchState = .loading
-        do {
-            let sessions = try await api.searchSessions(query: normalized, limit: 30)
-            guard !Task.isCancelled, generation == searchGeneration else { return }
-            searchState = sessions.isEmpty ? .empty : .loaded(sessions)
-        } catch LonghouseAPIError.notAuthenticated {
-            guard !Task.isCancelled, generation == searchGeneration else { return }
-            applyConnectivity(.authFailed)
-            appState.handleExpiredSession()
-            searchState = .error("Sign in to search your sessions.")
-        } catch {
-            guard !Task.isCancelled, generation == searchGeneration else { return }
-            let message = connectionBanner == .offline
-                ? "Search needs a connection."
-                : "Search unavailable: \(error.localizedDescription)"
-            searchState = .error(message)
+
+        searchTask = Task { [weak self] in
+            guard let self else { return }
+            guard let api = self.apiFactory(appState.serverURL) else {
+                self.searchState = .error("Invalid server URL")
+                return
+            }
+            do {
+                let sessions = try await api.searchSessions(
+                    query: normalized,
+                    lane: lane,
+                    daysBack: self.searchDaysBack,
+                    limit: self.searchLimit
+                )
+                guard !Task.isCancelled, generation == self.searchGeneration else { return }
+                self.searchState = sessions.isEmpty ? .empty : .loaded(sessions)
+            } catch LonghouseAPIError.notAuthenticated {
+                guard !Task.isCancelled, generation == self.searchGeneration else { return }
+                self.applyConnectivity(.authFailed)
+                appState.handleExpiredSession()
+                self.searchState = .error("Sign in to search your sessions.")
+            } catch {
+                guard !Task.isCancelled, generation == self.searchGeneration else { return }
+                let message = self.connectionBanner == .offline
+                    ? "Search needs a connection."
+                    : "Search failed: \(error.localizedDescription)"
+                self.searchState = .error(message)
+            }
         }
     }
+
+    /// Await the in-flight server lane, for pull-to-refresh.
+    func awaitRemoteSearch() async {
+        await searchTask?.value
+    }
+
+    /// Repeat the last lane for the last query, so a retry after a failure or a
+    /// pull-to-refresh does not silently change what is being asked.
+    func retrySearch(using appState: AppState) {
+        guard let query = lastSearchQuery, let lane = lastSearchLane else { return }
+        searchRemote(query: query, lane: lane, using: appState)
+    }
+
+    var searchScopeDays: Int { searchDaysBack }
 
     func refresh(using appState: AppState, reloadWidget: Bool = false, force: Bool = false) async {
         if isRefreshInFlight && !force {
