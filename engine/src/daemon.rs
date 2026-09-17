@@ -1170,6 +1170,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         JoinSet::new();
     let mut unmanaged_binding_refresh_generation: Option<(u64, u64)> = None;
     let mut storage_maintenance_tasks: JoinSet<()> = JoinSet::new();
+    // The daily pass gets its own set: sharing one with the cursor-drain work
+    // meant a due pass could be skipped outright when a drain was in flight,
+    // and the timer would not come back for another day.
+    let mut daily_maintenance_tasks: JoinSet<()> = JoinSet::new();
 
     let outbox_dir = config::get_agent_outbox_dir()?;
     let runtime_events_outbox_dir = config::get_agent_runtime_events_outbox_dir()?;
@@ -1790,6 +1794,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
             _ = storage_maintenance_tasks.join_next(), if !storage_maintenance_tasks.is_empty() => {}
+            _ = daily_maintenance_tasks.join_next(), if !daily_maintenance_tasks.is_empty() => {}
 
 
             unmanaged_binding_refresh_result = unmanaged_binding_refresh_tasks.join_next(), if !unmanaged_binding_refresh_tasks.is_empty() => {
@@ -2770,40 +2775,16 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 });
             }
             _ = prune_timer.tick() => {
-                // Give dead-lettered ranges another chance before pruning
-                // anything. Most dead-lettering is a transient the engine
-                // outlived — a host outage, a payload shape since fixed — and
-                // without this the range is retained, displayed, and never
-                // retried. Bounded so a large graveyard drains over days rather
-                // than flooding the shipper in one tick.
-                let spool = Spool::new(&conn);
-                match spool.revive_dead_with_readable_sources(200) {
-                    Ok(n) if n > 0 => tracing::info!("Daily revive: returned {} dead ranges to pending", n),
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!("Dead-range revive error: {}", e),
-                }
-                let fs = FileState::new(&conn);
-                match fs.prune_stale(30) {
-                    Ok(n) if n > 0 => tracing::info!("Daily prune: removed {} stale file_state entries", n),
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!("Daily prune error: {}", e),
-                }
-                let sb = crate::state::session_binding::SessionBinding::new(&conn);
-                match sb.prune_stale(30) {
-                    Ok(n) if n > 0 => tracing::info!("Daily prune: removed {} stale session_binding entries", n),
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!("Session binding prune error: {}", e),
-                }
-                let windows =
-                    crate::state::session_run_binding::SessionRunWindowStore::new(&conn);
-                match windows.prune(chrono::Utc::now()) {
-                    Ok(n) if n > 0 => tracing::info!("Daily prune: removed {} stale session_run_window entries", n),
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!("Session run window prune error: {}", e),
-                }
-                if storage_maintenance_tasks.is_empty() {
+                // The whole daily pass — prunes, revive, compaction — runs on
+                // the blocking maintenance thread with its own connection. It
+                // used to run four write statements inline here, on a `biased`
+                // select whose loop connection is shared with shipping. The
+                // pass tracks its own task set so an unrelated maintenance job
+                // can never make a due pass silently skip a day; overlapping
+                // compactions are refused inside the pass.
+                if daily_maintenance_tasks.is_empty() {
                     let db_path = projection_db_path.clone();
-                    storage_maintenance_tasks.spawn_blocking(move || {
+                    daily_maintenance_tasks.spawn_blocking(move || {
                         crate::state::recover::run_daily_storage_maintenance(&db_path);
                     });
                 }

@@ -1330,6 +1330,83 @@ pub fn daily_maintenance_delay(db_path: &Path, now: DateTime<Utc>) -> Duration {
     }
 }
 
+/// The parts of the daily pass that do not depend on compaction.
+///
+/// These used to run inline on the daemon's event loop — which is a `biased`
+/// select — as four write statements on a connection shared with shipping, in a
+/// branch that suppresses every branch declared after it. They belong on the
+/// maintenance thread with their own connection, next to the compaction they
+/// prepare for. Each statement is bounded and idempotent; one failure does not
+/// stop the others, and none of them defers the pass — that was true before this
+/// move and is what keeps a missing table from reading as a maintenance failure.
+fn run_daily_prunes(conn: &Connection) {
+    // Give dead-lettered ranges another chance before pruning anything. Most
+    // dead-lettering is a transient the engine outlived — a host outage, a
+    // payload shape since fixed — and without this the range is retained,
+    // displayed, and never retried. Bounded so a large graveyard drains over
+    // days rather than flooding the shipper in one pass.
+    match crate::state::spool::Spool::new(conn).revive_dead_with_readable_sources(200) {
+        Ok(n) if n > 0 => {
+            tracing::info!("Daily revive: returned {} dead ranges to pending", n)
+        }
+        Ok(_) => {}
+        Err(err) => tracing::warn!("Dead-range revive error: {}", err),
+    }
+    match crate::state::file_state::FileState::new(conn).prune_stale(30) {
+        Ok(n) if n > 0 => {
+            tracing::info!("Daily prune: removed {} stale file_state entries", n)
+        }
+        Ok(_) => {}
+        Err(err) => tracing::warn!("Daily prune error: {}", err),
+    }
+    match crate::state::session_binding::SessionBinding::new(conn).prune_stale(30) {
+        Ok(n) if n > 0 => {
+            tracing::info!("Daily prune: removed {} stale session_binding entries", n)
+        }
+        Ok(_) => {}
+        Err(err) => tracing::warn!("Session binding prune error: {}", err),
+    }
+    match crate::state::session_run_binding::SessionRunWindowStore::new(conn).prune(Utc::now()) {
+        Ok(n) if n > 0 => {
+            tracing::info!("Daily prune: removed {} stale session_run_window entries", n)
+        }
+        Ok(_) => {}
+        Err(err) => tracing::warn!("Session run window prune error: {}", err),
+    }
+}
+
+/// One compaction at a time, process-wide.
+///
+/// A daily pass is started by the daemon's timer, and the engine can be
+/// restarted mid-pass, so two passes can overlap. Two VACUUMs on one file is a
+/// self-inflicted outage — the 2026-09-17 pass held the write lock for 25
+/// minutes — but neither pass may skip its prunes because a compaction is in
+/// flight, which is why this guards the compaction alone rather than the pass.
+static COMPACTION_IN_FLIGHT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+struct CompactionLease;
+
+impl CompactionLease {
+    fn acquire() -> Option<Self> {
+        COMPACTION_IN_FLIGHT
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .ok()
+            .map(|_| CompactionLease)
+    }
+}
+
+impl Drop for CompactionLease {
+    fn drop(&mut self) {
+        COMPACTION_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
 /// Run one daily maintenance pass and record that it completed.
 ///
 /// The marker is written only when every step finished. A pass deferred by a
@@ -1337,6 +1414,21 @@ pub fn daily_maintenance_delay(db_path: &Path, now: DateTime<Utc>) -> Duration {
 /// instead of waiting out another day.
 pub fn run_daily_storage_maintenance(db_path: &Path) {
     let mut deferred = false;
+    // The prunes get their own connection, on this thread: the daemon's event
+    // loop must not do this work, and the connection it holds is shared with
+    // shipping. A connection that cannot be opened at all defers the pass — the
+    // prunes did not run — while a statement that fails against an initialized
+    // database does not.
+    match crate::state::db::open_client_connection(db_path, MAINTENANCE_BUSY_TIMEOUT) {
+        Ok(conn) => run_daily_prunes(&conn),
+        Err(err) => {
+            deferred = true;
+            tracing::warn!(
+                error = %format!("{err:#}"),
+                "Daily maintenance: prune connection unavailable"
+            );
+        }
+    }
     match prune_stale_quarantines(db_path) {
         Ok(report) if report.deleted_files > 0 => {
             tracing::info!(
@@ -1354,25 +1446,30 @@ pub fn run_daily_storage_maintenance(db_path: &Path) {
         }
     }
 
-    match maybe_compact_database(db_path) {
-        Ok(Some(report)) => {
-            // The freelist delta understates it when the space was interior.
-            let reclaimed = report
-                .page_bytes_before
-                .saturating_sub(report.page_bytes_after);
-            tracing::info!(
-                reclaimed_bytes = reclaimed,
-                page_bytes_before = report.page_bytes_before,
-                page_bytes_after = report.page_bytes_after,
-                wal_checkpoint_busy = report.wal_checkpoint_busy,
-                "Daily maintenance: compacted shipper database"
-            );
-        }
-        Ok(None) => {}
-        Err(err) => {
-            deferred = true;
-            tracing::warn!(error = %err, "Daily maintenance: database compaction deferred");
-        }
+    match CompactionLease::acquire() {
+        Some(_lease) => match maybe_compact_database(db_path) {
+            Ok(Some(report)) => {
+                // The freelist delta understates it when the space was interior.
+                let reclaimed = report
+                    .page_bytes_before
+                    .saturating_sub(report.page_bytes_after);
+                tracing::info!(
+                    reclaimed_bytes = reclaimed,
+                    page_bytes_before = report.page_bytes_before,
+                    page_bytes_after = report.page_bytes_after,
+                    wal_checkpoint_busy = report.wal_checkpoint_busy,
+                    "Daily maintenance: compacted shipper database"
+                );
+            }
+            Ok(None) => {}
+            Err(err) => {
+                deferred = true;
+                tracing::warn!(error = %err, "Daily maintenance: database compaction deferred");
+            }
+        },
+        None => tracing::info!(
+            "Daily maintenance: a compaction is already in flight; prunes only this pass"
+        ),
     }
 
     if deferred {

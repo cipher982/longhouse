@@ -54,6 +54,25 @@ const SOURCE_BINDING_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// must not become a permanently degraded session.
 const SOURCE_BINDING_ATTEMPTS: usize = 3;
 const SOURCE_BINDING_RETRY_DELAY: Duration = Duration::from_millis(250);
+/// Spacing between late native-identity reconciliation attempts.
+///
+/// A binding that fails leaves no committed identity, and nothing re-binds it
+/// on its own: `extension_identity_matches_locked` reads an empty stored
+/// identity as "no drift", so every later activity frame is accepted against
+/// the identity the launcher never wrote. Observed on `cinder`: a busy archive
+/// database failed the bind at session start, and two live sessions stayed
+/// `degraded` with no native identity for the rest of their lives — unbound in
+/// discovery and never granted their initial prompt. Retrying is spaced so a
+/// database that stays unavailable cannot hold the activity channel.
+const IDENTITY_RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
+/// Busy budget for a *repair* attempt on an otherwise working channel.
+///
+/// The launch-critical binding may spend its full budget (three opens of five
+/// seconds) because the session is unusable until it lands. A repair runs on the
+/// session's activity reader thread, so it gets one short attempt: a database
+/// that is unavailable for longer than this simply loses the attempt, and the
+/// next reconciliation window retries it.
+const RECONCILE_BINDING_BUSY_TIMEOUT: Duration = Duration::from_secs(2);
 
 const EXTENSION_ASSET: &str = include_str!("../assets/longhouse-omp-helm.ts");
 
@@ -139,6 +158,9 @@ struct SharedState {
     observed_turn_generation: u64,
     live_turn_seq: u64,
     live_message_seq: u64,
+    /// Earliest time a later activity frame may retry a native-identity binding
+    /// that never succeeded. See `IDENTITY_RECONCILE_INTERVAL`.
+    identity_retry_after: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -175,6 +197,7 @@ impl OmpHelmServer {
                 observed_turn_generation: 0,
                 live_turn_seq: 0,
                 live_message_seq: 0,
+                identity_retry_after: None,
             })),
             socket_path,
             state_path,
@@ -259,6 +282,9 @@ impl OmpHelmServer {
             fail_pending_locked(&mut state, "OMP extension connection replaced");
             state.extension_sender = Some(sender);
             state.extension_connection_id = Some(connection_id.clone());
+            // A new channel is a new authority: a window armed against the old
+            // connection must not postpone this one's first reconcile attempt.
+            state.identity_retry_after = None;
             state.state.connection_id = connection_id.clone();
             state.state.lease_generation = Uuid::new_v4().to_string();
             state.state.ready = false;
@@ -316,6 +342,35 @@ impl OmpHelmServer {
             && state.state.terminal_state.is_none()
             && state.state.terminal_reason.as_deref()
                 != Some("native_session_transition_not_committed")
+    }
+    /// Guards shared by both identity-reconcile paths: a frame may only bind the
+    /// session's source when it carries the base authority, the session can
+    /// still change identity, and it offers a native identity to bind.
+    fn identity_binding_allowed(&self, connection_id: &str, frame: &Value) -> bool {
+        self.extension_base_authority_matches(connection_id, frame)
+            && self.activity_identity_reconciliation_allowed()
+            && has_native_session_identity(frame)
+    }
+    /// True when this frame should retry a binding that never committed, and
+    /// arms the spacing window. Only a frame that already carries the base
+    /// authority may arm it, so a stale connection or lease generation cannot
+    /// postpone the retry that a valid frame deserves.
+    fn uncommitted_identity_needs_reconcile(&self, frame: &Value, base_authority: bool) -> bool {
+        if !base_authority {
+            return false;
+        }
+        let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+        let now = Instant::now();
+        let due = should_reconcile_uncommitted_identity(
+            &state.state.native_session_id,
+            frame,
+            state.identity_retry_after,
+            now,
+        );
+        if due {
+            state.identity_retry_after = Some(now + IDENTITY_RECONCILE_INTERVAL);
+        }
+        due
     }
     fn terminal_turn_is_latched(&self) -> bool {
         self.shared
@@ -406,6 +461,7 @@ impl OmpHelmServer {
         fail_pending_locked(&mut state, "OMP extension channel disconnected");
         state.extension_sender = None;
         state.extension_connection_id = None;
+        state.identity_retry_after = None;
         state.state.ready = false;
         if state.state.status != "stopped" {
             state.state.status = "degraded".into();
@@ -436,7 +492,13 @@ impl OmpHelmServer {
         }
     }
 
-    fn update_identity(&self, connection_id: &str, frame: &Value, replacement: bool) -> Result<()> {
+    fn update_identity(
+        &self,
+        connection_id: &str,
+        frame: &Value,
+        replacement: bool,
+        attempt: BindingAttempt,
+    ) -> Result<()> {
         let native_id = frame
             .get("native_session_id")
             .and_then(Value::as_str)
@@ -495,7 +557,15 @@ impl OmpHelmServer {
         // materializing its header. Discovery then keeps the path pending
         // instead of minting a Shadow session in this transition window.
         let db_path = crate::config::get_agent_db_path()?;
-        let conn = open_agent_binding_connection(&db_path)?;
+        let conn = match attempt {
+            BindingAttempt::Launch => open_agent_binding_connection(&db_path)?,
+            BindingAttempt::Reconcile => open_agent_binding_connection_with(
+                &db_path,
+                RECONCILE_BINDING_BUSY_TIMEOUT,
+                1,
+                SOURCE_BINDING_RETRY_DELAY,
+            )?,
+        };
         {
             let state = self.shared.lock().expect("OMP state mutex poisoned");
             identity_commit_authority_matches_locked(
@@ -542,11 +612,19 @@ impl OmpHelmServer {
             &session_id,
             native_id,
         )?;
+        // A late reconcile repairs the degradation it recovered from:
+        // `mark_degraded` left the bind error in `terminal_reason`, and a
+        // session that is ready again must not keep advertising it.
+        let recovered_from_degraded = state.state.status == "degraded";
         state.state.native_session_id = native_id.to_string();
         state.state.session_file = source.to_string();
         state.state.pending_transition = false;
         state.state.ready = true;
         state.state.status = "ready".into();
+        state.identity_retry_after = None;
+        if recovered_from_degraded {
+            state.state.terminal_reason = None;
+        }
         if previous != native_id {
             state.live_assistant_text.clear();
             state.live_text_seq = 0;
@@ -603,17 +681,35 @@ impl OmpHelmServer {
             .get("kind")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        // `extension_identity_matches` reads an empty stored identity as a
+        // match, which is right while a session is starting and wrong for the
+        // rest of a session whose first bind failed: every later activity frame
+        // is accepted against the identity the launcher never wrote, so nothing
+        // retried, discovery could not bind the transcript, and the initial
+        // prompt was never granted. Ask separately — throttled, and only for
+        // frames that carry the base authority — while leaving the frames that
+        // do not publish provider activity (`initial_prompt_request`,
+        // `command_result`, `title_change`, transition frames) untouched.
         let identity_drift =
             is_activity_frame_kind(kind) && !self.extension_identity_matches(&frame);
-        if !self.extension_authority_matches(connection_id, &frame) {
-            if !identity_drift
-                || !self.extension_base_authority_matches(connection_id, &frame)
-                || !self.activity_identity_reconciliation_allowed()
-                || !has_native_session_identity(&frame)
+        let base_authority = self.extension_base_authority_matches(connection_id, &frame);
+        let uncommitted_identity = is_activity_frame_kind(kind)
+            && self.uncommitted_identity_needs_reconcile(&frame, base_authority);
+        if uncommitted_identity && self.identity_binding_allowed(connection_id, &frame) {
+            if let Err(error) =
+                self.update_identity(connection_id, &frame, false, BindingAttempt::Reconcile)
             {
+                eprintln!("Longhouse: OMP activity identity binding failed: {error:#}");
                 return;
             }
-            if let Err(error) = self.update_identity(connection_id, &frame, false) {
+        }
+        if !self.extension_authority_matches(connection_id, &frame) {
+            if !identity_drift || !self.identity_binding_allowed(connection_id, &frame) {
+                return;
+            }
+            if let Err(error) =
+                self.update_identity(connection_id, &frame, false, BindingAttempt::Reconcile)
+            {
                 eprintln!("Longhouse: OMP activity identity binding failed: {error:#}");
                 return;
             }
@@ -654,7 +750,9 @@ impl OmpHelmServer {
         }
         match kind {
             "session_start" | "session_reconnect" => {
-                if let Err(error) = self.update_identity(connection_id, &frame, false) {
+                if let Err(error) =
+                    self.update_identity(connection_id, &frame, false, BindingAttempt::Launch)
+                {
                     if self.identity_failure_is_current(connection_id, &frame, false) {
                         self.mark_degraded(&error);
                     }
@@ -690,7 +788,9 @@ impl OmpHelmServer {
             }
             "session_switch" | "session_branch" => {
                 let replacement = self.current_state().pending_transition;
-                if let Err(error) = self.update_identity(connection_id, &frame, replacement) {
+                if let Err(error) =
+                    self.update_identity(connection_id, &frame, replacement, BindingAttempt::Launch)
+                {
                     if self.identity_failure_is_current(connection_id, &frame, replacement) {
                         self.mark_degraded(&error);
                     }
@@ -1313,6 +1413,36 @@ fn is_activity_frame_kind(kind: &str) -> bool {
             | "message_update"
             | "agent_end"
     )
+}
+
+/// How hard one native-identity binding attempt tries before it reports failure.
+#[derive(Clone, Copy)]
+enum BindingAttempt {
+    /// A launch-critical bind: the session is unusable until it lands, so it
+    /// gets the full retry budget even at the cost of a blocked reader.
+    Launch,
+    /// A repair on an otherwise working channel: one short attempt, repeated on
+    /// the reconciliation cadence instead of held open.
+    Reconcile,
+}
+
+/// Whether an activity frame must retry a native-identity binding that never
+/// succeeded.
+///
+/// `extension_identity_matches_locked` answers "no drift" for an empty stored
+/// identity, which is right while a session is starting and wrong for the rest
+/// of a session whose first binding failed. This is the decision that makes
+/// that failure recoverable; `retry_after` bounds how often the attempt may
+/// hold the activity channel.
+fn should_reconcile_uncommitted_identity(
+    stored_identity: &str,
+    frame: &Value,
+    retry_after: Option<Instant>,
+    now: Instant,
+) -> bool {
+    stored_identity.is_empty()
+        && has_native_session_identity(frame)
+        && retry_after.is_none_or(|deadline| deadline <= now)
 }
 
 fn has_native_session_identity(frame: &Value) -> bool {
@@ -2352,6 +2482,7 @@ mod tests {
             observed_turn_generation: 0,
             live_turn_seq: 0,
             live_message_seq: 0,
+            identity_retry_after: None,
         };
 
         settle_pending_terminate_locked(&mut shared);
@@ -2380,6 +2511,7 @@ mod tests {
             observed_turn_generation: 0,
             live_turn_seq: 0,
             live_message_seq: 0,
+            identity_retry_after: None,
         };
         let frame = json!({
             "auth_token": "token",
@@ -2437,6 +2569,289 @@ mod tests {
             assert_eq!(current.phase, "running");
             assert!(current.ready);
             assert_eq!(current.status, "ready");
+            server.shutdown();
+        });
+    }
+
+    #[test]
+    fn uncommitted_identity_reconcile_respects_the_spacing_window() {
+        let frame = json!({"native_session_id": "native", "session_file": "/tmp/s.jsonl"});
+        let now = Instant::now();
+        assert!(should_reconcile_uncommitted_identity("", &frame, None, now));
+        assert!(!should_reconcile_uncommitted_identity(
+            "",
+            &frame,
+            Some(now + Duration::from_secs(5)),
+            now
+        ));
+        assert!(should_reconcile_uncommitted_identity(
+            "",
+            &frame,
+            Some(now - Duration::from_secs(1)),
+            now
+        ));
+        // A committed identity is never re-reconciled by this rule: ordinary
+        // drift is `extension_identity_matches`'s job.
+        assert!(!should_reconcile_uncommitted_identity("native", &frame, None, now));
+        // A frame that carries no identity cannot bind one.
+        assert!(!should_reconcile_uncommitted_identity(
+            "",
+            &json!({"kind": "activity"}),
+            None,
+            now
+        ));
+    }
+
+    #[test]
+    fn a_failed_binding_is_reconciled_by_ordinary_activity() {
+        // Regression for the incident: a bind that failed at session start
+        // (busy archive database) left `native_session_id` empty, and an empty
+        // committed identity read as "no drift", so nothing ever retried. The
+        // session stayed degraded with no native identity and never got its
+        // initial prompt.
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let source = temp.path().join("session-b.jsonl");
+        fs::write(
+            &source,
+            b"{\"type\":\"session\",\"id\":\"native-b\",\"cwd\":\"/tmp\"}\n",
+        )
+        .unwrap();
+        let socket_dir = temp.path().join("socket");
+        let socket_path = socket_dir.join("channel.sock");
+        let state_path = temp.path().join("state.json");
+        let mut initial = state();
+        initial.session_id = Uuid::new_v4().to_string();
+        initial.native_session_id = String::new();
+        initial.session_file = String::new();
+        initial.ready = false;
+        initial.status = "degraded".into();
+        initial.terminal_reason = Some("database is locked".into());
+
+        temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
+            let server =
+                OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
+            let (sender, _receiver) = mpsc::channel();
+            {
+                let mut shared = server.shared.lock().unwrap();
+                shared.extension_sender = Some(sender);
+                shared.extension_connection_id = Some("connection".into());
+            }
+            server.handle_extension_frame(
+                "connection",
+                json!({
+                    "kind": "activity",
+                    "event": {"type": "activity"},
+                    "auth_token": "token",
+                    "session_id": server.current_state().session_id,
+                    "native_session_id": "native-b",
+                    "session_file": source.display().to_string(),
+                    "connection_id": "connection",
+                    "lease_generation": "generation"
+                }),
+            );
+            let current = server.current_state();
+            assert_eq!(current.native_session_id, "native-b");
+            assert_eq!(current.session_file, source.display().to_string());
+            assert!(current.ready, "a late bind must make the session ready again");
+            assert_eq!(current.status, "ready");
+            assert_eq!(
+                current.terminal_reason, None,
+                "the repaired session must stop advertising the bind failure"
+            );
+            server.shutdown();
+        });
+    }
+
+    #[test]
+    fn initial_prompt_request_is_answered_while_identity_is_uncommitted() {
+        // Regression guard for the fix itself: a repair must not be paid for by
+        // dropping the frames that do not publish provider activity. The
+        // provider retries `initial_prompt_request` for about a minute and then
+        // stops, so an unanswered request is a lost prompt.
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let socket_dir = temp.path().join("socket");
+        let socket_path = socket_dir.join("channel.sock");
+        let state_path = temp.path().join("state.json");
+        let mut initial = state();
+        initial.session_id = Uuid::new_v4().to_string();
+        initial.native_session_id = String::new();
+        initial.session_file = String::new();
+        initial.ready = false;
+        initial.status = "degraded".into();
+        initial.terminal_reason = Some("database is locked".into());
+
+        temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
+            let server =
+                OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
+            let (sender, receiver) = mpsc::channel();
+            {
+                let mut shared = server.shared.lock().unwrap();
+                shared.extension_sender = Some(sender);
+                shared.extension_connection_id = Some("connection".into());
+            }
+            server.handle_extension_frame(
+                "connection",
+                json!({
+                    "kind": "initial_prompt_request",
+                    "auth_token": "token",
+                    "session_id": server.current_state().session_id,
+                    "connection_id": "connection",
+                    "lease_generation": "generation"
+                }),
+            );
+            let sent = receiver
+                .try_recv()
+                .expect("an unbound session must still answer the prompt request");
+            assert_eq!(sent["kind"], json!("initial_prompt_grant"));
+            assert_eq!(
+                sent["granted"],
+                json!(false),
+                "not ready yet is a refusal, not a dropped frame"
+            );
+            server.shutdown();
+        });
+    }
+
+    #[test]
+    fn a_late_bind_lets_the_initial_prompt_through() {
+        // The end-to-end repair: bind late, then grant the prompt the provider
+        // is still retrying.
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let source = temp.path().join("session-b.jsonl");
+        fs::write(
+            &source,
+            b"{\"type\":\"session\",\"id\":\"native-b\",\"cwd\":\"/tmp\"}\n",
+        )
+        .unwrap();
+        let socket_dir = temp.path().join("socket");
+        let socket_path = socket_dir.join("channel.sock");
+        let state_path = temp.path().join("state.json");
+        let mut initial = state();
+        initial.session_id = Uuid::new_v4().to_string();
+        initial.native_session_id = String::new();
+        initial.session_file = String::new();
+        initial.ready = false;
+        initial.status = "degraded".into();
+        initial.terminal_reason = Some("database is locked".into());
+
+        temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
+            let server =
+                OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
+            let (sender, receiver) = mpsc::channel();
+            {
+                let mut shared = server.shared.lock().unwrap();
+                shared.extension_sender = Some(sender);
+                shared.extension_connection_id = Some("connection".into());
+            }
+            let session_id = server.current_state().session_id;
+            server.handle_extension_frame(
+                "connection",
+                json!({
+                    "kind": "agent_start",
+                    "event": {"type": "agent_start"},
+                    "auth_token": "token",
+                    "session_id": session_id,
+                    "native_session_id": "native-b",
+                    "session_file": source.display().to_string(),
+                    "connection_id": "connection",
+                    "lease_generation": "generation"
+                }),
+            );
+            assert!(server.current_state().ready);
+            server.handle_extension_frame(
+                "connection",
+                json!({
+                    "kind": "initial_prompt_request",
+                    "auth_token": "token",
+                    "session_id": server.current_state().session_id,
+                    "native_session_id": "native-b",
+                    "session_file": source.display().to_string(),
+                    "connection_id": "connection",
+                    "lease_generation": "generation"
+                }),
+            );
+            let sent = receiver
+                .try_recv()
+                .expect("a ready session must answer the prompt request");
+            assert_eq!(sent["kind"], json!("initial_prompt_grant"));
+            assert_eq!(sent["granted"], json!(true));
+            assert!(server.current_state().initial_prompt_delivered);
+            server.shutdown();
+        });
+    }
+
+    #[test]
+    fn a_stale_frame_cannot_arm_the_identity_retry_window() {
+        // The window must be armed only by a frame that carries the base
+        // authority; otherwise a stale connection or lease generation could
+        // postpone the retry a valid frame deserves.
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let source = temp.path().join("session-b.jsonl");
+        fs::write(
+            &source,
+            b"{\"type\":\"session\",\"id\":\"native-b\",\"cwd\":\"/tmp\"}\n",
+        )
+        .unwrap();
+        let socket_dir = temp.path().join("socket");
+        let socket_path = socket_dir.join("channel.sock");
+        let state_path = temp.path().join("state.json");
+        let mut initial = state();
+        initial.session_id = Uuid::new_v4().to_string();
+        initial.native_session_id = String::new();
+        initial.session_file = String::new();
+        initial.ready = false;
+        initial.status = "degraded".into();
+
+        temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
+            let server =
+                OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
+            let (sender, _receiver) = mpsc::channel();
+            {
+                let mut shared = server.shared.lock().unwrap();
+                shared.extension_sender = Some(sender);
+                shared.extension_connection_id = Some("connection".into());
+            }
+            let session_id = server.current_state().session_id;
+            server.handle_extension_frame(
+                "connection",
+                json!({
+                    "kind": "agent_start",
+                    "event": {"type": "agent_start"},
+                    "auth_token": "token",
+                    "session_id": session_id,
+                    "native_session_id": "native-b",
+                    "session_file": source.display().to_string(),
+                    "connection_id": "connection",
+                    "lease_generation": "stale-generation"
+                }),
+            );
+            assert!(
+                server.shared.lock().unwrap().identity_retry_after.is_none(),
+                "a frame that fails the base authority must not arm the retry window"
+            );
+
+            server.handle_extension_frame(
+                "connection",
+                json!({
+                    "kind": "agent_start",
+                    "event": {"type": "agent_start"},
+                    "auth_token": "token",
+                    "session_id": session_id,
+                    "native_session_id": "native-b",
+                    "session_file": source.display().to_string(),
+                    "connection_id": "connection",
+                    "lease_generation": "generation"
+                }),
+            );
+            assert_eq!(
+                server.current_state().native_session_id,
+                "native-b",
+                "the valid frame must be free to retry immediately"
+            );
             server.shutdown();
         });
     }
@@ -3264,7 +3679,9 @@ mod tests {
             });
             let worker = {
                 let server = server.clone();
-                thread::spawn(move || server.update_identity("connection", &frame, false))
+                thread::spawn(move || {
+                    server.update_identity("connection", &frame, false, BindingAttempt::Launch)
+                })
             };
             thread::sleep(Duration::from_millis(100));
             server.mark_stopped(None, "provider_exit").unwrap();
@@ -3300,6 +3717,7 @@ mod tests {
             observed_turn_generation: 0,
             live_turn_seq: 0,
             live_message_seq: 0,
+            identity_retry_after: None,
         };
         fail_pending_locked(&mut shared, "replacement");
         let response = receiver.recv().unwrap();
@@ -3484,7 +3902,9 @@ mod tests {
             });
             let worker = {
                 let server = server.clone();
-                std::thread::spawn(move || server.update_identity("connection", &frame, true))
+                std::thread::spawn(move || {
+                    server.update_identity("connection", &frame, true, BindingAttempt::Launch)
+                })
             };
             std::thread::sleep(Duration::from_millis(100));
             server.reconcile_transition_timeout("connection", &switching.lease_generation);

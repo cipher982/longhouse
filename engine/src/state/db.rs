@@ -190,15 +190,6 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             last_seen_at TEXT
         );
 
-        CREATE TABLE IF NOT EXISTS live_file_state (
-            path TEXT PRIMARY KEY,
-            provider TEXT NOT NULL,
-            offset INTEGER NOT NULL DEFAULT 0,
-            file_identity TEXT,
-            session_id TEXT,
-            updated_at TEXT NOT NULL
-        );
-
         CREATE TABLE IF NOT EXISTS session_phase_state (
             session_id TEXT PRIMARY KEY,
             provider TEXT NOT NULL,
@@ -418,13 +409,12 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
         conn.execute_batch("ALTER TABLE session_binding ADD COLUMN last_seen_at TEXT;")?;
     }
 
-    let live_file_state_columns: std::collections::HashSet<String> = conn
-        .prepare("PRAGMA table_info(live_file_state)")?
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<std::result::Result<_, _>>()?;
-    if !live_file_state_columns.contains("file_identity") {
-        conn.execute_batch("ALTER TABLE live_file_state ADD COLUMN file_identity TEXT;")?;
-    }
+    // Deletion migration, not a rewrite: `live_file_state` had no reader or
+    // writer anywhere in the engine (only its own DDL), and its rows describe
+    // v1 per-file offsets that `source_epoch_lane_state` owns now. Dropping it
+    // here is what makes the removal real for databases created before
+    // 2026-09-17 instead of only for fresh ones.
+    conn.execute_batch("DROP TABLE IF EXISTS live_file_state;")?;
 
     let session_phase_columns: std::collections::HashSet<String> = conn
         .prepare("PRAGMA table_info(session_phase_state)")?
@@ -561,9 +551,6 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
 
          CREATE INDEX IF NOT EXISTS idx_session_phase_provider_observed
          ON session_phase_state(provider, observed_at DESC);
-
-         CREATE INDEX IF NOT EXISTS idx_live_file_state_updated
-         ON live_file_state(provider, updated_at DESC);
 
          CREATE INDEX IF NOT EXISTS idx_unmanaged_process_binding_observed
          ON unmanaged_process_binding_state(provider, observed_at DESC);

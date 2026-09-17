@@ -154,20 +154,35 @@ mod tests {
     /// drive the daemon loop directly; until that exists, this is the guard.
     #[test]
     fn every_recovery_producer_is_wired_into_the_daemon() {
+        // A recovery path that nothing schedules is indistinguishable from one
+        // that does not exist. The producer may live outside the daemon — the
+        // daily pass now runs the dead-range revive next to the compaction it
+        // prepares for — so the invariant is asserted in two parts: the
+        // producer exists where it is claimed to, and the daemon names the
+        // entry point that schedules it.
         let daemon = include_str!("../daemon.rs");
-        for (function, why) in [
+        let recover = include_str!("recover.rs");
+        for (producer, producer_source, scheduled_entry, why) in [
             (
                 "revive_dead_with_readable_sources",
+                recover,
+                "run_daily_storage_maintenance",
                 "dead spool ranges would never return to pending",
             ),
             (
+                "run_check_tick",
+                daemon,
                 "run_check_tick",
                 "the machine would never learn it is running a stale binary",
             ),
         ] {
             assert!(
-                daemon.contains(function),
-                "{function} is not called from daemon.rs, so {why}. A recovery path that \
+                producer_source.contains(producer),
+                "{producer} is not found in the source this test claims holds it"
+            );
+            assert!(
+                daemon.contains(scheduled_entry),
+                "daemon.rs does not schedule {scheduled_entry}, so {why}. A recovery path that \
                  nothing schedules is indistinguishable from one that does not exist."
             );
         }
