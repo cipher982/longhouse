@@ -122,11 +122,15 @@ fn snapshot_files(dir: &Path, include: impl Fn(&std::fs::DirEntry) -> bool) -> V
         }
     };
 
+    let mut entries_seen = 0_u64;
     for entry in entries.flatten() {
-        if count >= SNAPSHOT_FILE_CAP {
+        // Cap what is inspected, not what matches: a directory of skipped
+        // names costs exactly as much to walk as a directory of ready ones.
+        if entries_seen >= SNAPSHOT_FILE_CAP {
             capped = true;
             break;
         }
+        entries_seen += 1;
         let Ok(metadata) = entry.metadata() else {
             continue;
         };
