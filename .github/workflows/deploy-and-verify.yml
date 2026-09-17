@@ -207,12 +207,17 @@ jobs:
           timeout_seconds: "1200"
 
       - name: Resolve publishing workflow order
-        if: ${{ needs.changes.outputs.runtime_image == 'true' && github.event_name == 'push' }}
+        id: source
+        if: ${{ needs.changes.outputs.runtime_image == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ steps.meta.outputs.head_sha }}
+          SOURCE_SHA: ${{ steps.meta.outputs.runtime_image_tag }}
         run: |
           set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-fA-F]{40}$ ]] || {
+            echo "Runtime image tag must be a full source SHA for deployment metadata: $SOURCE_SHA" >&2
+            exit 1
+          }
           run_number="$(gh run list \
             --repo "${{ github.repository }}" \
             --workflow runtime-image.yml \
@@ -333,6 +338,11 @@ jobs:
     if: github.repository == 'cipher982/longhouse'
     timeout-minutes: 60
     needs: [changes, gate]
+    outputs:
+      instance_id: ${{ steps.instance.outputs.instance_id }}
+      instance_url: ${{ steps.instance.outputs.instance_url }}
+      frontend_url: ${{ steps.instance.outputs.frontend_url }}
+      api_url: ${{ steps.instance.outputs.api_url }}
     env:
       CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.HOSTED_CANARY_CONTROL_PLANE_ADMIN_TOKEN }}
       CONTROL_PLANE_URL: ${{ vars.HOSTED_CANARY_CONTROL_PLANE_URL }}

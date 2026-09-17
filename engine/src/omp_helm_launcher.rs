@@ -129,11 +129,11 @@ struct SharedState {
     pending_terminate: Option<String>,
     live_assistant_text: String,
     live_text_seq: u64,
+    /// OMP increments this when a new provider turn starts. If the start frame
+    /// is lost during a channel outage, the reconnect snapshot still lets the
+    /// launcher open the new turn without admitting old drain frames.
+    observed_turn_generation: u64,
     live_turn_seq: u64,
-    /// A non-idle reconnect is provisional until a fresh `agent_start` arrives.
-    /// It keeps the served phase live without allowing delayed drain frames to
-    /// bypass the terminal-turn latch.
-    reconnect_active: bool,
     live_message_seq: u64,
 }
 
@@ -168,9 +168,9 @@ impl OmpHelmServer {
                 pending_terminate: None,
                 live_assistant_text: String::new(),
                 live_text_seq: 0,
+                observed_turn_generation: 0,
                 live_turn_seq: 0,
                 live_message_seq: 0,
-                reconnect_active: false,
             })),
             socket_path,
             state_path,
@@ -320,6 +320,52 @@ impl OmpHelmServer {
             .state
             .agent_end_is_terminal
             == Some(true)
+    }
+    fn start_new_turn_locked(shared: &mut SharedState) {
+        shared.live_turn_seq = shared.live_turn_seq.saturating_add(1);
+        shared.live_message_seq = 0;
+        shared.state.live_turn_seq = shared.live_turn_seq;
+        shared.state.live_message_seq = 0;
+        shared.state.agent_end_observed = false;
+        shared.state.agent_end_is_terminal = None;
+        shared.state.agent_end_will_continue = None;
+        shared.state.agent_end_is_terminal_present = false;
+        shared.state.agent_end_will_continue_present = false;
+        shared.state.phase = "running".into();
+        shared.state.tool_name = None;
+        shared.live_assistant_text.clear();
+        shared.live_text_seq = 0;
+    }
+
+    fn reconcile_turn_generation(&self, frame: &Value) {
+        let Some(generation) = frame.get("turn_generation").and_then(Value::as_u64) else {
+            return;
+        };
+        let mut shared = self.shared.lock().expect("OMP state mutex poisoned");
+        if shared.state.status == "stopped"
+            || shared.state.terminal_state.is_some()
+            || generation <= shared.observed_turn_generation
+        {
+            return;
+        }
+        shared.observed_turn_generation = generation;
+        Self::start_new_turn_locked(&mut shared);
+    }
+
+    fn reconcile_terminal_snapshot(&self, frame: &Value) {
+        let Some(terminal) = frame.get("agent_end_terminal").and_then(Value::as_bool) else {
+            return;
+        };
+        let generation = frame.get("turn_generation").and_then(Value::as_u64);
+        let mut shared = self.shared.lock().expect("OMP state mutex poisoned");
+        if shared.state.status == "stopped"
+            || shared.state.terminal_state.is_some()
+            || generation.is_some_and(|value| value < shared.observed_turn_generation)
+        {
+            return;
+        }
+        shared.state.agent_end_observed = true;
+        shared.state.agent_end_is_terminal = Some(terminal);
     }
 
     fn extension_authority_matches(&self, connection_id: &str, frame: &Value) -> bool {
@@ -553,12 +599,6 @@ impl OmpHelmServer {
             .get("kind")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if is_activity_frame_kind(kind)
-            && !matches!(kind, "agent_start" | "extension_keepalive")
-            && self.terminal_turn_is_latched()
-        {
-            return;
-        }
         let identity_drift =
             is_activity_frame_kind(kind) && !self.extension_identity_matches(&frame);
         if !self.extension_authority_matches(connection_id, &frame) {
@@ -579,6 +619,15 @@ impl OmpHelmServer {
             if !self.extension_authority_matches(connection_id, &frame) {
                 return;
             }
+        }
+        if is_activity_frame_kind(kind) && kind != "agent_start" {
+            self.reconcile_turn_generation(&frame);
+        }
+        if is_activity_frame_kind(kind)
+            && !matches!(kind, "agent_start" | "extension_keepalive")
+            && self.terminal_turn_is_latched()
+        {
+            return;
         }
         if matches!(kind, "session_before_switch" | "session_before_branch") {
             let mut state = self.shared.lock().expect("OMP state mutex poisoned");
@@ -607,6 +656,8 @@ impl OmpHelmServer {
                     }
                     eprintln!("Longhouse: OMP native identity binding failed: {error:#}");
                 } else if kind == "session_reconnect" {
+                    self.reconcile_turn_generation(&frame);
+                    self.reconcile_terminal_snapshot(&frame);
                     if let Some(provider_idle) = frame
                         .get("event")
                         .and_then(|event| event.get("provider_idle"))
@@ -670,6 +721,7 @@ impl OmpHelmServer {
                 );
             }
             "extension_keepalive" => {
+                self.reconcile_terminal_snapshot(&frame);
                 if let Some(provider_idle) = frame.get("provider_idle").and_then(Value::as_bool) {
                     self.record_keepalive(provider_idle);
                 }
@@ -813,18 +865,13 @@ impl OmpHelmServer {
             return;
         }
         if kind == "agent_start" {
-            state.reconnect_active = false;
-            state.live_turn_seq = state.live_turn_seq.saturating_add(1);
-            state.live_message_seq = 0;
-            state.state.live_turn_seq = state.live_turn_seq;
-            state.state.live_message_seq = 0;
-            state.state.agent_end_observed = false;
-            state.state.agent_end_is_terminal = None;
-            state.state.agent_end_will_continue = None;
-            state.state.agent_end_is_terminal_present = false;
-            state.state.agent_end_will_continue_present = false;
-            state.live_assistant_text.clear();
-            state.live_text_seq = 0;
+            if let Some(generation) = frame.get("turn_generation").and_then(Value::as_u64) {
+                if generation <= state.observed_turn_generation {
+                    return;
+                }
+                state.observed_turn_generation = generation;
+            }
+            Self::start_new_turn_locked(&mut state);
         } else if kind == "message_start" {
             state.live_message_seq = state.live_message_seq.saturating_add(1);
             state.state.live_message_seq = state.live_message_seq;
@@ -917,21 +964,20 @@ impl OmpHelmServer {
 
     /// Refresh canonical activity evidence from the extension without
     /// manufacturing a lifecycle event. Keepalive observations are frequent:
-    /// they preserve the current phase, refresh idle evidence, and never
-    /// reopen a settled turn on their own.
+    /// they preserve the current phase and refresh the provider's live
+    /// observation. A terminal latch settles only on an idle sample.
     fn record_keepalive(&self, provider_idle: bool) {
-        self.record_keepalive_with_policy(provider_idle, false);
+        self.record_keepalive_with_policy(provider_idle);
     }
 
     /// A reconnect re-samples the provider after the extension may have
-    /// crossed a turn boundary while disconnected. A non-idle result keeps
-    /// the served phase live provisionally; only `agent_start` clears the
-    /// terminal latch and admits new activity frames.
+    /// crossed a turn boundary while disconnected. Turn-generation
+    /// reconciliation happens before this snapshot is recorded.
     fn record_reconnect(&self, provider_idle: bool) {
-        self.record_keepalive_with_policy(provider_idle, true);
+        self.record_keepalive_with_policy(provider_idle);
     }
 
-    fn record_keepalive_with_policy(&self, provider_idle: bool, reconnect: bool) {
+    fn record_keepalive_with_policy(&self, provider_idle: bool) {
         let (state, phase, tool) = {
             let _persist_lock = self
                 .persist_lock
@@ -942,15 +988,8 @@ impl OmpHelmServer {
                 return;
             }
             let terminal_turn = shared.state.agent_end_is_terminal == Some(true);
-            if reconnect {
-                shared.reconnect_active = terminal_turn && !provider_idle;
-            } else if provider_idle {
-                shared.reconnect_active = false;
-            }
-            let terminal_turn = shared.state.agent_end_is_terminal == Some(true);
             let continuation_turn = shared.state.agent_end_is_terminal == Some(false);
-            let provisional_active = terminal_turn && shared.reconnect_active;
-            let settled = terminal_turn && !provisional_active;
+            let settled = terminal_turn && provider_idle;
             shared.state.phase = if settled || (provider_idle && !continuation_turn) {
                 "idle".into()
             } else if shared.state.phase == "thinking" {
@@ -2306,9 +2345,9 @@ mod tests {
             pending_terminate: Some("terminate-1".into()),
             live_assistant_text: String::new(),
             live_text_seq: 0,
+            observed_turn_generation: 0,
             live_turn_seq: 0,
             live_message_seq: 0,
-            reconnect_active: false,
         };
 
         settle_pending_terminate_locked(&mut shared);
@@ -2334,9 +2373,9 @@ mod tests {
             pending_terminate: None,
             live_assistant_text: String::new(),
             live_text_seq: 0,
+            observed_turn_generation: 0,
             live_turn_seq: 0,
             live_message_seq: 0,
-            reconnect_active: false,
         };
         let frame = json!({
             "auth_token": "token",
@@ -2576,7 +2615,7 @@ mod tests {
             let runtime_before_terminal_keepalive = read_json_files(&runtime_outbox);
             server.handle_extension_frame("connection", keepalive(false));
             let terminal_keepalive_active = server.current_state();
-            assert_eq!(terminal_keepalive_active.phase, "idle");
+            assert_eq!(terminal_keepalive_active.phase, "running");
             assert_eq!(terminal_keepalive_active.tool_name, None);
             assert_eq!(terminal_keepalive_active.agent_end_is_terminal, Some(true));
             assert_ne!(
@@ -2591,7 +2630,21 @@ mod tests {
                 read_json_files(&runtime_outbox).len(),
                 runtime_before_terminal_keepalive.len() + 1
             );
-            assert_eq!(persisted()["phase"], "idle");
+            assert_eq!(
+                new_json_file(
+                    &local_before_terminal_keepalive,
+                    &read_json_files(&local_outbox),
+                )["state"],
+                "running"
+            );
+            assert_eq!(
+                new_json_file(
+                    &runtime_before_terminal_keepalive,
+                    &read_json_files(&runtime_outbox),
+                )["phase"],
+                "running"
+            );
+            assert_eq!(persisted()["phase"], "running");
             assert_eq!(
                 persisted()["agent_end_is_terminal"],
                 serde_json::Value::Bool(true)
@@ -2806,6 +2859,27 @@ mod tests {
                     "lease_generation": "generation"
                 })
             };
+            let generation_frame =
+                |kind: &str,
+                 event: Value,
+                 turn_generation: u64,
+                 agent_end_terminal: Option<bool>| {
+                    let mut frame = json!({
+                        "kind": kind,
+                        "event": event,
+                        "auth_token": "token",
+                        "session_id": session_id,
+                        "native_session_id": "native",
+                        "session_file": source,
+                        "connection_id": "connection",
+                        "lease_generation": "generation",
+                        "turn_generation": turn_generation
+                    });
+                    if let Some(terminal) = agent_end_terminal {
+                        frame["agent_end_terminal"] = json!(terminal);
+                    }
+                    frame
+                };
             server.handle_extension_frame(
                 "connection",
                 frame(
@@ -2814,6 +2888,12 @@ mod tests {
                 ),
             );
             assert_eq!(server.current_state().agent_end_is_terminal, Some(true));
+            server.handle_extension_frame("connection", keepalive(false));
+            let active_without_reconnect = server.current_state();
+            assert_eq!(active_without_reconnect.phase, "running");
+            assert_eq!(active_without_reconnect.agent_end_is_terminal, Some(true));
+            server.handle_extension_frame("connection", keepalive(true));
+            assert_eq!(server.current_state().phase, "idle");
             server.handle_extension_frame(
                 "connection",
                 frame(
@@ -2880,6 +2960,38 @@ mod tests {
             assert_eq!(settled_again.phase, "idle");
             assert_eq!(settled_again.tool_name, None);
             assert_eq!(settled_again.agent_end_is_terminal, Some(true));
+            // The new OMP turn starts while the channel is down, so no
+            // agent_start frame reaches the launcher. The generation in the
+            // reconnect snapshot must open it without reviving the old latch.
+            server.handle_extension_frame(
+                "connection",
+                generation_frame(
+                    "session_reconnect",
+                    json!({"type": "session_reconnect", "provider_idle": false}),
+                    2,
+                    None,
+                ),
+            );
+            let missed_start = server.current_state();
+            assert_eq!(missed_start.phase, "running");
+            assert_eq!(missed_start.agent_end_is_terminal, None);
+            assert_eq!(
+                missed_start.live_turn_seq,
+                settled_again.live_turn_seq.saturating_add(1)
+            );
+            server.handle_extension_frame(
+                "connection",
+                generation_frame(
+                    "activity",
+                    json!({"type": "activity", "toolName": "reconnected_tool"}),
+                    2,
+                    None,
+                ),
+            );
+            assert_eq!(
+                server.current_state().tool_name.as_deref(),
+                Some("reconnected_tool")
+            );
 
             server.handle_extension_frame(
                 "connection",
@@ -2914,9 +3026,11 @@ mod tests {
             assert_eq!(server.current_state().agent_end_is_terminal, Some(false));
             server.handle_extension_frame(
                 "connection",
-                frame(
+                generation_frame(
                     "session_reconnect",
                     json!({"type": "session_reconnect", "provider_idle": true}),
+                    2,
+                    None,
                 ),
             );
             let continuation = server.current_state();
@@ -2936,6 +3050,33 @@ mod tests {
                 Some("continuation_tool")
             );
             assert_eq!(continuation_activity.agent_end_is_terminal, Some(false));
+            // A final terminal event can be observed by OMP while the channel
+            // is down. Its explicit snapshot supersedes the old continuation
+            // latch and settles the served phase.
+            server.handle_extension_frame(
+                "connection",
+                generation_frame(
+                    "session_reconnect",
+                    json!({"type": "session_reconnect", "provider_idle": true}),
+                    2,
+                    Some(true),
+                ),
+            );
+            let settled_continuation = server.current_state();
+            assert_eq!(settled_continuation.phase, "idle");
+            assert_eq!(settled_continuation.agent_end_is_terminal, Some(true));
+            server.handle_extension_frame(
+                "connection",
+                generation_frame(
+                    "activity",
+                    json!({"type": "activity", "toolName": "late_continuation_tool"}),
+                    2,
+                    None,
+                ),
+            );
+            let delayed_continuation = server.current_state();
+            assert_eq!(delayed_continuation.phase, "idle");
+            assert_eq!(delayed_continuation.tool_name, None);
 
             server.shutdown();
         });
@@ -3152,9 +3293,9 @@ mod tests {
             pending_terminate: None,
             live_assistant_text: String::new(),
             live_text_seq: 0,
+            observed_turn_generation: 0,
             live_turn_seq: 0,
             live_message_seq: 0,
-            reconnect_active: false,
         };
         fail_pending_locked(&mut shared, "replacement");
         let response = receiver.recv().unwrap();
