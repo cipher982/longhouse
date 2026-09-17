@@ -510,6 +510,15 @@ impl PiHelmServer {
             if !remote_authority_matches_locked(&guard, &frame) {
                 return channel_error("stale_channel", "Pi Helm channel identity rejected");
             }
+            let fault = crate::qa_fault::helm_extension_fault("pi");
+            if kind == "abort" && fault == Some(crate::qa_fault::HelmExtensionFault::AbortNoop) {
+                crate::qa_fault::record_fired_named(
+                    "pi_abort_noop",
+                    &guard.state.session_id,
+                    json!({"forwarded": false}),
+                );
+                return json!({"kind": "command_result", "ok": true, "status": "active"});
+            }
             let Some(extension) = guard.extension_sender.clone() else {
                 return channel_error(
                     "session_not_attached",
@@ -522,6 +531,14 @@ impl PiHelmServer {
             guard.pending.insert(request_id.clone(), sender);
             let mut command = frame;
             command["request_id"] = json!(request_id);
+            if kind == "steer" && fault == Some(crate::qa_fault::HelmExtensionFault::SteerAsFollowUp) {
+                crate::qa_fault::record_fired_named(
+                    "pi_steer_as_follow_up",
+                    &guard.state.session_id,
+                    json!({"forwarded_kind": "send"}),
+                );
+                command["kind"] = json!("send");
+            }
             if extension.send(command).is_err() {
                 guard.pending.remove(&request_id);
                 return channel_error("session_not_attached", "Pi extension channel is closed");

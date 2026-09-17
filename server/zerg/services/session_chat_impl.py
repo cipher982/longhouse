@@ -1300,6 +1300,10 @@ async def _dispatch_managed_local_text(
 
     admitted, details = await runtime_admission().try_admit(path="/managed-control-dispatch")
     if not admitted:
+        # The receipt was created before this final admission fence.  Nothing
+        # reached the provider, so release the session lock and let the caller
+        # retain a retryable receipt keyed by the same operation id.
+        await session_lock_manager.release(lock_scope_id, request_id)
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={
@@ -1308,6 +1312,7 @@ async def _dispatch_managed_local_text(
                 "error": details.get("message", "Runtime is restarting"),
                 "request_id": request_id,
                 "runtime_epoch": details.get("runtime_epoch"),
+                "retryable": bool(details.get("retryable", True)),
             },
         )
     try:

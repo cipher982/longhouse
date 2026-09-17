@@ -168,8 +168,6 @@ struct PendingInputStore: Sendable {
         remove(intent)
     }
 
-    func waitForPendingWrites() {}
-
     private func fileURL(for intent: PendingInputIntent) -> URL {
         let key = [
             intent.serverURL,

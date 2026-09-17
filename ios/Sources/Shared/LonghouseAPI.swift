@@ -1565,6 +1565,19 @@ enum LonghouseAPIError: Error {
         guard case .structured(_, let code, _) = self else { return nil }
         return code
     }
+
+    var isRuntimeDraining: Bool {
+        structuredCode?.lowercased() == "runtime_draining"
+    }
+
+    var isProviderDeliveryUnknown: Bool {
+        switch structuredCode?.lowercased() {
+        case "delivery_unknown", "input_receipt_unknown":
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 extension LonghouseAPIError: LocalizedError {

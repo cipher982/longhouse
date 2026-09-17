@@ -552,7 +552,7 @@
       "build_provenance": "observed_install",
       "trigger": "manual",
       "status": "never_run",
-      "reason": "every capability-proof assertion declared for claude is already satisfiable by an automated trigger",
+      "reason": "remaining capability-proof scenario_ids for claude are orphaned: ['claude_helm_lifecycle', 'claude_transcript_search']",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [],
@@ -1128,7 +1128,7 @@
       "build_provenance": "observed_install",
       "trigger": "manual",
       "status": "never_run",
-      "reason": "every capability-proof assertion declared for codex is already satisfiable by an automated trigger",
+      "reason": "remaining capability-proof scenario_ids for codex are orphaned: ['codex_helm_lifecycle', 'codex_transcript_search']",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [],
@@ -2191,7 +2191,7 @@
       "build_provenance": "observed_install",
       "trigger": "manual",
       "status": "never_run",
-      "reason": "every capability-proof assertion declared for omp is already satisfiable by an automated trigger",
+      "reason": "remaining capability-proof scenario_ids for omp are orphaned: ['omp_transcript_search']",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [],
@@ -2294,7 +2294,7 @@
           "assertion_id": "omp_helm_launch_registration",
           "variant": null,
           "scenario_id": "omp_helm_lifecycle",
-          "minimum_scenario_revision": 8,
+          "minimum_scenario_revision": 9,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -2307,7 +2307,7 @@
           "assertion_id": "omp_helm_send_idle",
           "variant": null,
           "scenario_id": "omp_helm_lifecycle",
-          "minimum_scenario_revision": 8,
+          "minimum_scenario_revision": 9,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -2320,7 +2320,7 @@
           "assertion_id": "omp_helm_follow_up_native",
           "variant": null,
           "scenario_id": "omp_helm_lifecycle",
-          "minimum_scenario_revision": 8,
+          "minimum_scenario_revision": 9,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -2333,7 +2333,7 @@
           "assertion_id": "omp_helm_steer_active",
           "variant": null,
           "scenario_id": "omp_helm_lifecycle",
-          "minimum_scenario_revision": 8,
+          "minimum_scenario_revision": 9,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -2346,7 +2346,7 @@
           "assertion_id": "omp_helm_abort_native",
           "variant": null,
           "scenario_id": "omp_helm_lifecycle",
-          "minimum_scenario_revision": 8,
+          "minimum_scenario_revision": 9,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -2359,7 +2359,7 @@
           "assertion_id": "omp_helm_terminate_owned",
           "variant": null,
           "scenario_id": "omp_helm_lifecycle",
-          "minimum_scenario_revision": 8,
+          "minimum_scenario_revision": 9,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -2372,7 +2372,7 @@
           "assertion_id": "omp_helm_native_replacement_bound",
           "variant": null,
           "scenario_id": "omp_helm_lifecycle",
-          "minimum_scenario_revision": 8,
+          "minimum_scenario_revision": 9,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -2385,7 +2385,7 @@
           "assertion_id": "omp_helm_cold_resume_exact_file",
           "variant": null,
           "scenario_id": "omp_helm_lifecycle",
-          "minimum_scenario_revision": 8,
+          "minimum_scenario_revision": 9,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -2398,7 +2398,7 @@
           "assertion_id": "omp_helm_stale_owner_refused",
           "variant": null,
           "scenario_id": "omp_helm_lifecycle",
-          "minimum_scenario_revision": 8,
+          "minimum_scenario_revision": 9,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -2665,7 +2665,7 @@
       "build_provenance": "observed_install",
       "trigger": "manual",
       "status": "never_run",
-      "reason": "every capability-proof assertion declared for opencode is already satisfiable by an automated trigger",
+      "reason": "remaining capability-proof scenario_ids for opencode are orphaned: ['opencode_helm_lifecycle', 'opencode_transcript_search']",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [],
@@ -3061,7 +3061,7 @@
       "build_provenance": "observed_install",
       "trigger": "manual",
       "status": "never_run",
-      "reason": "every capability-proof assertion declared for pi is already satisfiable by an automated trigger",
+      "reason": "remaining capability-proof scenario_ids for pi are orphaned: ['pi_transcript_search']",
       "qualification_profile": null,
       "qualification_profiles": [],
       "scenario_ids": [],
@@ -3114,7 +3114,7 @@
           "assertion_id": "pi_helm_launch_registration",
           "variant": null,
           "scenario_id": "pi_helm_lifecycle",
-          "minimum_scenario_revision": 3,
+          "minimum_scenario_revision": 4,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -3127,7 +3127,7 @@
           "assertion_id": "pi_helm_native_tool_taxonomy",
           "variant": null,
           "scenario_id": "pi_helm_lifecycle",
-          "minimum_scenario_revision": 3,
+          "minimum_scenario_revision": 4,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -3140,7 +3140,7 @@
           "assertion_id": "pi_helm_send_idle",
           "variant": null,
           "scenario_id": "pi_helm_lifecycle",
-          "minimum_scenario_revision": 3,
+          "minimum_scenario_revision": 4,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -3153,7 +3153,7 @@
           "assertion_id": "pi_helm_steer_active",
           "variant": null,
           "scenario_id": "pi_helm_lifecycle",
-          "minimum_scenario_revision": 3,
+          "minimum_scenario_revision": 4,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -3166,7 +3166,7 @@
           "assertion_id": "pi_helm_follow_up_native",
           "variant": null,
           "scenario_id": "pi_helm_lifecycle",
-          "minimum_scenario_revision": 3,
+          "minimum_scenario_revision": 4,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -3179,7 +3179,7 @@
           "assertion_id": "pi_helm_abort_native",
           "variant": null,
           "scenario_id": "pi_helm_lifecycle",
-          "minimum_scenario_revision": 3,
+          "minimum_scenario_revision": 4,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -3192,7 +3192,7 @@
           "assertion_id": "pi_helm_terminate_owned",
           "variant": null,
           "scenario_id": "pi_helm_lifecycle",
-          "minimum_scenario_revision": 3,
+          "minimum_scenario_revision": 4,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -3205,7 +3205,7 @@
           "assertion_id": "pi_helm_reload_rebind",
           "variant": null,
           "scenario_id": "pi_helm_lifecycle",
-          "minimum_scenario_revision": 3,
+          "minimum_scenario_revision": 4,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -3218,7 +3218,7 @@
           "assertion_id": "pi_helm_session_replacement_rebind",
           "variant": null,
           "scenario_id": "pi_helm_lifecycle",
-          "minimum_scenario_revision": 3,
+          "minimum_scenario_revision": 4,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -3231,7 +3231,7 @@
           "assertion_id": "pi_helm_cold_resume_exact_file",
           "variant": null,
           "scenario_id": "pi_helm_lifecycle",
-          "minimum_scenario_revision": 3,
+          "minimum_scenario_revision": 4,
           "acceptable_evidence": [
             "live_token"
           ],
@@ -3244,7 +3244,7 @@
           "assertion_id": "pi_helm_stale_owner_refused",
           "variant": null,
           "scenario_id": "pi_helm_lifecycle",
-          "minimum_scenario_revision": 3,
+          "minimum_scenario_revision": 4,
           "acceptable_evidence": [
             "live_token"
           ],

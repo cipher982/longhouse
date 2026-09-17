@@ -1396,20 +1396,69 @@ _UNKNOWN_DELIVERY_CODES = frozenset({"delivery_unknown", "provider_unknown", "pr
 
 def _delivery_unknown_error(value: object) -> bool:
     """Return whether an error records an ambiguous provider handoff."""
+    return _receipt_error_code(value) in _UNKNOWN_DELIVERY_CODES
+
+
+def _receipt_error_code(value: object) -> str | None:
+    """Extract a durable receipt error code without treating prose as state."""
     if not isinstance(value, str):
-        return False
+        return None
     text = value.strip()
     if not text:
-        return False
+        return None
     try:
         payload = json.loads(text)
     except (TypeError, ValueError):
         payload = None
     if isinstance(payload, dict):
-        code = payload.get("code") or payload.get("reason")
-    else:
-        code = text.split(":", 1)[0]
-    return str(code or "").strip().lower() in _UNKNOWN_DELIVERY_CODES
+        code = payload.get("code") or payload.get("error_code") or payload.get("reason")
+        if code:
+            return str(code).strip().lower() or None
+        message = str(payload.get("message") or "").strip()
+        if message:
+            text = message
+    return text.split(":", 1)[0].strip().lower() or None
+
+
+def _runtime_draining_error(value: object) -> bool:
+    """Return whether a receipt records a known pre-dispatch drain refusal."""
+    return _receipt_error_code(value) == "runtime_draining"
+
+
+async def _set_catalog_live_receipt_error(
+    *,
+    receipt_id: str,
+    source_session,
+    owner_id: int,
+    text: str,
+    intent: InputIntent,
+    client_request_id: str,
+    delivery_request_id: str,
+    error: dict[str, object],
+    payload_digest: str | None = None,
+) -> bool:
+    receipt_error = dict(error)
+    if "code" not in receipt_error and receipt_error.get("error_code"):
+        receipt_error["code"] = receipt_error["error_code"]
+    if "message" not in receipt_error:
+        message = receipt_error.get("message") or receipt_error.get("error")
+        if message:
+            receipt_error["message"] = message
+    recorded = await record_live_input_receipt_best_effort(
+        owner_id=owner_id,
+        session_id=source_session.id,
+        provider=str(getattr(source_session, "provider", "") or "unknown"),
+        device_id=str(getattr(source_session, "device_id", "") or "").strip() or None,
+        thread_id=getattr(source_session, "thread_id", None) or getattr(source_session, "primary_thread_id", None),
+        text=text,
+        intent=intent,
+        status=INPUT_STATUS_DELIVERING,
+        client_request_id=client_request_id,
+        delivery_request_id=delivery_request_id,
+        error=receipt_error,
+        payload_digest=payload_digest,
+    )
+    return recorded == receipt_id
 
 
 def _live_receipt_outcome(receipt: LiveInputReceiptSnapshot) -> InputOutcome:
@@ -1471,6 +1520,229 @@ def _live_receipt_response(
         client_request_id=receipt.client_request_id,
         intent=receipt.intent if receipt.intent in (INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE, INPUT_INTENT_STEER) else INPUT_INTENT_AUTO,
         queued=recent,
+    )
+
+
+async def _retry_runtime_draining_catalog_input(
+    *,
+    source_session,
+    owner_id: int,
+    body: SessionInputRequest,
+    db: Session,
+    existing: LiveInputReceiptSnapshot,
+) -> SessionInputResponse:
+    """Replay a known pre-dispatch refusal without changing its operation id."""
+    delivery_request_id = str(existing.delivery_request_id or "").strip()
+    if not delivery_request_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error_code": "input_receipt_unknown",
+                "message": "The server could not confirm this operation; retry with the same client_request_id.",
+            },
+        )
+    lock_scope_id = session_lock_scope_id(source_session.id)
+    lock = await session_lock_manager.acquire(
+        session_id=lock_scope_id,
+        holder=delivery_request_id,
+        ttl_seconds=300,
+    )
+    if not lock:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error_code": "input_dispatch_in_flight",
+                "message": "This input is already being dispatched; retry with the same client_request_id.",
+                "client_request_id": body.client_request_id,
+            },
+        )
+    try:
+        current = await load_live_input_receipt_by_client_request(
+            owner_id=owner_id,
+            session_id=source_session.id,
+            client_request_id=body.client_request_id,
+        )
+    except LiveInputReceiptUnavailable as exc:
+        await session_lock_manager.release(lock_scope_id, delivery_request_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error_code": "input_receipt_unknown",
+                "message": "The server could not confirm this operation; retry with the same client_request_id.",
+            },
+        ) from exc
+    if current is None:
+        await session_lock_manager.release(lock_scope_id, delivery_request_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error_code": "input_receipt_unknown",
+                "message": "The server could not confirm this operation; retry with the same client_request_id.",
+            },
+        )
+    if current.text != body.text or current.intent != body.intent:
+        await session_lock_manager.release(lock_scope_id, delivery_request_id)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error_code": "input_conflict", "reason": "different_payload", "existing_live_input_id": current.id},
+        )
+    if current.status != INPUT_STATUS_DELIVERING or not _runtime_draining_error(current.error_json):
+        await session_lock_manager.release(lock_scope_id, delivery_request_id)
+        if current.status in (INPUT_STATUS_DELIVERED, INPUT_STATUS_QUEUED, INPUT_STATUS_DELIVERING) or (
+            current.status == INPUT_STATUS_FAILED and _delivery_unknown_error(current.error_json)
+        ):
+            state = await _catalog_recent_input_summaries(source_session.id)
+            recent = state[0] if state is not None else []
+            return _live_receipt_response(source_session=source_session, db=db, receipt=current, recent=recent)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error_code": "input_already_rejected", "existing_live_input_id": current.id, "status": current.status},
+        )
+    if str(current.delivery_request_id or "").strip() != delivery_request_id:
+        await session_lock_manager.release(lock_scope_id, delivery_request_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error_code": "input_receipt_unknown",
+                "message": "The server could not confirm this operation; retry with the same client_request_id.",
+            },
+        )
+    existing = current
+    claimed = await _set_catalog_live_receipt_error(
+        receipt_id=existing.id,
+        source_session=source_session,
+        owner_id=owner_id,
+        text=body.text,
+        intent=body.intent,
+        client_request_id=body.client_request_id,
+        delivery_request_id=delivery_request_id,
+        error={
+            "code": "delivery_unknown",
+            "message": "Provider dispatch is in flight; do not replay until its outcome is known.",
+        },
+    )
+    if not claimed:
+        await session_lock_manager.release(lock_scope_id, delivery_request_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error_code": "input_receipt_unknown",
+                "message": "The server could not confirm this operation; retry with the same client_request_id.",
+            },
+        )
+
+    async def mark_runtime_draining(payload: dict[str, object]) -> None:
+        marked = await _set_catalog_live_receipt_error(
+            receipt_id=existing.id,
+            source_session=source_session,
+            owner_id=owner_id,
+            text=body.text,
+            intent=body.intent,
+            client_request_id=body.client_request_id,
+            delivery_request_id=delivery_request_id,
+            error=payload,
+        )
+        if not marked:
+            await session_lock_manager.release(lock_scope_id, delivery_request_id)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "error_code": "input_receipt_unknown",
+                    "message": "The server could not confirm this operation; retry with the same client_request_id.",
+                },
+            )
+        await session_lock_manager.release(lock_scope_id, delivery_request_id)
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=payload)
+
+    if body.intent == INPUT_INTENT_STEER:
+        from zerg.services.managed_local_control import steer_text_to_managed_local_session
+        from zerg.services.runtime_admission import runtime_admission
+
+        admitted, details = await runtime_admission().try_admit(path="/managed-control-dispatch")
+        if not admitted:
+            await mark_runtime_draining(
+                {
+                    "error_code": details.get("code", "runtime_draining"),
+                    "error": details.get("message", "Runtime is restarting"),
+                    "request_id": delivery_request_id,
+                    "runtime_epoch": details.get("runtime_epoch"),
+                }
+            )
+        try:
+            result = await steer_text_to_managed_local_session(
+                db=db,
+                owner_id=owner_id,
+                session=source_session,
+                text=body.text,
+                request_id=delivery_request_id,
+            )
+        finally:
+            await runtime_admission().release()
+            await session_lock_manager.release(lock_scope_id, delivery_request_id)
+        if result.failure_reason == "indeterminate":
+            error = str(result.error or "steer outcome is unknown")
+            await _finish_catalog_input_receipt(
+                receipt_id=existing.id,
+                delivery_request_id=delivery_request_id,
+                error=f"delivery_unknown: {error}",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={"error_code": "delivery_unknown", "message": error},
+            )
+        if not result.ok:
+            await _finish_catalog_input_receipt(
+                receipt_id=existing.id,
+                delivery_request_id=delivery_request_id,
+                error=str(result.error or "steer failed"),
+            )
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"error_code": str(result.error or "steer_failed")})
+    else:
+        dispatch_response = await _build_managed_local_chat_response(
+            source_session=source_session,
+            owner_id=owner_id,
+            message=body.text,
+            request_id=delivery_request_id,
+            lock_scope_id=lock_scope_id,
+            db=db,
+        )
+        if int(dispatch_response.status_code) >= 400:
+            try:
+                payload = json.loads(dispatch_response.body or b"{}")
+            except Exception:
+                payload = {}
+            payload = payload if isinstance(payload, dict) else {}
+            if payload.get("error_code") == "runtime_draining":
+                await mark_runtime_draining(payload)
+            error = str(payload.get("error") or payload.get("message") or "send failed")
+            if _delivery_unknown_error(json.dumps(payload)):
+                # The provider may have accepted the command.  A terminal
+                # receipt with the existing unknown code makes same-ID replay
+                # refuse a blind redispatch.
+                await _finish_catalog_input_receipt(
+                    receipt_id=existing.id,
+                    delivery_request_id=delivery_request_id,
+                    error=f"delivery_unknown: {error}",
+                )
+                raise HTTPException(status_code=dispatch_response.status_code, detail=payload)
+            await _finish_catalog_input_receipt(
+                receipt_id=existing.id,
+                delivery_request_id=delivery_request_id,
+                error=error,
+            )
+            raise HTTPException(status_code=dispatch_response.status_code, detail=payload)
+
+    await _finish_catalog_input_receipt(
+        receipt_id=existing.id,
+        delivery_request_id=delivery_request_id,
+    )
+    return SessionInputResponse(
+        outcome="sent",
+        input_id=None,
+        live_input_id=existing.id,
+        client_request_id=body.client_request_id,
+        intent=body.intent,
+        queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
     )
 
 
@@ -1602,6 +1874,14 @@ async def _create_catalog_session_input_response(
                     "existing_live_input_id": existing.id,
                     "status": existing.status,
                 },
+            )
+        if existing.status == INPUT_STATUS_DELIVERING and _runtime_draining_error(existing.error_json):
+            return await _retry_runtime_draining_catalog_input(
+                source_session=source_session,
+                owner_id=owner_id,
+                body=body,
+                db=db,
+                existing=existing,
             )
         if existing.status in (INPUT_STATUS_DELIVERED, INPUT_STATUS_QUEUED, INPUT_STATUS_DELIVERING) or (
             existing.status == INPUT_STATUS_FAILED and _delivery_unknown_error(existing.error_json)
@@ -1806,15 +2086,53 @@ async def _create_catalog_session_input_response(
 
     if body.intent == INPUT_INTENT_STEER:
         from zerg.services.managed_local_control import steer_text_to_managed_local_session
+        from zerg.services.runtime_admission import runtime_admission
 
-        result = await steer_text_to_managed_local_session(
-            db=db,
-            owner_id=owner_id,
-            session=source_session,
-            text=body.text,
-            request_id=delivery_request_id,
-        )
+        admitted, details = await runtime_admission().try_admit(path="/managed-control-dispatch")
+        if not admitted:
+            payload = {
+                "error_code": details.get("code", "runtime_draining"),
+                "error": details.get("message", "Runtime is restarting"),
+                "request_id": delivery_request_id,
+                "runtime_epoch": details.get("runtime_epoch"),
+            }
+            marked = await _set_catalog_live_receipt_error(
+                receipt_id=receipt_id,
+                source_session=source_session,
+                owner_id=owner_id,
+                text=body.text,
+                intent=body.intent,
+                client_request_id=client_request_id,
+                delivery_request_id=delivery_request_id,
+                error=payload,
+            )
+            if not marked:
+                payload = {
+                    "error_code": "input_receipt_unknown",
+                    "message": "The server could not confirm this operation; retry with the same client_request_id.",
+                }
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=payload)
+        try:
+            result = await steer_text_to_managed_local_session(
+                db=db,
+                owner_id=owner_id,
+                session=source_session,
+                text=body.text,
+                request_id=delivery_request_id,
+            )
+        finally:
+            await runtime_admission().release()
         if result.failure_reason == "indeterminate":
+            await _set_catalog_live_receipt_error(
+                receipt_id=receipt_id,
+                source_session=source_session,
+                owner_id=owner_id,
+                text=body.text,
+                intent=body.intent,
+                client_request_id=client_request_id,
+                delivery_request_id=delivery_request_id,
+                error={"code": "delivery_unknown", "message": str(result.error or "steer outcome is unknown")},
+            )
             raise HTTPException(
                 status_code=502,
                 detail={"error_code": "delivery_unknown", "message": str(result.error or "steer outcome is unknown")},
@@ -1840,10 +2158,37 @@ async def _create_catalog_session_input_response(
                 payload = json.loads(dispatch_response.body or b"{}")
             except Exception:
                 payload = {}
-            error = str(payload.get("error") or "send failed")
-            if payload.get("error_code") == "delivery_unknown":
+            error = str(payload.get("error") or payload.get("message") or "send failed")
+            if payload.get("error_code") == "runtime_draining":
+                marked = await _set_catalog_live_receipt_error(
+                    receipt_id=receipt_id,
+                    source_session=source_session,
+                    owner_id=owner_id,
+                    text=body.text,
+                    intent=body.intent,
+                    client_request_id=client_request_id,
+                    delivery_request_id=delivery_request_id,
+                    error=payload,
+                )
+                if not marked:
+                    payload = {
+                        "error_code": "input_receipt_unknown",
+                        "message": "The server could not confirm this operation; retry with the same client_request_id.",
+                    }
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=payload)
+            if _delivery_unknown_error(json.dumps(payload)):
                 # Keep the receipt in delivering: the provider may have
                 # accepted the command, so replay must remain visibly unknown.
+                await _set_catalog_live_receipt_error(
+                    receipt_id=receipt_id,
+                    source_session=source_session,
+                    owner_id=owner_id,
+                    text=body.text,
+                    intent=body.intent,
+                    client_request_id=client_request_id,
+                    delivery_request_id=delivery_request_id,
+                    error={"code": "delivery_unknown", "message": error},
+                )
                 raise HTTPException(status_code=dispatch_response.status_code, detail=payload)
             await _finish_catalog_input_receipt(
                 receipt_id=receipt_id,

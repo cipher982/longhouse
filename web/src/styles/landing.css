@@ -840,6 +840,13 @@
     opacity: 0.38;
   }
 
+  /* A live test exists but has no current factory pass: not a claim. */
+  .landing-provider-capability.is-pending {
+    border-style: dashed;
+    border-color: rgba(201, 166, 107, 0.45);
+    opacity: 0.55;
+  }
+
   .landing-providers-source {
     margin: 14px 0 0;
   }

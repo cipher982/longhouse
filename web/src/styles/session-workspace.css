@@ -1721,6 +1721,13 @@
   border-radius: 4px;
   background: var(--color-surface-page);
 }
+/* Repeats the trace's narrow-viewport hide: this block sits later in the
+   file, so its display would otherwise win and clip the node off-screen. */
+@media (max-width: 640px) {
+  .tl-msg__node {
+    display: none;
+  }
+}
 .tl-msg__node-ring {
   width: 9px;
   height: 9px;
@@ -1754,6 +1761,101 @@
   line-height: 1.4;
   color: var(--color-text-primary);
 }
+
+/* --- Outbox: the ask before the transcript echoes it. ---
+     Same place, measure, and type as the durable ask it becomes, so the
+     swap moves nothing. Delivery state lives in the label; the words dim
+     while unsent. */
+.tl-msg--outbox .tl-msg__body {
+  white-space: pre-wrap;
+  transition: opacity 240ms ease;
+}
+.tl-msg__outbox-status {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.tl-msg__outbox-detail {
+  color: var(--color-text-secondary);
+}
+.tl-msg__outbox-action {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: var(--font-weight-medium);
+  color: rgba(226, 190, 112, 0.95);
+  cursor: pointer;
+}
+.tl-msg__outbox-action:hover:not(:disabled) {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.tl-msg__outbox-action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.tl-msg__outbox-status + .tl-msg__outbox-action::before,
+.tl-msg__outbox-action + .tl-msg__outbox-action::before {
+  content: "·";
+  margin-right: var(--space-2);
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  display: inline-block;
+}
+
+.tl-msg--outbox-sending .tl-msg__body {
+  animation: tl-outbox-breathe 1.8s ease-in-out infinite;
+}
+.tl-msg--outbox-sending .tl-msg__node-ring {
+  box-shadow: inset 0 0 0 1px rgba(226, 190, 112, 0.9);
+  animation: tl-outbox-breathe 1.8s ease-in-out infinite;
+}
+.tl-msg--outbox-queued .tl-msg__body {
+  opacity: 0.5;
+}
+.tl-msg--outbox-queued .tl-msg__node-ring {
+  box-shadow: none;
+  box-sizing: border-box;
+  border: 1px dashed var(--color-text-secondary);
+}
+.tl-msg--outbox-unconfirmed .tl-msg__body {
+  opacity: 0.6;
+}
+.tl-msg--outbox-unconfirmed .tl-msg__outbox-status {
+  color: rgba(255, 222, 157, 0.95);
+}
+.tl-msg--outbox-unconfirmed .tl-msg__node-ring {
+  box-shadow: inset 0 0 0 1px rgba(212, 168, 67, 0.9);
+}
+.tl-msg--outbox-failed .tl-msg__body {
+  opacity: 0.6;
+}
+.tl-msg--outbox-failed .tl-msg__outbox-status {
+  color: var(--color-intent-error);
+}
+.tl-msg--outbox-failed .tl-msg__node-ring {
+  box-shadow: inset 0 0 0 1px var(--color-intent-error);
+}
+
+@keyframes tl-outbox-breathe {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.75;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tl-msg--outbox-sending .tl-msg__body,
+  .tl-msg--outbox-sending .tl-msg__node-ring {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
 .session-context-recap {
   padding: 8px 0 10px;
   border-bottom: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.08));

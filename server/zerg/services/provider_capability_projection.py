@@ -42,6 +42,8 @@ class CapabilityProjection:
     open_case_id: str | None = None
     baseline_outcome: str | None = None
     disposition: str = "implemented"
+    longhouse_git_sha: str | None = None
+    provider_version: str | None = None
 
 
 def _parse_timestamp(value: str) -> datetime | None:
@@ -199,6 +201,8 @@ def project_capabilities(
                 worker_id=support.worker_id if support else None,
                 open_case_id=open_cases.get(key),
                 baseline_outcome=baselines.get(key),
+                longhouse_git_sha=support.longhouse_git_sha if support else None,
+                provider_version=support.provider_version if support else None,
             )
         )
     return tuple(projections)

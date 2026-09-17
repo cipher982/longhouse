@@ -44,6 +44,9 @@ from zerg.services.provider_capability_proof import v3_provenance_gaps
 from zerg.services.provider_capability_proof_store import ProofPublication
 from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
 from zerg.services.provider_capability_schema import load_capability_assertions
+from zerg.services.provider_capability_schema import load_chip_edge_assertions
+from zerg.services.provider_chip_edges import UNPROVEN
+from zerg.services.provider_chip_edges import rollup_state
 
 router = APIRouter(tags=["provider-capability-proofs"])
 
@@ -86,6 +89,15 @@ def _verify_factory_token(request: Request) -> None:
     presented = request.headers.get("X-Provider-Capability-Factory-Token")
     if not presented or not hmac.compare_digest(presented, expected):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Provider capability factory access denied")
+
+
+def _refuse_evidence_on_public_demo() -> None:
+    # The public demo runs auth-disabled, so the agents dependency admits any
+    # caller there. It holds mirrored factory proofs only to certify landing
+    # chips (`/public/provider-certification`); it never serves the records or
+    # the evidence bytes it verified at publication.
+    if getattr(get_settings(), "demo_mode", False):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
 
 async def _read_capped_json(request: Request) -> dict[str, Any]:
@@ -490,7 +502,7 @@ async def publish_provider_capability_proofs(
     }
 
 
-@router.get("/agents/provider-capability-proofs")
+@router.get("/agents/provider-capability-proofs", dependencies=[Depends(_refuse_evidence_on_public_demo)])
 def list_provider_capability_proofs(
     _auth: object = Depends(verify_agents_caller),
     _single: None = Depends(require_single_tenant),
@@ -546,7 +558,10 @@ def _require_owner_capable_evidence_caller(caller: Caller = Depends(verify_agent
     return caller
 
 
-@router.get("/agents/provider-capability-proofs/blobs/{sha256}", dependencies=[Depends(require_single_tenant)])
+@router.get(
+    "/agents/provider-capability-proofs/blobs/{sha256}",
+    dependencies=[Depends(_refuse_evidence_on_public_demo), Depends(require_single_tenant)],
+)
 def get_provider_capability_proof_blob(
     sha256: str,
     _caller: Caller = Depends(_require_owner_capable_evidence_caller),
@@ -602,6 +617,23 @@ def get_provider_capability_proof_blob(
     )
 
 
+def _published_records() -> tuple[list[ProviderCapabilityProofRecord], dict[str, tuple[str, ...]]]:
+    store = _proof_store()
+    all_records: list[ProviderCapabilityProofRecord] = []
+    integrity_reasons: dict[str, tuple[str, ...]] = {}
+    for provider in sorted(managed_provider_names()):
+        all_records.extend(store.records(provider))
+        integrity_reasons.update(
+            {item.artifact_id: item.reason_codes for item in store.integrity_report(provider).artifacts if not item.admissible}
+        )
+    legacy_store = _legacy_proof_store()
+    for provider in sorted(managed_provider_names()):
+        legacy_records = legacy_store.records(provider)
+        all_records.extend(legacy_records)
+        integrity_reasons.update({record.artifact_id: ("proof_schema_legacy", "historical_schema_v2") for record in legacy_records})
+    return all_records, integrity_reasons
+
+
 def build_capability_projection_payload(
     *,
     expected_longhouse_sha: str | None = None,
@@ -618,19 +650,7 @@ def build_capability_projection_payload(
     surface (GET /admin/provider-capabilities) so there is exactly one
     projection code path, not two that can drift.
     """
-    store = _proof_store()
-    all_records: list[ProviderCapabilityProofRecord] = []
-    integrity_reasons: dict[str, tuple[str, ...]] = {}
-    for provider in sorted(managed_provider_names()):
-        all_records.extend(store.records(provider))
-        integrity_reasons.update(
-            {item.artifact_id: item.reason_codes for item in store.integrity_report(provider).artifacts if not item.admissible}
-        )
-    legacy_store = _legacy_proof_store()
-    for provider in sorted(managed_provider_names()):
-        legacy_records = legacy_store.records(provider)
-        all_records.extend(legacy_records)
-        integrity_reasons.update({record.artifact_id: ("proof_schema_legacy", "historical_schema_v2") for record in legacy_records})
+    all_records, integrity_reasons = _published_records()
     try:
         assertions = load_capability_assertions()
     except SystemExit as exc:
@@ -705,3 +725,167 @@ def list_provider_capabilities(
     one row, whether or not it has ever been proven -- the schema is the
     source of truth for what should exist."""
     return build_capability_projection_payload()
+
+
+_NEGATIVE_CONTROL_KIND = "provider_negative_control_snapshot"
+_NEGATIVE_CONTROL_VERDICTS = frozenset({"pass", "fail", "inconclusive", "not_recorded"})
+_MAX_NEGATIVE_CONTROLS = 512
+
+
+def _negative_control_path():
+    return _proof_store().root.parent / "negative-controls.json"
+
+
+def _validated_negative_control_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
+    if set(payload) != {"schema_version", "artifact_kind", "epoch_digest", "published_at", "controls"}:
+        raise ValueError("negative-control snapshot has an unexpected schema")
+    if payload["schema_version"] != 1 or payload["artifact_kind"] != _NEGATIVE_CONTROL_KIND:
+        raise ValueError("negative-control snapshot kind or version is not admitted")
+    if not isinstance(payload["epoch_digest"], str) or not payload["epoch_digest"].startswith("sha256:"):
+        raise ValueError("negative-control snapshot must name its accepted epoch digest")
+    if not isinstance(payload["published_at"], str) or not payload["published_at"]:
+        raise ValueError("negative-control snapshot must carry published_at")
+    controls = payload["controls"]
+    if not isinstance(controls, list) or len(controls) > _MAX_NEGATIVE_CONTROLS:
+        raise ValueError("negative-control snapshot controls must be a bounded list")
+    for control in controls:
+        if not isinstance(control, dict) or set(control) != {"provider", "target_assertion", "fault", "verdict"}:
+            raise ValueError("negative-control entry has an unexpected schema")
+        if not all(isinstance(control[key], str) and control[key] for key in ("provider", "target_assertion", "fault")):
+            raise ValueError("negative-control entry identity is incomplete")
+        if control["verdict"] not in _NEGATIVE_CONTROL_VERDICTS:
+            raise ValueError("negative-control verdict is not admitted")
+    return payload
+
+
+@router.post("/internal/provider-negative-controls", status_code=status.HTTP_201_CREATED)
+async def publish_provider_negative_controls(
+    request: Request,
+    _factory: None = Depends(_verify_factory_token),
+) -> dict[str, Any]:
+    """Replace the factory's current negative-control snapshot.
+
+    The factory owns which requirements declare controls and which verdicts
+    judged the accepted producer and oracle; this host stores the latest
+    snapshot so public certification can require those controls.
+    """
+
+    global _certification_cache
+    payload = await _read_capped_json(request)
+    try:
+        snapshot = _validated_negative_control_snapshot(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    path = _negative_control_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(snapshot, sort_keys=True), encoding="utf-8")
+    temporary.replace(path)
+    _certification_cache = None
+    return {"accepted": len(snapshot["controls"]), "epoch_digest": snapshot["epoch_digest"]}
+
+
+def _negative_controls_by_requirement() -> dict[tuple[str, str], list[str]] | None:
+    """(provider, assertion) -> declared control verdicts; None when never published."""
+
+    path = _negative_control_path()
+    if not path.is_file():
+        return None
+    try:
+        snapshot = _validated_negative_control_snapshot(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    out: dict[tuple[str, str], list[str]] = {}
+    for control in snapshot["controls"]:
+        out.setdefault((control["provider"], control["target_assertion"]), []).append(control["verdict"])
+    return out
+
+
+CHIP_CERTIFICATION_VERSION = "provider-chip-certification-v1"
+_CERTIFICATION_TTL_SECONDS = 60.0
+_certification_cache: tuple[float, dict[str, Any]] | None = None
+
+
+def build_chip_certification_payload(*, now: datetime | None = None) -> dict[str, Any]:
+    """The *certified* landing layer: each chip's proof edges joined to the
+    factory proofs this Runtime Host holds.
+
+    A chip with no edge is ``unproven``. Otherwise the per-requirement
+    projection statuses roll up (`provider_chip_edges.rollup_state`): all
+    admissible passes certify it; an older admissible pass survives a newer
+    failure until it ages out, so one red candidate never revokes a released
+    claim. Rows carry the exact identity and the Longhouse SHA and provider
+    version the supporting proof ran against, so a claim is scoped to what was
+    tested rather than to "latest".
+    """
+
+    edges = load_chip_edge_assertions()
+    controls = _negative_controls_by_requirement()
+    all_records, integrity_reasons = _published_records()
+    flat = tuple(assertion for chips in edges.values() for chip in chips.values() if chip for assertion in chip)
+    projected = project_capabilities(flat, all_records, now=now, integrity_reasons=integrity_reasons)
+    by_identity = {(p.provider, p.capability, p.scenario_id, p.assertion_id, p.variant): p for p in projected}
+    moment = (now or datetime.now(UTC)).astimezone(UTC)
+    providers: list[dict[str, Any]] = []
+    for provider in sorted(edges):
+        chips: dict[str, Any] = {}
+        for chip, assertions in edges[provider].items():
+            if assertions is None:
+                chips[chip] = {"state": UNPROVEN, "requirements": []}
+                continue
+            rows = []
+            for assertion in assertions:
+                p = by_identity[
+                    (assertion.provider, assertion.capability, assertion.scenario_id, assertion.assertion_id, assertion.variant)
+                ]
+                rows.append(
+                    {
+                        "declared_in": p.capability,
+                        "scenario_id": p.scenario_id,
+                        "assertion_id": p.assertion_id,
+                        "variant": p.variant,
+                        "proof_status": p.proof_status,
+                        "latest_outcome": p.latest_outcome,
+                        "proven_at": p.generated_at if p.proof_status == "pass" else None,
+                        "longhouse_git_sha": p.longhouse_git_sha,
+                        "provider_version": p.provider_version,
+                        "accepted_epoch_id": p.accepted_epoch_id,
+                        "max_age_seconds": assertion.max_age_seconds,
+                        "negative_controls": None if controls is None else controls.get((provider, p.assertion_id), []),
+                    }
+                )
+            state = rollup_state(row["proof_status"] for row in rows)
+            entry: dict[str, Any] = {"state": state, "requirements": rows}
+            # A pass certifies only when every declared negative control proved
+            # the judge can fail. Without the factory's snapshot nothing says
+            # which controls are declared, so no chip certifies.
+            if state == "certified" and (
+                controls is None or any(verdict != "pass" for row in rows for verdict in row["negative_controls"])
+            ):
+                entry = {
+                    "state": "unverified",
+                    "requirements": rows,
+                    "blocked_by": "negative_control_snapshot_missing" if controls is None else "negative_control",
+                }
+            chips[chip] = entry
+        providers.append({"provider": provider, "chips": chips})
+    return {
+        "schema_version": 1,
+        "artifact_kind": "provider_chip_certification",
+        "certification_version": CHIP_CERTIFICATION_VERSION,
+        "generated_at": moment.isoformat().replace("+00:00", "Z"),
+        "providers": providers,
+    }
+
+
+@router.get("/public/provider-certification")
+def get_provider_certification(response: Response) -> dict[str, Any]:
+    """Unauthenticated: the landing page reads this. It exposes proof
+    status and identities only -- never evidence blobs or artifact paths."""
+
+    global _certification_cache
+    clock = time.monotonic()
+    if _certification_cache is None or clock - _certification_cache[0] > _CERTIFICATION_TTL_SECONDS:
+        _certification_cache = (clock, build_chip_certification_payload())
+    response.headers["Cache-Control"] = f"public, max-age={int(_CERTIFICATION_TTL_SECONDS)}"
+    return _certification_cache[1]

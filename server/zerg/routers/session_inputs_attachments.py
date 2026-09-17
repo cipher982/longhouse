@@ -46,6 +46,8 @@ from zerg.routers.session_chat import QueuedInputSummary
 from zerg.routers.session_chat import SessionInputResponse
 from zerg.routers.session_chat import _delivery_unknown_error
 from zerg.routers.session_chat import _live_receipt_outcome
+from zerg.routers.session_chat import _runtime_draining_error
+from zerg.routers.session_chat import _set_catalog_live_receipt_error
 from zerg.services.live_session_inputs import LiveInputReceiptUnavailable
 from zerg.services.live_session_inputs import load_live_input_receipt_by_client_request
 from zerg.services.live_session_inputs import record_live_input_receipt_best_effort
@@ -279,6 +281,7 @@ async def create_session_input_with_attachments(
                 "message": "The server could not confirm this operation; retry with the same client_request_id.",
             },
         ) from exc
+    runtime_replay = False
     if existing_receipt is not None:
         if existing_receipt.payload_digest != payload_digest:
             _record_outcome("rejected_idempotency_conflict")
@@ -291,6 +294,7 @@ async def create_session_input_with_attachments(
                 },
             )
         is_delivery_unknown = existing_receipt.status == "failed" and _delivery_unknown_error(existing_receipt.error_json)
+        runtime_replay = existing_receipt.status == INPUT_STATUS_DELIVERING and _runtime_draining_error(existing_receipt.error_json)
         if existing_receipt.status in {"failed", "cancelled"} and not is_delivery_unknown:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -300,15 +304,24 @@ async def create_session_input_with_attachments(
                     "status": existing_receipt.status,
                 },
             )
-        return SessionInputResponse(
-            outcome=_live_receipt_outcome(existing_receipt),
-            input_id=None,
-            live_input_id=existing_receipt.id,
-            client_request_id=request_id,
-            intent=existing_receipt.intent,
-            queued=[],
-        )
-    delivery_request_id = uuid.uuid4().hex
+        if not runtime_replay:
+            return SessionInputResponse(
+                outcome=_live_receipt_outcome(existing_receipt),
+                input_id=None,
+                live_input_id=existing_receipt.id,
+                client_request_id=request_id,
+                intent=existing_receipt.intent,
+                queued=[],
+            )
+        if not str(existing_receipt.delivery_request_id or "").strip():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "error_code": "input_receipt_unknown",
+                    "message": "The server could not confirm this operation; retry with the same client_request_id.",
+                },
+            )
+    delivery_request_id = str(existing_receipt.delivery_request_id) if runtime_replay and existing_receipt is not None else uuid.uuid4().hex
     lock_scope_id = session_lock_scope_id(source_session.id)
 
     # We acquire the dispatch lock before persisting anything so a second
@@ -324,23 +337,115 @@ async def create_session_input_with_attachments(
             status_code=status.HTTP_409_CONFLICT,
             detail="another dispatch is in flight for this session; try again",
         )
+    if runtime_replay:
+        try:
+            current_receipt = await load_live_input_receipt_by_client_request(
+                owner_id=int(current_user.id),
+                session_id=source_session.id,
+                client_request_id=request_id,
+            )
+        except LiveInputReceiptUnavailable as exc:
+            await session_lock_manager.release(lock_scope_id, delivery_request_id)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "error_code": "input_receipt_unknown",
+                    "message": "The server could not confirm this operation; retry with the same client_request_id.",
+                },
+            ) from exc
+        if current_receipt is None:
+            await session_lock_manager.release(lock_scope_id, delivery_request_id)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "error_code": "input_receipt_unknown",
+                    "message": "The server could not confirm this operation; retry with the same client_request_id.",
+                },
+            )
+        if current_receipt.payload_digest != payload_digest:
+            await session_lock_manager.release(lock_scope_id, delivery_request_id)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error_code": "input_conflict",
+                    "reason": "different_payload",
+                    "existing_live_input_id": current_receipt.id,
+                },
+            )
+        if current_receipt.status != INPUT_STATUS_DELIVERING or not _runtime_draining_error(current_receipt.error_json):
+            await session_lock_manager.release(lock_scope_id, delivery_request_id)
+            if current_receipt.status in {"delivered", "queued", "delivering"} or (
+                current_receipt.status == "failed" and _delivery_unknown_error(current_receipt.error_json)
+            ):
+                return SessionInputResponse(
+                    outcome=_live_receipt_outcome(current_receipt),
+                    input_id=None,
+                    live_input_id=current_receipt.id,
+                    client_request_id=request_id,
+                    intent=current_receipt.intent,
+                    queued=[],
+                )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error_code": "input_already_rejected",
+                    "existing_live_input_id": current_receipt.id,
+                    "status": current_receipt.status,
+                },
+            )
+        if str(current_receipt.delivery_request_id or "").strip() != delivery_request_id:
+            await session_lock_manager.release(lock_scope_id, delivery_request_id)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "error_code": "input_receipt_unknown",
+                    "message": "The server could not confirm this operation; retry with the same client_request_id.",
+                },
+            )
+        existing_receipt = current_receipt
+        claimed = await _set_catalog_live_receipt_error(
+            receipt_id=existing_receipt.id,
+            source_session=source_session,
+            owner_id=int(current_user.id),
+            text=text,
+            intent=INPUT_INTENT_AUTO,
+            client_request_id=request_id,
+            delivery_request_id=delivery_request_id,
+            payload_digest=payload_digest,
+            error={
+                "code": "delivery_unknown",
+                "message": "Provider dispatch is in flight; do not replay until its outcome is known.",
+            },
+        )
+        if not claimed:
+            await session_lock_manager.release(lock_scope_id, delivery_request_id)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "error_code": "input_receipt_unknown",
+                    "message": "The server could not confirm this operation; retry with the same client_request_id.",
+                },
+            )
 
     stored_refs: list[dict] = []
     catalog_receipt_id: str | None = None
     try:
-        catalog_receipt_id = await record_live_input_receipt_best_effort(
-            owner_id=int(current_user.id),
-            session_id=source_session.id,
-            provider=str(source_session.provider or "codex"),
-            device_id=str(source_session.device_id or "").strip() or None,
-            thread_id=source_session.primary_thread_id,
-            text=text,
-            intent=intent,
-            status=INPUT_STATUS_DELIVERING,
-            client_request_id=request_id,
-            payload_digest=payload_digest,
-            delivery_request_id=delivery_request_id,
-        )
+        if runtime_replay and existing_receipt is not None:
+            catalog_receipt_id = existing_receipt.id
+        else:
+            catalog_receipt_id = await record_live_input_receipt_best_effort(
+                owner_id=int(current_user.id),
+                session_id=source_session.id,
+                provider=str(source_session.provider or "codex"),
+                device_id=str(source_session.device_id or "").strip() or None,
+                thread_id=source_session.primary_thread_id,
+                text=text,
+                intent=intent,
+                status=INPUT_STATUS_DELIVERING,
+                client_request_id=request_id,
+                payload_digest=payload_digest,
+                delivery_request_id=delivery_request_id,
+            )
         if catalog_receipt_id is None:
             raise RuntimeError("catalog input receipt is unavailable")
         input_identity = catalog_receipt_id
@@ -426,9 +531,49 @@ async def create_session_input_with_attachments(
             payload = json.loads(getattr(dispatch_response, "body", b"{}") or b"{}")
         except Exception:
             payload = {}
-        if isinstance(payload, dict) and payload.get("error_code") == "delivery_unknown":
-            # Keep the receipt and its durable blobs in delivering state. The
-            # provider may have accepted the handoff, so replay must be unknown.
+        if isinstance(payload, dict) and payload.get("error_code") == "runtime_draining":
+            marked = await _set_catalog_live_receipt_error(
+                receipt_id=catalog_receipt_id,
+                source_session=source_session,
+                owner_id=int(current_user.id),
+                text=text,
+                intent=INPUT_INTENT_AUTO,
+                client_request_id=request_id,
+                delivery_request_id=delivery_request_id,
+                payload_digest=payload_digest,
+                error=payload,
+            )
+            if not marked:
+                payload = {
+                    "error_code": "input_receipt_unknown",
+                    "message": "The server could not confirm this operation; retry with the same client_request_id.",
+                }
+            _record_outcome("dispatch_deferred")
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=payload)
+        if isinstance(payload, dict) and _delivery_unknown_error(json.dumps(payload)):
+            # Keep the receipt unknown.  A replay of a known pre-dispatch
+            # refusal is terminalized with this same stable unknown code so
+            # it cannot blindly redispatch; the first attempt remains in
+            # delivering as before.
+            unknown_error = str(payload.get("error") or payload.get("message") or "attachment delivery outcome is unknown")
+            if runtime_replay:
+                await _finish_catalog_receipt(
+                    receipt_id=catalog_receipt_id,
+                    delivery_request_id=delivery_request_id,
+                    error=f"delivery_unknown: {unknown_error}",
+                )
+            else:
+                await _set_catalog_live_receipt_error(
+                    receipt_id=catalog_receipt_id,
+                    source_session=source_session,
+                    owner_id=int(current_user.id),
+                    text=text,
+                    intent=INPUT_INTENT_AUTO,
+                    client_request_id=request_id,
+                    delivery_request_id=delivery_request_id,
+                    payload_digest=payload_digest,
+                    error={"code": "delivery_unknown", "message": unknown_error},
+                )
             _record_outcome("dispatch_unknown")
             raise HTTPException(status_code=dispatch_status, detail=payload)
         await _finish_catalog_receipt(

@@ -1,25 +1,44 @@
 /**
- * Provider truth. Every chip and every sentence derives from the generated
- * proof edges: a claim is lit only when the provider factory runs a live-token
- * assertion for it. This component only turns those booleans into copy.
+ * Provider truth. Every chip and every sentence derives from two layers: the
+ * generated proof edges say a live factory test exists for a claim ("covered"),
+ * and the Runtime Host's certification says that test currently passes
+ * against the real binary ("certified"). A claim is lit only when certified.
+ * This component only turns those states into copy.
  */
 
+import type { ProvenChips } from "../../generated/provider-capabilities";
+import {
+  certifiedChips,
+  chipCertification,
+  useProviderCertification,
+  type CertificationState,
+  type ChipKey,
+  type ProviderCertificationPayload,
+} from "../../lib/providerCertification";
 import { getLaunchProviderSupportList, type LaunchProviderSupport } from "../../lib/providers";
 import { ProviderGlyph } from "../ProviderGlyph";
 
 type Capability = {
   key: "search" | "launch" | "interrupt" | "steer" | "resume";
   label: string;
-  supported: (provider: LaunchProviderSupport) => boolean;
+  chip: ChipKey;
 };
 
 const CAPABILITIES: Capability[] = [
-  { key: "search", label: "Search", supported: (provider) => provider.proven.search },
-  { key: "launch", label: "Launch", supported: (provider) => provider.proven.launchAndSend },
-  { key: "interrupt", label: "Interrupt", supported: (provider) => provider.proven.interrupt },
-  { key: "steer", label: "Mid-turn", supported: (provider) => provider.proven.steerMidTurn },
-  { key: "resume", label: "Resume", supported: (provider) => provider.proven.resume },
+  { key: "search", label: "Search", chip: "search" },
+  { key: "launch", label: "Launch", chip: "launchAndSend" },
+  { key: "interrupt", label: "Interrupt", chip: "interrupt" },
+  { key: "steer", label: "Mid-turn", chip: "steerMidTurn" },
+  { key: "resume", label: "Resume", chip: "resume" },
 ];
+
+const STATE_DESCRIPTION: Record<CertificationState, string> = {
+  certified: "proven against the real binary",
+  unverified: "tested, awaiting a current factory pass",
+  stale: "factory proof expired",
+  failing: "latest factory run failing",
+  unproven: "not yet proven",
+};
 
 function joinClause(parts: string[]): string {
   if (parts.length < 3) return parts.join(" and ");
@@ -32,12 +51,12 @@ function joinClause(parts: string[]): string {
  * "Launch, send, and interrupt" directly beside a chip reading Interrupt: not
  * supported.
  */
-function providerSummary(provider: LaunchProviderSupport): string {
+export function providerSummary(certified: ProvenChips): string {
   const claims: Array<[boolean, string]> = [
-    [provider.proven.launchAndSend, "launch and send"],
-    [provider.proven.interrupt, "interrupt"],
-    [provider.proven.steerMidTurn, "mid-turn steering"],
-    [provider.proven.resume, "resume"],
+    [certified.launchAndSend, "launch and send"],
+    [certified.interrupt, "interrupt"],
+    [certified.steerMidTurn, "mid-turn steering"],
+    [certified.resume, "resume"],
   ];
   const have = claims.filter(([proven]) => proven).map(([, label]) => label);
   const missing = claims.filter(([proven]) => !proven).map(([, label]) => label);
@@ -53,14 +72,26 @@ function capitalize(text: string): string {
   return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 }
 
-function CapabilityChip({ capability, provider }: { capability: Capability; provider: LaunchProviderSupport }) {
-  const supported = capability.supported(provider);
+function CapabilityChip({
+  capability,
+  provider,
+  certification,
+}: {
+  capability: Capability;
+  provider: LaunchProviderSupport;
+  certification: ProviderCertificationPayload | null;
+}) {
+  const state = chipCertification(provider.id, capability.chip, provider.proven, certification);
+  const supported = state === "certified";
+  const pending = state !== "certified" && state !== "unproven";
   return (
     <span
-      className={`landing-provider-capability ${supported ? "is-supported" : "is-unsupported"}`}
+      className={`landing-provider-capability ${supported ? "is-supported" : "is-unsupported"}${pending ? " is-pending" : ""}`}
       data-capability={capability.key}
       data-supported={supported ? "true" : "false"}
-      aria-label={`${capability.label}: ${supported ? "supported" : "not supported"}`}
+      data-certification={state}
+      title={`${capability.label}: ${STATE_DESCRIPTION[state]}`}
+      aria-label={`${capability.label}: ${STATE_DESCRIPTION[state]}`}
     >
       {capability.label}
     </span>
@@ -69,7 +100,9 @@ function CapabilityChip({ capability, provider }: { capability: Capability; prov
 
 export function IntegrationsSection() {
   const providers = getLaunchProviderSupportList();
-  const searchable = providers.filter((provider) => provider.proven.search);
+  const certification = useProviderCertification();
+  const certified = new Map(providers.map((provider) => [provider.id, certifiedChips(provider.id, provider.proven, certification)]));
+  const searchable = providers.filter((provider) => certified.get(provider.id)?.search);
 
   return (
     <section id="providers" className="landing-providers">
@@ -108,10 +141,10 @@ export function IntegrationsSection() {
                 </span>
                 <strong className="landing-provider-row-name">{provider.marketingName}</strong>
               </div>
-              <p className="landing-provider-summary">{providerSummary(provider)}</p>
+              <p className="landing-provider-summary">{providerSummary(certified.get(provider.id)!)}</p>
               <div className="landing-provider-capabilities" aria-label={`${provider.marketingName} capabilities`}>
                 {CAPABILITIES.map((capability) => (
-                  <CapabilityChip capability={capability} provider={provider} key={capability.key} />
+                  <CapabilityChip capability={capability} provider={provider} certification={certification} key={capability.key} />
                 ))}
               </div>
             </li>
@@ -119,7 +152,7 @@ export function IntegrationsSection() {
         </ul>
 
         <p className="landing-providers-source">
-          Lit only where the provider factory runs a live test against the real binary.
+          Lit only while the provider factory has a current passing live test against the real binary.
         </p>
       </div>
     </section>

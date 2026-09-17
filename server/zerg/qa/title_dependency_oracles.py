@@ -30,7 +30,6 @@ from uuid import uuid4
 
 import httpx
 
-from zerg.qa.live_session_toolkit import require_disposable_runtime
 from zerg.qa.provider_artifacts import now
 from zerg.qa.provider_artifacts import sha256_file
 from zerg.services.factory_assurance_title_binding import FACTORY_ASSURANCE_ENVIRONMENT
@@ -1008,6 +1007,8 @@ def run_hermetic_title_dependency_oracle(*, evidence_root: Path, repo_root: Path
 
 def run_live_title_dependency_oracle(*, evidence_root: Path) -> dict[str, Any]:
     evidence_root.mkdir(parents=True, exist_ok=False)
+    from zerg.qa.live_session_toolkit import require_disposable_runtime
+
     api_url = str(os.environ.get(RUNTIME_API_URL_ENV) or "").strip()
     require_disposable_runtime(api_url)
     token = str(os.environ.get(RUNTIME_AGENTS_TOKEN_ENV) or "").strip()

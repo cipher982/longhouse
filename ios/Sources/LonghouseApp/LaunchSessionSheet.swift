@@ -184,6 +184,7 @@ struct LaunchSessionSheet: View {
                         )
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("launch-machine-picker")
                 }
 
                 launchSectionTitle("Session")
@@ -206,6 +207,7 @@ struct LaunchSessionSheet: View {
                             )
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier("launch-provider-picker")
                     } else {
                         LaunchSummaryRow(
                             title: providerDisplayName(selectedProvider),
@@ -633,9 +635,12 @@ private struct MachineSelectionView: View {
                                     Image(systemName: "checkmark").fontWeight(.semibold)
                                 }
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.vertical, 5)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier("launch-machine-row-\(machine.deviceId)")
                         .accessibilityLabel("\(machine.machineName), Ready")
                         .accessibilityAddTraits(machine.deviceId == selectedDeviceId ? .isSelected : [])
                     }
@@ -679,13 +684,16 @@ private struct ProviderSelectionView: View {
                 onSelect(provider)
                 dismiss()
             } label: {
-                HStack {
+                HStack(spacing: 12) {
                     Text(displayName(provider)).foregroundStyle(.primary)
-                    Spacer()
+                    Spacer(minLength: 12)
                     if provider == selectedProvider { Image(systemName: "checkmark") }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityIdentifier("launch-provider-row-\(provider)")
             .accessibilityAddTraits(provider == selectedProvider ? .isSelected : [])
         }
         .navigationTitle("Choose Agent")

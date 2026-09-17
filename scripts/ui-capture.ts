@@ -456,6 +456,27 @@ async function installSceneMocks(
           status: 200,
           contentType: "application/json",
           body: JSON.stringify([
+            // The stress scene shows every outbox state the transcript tail
+            // renders; other scenes keep the single queued row.
+            ...(scene === "session-detail-stress"
+              ? [
+                  {
+                    id: 8999,
+                    text: "Run the migration against the staging copy too.",
+                    intent: "auto",
+                    status: "failed",
+                    last_error: "provider rejected the input",
+                    created_at: "2026-04-15T16:10:30Z",
+                  },
+                  {
+                    id: 9000,
+                    text: "tldr i missed this whole thread?",
+                    intent: "auto",
+                    status: "delivering",
+                    created_at: "2026-04-15T16:10:40Z",
+                  },
+                ]
+              : []),
             {
               id: 9001,
               text: "Tighten the transcript rows first; the side pane can wait.",

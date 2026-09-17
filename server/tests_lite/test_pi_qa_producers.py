@@ -573,7 +573,39 @@ def test_pi_helm_steer_oracle_requires_active_state_before_native_control() -> N
         "active_turn_observed": True,
         "active_state": {"phase": "running"},
     }
+    # A marker answered after the task turn finished is a queued follow-up.
+    observation["steer_turn_verdict"] = {"passed": False, "code": "steer_delivered_as_queued_follow_up"}
+    assert pi_helm_lifecycle_assertions(observation)["pi_helm_steer_active"] is False
+    observation["steer_turn_verdict"] = {"passed": True, "code": "steer_changed_active_turn"}
     assert pi_helm_lifecycle_assertions(observation)["pi_helm_steer_active"] is True
+
+
+def test_pi_helm_negative_control_requires_fired_fault_and_expected_rejection() -> None:
+    from zerg.qa.pi_family_turn_oracle import negative_control_verdict
+
+    assertions = {"pi_helm_launch_registration": True, "pi_helm_send_idle": True, "pi_helm_steer_active": False}
+    observation = {"steer_turn_verdict": {"passed": False, "code": "steer_delivered_as_queued_follow_up"}}
+    fired = [{"fault": "pi_steer_as_follow_up", "session_id": "s1"}]
+
+    passed = negative_control_verdict(
+        "steer", provider="pi", assertions=assertions, observation=observation, fault_receipts=fired, session_id="s1"
+    )
+    assert passed["status"] == "pass"
+    # No receipt: the failure could be unrelated, so it is inconclusive.
+    assert (
+        negative_control_verdict(
+            "steer", provider="pi", assertions=assertions, observation=observation, fault_receipts=[], session_id="s1"
+        )["status"]
+        == "inconclusive"
+    )
+    # Wrong failure reason: also inconclusive.
+    timeout = {"steer_turn_verdict": {"passed": False, "code": "steer_prompt_not_unique"}}
+    assert (
+        negative_control_verdict("steer", provider="pi", assertions=assertions, observation=timeout, fault_receipts=fired, session_id="s1")[
+            "status"
+        ]
+        == "inconclusive"
+    )
 
 
 def test_pi_helm_follow_up_oracle_requires_active_native_input_delivery() -> None:

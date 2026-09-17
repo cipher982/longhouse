@@ -89,7 +89,9 @@ def test_each_managed_provider_emits_profile_artifact() -> None:
             if provider == "opencode":
                 assert payload["operation_evidence"]["send_input"]["status"] == "not_run"
                 assert payload["operation_evidence"]["send_input"]["canary"] == "opencode_server_live_contract"
-                assert payload["operation_evidence"]["steer_active_turn"]["status"] == "unsupported"
+                # OpenCode steer is implemented (prompt_async lands at the next
+                # step boundary); a no-live-flag profile leaves it pending.
+                assert payload["operation_evidence"]["steer_active_turn"]["status"] == "not_run"
             if provider == "antigravity":
                 # Maintenance tier withdraws Console turns without erasing the
                 # already-declared Helm hook-inbox send path. With no live flag

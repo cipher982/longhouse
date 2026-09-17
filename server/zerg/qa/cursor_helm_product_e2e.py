@@ -140,11 +140,43 @@ def steer_landed_in_generation(
     }
 
 
-def abort_stopped_generation(rows: list[dict[str, Any]], *, generation_id: str, forbidden_marker: str) -> dict[str, Any]:
+def abort_stopped_generation(
+    rows: list[dict[str, Any]],
+    *,
+    generation_id: str,
+    forbidden_marker: str,
+    recovery_marker: str | None = None,
+) -> dict[str, Any]:
+    """Did the interrupt stop the active generation without its reply?
+
+    With ``recovery_marker`` the surviving session must also complete a later
+    generation that answers with that marker; stopping a turn by breaking the
+    session is not an abort.
+    """
+
     in_generation = [row for row in rows if row.get("generation_id") == generation_id]
     aborted = any(row.get("event") == "stop" and row.get("status") in {"aborted", "error"} for row in in_generation)
     responded = any(row.get("event") == "afterAgentResponse" and forbidden_marker in str(row.get("text") or "") for row in in_generation)
-    return {"passed": aborted and not responded, "generation_stopped_aborted": aborted, "forbidden_response_produced": responded}
+    passed = aborted and not responded
+    following_completed = None
+    if recovery_marker is not None:
+        answered = {
+            str(row.get("generation_id"))
+            for row in rows
+            if row.get("event") == "afterAgentResponse"
+            and row.get("generation_id") != generation_id
+            and recovery_marker in str(row.get("text") or "")
+        }
+        following_completed = any(
+            row.get("event") == "stop" and row.get("status") == "completed" and str(row.get("generation_id")) in answered for row in rows
+        )
+        passed = passed and following_completed
+    return {
+        "passed": passed,
+        "generation_stopped_aborted": aborted,
+        "forbidden_response_produced": responded,
+        "following_turn_completed": following_completed,
+    }
 
 
 @dataclass
@@ -627,8 +659,23 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 timeout=args.timeout,
                 description="post-abort Cursor turn in hosted archive",
             )
-            abort_verdict["following_turn_completed"] = True
-            abort_verdict["passed"] = bool(abort_verdict["passed"] and abort_verdict["tui_alive_after_abort"])
+            _wait_until(
+                lambda: any(
+                    row.get("event") == "stop" and row.get("status") == "completed" and row.get("generation_id") != abort_generation
+                    for row in _hook_rows(root, session_id)[abort_hook_start:]
+                ),
+                timeout=args.timeout,
+                description="post-abort Cursor generation completing",
+            )
+            tui_alive = abort_verdict["tui_alive_after_abort"]
+            abort_verdict = abort_stopped_generation(
+                _hook_rows(root, session_id)[abort_hook_start:],
+                generation_id=abort_generation,
+                forbidden_marker=forbidden,
+                recovery_marker=recovery,
+            )
+            abort_verdict["tui_alive_after_abort"] = tui_alive
+            abort_verdict["passed"] = bool(abort_verdict["passed"] and tui_alive)
             lifecycle["abort_native"] = abort_verdict
             if not abort_verdict["passed"]:
                 raise RuntimeError(f"Cursor abort oracle failed: {abort_verdict}")

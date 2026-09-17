@@ -20,6 +20,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from socketserver import TCPServer
 from typing import Any
 from urllib.parse import urlparse
 
@@ -144,6 +145,14 @@ class FixtureHandler(BaseHTTPRequestHandler):
         self.send_json(401, {"detail": "fixture authentication required"})
         return False
 
+    def discard_request_body(self) -> None:
+        # HTTP/1.1 keeps the connection reusable after a response. Unsupported
+        # POST routes still have to consume their declared body or the next
+        # request begins in the parser as raw JSON.
+        content_length = int(self.headers.get("Content-Length", "0") or "0")
+        if content_length:
+            self.rfile.read(content_length)
+
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path
@@ -232,9 +241,11 @@ class FixtureHandler(BaseHTTPRequestHandler):
         # The proof must use the attachment route. A JSON input would not prove
         # that PhotosPicker bytes reached the production multipart client.
         if re.fullmatch(r"/api/sessions/([^/]+)/input", path):
+            self.discard_request_body()
             if self.require_auth():
                 self.send_json(400, {"detail": "proof requires inputs-multipart"})
             return
+        self.discard_request_body()
         self.send_json(404, {"detail": "fixture route not implemented"})
 
     def record_multipart(self) -> None:
@@ -654,6 +665,11 @@ class ProofHTTPServer(ThreadingHTTPServer):
     def __init__(self, address: tuple[str, int], proof: ProofState) -> None:
         super().__init__(address, FixtureHandler)
         self.proof = proof
+
+    def server_bind(self) -> None:
+        # This loopback fixture needs no reverse DNS before reporting readiness.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address
 
 
 def main() -> int:

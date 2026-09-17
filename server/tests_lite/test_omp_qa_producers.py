@@ -107,7 +107,7 @@ def test_omp_qualification_producers_are_registered_on_their_own_contracts() -> 
     assert CONSOLE_REGISTRATION.scenario_revision == 8
     assert "console_continuation_receipt" in CONSOLE_REGISTRATION.required_artifacts
     assert HELM_REGISTRATION.producer_id == "omp.helm_lifecycle.v1"
-    assert HELM_REGISTRATION.scenario_revision == 8
+    assert HELM_REGISTRATION.scenario_revision == 9
     assert HELM_REGISTRATION.providers == ("omp",)
     assert HELM_REGISTRATION.scenario_id == "omp_helm_lifecycle"
     assert "transcript_flush_receipt" in HELM_REGISTRATION.required_artifacts
@@ -1685,7 +1685,9 @@ def test_omp_helm_assertions_do_not_use_agent_settled_as_completion() -> None:
         "send_idle": True,
         "follow_up_native": True,
         "steer_active": True,
+        "steer_turn_verdict": {"passed": True, "code": "steer_changed_active_turn"},
         "abort_native": True,
+        "abort_turn_verdict": {"passed": True, "code": "abort_stopped_turn_and_session_continued"},
         "terminate_owned": True,
         "cold_resume_exact_file": True,
         "stale_owner_refused": True,
@@ -1986,7 +1988,7 @@ def test_omp_semantic_entrypoint_uses_validated_request_and_runtime_token(tmp_pa
         "provider_version": "1.2.3",
         "agents_token": "runtime-token",
         "variant": None,
-        "scenario_revision": 8,
+        "scenario_revision": 9,
         "secrets": ("runtime-token",),
         "assertion_count": len(HELM_ASSERTIONS),
     }

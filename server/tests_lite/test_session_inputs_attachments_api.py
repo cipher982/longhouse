@@ -21,6 +21,7 @@ from uuid import uuid4
 
 import pytest
 from cryptography.fernet import Fernet
+from fastapi import HTTPException
 from fastapi import UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
@@ -162,6 +163,11 @@ async def test_catalog_multipart_uses_live_receipt_without_legacy_db(monkeypatch
     async def acquire(**kwargs):
         return SimpleNamespace()
 
+    async def load_receipt(**kwargs):
+        return None
+
+    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_receipt)
+
     monkeypatch.setattr(route, "record_live_input_receipt_best_effort", record_receipt)
     monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob)
     monkeypatch.setattr(route, "_build_managed_local_chat_response", dispatch)
@@ -194,6 +200,143 @@ async def test_catalog_multipart_uses_live_receipt_without_legacy_db(monkeypatch
     assert calls["dispatch"]["db"] is None
     assert f"/inputs/{receipt_id}/attachments/{attachment_id}/blob" in calls["dispatch"]["attachments"][0]["blob_url"]
     assert calls["finishes"] == [{"receipt_id": receipt_id, "delivery_request_id": calls["receipt"]["delivery_request_id"]}]
+
+
+@pytest.mark.asyncio
+async def test_catalog_multipart_runtime_draining_replays_same_receipt_and_bytes(monkeypatch, tmp_path):
+    import zerg.routers.session_inputs_attachments as route
+
+    _set_blob_root(monkeypatch, tmp_path)
+    session_id = uuid4()
+    receipt_id = str(uuid4())
+    source_session = SimpleNamespace(
+        id=session_id,
+        provider="codex",
+        device_id="cinder",
+        primary_thread_id=uuid4(),
+        catalog_facts={
+            "connections": [
+                {
+                    "control_plane": "codex_bridge",
+                    "state": "attached",
+                    "released_at": None,
+                }
+            ]
+        },
+    )
+    state = {"receipt": None, "dispatches": [], "stores": 0}
+
+    def load_scoped(db, sid, *, owner_id):
+        del db, sid, owner_id
+        return source_session
+
+    async def load_receipt(**kwargs):
+        del kwargs
+        return state["receipt"]
+
+    async def record_receipt(**kwargs):
+        state["receipt"] = SimpleNamespace(
+            id=receipt_id,
+            status=kwargs["status"],
+            payload_digest=kwargs["payload_digest"],
+            intent=kwargs["intent"],
+            client_request_id=kwargs["client_request_id"],
+            error_json=None,
+            delivery_request_id=kwargs["delivery_request_id"],
+        )
+        return receipt_id
+
+    async def mark_error(**kwargs):
+        state["receipt"].status = "delivering"
+        error = kwargs["error"]
+        state["receipt"].error_json = json.dumps(
+            {
+                "code": error.get("code") or error.get("error_code") or "runtime_draining",
+                "message": error.get("message") or error.get("error") or "Runtime is restarting",
+            }
+        )
+        return True
+
+    async def store_blob(**kwargs):
+        state["stores"] += 1
+        attachment_id = uuid4()
+        return StoredAttachment(
+            id=attachment_id,
+            session_input_id=receipt_id,
+            session_id=session_id,
+            mime_type="image/png",
+            byte_size=len(_PNG_BYTES),
+            sha256=hashlib.sha256(_PNG_BYTES).hexdigest(),
+            blob_path=tmp_path / f"blob-{state['stores']}.bin",
+            original_filename="a.png",
+            original_byte_size=len(_PNG_BYTES),
+        )
+
+    async def dispatch(**kwargs):
+        state.setdefault("attempts", []).append(kwargs)
+        if len(state["attempts"]) == 1:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error_code": "runtime_draining",
+                    "error": "Runtime is restarting",
+                    "request_id": kwargs["request_id"],
+                },
+            )
+        state["dispatches"].append(kwargs)
+        return JSONResponse({"accepted": True})
+
+    async def finish(**kwargs):
+        state["receipt"].status = "delivered" if kwargs.get("error") is None else "failed"
+
+    async def acquire(**kwargs):
+        return SimpleNamespace()
+
+    monkeypatch.setattr(route, "_load_session_for_continuation", load_scoped)
+    monkeypatch.setattr(route, "_assert_live_session_send_available", lambda *args, **kwargs: None)
+    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_receipt)
+    monkeypatch.setattr(route, "record_live_input_receipt_best_effort", record_receipt)
+    monkeypatch.setattr(route, "_set_catalog_live_receipt_error", mark_error)
+    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob)
+    monkeypatch.setattr(route, "_build_managed_local_chat_response", dispatch)
+    monkeypatch.setattr(route, "_finish_catalog_receipt", finish)
+    monkeypatch.setattr(route.session_lock_manager, "acquire", acquire)
+
+    def upload():
+        return UploadFile(
+            file=io.BytesIO(_PNG_BYTES),
+            filename="a.png",
+            headers=Headers({"content-type": "image/png"}),
+        )
+
+    kwargs = {
+        "session_id": str(session_id),
+        "request": SimpleNamespace(headers={}, url=SimpleNamespace(scheme="http", netloc="testserver")),
+        "text": "look",
+        "intent": "auto",
+        "client_request_id": "catalog-attachment-drain-1",
+        "user_agent": "Longhouse-iOS",
+        "db": None,
+        "current_user": SimpleNamespace(id=7),
+    }
+    with pytest.raises(HTTPException) as refused:
+        await route.create_session_input_with_attachments(attachments=[upload()], **kwargs)
+    assert refused.value.status_code == 503
+    assert refused.value.detail["error_code"] == "runtime_draining"
+    assert state["receipt"].status == "delivering"
+    original_delivery_request_id = state["receipt"].delivery_request_id
+
+    replay = await route.create_session_input_with_attachments(attachments=[upload()], **kwargs)
+    assert replay.outcome == "sent"
+    assert state["receipt"].status == "delivered"
+    assert len(state["attempts"]) == 2
+    assert len(state["dispatches"]) == 1
+    assert state["dispatches"][0]["request_id"] == original_delivery_request_id
+
+    duplicate = await route.create_session_input_with_attachments(attachments=[upload()], **kwargs)
+    assert duplicate.outcome == "sent"
+    assert len(state["attempts"]) == 2
+    assert len(state["dispatches"]) == 1
 
 
 @pytest.mark.asyncio

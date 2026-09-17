@@ -73,7 +73,10 @@ final class HTTPOutboxUITests: XCTestCase {
             "LONGHOUSE_HEADLESS_AUTH_TOKEN": configuration.authToken,
             "LONGHOUSE_HEADLESS_OPEN_SESSION": configuration.sessionID,
         ]
-        defer { app.terminate() }
+        defer {
+            retainPickerEvidence(in: app)
+            app.terminate()
+        }
 
         app.launch()
         let transcript = app.descendants(matching: .any)["session-chat-transcript"]
@@ -88,10 +91,12 @@ final class HTTPOutboxUITests: XCTestCase {
         let attach = app.buttons["session-chat-attach"]
         XCTAssertTrue(attach.waitForExistence(timeout: 5), "real attachment action is not available")
         attach.tap()
-        chooseSeededPhoto(in: app)
+        try chooseSeededPhoto(in: app)
 
         let tray = app.descendants(matching: .any)["session-chat-attachment-tray"]
-        XCTAssertTrue(tray.waitForExistence(timeout: Self.timeout), "PhotosPicker selection did not reach the production attachment tray")
+        guard tray.waitForExistence(timeout: Self.timeout) else {
+            throw ProofFailure(description: "PhotosPicker selection did not reach the production attachment tray")
+        }
 
         let message = "HTTP outbox proof \(UUID().uuidString)"
         composer.tap()
@@ -230,43 +235,78 @@ final class HTTPOutboxUITests: XCTestCase {
         )
     }
 
-    private func chooseSeededPhoto(in app: XCUIApplication) {
-        let pickerButtons = app.buttons["Add"]
-        let pickerImage = app.images.firstMatch
-        let pickerCells = app.collectionViews.cells
-        if pickerImage.waitForExistence(timeout: 10) {
-            pickerImage.tap()
-            XCTAssertTrue(pickerButtons.waitForExistence(timeout: 5), "PhotosPicker did not expose its Add action")
-            pickerButtons.tap()
-            return
-        }
-        if pickerCells.firstMatch.waitForExistence(timeout: 5) {
-            pickerCells.firstMatch.tap()
-            XCTAssertTrue(pickerButtons.waitForExistence(timeout: 5), "PhotosPicker did not expose its Add action")
-            pickerButtons.tap()
+    private func chooseSeededPhoto(in app: XCUIApplication) throws {
+        // On current PhotosPicker runtimes, asset tiles are exposed as Images
+        // in the PhotosViewService hierarchy, not collection-view cells. The
+        // first PXGGridLayout-Info tile is the proof seed: the isolated driver
+        // imports it as the newest asset before the picker opens.
+        let pickerApplications: [(String, XCUIApplication)] = [
+            ("PhotosUIService", XCUIApplication(bundleIdentifier: "com.apple.PhotosUIService")),
+            ("PhotosViewService", XCUIApplication(bundleIdentifier: "com.apple.PhotosViewService")),
+            ("host app", app),
+        ]
+
+        for (name, picker) in pickerApplications {
+            let photo = picker.images.matching(identifier: "PXGGridLayout-Info").firstMatch
+            guard photo.waitForExistence(timeout: 5) else { continue }
+            guard waitUntilEnabled(photo, timeout: 5) else {
+                throw ProofFailure(description: "\(name) PhotosPicker seeded photo was not accessibility-enabled")
+            }
+            let frame = photo.frame
+            guard frame.width > 0, frame.height > 0 else {
+                throw ProofFailure(description: "\(name) PhotosPicker seeded photo had no surfaced geometry")
+            }
+
+            // PhotosPicker exposes the tile as an enabled, visible Image, but
+            // XCUITest does not mark that noninteractive accessibility element
+            // hittable. Tap the center of the surfaced tile instead of using a
+            // hardcoded screen coordinate.
+            photo.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+
+            let done = picker.buttons["Done"]
+            guard done.waitForExistence(timeout: 5),
+                  waitUntilEnabled(done, timeout: 5),
+                  waitUntilHittable(done, timeout: 5),
+                  done.isEnabled else {
+                throw ProofFailure(description: "\(name) PhotosPicker did not expose an enabled Done action")
+            }
+            done.tap()
             return
         }
 
-        // PHPicker may be hosted in a PhotosUI service rather than the app's
-        // accessibility tree on a particular simulator runtime.
-        for bundleIdentifier in ["com.apple.PhotosUIService", "com.apple.PhotosViewService"] {
-            let photos = XCUIApplication(bundleIdentifier: bundleIdentifier)
-            let photosImage = photos.images.firstMatch
-            if photosImage.waitForExistence(timeout: 5) {
-                photosImage.tap()
-            } else {
-                let cells = photos.collectionViews.cells
-                guard cells.firstMatch.waitForExistence(timeout: 5) else { continue }
-                cells.firstMatch.tap()
-            }
-            XCTAssertTrue(
-                photos.buttons["Add"].waitForExistence(timeout: 5),
-                "\(bundleIdentifier) did not expose its Add action"
-            )
-            photos.buttons["Add"].tap()
-            return
-        }
-        XCTFail("seeded simulator Photos asset was not visible in PHPicker")
+        throw ProofFailure(description: "seeded simulator Photos asset was not visible in the PhotosPicker grid")
+    }
+
+    private func waitUntilEnabled(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == true"),
+            object: element
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hittable == true"),
+            object: element
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    private func retainPickerEvidence(in app: XCUIApplication) {
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "http-outbox-picker-failure-screenshot"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+
+        let hostAccessibility = XCTAttachment(
+            data: Data(app.debugDescription.utf8),
+            uniformTypeIdentifier: "public.plain-text"
+        )
+        hostAccessibility.name = "http-outbox-picker-host-a11y"
+        hostAccessibility.lifetime = .keepAlways
+        add(hostAccessibility)
+
     }
 
     private func waitForWebViewText(

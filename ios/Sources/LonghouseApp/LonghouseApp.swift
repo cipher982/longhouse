@@ -210,9 +210,14 @@ final class AppState: ObservableObject {
               !url.isEmpty, !token.isEmpty, URL(string: url) != nil
         else { return }
         serverURL = url
-        KeychainHelper.saveServerURL(url)
-        SharedAuthStore.saveServerURL(url)
-        SharedAuthStore.advanceAuthGeneration(for: url)
+        // A relaunch repeats the same headless credentials. Keep the
+        // generation stable so durable pending inputs can reconcile after
+        // process death; rotate it only when the credential actually changes.
+        let previousRuntimeToken = SharedAuthStore.runtimeToken(for: url)
+        let previousNativeRefreshToken = SharedAuthStore.nativeRefreshToken(for: url)
+        if previousRuntimeToken != token || previousNativeRefreshToken != token {
+            SharedAuthStore.advanceAuthGeneration(for: url)
+        }
         SharedAuthStore.clearManagedCookies(for: url)
         SharedAuthStore.removeSharedCookieStorage(for: url)
         SharedAuthStore.saveRuntimeToken(token, for: url)

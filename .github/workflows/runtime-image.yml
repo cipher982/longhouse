@@ -8,15 +8,20 @@ on:
     paths:
       - '.dockerignore'
       - 'bun.lock'
+      - 'package.json'
+      - 'e2e/package.json'
+      - 'runner/package.json'
       - 'config/**'
       - 'docker/entrypoint.sh'
       - 'docker/runtime.dockerfile'
       - 'engine/**'
+      - 'schemas/**'
       - 'server/**'
       - 'web/**'
       # video/src is a web-runtime input: the landing hero imports the demo
       # script + recordings from @longhouse/video (workspace source).
       - 'video/src/**'
+      - 'video/scripts/**'
       - 'video/package.json'
       - 'scripts/ops/runtime-schema.py'
       - 'scripts/ops/release-artifacts.py'
@@ -68,30 +73,16 @@ jobs:
             echo "runtime_image=true" >> "$GITHUB_OUTPUT"
           fi
 
-  gate:
-    timeout-minutes: 15
-    name: "Gate image on push to main"
-    runs-on: cube
-    needs: changes
-    if: ${{ needs.changes.outputs.runtime_image == 'true' }}
-    outputs:
-      head_sha: ${{ steps.meta.outputs.head_sha }}
-    steps:
-      - name: Resolve target commit
-        id: meta
-        run: |
-          echo "head_sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
-          echo "Building image for ${{ github.sha }}"
-
   build-and-push:
     timeout-minutes: 45
     runs-on: cube
-    needs: gate
+    needs: changes
+    if: ${{ needs.changes.outputs.runtime_image == 'true' }}
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ needs.gate.outputs.head_sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 1
       - name: Setup uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
@@ -119,7 +110,7 @@ jobs:
         id: image
         env:
           IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/longhouse-runtime
-          HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+          HEAD_SHA: ${{ github.sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           {
@@ -144,7 +135,7 @@ jobs:
           tags: ${{ steps.image.outputs.tags }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ needs.gate.outputs.head_sha }}
+            org.opencontainers.image.revision=${{ github.sha }}
             org.longhouse.catalog-schema.version=${{ steps.schema.outputs.schema_version }}
             org.longhouse.catalog-schema.min-reader=${{ steps.schema.outputs.schema_min_reader }}
             org.longhouse.catalog-schema.max-reader=${{ steps.schema.outputs.schema_max_reader }}
@@ -153,7 +144,7 @@ jobs:
 
       - name: Write immutable qualification metadata
         env:
-          SOURCE_SHA: ${{ needs.gate.outputs.head_sha }}
+          SOURCE_SHA: ${{ github.sha }}
           SOURCE_WORKFLOW: ${{ github.workflow }}
           SOURCE_ORDER: ${{ github.run_number }}
           QUALIFICATION_ID: runtime-image-${{ github.run_id }}-${{ github.run_attempt }}
@@ -185,7 +176,7 @@ jobs:
       - name: Publish immutable OCI archive
         env:
           IMAGE_REF: ghcr.io/${{ github.repository_owner }}/longhouse-runtime@${{ steps.build.outputs.digest }}
-          SOURCE_SHA: ${{ needs.gate.outputs.head_sha }}
+          SOURCE_SHA: ${{ github.sha }}
           BUILD_RUN_ID: ${{ github.run_id }}
           BUILD_ATTEMPT: ${{ github.run_attempt }}
           REGISTRY_USERNAME: ${{ github.actor }}

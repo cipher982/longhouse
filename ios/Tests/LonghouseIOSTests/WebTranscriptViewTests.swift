@@ -287,7 +287,7 @@ final class WebTranscriptViewTests: XCTestCase {
 
         XCTAssertEqual(rows.first?.kind, "submitted")
         XCTAssertEqual(rows.first?.status, "couldNotConfirm")
-        XCTAssertEqual(rows.first?.subtitle, "Could not confirm")
+        XCTAssertEqual(rows.first?.subtitle, "Not confirmed")
     }
 
     func testPayloadCarriesPresentMediaRefsWithAbsoluteThumbnailURL() {

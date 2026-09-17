@@ -1125,6 +1125,15 @@ impl OmpHelmServer {
             if !remote_authority_matches_locked(&state, &frame) {
                 return channel_error("stale_channel", "OMP Helm channel identity rejected");
             }
+            let fault = crate::qa_fault::helm_extension_fault("omp");
+            if kind == "abort" && fault == Some(crate::qa_fault::HelmExtensionFault::AbortNoop) {
+                crate::qa_fault::record_fired_named(
+                    "omp_abort_noop",
+                    &state.state.session_id,
+                    json!({"forwarded": false}),
+                );
+                return json!({"kind": "command_result", "ok": true, "status": "active"});
+            }
             let Some(extension) = state.extension_sender.clone() else {
                 return channel_error(
                     "session_not_attached",
@@ -1137,6 +1146,14 @@ impl OmpHelmServer {
             state.pending.insert(request_id.clone(), sender);
             let mut command = frame;
             command["request_id"] = json!(request_id);
+            if kind == "steer" && fault == Some(crate::qa_fault::HelmExtensionFault::SteerAsFollowUp) {
+                crate::qa_fault::record_fired_named(
+                    "omp_steer_as_follow_up",
+                    &state.state.session_id,
+                    json!({"forwarded_kind": "send"}),
+                );
+                command["kind"] = json!("send");
+            }
             command["connection_id"] = json!(state.state.connection_id);
             command["lease_generation"] = json!(state.state.lease_generation);
             command["native_session_id"] = json!(state.state.native_session_id);

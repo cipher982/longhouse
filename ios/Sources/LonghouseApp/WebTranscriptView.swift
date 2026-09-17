@@ -969,12 +969,13 @@ struct WebTranscriptView: UIViewRepresentable {
 
     private nonisolated static func submittedStatus(_ phase: SubmittedInputPhase, lastError: String?) -> String {
         switch phase {
-        case .submitting: return "Sending..."
-        case .working: return "Working..."
-        case .sent: return "Sent"
-        case .queued: return "Queued"
-        case .couldNotConfirm: return "Could not confirm"
-        case .failed: return lastError ?? "Could not send"
+        // One vocabulary with web: the durable echo replacing this row is the
+        // confirmation, and turn progress belongs to the composer, so every
+        // in-flight phase reads the same.
+        case .submitting, .working, .sent: return "Sending…"
+        case .queued: return "Queued · sends after this turn"
+        case .couldNotConfirm: return "Not confirmed"
+        case .failed: return lastError.map { "Not delivered — \($0)" } ?? "Not delivered"
         case .needsUserDecision: return "Needs choice"
         }
     }
@@ -2297,9 +2298,29 @@ private extension WebTranscriptView {
       white-space: pre-wrap;
     }
 
+    /* An unsent message sits exactly where its durable row will land, in
+       the same capsule; only its ink and the status line say it is unsent. */
     .submitted .bubble {
       background: var(--user-pending);
-      box-shadow: inset 0 0 0 1px var(--rule);
+    }
+
+    .submitted.submitting .bubble,
+    .submitted.working .bubble,
+    .submitted.sent .bubble {
+      animation: submitted-breathe 1.8s ease-in-out infinite;
+    }
+
+    .submitted.queued .bubble {
+      background: transparent;
+      /* Outline, not border: the capsule keeps its size when it sends. */
+      outline: 1px dashed var(--rule);
+      outline-offset: -1px;
+      color: var(--secondary);
+    }
+
+    .submitted.couldNotConfirm .bubble,
+    .submitted.failed .bubble {
+      opacity: 0.6;
     }
 
     .submitted-status {
@@ -2310,20 +2331,23 @@ private extension WebTranscriptView {
       text-align: right;
     }
 
-    .submitted.working .submitted-status::before {
-      content: "";
-      display: inline-block;
-      width: 6px;
-      height: 6px;
-      margin-right: 6px;
-      border-radius: 50%;
-      background: var(--accent);
-      animation: working-pulse 1.1s ease-in-out infinite;
+    .submitted.couldNotConfirm .submitted-status,
+    .submitted.failed .submitted-status {
+      color: var(--attention);
     }
 
-    @keyframes working-pulse {
-      0%, 100% { opacity: 0.35; transform: scale(0.8); }
-      50% { opacity: 1; transform: scale(1.15); }
+    @keyframes submitted-breathe {
+      0%, 100% { opacity: 0.5; }
+      50% { opacity: 0.85; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .submitted.submitting .bubble,
+      .submitted.working .bubble,
+      .submitted.sent .bubble {
+        animation: none;
+        opacity: 0.65;
+      }
     }
 
     .action {

@@ -21,6 +21,7 @@ def evidence_runtime(monkeypatch, tmp_path):
     monkeypatch.setenv("JWT_SECRET", "runtime-evidence-test-only")
     monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_PENDING", "1")
     monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_GENERATION", "7")
+    monkeypatch.setenv("LONGHOUSE_IMAGE_DIGEST", "sha256:" + "a" * 64)
 
     from fastapi.testclient import TestClient
 
@@ -329,3 +330,101 @@ async def test_unavailable_activation_evidence_stays_closed(monkeypatch) -> None
     assert recovered["state"] == "unknown"
     admitted, _ = await runtime.try_admit(path="/api/sessions")
     assert admitted is False
+
+
+def test_mounted_control_can_reopen_while_tenant_writes_are_closed(evidence_runtime, monkeypatch):
+    from fastapi.testclient import TestClient
+    from starlette.routing import Mount
+
+    from zerg.main import api_app
+    from zerg.main import app
+    from zerg.routers import internal_deployments
+    from zerg.services import runtime_admission as admission_module
+
+    _client, runtime, _ping = evidence_runtime
+    monkeypatch.setattr(admission_module, "runtime_admission", lambda: runtime)
+    monkeypatch.setattr(app.router, "routes", [Mount("/api", app=api_app)])
+    activation = {}
+
+    async def catalog_probe(operation):
+        return {"available": True, "state": "closed", "depth": 0, "accepting": False, "active_label": None}
+
+    async def activation_probe(operation, params):
+        activation.update(params)
+        return {
+            "available": True,
+            "state": "open",
+            "depth": 0,
+            "accepting": True,
+            "active_label": None,
+            "activation": {**activation, "activated_at": datetime.now(timezone.utc).isoformat()},
+        }
+
+    monkeypatch.setattr(internal_deployments, "_catalog_admission_probe", catalog_probe)
+    monkeypatch.setattr(internal_deployments, "_catalog_activation_probe", activation_probe)
+    runtime.mark_candidate_ready(attempt_id="owned-attempt")
+    runtime.mark_candidate_consistent(attempt_id="owned-attempt")
+    client = TestClient(app)
+    try:
+        assert client.post("/api/sessions").status_code == 503
+        path = "/api/internal/deployments/owned-attempt/reopen"
+        payload = _activation_payload(runtime)
+        assert client.post(path, json=payload).status_code == 401
+        response = client.post(path, json=payload, headers={"X-Internal-Token": "evidence-test-only"})
+        assert response.status_code == 200
+        assert response.json()["state"] == "reopened"
+        assert activation["generation"] == "7"
+    finally:
+        client.close()
+
+
+@pytest.mark.asyncio
+async def test_refused_steer_retry_cannot_drain_another_writer(monkeypatch):
+    from unittest.mock import AsyncMock
+    from uuid import uuid4
+
+    from fastapi import HTTPException
+
+    from zerg.routers import session_chat
+    from zerg.services import runtime_admission as admission_module
+
+    monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_PENDING", "0")
+    runtime = admission_module.RuntimeAdmission()
+    admitted, _ = await runtime.try_admit(path="/existing-provider-write")
+    assert admitted
+
+    async def catalog_probe(_operation):
+        return {"available": True, "state": "closed", "depth": 0, "accepting": False}
+
+    payload = {**_drain_payload(runtime), "grace_seconds": 0}
+    assert (await runtime.drain(payload, attempt_id="attempt", catalog_probe=catalog_probe))["state"] == "draining"
+    receipt = SimpleNamespace(
+        id="receipt",
+        delivery_request_id="delivery",
+        text="keep working",
+        intent="steer",
+        status="delivering",
+        error_json=json.dumps({"code": "runtime_draining"}),
+    )
+    monkeypatch.setattr(admission_module, "runtime_admission", lambda: runtime)
+    monkeypatch.setattr(session_chat, "load_live_input_receipt_by_client_request", AsyncMock(return_value=receipt))
+    monkeypatch.setattr(session_chat, "_set_catalog_live_receipt_error", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        session_chat,
+        "session_lock_manager",
+        SimpleNamespace(acquire=AsyncMock(return_value=True), release=AsyncMock()),
+    )
+    try:
+        with pytest.raises(HTTPException) as refused:
+            await session_chat._retry_runtime_draining_catalog_input(
+                source_session=SimpleNamespace(id=uuid4()),
+                owner_id=7,
+                body=session_chat.SessionInputRequest(text=receipt.text, intent="steer", client_request_id="original-operation"),
+                db=None,
+                existing=receipt,
+            )
+        assert refused.value.status_code == 503
+        assert (await runtime.snapshot())["state"] == "draining"
+    finally:
+        await runtime.release()
+    assert (await runtime.snapshot())["state"] == "drained"

@@ -79,7 +79,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="claude.helm_lifecycle.v1",
     producer_revision=1,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=1,
+    scenario_revision=2,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("claude",),
     # Claude on macOS keeps credentials in the desktop Keychain; a relocated
@@ -219,12 +219,18 @@ def abort_stopped_turn(
     forbidden_marker: str,
     interrupted_at: float,
     tool_seconds: float,
+    recovery_marker: str | None = None,
 ) -> dict[str, Any]:
     """Did the interrupt end the active turn early, without its promised reply?
 
     The turn's long tool runs for ``tool_seconds``. A no-op interrupt lets it
     finish and the model then produces ``forbidden_marker``; a real one ends the
     turn well before the tool could have completed.
+
+    With ``recovery_marker`` the verdict also requires the session to survive
+    the interrupt: a later turn prompted with that marker must complete and
+    answer with it. An interrupt that stops the turn by breaking the session
+    is not an abort.
     """
 
     bounds = _turn_bounds(rows, prompt_marker)
@@ -244,6 +250,17 @@ def abort_stopped_turn(
         1 for row in turn if (stamp := _timestamp(row)) is not None and stamp > interrupted_at and _successful_tool_result(row)
     )
     failure = None if (not forbidden and early and tools_after == 0) else "abort_did_not_stop_turn"
+    following_completed = None
+    if recovery_marker is not None:
+        later = rows[end + 1 :]
+        recovery = _turn_bounds(later, recovery_marker)
+        following_completed = bool(
+            recovery is not None
+            and recovery[1] is not None
+            and any(recovery_marker in text for text in _assistant_texts(later[recovery[0] : recovery[1] + 1]))
+        )
+        if failure is None and not following_completed:
+            failure = "abort_following_turn_missing"
     return {
         "passed": failure is None,
         "failure_code": failure,
@@ -251,6 +268,7 @@ def abort_stopped_turn(
         "turn_stop_latency_seconds": stop_latency,
         "stopped_before_tool_could_finish": early,
         "tools_executed_after_interrupt": tools_after,
+        "following_turn_completed": following_completed,
     }
 
 
@@ -526,6 +544,10 @@ def _drive_lifecycle(
         abort_verdict["passed"] = False
         raise ScenarioError(f"Claude abort oracle failed: {abort_verdict}")
     recovery = f"LONGHOUSE_CLAUDE_RECOVERED_{token_hex}"
+    # The named abort verdict is not a pass until the surviving session has
+    # completed a following turn; record it failed until that is observed.
+    abort_verdict["passed"] = False
+    abort_verdict["failure_code"] = "abort_following_turn_missing"
     wait_can_send()
     _post(api, token, f"sessions/{session_id}/send-live", {"message": f"Reply with exactly {recovery}"})
     wait_until(
@@ -533,8 +555,18 @@ def _drive_lifecycle(
         timeout=args.response_timeout_secs,
         description="post-abort Claude turn in hosted archive",
     )
-    abort_verdict["following_turn_completed"] = True
     wait_turn_end(f"Reply with exactly {recovery}", "recovery turn completing", args.response_timeout_secs)
+    final_abort = abort_stopped_turn(
+        rows(),
+        prompt_marker=abort_prompt,
+        forbidden_marker=forbidden,
+        interrupted_at=interrupted_at,
+        tool_seconds=tool_seconds,
+        recovery_marker=recovery,
+    )
+    abort_verdict.update(final_abort)
+    if not final_abort["passed"]:
+        raise ScenarioError(f"Claude abort oracle failed after recovery: {abort_verdict}")
 
     # Terminate through the Runtime Host, then prove the owned provider process
     # is gone and the served run ended.

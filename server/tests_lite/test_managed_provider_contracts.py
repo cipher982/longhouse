@@ -201,6 +201,7 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
     assert set(claude.capabilities) == expected | turn_boundary | {
         "session.launch.helm",
         "session.resume.helm",
+        "session.transcript.search",
         "session.turn.start",
     }
     # Codex alone carries session.branch.console: branching forks the parent's
@@ -218,6 +219,7 @@ def test_semantic_capabilities_include_exact_coordination_and_steer_limitations(
         "session.launch.helm",
         "session.reattach.helm",
         "session.resume.helm",
+        "session.transcript.search",
         "session.turn.start",
     }
     cursor = contract_for_provider("cursor")
