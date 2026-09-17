@@ -100,7 +100,9 @@ pytestmark = [
     pytest.mark.integration,
     # Filesystem observation can legitimately consume the 8-second condition
     # budget before teardown gets its separate 5-second graceful-exit window.
-    pytest.mark.timeout(30),
+    # The module-scoped server's cold start is charged to the first test, and a
+    # loaded isolated CI runner can take most of a minute to reach readyz.
+    pytest.mark.timeout(90),
 ]
 
 
@@ -115,27 +117,33 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _wait_ready(url: str, proc: subprocess.Popen[str], timeout: float = 20.0) -> None:
+def _wait_ready(url: str, proc: subprocess.Popen[str], timeout: float = 60.0) -> None:
     deadline = time.monotonic() + timeout
+    last_observation = "no response"
     while time.monotonic() < deadline:
         try:
             r = requests.get(f"{url}/api/readyz", timeout=1)
             if r.status_code == 200:
                 return
-        except requests.exceptions.RequestException:
+            last_observation = f"HTTP {r.status_code}: {r.text[:200]}"
+        except requests.exceptions.RequestException as exc:
+            last_observation = type(exc).__name__
             if proc.poll() is not None:
                 break
         time.sleep(0.25)
 
+    # Reading a live server's stderr blocks until it exits, which used to spend
+    # the whole pytest timeout and hide this message. Stop the tree first.
+    _terminate_group(proc)
     stderr_tail = ""
     if proc.stderr is not None:
         try:
-            stderr_tail = proc.stderr.read().strip()
+            stderr_tail = proc.stderr.read().strip()[-4000:]
         except Exception:
             stderr_tail = ""
 
     detail = f"\nServer stderr:\n{stderr_tail}" if stderr_tail else ""
-    raise TimeoutError(f"Server at {url} did not become ready within {timeout}s.{detail}")
+    raise TimeoutError(f"Server at {url} did not become ready within {timeout}s (last: {last_observation}).{detail}")
 
 
 def _server_url(server: str | dict[str, str]) -> str:
