@@ -76,6 +76,7 @@ import {
   countTimelineItems,
   getSessionInteractionCapabilities,
 } from "../lib/sessionWorkspace";
+import type { OutboxEntry } from "../components/session-workspace/OutboxRow";
 import "../styles/session-workspace.css";
 
 const GENERIC_HOME_LABELS = new Set([
@@ -180,6 +181,8 @@ function SessionDetailWorkspaceRoute({
     [session, nowMs],
   );
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // Sends the composer owns but the transcript renders at its tail.
+  const [outboxEntries, setOutboxEntries] = useState<OutboxEntry[]>([]);
 
   const navigateToSession = (nextSessionId: string) => {
     navigate(`/timeline/${nextSessionId}`, {
@@ -670,6 +673,7 @@ function SessionDetailWorkspaceRoute({
         <TimelinePane
           items={items}
           provider={displaySession.provider}
+          outbox={outboxEntries}
           totalEntries={totalEntries}
           loadedEntries={loadedEntryCount}
           abandonedEvents={abandonedEvents}
@@ -751,6 +755,7 @@ function SessionDetailWorkspaceRoute({
                       displaySession.capabilities?.can_steer_active_turn,
                     )}
                     timelineItems={items}
+                    onOutboxChange={setOutboxEntries}
                     composerHeaderAccessory={
                       <SessionRuntimeStrip
                         session={displaySession}

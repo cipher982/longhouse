@@ -12,6 +12,7 @@ import { SessionChat, type SessionChatTarget } from "../SessionChat";
 import type { SessionLockInfo } from "../../services/api";
 import type { TimelineItem } from "../../lib/sessionWorkspace";
 import { makeSessionStateFacts } from "../../test/sessionState";
+import type { OutboxEntry } from "../session-workspace/OutboxRow";
 
 const { fetchWithRefreshMock } = vi.hoisted(() => ({
   fetchWithRefreshMock: vi.fn(),
@@ -1592,5 +1593,132 @@ describe("SessionChat", () => {
     );
     expect(postCalls).toBe(0);
     expect(screen.getByRole("textbox")).toHaveValue("do not silently queue");
+  });
+
+  describe("with the outbox in the transcript", () => {
+    function lastOutbox(mock: ReturnType<typeof vi.fn>): OutboxEntry[] {
+      const calls = mock.mock.calls;
+      return (calls[calls.length - 1]?.[0] ?? []) as OutboxEntry[];
+    }
+
+    function mockSendOutcome(outcome: "sent" | "queued", text: string) {
+      requestMock.mockImplementation((path: string, init?: RequestInit) => {
+        if (String(path).endsWith("/lock")) {
+          return Promise.resolve({ locked: false, fork_available: false });
+        }
+        if (String(path).endsWith("/inputs") && !init) {
+          return Promise.resolve([]);
+        }
+        if (String(path).endsWith("/input") && init?.method === "POST") {
+          const payload = JSON.parse(String(init.body ?? "{}"));
+          return Promise.resolve({
+            outcome,
+            input_id: 7,
+            intent: "auto",
+            client_request_id: payload.client_request_id,
+            queued: [
+              {
+                id: 7,
+                client_request_id: payload.client_request_id,
+                text,
+                intent: "auto",
+                status: outcome === "sent" ? "delivered" : "queued",
+                created_at: null,
+              },
+            ],
+          });
+        }
+        return Promise.reject(new Error(`Unexpected request: ${path}`));
+      });
+    }
+
+    it("keeps a delivered send in the transcript until its echo arrives", async () => {
+      const user = userEvent.setup();
+      const onOutboxChange = vi.fn();
+      mockSendOutcome("sent", "tldr please");
+      const { rerenderSessionChat } = renderSessionChat({
+        chatMode: "managed_local",
+        timelineItems: [],
+        onOutboxChange,
+      });
+
+      await user.type(screen.getByRole("textbox"), "tldr please");
+      await user.click(screen.getByRole("button", { name: /send/i }));
+
+      await waitFor(() => {
+        expect(lastOutbox(onOutboxChange)).toMatchObject([
+          { text: "tldr please", state: "sending" },
+        ]);
+      });
+      // Nothing about this send renders inside the composer.
+      expect(screen.queryByText("tldr please")).not.toBeInTheDocument();
+      expect(screen.queryByText("Sent")).not.toBeInTheDocument();
+
+      const postCall = requestMock.mock.calls.find(
+        ([path, init]) =>
+          String(path).endsWith("/input") && init?.method === "POST",
+      );
+      const clientRequestId = JSON.parse(String(postCall?.[1]?.body))
+        .client_request_id as string;
+      rerenderSessionChat({
+        chatMode: "managed_local",
+        onOutboxChange,
+        timelineItems: [makeLonghouseUserItem({ clientRequestId })],
+      });
+      await waitFor(() => expect(lastOutbox(onOutboxChange)).toEqual([]));
+    });
+
+    it("clears a delivered send when its echo lands before identity is linked", async () => {
+      const user = userEvent.setup();
+      const onOutboxChange = vi.fn();
+      mockSendOutcome("sent", "same words");
+      const { rerenderSessionChat } = renderSessionChat({
+        chatMode: "managed_local",
+        timelineItems: [],
+        onOutboxChange,
+      });
+
+      await user.type(screen.getByRole("textbox"), "same words");
+      await user.click(screen.getByRole("button", { name: /send/i }));
+      await waitFor(() =>
+        expect(lastOutbox(onOutboxChange)).toMatchObject([
+          { state: "sending" },
+        ]),
+      );
+
+      rerenderSessionChat({
+        chatMode: "managed_local",
+        onOutboxChange,
+        timelineItems: [
+          makeLonghouseUserItem({ text: "same  words", authoredVia: null }),
+        ],
+      });
+      await waitFor(() => expect(lastOutbox(onOutboxChange)).toEqual([]));
+    });
+
+    it("reports a queued send with a cancel action", async () => {
+      const user = userEvent.setup();
+      const onOutboxChange = vi.fn();
+      mockSendOutcome("queued", "after this");
+      renderSessionChat({
+        chatMode: "managed_local",
+        timelineItems: [],
+        onOutboxChange,
+      });
+
+      await user.type(screen.getByRole("textbox"), "after this");
+      await user.click(screen.getByRole("button", { name: /send/i }));
+
+      await waitFor(() => {
+        const [entry] = lastOutbox(onOutboxChange);
+        expect(entry).toMatchObject({ text: "after this", state: "queued" });
+        expect(entry.actions?.map((action) => action.label)).toEqual([
+          "Cancel",
+        ]);
+      });
+      expect(
+        screen.queryByTestId("session-chat-queued"),
+      ).not.toBeInTheDocument();
+    });
   });
 });
