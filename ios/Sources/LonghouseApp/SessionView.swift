@@ -24,6 +24,8 @@ struct SessionView: View {
     @State private var pickerSelection: [PhotosPickerItem] = []
     @State private var isShowingPhotoPicker: Bool = false
     @State private var isShowingBugReport = false
+    @State private var bugReportAutoStartFix = false
+    @State private var isShowingBugReportSavedAlert = false
     @State private var bugReportScreenshot: Data?
     @State private var bugReportContextJSON = Data("{}".utf8)
     @State private var isLoadingPickerItems: Bool = false
@@ -194,8 +196,21 @@ struct SessionView: View {
                 sourceSessionID: sessionId,
                 contextJSON: bugReportContextJSON,
                 screenshotData: bugReportScreenshot,
-                onSent: { onOpenSession?($0) }
+                autoStartFix: bugReportAutoStartFix,
+                onSent: { onOpenSession?($0) },
+                onSaved: {
+                    showBugReportSavedAlert()
+                }
             )
+        }
+        .alert("Report saved", isPresented: $isShowingBugReportSavedAlert) {
+            Button("Start a fix") {
+                bugReportAutoStartFix = true
+                isShowingBugReport = true
+            }
+            Button("Done", role: .cancel) {}
+        } message: {
+            Text("Your screenshot and diagnostics are attached. Start a fix now or return to this session.")
         }
     }
 
@@ -235,6 +250,7 @@ struct SessionView: View {
     private var overflowMenu: some View {
         Menu {
             Button {
+                bugReportAutoStartFix = false
                 bugReportContextJSON = viewModel.makeBugReportContext(
                     sessionId: sessionId,
                     serverURL: appState.serverURL
@@ -284,6 +300,13 @@ struct SessionView: View {
         }
         .accessibilityLabel("Session actions")
         .accessibilityIdentifier("session-overflow-menu")
+    }
+    private func showBugReportSavedAlert() {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            isShowingBugReportSavedAlert = true
+        }
     }
 
     private var sessionWebURL: URL? {

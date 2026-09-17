@@ -11,6 +11,8 @@ struct BugReportSheet: View {
     let initialContextJSON: Data
     let initialScreenshot: Data?
     let onSent: ((String) -> Void)?
+    let onSaved: (() -> Void)?
+    let autoStartFix: Bool
 
     private enum FailureAction: Equatable {
         case retryHandoff
@@ -41,12 +43,16 @@ struct BugReportSheet: View {
         sourceSessionID: String?,
         contextJSON: Data,
         screenshotData: Data?,
-        onSent: ((String) -> Void)? = nil
+        autoStartFix: Bool = false,
+        onSent: ((String) -> Void)? = nil,
+        onSaved: (() -> Void)? = nil
     ) {
         self.sourceSessionID = sourceSessionID
         self.initialContextJSON = contextJSON
         self.initialScreenshot = screenshotData
+        self.autoStartFix = autoStartFix
         self.onSent = onSent
+        self.onSaved = onSaved
         _screenshotData = State(initialValue: screenshotData)
     }
 
@@ -163,6 +169,20 @@ struct BugReportSheet: View {
             }
             .task {
                 restoreDraft()
+                guard autoStartFix else { return }
+                await Task.yield()
+                if reportID != nil {
+                    showingLaunchPicker = true
+                }
+            }
+            .onChange(of: showingLaunchPicker) { _, isPresented in
+                guard !isPresented,
+                      autoStartFix,
+                      reportID != nil,
+                      targetSessionID == nil,
+                      !isSending
+                else { return }
+                dismiss()
             }
             .onChange(of: description) { _, _ in scheduleDraftSave() }
             .onChange(of: photoItems) { _, items in
@@ -238,7 +258,10 @@ struct BugReportSheet: View {
             draftSaveTask?.cancel()
             draftSaveTask = nil
             saveDraft()
-            statusMessage = "Report saved. Start a fix when you’re ready."
+            // A successful save ends the form task. The parent owns the
+            // confirmation and any optional handoff action.
+            dismiss()
+            onSaved?()
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? "Could not save the bug report."
         }
@@ -288,7 +311,7 @@ struct BugReportSheet: View {
             BugReportLocalStore.clearDraft()
             BugReportLocalStore.clearHandoff()
             didSend = true
-            statusMessage = "Sent to Console. The agent has the screenshot and diagnostics."
+            dismiss()
             onSent?(sessionID)
         } catch {
             if let apiError = error as? LonghouseAPIError, apiError.structuredCode == "report_in_progress" {
@@ -496,4 +519,15 @@ struct BugReportSheet: View {
         screenshotData: nil
     )
     .environmentObject(AppState())
+}
+
+#Preview("Report saved confirmation") {
+    Color(.systemBackground)
+        .ignoresSafeArea()
+        .alert("Report saved", isPresented: .constant(true)) {
+            Button("Start a fix") {}
+            Button("Done", role: .cancel) {}
+        } message: {
+            Text("Your screenshot and diagnostics are attached. Start a fix now or return to Timeline.")
+        }
 }
