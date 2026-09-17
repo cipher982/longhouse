@@ -1702,17 +1702,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             more = sweep.more,
                             "Swept superseded runtime status out of a flooded outbox"
                         );
-                        // One sweep is capped. Keep going until the directory
-                        // holds only current status; a flood outlives a pass.
-                        if sweep.more {
-                            let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
-                            runtime_sweep_tasks.spawn_blocking(move || {
-                                outbox::sweep_runtime_event_outbox(
-                                    &runtime_events_outbox_dir,
-                                    outbox::RUNTIME_EVENT_SWEEP_LIMIT,
-                                )
-                            });
-                        }
+                        // More work does not mean another pass right now. The
+                        // next saturated collection arms the next sweep on the
+                        // ordinary tick; chaining blocking passes back to back
+                        // would starve every other lane on this loop.
                     }
                     Some(Err(err)) => {
                         tracing::warn!("Runtime-event outbox sweep task failed: {}", err);

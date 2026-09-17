@@ -68,6 +68,9 @@ pub const RUNTIME_EVENT_SWEEP_LIMIT: usize = 50_000;
 /// Workers the sweep uses to read and remove. The device does thousands of
 /// each per second; one thread does not.
 const RUNTIME_EVENT_SWEEP_WORKERS: usize = 8;
+/// Paths one sweep pass materializes before working. Enumeration is cheap,
+/// but a million owned paths is not: the rest waits for the next pass.
+const RUNTIME_EVENT_SWEEP_PATHS: usize = 200_000;
 /// Requests in flight to the Runtime Host. One at a time leaves the link idle
 /// for a whole round trip between batches, which is how a backlog that the
 /// device can clear in minutes takes hours to deliver.
@@ -924,23 +927,30 @@ pub fn sweep_runtime_event_outbox_with_workers(dir: &Path, workers: usize) -> Ru
     let Ok(entries) = std::fs::read_dir(dir) else {
         return RuntimeOutboxSweep::default();
     };
-    let paths: Vec<PathBuf> = entries
-        .flatten()
-        .filter(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .is_some_and(|name| name.ends_with(".json") && !name.starts_with('.'))
-        })
-        .map(|entry| entry.path())
-        .collect();
+    let mut paths: Vec<PathBuf> = Vec::new();
+    let mut truncated = false;
+    for entry in entries.flatten() {
+        if paths.len() >= RUNTIME_EVENT_SWEEP_PATHS {
+            truncated = true;
+            break;
+        }
+        let is_ready = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.ends_with(".json") && !name.starts_with('.'));
+        if is_ready {
+            paths.push(entry.path());
+        }
+    }
     if paths.is_empty() {
         return RuntimeOutboxSweep::default();
     }
 
     let inspected = AtomicUsize::new(0);
     let discarded = AtomicUsize::new(0);
-    let newest: Mutex<HashMap<u64, (Option<DateTime<Utc>>, PathBuf)>> =
+    // A 128-bit statement identity, not 64: this map decides which file gets
+    // removed, and one collision would remove a different statement.
+    let newest: Mutex<HashMap<(u64, u64), (Option<DateTime<Utc>>, PathBuf)>> =
         Mutex::new(HashMap::new());
     let next = AtomicUsize::new(0);
     let worker_count = workers.max(1).min(paths.len());
@@ -952,6 +962,16 @@ pub fn sweep_runtime_event_outbox_with_workers(dir: &Path, workers: usize) -> Ru
                 let Some(path) = paths.get(index) else {
                     return;
                 };
+                // The collector's size policy applies here too: eight workers
+                // reading unbounded files is eight unbounded allocations.
+                // Oversized files are left for the collector, which owns the
+                // dead-letter decision.
+                let too_large = std::fs::metadata(path)
+                    .map(|meta| meta.len() as usize > RUNTIME_EVENT_MAX_FILE_BYTES)
+                    .unwrap_or(true);
+                if too_large {
+                    continue;
+                }
                 let Ok(bytes) = std::fs::read(path) else {
                     continue;
                 };
@@ -994,61 +1014,63 @@ pub fn sweep_runtime_event_outbox_with_workers(dir: &Path, workers: usize) -> Ru
     RuntimeOutboxSweep {
         inspected: inspected.load(Ordering::Relaxed),
         discarded: discarded.load(Ordering::Relaxed),
-        // A pass now covers the whole directory, so another one is only worth
-        // running while this one was still finding copies to remove — a
-        // producer that keeps writing is exactly that case.
-        more: discarded.load(Ordering::Relaxed) > 0,
+        // Another pass is worth running when this one was still finding copies
+        // to remove, or when it did not reach the end of the directory. The
+        // daemon schedules that on its ordinary tick rather than immediately:
+        // chaining blocking passes back to back starves the other lanes.
+        more: discarded.load(Ordering::Relaxed) > 0 || truncated,
     }
 }
 
-fn hash_statement_key(key: &str) -> u64 {
+/// Two independent hashes of the same key. A single 64-bit hash over half a
+/// million statements carries a real, if small, chance of deleting one
+/// statement as though it were another; 128 bits removes it.
+fn hash_statement_key(key: &str) -> (u64, u64) {
     use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    key.hash(&mut hasher);
-    hasher.finish()
+    let mut first = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut first);
+    let mut second = std::collections::hash_map::DefaultHasher::new();
+    key.len().hash(&mut second);
+    second.write_u8(0xA5);
+    key.hash(&mut second);
+    (first.finish(), second.finish())
 }
 
 /// Deliver a batch, using the link instead of one round trip at a time.
 ///
-/// Requests go out concurrently, but a session's events never split across
-/// concurrent requests: each request carries whole sessions, so the Runtime
-/// Host still sees one session's observations in the order they happened.
-/// Serial chunks left the link idle for a full round trip between batches,
-/// which on `cinder` meant 256 events every few minutes while the device
-/// could have cleared the whole backlog in that time.
+/// Concurrency runs across sessions, never inside one. A session's events are
+/// sent in order, one request at a time, and a transient failure stops that
+/// session there rather than letting its later events overtake the ones still
+/// waiting: a `pause_resolution` that arrives before its `pause_request` is
+/// dropped by the Runtime Host, because there is nothing pending to resolve.
+/// Sessions are independent, so they proceed in parallel.
+///
+/// Serial delivery across everything left the link idle for a full round trip
+/// between batches, which on `cinder` meant 256 events every few minutes while
+/// the device could have cleared the whole backlog in that time.
 pub async fn post_pending_runtime_event_files(
     client: &ShipperClient,
     posts: Vec<PendingRuntimeEventPost>,
 ) -> (usize, usize) {
-    let mut by_session: HashMap<String, Vec<PendingRuntimeEventPost>> = HashMap::new();
-    let mut order: Vec<String> = Vec::new();
-    for post in posts {
-        let session = text_field(post.event.get("session_id"));
-        if !by_session.contains_key(&session) {
-            order.push(session.clone());
-        }
-        by_session.entry(session).or_default().push(post);
-    }
+    let sessions = group_posts_by_session(posts);
 
-    let mut requests: Vec<Vec<PendingRuntimeEventPost>> = Vec::new();
-    let mut current: Vec<PendingRuntimeEventPost> = Vec::new();
-    for session in order {
-        let Some(events) = by_session.remove(&session) else {
-            continue;
-        };
-        for group in events.chunks(RUNTIME_EVENT_BATCH_LIMIT) {
-            if !current.is_empty() && current.len() + group.len() > RUNTIME_EVENT_BATCH_LIMIT {
-                requests.push(std::mem::take(&mut current));
+    let outcomes = stream::iter(sessions.into_iter().map(|events| async move {
+        let mut sent = 0usize;
+        let mut kept = 0usize;
+        for chunk in events.chunks(RUNTIME_EVENT_BATCH_LIMIT) {
+            let (chunk_sent, chunk_kept) =
+                post_one_runtime_event_request(client, chunk.to_vec()).await;
+            sent += chunk_sent;
+            kept += chunk_kept;
+            if chunk_kept > 0 {
+                // Everything after this in the same session stays queued: it
+                // must not arrive before the events it follows.
+                let remaining: usize = events.len() - (sent + kept);
+                kept += remaining;
+                break;
             }
-            current.extend(group.iter().cloned());
         }
-    }
-    if !current.is_empty() {
-        requests.push(current);
-    }
-
-    let outcomes = stream::iter(requests.into_iter().map(|request| async move {
-        post_one_runtime_event_request(client, request).await
+        (sent, kept)
     }))
     .buffer_unordered(RUNTIME_EVENT_POST_CONCURRENCY)
     .collect::<Vec<_>>()
@@ -1059,6 +1081,26 @@ pub async fn post_pending_runtime_event_files(
         .fold((0usize, 0usize), |(sent, kept), (chunk_sent, chunk_kept)| {
             (sent + chunk_sent, kept + chunk_kept)
         })
+}
+
+/// One group per session, each in the order the events were observed.
+///
+/// This is the unit of concurrency: groups may be sent in parallel, the
+/// contents of a group may not.
+fn group_posts_by_session(posts: Vec<PendingRuntimeEventPost>) -> Vec<Vec<PendingRuntimeEventPost>> {
+    let mut by_session: HashMap<String, Vec<PendingRuntimeEventPost>> = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+    for post in posts {
+        let session = text_field(post.event.get("session_id"));
+        if !by_session.contains_key(&session) {
+            order.push(session.clone());
+        }
+        by_session.entry(session).or_default().push(post);
+    }
+    order
+        .into_iter()
+        .filter_map(|session| by_session.remove(&session))
+        .collect()
 }
 
 async fn post_one_runtime_event_request(
@@ -3074,6 +3116,70 @@ mod runtime_status_collection_tests {
             .filter(|post| post.event["kind"] == "terminal_signal")
             .count();
         assert_eq!(terminals, 2, "both terminal records survive the race");
+    }
+
+    /// Concurrency runs across sessions, never inside one: a session's later
+    /// events must not overtake the ones they follow, or the Runtime Host
+    /// drops a pause resolution whose request has not arrived.
+    #[test]
+    fn delivery_groups_keep_one_session_whole_and_in_order() {
+        let tmp = TempDir::new().expect("tempdir");
+        let dir = tmp.path();
+        let mut posts = Vec::new();
+        for index in 0..300 {
+            let session = if index % 2 == 0 { "s1" } else { "s2" };
+            let event = phase_event(
+                session,
+                "r1",
+                "running",
+                &format!("2026-09-17T15:{:02}:{:02}Z", index / 60, index % 60),
+            );
+            posts.push(PendingRuntimeEventPost {
+                path: dir.join(format!("{index}.json")),
+                event,
+            });
+        }
+
+        let groups = group_posts_by_session(posts);
+
+        assert_eq!(groups.len(), 2, "one group per session");
+        for group in &groups {
+            assert!(
+                group.len() > RUNTIME_EVENT_BATCH_LIMIT,
+                "the interesting case is a session larger than one request"
+            );
+            let sessions: std::collections::HashSet<String> = group
+                .iter()
+                .map(|post| text_field(post.event.get("session_id")))
+                .collect();
+            assert_eq!(sessions.len(), 1, "a group never mixes sessions");
+            let times: Vec<String> = group
+                .iter()
+                .map(|post| text_field(post.event.get("occurred_at")))
+                .collect();
+            let mut sorted = times.clone();
+            sorted.sort();
+            assert_eq!(times, sorted, "a session stays in observation order");
+        }
+    }
+
+    /// The collector's size policy applies to the sweep too: eight workers
+    /// reading unbounded files is eight unbounded allocations.
+    #[test]
+    fn sweep_leaves_an_oversized_file_for_the_collector() {
+        let tmp = TempDir::new().expect("tempdir");
+        let dir = tmp.path();
+        let mut huge = phase_event("s1", "r1", "thinking", "2026-09-17T15:00:01Z");
+        huge["payload"]["pad"] = json!("x".repeat(RUNTIME_EVENT_MAX_FILE_BYTES + 1));
+        write_plain(dir, &huge);
+        write_plain(dir, &phase_event("s1", "r1", "thinking", "2026-09-17T15:00:02Z"));
+        write_plain(dir, &phase_event("s1", "r1", "thinking", "2026-09-17T15:00:03Z"));
+
+        let sweep = sweep_runtime_event_outbox_with_workers(dir, 4);
+
+        assert_eq!(sweep.inspected, 2, "the oversized file is never read");
+        assert_eq!(sweep.discarded, 1);
+        assert_eq!(ready_files(dir), 2, "it is left where the collector will decide");
     }
 
     /// A producer writing through a sweep keeps its event: the sweep only
