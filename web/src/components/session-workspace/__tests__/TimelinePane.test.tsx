@@ -1055,3 +1055,44 @@ describe("TimelinePane turn footers", () => {
     expect(footer).not.toContain("Worked for");
   });
 });
+
+describe("TimelinePane outbox", () => {
+  it("renders unsent messages at the tail with their state and actions", () => {
+    const onCancel = vi.fn();
+    render(
+      <TimelinePane
+        items={[]}
+        totalEntries={0}
+        loadedEntries={0}
+        abandonedEvents={0}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+        outbox={[
+          { key: "a", text: "on its way", state: "sending" },
+          {
+            key: "b",
+            text: "after this",
+            state: "queued",
+            actions: [{ label: "Cancel", onClick: onCancel }],
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByText("No events")).not.toBeInTheDocument();
+    const rows = screen.getAllByTestId("session-outbox-row");
+    expect(rows.map((row) => row.getAttribute("data-outbox-state"))).toEqual([
+      "sending",
+      "queued",
+    ]);
+    expect(rows[0]).toHaveTextContent("Sending…");
+    expect(rows[1]).toHaveTextContent("Queued · sends after this turn");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+});

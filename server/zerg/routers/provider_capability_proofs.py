@@ -727,6 +727,80 @@ def list_provider_capabilities(
     return build_capability_projection_payload()
 
 
+_NEGATIVE_CONTROL_KIND = "provider_negative_control_snapshot"
+_NEGATIVE_CONTROL_VERDICTS = frozenset({"pass", "fail", "inconclusive", "not_recorded"})
+_MAX_NEGATIVE_CONTROLS = 512
+
+
+def _negative_control_path():
+    return _proof_store().root.parent / "negative-controls.json"
+
+
+def _validated_negative_control_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
+    if set(payload) != {"schema_version", "artifact_kind", "epoch_digest", "published_at", "controls"}:
+        raise ValueError("negative-control snapshot has an unexpected schema")
+    if payload["schema_version"] != 1 or payload["artifact_kind"] != _NEGATIVE_CONTROL_KIND:
+        raise ValueError("negative-control snapshot kind or version is not admitted")
+    if not isinstance(payload["epoch_digest"], str) or not payload["epoch_digest"].startswith("sha256:"):
+        raise ValueError("negative-control snapshot must name its accepted epoch digest")
+    if not isinstance(payload["published_at"], str) or not payload["published_at"]:
+        raise ValueError("negative-control snapshot must carry published_at")
+    controls = payload["controls"]
+    if not isinstance(controls, list) or len(controls) > _MAX_NEGATIVE_CONTROLS:
+        raise ValueError("negative-control snapshot controls must be a bounded list")
+    for control in controls:
+        if not isinstance(control, dict) or set(control) != {"provider", "target_assertion", "fault", "verdict"}:
+            raise ValueError("negative-control entry has an unexpected schema")
+        if not all(isinstance(control[key], str) and control[key] for key in ("provider", "target_assertion", "fault")):
+            raise ValueError("negative-control entry identity is incomplete")
+        if control["verdict"] not in _NEGATIVE_CONTROL_VERDICTS:
+            raise ValueError("negative-control verdict is not admitted")
+    return payload
+
+
+@router.post("/internal/provider-negative-controls", status_code=status.HTTP_201_CREATED)
+async def publish_provider_negative_controls(
+    request: Request,
+    _factory: None = Depends(_verify_factory_token),
+) -> dict[str, Any]:
+    """Replace the factory's current negative-control snapshot.
+
+    The factory owns which requirements declare controls and which verdicts
+    judged the accepted producer and oracle; this host stores the latest
+    snapshot so public certification can require those controls.
+    """
+
+    global _certification_cache
+    payload = await _read_capped_json(request)
+    try:
+        snapshot = _validated_negative_control_snapshot(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    path = _negative_control_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(snapshot, sort_keys=True), encoding="utf-8")
+    temporary.replace(path)
+    _certification_cache = None
+    return {"accepted": len(snapshot["controls"]), "epoch_digest": snapshot["epoch_digest"]}
+
+
+def _negative_controls_by_requirement() -> dict[tuple[str, str], list[str]] | None:
+    """(provider, assertion) -> declared control verdicts; None when never published."""
+
+    path = _negative_control_path()
+    if not path.is_file():
+        return None
+    try:
+        snapshot = _validated_negative_control_snapshot(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    out: dict[tuple[str, str], list[str]] = {}
+    for control in snapshot["controls"]:
+        out.setdefault((control["provider"], control["target_assertion"]), []).append(control["verdict"])
+    return out
+
+
 CHIP_CERTIFICATION_VERSION = "provider-chip-certification-v1"
 _CERTIFICATION_TTL_SECONDS = 60.0
 _certification_cache: tuple[float, dict[str, Any]] | None = None
@@ -746,6 +820,7 @@ def build_chip_certification_payload(*, now: datetime | None = None) -> dict[str
     """
 
     edges = load_chip_edge_assertions()
+    controls = _negative_controls_by_requirement()
     all_records, integrity_reasons = _published_records()
     flat = tuple(assertion for chips in edges.values() for chip in chips.values() if chip for assertion in chip)
     projected = project_capabilities(flat, all_records, now=now, integrity_reasons=integrity_reasons)
@@ -776,9 +851,23 @@ def build_chip_certification_payload(*, now: datetime | None = None) -> dict[str
                         "provider_version": p.provider_version,
                         "accepted_epoch_id": p.accepted_epoch_id,
                         "max_age_seconds": assertion.max_age_seconds,
+                        "negative_controls": None if controls is None else controls.get((provider, p.assertion_id), []),
                     }
                 )
-            chips[chip] = {"state": rollup_state(row["proof_status"] for row in rows), "requirements": rows}
+            state = rollup_state(row["proof_status"] for row in rows)
+            entry: dict[str, Any] = {"state": state, "requirements": rows}
+            # A pass certifies only when every declared negative control proved
+            # the judge can fail. Without the factory's snapshot nothing says
+            # which controls are declared, so no chip certifies.
+            if state == "certified" and (
+                controls is None or any(verdict != "pass" for row in rows for verdict in row["negative_controls"])
+            ):
+                entry = {
+                    "state": "unverified",
+                    "requirements": rows,
+                    "blocked_by": "negative_control_snapshot_missing" if controls is None else "negative_control",
+                }
+            chips[chip] = entry
         providers.append({"provider": provider, "chips": chips})
     return {
         "schema_version": 1,

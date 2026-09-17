@@ -51,6 +51,7 @@ import { useScrollToLoad } from "../../hooks/useScrollToLoad";
 import { collapseUnchanged, lineDiff, type DiffLine } from "../../lib/sessionWorkspace/diff";
 import type { EditStat } from "../../lib/sessionWorkspace/editSummary";
 import { SyntaxHighlighter, oneDark } from "../../lib/syntaxHighlighter";
+import { OutboxRow, type OutboxEntry } from "./OutboxRow";
 import type { AgentEvent, AgentEventMediaRef, AgentEventTurnEnd } from "../../services/api/agents";
 
 type EventFilter = "all" | "messages" | "tools";
@@ -109,6 +110,8 @@ interface TimelinePaneProps {
   renderMedia?: boolean;
   /** Session provider; its glyph marks assistant turns on the transcript trace. */
   provider?: string | null;
+  /** Sends the transcript has not echoed yet; rendered after the last row. */
+  outbox?: OutboxEntry[];
 }
 
 function nonEmptyText(value: unknown): string | null {
@@ -1083,6 +1086,8 @@ function ToolRow(props: {
   return <ActionCard {...props} />;
 }
 
+const EMPTY_OUTBOX: OutboxEntry[] = [];
+
 export function TimelinePane({
   items,
   totalEntries,
@@ -1109,6 +1114,7 @@ export function TimelinePane({
   listRef,
   renderMedia = true,
   provider = null,
+  outbox = EMPTY_OUTBOX,
 }: TimelinePaneProps) {
   const [eventFilter, setEventFilter] = useState<EventFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -1326,6 +1332,30 @@ export function TimelinePane({
     [items, loadedEntries, totalEntries],
   );
 
+  // Pending sends belong to the unfiltered tail; a search or kind filter is
+  // reading history, not watching the conversation continue.
+  const visibleOutbox =
+    eventFilter === "all" && !debouncedSearch.trim() ? outbox : EMPTY_OUTBOX;
+  // A new send always brings the tail into view, wherever the reader was:
+  // the user just acted and expects to see their message land. Filtered or
+  // searched views hide the outbox, so they are left where they are.
+  // Keyed on sends, not visibility: clearing a filter is not a send.
+  const prevOutboxCountRef = useRef(outbox.length);
+  // The typed query, not the debounced one: a send right after typing a
+  // search is still a send made while reading filtered history.
+  const outboxVisible =
+    eventFilter === "all" && !searchQuery.trim() && outbox.length > 0;
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    const prevCount = prevOutboxCountRef.current;
+    prevOutboxCountRef.current = outbox.length;
+    if (!container || !outboxVisible || outbox.length <= prevCount) return;
+    container.scrollTop = container.scrollHeight;
+    wasAtBottomRef.current = true;
+    setUnreadCount(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a send, not a visibility change, scrolls
+  }, [outbox.length]);
+
   const showScopedLoading = loading && filteredItems.length === 0;
   const showScopedError = !loading && !!error && filteredItems.length === 0;
 
@@ -1468,7 +1498,7 @@ export function TimelinePane({
                 : "The stitched timeline failed to load for this session."
             }
           />
-        ) : filteredItems.length === 0 ? (
+        ) : filteredItems.length === 0 && visibleOutbox.length === 0 ? (
           <EmptyState
             title="No events"
             description={
@@ -1561,6 +1591,9 @@ export function TimelinePane({
               />
             );
           })}
+          {visibleOutbox.map((entry) => (
+            <OutboxRow key={entry.key} entry={entry} />
+          ))}
           </div>
         )}
         </div>
