@@ -151,8 +151,6 @@ async def test_drain_catalog_unavailable_stays_unknown() -> None:
     assert result["queued_side_effects"] is None
 
 
-
-
 @pytest.mark.asyncio
 async def test_reopened_runtime_accepts_next_drain_without_reusing_fence(monkeypatch) -> None:
     from zerg.services.runtime_admission import RuntimeAdmission
@@ -183,6 +181,7 @@ async def test_reopened_runtime_accepts_next_drain_without_reusing_fence(monkeyp
     next_drained = await runtime.drain(next_request, attempt_id="next-attempt", catalog_probe=probe)
     assert next_drained["state"] == "drained"
     assert operations == ["close", "open", "close"]
+
 
 @pytest.mark.asyncio
 async def test_get_drain_promotes_when_catalog_gate_and_runtime_are_quiescent(monkeypatch) -> None:
