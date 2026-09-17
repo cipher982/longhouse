@@ -694,6 +694,7 @@ def run_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         "scenario_id": REGISTRATION.scenario_id,
         "scenario_revision": REGISTRATION.scenario_revision,
         "evidence_class": "live_token",
+        "observation_scope": "scenario",
         "generated_at": now_iso(),
         "session_id": session_id,
         "observation": {"lifecycle": lifecycle, "error": error, "claude_helm_process_exited": cleanup_ok},
