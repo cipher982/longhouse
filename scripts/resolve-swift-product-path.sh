@@ -74,14 +74,17 @@ if [[ ! -d "$PACKAGE_PATH" ]]; then
   echo "Package path not found: $PACKAGE_PATH" >&2
   exit 1
 fi
-SWIFT_BUILD_ARGS=()
-if [[ -n "$SCRATCH_PATH" ]]; then
-  SWIFT_BUILD_ARGS+=(--scratch-path "$SCRATCH_PATH")
-fi
+swift_build() {
+  if [[ -n "$SCRATCH_PATH" ]]; then
+    swift build --package-path "$PACKAGE_PATH" --scratch-path "$SCRATCH_PATH" "$@"
+  else
+    swift build --package-path "$PACKAGE_PATH" "$@"
+  fi
+}
 
 if [[ "$BUILD_PRODUCT" == "1" ]]; then
   BUILD_LOG="$(mktemp -t resolve-swift-build.XXXXXX.log)"
-  if ! swift build --package-path "$PACKAGE_PATH" "${SWIFT_BUILD_ARGS[@]}" -c "$CONFIGURATION" --product "$PRODUCT_NAME" >"$BUILD_LOG" 2>&1; then
+  if ! swift_build -c "$CONFIGURATION" --product "$PRODUCT_NAME" >"$BUILD_LOG" 2>&1; then
     cat "$BUILD_LOG" >&2
     rm -f "$BUILD_LOG"
     exit 1
@@ -89,7 +92,7 @@ if [[ "$BUILD_PRODUCT" == "1" ]]; then
   rm -f "$BUILD_LOG"
 fi
 
-BIN_DIR="$(swift build --package-path "$PACKAGE_PATH" "${SWIFT_BUILD_ARGS[@]}" -c "$CONFIGURATION" --show-bin-path)"
+BIN_DIR="$(swift_build -c "$CONFIGURATION" --show-bin-path)"
 PRIMARY_CANDIDATE="$BIN_DIR/$PRODUCT_NAME"
 if [[ -x "$PRIMARY_CANDIDATE" ]]; then
   printf '%s\n' "$PRIMARY_CANDIDATE"
