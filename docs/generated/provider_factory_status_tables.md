@@ -7,15 +7,15 @@
 | codex | release_poll | staged_release | runs — 2 qualification scenarios + 32 harness scenarios |
 | codex | push | generated_fake | runs — 1 scenario |
 | codex | weekly_cron | generated_fake | runs — 32 scenarios |
-| codex | manual | observed_install | never runs — remaining capability-proof scenario_ids for codex are orphaned: ['codex_helm_lifecycle', 'codex_transcript_search'] |
+| codex | manual | observed_install | never runs — every capability-proof assertion declared for codex is already satisfiable by an automated trigger |
 | claude | release_poll | staged_release | runs — 1 qualification scenario + 32 harness scenarios |
 | claude | push | generated_fake | runs — 4 scenarios |
 | claude | weekly_cron | generated_fake | runs — 32 scenarios |
-| claude | manual | observed_install | never runs — remaining capability-proof scenario_ids for claude are orphaned: ['claude_helm_lifecycle', 'claude_transcript_search'] |
+| claude | manual | observed_install | never runs — every capability-proof assertion declared for claude is already satisfiable by an automated trigger |
 | opencode | release_poll | staged_release | runs — 1 qualification scenario + 32 harness scenarios |
 | opencode | push | generated_fake | runs — 4 scenarios |
 | opencode | weekly_cron | generated_fake | runs — 32 scenarios |
-| opencode | manual | observed_install | never runs — remaining capability-proof scenario_ids for opencode are orphaned: ['opencode_helm_lifecycle', 'opencode_transcript_search'] |
+| opencode | manual | observed_install | never runs — every capability-proof assertion declared for opencode is already satisfiable by an automated trigger |
 | antigravity | release_poll | staged_release | runs — 1 qualification scenario + 32 harness scenarios |
 | antigravity | push | generated_fake | runs — 4 scenarios |
 | antigravity | weekly_cron | generated_fake | runs — 32 scenarios |
@@ -27,11 +27,11 @@
 | pi | release_poll | observed_install | runs — 3 scenarios |
 | pi | push | generated_fake | runs — 4 scenarios |
 | pi | weekly_cron | generated_fake | runs — 32 scenarios |
-| pi | manual | observed_install | never runs — remaining capability-proof scenario_ids for pi are orphaned: ['pi_transcript_search'] |
+| pi | manual | observed_install | never runs — every capability-proof assertion declared for pi is already satisfiable by an automated trigger |
 | omp | release_poll | staged_release | runs — 2 scenarios |
 | omp | push | generated_fake | runs — 4 scenarios |
 | omp | weekly_cron | generated_fake | runs — 32 scenarios |
-| omp | manual | observed_install | never runs — remaining capability-proof scenario_ids for omp are orphaned: ['omp_transcript_search'] |
+| omp | manual | observed_install | never runs — every capability-proof assertion declared for omp is already satisfiable by an automated trigger |
 
 ## Staged-release diagonal
 
