@@ -90,10 +90,18 @@ pub fn runtime_event_outbox_snapshot(dir: &Path) -> Value {
     })
 }
 
+/// Observability must not become the outage. This sampler runs inside the
+/// daemon's main loop, and on 2026-09-17 the runtime outbox held 250k files:
+/// one unbounded `read_dir` plus a `metadata()` per entry blocks heartbeats and
+/// control for as long as the enumeration takes. A depth reading that stops at
+/// the cap still answers the only question this sample asks.
+const SNAPSHOT_FILE_CAP: u64 = 5_000;
+
 fn snapshot_files(dir: &Path, include: impl Fn(&std::fs::DirEntry) -> bool) -> Value {
     let mut count = 0_u64;
     let mut bytes = 0_u64;
     let mut oldest_age_ms: Option<u64> = None;
+    let mut capped = false;
     let now = SystemTime::now();
 
     let entries = match fs::read_dir(dir) {
@@ -115,6 +123,10 @@ fn snapshot_files(dir: &Path, include: impl Fn(&std::fs::DirEntry) -> bool) -> V
     };
 
     for entry in entries.flatten() {
+        if count >= SNAPSHOT_FILE_CAP {
+            capped = true;
+            break;
+        }
         let Ok(metadata) = entry.metadata() else {
             continue;
         };
@@ -143,6 +155,7 @@ fn snapshot_files(dir: &Path, include: impl Fn(&std::fs::DirEntry) -> bool) -> V
         "count": count,
         "bytes": bytes,
         "oldest_age_ms": oldest_age_ms,
+        "capped": capped,
     })
 }
 
