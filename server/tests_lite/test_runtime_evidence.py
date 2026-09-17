@@ -419,9 +419,7 @@ async def test_refused_steer_retry_cannot_drain_another_writer(monkeypatch):
             await session_chat._retry_runtime_draining_catalog_input(
                 source_session=SimpleNamespace(id=uuid4()),
                 owner_id=7,
-                body=session_chat.SessionInputRequest(
-                    text=receipt.text, intent="steer", client_request_id="original-operation"
-                ),
+                body=session_chat.SessionInputRequest(text=receipt.text, intent="steer", client_request_id="original-operation"),
                 db=None,
                 existing=receipt,
             )

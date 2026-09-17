@@ -202,8 +202,6 @@ async def test_catalog_multipart_uses_live_receipt_without_legacy_db(monkeypatch
     assert calls["finishes"] == [{"receipt_id": receipt_id, "delivery_request_id": calls["receipt"]["delivery_request_id"]}]
 
 
-
-
 @pytest.mark.asyncio
 async def test_catalog_multipart_runtime_draining_replays_same_receipt_and_bytes(monkeypatch, tmp_path):
     import zerg.routers.session_inputs_attachments as route
@@ -339,6 +337,7 @@ async def test_catalog_multipart_runtime_draining_replays_same_receipt_and_bytes
     assert duplicate.outcome == "sent"
     assert len(state["attempts"]) == 2
     assert len(state["dispatches"]) == 1
+
 
 @pytest.mark.asyncio
 async def test_catalog_attachment_blob_fetch_uses_catalog_metadata_without_legacy_db(monkeypatch, tmp_path):

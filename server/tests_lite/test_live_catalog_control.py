@@ -455,7 +455,6 @@ async def test_catalog_input_dispatches_and_projects_live_receipt_only(tmp_path,
         assert receipt.archive_session_input_id is None
 
 
-
 @pytest.mark.asyncio
 async def test_catalog_runtime_draining_replay_keeps_operation_id_and_dispatches_once(tmp_path, monkeypatch):
     """A late drain is retryable, but two same-ID replays cannot both dispatch."""
@@ -516,7 +515,9 @@ async def test_catalog_runtime_draining_replay_keeps_operation_id_and_dispatches
     import zerg.services.runtime_admission as admission_module
     import zerg.services.session_chat_impl as chat_impl
     import zerg.routers.session_chat as chat_router
+
     ambiguous = {"value": False}
+
     async def fake_dispatch(**kwargs):
         commands.append(dict(kwargs))
         if ambiguous["value"]:
