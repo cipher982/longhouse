@@ -88,10 +88,12 @@ final class HTTPOutboxUITests: XCTestCase {
         let attach = app.buttons["session-chat-attach"]
         XCTAssertTrue(attach.waitForExistence(timeout: 5), "real attachment action is not available")
         attach.tap()
-        chooseSeededPhoto(in: app)
+        try chooseSeededPhoto(in: app)
 
         let tray = app.descendants(matching: .any)["session-chat-attachment-tray"]
-        XCTAssertTrue(tray.waitForExistence(timeout: Self.timeout), "PhotosPicker selection did not reach the production attachment tray")
+        guard tray.waitForExistence(timeout: Self.timeout) else {
+            throw ProofFailure(description: "PhotosPicker selection did not reach the production attachment tray")
+        }
 
         let message = "HTTP outbox proof \(UUID().uuidString)"
         composer.tap()
@@ -230,10 +232,11 @@ final class HTTPOutboxUITests: XCTestCase {
         )
     }
 
-    private func chooseSeededPhoto(in app: XCUIApplication) {
-        // PHPicker's photo tiles are collection-view cells. The host app still
-        // exposes the composer's plus glyph while PhotosPicker is presented,
-        // so querying app.images would select the wrong element.
+    private func chooseSeededPhoto(in app: XCUIApplication) throws {
+        // On current PhotosPicker runtimes, asset tiles are exposed as Images
+        // in the PhotosViewService hierarchy, not collection-view cells. The
+        // first PXGGridLayout-Info tile is the proof seed: the isolated driver
+        // imports it as the newest asset before the picker opens.
         let pickerApplications: [(String, XCUIApplication)] = [
             ("PhotosUIService", XCUIApplication(bundleIdentifier: "com.apple.PhotosUIService")),
             ("PhotosViewService", XCUIApplication(bundleIdentifier: "com.apple.PhotosViewService")),
@@ -241,29 +244,27 @@ final class HTTPOutboxUITests: XCTestCase {
         ]
 
         for (name, picker) in pickerApplications {
-            let photo = picker.collectionViews.cells.firstMatch
+            let photo = picker.images.matching(identifier: "PXGGridLayout-Info").firstMatch
             guard photo.waitForExistence(timeout: 5) else { continue }
             guard waitUntilHittable(photo, timeout: 5) else {
-                XCTFail("\(name) PhotosPicker seeded photo was not hittable")
-                return
+                throw ProofFailure(description: "\(name) PhotosPicker seeded photo was not hittable")
             }
             photo.tap()
 
-            let add = picker.buttons["Add"]
-            guard add.waitForExistence(timeout: 5) else {
-                XCTFail("\(name) PhotosPicker did not expose its Add action")
-                return
+            let done = picker.buttons["Done"]
+            guard done.waitForExistence(timeout: 5), waitUntilHittable(done, timeout: 5) else {
+                throw ProofFailure(description: "\(name) PhotosPicker did not expose an enabled Done action")
             }
-            add.tap()
+            done.tap()
             return
         }
 
-        XCTFail("seeded simulator Photos asset was not visible in the PhotosPicker grid")
+        throw ProofFailure(description: "seeded simulator Photos asset was not visible in the PhotosPicker grid")
     }
 
     private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
         let expectation = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "hittable == true"),
+            predicate: NSPredicate(format: "hittable == true AND enabled == true"),
             object: element
         )
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
