@@ -258,7 +258,6 @@ export default function (pi: any) {
           { type: "session_reconnect", provider_idle: providerIdle },
           ctx,
         );
-        scheduleReconnect(ctx);
       } catch {
         scheduleReconnect(ctx);
       }

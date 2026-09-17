@@ -1,18 +1,24 @@
 import { describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { createServer, type Socket } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const identityKeys = [
   "LONGHOUSE_OMP_HELM_CHANNEL_PATH",
   "LONGHOUSE_OMP_HELM_CHANNEL_TOKEN",
   "LONGHOUSE_MANAGED_SESSION_ID",
 ] as const;
+const channelDir = mkdtempSync(join(tmpdir(), "omp-helm-test-"));
 const previousIdentity = Object.fromEntries(identityKeys.map((key) => [key, process.env[key]]));
 Object.assign(process.env, {
-  LONGHOUSE_OMP_HELM_CHANNEL_PATH: "/tmp/omp-helm-test.sock",
+  LONGHOUSE_OMP_HELM_CHANNEL_PATH: join(channelDir, "channel.sock"),
   LONGHOUSE_OMP_HELM_CHANNEL_TOKEN: "omp-helm-test-token",
   LONGHOUSE_MANAGED_SESSION_ID: "omp-helm-test-session",
 });
 // Dynamic import is intentional: the extension validates launch-scoped identity at module load.
-const { agentEndIsTerminal, ompProviderIsIdle } = await import("./longhouse-omp-helm");
+const channelPath = process.env.LONGHOUSE_OMP_HELM_CHANNEL_PATH!;
+const { default: registerExtension, agentEndIsTerminal, ompProviderIsIdle } = await import("./longhouse-omp-helm");
 for (const key of identityKeys) {
   const value = previousIdentity[key];
   if (value === undefined) delete process.env[key];
@@ -54,5 +60,49 @@ describe("agentEndIsTerminal", () => {
   it("keeps malformed present values non-terminal", () => {
     expect(agentEndIsTerminal({ type: "agent_end", willContinue: null })).toBe(false);
     expect(agentEndIsTerminal({ type: "agent_end", isTerminal: "true" })).toBe(false);
+  });
+});
+
+describe("channel reconnect", () => {
+  it("sends one session_reconnect per dropped channel, not a polling loop", async () => {
+    const frames: Record<string, unknown>[] = [];
+    const sockets: Socket[] = [];
+    const server = createServer((socket) => {
+      sockets.push(socket);
+      let buffer = "";
+      socket.on("data", (chunk) => {
+        buffer += chunk.toString("utf8");
+        let newline = buffer.indexOf("\n");
+        while (newline >= 0) {
+          const frame = JSON.parse(buffer.slice(0, newline));
+          buffer = buffer.slice(newline + 1);
+          newline = buffer.indexOf("\n");
+          frames.push(frame);
+          if (frame.kind === "extension_hello") {
+            socket.write(`${JSON.stringify({ kind: "extension_ready", ok: true, connection_id: `c${sockets.length}`, lease_generation: "g1" })}\n`);
+          }
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(channelPath, resolve));
+    const handlers: Record<string, (event: Record<string, unknown>, ctx: unknown) => Promise<unknown>> = {};
+    registerExtension({ on: (name: string, handler: (typeof handlers)[string]) => { handlers[name] = handler; } });
+    const ctx = {
+      isIdle: () => false,
+      sessionManager: { getSessionId: () => "native-1", getSessionFile: () => join(channelDir, "session.jsonl") },
+    };
+    try {
+      await handlers.session_start({ type: "session_resume" }, ctx);
+      sockets[0].destroy();
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const reconnects = frames.filter((frame) => frame.kind === "session_reconnect");
+      expect(sockets.length).toBe(2);
+      expect(reconnects.length).toBe(1);
+    } finally {
+      await handlers.session_shutdown({ type: "session_shutdown" }, ctx);
+      for (const socket of sockets) socket.destroy();
+      await new Promise((resolve) => server.close(resolve));
+      rmSync(channelDir, { recursive: true, force: true });
+    }
   });
 });
