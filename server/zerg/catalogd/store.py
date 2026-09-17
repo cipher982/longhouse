@@ -159,6 +159,29 @@ def _has_durable_timeline_content(row) -> Any:
     )
 
 
+def _timeline_window_order_at(session_id_column, activity_at) -> Any:
+    """Newest live-evidence observation, falling back to transcript activity.
+
+    The page window decides which sessions a client ever sees, and the client
+    ranks what it receives by the card anchor the projector derives from these
+    same heads. Ordering the window by transcript recency alone dropped a
+    live-but-quiet Helm session below the page cut — terminal attached, no
+    transcript write for a day — so it left Live now entirely while the browser
+    would have ranked it first. ``_empty_human_helm_is_open`` already consults
+    these heads for admission; this makes the window *order* agree with the same
+    evidence. ``max`` here is SQLite's two-argument scalar function, and the
+    head term is coalesced first so both arguments are non-null.
+    """
+
+    head = FactHead.__table__
+    live_at = (
+        select(func.max(head.c.observed_at))
+        .where(head.c.session_id == session_id_column, head.c.family.in_(("activity", "control")))
+        .scalar_subquery()
+    )
+    return func.max(func.coalesce(live_at, activity_at), activity_at)
+
+
 def _empty_human_helm_is_open(*, session_id, thread_id, observed_at: datetime) -> Any:
     """Admit an empty human Helm only on canonical current-work evidence.
 
@@ -5628,13 +5651,21 @@ class CatalogStore:
                     storage.c.last_console_result_at > storage.c.last_read_at,
                 ),
             )
+            legacy_order_at = _timeline_window_order_at(
+                card.c.session_id,
+                func.coalesce(card.c.last_activity_at, card.c.started_at),
+            )
+            storage_order_at = _timeline_window_order_at(
+                storage.c.session_id,
+                func.coalesce(storage.c.last_activity_at, storage.c.started_at),
+            )
             legacy_where = [
-                or_(func.coalesce(card.c.last_activity_at, card.c.started_at) >= since, legacy_unread),
+                or_(legacy_order_at >= since, legacy_unread),
                 catalog.c.user_state.notin_(("archived", "snoozed", "deleted")),
                 ~select(storage.c.session_id).where(storage.c.session_id == card.c.session_id).exists(),
             ]
             storage_where = [
-                or_(storage.c.last_activity_at >= since, storage_unread),
+                or_(storage_order_at >= since, storage_unread),
                 storage.c.user_state.notin_(("archived", "snoozed", "deleted")),
                 ~select(tombstones.c.session_id).where(tombstones.c.session_id == storage.c.session_id).exists(),
             ]
@@ -5766,22 +5797,24 @@ class CatalogStore:
             candidates = union_all(
                 select(
                     card.c.session_id.label("session_id"),
-                    func.coalesce(card.c.last_activity_at, card.c.started_at).label("order_at"),
+                    legacy_order_at.label("order_at"),
                     case((legacy_unread, 1), else_=0).label("unread"),
                 )
                 .select_from(joined)
                 .where(*legacy_where),
                 select(
                     storage.c.session_id.label("session_id"),
-                    storage.c.last_activity_at.label("order_at"),
+                    storage_order_at.label("order_at"),
                     case((storage_unread, 1), else_=0).label("unread"),
                 )
                 .select_from(storage_joined)
                 .where(*storage_where),
             ).subquery()
             total = int(connection.execute(select(func.count()).select_from(candidates)).scalar_one())
-            # Unread first so acknowledgement-pending sessions can never be
-            # paged out of the first window; clients do their own visual sort.
+            # Unread first, then the newest live evidence: a session the served
+            # state calls open, or whose Console result nobody has read, must
+            # never be paged out of the first window. Clients keep doing their
+            # own visual sort.
             session_ids = [
                 str(value)
                 for value in connection.execute(
