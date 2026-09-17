@@ -151,7 +151,7 @@ pub async fn cmd_ship(
     let mut conn = open_db(config.db_path.as_deref())?;
     let client = ShipperClient::with_compression(&config, algo)?;
     let negotiated = client
-        .storage_v2_capabilities(&config.machine_name, Some(Duration::from_secs(5)))
+        .negotiate_storage_v2_at_startup(&config.machine_name)
         .await?;
     let capabilities = require_storage_v2_cutover(negotiated, &config.api_url)?;
 
@@ -268,7 +268,7 @@ pub async fn cmd_ship_file(
     let mut conn = open_db(config.db_path.as_deref())?;
     let client = ShipperClient::with_compression(&config, algo)?;
     let negotiated = client
-        .storage_v2_capabilities(&config.machine_name, Some(Duration::from_secs(5)))
+        .negotiate_storage_v2_at_startup(&config.machine_name)
         .await?;
     // Settle the lane before touching durable state: rewinding for a replay the
     // host cannot accept would leave the local cursor behind for nothing.

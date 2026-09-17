@@ -13,6 +13,17 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
 use crate::config::ShipperConfig;
+
+/// Attempts and spacing for the startup capability negotiation.
+///
+/// The window is deliberately short: it exists to survive a deploy or a blip,
+/// not to hold a caller open against a host that is genuinely gone. Covering a
+/// long outage requires capturing locally without a negotiated capability,
+/// which needs cached capabilities and a renegotiation path so a cached tenant
+/// can never outlive the tenant it was issued for.
+pub(crate) const STARTUP_NEGOTIATION_ATTEMPTS: usize = 4;
+pub(crate) const STARTUP_NEGOTIATION_BACKOFF: Duration = Duration::from_secs(5);
+pub(crate) const STARTUP_NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(5);
 use crate::pipeline::compressor::{content_encoding, CompressionAlgo};
 use crate::shipping::storage_v2::{
     StorageV2Capabilities, StorageV2Envelope, StorageV2Receipt, StorageV2SourceManifest,
@@ -407,6 +418,48 @@ impl ShipperClient {
             .context("storage-v2 capability response is invalid")?;
         capabilities.validate(machine_id)?;
         Ok(Some(capabilities))
+    }
+
+    /// Negotiate storage-v2 with the bounded retry every startup path needs.
+    ///
+    /// One slow answer is not a refusal. The daemon already retried here; the
+    /// one-shot `ship` path did not, so a single loaded-host timeout failed the
+    /// whole run while a long-lived engine on the same host recovered. The
+    /// per-attempt timeout stays short on purpose: this survives a deploy or a
+    /// blip, not a host that is genuinely gone.
+    pub async fn negotiate_storage_v2_at_startup(
+        &self,
+        machine_id: &str,
+    ) -> Result<Option<StorageV2Capabilities>> {
+        let mut last_error = None;
+        for attempt in 1..=STARTUP_NEGOTIATION_ATTEMPTS {
+            match self
+                .storage_v2_capabilities(machine_id, Some(STARTUP_NEGOTIATION_TIMEOUT))
+                .await
+            {
+                Ok(negotiated) => {
+                    // A host that answered and does not offer storage-v2 is a
+                    // refusal, not a blip: retrying cannot change its mind.
+                    if attempt > 1 && negotiated.is_some() {
+                        tracing::info!(attempt, "Runtime Host answered after a startup retry");
+                    }
+                    return Ok(negotiated);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        attempt,
+                        attempts = STARTUP_NEGOTIATION_ATTEMPTS,
+                        error = %error,
+                        "Runtime Host capability negotiation failed"
+                    );
+                    last_error = Some(error);
+                    if attempt < STARTUP_NEGOTIATION_ATTEMPTS {
+                        tokio::time::sleep(STARTUP_NEGOTIATION_BACKOFF).await;
+                    }
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("capability negotiation never ran")))
     }
 
     #[allow(dead_code)] // Kept as the typed convenience boundary for callers/tests.
