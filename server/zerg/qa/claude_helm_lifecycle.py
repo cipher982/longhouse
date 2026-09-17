@@ -79,7 +79,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="claude.helm_lifecycle.v1",
     producer_revision=1,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=2,
+    scenario_revision=3,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("claude",),
     # Claude on macOS keeps credentials in the desktop Keychain; a relocated
@@ -151,6 +151,27 @@ def _user_prompt_contains(row: dict[str, Any], marker: str) -> bool:
     return row.get("type") == "attachment" and attachment.get("type") == "queued_command" and marker in str(attachment.get("prompt") or "")
 
 
+_STEER_HOOK_ATTACHMENTS = frozenset({"hook_additional_context", "hook_blocking_error", "hook_stopped_continuation"})
+
+
+def _steer_delivered(row: dict[str, Any], marker: str) -> bool:
+    """A steer reaches Claude as a prompt or through the session's lifecycle hook.
+
+    While a turn runs, the Machine Agent delivers the steer only through the
+    PostToolUse hook, or the Stop hook that keeps the turn going, because Claude
+    Code frames channel messages as untrusted external data.
+    """
+
+    if _user_prompt_contains(row, marker):
+        return True
+    attachment = row.get("attachment") if isinstance(row.get("attachment"), dict) else {}
+    if row.get("type") == "attachment" and attachment.get("type") in _STEER_HOOK_ATTACHMENTS:
+        return marker in json.dumps(attachment, ensure_ascii=False)
+    if row.get("type") == "user" and row.get("isMeta") is True:
+        return marker in json.dumps((row.get("message") or {}).get("content"), ensure_ascii=False)
+    return False
+
+
 def _turn_end(row: dict[str, Any]) -> bool:
     return row.get("type") == "system" and row.get("subtype") == "turn_duration"
 
@@ -186,11 +207,11 @@ def steer_landed_in_turn(
     if end is None:
         return {"passed": False, "failure_code": "steer_target_turn_never_completed"}
     turn, after = rows[start : end + 1], rows[end + 1 :]
-    steer_in_turn = any(_user_prompt_contains(row, steer_marker) for row in turn[1:])
+    steer_in_turn = any(_steer_delivered(row, steer_marker) for row in turn[1:])
     steered_here = any(steered_marker in text for text in _assistant_texts(turn))
     later_step_ran = any(later_step_command in command for command in _bash_commands(turn))
     finished_original = any(done_marker in text for text in _assistant_texts(turn))
-    steered_elsewhere = any(_user_prompt_contains(row, steer_marker) for row in after) or any(
+    steered_elsewhere = any(_steer_delivered(row, steer_marker) for row in after) or any(
         steered_marker in text for text in _assistant_texts(after)
     )
     if steer_in_turn and steered_here and not later_step_ran and not finished_original:
@@ -499,8 +520,9 @@ def _drive_lifecycle(
     lifecycle["steer_active"] = steer_verdict
     if fault == "claude_steer_after_turn":
         return
-    if not steer_verdict["passed"]:
-        raise ScenarioError(f"Claude steer oracle failed: {steer_verdict}")
+    # A failed steer is that assertion's verdict, not a scenario error: the
+    # steered turn has already ended, so abort and terminate still get judged
+    # on their own instead of all three cells reporting the one steer failure.
 
     # Abort: stop an active turn whose foreground tool runs for tool_seconds,
     # then prove the surviving session completes a following turn.

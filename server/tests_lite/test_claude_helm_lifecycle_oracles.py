@@ -2,7 +2,8 @@
 
 The row shapes mirror claude 2.1.273 transcripts: a Runtime Host send arrives
 as a ``user`` row wrapped in ``<channel>``, a steer delivered inside the active
-turn arrives as a ``queued_command`` attachment, and every turn closes with a
+turn arrives as a ``queued_command`` attachment (or, from claude 2.1.274, as the
+lifecycle hook's ``hook_additional_context``), and every turn closes with a
 ``system/turn_duration`` row.
 """
 
@@ -60,6 +61,55 @@ def test_steer_inside_the_active_turn_passes() -> None:
 
     assert verdict["passed"] is True
     assert verdict["failure_code"] is None
+
+
+def _hook_steer(text: str, event: str = "PostToolUse") -> dict:
+    # claude 2.1.274: the Machine Agent delivers an active-turn steer through the
+    # lifecycle hook, recorded as a hook_additional_context attachment.
+    return {
+        "type": "attachment",
+        "attachment": {
+            "type": "hook_additional_context",
+            "hookEvent": event,
+            "content": [f'The user of this session sent this steer from Longhouse while you were working: "{text}".'],
+        },
+    }
+
+
+def test_steer_delivered_by_the_lifecycle_hook_inside_the_turn_passes() -> None:
+    rows = [_task(), _bash(f"sleep 8; echo {STEP}_1"), _hook_steer(f"Reply with exactly {STEERED}"), _text(STEERED), _end()]
+
+    verdict = _steer(rows)
+
+    assert verdict["passed"] is True
+    assert verdict["steer_delivered_in_target_turn"] is True
+
+
+def test_hook_steer_the_model_ignored_is_rejected() -> None:
+    rows = [
+        _task(),
+        _bash(f"sleep 8; echo {STEP}_1"),
+        _hook_steer(f"Reply with exactly {STEERED}"),
+        _bash(f"sleep 8; echo {STEP}_2"),
+        _hook_steer(f"Reply with exactly {STEERED}"),
+        _bash(f"sleep 8; echo {STEP}_3"),
+        _text(DONE),
+        _end(),
+    ]
+
+    verdict = _steer(rows)
+
+    assert verdict["passed"] is False
+    assert verdict["failure_code"] == "steer_did_not_change_course"
+
+
+def test_unrelated_hook_context_is_not_a_steer_delivery() -> None:
+    rows = [_task(), _bash(f"sleep 8; echo {STEP}_1"), _hook_steer("something else"), _text(STEERED), _end()]
+
+    verdict = _steer(rows)
+
+    assert verdict["passed"] is False
+    assert verdict["steer_delivered_in_target_turn"] is False
 
 
 def test_queued_follow_up_after_the_turn_is_rejected() -> None:
