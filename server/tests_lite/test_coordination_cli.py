@@ -193,7 +193,7 @@ def test_reply_routes_by_input_id(monkeypatch):
     monkeypatch.setenv("LONGHOUSE_MANAGED_SESSION_ID", SOURCE_ID)
     monkeypatch.setenv("LONGHOUSE_COORDINATION_TOKEN", "zst_coordination")
 
-    result = CliRunner().invoke(app, ["reply", "9", "verified"])
+    result = CliRunner().invoke(app, ["reply", "9", "verified", "--client-request-id", "req-reply-1"])
 
     assert result.exit_code == 0, result.output
     assert "Reply created." in result.output
@@ -204,7 +204,7 @@ def test_reply_routes_by_input_id(monkeypatch):
             "X-Agents-Token": "zst_coordination",
             "X-Longhouse-Session-Id": SOURCE_ID,
         },
-        "json": {"text": "verified"},
+        "json": {"text": "verified", "client_request_id": "req-reply-1"},
     }
 
 
@@ -214,7 +214,7 @@ def test_directed_commands_fail_without_session_scoped_authority(monkeypatch):
     monkeypatch.setenv("LONGHOUSE_MANAGED_SESSION_ID", SOURCE_ID)
     monkeypatch.delenv("LONGHOUSE_COORDINATION_TOKEN", raising=False)
 
-    result = CliRunner().invoke(app, ["send", TARGET_ID, "must fail"])
+    result = CliRunner().invoke(app, ["send", TARGET_ID, "must fail", "--client-request-id", "req-fail-1"])
 
     assert result.exit_code == 1
     assert "requires session-scoped coordination authority" in result.output
