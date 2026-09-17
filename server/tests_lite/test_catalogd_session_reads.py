@@ -1305,6 +1305,7 @@ async def test_canonical_timeline_is_owner_scoped_and_commit_coherent(daemon_pat
             "machine.heartbeat.apply.v2",
             {
                 "heartbeat": heartbeat,
+                "machine_evidence": evidence,
                 "managed_leases": [],
                 "managed_leases_present": False,
                 "owner_id": 7,
