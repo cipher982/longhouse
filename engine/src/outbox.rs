@@ -590,6 +590,10 @@ fn handle_oversized_runtime_event(path: &Path, file_bytes: usize) {
         );
         return;
     }
+    // A file that has since disappeared is not a poison payload.
+    if !path.exists() {
+        return;
+    }
     let post = PendingRuntimeEventPost {
         path: path.to_path_buf(),
         event: Value::Null,
@@ -723,11 +727,16 @@ fn reduce_ready_runtime_events(
         }
 
         // Decide on size before reading anything, including the first file of
-        // a pass: a budget enforced after the read is not a budget. A size
-        // that cannot be read at all is treated as the worst case.
+        // a pass: a budget enforced after the read is not a budget.
+        //
+        // A size that cannot be read means the entry is gone, not that it is
+        // enormous. The sweep and the live pass walk this directory at the
+        // same time by design, so losing a race with a removal is ordinary.
+        // Treating that as an oversized payload sent real status events to
+        // dead-letter on `cinder` within a minute of deploying it.
         let file_bytes = match entry.metadata() {
             Ok(meta) => meta.len() as usize,
-            Err(_) => RUNTIME_EVENT_MAX_FILE_BYTES.saturating_add(1),
+            Err(_) => continue,
         };
         if file_bytes > RUNTIME_EVENT_MAX_FILE_BYTES {
             handle_oversized_runtime_event(&path, file_bytes);
@@ -2668,6 +2677,26 @@ mod runtime_status_collection_tests {
     /// A record no later event can restate is never dropped for being large.
     /// The size limit here is the Machine Agent's own, not a Runtime Host
     /// contract, so it may not decide that a terminal never happened.
+    /// The sweep and the live pass race by design, so a file can vanish
+    /// between enumeration and inspection. That is ordinary, not a poison
+    /// payload: treating it as oversized dead-lettered live status on
+    /// `cinder` within a minute of deploying it.
+    #[test]
+    fn a_vanished_entry_is_not_treated_as_oversized() {
+        let tmp = TempDir::new().expect("tempdir");
+        let dir = tmp.path();
+        write_plain(dir, &phase_event("s1", "r1", "thinking", "2026-09-17T15:00:01Z"));
+        let ghost = dir.join("gone.json");
+
+        handle_oversized_runtime_event(&ghost, usize::MAX);
+
+        assert!(
+            !dir.join(RUNTIME_EVENT_DEAD_LETTER_DIR).exists(),
+            "a file that is not there is not dead-lettered"
+        );
+        assert_eq!(collect_runtime_event_outbox(dir).len(), 1);
+    }
+
     #[test]
     fn an_oversized_critical_record_is_retained_where_it_is() {
         let tmp = TempDir::new().expect("tempdir");
