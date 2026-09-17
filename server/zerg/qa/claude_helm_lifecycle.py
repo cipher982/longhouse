@@ -242,11 +242,14 @@ def abort_stopped_turn(
     tool_seconds: float,
     recovery_marker: str | None = None,
 ) -> dict[str, Any]:
-    """Did the interrupt end the active turn early, without its promised reply?
+    """Did the interrupt end the active turn early, stopping the work?
 
     The turn's long tool runs for ``tool_seconds``. A no-op interrupt lets it
     finish and the model then produces ``forbidden_marker``; a real one ends the
-    turn well before the tool could have completed.
+    turn well before the tool could have completed, and nothing new runs after.
+    ``forbidden_marker`` only counts against the abort when the long tool
+    actually completed: a killed tool also "finishes", and a literal-minded
+    model says the promised reply anyway.
 
     With ``recovery_marker`` the verdict also requires the session to survive
     the interrupt: a later turn prompted with that marker must complete and
@@ -278,8 +281,15 @@ def abort_stopped_turn(
     early = stop_latency is not None and stop_latency < tool_seconds / 2
     # A killed tool alone is not a stop: the model can read the failure and
     # carry on with more tools. Nothing may execute after the interrupt.
+    # Any tool the model STARTS after the interrupt is continued work, whether
+    # or not it succeeds: a model that retries a killed command until it gives
+    # up was never stopped. The killed tool's own error result arrives after
+    # the interrupt by construction, so it is not counted -- only a new
+    # tool_use, or a tool that succeeded after the interrupt.
     tools_after = sum(
-        1 for row in turn if (stamp := _timestamp(row)) is not None and stamp > interrupted_at and _successful_tool_result(row)
+        1
+        for row in turn
+        if (stamp := _timestamp(row)) is not None and stamp > interrupted_at and (_successful_tool_result(row) or _started_tool(row))
     )
     failure = None if (not forbidden and early and tools_after == 0) else "abort_did_not_stop_turn"
     following_completed = None
@@ -304,6 +314,18 @@ def abort_stopped_turn(
         "tools_executed_after_interrupt": tools_after,
         "following_turn_completed": following_completed,
     }
+
+
+def _started_tool(row: dict[str, Any]) -> bool:
+    """Did the model start a tool call in this row?"""
+
+    message = row.get("message") if isinstance(row.get("message"), dict) else {}
+    content = message.get("content")
+    return (
+        row.get("type") == "assistant"
+        and isinstance(content, list)
+        and any(isinstance(block, dict) and block.get("type") == "tool_use" for block in content)
+    )
 
 
 def _successful_tool_result(row: dict[str, Any]) -> bool:
