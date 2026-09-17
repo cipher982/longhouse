@@ -1717,6 +1717,9 @@ struct SessionViewModelTests {
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
         await waitForWorkspaceRequestCount(api, atLeast: 2)
+        await waitForCondition("post-send tail refresh applies transcript") {
+            model.items.map(\.id) == ["user:11"]
+        }
 
         #expect(!sent)
         #expect(model.submittedInputs.count == 1)
