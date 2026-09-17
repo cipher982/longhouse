@@ -106,7 +106,7 @@ export const GENERATED_PROVIDER_CAPABILITIES: Record<GeneratedProviderId, Genera
       interrupt: true,
       steerMidTurn: true,
       resume: true,
-      search: false,
+      search: true,
     },
     cloudSessionStart: "live",
     nativeLaunchCommand: "longhouse omp",

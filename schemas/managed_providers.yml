@@ -2195,7 +2195,7 @@ providers:
         id: pi_helm_launch_registration
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
-        minimum_scenario_revision: 3
+        minimum_scenario_revision: 4
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
       - <<: *pi_helm_lifecycle_assertion
@@ -2257,7 +2257,7 @@ providers:
       - id: pi_helm_launch_registration
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
-        minimum_scenario_revision: 3
+        minimum_scenario_revision: 4
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -2273,7 +2273,7 @@ providers:
       - id: pi_helm_cold_resume_exact_file
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
-        minimum_scenario_revision: 3
+        minimum_scenario_revision: 4
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -2283,7 +2283,7 @@ providers:
       - id: pi_helm_send_idle
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
-        minimum_scenario_revision: 3
+        minimum_scenario_revision: 4
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -2293,7 +2293,7 @@ providers:
       - id: pi_helm_abort_native
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
-        minimum_scenario_revision: 3
+        minimum_scenario_revision: 4
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -2303,7 +2303,7 @@ providers:
       - id: pi_helm_steer_active
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
-        minimum_scenario_revision: 3
+        minimum_scenario_revision: 4
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -2319,7 +2319,7 @@ providers:
       - id: pi_helm_terminate_owned
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
-        minimum_scenario_revision: 3
+        minimum_scenario_revision: 4
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -2511,7 +2511,7 @@ providers:
       - id: omp_helm_launch_registration
         scenario_id: omp_helm_lifecycle
         oracle_source: server/zerg/qa/omp_helm_lifecycle.py
-        minimum_scenario_revision: 8
+        minimum_scenario_revision: 9
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -2522,7 +2522,7 @@ providers:
       - id: omp_helm_cold_resume_exact_file
         scenario_id: omp_helm_lifecycle
         oracle_source: server/zerg/qa/omp_helm_lifecycle.py
-        minimum_scenario_revision: 8
+        minimum_scenario_revision: 9
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -2532,7 +2532,7 @@ providers:
       - id: omp_helm_send_idle
         scenario_id: omp_helm_lifecycle
         oracle_source: server/zerg/qa/omp_helm_lifecycle.py
-        minimum_scenario_revision: 8
+        minimum_scenario_revision: 9
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -2542,7 +2542,7 @@ providers:
       - id: omp_helm_abort_native
         scenario_id: omp_helm_lifecycle
         oracle_source: server/zerg/qa/omp_helm_lifecycle.py
-        minimum_scenario_revision: 8
+        minimum_scenario_revision: 9
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -2552,7 +2552,7 @@ providers:
       - id: omp_helm_steer_active
         scenario_id: omp_helm_lifecycle
         oracle_source: server/zerg/qa/omp_helm_lifecycle.py
-        minimum_scenario_revision: 8
+        minimum_scenario_revision: 9
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -2563,7 +2563,7 @@ providers:
       - id: omp_helm_terminate_owned
         scenario_id: omp_helm_lifecycle
         oracle_source: server/zerg/qa/omp_helm_lifecycle.py
-        minimum_scenario_revision: 8
+        minimum_scenario_revision: 9
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -2573,6 +2573,24 @@ providers:
     turn_start: {level: source_review, source: "stock OMP JSON print with exact native continuation; omp_console_lifecycle", disposition: implemented, blocker: budget}
     fork_thread: {level: none, source: "OMP native child acquisition is not exposed by Longhouse", disposition: not_implemented, owner_action: "Add an OMP native child acquisition canary before exposing fork_thread", blocker: none}
   capabilities:
+    session.transcript.search:
+      disposition: implemented
+      reason_code: semantic_proof_missing
+      policy_key: provider.omp.transcript_search
+      action_gate: ceiling
+      contexts:
+        modes: [console]
+      runtime_prerequisites: []
+      required_assertions:
+      # A marker only the model's own output holds is shipped by the real
+      # Machine Agent and returned by served lexical search on the exact
+      # session, matched on an assistant event.
+      - id: transcript_ingested_searchable
+        scenario_id: omp_transcript_search
+        oracle_source: server/zerg/qa/search_ingest_oracle.py
+        minimum_scenario_revision: 1
+        acceptable_evidence: [live_token]
+        max_age_seconds: 604800
     session.launch.helm:
       disposition: implemented
       reason_code: semantic_proof_missing
@@ -2586,7 +2604,7 @@ providers:
         id: omp_helm_launch_registration
         scenario_id: omp_helm_lifecycle
         oracle_source: server/zerg/qa/omp_helm_lifecycle.py
-        minimum_scenario_revision: 8
+        minimum_scenario_revision: 9
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
       - <<: *omp_helm_lifecycle_assertion

@@ -37,6 +37,33 @@ pub fn codex_fault() -> Option<CodexFault> {
     None
 }
 
+/// Faults injected where the Pi and OMP Helm launchers forward an authorized
+/// remote command to the provider extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelmExtensionFault {
+    /// Forward a steer as a plain send. While a turn is active the extension
+    /// delivers that as `followUp`: the queued shape a steer oracle must reject.
+    SteerAsFollowUp,
+    /// Acknowledge abort without forwarding it to the provider.
+    AbortNoop,
+}
+
+/// `<provider>_steer_as_follow_up` or `<provider>_abort_noop`.
+#[cfg(feature = "qa-fault-injection")]
+pub fn helm_extension_fault(provider: &str) -> Option<HelmExtensionFault> {
+    let value = std::env::var("LONGHOUSE_QA_FAULT").ok()?;
+    match value.strip_prefix(provider)?.strip_prefix('_')? {
+        "steer_as_follow_up" => Some(HelmExtensionFault::SteerAsFollowUp),
+        "abort_noop" => Some(HelmExtensionFault::AbortNoop),
+        _ => None,
+    }
+}
+
+#[cfg(not(feature = "qa-fault-injection"))]
+pub fn helm_extension_fault(_provider: &str) -> Option<HelmExtensionFault> {
+    None
+}
+
 /// Ingest fault: the Machine Agent ships the transcript normally but blanks one
 /// marker token out of every render record before the envelope is persisted.
 /// The raw bytes, envelope identity and acknowledgement are untouched, so the
