@@ -101,7 +101,10 @@ jobs:
         run: ./scripts/ci/ensure-make.sh
 
       - name: Validate contracts
-        timeout-minutes: 10
+        # make validate builds its isolated image and then runs every contract
+        # check; on 2026-09-17 it reached its last check at 9m45s under normal
+        # runner load, so 10 minutes failed healthy runs.
+        timeout-minutes: 20
         # One step, because two lists drift. This job used to enumerate a subset
         # of `make validate` by hand, and twelve of its members -- including
         # validate-session-state-contract, the drift check for the very
