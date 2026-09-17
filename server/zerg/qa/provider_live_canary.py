@@ -367,6 +367,10 @@ def _opencode_operation_evidence(
         canaries=canaries,
         required=["binary_identity", "server_startup", "session_create", "session_get"],
         canary_name="opencode_server_session_no_token",
+        # This canary measures a no-token server/session contract. The contract
+        # row now names live-token assertions instead of a level, so the level
+        # this canary actually observed has to be stated here.
+        level="live_no_token",
     )
     if launch_local:
         evidence["launch_local"] = launch_local
