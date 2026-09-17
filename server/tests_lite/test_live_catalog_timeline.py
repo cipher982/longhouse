@@ -127,6 +127,7 @@ def test_live_catalog_timeline_does_not_rescan_on_pubsub_timeout(monkeypatch):
             return None
 
     class Bus:
+        stream_epoch = "test"
         def peek_latest_seq(self, _topic):
             return 0
 
@@ -155,7 +156,7 @@ def test_live_catalog_timeline_does_not_rescan_on_pubsub_timeout(monkeypatch):
 
     events = asyncio.run(collect())
 
-    assert events == [{"event": "connected", "data": '{"message": "Timeline session stream connected"}'}]
+    assert events == [{"event": "connected", "data": '{"message": "Timeline session stream connected", "stream_epoch": "test"}'}]
     assert calls == 1
 
 
@@ -189,6 +190,7 @@ def test_live_catalog_timeline_coalesces_queued_pubsub_wakes(monkeypatch):
     subscription = Subscription()
 
     class Bus:
+        stream_epoch = "test"
         def peek_latest_seq(self, _topic):
             return 0
 
@@ -217,7 +219,7 @@ def test_live_catalog_timeline_coalesces_queued_pubsub_wakes(monkeypatch):
 
     events = asyncio.run(collect())
 
-    assert events == [{"event": "connected", "data": '{"message": "Timeline session stream connected"}'}]
+    assert events == [{"event": "connected", "data": '{"message": "Timeline session stream connected", "stream_epoch": "test"}'}]
     assert calls == 2
     assert subscription.drained == 2
 
@@ -246,6 +248,7 @@ def test_live_catalog_timeline_survives_catalog_pressure_after_headers(monkeypat
             return 0
 
     class Bus:
+        stream_epoch = "test"
         def peek_latest_seq(self, _topic):
             return 0
 
@@ -281,7 +284,7 @@ def test_live_catalog_timeline_survives_catalog_pressure_after_headers(monkeypat
 
     events = asyncio.run(collect())
 
-    assert events == [{"event": "connected", "data": '{"message": "Timeline session stream connected"}'}]
+    assert events == [{"event": "connected", "data": '{"message": "Timeline session stream connected", "stream_epoch": "test"}'}]
     assert calls == 3
     assert sleeps == [1.0]
 
