@@ -7,10 +7,35 @@
 # For hosted instances provisioned by control plane.
 # Backend serves frontend via StaticFiles mount (no nginx needed).
 
+ARG BUN_VERSION=1.2.20
+ARG BUN_SHA256_X64=4e9edc4cba0c7c1623a288be01e53bbde11a4d073f2cf339cab026627858b548
+ARG BUN_SHA256_AARCH64=98d2e0b2c09421569172b4d46b6f81378c2dbdd77480ebb27f3989dd4e72e18b
+
 # =============================================================================
 # Stage 1: Build Frontend
 # =============================================================================
-FROM oven/bun:alpine AS frontend-builder
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS frontend-builder
+
+ARG TARGETARCH
+ARG BUN_VERSION
+ARG BUN_SHA256_X64
+ARG BUN_SHA256_AARCH64
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl unzip \
+    && rm -rf /var/lib/apt/lists/* \
+    && case "${TARGETARCH}" in \
+        amd64) BUN_ARCH=x64; BUN_SHA256="${BUN_SHA256_X64}" ;; \
+        arm64) BUN_ARCH=aarch64; BUN_SHA256="${BUN_SHA256_AARCH64}" ;; \
+        *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+      esac \
+    && curl -fsSL --retry 3 \
+      -o /tmp/bun.zip \
+      "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-${BUN_ARCH}.zip" \
+    && echo "${BUN_SHA256}  /tmp/bun.zip" | sha256sum -c - \
+    && unzip -q /tmp/bun.zip -d /tmp \
+    && install -m 0755 "/tmp/bun-linux-${BUN_ARCH}/bun" /usr/local/bin/bun \
+    && rm -rf /tmp/bun.zip "/tmp/bun-linux-${BUN_ARCH}"
 
 WORKDIR /app
 
@@ -40,7 +65,7 @@ RUN bun run build
 # =============================================================================
 # Stage 1.5: Build pysqlite3 wheel with pinned SQLite amalgamation
 # =============================================================================
-FROM python:3.12-slim-bookworm AS pysqlite-builder
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS pysqlite-builder
 
 ARG SQLITE_VERSION=3510300
 ARG SQLITE_SHA3=581215771b32ea4c4062e6fb9842c4aa43d0a7fb2b6670ff6fa4ebb807781204
@@ -81,7 +106,7 @@ RUN uv sync --frozen --no-install-project --no-dev
 # =============================================================================
 # Stage 2.5: Fetch the checksum-pinned embedding model
 # =============================================================================
-FROM python:3.12-slim-bookworm AS embedding-model
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS embedding-model
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -154,7 +179,7 @@ conn.close(); print(f'pysqlite3 OK: SQLite {v}, FTS5 + dbstat + progress handler
 # =============================================================================
 # Stage 4: Production Runtime
 # =============================================================================
-FROM python:3.12-slim-bookworm AS production
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS production
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
