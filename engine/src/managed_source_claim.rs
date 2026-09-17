@@ -275,6 +275,37 @@ pub fn active_claims() -> Result<Vec<SourceClaim>> {
     Ok(claims)
 }
 
+/// Refuse a bind that would contradict what is already claimed.
+///
+/// The launchers used to read the archive binding for this: another managed
+/// session owning the path, or this session changing the identity it already
+/// bound. The claim is the authority now, so the rule lives here.
+pub fn ensure_bindable(session_id: &str, source_path: &Path, native_id: &str) -> Result<()> {
+    let normalized = crate::storage_v2_shipper::stable_source_path(source_path);
+    for existing in active_claims()? {
+        let existing_path =
+            crate::storage_v2_shipper::stable_source_path(Path::new(&existing.source_path));
+        if existing_path != normalized {
+            continue;
+        }
+        if existing.session_id != session_id {
+            anyhow::bail!(
+                "source {} is already claimed by managed session {}",
+                source_path.display(),
+                existing.session_id
+            );
+        }
+        if let Some(bound) = existing.native_session_id.as_deref() {
+            anyhow::ensure!(
+                bound == native_id,
+                "source {} is already bound to native identity {bound}",
+                source_path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Drop a session's claim. Called when a launcher exits; the projection is
 /// retired by the daemon on its next pass.
 pub fn release(session_id: &str) -> Result<()> {
@@ -466,6 +497,29 @@ mod tests {
 
             release("session-1").expect("release");
             assert!(active_claims().expect("active claims").is_empty());
+        });
+    }
+
+    #[test]
+    fn a_bind_cannot_contradict_an_existing_claim() {
+        let dir = tempfile::tempdir().unwrap();
+        with_home(&dir.path().join("longhouse"), || {
+            let source = dir.path().join("session.jsonl");
+            reserve("session-1", "pi", &source, dir.path(), None, None).expect("claim");
+            confirm_identity("session-1", "pi", &source, "native-1", None, None).expect("bind");
+
+            assert!(
+                ensure_bindable("session-1", &source, "native-1").is_ok(),
+                "the same identity may be re-bound"
+            );
+            assert!(
+                ensure_bindable("session-1", &source, "native-2").is_err(),
+                "a session may not silently change the identity it bound"
+            );
+            assert!(
+                ensure_bindable("session-2", &source, "native-1").is_err(),
+                "another session may not take a claimed path"
+            );
         });
     }
 

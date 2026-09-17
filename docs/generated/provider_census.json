@@ -226,7 +226,8 @@
       "path": "engine/src/managed_source_claim.rs",
       "providers": [
         "codex",
-        "omp"
+        "omp",
+        "pi"
       ]
     },
     {

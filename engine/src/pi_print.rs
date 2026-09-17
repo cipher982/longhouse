@@ -115,12 +115,7 @@ pub async fn start_pi_print_turn(config: PiPrintRunConfig) -> Result<PiPrintRunS
     // file. This is the fence against watcher discovery winning the initial
     // write race and creating an unrelated Shadow session.
     if let Some(path) = exact_session_file.as_deref() {
-        persist_transcript_binding(
-            config.local_db_path.as_deref(),
-            path,
-            &config.session_id,
-            &provider_thread_id,
-        )?;
+        persist_transcript_binding(path, &config.session_id, &provider_thread_id)?;
     }
     crate::turn_claims::default_registry()?.mark_provider_binding(
         &config.run_id,
@@ -932,37 +927,21 @@ fn locate_exact_transcript(
 }
 
 fn persist_transcript_binding(
-    db_path: Option<&Path>,
     transcript: &Path,
     session_id: &str,
     provider_thread_id: &str,
 ) -> Result<()> {
-    let Some(db_path) = db_path else {
-        return Ok(());
-    };
-    let conn = crate::state::db::open_client_connection(db_path, Duration::from_millis(500))?;
-    let stable_path = crate::storage_v2_shipper::stable_source_path(transcript);
-    let binding = crate::state::session_binding::SessionBinding::new(&conn);
-    if let Some((existing_session, existing_provider_thread)) =
-        binding.get_with_thread_for_provider(&stable_path.to_string_lossy(), "pi")?
-    {
-        anyhow::ensure!(
-            existing_session == session_id,
-            "Pi native session file is already bound to another Longhouse session"
-        );
-        anyhow::ensure!(
-            existing_provider_thread
-                .as_deref()
-                .map(|value| value == provider_thread_id)
-                .unwrap_or(true),
-            "Pi native session file is bound to another provider identity"
-        );
-    }
-    binding.bind_for_thread(
-        &stable_path.to_string_lossy(),
+    // A local claim: the daemon projects it into the binding discovery reads,
+    // before it enumerates sources, so the watcher cannot win the initial write
+    // race and mint an unrelated Shadow session.
+    crate::managed_source_claim::ensure_bindable(session_id, transcript, provider_thread_id)?;
+    crate::managed_source_claim::confirm_identity(
         session_id,
         "pi",
-        Some(provider_thread_id),
+        transcript,
+        provider_thread_id,
+        None,
+        None,
     )?;
     Ok(())
 }
@@ -986,12 +965,7 @@ impl PiPrintSink {
             provider_session_id == self.provider_thread_id,
             "Pi native session header changed identity after launch"
         );
-        persist_transcript_binding(
-            self.local_db_path.as_deref(),
-            &transcript,
-            &self.session_id,
-            &self.provider_thread_id,
-        )?;
+        persist_transcript_binding(&transcript, &self.session_id, &self.provider_thread_id)?;
         crate::turn_claims::default_registry()?.mark_provider_binding(
             &self.run_id,
             &self.provider_thread_id,

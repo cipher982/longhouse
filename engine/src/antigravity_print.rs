@@ -114,7 +114,6 @@ pub async fn start_antigravity_print_turn(
     if let Some(conversation_id) = normalized_optional(&config.conversation_id) {
         validate_uuid(&conversation_id, "conversation_id")?;
         persist_transcript_binding(
-            db_path,
             &conversation_transcript_path(
                 &antigravity_brain_root().context("HOME is unset")?,
                 &conversation_id,
@@ -853,13 +852,34 @@ fn is_antigravity_print_claim(claim: &crate::turn_claims::TurnClaim) -> bool {
 }
 
 fn persist_transcript_binding(
-    db_path: &Path,
     transcript: &Path,
     session_id: &str,
     provider_session_id: &str,
 ) -> Result<()> {
-    let conn = crate::state::db::open_client_connection(db_path, Duration::from_millis(500))?;
-    bind_source_owner(&conn, transcript, session_id, provider_session_id)
+    // A local claim, projected by the daemon before discovery runs.
+    crate::managed_source_claim::ensure_bindable(session_id, transcript, provider_session_id)?;
+    if transcript
+        .file_name()
+        .is_some_and(|name| name == "transcript_full.jsonl")
+    {
+        // Earlier bindings may name the shortened sibling. That durable owner
+        // still prevents another session from taking over; it does not
+        // authorize another source to be enrolled beside the full transcript.
+        crate::managed_source_claim::ensure_bindable(
+            session_id,
+            &transcript.with_file_name("transcript.jsonl"),
+            provider_session_id,
+        )?;
+    }
+    crate::managed_source_claim::confirm_identity(
+        session_id,
+        "antigravity",
+        transcript,
+        provider_session_id,
+        None,
+        None,
+    )?;
+    Ok(())
 }
 
 fn bind_source_owner(
@@ -1000,7 +1020,7 @@ impl AntigravityPrintSink {
             .local_db_path
             .as_deref()
             .context("Antigravity Console has no source binding database")?;
-        persist_transcript_binding(db_path, &transcript, &self.session_id, provider_session_id)?;
+        persist_transcript_binding(&transcript, &self.session_id, provider_session_id)?;
         crate::turn_claims::default_registry()?.mark_provider_binding(
             &self.run_id,
             provider_session_id,
@@ -1643,6 +1663,10 @@ mod tests {
             let terminal = read_outbox_events(&legacy.runtime_events_outbox_dir).into_iter()
                 .find(|event| event["run_id"] == legacy.run_id && event["kind"] == "terminal_signal").unwrap();
             assert_eq!(terminal["payload"]["terminal_state"], "run_completed");
+            // The console writes a claim; discovery reads a binding. The daemon
+            // is what joins them, so the test projects the claims exactly as the
+            // observation scan does before asserting what discovery sees.
+            crate::managed_source_claim::project_claims(&db_path).expect("project claims");
             let conn = crate::state::db::open_db(Some(&db_path)).unwrap();
             assert_eq!(
                 crate::state::session_binding::SessionBinding::new(&conn)
