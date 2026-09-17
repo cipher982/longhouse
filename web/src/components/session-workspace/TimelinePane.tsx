@@ -1341,7 +1341,10 @@ export function TimelinePane({
   // searched views hide the outbox, so they are left where they are.
   // Keyed on sends, not visibility: clearing a filter is not a send.
   const prevOutboxCountRef = useRef(outbox.length);
-  const outboxVisible = visibleOutbox.length > 0;
+  // The typed query, not the debounced one: a send right after typing a
+  // search is still a send made while reading filtered history.
+  const outboxVisible =
+    eventFilter === "all" && !searchQuery.trim() && outbox.length > 0;
   useLayoutEffect(() => {
     const container = scrollContainerRef.current;
     const prevCount = prevOutboxCountRef.current;

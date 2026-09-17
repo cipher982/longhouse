@@ -63,8 +63,9 @@ interface PendingManagedLocalInput {
    *  transcript echoes it so the message never blinks out in between. */
   phase: "submitting" | "queued" | "unknown" | "delivered";
   deliveredAt?: number;
-  /** User rows with this exact text already loaded when the send started. */
-  echoBaseline?: number;
+  /** Same-text user rows that cannot be this send's echo: those loaded when
+   *  it started, plus rows other sends have already claimed. */
+  echoExcludedRowIds?: string[];
 }
 
 /** A delivered message normally echoes within seconds. If the echo never
@@ -339,11 +340,11 @@ async function loadInputOutboxes(
   }
   return loaded;
 }
-function timelineHasDurableSubmittedInput(
+function durableSubmittedInputRowId(
   timelineItems: TimelineItem[],
   pendingInput: PendingManagedLocalInput,
-): boolean {
-  return timelineItems.some((item) => {
+): string | null {
+  const match = timelineItems.find((item) => {
     if (item.kind !== "message") return false;
     const { event } = item;
     if (event.role !== "user" || event.is_head_branch === false) return false;
@@ -360,39 +361,50 @@ function timelineHasDurableSubmittedInput(
       origin.client_request_id === pendingInput.clientRequestId,
     );
   });
+  return match?.kind === "message" ? String(match.event.id) : null;
 }
 function normalizeInputText(value: string | null | undefined): string {
   return (value ?? "").replace(/\s+/g, " ").trim();
 }
 
-function countUserRowsWithText(
+function userRowIdsWithText(
   timelineItems: TimelineItem[] | undefined,
   text: string,
-): number {
+): string[] {
   const target = normalizeInputText(text);
-  if (!target || !timelineItems) return 0;
-  let count = 0;
+  if (!target || !timelineItems) return [];
+  const ids: string[] = [];
   for (const item of timelineItems) {
     if (item.kind !== "message") continue;
     const { event } = item;
     if (event.role !== "user" || event.is_head_branch === false) continue;
-    if (normalizeInputText(event.content_text) === target) count += 1;
+    if (normalizeInputText(event.content_text) === target) {
+      ids.push(String(event.id));
+    }
   }
-  return count;
+  return ids;
 }
 
 /** Delivery is already confirmed, so only the visible row is at stake: the
- *  receipt-to-event link lands after ingest, and a matching new user row is
- *  the same message seen before its identity is stamped. */
-function timelineShowsDeliveredEcho(
+ *  receipt-to-event link lands after ingest, and a new same-text user row
+ *  nobody else has claimed is this message seen before its identity is
+ *  stamped. Returns that row's id. */
+function deliveredTextEchoRowId(
   timelineItems: TimelineItem[],
   pendingInput: PendingManagedLocalInput,
-): boolean {
+  claimedRowIds: Set<string>,
+): string | null {
+  if (
+    pendingInput.phase !== "delivered" ||
+    pendingInput.echoExcludedRowIds == null
+  ) {
+    return null;
+  }
+  const excluded = new Set(pendingInput.echoExcludedRowIds);
   return (
-    pendingInput.phase === "delivered" &&
-    pendingInput.echoBaseline != null &&
-    countUserRowsWithText(timelineItems, pendingInput.text) >
-      pendingInput.echoBaseline
+    userRowIdsWithText(timelineItems, pendingInput.text).find(
+      (id) => !excluded.has(id) && !claimedRowIds.has(id),
+    ) ?? null
   );
 }
 
@@ -570,43 +582,43 @@ export function SessionChat({
 
   useEffect(() => {
     if (pendingManagedLocalInputs.length === 0 || !timelineItems) return;
-    // Oldest first: every resolved echo is one user row with that text, so
-    // a later identical send must see one more row before it counts as
-    // echoed. Without this, one echo clears two same-text sends.
-    const echoesClaimed = new Map<string, number>();
+    // Oldest first, and each echo row resolves exactly one send: a row
+    // claimed here is excluded for every later same-text send, now and in
+    // later passes, so one echo never clears two identical sends.
+    const claimedRowIds = new Set<string>();
     const resolvedIds: string[] = [];
     for (const pending of pendingManagedLocalInputs) {
-      const text = normalizeInputText(pending.text);
-      const claimed = echoesClaimed.get(text) ?? 0;
-      const identityEcho =
-        (pending.attachments.length === 0 || pending.phase === "delivered") &&
-        timelineHasDurableSubmittedInput(timelineItems, pending);
-      const textEcho = timelineShowsDeliveredEcho(timelineItems, {
-        ...pending,
-        echoBaseline:
-          pending.echoBaseline == null
-            ? undefined
-            : pending.echoBaseline + claimed,
-      });
-      if (!identityEcho && !textEcho) continue;
+      const identityRow =
+        pending.attachments.length === 0 || pending.phase === "delivered"
+          ? durableSubmittedInputRowId(timelineItems, pending)
+          : null;
+      const echoRow =
+        identityRow ??
+        deliveredTextEchoRowId(timelineItems, pending, claimedRowIds);
+      if (echoRow == null) continue;
       resolvedIds.push(pending.clientRequestId);
-      echoesClaimed.set(text, claimed + 1);
+      claimedRowIds.add(echoRow);
     }
     if (resolvedIds.length === 0) return;
     for (const clientRequestId of resolvedIds) {
       clearInputOutbox(session.id, clientRequestId);
     }
-    // The rows those echoes occupy stay loaded, so the surviving same-text
-    // sends carry them in their baseline across later passes too.
     setPendingManagedLocalInputs((current) =>
       current
         .filter((pending) => !resolvedIds.includes(pending.clientRequestId))
-        .map((pending) => {
-          const consumed = echoesClaimed.get(normalizeInputText(pending.text));
-          return consumed && pending.echoBaseline != null
-            ? { ...pending, echoBaseline: pending.echoBaseline + consumed }
-            : pending;
-        }),
+        .map((pending) =>
+          pending.echoExcludedRowIds == null
+            ? pending
+            : {
+                ...pending,
+                echoExcludedRowIds: [
+                  ...new Set([
+                    ...pending.echoExcludedRowIds,
+                    ...claimedRowIds,
+                  ]),
+                ],
+              },
+        ),
     );
   }, [pendingManagedLocalInputs, session.id, timelineItems]);
 
@@ -820,7 +832,7 @@ export function SessionChat({
         intent,
         attachments,
         phase: "submitting",
-        echoBaseline: countUserRowsWithText(
+        echoExcludedRowIds: userRowIdsWithText(
           timelineItemsRef.current,
           message,
         ),
