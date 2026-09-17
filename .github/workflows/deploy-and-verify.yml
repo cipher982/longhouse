@@ -133,6 +133,7 @@ jobs:
       runtime_source_sha: ${{ steps.artifact_schema.outputs.source_sha }}
       runtime_source_order: ${{ steps.source.outputs.source_order }}
       runtime_source_workflow: ${{ steps.source.outputs.source_workflow }}
+      runtime_qualification_id: ${{ steps.source.outputs.qualification_id }}
       runtime_schema_version: ${{ steps.artifact_schema.outputs.schema_version }}
       runtime_schema_min_reader: ${{ steps.artifact_schema.outputs.schema_min_reader }}
       runtime_schema_max_reader: ${{ steps.artifact_schema.outputs.schema_max_reader }}
@@ -223,19 +224,27 @@ jobs:
             echo "Runtime image tag must be a full source SHA for deployment metadata: $SOURCE_SHA" >&2
             exit 1
           }
-          run_number="$(curl --fail-with-body --silent --show-error \
+          publish_run="$(curl --fail-with-body --silent --show-error \
             --header "Authorization: Bearer $GH_TOKEN" \
             --header "Accept: application/vnd.github+json" \
             --header "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/${{ github.repository }}/actions/workflows/runtime-image.yml/runs?head_sha=$SOURCE_SHA&status=success&per_page=1" \
-            | jq -r '.workflow_runs[0].run_number // empty')"
-          [[ "$run_number" =~ ^[0-9]+$ ]] || {
-            echo "No successful runtime-image publishing run for $SOURCE_SHA" >&2
-            exit 1
-          }
+            | jq -r '.workflow_runs[0] | [(.run_number // ""), (.id // ""), (.run_attempt // "")] | @tsv')"
+          IFS=$'\t' read -r run_number run_id run_attempt <<<"$publish_run"
+          for value in "$run_number" "$run_id" "$run_attempt"; do
+            [[ "$value" =~ ^[0-9]+$ ]] || {
+              echo "No successful runtime-image publishing run for $SOURCE_SHA" >&2
+              exit 1
+            }
+          done
+          # A ready deployment must name the qualification it was accepted
+          # against: the hosted canary control plane refuses one without a
+          # qualification id, which is how every canary reprovision failed while
+          # the workflow sent none.
           {
             echo "source_order=$run_number"
             echo "source_workflow=Publish Runtime Image"
+            echo "qualification_id=runtime-image-${run_id}-${run_attempt}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Verify exact runtime image publication
@@ -308,6 +317,7 @@ jobs:
       RUNTIME_SOURCE_SHA: ${{ needs.gate.outputs.runtime_source_sha }}
       RUNTIME_SOURCE_WORKFLOW: ${{ needs.gate.outputs.runtime_source_workflow }}
       RUNTIME_SOURCE_ORDER: ${{ needs.gate.outputs.runtime_source_order }}
+      RUNTIME_QUALIFICATION_ID: ${{ needs.gate.outputs.runtime_qualification_id }}
       RUNTIME_SCHEMA_VERSION: ${{ needs.gate.outputs.runtime_schema_version }}
       RUNTIME_SCHEMA_MIN_READER: ${{ needs.gate.outputs.runtime_schema_min_reader }}
       RUNTIME_SCHEMA_MAX_READER: ${{ needs.gate.outputs.runtime_schema_max_reader }}
@@ -354,6 +364,7 @@ jobs:
       LH_DEPLOYMENT_SOURCE_SHA: ${{ needs.gate.outputs.runtime_source_sha }}
       LH_DEPLOYMENT_SOURCE_WORKFLOW: ${{ needs.gate.outputs.runtime_source_workflow }}
       LH_DEPLOYMENT_SOURCE_ORDER: ${{ needs.gate.outputs.runtime_source_order }}
+      LH_DEPLOYMENT_QUALIFICATION_ID: ${{ needs.gate.outputs.runtime_qualification_id }}
       LH_DEPLOYMENT_SCHEMA_VERSION: ${{ needs.gate.outputs.runtime_schema_version }}
       LH_DEPLOYMENT_SCHEMA_MIN_READER: ${{ needs.gate.outputs.runtime_schema_min_reader }}
       LH_DEPLOYMENT_SCHEMA_MAX_READER: ${{ needs.gate.outputs.runtime_schema_max_reader }}
