@@ -113,7 +113,12 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   gate:
-    timeout-minutes: 15
+    # This budget must exceed every wait-for-ci timeout_seconds in the job; the
+    # largest is 1200s (runtime image publication), whose median wall time is
+    # over 20 minutes. At 15 minutes the job killed itself mid-wait and the run
+    # concluded "cancelled", which reads identically to a manual cancel in the
+    # run list and sent several agents looking for a canceller who did not exist.
+    timeout-minutes: 30
     name: "Resolve exact-SHA deploy metadata"
     runs-on: cube
     needs: changes
