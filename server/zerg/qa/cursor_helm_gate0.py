@@ -1529,6 +1529,15 @@ def _permission_scenario(
     # question, so a forced run legitimately proceeds and the scenario would be
     # asserting something the provider never promised. Unforced, an unattended
     # `ask` executes nothing, which is exactly the promise worth proving.
+    #
+    # Read the `ask` result for what it is. Since 2026.09.02 an un-allowlisted
+    # command stops at the CLI's own "Run this command?" prompt regardless of
+    # the hook, so this scenario proves that an unattended `ask` executes
+    # nothing -- the user-facing safety promise -- and NOT that the Longhouse
+    # hook decision is what stopped it. `deny` is where hook causation is
+    # proven, because --force removes the provider's own prompt and a
+    # still-absent side effect can only be the hook. Do not restate this
+    # scenario as evidence that `ask` is honoured.
     auto_approval = "prompt" if decision == "ask" else "force"
     argv = [binary, "--resume", provider_id, "--workspace", str(workspace)]
     if auto_approval == "force":
@@ -1564,6 +1573,24 @@ def _permission_scenario(
             time.sleep(1)
             if marker_file.exists():
                 raise RuntimeError(f"Cursor executed shell after permission={decision}")
+            # A blocked command has to be distinguishable from a run that never
+            # got anywhere. Absence of a side effect is the same observation
+            # whether the decision held, the session died, or the shell ran
+            # somewhere this scenario never looks. Require the positive
+            # witnesses: nothing executed (no afterShellExecution for the
+            # proposal we just saw) and the session is still alive to have
+            # honoured the decision at all.
+            executed = [
+                row
+                for row in read_hook_events(events_path)[before:]
+                if row.get("longhouse_session_id") == longhouse_session_id
+                and row.get("event") == "afterShellExecution"
+                and row.get("conversation_id") == provider_id
+            ]
+            if executed:
+                raise RuntimeError(f"Cursor reported shell execution after permission={decision}")
+            if not session.alive():
+                raise RuntimeError(f"Cursor session died before permission={decision} could be observed")
         return {
             "status": "passed",
             "decision": decision,
