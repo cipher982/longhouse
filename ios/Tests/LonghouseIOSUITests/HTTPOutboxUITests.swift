@@ -73,7 +73,10 @@ final class HTTPOutboxUITests: XCTestCase {
             "LONGHOUSE_HEADLESS_AUTH_TOKEN": configuration.authToken,
             "LONGHOUSE_HEADLESS_OPEN_SESSION": configuration.sessionID,
         ]
-        defer { app.terminate() }
+        defer {
+            retainPickerEvidence(in: app)
+            app.terminate()
+        }
 
         app.launch()
         let transcript = app.descendants(matching: .any)["session-chat-transcript"]
@@ -246,13 +249,25 @@ final class HTTPOutboxUITests: XCTestCase {
         for (name, picker) in pickerApplications {
             let photo = picker.images.matching(identifier: "PXGGridLayout-Info").firstMatch
             guard photo.waitForExistence(timeout: 5) else { continue }
-            guard waitUntilHittable(photo, timeout: 5) else {
-                throw ProofFailure(description: "\(name) PhotosPicker seeded photo was not hittable")
+            guard waitUntilEnabled(photo, timeout: 5) else {
+                throw ProofFailure(description: "\(name) PhotosPicker seeded photo was not accessibility-enabled")
             }
-            photo.tap()
+            let frame = photo.frame
+            guard frame.width > 0, frame.height > 0 else {
+                throw ProofFailure(description: "\(name) PhotosPicker seeded photo had no surfaced geometry")
+            }
+
+            // PhotosPicker exposes the tile as an enabled, visible Image, but
+            // XCUITest does not mark that noninteractive accessibility element
+            // hittable. Tap the center of the surfaced tile instead of using a
+            // hardcoded screen coordinate.
+            photo.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
             let done = picker.buttons["Done"]
-            guard done.waitForExistence(timeout: 5), waitUntilHittable(done, timeout: 5) else {
+            guard done.waitForExistence(timeout: 5),
+                  waitUntilEnabled(done, timeout: 5),
+                  waitUntilHittable(done, timeout: 5),
+                  done.isEnabled else {
                 throw ProofFailure(description: "\(name) PhotosPicker did not expose an enabled Done action")
             }
             done.tap()
@@ -262,12 +277,36 @@ final class HTTPOutboxUITests: XCTestCase {
         throw ProofFailure(description: "seeded simulator Photos asset was not visible in the PhotosPicker grid")
     }
 
-    private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+    private func waitUntilEnabled(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
         let expectation = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "hittable == true AND enabled == true"),
+            predicate: NSPredicate(format: "enabled == true"),
             object: element
         )
         return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    private func waitUntilHittable(_ element: XCUIElement, timeout: TimeInterval) -> Bool {
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "hittable == true"),
+            object: element
+        )
+        return XCTWaiter.wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    private func retainPickerEvidence(in app: XCUIApplication) {
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "http-outbox-picker-failure-screenshot"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+
+        let hostAccessibility = XCTAttachment(
+            data: Data(app.debugDescription.utf8),
+            uniformTypeIdentifier: "public.plain-text"
+        )
+        hostAccessibility.name = "http-outbox-picker-host-a11y"
+        hostAccessibility.lifetime = .keepAlways
+        add(hostAccessibility)
+
     }
 
     private func waitForWebViewText(
