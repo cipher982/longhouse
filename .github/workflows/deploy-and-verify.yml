@@ -218,14 +218,12 @@ jobs:
             echo "Runtime image tag must be a full source SHA for deployment metadata: $SOURCE_SHA" >&2
             exit 1
           }
-          run_number="$(gh run list \
-            --repo "${{ github.repository }}" \
-            --workflow runtime-image.yml \
-            --commit "$SOURCE_SHA" \
-            --status success \
-            --limit 1 \
-            --json number \
-            --jq '.[0].number // empty')"
+          run_number="$(curl --fail-with-body --silent --show-error \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/runtime-image.yml/runs?head_sha=$SOURCE_SHA&status=success&per_page=1" \
+            | jq -r '.workflow_runs[0].run_number // empty')"
           [[ "$run_number" =~ ^[0-9]+$ ]] || {
             echo "No successful runtime-image publishing run for $SOURCE_SHA" >&2
             exit 1
@@ -496,12 +494,19 @@ jobs:
           DEPLOYMENT_ID: ${{ needs.deploy_demo.outputs.deployment_id }}
         run: |
           set -euo pipefail
-          gh workflow run hosted-live-qa.yml \
-            --repo "${{ github.repository }}" \
-            --ref "$SOURCE_SHA" \
-            -f source_sha="$SOURCE_SHA" \
-            -f runtime_image_tag="$RUNTIME_IMAGE_TAG" \
-            -f deployment_id="$DEPLOYMENT_ID"
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --header "Content-Type: application/json" \
+            --data "$(jq -cn \
+              --arg ref "$SOURCE_SHA" \
+              --arg source_sha "$SOURCE_SHA" \
+              --arg runtime_image_tag "$RUNTIME_IMAGE_TAG" \
+              --arg deployment_id "$DEPLOYMENT_ID" \
+              '{ref:$ref,inputs:{source_sha:$source_sha,runtime_image_tag:$runtime_image_tag,deployment_id:$deployment_id}}')" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/hosted-live-qa.yml/dispatches"
           echo "Dispatched hosted-live-qa for deployment receipt $DEPLOYMENT_ID"
 
   profile-deploy:
@@ -523,13 +528,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mapfile -t RUN_IDS < <(
-            gh run list \
-              --repo "${{ github.repository }}" \
-              --commit "${{ github.sha }}" \
-              --event push \
-              --limit 100 \
-              --json databaseId,headSha \
-              --jq '.[] | select(.headSha == "${{ github.sha }}") | .databaseId'
+            curl --fail-with-body --silent --show-error \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "Accept: application/vnd.github+json" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/runs?head_sha=${{ github.sha }}&event=push&per_page=100" \
+              | jq -r --arg sha "${{ github.sha }}" '.workflow_runs[] | select(.head_sha == $sha) | .id'
           )
           PROFILE_ARGS=()
           for run_id in "${RUN_IDS[@]}"; do
