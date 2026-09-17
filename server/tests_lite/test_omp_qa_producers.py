@@ -2100,3 +2100,24 @@ def test_omp_native_model_evidence_binds_routed_thinking_pin_to_recorded_model(t
             )
             is None
         )
+
+
+def test_omp_helm_control_retries_only_undispatched_channel_reconnect() -> None:
+    unavailable = "Managed control channel is not connected or does not advertise this capability"
+    reconnecting = omp_helm_lifecycle._control_channel_reconnecting
+
+    # The Machine Agent restart after a transcript flush leaves a sub-second
+    # window where terminate/interrupt are refused before dispatch.
+    assert reconnecting(
+        502,
+        json.dumps({"detail": {"error_code": "terminate_failed", "message": unavailable, "exit_code": None, "released_lock": False}}),
+    )
+    assert reconnecting(502, json.dumps({"detail": {"code": "interrupt_failed", "message": unavailable}}))
+    assert reconnecting(409, "no live Longhouse control channel for this session")
+    # A dispatched failure (different message) is a real result.
+    assert not reconnecting(
+        502,
+        json.dumps({"detail": {"error_code": "terminate_failed", "message": "OMP extension did not acknowledge the command"}}),
+    )
+    assert not reconnecting(502, "not json")
+    assert not reconnecting(500, json.dumps({"detail": {"error_code": "terminate_failed", "message": unavailable}}))
