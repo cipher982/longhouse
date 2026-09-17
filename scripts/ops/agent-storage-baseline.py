@@ -71,8 +71,7 @@ def collect(db: Path, samples: int, day: str) -> tuple[dict, list[str]]:
 
     if db.stat().st_size == 0:
         degraded.append("database_file_empty: every schema measurement was skipped")
-        report["degraded_reason"] = "database_file_empty"
-        return report, degraded
+        return finish(report, degraded)
 
     uri = f"file:{db}?mode=ro"
     with sqlite3.connect(uri, uri=True) as conn:
@@ -83,13 +82,11 @@ def collect(db: Path, samples: int, day: str) -> tuple[dict, list[str]]:
             report["freelist_pages"] = conn.execute("pragma freelist_count").fetchone()[0]
         except sqlite3.Error as error:
             degraded.append(f"pragma_read_failed: {error}")
-            report["degraded_reason"] = "pragma_read_failed"
-            return report, degraded
+            return finish(report, degraded)
 
         if report["page_count"] == 0:
             degraded.append("database_uninitialized: page_count is zero")
-            report["degraded_reason"] = "database_uninitialized"
-            return report, degraded
+            return finish(report, degraded)
 
         try:
             row = conn.execute("select coalesce(sum(unused), 0) from dbstat").fetchone()
@@ -121,15 +118,27 @@ def collect(db: Path, samples: int, day: str) -> tuple[dict, list[str]]:
         report["row_counts"] = counts
 
     report["wal_checkpoint"] = checkpoint_state(db)
+    if report["wal_checkpoint"].get("degraded"):
+        degraded.append(report["wal_checkpoint"]["degraded"])
 
     report["write_lock_probe"] = lock_probe(db, samples)
     if report["write_lock_probe"]["degraded"]:
         degraded.append(report["write_lock_probe"]["degraded"])
 
-    report["openers"] = openers(db)
+    openers_result = openers(db)
+    if openers_result.get("degraded"):
+        degraded.append(openers_result["degraded"])
+    report["openers"] = openers_result.get("openers", [])
+    report["opener_writers"] = openers_result.get("writers")
     report["status"] = engine_status(db.parent / "engine-status.json", degraded)
     report["warnings"] = warning_kinds(db.parent / "logs", day)
+    return finish(report, degraded)
+
+
+def finish(report: dict, degraded: list[str]) -> tuple[dict, list[str]]:
+    """One place decides what a report says about its own completeness."""
     report["degraded"] = degraded
+    report["healthy_baseline"] = not degraded
     return report, degraded
 
 
@@ -194,29 +203,43 @@ def lock_probe(db: Path, samples: int) -> dict:
     }
 
 
-def openers(db: Path) -> list[dict]:
-    """Who holds the database, and in which mode.
+def openers(db: Path) -> dict:
+    """Who holds the database, and in which access mode.
 
     Only the daemon should hold it for write at rest. Launchers open it
-    transiently on the launch path, which is why presence alone is not proof;
-    the mode is what matters.
+    transiently on the launch path, so presence alone is not proof; the mode
+    (`r`, `w`, `u`) is what distinguishes a reader from a writer. lsof's field
+    output does not carry the mode -- its FD field does -- so this parses the
+    ordinary table, and a failed `lsof` is reported as unmeasured rather than as
+    an empty opener set.
     """
     try:
-        raw = subprocess.run(
-            ["lsof", "-Fpcn", str(db)], capture_output=True, text=True, timeout=20
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return []
+        result = subprocess.run(
+            ["lsof", "--", str(db)], capture_output=True, text=True, timeout=20
+        )
+        if result.returncode not in (0, 1):  # 1 is lsof's "nothing to report"
+            return {"degraded": f"lsof_failed: exit {result.returncode}"}
+    except (OSError, subprocess.SubprocessError) as error:
+        return {"degraded": f"lsof_unavailable: {error}"}
+
     rows: list[dict] = []
-    pid = command = None
-    for line in raw.splitlines():
-        if line.startswith("p"):
-            pid = line[1:]
-        elif line.startswith("c"):
-            command = line[1:]
-        elif line.startswith("n"):
-            rows.append({"pid": pid, "command": command, "path": line[1:]})
-    return rows
+    for line in result.stdout.splitlines()[1:]:
+        fields = line.split()
+        if len(fields) < 5:
+            continue
+        descriptor = fields[3]
+        rows.append(
+            {
+                "command": fields[0],
+                "pid": fields[1],
+                "fd": descriptor[:-1] if descriptor[-1:] in {"r", "w", "u"} else descriptor,
+                "mode": descriptor[-1:] if descriptor[-1:] in {"r", "w", "u"} else "unknown",
+            }
+        )
+    return {
+        "openers": rows,
+        "writers": sum(1 for row in rows if row["mode"] in {"w", "u"}),
+    }
 
 
 def engine_status(path: Path, degraded: list[str]) -> dict:
@@ -262,7 +285,9 @@ def summarize(report: dict) -> str:
         f"lock_p50_ms={probe.get('p50_ms')} lock_p95_ms={probe.get('p95_ms')} "
         f"lock_max_ms={probe.get('max_ms')} failures={probe.get('failures')}"
     )
-    lines.append(f"openers={json.dumps(report.get('openers'))}")
+    lines.append(
+        f"opener_writers={report.get('opener_writers')} openers={json.dumps(report.get('openers'))}"
+    )
     counts = report.get("row_counts") or {}
     for table in LEDGER_TABLES:
         if table in counts:

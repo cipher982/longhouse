@@ -655,6 +655,36 @@ fn default_db_path() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn open_db_drops_the_dead_live_file_state_table() {
+        // The table had no reader anywhere in the engine. Fresh databases simply
+        // never create it; existing ones lose it here, so "deleted" means the
+        // storage is gone rather than only the code that wrote it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE live_file_state (
+                 path TEXT PRIMARY KEY,
+                 provider TEXT NOT NULL,
+                 offset INTEGER NOT NULL DEFAULT 0,
+                 updated_at TEXT NOT NULL
+             );
+             INSERT INTO live_file_state VALUES ('/tmp/a.jsonl', 'claude', 0, '2026-01-01T00:00:00Z');",
+        )
+        .unwrap();
+        drop(conn);
+
+        let conn = open_db(Some(&path)).unwrap();
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'live_file_state'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0, "the dead table must not survive a cold open");
+    }
 
     #[test]
     fn bundled_sqlite_excludes_the_wal_reset_corruption_window() {

@@ -1467,9 +1467,15 @@ pub fn run_daily_storage_maintenance(db_path: &Path) {
                 tracing::warn!(error = %err, "Daily maintenance: database compaction deferred");
             }
         },
-        None => tracing::info!(
-            "Daily maintenance: a compaction is already in flight; prunes only this pass"
-        ),
+        None => {
+            // This pass did not perform the only operation that reclaims space,
+            // so it must not record a completed day: the marker would postpone
+            // the reclaim it just skipped.
+            deferred = true;
+            tracing::info!(
+                "Daily maintenance: a compaction is already in flight; prunes done, pass stays due"
+            );
+        }
     }
 
     if deferred {
@@ -1802,6 +1808,18 @@ fn run_recovery_walk(source: &Path, destination: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The compaction lease is process-global while the test harness runs tests
+    /// in parallel threads, so the tests that exercise a pass must not overlap:
+    /// one test holding the lease is exactly the condition another test is
+    /// trying to observe.
+    static COMPACTION_LEASE_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn serialize_lease_test() -> std::sync::MutexGuard<'static, ()> {
+        COMPACTION_LEASE_TESTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
     use std::time::Duration;
 
     /// Build a database whose on-disk column order differs from the current
@@ -2363,6 +2381,7 @@ mod tests {
 
     #[test]
     fn a_completed_pass_is_not_immediately_due_again() {
+        let _serial = serialize_lease_test();
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("longhouse-shipper.db");
         Connection::open(&db_path).unwrap();
@@ -2376,7 +2395,8 @@ mod tests {
     }
 
     #[test]
-    fn a_pass_that_could_not_compact_stays_due() {
+    fn a_pass_that_cannot_compact_stays_due() {
+        let _serial = serialize_lease_test();
         let dir = tempfile::tempdir().unwrap();
         // Not a database: every maintenance step that touches it fails, which
         // is what a deferred pass looks like to the marker.
@@ -2389,6 +2409,25 @@ mod tests {
             daily_maintenance_delay(&db_path, Utc::now()),
             Duration::ZERO,
             "a pass that could not finish must stay due for the next daemon start"
+        );
+    }
+
+    #[test]
+    fn a_pass_that_skipped_compaction_stays_due() {
+        // A pass that prunes while a compaction is already in flight did not do
+        // the work the marker records, so it must not buy another day.
+        let _serial = serialize_lease_test();
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("longhouse-shipper.db");
+        Connection::open(&db_path).unwrap();
+        let _held = CompactionLease::acquire().expect("serialized, so the lease is free");
+
+        run_daily_storage_maintenance(&db_path);
+
+        assert_eq!(
+            daily_maintenance_delay(&db_path, Utc::now()),
+            Duration::ZERO,
+            "a pass that skipped compaction must stay due"
         );
     }
 }

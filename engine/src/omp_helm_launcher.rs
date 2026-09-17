@@ -69,10 +69,13 @@ const IDENTITY_RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 ///
 /// The launch-critical binding may spend its full budget (three opens of five
 /// seconds) because the session is unusable until it lands. A repair runs on the
-/// session's activity reader thread, so it gets one short attempt: a database
-/// that is unavailable for longer than this simply loses the attempt, and the
-/// next reconciliation window retries it.
-const RECONCILE_BINDING_BUSY_TIMEOUT: Duration = Duration::from_secs(2);
+/// session's activity reader thread, so every step of it is bounded: one open,
+/// one header wait, and the reservation and bind writes that share the
+/// connection's timeout. Worst case is roughly four seconds on a thread that is
+/// otherwise idle, and the next reconciliation window retries.
+const RECONCILE_BINDING_BUSY_TIMEOUT: Duration = Duration::from_secs(1);
+/// How long a repair waits for the provider to materialize its session header.
+const RECONCILE_HEADER_TIMEOUT: Duration = Duration::from_secs(1);
 
 const EXTENSION_ASSET: &str = include_str!("../assets/longhouse-omp-helm.ts");
 
@@ -352,13 +355,9 @@ impl OmpHelmServer {
             && has_native_session_identity(frame)
     }
     /// True when this frame should retry a binding that never committed, and
-    /// arms the spacing window. Only a frame that already carries the base
-    /// authority may arm it, so a stale connection or lease generation cannot
-    /// postpone the retry that a valid frame deserves.
-    fn uncommitted_identity_needs_reconcile(&self, frame: &Value, base_authority: bool) -> bool {
-        if !base_authority {
-            return false;
-        }
+    /// arms the spacing window. Callers must establish that the frame is
+    /// eligible to bind first, so an ineligible frame cannot postpone a retry.
+    fn uncommitted_identity_needs_reconcile(&self, frame: &Value) -> bool {
         let mut state = self.shared.lock().expect("OMP state mutex poisoned");
         let now = Instant::now();
         let due = should_reconcile_uncommitted_identity(
@@ -443,11 +442,19 @@ impl OmpHelmServer {
             return state.state.pending_transition;
         }
         if kind == "session_transition_cancelled" {
-            return state.state.pending_transition
-                && frame.get("native_session_id").and_then(Value::as_str)
+            // A cancellation must name this session's identity. While no
+            // identity has been committed there is nothing to compare, and OMP
+            // sends the real values, so requiring equality would reject the
+            // frame that clears a transition the launcher itself started.
+            let identity_matches = if state.state.native_session_id.is_empty() {
+                has_native_session_identity(frame)
+            } else {
+                frame.get("native_session_id").and_then(Value::as_str)
                     == Some(state.state.native_session_id.as_str())
-                && frame.get("session_file").and_then(Value::as_str)
-                    == Some(state.state.session_file.as_str());
+                    && frame.get("session_file").and_then(Value::as_str)
+                        == Some(state.state.session_file.as_str())
+            };
+            return state.state.pending_transition && identity_matches;
         }
         extension_identity_matches_locked(&state, frame)
     }
@@ -581,7 +588,13 @@ impl OmpHelmServer {
                 Some(native_id),
             )?;
         }
-        let deadline = Instant::now() + SOCKET_TIMEOUT;
+        // A repair may not inherit the launch header budget: it runs on the
+        // session's activity reader thread, so its whole operation is bounded.
+        let header_budget = match attempt {
+            BindingAttempt::Launch => SOCKET_TIMEOUT,
+            BindingAttempt::Reconcile => RECONCILE_HEADER_TIMEOUT,
+        };
+        let deadline = Instant::now() + header_budget;
         let header = loop {
             match crate::omp_session::read_session_header(Path::new(source)) {
                 Ok(header) => break header,
@@ -693,9 +706,16 @@ impl OmpHelmServer {
         let identity_drift =
             is_activity_frame_kind(kind) && !self.extension_identity_matches(&frame);
         let base_authority = self.extension_base_authority_matches(connection_id, &frame);
+        // Eligibility is decided before the window is armed: a frame that cannot
+        // bind (pending transition, stopped, terminal-timeout reason, or no
+        // identity to bind) must not postpone the retry a later valid frame
+        // deserves.
+        let binding_allowed =
+            base_authority && self.identity_binding_allowed(connection_id, &frame);
         let uncommitted_identity = is_activity_frame_kind(kind)
-            && self.uncommitted_identity_needs_reconcile(&frame, base_authority);
-        if uncommitted_identity && self.identity_binding_allowed(connection_id, &frame) {
+            && binding_allowed
+            && self.uncommitted_identity_needs_reconcile(&frame);
+        if uncommitted_identity {
             if let Err(error) =
                 self.update_identity(connection_id, &frame, false, BindingAttempt::Reconcile)
             {
@@ -814,6 +834,9 @@ impl OmpHelmServer {
                 state.state.ready = true;
                 state.state.status = "ready".into();
                 state.state.terminal_reason = None;
+                // A cancelled transition is a fresh authority moment: whatever
+                // window an earlier frame armed must not outlive it.
+                state.identity_retry_after = None;
                 state.state.updated_at = Utc::now().to_rfc3339();
                 let generation = state.state.lease_generation.clone();
                 let connection = state.state.connection_id.clone();
@@ -2658,6 +2681,60 @@ mod tests {
             assert_eq!(
                 current.terminal_reason, None,
                 "the repaired session must stop advertising the bind failure"
+            );
+            server.shutdown();
+        });
+    }
+
+    #[test]
+    fn transition_cancellation_clears_a_pending_transition_without_a_committed_identity() {
+        // A cancelled transition must not be left pending just because the first
+        // bind never committed: the frame carries the provider's real identity
+        // while the launcher's stored one is empty.
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let socket_dir = temp.path().join("socket");
+        let socket_path = socket_dir.join("channel.sock");
+        let state_path = temp.path().join("state.json");
+        let mut initial = state();
+        initial.native_session_id = String::new();
+        initial.session_file = String::new();
+        initial.pending_transition = true;
+        initial.ready = false;
+        initial.status = "switching".into();
+
+        temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
+            let server =
+                OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
+            let (sender, _receiver) = mpsc::channel();
+            {
+                let mut shared = server.shared.lock().unwrap();
+                shared.extension_sender = Some(sender);
+                shared.extension_connection_id = Some("connection".into());
+                shared.identity_retry_after =
+                    Some(Instant::now() + Duration::from_secs(60));
+            }
+            server.handle_extension_frame(
+                "connection",
+                json!({
+                    "kind": "session_transition_cancelled",
+                    "auth_token": "token",
+                    "session_id": server.current_state().session_id,
+                    "native_session_id": "native-b",
+                    "session_file": "/tmp/session-b.jsonl",
+                    "connection_id": "connection",
+                    "lease_generation": "generation"
+                }),
+            );
+            let current = server.current_state();
+            assert!(
+                !current.pending_transition,
+                "a cancellation carrying a real identity must clear the transition"
+            );
+            assert!(current.ready);
+            assert!(
+                server.shared.lock().unwrap().identity_retry_after.is_none(),
+                "a cancelled transition must not leave a window arming a later frame"
             );
             server.shutdown();
         });
