@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import os
 from datetime import datetime
 from datetime import timedelta
@@ -139,7 +138,7 @@ def _machine_heartbeat(*, device_id: str, now: datetime, raw_json: str | None = 
     }
 
 
-def _machine_evidence_json(*, provider: str, session_id: str, run_id: str, now: datetime) -> str:
+def _machine_evidence(*, provider: str, session_id: str, run_id: str, now: datetime) -> dict:
     """The typed facts the provider adapter reports through the heartbeat.
 
     The control fact binds an adapter connection identity to the catalog
@@ -179,39 +178,35 @@ def _machine_evidence_json(*, provider: str, session_id: str, run_id: str, now: 
         "source": "provider_control",
         "observed_at": now.isoformat(),
     }
-    return json.dumps(
-        {
-            "machine_evidence": {
-                "schema_version": 3,
-                "activity": [activity],
-                "control": [control],
-                "identities": [
-                    {
-                        "fact_family": "activity",
-                        "fact_index": 0,
-                        "subject_key": f"run:{run_id}",
-                        "source": "provider_runtime",
-                        "source_epoch": run_id,
-                        "source_seq": 1,
-                        "sequenced": True,
-                        "dedupe_key": hashlib.sha256(f"{run_id}:activity:1".encode()).hexdigest(),
-                        "evidence_hash": canonical_evidence_hash(activity),
-                    },
-                    {
-                        "fact_family": "control",
-                        "fact_index": 0,
-                        "subject_key": f"connection:{connection_id}:{lease_generation}",
-                        "source": "provider_control",
-                        "source_epoch": lease_generation,
-                        "source_seq": None,
-                        "sequenced": False,
-                        "dedupe_key": hashlib.sha256(f"{connection_id}:{lease_generation}".encode()).hexdigest(),
-                        "evidence_hash": canonical_evidence_hash(control),
-                    },
-                ],
-            }
-        }
-    )
+    return {
+        "schema_version": 3,
+        "activity": [activity],
+        "control": [control],
+        "identities": [
+            {
+                "fact_family": "activity",
+                "fact_index": 0,
+                "subject_key": f"run:{run_id}",
+                "source": "provider_runtime",
+                "source_epoch": run_id,
+                "source_seq": 1,
+                "sequenced": True,
+                "dedupe_key": hashlib.sha256(f"{run_id}:activity:1".encode()).hexdigest(),
+                "evidence_hash": canonical_evidence_hash(activity),
+            },
+            {
+                "fact_family": "control",
+                "fact_index": 0,
+                "subject_key": f"connection:{connection_id}:{lease_generation}",
+                "source": "provider_control",
+                "source_epoch": lease_generation,
+                "source_seq": None,
+                "sequenced": False,
+                "dedupe_key": hashlib.sha256(f"{connection_id}:{lease_generation}".encode()).hexdigest(),
+                "evidence_hash": canonical_evidence_hash(control),
+            },
+        ],
+    }
 
 
 def _seed_live_catalog_session(
@@ -288,10 +283,12 @@ def _seed_live_catalog_session(
     live.rpc(
         "machine.heartbeat.apply.v2",
         {
-            "heartbeat": _machine_heartbeat(
-                device_id=device_id,
+            "heartbeat": _machine_heartbeat(device_id=device_id, now=now, raw_json=None),
+            "machine_evidence": _machine_evidence(
+                provider=provider,
+                session_id=session_id,
+                run_id=run_id,
                 now=now,
-                raw_json=_machine_evidence_json(provider=provider, session_id=session_id, run_id=run_id, now=now),
             ),
             "managed_leases": [
                 {
