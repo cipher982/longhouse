@@ -948,15 +948,17 @@ impl OmpHelmServer {
                 shared.reconnect_active = false;
             }
             let terminal_turn = shared.state.agent_end_is_terminal == Some(true);
+            let continuation_turn = shared.state.agent_end_is_terminal == Some(false);
             let provisional_active = terminal_turn && shared.reconnect_active;
-            shared.state.phase = if provider_idle || (terminal_turn && !provisional_active) {
+            let settled = terminal_turn && !provisional_active;
+            shared.state.phase = if settled || (provider_idle && !continuation_turn) {
                 "idle".into()
             } else if shared.state.phase == "thinking" {
                 "thinking".into()
             } else {
                 "running".into()
             };
-            shared.state.tool_name = if provider_idle || (terminal_turn && !provisional_active) {
+            shared.state.tool_name = if settled || (provider_idle && !continuation_turn) {
                 None
             } else {
                 shared.state.tool_name.clone()
@@ -2775,6 +2777,18 @@ mod tests {
                     "lease_generation": "generation"
                 })
             };
+            let keepalive = |provider_idle: bool| {
+                json!({
+                    "kind": "extension_keepalive",
+                    "provider_idle": provider_idle,
+                    "auth_token": "token",
+                    "session_id": session_id,
+                    "native_session_id": "native",
+                    "session_file": source,
+                    "connection_id": "connection",
+                    "lease_generation": "generation"
+                })
+            };
             server.handle_extension_frame(
                 "connection",
                 frame(
@@ -2838,25 +2852,13 @@ mod tests {
                 shared.state.updated_at = "2000-01-01T00:00:00+00:00".into();
             }
             let before_keepalive = server.current_state();
-            server.handle_extension_frame(
-                "connection",
-                frame(
-                    "extension_keepalive",
-                    json!({"type": "extension_keepalive", "provider_idle": false}),
-                ),
-            );
+            server.handle_extension_frame("connection", keepalive(false));
             let active_keepalive = server.current_state();
             assert_eq!(active_keepalive.phase, "running");
             assert_eq!(active_keepalive.agent_end_is_terminal, Some(true));
             assert_ne!(active_keepalive.updated_at, before_keepalive.updated_at);
 
-            server.handle_extension_frame(
-                "connection",
-                frame(
-                    "extension_keepalive",
-                    json!({"type": "extension_keepalive", "provider_idle": true}),
-                ),
-            );
+            server.handle_extension_frame("connection", keepalive(true));
             let settled_again = server.current_state();
             assert_eq!(settled_again.phase, "idle");
             assert_eq!(settled_again.tool_name, None);
@@ -2880,6 +2882,44 @@ mod tests {
             assert_eq!(active.phase, "running");
             assert_eq!(active.tool_name.as_deref(), Some("next_tool"));
             assert_eq!(active.agent_end_is_terminal, None);
+
+            server.handle_extension_frame(
+                "connection",
+                frame(
+                    "agent_end",
+                    json!({
+                        "type": "agent_end",
+                        "isTerminal": false,
+                        "willContinue": true
+                    }),
+                ),
+            );
+            assert_eq!(server.current_state().agent_end_is_terminal, Some(false));
+            server.handle_extension_frame(
+                "connection",
+                frame(
+                    "session_reconnect",
+                    json!({"type": "session_reconnect", "provider_idle": true}),
+                ),
+            );
+            let continuation = server.current_state();
+            assert_eq!(continuation.phase, "running");
+            assert_eq!(continuation.agent_end_is_terminal, Some(false));
+            server.handle_extension_frame(
+                "connection",
+                frame(
+                    "activity",
+                    json!({"type": "activity", "toolName": "continuation_tool"}),
+                ),
+            );
+            let continuation_activity = server.current_state();
+            assert_eq!(continuation_activity.phase, "running");
+            assert_eq!(
+                continuation_activity.tool_name.as_deref(),
+                Some("continuation_tool")
+            );
+            assert_eq!(continuation_activity.agent_end_is_terminal, Some(false));
+
             server.shutdown();
         });
     }
