@@ -72,7 +72,19 @@ impl SourceClaim {
 /// Where every launcher's claim lives. Shared across providers so the daemon
 /// reads one directory rather than learning each launcher's state dir.
 pub fn claims_dir() -> Result<PathBuf> {
-    Ok(crate::config::get_longhouse_home()?.join("managed-local").join("claims"))
+    let home = crate::config::get_longhouse_home()?;
+    #[cfg(test)]
+    {
+        // A claim is authority over a real transcript path: one written into the
+        // developer's own home can refuse a real launch. Tests isolate the home
+        // with `LONGHOUSE_HOME`, and this makes forgetting that loud instead of
+        // polluting a machine.
+        anyhow::ensure!(
+            std::env::var("LONGHOUSE_HOME").is_ok(),
+            "tests must set LONGHOUSE_HOME to a temporary directory before writing a claim"
+        );
+    }
+    Ok(home.join("managed-local").join("claims"))
 }
 
 fn claim_path(session_id: &str) -> Result<PathBuf> {
