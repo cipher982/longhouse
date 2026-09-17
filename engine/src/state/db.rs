@@ -421,6 +421,9 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
         ("media_objects_path", "TEXT"),
         ("media_objects_sha256", "TEXT"),
         ("media_objects_len", "INTEGER"),
+        ("request_body_path", "TEXT"),
+        ("request_body_sha256", "TEXT"),
+        ("request_body_len", "INTEGER"),
     ] {
         if !pending_envelope_columns.contains(column) {
             conn.execute_batch(&format!(
