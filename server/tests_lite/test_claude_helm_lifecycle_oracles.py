@@ -154,6 +154,51 @@ def test_noop_interrupt_that_lets_the_tool_finish_is_rejected() -> None:
     assert verdict["failure_code"] == "abort_did_not_stop_turn"
 
 
+def _recovery_abort(rows: list[dict]) -> dict:
+    return abort_stopped_turn(
+        rows,
+        prompt_marker="lh_claude_progress_x",
+        forbidden_marker="FORBIDDEN_x",
+        interrupted_at=1789587600.0,
+        tool_seconds=45,
+        recovery_marker="LONGHOUSE_CLAUDE_RECOVERED_x",
+    )
+
+
+def test_abort_passes_only_when_a_following_turn_completes() -> None:
+    stopped = [
+        _prompt("run lh_claude_progress_x then reply FORBIDDEN_x"),
+        _bash("for i ...lh_claude_progress_x"),
+        _end("2026-09-16T19:40:04Z"),
+    ]
+    recovered = [
+        _prompt("Reply with exactly LONGHOUSE_CLAUDE_RECOVERED_x"),
+        _text("LONGHOUSE_CLAUDE_RECOVERED_x"),
+        _end("2026-09-16T19:40:09Z"),
+    ]
+
+    verdict = _recovery_abort(stopped + recovered)
+
+    assert verdict["passed"] is True
+    assert verdict["following_turn_completed"] is True
+
+
+def test_abort_that_stops_the_turn_but_never_recovers_is_rejected() -> None:
+    stopped = [
+        _prompt("run lh_claude_progress_x then reply FORBIDDEN_x"),
+        _bash("for i ...lh_claude_progress_x"),
+        _end("2026-09-16T19:40:04Z"),
+    ]
+    # The recovery prompt was accepted but its turn never completed.
+    never_answered = [_prompt("Reply with exactly LONGHOUSE_CLAUDE_RECOVERED_x")]
+
+    assert _recovery_abort(stopped)["failure_code"] == "abort_following_turn_missing"
+    verdict = _recovery_abort(stopped + never_answered)
+    assert verdict["passed"] is False
+    assert verdict["failure_code"] == "abort_following_turn_missing"
+    assert verdict["following_turn_completed"] is False
+
+
 def test_negative_control_passes_only_when_the_fault_fired_and_was_caught() -> None:
     lifecycle = {
         "launch_registration": {"passed": True},
