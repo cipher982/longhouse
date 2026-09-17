@@ -861,7 +861,25 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         }
     }
 
-    // 3. Create HTTP client and settle the one transcript lane this engine has.
+    // 3. Reconcile the frozen payload store before anything ships: delete files
+    // no row references, and hold — never silently drop — a row whose payload is
+    // missing, because that intent cannot be sent and can be re-prepared.
+    match crate::state::pending_source_envelope::reconcile_frozen_payloads(&conn) {
+        Ok(report) if report.orphans_removed > 0 || report.missing_blocked > 0 => {
+            tracing::warn!(
+                orphans_removed = report.orphans_removed,
+                missing_blocked = report.missing_blocked,
+                "Frozen payload reconciliation found work to do"
+            );
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!(
+            error = %format!("{error:#}"),
+            "Frozen payload reconciliation failed; shipping continues"
+        ),
+    }
+
+    // 4. Create HTTP client and settle the one transcript lane this engine has.
     // Storage-v2 is not a preference here: it is the only shipping protocol the
     // Machine Agent still implements. A host that cannot accept it gets a
     // refusal, not a shipping loop that would drop the user's history in

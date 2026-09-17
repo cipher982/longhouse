@@ -150,6 +150,14 @@ pub fn remove(root: &Path, relative_path: &str) -> Result<()> {
     }
 }
 
+/// Whether a referenced payload file is present.
+///
+/// Existence, not integrity: a corrupted payload is caught by `read`'s hash
+/// check at ship time, which is where the bytes are actually needed.
+pub fn exists(root: &Path, relative_path: &str) -> bool {
+    root.join(relative_path).exists()
+}
+
 /// What a sweep found. Every field is evidence, not a count to ignore.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct PayloadSweep {

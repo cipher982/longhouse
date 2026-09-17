@@ -118,6 +118,10 @@ pub enum BlockKind {
     /// The host refused the envelope as structurally invalid. The stored body
     /// is what gets retried, so no retry can change the verdict.
     EnvelopeRejected,
+    /// The frozen payload this row names is not on disk. Nothing can be sent
+    /// until the intent is re-prepared from the source, so the row is held
+    /// visibly instead of shipping an empty envelope or vanishing.
+    PayloadMissing,
     /// A code from a Runtime Host this engine does not know about.
     Unrecognized(String),
 }
@@ -129,6 +133,7 @@ impl BlockKind {
             "source_epoch_conflict_unresolved" => Self::SourceEpochConflictUnresolved,
             "storage_target_changed" => Self::StorageTargetChanged,
             "envelope_rejected" => Self::EnvelopeRejected,
+            "payload_missing" => Self::PayloadMissing,
             other => Self::Unrecognized(other.to_string()),
         }
     }
@@ -137,6 +142,7 @@ impl BlockKind {
         match self {
             Self::SourceEpochConflict => "source_epoch_conflict",
             Self::SourceEpochConflictUnresolved => "source_epoch_conflict_unresolved",
+            Self::PayloadMissing => "payload_missing",
             Self::StorageTargetChanged => "storage_target_changed",
             Self::EnvelopeRejected => "envelope_rejected",
             Self::Unrecognized(value) => value,
@@ -165,6 +171,10 @@ pub fn block_kind_is_reconciling(block_kind: Option<&str>) -> bool {
         // Nothing local can rewrite a stored body the host already refused.
         // Clearing it is a person's decision, via `longhouse shipping discard`.
         BlockKind::EnvelopeRejected => false,
+        // The frozen bytes are gone but the source can produce them again, so a
+        // pass could re-prepare this row — deliberately not wired yet, because
+        // re-preparing deletes intent and needs its own proof.
+        BlockKind::PayloadMissing => false,
         // Fail closed. A code this engine does not recognise may well be
         // recoverable by a newer engine, but reporting "healing" for something
         // no code here can act on is exactly the false green the health
@@ -1947,6 +1957,79 @@ fn frozen_body_guard_sql(sha_placeholder: &str, bytes_placeholder: &str) -> Stri
     )
 }
 
+/// What one startup reconciliation found.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PayloadReconciliation {
+    /// Files no row references, removed.
+    pub orphans_removed: usize,
+    /// Rows whose frozen payload is gone, now blocked and visible.
+    pub missing_blocked: usize,
+}
+
+/// Reconcile the payload store against the rows that reference it.
+///
+/// Run at startup, before anything ships. The two shapes are not symmetrical: an
+/// orphaned file wastes space and is deleted, while a row without its bytes is
+/// *held* — blocked with a typed kind and counted in the outbox diagnostics —
+/// because it is an intent that cannot be sent and must not be silently dropped.
+/// Re-preparing it from the source is a separate decision with its own proof.
+pub fn reconcile_frozen_payloads(conn: &Connection) -> Result<PayloadReconciliation> {
+    let root = crate::state::payload_store::root_for_connection(conn)?;
+    let mut statement = conn.prepare(
+        "SELECT source_epoch, envelope_id, media_objects_path, request_body_path
+         FROM pending_source_envelope",
+    )?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+
+    let mut referenced = Vec::new();
+    let mut missing = Vec::new();
+    for (source_epoch, envelope_id, media_path, request_path) in rows {
+        for relative_path in [media_path, request_path].into_iter().flatten() {
+            if crate::state::payload_store::exists(&root, &relative_path) {
+                referenced.push(relative_path);
+            } else {
+                missing.push((source_epoch.clone(), envelope_id.clone(), relative_path));
+            }
+        }
+    }
+
+    let report = crate::state::payload_store::sweep(&root, &referenced)?;
+    let now = Utc::now().to_rfc3339();
+    let mut missing_blocked = 0;
+    for (source_epoch, envelope_id, relative_path) in missing {
+        let changed = conn.execute(
+            "UPDATE pending_source_envelope
+             SET blocked_at = COALESCE(blocked_at, ?1),
+                 block_kind = ?2,
+                 block_detail = ?3,
+                 wake_at = '1970-01-01T00:00:00.000000000Z'
+             WHERE source_epoch = ?4 AND envelope_id = ?5",
+            params![
+                now,
+                BlockKind::PayloadMissing.as_str(),
+                format!("frozen payload {relative_path} is missing"),
+                source_epoch,
+                envelope_id,
+            ],
+        )?;
+        missing_blocked += changed;
+    }
+    Ok(PayloadReconciliation {
+        orphans_removed: report.orphans_removed,
+        missing_blocked,
+    })
+}
+
 /// Load a file-backed media payload, leaving a legacy blob row untouched.
 ///
 /// A row whose payload is missing is an error the caller must see: the only
@@ -2661,6 +2744,58 @@ mod tests {
                 "an acknowledged request body must be removed, and only after its row"
             );
         }
+    }
+
+    #[test]
+    fn reconciliation_removes_orphans_and_holds_a_row_whose_payload_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let root = crate::state::payload_store::root_for_connection(&conn).unwrap();
+        let epoch = Uuid::new_v4();
+        register_epoch(&conn, epoch, "claude");
+        let persisted = persist_or_load(&mut conn, &candidate(epoch, "/tmp/lost.jsonl")).unwrap();
+
+        // An orphan left by a crash between sealing and committing the row.
+        std::fs::create_dir_all(root.join("ff")).unwrap();
+        std::fs::write(root.join("ff/orphan.zst"), b"nobody references me").unwrap();
+
+        let report = super::reconcile_frozen_payloads(&conn).unwrap();
+        assert_eq!(report.orphans_removed, 1, "an unreferenced payload is deleted");
+        assert_eq!(report.missing_blocked, 0, "every referenced payload is present");
+        assert!(!root.join("ff/orphan.zst").exists());
+
+        // Now the payload is lost. The row must be held, not shipped empty.
+        let (media_path, request_path): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT media_objects_path, request_body_path FROM pending_source_envelope
+                 WHERE source_epoch = ?1",
+                [epoch.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        for relative in [media_path, request_path].into_iter().flatten() {
+            std::fs::remove_file(root.join(&relative)).unwrap();
+        }
+
+        let report = super::reconcile_frozen_payloads(&conn).unwrap();
+        assert_eq!(report.missing_blocked, 2, "both payloads are gone");
+        let (kind, detail): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT block_kind, block_detail FROM pending_source_envelope
+                 WHERE source_epoch = ?1",
+                [epoch.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(kind.as_deref(), Some("payload_missing"));
+        assert!(detail.unwrap_or_default().contains("is missing"));
+        let state = snapshot(&conn).unwrap();
+        assert_eq!(
+            state.blocked_source_count, 1,
+            "the held intent must be visible in the outbox diagnostics"
+        );
+        assert_eq!(state.pending_count, 0);
+        assert_eq!(persisted.source_epoch, epoch);
     }
 
     #[test]
