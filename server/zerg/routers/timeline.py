@@ -13,7 +13,6 @@ import asyncio
 import json
 import logging
 from datetime import datetime
-from datetime import timedelta
 from datetime import timezone
 from time import monotonic
 from typing import Literal
@@ -38,6 +37,7 @@ from zerg.dependencies.browser_auth import get_current_browser_caller
 from zerg.dependencies.browser_auth import get_current_browser_caller_short_lived
 from zerg.dependencies.browser_auth import require_current_browser_user_short_lived
 from zerg.dependencies.request_db import no_request_db
+from zerg.middleware.request_timeout import ARCHIVE_READ_TIMEOUT_SECONDS
 from zerg.routers import agents_search as _search_router
 from zerg.routers import agents_sessions as _sessions_router
 from zerg.schemas.machines import MachineDirectoryEntry
@@ -54,12 +54,13 @@ from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.live_catalog_timeline import read_live_catalog_sessions
 from zerg.services.live_catalog_timeline import stream_live_catalog_timeline
 from zerg.services.machines_directory import build_machines_directory
-from zerg.services.searchd_supervisor import get_searchd_client
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_resume import SessionResumeIntentResponse
 from zerg.services.session_resume import build_session_resume_intent
 from zerg.services.session_views import FiltersResponse
+from zerg.services.session_views import MachineSearchLaneFailure
 from zerg.services.session_views import RecallContextResponse
+from zerg.services.session_views import RecallMatch
 from zerg.services.session_views import RecallResponse
 from zerg.services.session_views import SemanticSearchResponse
 from zerg.services.session_views import SessionActionRequest
@@ -107,55 +108,59 @@ async def _search_storage_v2_timeline(
     owner_id: int,
     params: TimelineSessionListParams,
 ) -> TimelineSessionsListResponse:
-    search = get_searchd_client()
-    if search is None:
-        raise HTTPException(
-            status_code=503,
-            detail={"code": "search_unavailable", "message": "The derived search index is unavailable."},
-        )
-    now = datetime.now(timezone.utc)
-    try:
-        result = await search.call(
-            "search.query.v2",
-            {
-                "owner_id": str(owner_id),
-                "query": str(params.query),
-                "project": params.project,
-                "provider": params.provider,
-                "environment": params.environment,
-                "window_start_us": int((now - timedelta(days=params.days_back)).timestamp() * 1_000_000),
-                "window_end_us": None,
-                "limit": min(200, max(params.limit + params.offset, params.limit)),
-                "include_snippets": True,
-                "include_origin_hidden": params.include_automation,
-            },
-        )
-    except (CatalogRemoteError, CatalogUnavailable) as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={"code": "search_unavailable", "message": "The derived search index is unavailable."},
-        ) from exc
-    session_ids: list[UUID] = []
-    search_rows: list[dict[str, object]] = []
-    seen: set[str] = set()
-    for row in result.get("results") or []:
-        session_id = str(row.get("session_id") or "") if isinstance(row, dict) else ""
-        if session_id and session_id not in seen:
-            seen.add(session_id)
-            session_ids.append(UUID(session_id))
-            search_rows.append(row)
-    projected = []
-    for start in range(0, len(session_ids), _SEARCH_RESULT_HYDRATION_BATCH_SIZE):
-        batch = session_ids[start : start + _SEARCH_RESULT_HYDRATION_BATCH_SIZE]
-        projected.extend(
-            await asyncio.to_thread(
-                read_live_catalog_sessions,
-                batch,
-                owner_id=owner_id,
-            )
-        )
+    """Rank sessions with the lanes the caller named, then project timeline cards.
+
+    Lane policy lives in ``agents_search.search_session_matches`` so the browser
+    read and the machine read cannot answer the same `mode` differently. This
+    function owns only the browser projection: which hits survive the visibility
+    policy, and what a card looks like.
+    """
+
+    degraded: list[MachineSearchLaneFailure] = []
+    matches, lanes = await _search_router.search_session_matches(
+        owner_id=owner_id,
+        query=str(params.query),
+        project=params.project,
+        provider=params.provider,
+        environment=params.environment,
+        days_back=params.days_back,
+        include_test=params.include_test,
+        include_automation=params.include_automation,
+        mode=params.mode or "lexical",
+        limit=params.limit + params.offset,
+        timeout_seconds=ARCHIVE_READ_TIMEOUT_SECONDS,
+        degraded=degraded,
+    )
+
+    # Rank order is the answer, so it is preserved through hydration rather than
+    # recovered from it. Two lanes can name the same session, and an id the
+    # index returned but the catalog cannot project costs its own row.
+    match_by_session: dict[str, RecallMatch] = {}
+    ordered_ids: list[UUID] = []
+    for match in matches:
+        if match.session_id in match_by_session:
+            continue
+        try:
+            session_id = UUID(match.session_id)
+        except ValueError:
+            continue
+        match_by_session[match.session_id] = match
+        ordered_ids.append(session_id)
+
+    projected: dict[str, SessionResponse] = {}
+    for start in range(0, len(ordered_ids), _SEARCH_RESULT_HYDRATION_BATCH_SIZE):
+        batch = ordered_ids[start : start + _SEARCH_RESULT_HYDRATION_BATCH_SIZE]
+        for session, _provider_alias, _commit_seq in await asyncio.to_thread(
+            read_live_catalog_sessions,
+            batch,
+            owner_id=owner_id,
+        ):
+            if session is not None:
+                projected[str(session.id)] = session
+
     cards: list[TimelineSessionCardResponse] = []
-    for (session, _provider_alias, _commit_seq), row in zip(projected, search_rows, strict=True):
+    for session_id in ordered_ids:
+        session = projected.get(str(session_id))
         if session is None:
             continue
         if session.user_hidden_from_timeline:
@@ -164,13 +169,12 @@ async def _search_storage_v2_timeline(
             continue
         if params.hide_autonomous and session.user_messages <= 0:
             continue
-        snippet = str(row.get("content_snippet") or row.get("tool_output_snippet") or "") or None
-        rank = abs(float(row.get("rank") or 0.0))
+        match = match_by_session[str(session_id)]
         session = session.model_copy(
             update={
-                "match_event_id": str(row.get("event_id") or "") or None,
-                "match_snippet": snippet,
-                "match_score": 1.0 / (1.0 + rank),
+                "match_event_id": str(match.match_event_id) if match.match_event_id is not None else None,
+                "match_snippet": match.evidence,
+                "match_score": match.score,
             }
         )
         cards.append(
@@ -186,7 +190,13 @@ async def _search_storage_v2_timeline(
             )
         )
     page = cards[params.offset : params.offset + params.limit]
-    return TimelineSessionsListResponse(sessions=page, total=len(cards), has_real_sessions=bool(cards))
+    return TimelineSessionsListResponse(
+        sessions=page,
+        total=len(cards),
+        has_real_sessions=bool(cards),
+        lanes=lanes,
+        degraded=degraded,
+    )
 
 
 def _browser_owner_id(caller: Caller) -> int:

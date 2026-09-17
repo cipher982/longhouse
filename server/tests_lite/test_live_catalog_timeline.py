@@ -11,10 +11,12 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
+import zerg.routers.agents_search as agents_search
 import zerg.routers.timeline as timeline_router
 import zerg.services.live_catalog_timeline as live_catalog_timeline
 from zerg.catalogd.models import FactHead
@@ -41,6 +43,7 @@ from zerg.services.live_catalog_timeline import project_catalog_session_facts
 from zerg.services.live_catalog_timeline import project_catalog_sessions_snapshot
 from zerg.services.live_catalog_timeline import project_catalog_timeline_snapshot
 from zerg.services.live_catalog_timeline import read_live_catalog_session
+from zerg.services.session_views import RecallMatch
 from zerg.services.session_views import SessionResponse
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 
@@ -442,25 +445,12 @@ def test_canonical_detail_requires_owner_scope_before_catalog_read(monkeypatch):
 async def test_storage_v2_browser_search_hydrates_hits_with_owner_scope(monkeypatch, include_automation):
     session_id = uuid4()
     observed: dict[str, object] = {}
+    search_params: dict[str, object] = {}
 
     class SearchClient:
-        async def call(self, method, params):
+        async def call(self, method, params, **_kwargs):
             assert method == "search.query.v2"
-            assert params["owner_id"] == "7"
-            assert set(params) == {
-                "owner_id",
-                "query",
-                "project",
-                "provider",
-                "environment",
-                "window_start_us",
-                "window_end_us",
-                "limit",
-                "include_snippets",
-                "include_origin_hidden",
-            }
-            assert params["include_snippets"] is True
-            assert params["include_origin_hidden"] is include_automation
+            search_params.update(params)
             return {
                 "results": [
                     {
@@ -485,7 +475,7 @@ async def test_storage_v2_browser_search_hydrates_hits_with_owner_scope(monkeypa
         )
         return [(session, None, "9")]
 
-    monkeypatch.setattr(timeline_router, "get_searchd_client", lambda: SearchClient())
+    monkeypatch.setattr(agents_search, "get_searchd_client", lambda: SearchClient())
     monkeypatch.setattr(timeline_router, "read_live_catalog_sessions", read_sessions)
 
     result = await timeline_router._search_storage_v2_timeline(
@@ -493,7 +483,19 @@ async def test_storage_v2_browser_search_hydrates_hits_with_owner_scope(monkeypa
         params=_params(query="needle", include_automation=include_automation),
     )
 
+    # Assert the scope the index was asked for, not a parameter dump: owner
+    # scope, the recency window, and the visibility flags are the contract.
+    assert search_params["owner_id"] == "7"
+    assert search_params["include_snippets"] is True
+    assert search_params["include_origin_hidden"] is include_automation
+    assert search_params["include_test"] is False
+    window_start = datetime.fromtimestamp(search_params["window_start_us"] / 1_000_000, tz=timezone.utc)
+    age = datetime.now(timezone.utc) - window_start
+    assert timedelta(days=13) < age < timedelta(days=15)
+
     assert result.total == 1
+    assert result.lanes == ["lexical"]
+    assert result.degraded == []
     assert result.sessions[0].head.match_snippet == "matched provider channel"
     assert result.sessions[0].head.match_score == 0.25
     assert observed == {"requested": [session_id], "owner_id": 7}
@@ -506,19 +508,17 @@ async def test_storage_v2_browser_search_batches_catalog_hydration(monkeypatch):
     maximum_active = 0
     page_sizes: list[int] = []
 
-    class SearchClient:
-        async def call(self, method, params):
-            assert method == "search.query.v2"
-            return {
-                "results": [
-                    {
-                        "session_id": str(session_id),
-                        "content_snippet": "bounded hit",
-                        "rank": float(index + 1),
-                    }
-                    for index, session_id in enumerate(session_ids)
-                ]
+    async def search_rows(*, limit, **_kwargs):
+        # One bounded index walk, whatever the page size.
+        assert limit <= 200
+        return [
+            {
+                "session_id": str(session_id),
+                "content_snippet": "bounded hit",
+                "rank": float(index + 1),
             }
+            for index, session_id in enumerate(session_ids)
+        ]
 
     async def fake_to_thread(function, *args, **kwargs):
         nonlocal active, maximum_active
@@ -550,7 +550,7 @@ async def test_storage_v2_browser_search_batches_catalog_hydration(monkeypatch):
             for session_id in requested
         ]
 
-    monkeypatch.setattr(timeline_router, "get_searchd_client", lambda: SearchClient())
+    monkeypatch.setattr(agents_search, "search_storage_v2_rows", search_rows)
     monkeypatch.setattr(timeline_router, "read_live_catalog_sessions", read_sessions)
     monkeypatch.setattr(timeline_router.asyncio, "to_thread", fake_to_thread)
 
@@ -559,6 +559,172 @@ async def test_storage_v2_browser_search_batches_catalog_hydration(monkeypatch):
     assert result.total == 12
     assert maximum_active == 1
     assert page_sizes == [12]
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_browser_search_semantic_mode_runs_only_the_dense_lane(monkeypatch):
+    session_id = uuid4()
+    calls: list[str] = []
+
+    async def search_rows(**_kwargs):
+        calls.append("lexical")
+        return []
+
+    async def semantic_matches(**kwargs):
+        calls.append("dense")
+        return [RecallMatch(session_id=str(session_id), chunk_index=0, score=0.9, evidence="a paraphrase")]
+
+    def read_sessions(requested, *, owner_id):
+        return [
+            (
+                SessionResponse.model_construct(
+                    id=str(session_id),
+                    user_hidden_from_timeline=False,
+                    environment="development",
+                    user_messages=1,
+                    timeline_anchor_at=datetime.now(timezone.utc),
+                    origin_label="cube",
+                    match_snippet=None,
+                    match_score=None,
+                ),
+                None,
+                "9",
+            )
+            for _session_id in requested
+        ]
+
+    monkeypatch.setattr(agents_search, "search_storage_v2_rows", search_rows)
+    monkeypatch.setattr(agents_search, "_semantic_recall_matches", semantic_matches)
+    monkeypatch.setattr(timeline_router, "read_live_catalog_sessions", read_sessions)
+
+    result = await timeline_router._search_storage_v2_timeline(
+        owner_id=7,
+        params=_params(query="needle", mode="semantic"),
+    )
+
+    # A request that named one lane must not run the other, or "finds by
+    # meaning" is just keyword search wearing a different label.
+    assert calls == ["dense"]
+    assert result.lanes == ["dense"]
+    assert result.sessions[0].head.match_snippet == "a paraphrase"
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_browser_search_hybrid_fuses_both_lanes(monkeypatch):
+    lexical_only = uuid4()
+    shared = uuid4()
+    dense_only = uuid4()
+
+    async def search_rows(**_kwargs):
+        return [
+            {"session_id": str(lexical_only), "content_snippet": "lex", "rank": 1.0},
+            {"session_id": str(shared), "content_snippet": "lex", "rank": 2.0},
+        ]
+
+    async def semantic_matches(**_kwargs):
+        return [
+            RecallMatch(session_id=str(shared), chunk_index=0, score=0.9, evidence="dense"),
+            RecallMatch(session_id=str(dense_only), chunk_index=0, score=0.8, evidence="dense"),
+        ]
+
+    def read_sessions(requested, *, owner_id):
+        return [
+            (
+                SessionResponse.model_construct(
+                    id=str(session_id),
+                    user_hidden_from_timeline=False,
+                    environment="development",
+                    user_messages=1,
+                    timeline_anchor_at=datetime.now(timezone.utc),
+                    origin_label="cube",
+                    match_snippet=None,
+                    match_score=None,
+                ),
+                None,
+                "9",
+            )
+            for session_id in requested
+        ]
+
+    monkeypatch.setattr(agents_search, "search_storage_v2_rows", search_rows)
+    monkeypatch.setattr(agents_search, "_semantic_recall_matches", semantic_matches)
+    monkeypatch.setattr(timeline_router, "read_live_catalog_sessions", read_sessions)
+
+    result = await timeline_router._search_storage_v2_timeline(
+        owner_id=7,
+        params=_params(query="needle", mode="hybrid"),
+    )
+
+    assert result.lanes == ["lexical", "dense"]
+    assert result.degraded == []
+    # Agreement outranks either lane's solo hits, and every ranked id survives.
+    assert [card.head.id for card in result.sessions] == [str(shared), str(lexical_only), str(dense_only)]
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_browser_search_hybrid_reports_a_dead_lane(monkeypatch):
+    session_id = uuid4()
+
+    async def search_rows(**_kwargs):
+        return [{"session_id": str(session_id), "content_snippet": "lex", "rank": 1.0}]
+
+    async def semantic_matches(**_kwargs):
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "search_unavailable", "message": "The derived search index is unavailable."},
+        )
+
+    def read_sessions(requested, *, owner_id):
+        return [
+            (
+                SessionResponse.model_construct(
+                    id=str(session_id),
+                    user_hidden_from_timeline=False,
+                    environment="development",
+                    user_messages=1,
+                    timeline_anchor_at=datetime.now(timezone.utc),
+                    origin_label="cube",
+                    match_snippet=None,
+                    match_score=None,
+                ),
+                None,
+                "9",
+            )
+            for _session_id in requested
+        ]
+
+    monkeypatch.setattr(agents_search, "search_storage_v2_rows", search_rows)
+    monkeypatch.setattr(agents_search, "_semantic_recall_matches", semantic_matches)
+    monkeypatch.setattr(timeline_router, "read_live_catalog_sessions", read_sessions)
+
+    result = await timeline_router._search_storage_v2_timeline(
+        owner_id=7,
+        params=_params(query="needle", mode="hybrid"),
+    )
+
+    # A half-served hybrid is a result the caller can judge; the same request
+    # must never come back looking like a complete two-lane answer.
+    assert result.lanes == ["lexical"]
+    assert [failure.lane for failure in result.degraded] == ["dense"]
+    assert result.degraded[0].code == "search_unavailable"
+    assert result.total == 1
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_browser_search_rejects_an_unknown_mode(monkeypatch):
+    async def search_rows(**_kwargs):
+        pytest.fail("an unknown mode must not reach the index")
+
+    monkeypatch.setattr(agents_search, "search_storage_v2_rows", search_rows)
+
+    with pytest.raises(HTTPException) as raised:
+        await timeline_router._search_storage_v2_timeline(
+            owner_id=7,
+            params=_params(query="needle", mode="fuzzy"),
+        )
+
+    assert raised.value.status_code == 422
+    assert raised.value.detail["code"] == "search_mode_unknown"
 
 
 def test_canonical_timeline_projects_all_rows_at_snapshot_commit(monkeypatch):

@@ -29,12 +29,37 @@ struct LonghouseAPITests {
     }
 
     @Test
-    func searchSessionsURLUsesBrowserAuthTimelineRoute() throws {
+    func lexicalSearchUsesTheBrowserTimelineRoute() throws {
+        // Both lanes authenticate with the browser cookie, so both MUST hit
+        // /api/timeline/*, NOT the device-token-gated /api/agents/* sibling.
         let baseURL = try #require(URL(string: "https://demo.longhouse.ai"))
 
-        let url = LonghouseAPI.searchSessionsURL(
+        let url = LonghouseAPI.lexicalSearchURL(
             baseURL: baseURL,
             query: "provider channel",
+            daysBack: 90,
+            limit: 25
+        )
+        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+
+        #expect(components.path == "/api/timeline/sessions")
+        #expect(!components.path.contains("/agents/"))
+        #expect(components.queryItems == [
+            URLQueryItem(name: "query", value: "provider channel"),
+            URLQueryItem(name: "days_back", value: "90"),
+            URLQueryItem(name: "limit", value: "25"),
+            URLQueryItem(name: "mode", value: "lexical"),
+        ])
+    }
+
+    @Test
+    func semanticSearchUsesTheDenseLaneRoute() throws {
+        let baseURL = try #require(URL(string: "https://demo.longhouse.ai"))
+
+        let url = LonghouseAPI.semanticSearchURL(
+            baseURL: baseURL,
+            query: "provider channel",
+            daysBack: 90,
             limit: 25
         )
         let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
@@ -43,7 +68,7 @@ struct LonghouseAPITests {
         #expect(!components.path.contains("/agents/"))
         #expect(components.queryItems == [
             URLQueryItem(name: "query", value: "provider channel"),
-            URLQueryItem(name: "days_back", value: "365"),
+            URLQueryItem(name: "days_back", value: "90"),
             URLQueryItem(name: "limit", value: "25"),
             URLQueryItem(name: "context_mode", value: "forensic"),
         ])

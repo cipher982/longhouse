@@ -6,6 +6,14 @@
 
 import Foundation
 
+struct APIMachineSearchLaneFailure: Codable, Hashable, Sendable {
+    let lane: String
+    let statusCode: Int
+    let code: String
+    let message: String
+    let reason: String?
+}
+
 struct APILastTurnResponse: Codable, Hashable, Sendable {
     let durationMs: Int
     let endedAt: String
@@ -442,6 +450,8 @@ struct APITimelineSessionsListResponse: Codable, Hashable, Sendable {
     let sessions: [APITimelineSessionCardResponse]
     let total: Int
     let hasRealSessions: Bool?
+    let lanes: [String]?
+    let degraded: [APIMachineSearchLaneFailure]?
 }
 
 struct APISessionThreadResponse: Codable, Hashable, Sendable {
