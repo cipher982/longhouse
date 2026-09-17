@@ -73,6 +73,12 @@ DEFAULT_MANAGED_SESSION_LEASE_TTL_MS = 15 * 60 * 1000
 MAX_MANAGED_SESSION_LEASE_TTL_MS = 60 * 60 * 1000
 MAX_MACHINE_EVIDENCE_FACTS_PER_FAMILY = 2_048
 MAX_REDUCER_EVIDENCE_FACTS = 256
+# Transport budget for one heartbeat's machine evidence. It sits well under
+# catalogd's 8 MiB RPC frame while leaving room for the machine's own fact
+# growth; evidence over budget is dropped by itself and the liveness stamp
+# still commits, because an overgrown evidence payload must never be able to
+# take a machine's liveness down with it.
+MAX_MACHINE_EVIDENCE_BYTES = 4 * 1024 * 1024
 MANAGED_SESSION_LEASE_STATES = {"attached", "detached", "degraded"}
 # Metric label bucketing only (see _managed_lease_provider_label). Derived so a
 # provider cannot ship first-tier and have its leases reported as "other",
@@ -450,6 +456,29 @@ class HeartbeatIn(BaseModel):
             return HistoryImportSnapshot.unavailable()
 
 
+def _bounded_machine_evidence(evidence, *, device_id: str) -> dict | None:
+    """Serialized evidence under the transport budget, or None with a warning.
+
+    Liveness outranks evidence: a machine whose evidence outgrows the budget
+    keeps reporting in, and the drop is visible here rather than as a machine
+    that silently stops beating.
+    """
+
+    if evidence is None:
+        return None
+    serialized = evidence.model_dump(mode="json", exclude_none=True)
+    size = len(json.dumps(serialized, separators=(",", ":")).encode("utf-8"))
+    if size > MAX_MACHINE_EVIDENCE_BYTES:
+        logger.warning(
+            "Dropping oversized machine evidence device=%s bytes=%d budget=%d",
+            device_id,
+            size,
+            MAX_MACHINE_EVIDENCE_BYTES,
+        )
+        return None
+    return serialized
+
+
 def _machine_process_snapshot_complete(payload: HeartbeatIn, scope_name: str) -> bool:
     evidence = payload.machine_evidence
     if evidence is None:
@@ -822,11 +851,18 @@ async def ingest_heartbeat(
                         pass
 
                 wire_bytes = len(await request.body())
+                # The stamp's ``raw_json`` is a bounded forensic copy of the
+                # payload (catalogd caps it at 512 KiB). Machine evidence is
+                # bulk fact data -- hundreds of kilobytes on a busy machine --
+                # so it travels as its own catalogd parameter and never rides
+                # this copy: smuggling it here made every heartbeat from a
+                # machine whose evidence outgrew the cap fail validation, and
+                # a failed heartbeat is a machine reported offline.
                 payload_for_retention = payload.model_dump(mode="json")
                 if "history_import" not in payload.model_fields_set:
                     payload_for_retention.pop("history_import", None)
-                if payload.machine_evidence is not None:
-                    payload_for_retention["machine_evidence"] = payload.machine_evidence.model_dump(mode="json", exclude_none=True)
+                payload_for_retention.pop("machine_evidence", None)
+                machine_evidence = _bounded_machine_evidence(payload.machine_evidence, device_id=device_id)
                 payload_json = json.dumps(payload_for_retention)
                 agents_heartbeat_payload_bytes.observe(wire_bytes)
                 set_span_attributes(
@@ -958,6 +994,7 @@ async def ingest_heartbeat(
                                 key: (value.isoformat() if isinstance(value, datetime) else value)
                                 for key, value in heartbeat_stamp_kwargs.items()
                             },
+                            "machine_evidence": machine_evidence,
                             "managed_leases": [lease.model_dump(mode="json") for lease in _managed_leases],
                             "managed_leases_present": _managed_leases_present,
                             "owner_id": getattr(_token, "owner_id", None),
@@ -994,6 +1031,16 @@ async def ingest_heartbeat(
                     ) from exc
                 except CatalogRemoteError as exc:
                     request_status_label = "write_backpressure" if exc.retryable else "internal_error"
+                    # A refused heartbeat is a machine that stops looking
+                    # alive, so the reason belongs in the log next to the
+                    # device it silenced rather than only in the response.
+                    logger.warning(
+                        "Heartbeat rejected device=%s code=%s retryable=%s reason=%s",
+                        _device_id,
+                        exc.code,
+                        exc.retryable,
+                        exc,
+                    )
                     raise HTTPException(
                         status_code=(status.HTTP_503_SERVICE_UNAVAILABLE if exc.retryable else status.HTTP_500_INTERNAL_SERVER_ERROR),
                         detail={

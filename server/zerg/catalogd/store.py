@@ -2308,6 +2308,7 @@ class CatalogStore:
         managed_leases: list[dict[str, Any]],
         managed_leases_present: bool,
         owner_id: int | None,
+        machine_evidence: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Atomically persist and reconcile one hosted Machine Agent heartbeat.
 
@@ -2431,6 +2432,7 @@ class CatalogStore:
             shadow_reducer = _apply_shadow_reducer(
                 connection,
                 heartbeat=heartbeat,
+                machine_evidence=machine_evidence,
                 received_at=received_at,
                 commit_seq=commit_seq,
             )
@@ -2438,6 +2440,7 @@ class CatalogStore:
             shadow_parity, next_shadow_parity_delta_count = _apply_shadow_parity(
                 connection,
                 heartbeat=heartbeat,
+                machine_evidence=machine_evidence,
                 managed_leases_present=managed_leases_present,
                 received_at=received_at,
                 commit_seq=commit_seq,
@@ -14647,6 +14650,7 @@ def _apply_shadow_reducer(
     connection,
     *,
     heartbeat: dict[str, Any],
+    machine_evidence: dict[str, Any] | None,
     received_at: datetime,
     commit_seq: int,
 ) -> dict[str, Any]:
@@ -14655,7 +14659,9 @@ def _apply_shadow_reducer(
     timer = _StageTimer("shadow_reducer")
     try:
         with connection.begin_nested():
-            evidence_status, facts = _shadow_facts_from_heartbeat(heartbeat)
+            evidence_status, facts = _shadow_facts_from_heartbeat(
+                machine_evidence=machine_evidence,
+            )
             if evidence_status != "ready":
                 return {"status": evidence_status}
             timer.mark("extract_facts")
@@ -14918,6 +14924,7 @@ def _apply_shadow_parity(
     connection,
     *,
     heartbeat: dict[str, Any],
+    machine_evidence: dict[str, Any] | None,
     managed_leases_present: bool,
     received_at: datetime,
     commit_seq: int,
@@ -14932,7 +14939,9 @@ def _apply_shadow_parity(
         return {"status": "legacy_unavailable"}, known_delta_count
     try:
         with connection.begin_nested():
-            evidence_status, facts = _shadow_facts_from_heartbeat(heartbeat)
+            evidence_status, facts = _shadow_facts_from_heartbeat(
+                machine_evidence=machine_evidence,
+            )
             if evidence_status != "ready":
                 return {"status": evidence_status}, known_delta_count
             candidates = {
@@ -15045,15 +15054,22 @@ def _apply_shadow_parity(
         return {"status": "failed", "reason": "invalid_evidence"}, original_delta_count
 
 
-def _shadow_facts_from_heartbeat(heartbeat: dict[str, Any]):
-    raw_json = heartbeat.get("raw_json")
-    if not isinstance(raw_json, str) or not raw_json:
+def _shadow_facts_from_heartbeat(
+    *,
+    machine_evidence: dict[str, Any] | None,
+):
+    """Facts for this heartbeat's schema-v3 evidence, or why there are none.
+
+    Evidence arrives as its own argument. It used to ride the stamp's
+    ``raw_json``, which is a size-capped forensic copy of the payload, so a
+    machine whose evidence grew past the cap had every heartbeat refused --
+    liveness died with the evidence it carried.
+    """
+
+    evidence = machine_evidence
+    if not isinstance(evidence, dict):
         return "no_evidence", []
-    payload = json.loads(raw_json)
-    if not isinstance(payload, dict) or "machine_evidence" not in payload:
-        return "no_evidence", []
-    evidence = payload["machine_evidence"]
-    if not isinstance(evidence, dict) or evidence.get("schema_version") != 3:
+    if evidence.get("schema_version") != 3:
         return "unsupported_schema", []
     facts = reducer_facts_from_machine_evidence(evidence)
     if len(facts) > MAX_REDUCER_FACTS:

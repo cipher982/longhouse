@@ -852,19 +852,56 @@ def test_heartbeat_accepts_and_retains_typed_machine_evidence_without_reducing_i
     )
     assert response.status_code == 204, response.text
 
-    retained = json.loads(_one_stamp()["raw_json"])["machine_evidence"]
-    assert retained["schema_version"] == 1
-    assert {fact["provider"] for fact in retained["process"]} == {
-        "codex",
-        "claude",
-        "opencode",
-        "cursor",
-        "antigravity",
-    }
-    assert retained["process"][0]["process_start_time"] == "Thu May  8 11:59:00 2026"
+    # Evidence travels as its own field and is deliberately NOT duplicated into
+    # the stamp's size-capped forensic copy: a machine whose evidence outgrew
+    # that cap used to have every heartbeat refused, which reads as a machine
+    # that went offline.
+    retained = json.loads(_one_stamp()["raw_json"])
+    assert "machine_evidence" not in retained
+    assert retained["version"] == "phase-2"
     # Typed control evidence is validation-only. It must not silently become a
     # second lifecycle/control reducer.
     assert _leases() == []
+
+
+def test_heartbeat_lands_when_machine_evidence_outgrows_the_stamp_copy(live_catalog, live_catalog_client):
+    """A large evidence payload must not cost the machine its liveness.
+
+    Evidence used to ride the stamp's ``raw_json``, which catalogd validates
+    against a 512 KiB cap. A real machine's evidence crossed that cap (hosted
+    ``cinder`` on 2026-09-17 sent 562 KiB) and every heartbeat became a
+    non-retryable catalog failure, so the machine read as offline for as long
+    as its evidence stayed large.
+    """
+
+    evidence = _machine_evidence_payload()
+    template = evidence["process"][0]
+    evidence["process"] = [
+        {**template, "provider": "codex", "pid": 1_000 + index, "cwd": f"/tmp/oversize/{index:05d}"} for index in range(2_000)
+    ]
+    assert len(json.dumps(evidence)) > 512 * 1024
+
+    response = live_catalog_client.post(
+        "/agents/heartbeat",
+        headers=_headers(live_catalog),
+        json={"version": "oversize-evidence", "daemon_pid": 42, "machine_evidence": evidence},
+    )
+    assert response.status_code == 204, response.text
+
+    stamp = _one_stamp()
+    assert stamp["version"] == "oversize-evidence"
+    assert "machine_evidence" not in json.loads(stamp["raw_json"])
+
+
+def test_heartbeat_refuses_evidence_over_the_transport_budget(monkeypatch):
+    from zerg.routers.heartbeat import HeartbeatIn
+    from zerg.routers.heartbeat import _bounded_machine_evidence
+
+    payload = HeartbeatIn.model_validate({"version": "budget", "daemon_pid": 1, "machine_evidence": _machine_evidence_payload()})
+    monkeypatch.setattr("zerg.routers.heartbeat.MAX_MACHINE_EVIDENCE_BYTES", 256)
+
+    assert _bounded_machine_evidence(payload.machine_evidence, device_id=DEVICE_ID) is None
+    assert _bounded_machine_evidence(None, device_id=DEVICE_ID) is None
 
 
 def test_heartbeat_accepts_reducer_grade_identity_without_promoting_authority(live_catalog, live_catalog_client):
@@ -882,10 +919,9 @@ def test_heartbeat_accepts_reducer_grade_identity_without_promoting_authority(li
     )
     assert response.status_code == 204, response.text
 
-    retained = json.loads(_one_stamp()["raw_json"])["machine_evidence"]
-    assert retained["schema_version"] == 2
-    assert retained["identities"][0]["subject_key"].startswith("process:")
-    assert len(validate_machine_evidence_identities(retained)) == 1
+    retained = json.loads(_one_stamp()["raw_json"])
+    assert "machine_evidence" not in retained
+    assert len(validate_machine_evidence_identities(evidence)) == 1
     assert _leases() == []
 
 
@@ -1056,8 +1092,9 @@ def test_heartbeat_accepts_live_omp_owner_with_invalid_resume_reason(live_catalo
     )
     assert response.status_code == 204, response.text
 
-    retained = json.loads(_one_stamp()["raw_json"])["machine_evidence"]
-    assert retained["continuation"][0]["unavailable_reason"] == unavailable_reason
+    retained = json.loads(_one_stamp()["raw_json"])
+    assert "machine_evidence" not in retained
+    assert evidence["continuation"][0]["unavailable_reason"] == unavailable_reason
     heads = [row for row in _catalog_rows(FactHead.__table__) if row["family"] == "control" and row["session_id"] == session_id]
     assert len(heads) == 1
     assert heads[0]["subject_key"] == f"connection:{connection_id}:{lease_generation}"
