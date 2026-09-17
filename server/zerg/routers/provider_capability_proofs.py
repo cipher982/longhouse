@@ -44,6 +44,9 @@ from zerg.services.provider_capability_proof import v3_provenance_gaps
 from zerg.services.provider_capability_proof_store import ProofPublication
 from zerg.services.provider_capability_proof_store import ProviderCapabilityProofStore
 from zerg.services.provider_capability_schema import load_capability_assertions
+from zerg.services.provider_capability_schema import load_chip_edge_assertions
+from zerg.services.provider_chip_edges import UNPROVEN
+from zerg.services.provider_chip_edges import rollup_state
 
 router = APIRouter(tags=["provider-capability-proofs"])
 
@@ -602,6 +605,23 @@ def get_provider_capability_proof_blob(
     )
 
 
+def _published_records() -> tuple[list[ProviderCapabilityProofRecord], dict[str, tuple[str, ...]]]:
+    store = _proof_store()
+    all_records: list[ProviderCapabilityProofRecord] = []
+    integrity_reasons: dict[str, tuple[str, ...]] = {}
+    for provider in sorted(managed_provider_names()):
+        all_records.extend(store.records(provider))
+        integrity_reasons.update(
+            {item.artifact_id: item.reason_codes for item in store.integrity_report(provider).artifacts if not item.admissible}
+        )
+    legacy_store = _legacy_proof_store()
+    for provider in sorted(managed_provider_names()):
+        legacy_records = legacy_store.records(provider)
+        all_records.extend(legacy_records)
+        integrity_reasons.update({record.artifact_id: ("proof_schema_legacy", "historical_schema_v2") for record in legacy_records})
+    return all_records, integrity_reasons
+
+
 def build_capability_projection_payload(
     *,
     expected_longhouse_sha: str | None = None,
@@ -618,19 +638,7 @@ def build_capability_projection_payload(
     surface (GET /admin/provider-capabilities) so there is exactly one
     projection code path, not two that can drift.
     """
-    store = _proof_store()
-    all_records: list[ProviderCapabilityProofRecord] = []
-    integrity_reasons: dict[str, tuple[str, ...]] = {}
-    for provider in sorted(managed_provider_names()):
-        all_records.extend(store.records(provider))
-        integrity_reasons.update(
-            {item.artifact_id: item.reason_codes for item in store.integrity_report(provider).artifacts if not item.admissible}
-        )
-    legacy_store = _legacy_proof_store()
-    for provider in sorted(managed_provider_names()):
-        legacy_records = legacy_store.records(provider)
-        all_records.extend(legacy_records)
-        integrity_reasons.update({record.artifact_id: ("proof_schema_legacy", "historical_schema_v2") for record in legacy_records})
+    all_records, integrity_reasons = _published_records()
     try:
         assertions = load_capability_assertions()
     except SystemExit as exc:
@@ -705,3 +713,78 @@ def list_provider_capabilities(
     one row, whether or not it has ever been proven -- the schema is the
     source of truth for what should exist."""
     return build_capability_projection_payload()
+
+
+CHIP_CERTIFICATION_VERSION = "provider-chip-certification-v1"
+_CERTIFICATION_TTL_SECONDS = 60.0
+_certification_cache: tuple[float, dict[str, Any]] | None = None
+
+
+def build_chip_certification_payload(*, now: datetime | None = None) -> dict[str, Any]:
+    """The *certified* landing layer: each chip's proof edges joined to the
+    factory proofs this Runtime Host holds.
+
+    A chip with no edge is ``unproven``. Otherwise the per-requirement
+    projection statuses roll up (`provider_chip_edges.rollup_state`): all
+    admissible passes certify it; an older admissible pass survives a newer
+    failure until it ages out, so one red candidate never revokes a released
+    claim. Rows carry the exact identity and the Longhouse SHA and provider
+    version the supporting proof ran against, so a claim is scoped to what was
+    tested rather than to "latest".
+    """
+
+    edges = load_chip_edge_assertions()
+    all_records, integrity_reasons = _published_records()
+    flat = tuple(assertion for chips in edges.values() for chip in chips.values() if chip for assertion in chip)
+    projected = project_capabilities(flat, all_records, now=now, integrity_reasons=integrity_reasons)
+    by_identity = {(p.provider, p.capability, p.scenario_id, p.assertion_id, p.variant): p for p in projected}
+    moment = (now or datetime.now(UTC)).astimezone(UTC)
+    providers: list[dict[str, Any]] = []
+    for provider in sorted(edges):
+        chips: dict[str, Any] = {}
+        for chip, assertions in edges[provider].items():
+            if assertions is None:
+                chips[chip] = {"state": UNPROVEN, "requirements": []}
+                continue
+            rows = []
+            for assertion in assertions:
+                p = by_identity[
+                    (assertion.provider, assertion.capability, assertion.scenario_id, assertion.assertion_id, assertion.variant)
+                ]
+                rows.append(
+                    {
+                        "declared_in": p.capability,
+                        "scenario_id": p.scenario_id,
+                        "assertion_id": p.assertion_id,
+                        "variant": p.variant,
+                        "proof_status": p.proof_status,
+                        "latest_outcome": p.latest_outcome,
+                        "proven_at": p.generated_at if p.proof_status == "pass" else None,
+                        "longhouse_git_sha": p.longhouse_git_sha,
+                        "provider_version": p.provider_version,
+                        "accepted_epoch_id": p.accepted_epoch_id,
+                        "max_age_seconds": assertion.max_age_seconds,
+                    }
+                )
+            chips[chip] = {"state": rollup_state(row["proof_status"] for row in rows), "requirements": rows}
+        providers.append({"provider": provider, "chips": chips})
+    return {
+        "schema_version": 1,
+        "artifact_kind": "provider_chip_certification",
+        "certification_version": CHIP_CERTIFICATION_VERSION,
+        "generated_at": moment.isoformat().replace("+00:00", "Z"),
+        "providers": providers,
+    }
+
+
+@router.get("/public/provider-certification")
+def get_provider_certification(response: Response) -> dict[str, Any]:
+    """Unauthenticated: the landing page reads this. It exposes proof
+    status and identities only -- never evidence blobs or artifact paths."""
+
+    global _certification_cache
+    clock = time.monotonic()
+    if _certification_cache is None or clock - _certification_cache[0] > _CERTIFICATION_TTL_SECONDS:
+        _certification_cache = (clock, build_chip_certification_payload())
+    response.headers["Cache-Control"] = f"public, max-age={int(_CERTIFICATION_TTL_SECONDS)}"
+    return _certification_cache[1]

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { certifiedChips, useProviderCertification, type ProviderCertificationPayload } from "../../lib/providerCertification";
 import { getLaunchProviderSupportList } from "../../lib/providers";
 
 interface FAQ {
@@ -6,19 +7,23 @@ interface FAQ {
   answer: string;
 }
 
-function strongestProvidersAnswer(): string {
-  // Derived from the same proof edges as the provider list, never hand-written.
+function strongestProvidersAnswer(certification: ProviderCertificationPayload | null): string {
+  // Derived from the same certified chips as the provider list, never hand-written.
   const full = getLaunchProviderSupportList()
-    .filter(({ proven }) => proven.launchAndSend && proven.interrupt && proven.steerMidTurn && proven.resume)
+    .filter(({ id, proven }) => {
+      const c = certifiedChips(id, proven, certification);
+      return c.launchAndSend && c.interrupt && c.steerMidTurn && c.resume;
+    })
     .map((provider) => provider.marketingName);
   const lead =
     full.length === 0
       ? "No provider has every control capability release-proven yet."
       : `${full.join(", ")} ${full.length === 1 ? "has" : "have"} launch, send, interrupt, mid-turn steering, and resume all release-proven.`;
-  return `${lead} Each chip in the provider list above lights only where the provider factory runs a live test against the real binary.`;
+  return `${lead} Each chip in the provider list above lights only while the provider factory has a current passing live test against the real binary.`;
 }
 
-const faqs: FAQ[] = [
+function buildFaqs(certification: ProviderCertificationPayload | null): FAQ[] {
+  return [
   {
     question: "Is Longhouse another coding agent?",
     answer:
@@ -41,7 +46,7 @@ const faqs: FAQ[] = [
   },
   {
     question: "Which providers are strongest today?",
-    answer: strongestProvidersAnswer(),
+    answer: strongestProvidersAnswer(certification),
   },
   {
     question: "Where is my data stored?",
@@ -49,9 +54,11 @@ const faqs: FAQ[] = [
       "A self-hosted archive lives in SQLite on the server you choose. With hosted, the archive lives on the private Longhouse server we operate for you.",
   },
 ];
+}
 
 export function TrustSection() {
   const [openIndex, setOpenIndex] = useState<number | null>(null);
+  const faqs = buildFaqs(useProviderCertification());
 
   const toggleFAQ = (index: number) => {
     setOpenIndex(openIndex === index ? null : index);

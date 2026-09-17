@@ -31,6 +31,15 @@ CONTRACTS = REPO / "server" / "zerg" / "config" / "managed_provider_contracts.js
 ENTRYPOINTS = REPO / "config" / "native_device_entrypoints.json"
 TS_OUT = REPO / "web" / "src" / "generated" / "provider-capabilities.ts"
 
+# The chip -> proof edge definition is shared with the Runtime Host's
+# certification rollup, so the covered and certified layers read one graph.
+sys.path.insert(0, str(REPO / "server"))
+from zerg.services.provider_chip_edges import CHIP_CAPABILITIES  # noqa: E402,F401
+from zerg.services.provider_chip_edges import CHIP_OPERATIONS  # noqa: E402,F401
+from zerg.services.provider_chip_edges import capability_proven  # noqa: E402,F401
+from zerg.services.provider_chip_edges import chip_states  # noqa: E402
+from zerg.services.provider_chip_edges import operation_proven  # noqa: E402,F401
+
 
 def _native_launch_commands() -> dict[str, str]:
     """`longhouse <provider>` per provider, for entrypoints that actually ship.
@@ -53,71 +62,6 @@ def _native_launch_commands() -> dict[str, str]:
     return out
 
 
-# Landing chip -> the contract operations whose factory proof lights it. A chip
-# is only as proven as every edge behind it; the runtime booleans and
-# implementation dispositions stay authoritative for control and are never
-# read here. See control-plane docs/specs/provider-chip-proof-graph.md.
-CHIP_OPERATIONS: dict[str, tuple[str, ...]] = {
-    "launchAndSend": ("launch_local", "send_input"),
-    "interrupt": ("interrupt", "terminate"),
-    "steerMidTurn": ("steer_active_turn",),
-}
-# Chips proven by a capability rather than an operation.
-CHIP_CAPABILITIES: dict[str, str] = {
-    "resume": "session.resume.helm",
-    "search": "session.transcript.search",
-}
-
-
-def _live_token_proof(assertions: object) -> bool:
-    """Every required assertion demands a real provider turn.
-
-    A `live_no_token` cell proves a binary's surface, not that a user's
-    instruction produced provider work, so it cannot light a chip.
-    """
-
-    if not isinstance(assertions, list) or not assertions:
-        return False
-    return all(
-        isinstance(assertion, dict) and assertion.get("acceptable_evidence") == ["live_token"]
-        for assertion in assertions
-    )
-
-
-def operation_proven(provider: dict, operation: str) -> bool:
-    evidence = (provider.get("operation_evidence") or {}).get(operation) or {}
-    return (
-        provider.get(operation) is True
-        and evidence.get("disposition") == "implemented"
-        and _live_token_proof(evidence.get("required_assertions"))
-    )
-
-
-def capability_proven(provider: dict, capability: str) -> bool:
-    """A capability lights its chip through its live-token assertions.
-
-    Capabilities legitimately pair live cells with hermetic invariants (resume
-    idempotency, single owner); those still gate the capability in the factory
-    but are not what a user-visible claim rests on.
-    """
-
-    declaration = (provider.get("capabilities") or {}).get(capability) or {}
-    live = [
-        assertion
-        for assertion in declaration.get("required_assertions") or []
-        if isinstance(assertion, dict) and assertion.get("acceptable_evidence") == ["live_token"]
-    ]
-    return declaration.get("disposition") == "implemented" and _live_token_proof(live)
-
-
-def chip_states(provider: dict) -> dict[str, bool]:
-    chips = {chip: all(operation_proven(provider, op) for op in ops) for chip, ops in CHIP_OPERATIONS.items()}
-    for chip, capability in CHIP_CAPABILITIES.items():
-        chips[chip] = capability_proven(provider, capability)
-    chips["resume"] = chips["resume"] and provider.get("can_resume") is True
-    return chips
-
-
 def _rows() -> list[dict[str, object]]:
     payload = json.loads(CONTRACTS.read_text(encoding="utf-8"))
     launch_commands = _native_launch_commands()
@@ -125,10 +69,7 @@ def _rows() -> list[dict[str, object]]:
     for provider in payload["providers"]:
         name = str(provider["provider"])
         capabilities = provider.get("capabilities") or {}
-        console_turn_admitted = (
-            isinstance(capabilities, dict)
-            and "session.turn.start" in capabilities
-        )
+        console_turn_admitted = isinstance(capabilities, dict) and "session.turn.start" in capabilities
         supports = provider.get("machine_control_supports") or []
         turn_interrupt = f"{name}.turn_interrupt" in supports
         rows.append(
@@ -138,8 +79,7 @@ def _rows() -> list[dict[str, object]]:
                 # Console lane, not just the live one: Pi is the case that forces
                 # it -- `longhouse pi` ships and its Console turns start and
                 # interrupt. These never light a landing chip; `proven` does.
-                "launchAndSend": bool(provider["launch_local"])
-                and (bool(provider["send_input"]) or bool(provider["turn_start"])),
+                "launchAndSend": bool(provider["launch_local"]) and (bool(provider["send_input"]) or bool(provider["turn_start"])),
                 "interrupt": (bool(provider["interrupt"]) and bool(provider["terminate"])) or turn_interrupt,
                 "steerMidTurn": bool(provider["steer_active_turn"]),
                 "resume": bool(provider["can_resume"]),
@@ -198,12 +138,12 @@ def render_ts() -> str:
         command_literal = "null" if command is None else f'"{command}"'
         lines.extend(
             [
-                f'  {row["id"]}: {{',
+                f"  {row['id']}: {{",
                 f'    id: "{row["id"]}",',
-                f'    launchAndSend: {str(row["launchAndSend"]).lower()},',
-                f'    interrupt: {str(row["interrupt"]).lower()},',
-                f'    steerMidTurn: {str(row["steerMidTurn"]).lower()},',
-                f'    resume: {str(row["resume"]).lower()},',
+                f"    launchAndSend: {str(row['launchAndSend']).lower()},",
+                f"    interrupt: {str(row['interrupt']).lower()},",
+                f"    steerMidTurn: {str(row['steerMidTurn']).lower()},",
+                f"    resume: {str(row['resume']).lower()},",
                 "    proven: {",
                 *(f"      {chip}: {str(value).lower()}," for chip, value in row["proven"].items()),
                 "    },",
