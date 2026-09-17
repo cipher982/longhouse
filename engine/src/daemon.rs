@@ -1745,12 +1745,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             }
                             Err(err) => {
                                 last_runtime_truth_signature = None;
-                                // A refused heartbeat is a machine that stops
-                                // looking alive to every client that reads it,
-                                // so the failure is reported rather than
-                                // buried: hosted `cinder` lost 20 minutes of
-                                // heartbeats to a 500 nobody could see.
-                                tracing::warn!(
+                                tracing::debug!(
                                     reason = result.reason,
                                     "Runtime truth snapshot send failed: {}",
                                     err
