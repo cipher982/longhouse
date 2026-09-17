@@ -872,10 +872,11 @@ def _assert_provider_inflight_disconnect_fails_cleanly(
             cookies=cookies,
         )
 
-        # The engine dropped mid-command: the client must see a clean gateway
-        # error, never a false "sent".
+        # The engine dropped mid-command: the provider may or may not have
+        # received the text, so the client must see an explicit unknown
+        # outcome, never a false "sent" and never a replay-inviting failure.
         assert resp.status_code == 502, resp.text
-        assert resp.json()["detail"]["error_code"] == "send_failed"
+        assert resp.json()["detail"]["error_code"] == "delivery_unknown"
         assert len(websocket.sent) == 1
         assert websocket.sent[0]["command_type"] == "session.send_text"
 
@@ -887,7 +888,9 @@ def _assert_provider_inflight_disconnect_fails_cleanly(
         )
         # The crucial "no babysitting" guarantee: a dropped send is NOT
         # silently marked delivered.
-        assert receipt["status"] == INPUT_STATUS_FAILED
+        # An indeterminate dispatch keeps its claim (status delivering with a
+        # delivery_unknown error) so a retry cannot replay the text blindly.
+        assert receipt["status"] == INPUT_STATUS_DELIVERING
         assert receipt["status"] != INPUT_STATUS_DELIVERED
         assert receipt["error_json"]
         # Lock must be released so the next steer attempt is not wedged.
