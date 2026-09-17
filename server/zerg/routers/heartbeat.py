@@ -434,10 +434,12 @@ class HeartbeatIn(BaseModel):
     unmanaged_session_bindings: list[UnmanagedSessionBindingIn] = Field(default_factory=list)
     # Phase 2 typed observation envelope. Validation + raw retention only;
     # legacy session arrays remain reducer authority during shadow comparison.
-    # Opaque until something is going to use it: shape, self-consistency, and
-    # size are checked by `_accepted_machine_evidence`, which drops bad evidence
-    # instead of refusing the heartbeat that carried it.
-    machine_evidence: dict[str, Any] | None = None
+    # Opaque until something is going to use it, and deliberately any JSON
+    # value: shape, self-consistency, and size are settled by
+    # `_accepted_machine_evidence`, which drops what it cannot use instead of
+    # refusing the heartbeat that carried it. A type here would put a 422 in
+    # front of that decision and silence the machine instead.
+    machine_evidence: Any = None
     # Canonical engine-resolved local session snapshot. When present, server
     # ingest prefers this over legacy managed/unmanaged arrays for identity.
     sessions: list[ResolvedLocalSessionIn] = Field(default_factory=list)

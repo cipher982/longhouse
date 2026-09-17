@@ -6180,13 +6180,21 @@ class CatalogStore:
                         raise ValueError("shadow outcome is missing")
                     reducer_status = reducer.get("status")
                     parity_status = parity.get("status")
-                    if reducer_status not in {"disabled", "no_evidence", "unsupported_schema", "applied", "failed"}:
+                    if reducer_status not in {
+                        "disabled",
+                        "no_evidence",
+                        "unsupported_schema",
+                        "oversize_evidence",
+                        "applied",
+                        "failed",
+                    }:
                         raise ValueError("unknown shadow reducer status")
                     if parity_status not in {
                         "disabled",
                         "legacy_unavailable",
                         "no_evidence",
                         "unsupported_schema",
+                        "oversize_evidence",
                         "compared",
                         "failed",
                     }:

@@ -1177,6 +1177,11 @@ def test_heartbeat_lands_and_drops_machine_evidence_it_cannot_use(live_catalog, 
     oversized["process"] = [process[1]] * 2_049
     invalid_evidence.append(oversized)
 
+    # Any JSON value: a machine that sends a list where a document belongs has
+    # still told Longhouse it is alive.
+    invalid_evidence.append([{"process": []}])
+    invalid_evidence.append("not-a-document")
+
     for index, evidence in enumerate(invalid_evidence):
         response = live_catalog_client.post(
             "/agents/heartbeat",
