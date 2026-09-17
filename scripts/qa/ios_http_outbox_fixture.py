@@ -607,7 +607,9 @@ def accepted_event_item(
         "session_id": session_id,
         "timestamp": NOW,
         "event": {
-            "id": receipt["event_id"],
+            # The receipt event_id is an opaque input-receipt identity. The
+            # projected durable row has the numeric head id advertised by SSE.
+            "id": 2,
             "role": "user",
             "content_text": post["text"],
             "interaction_kind": None,
