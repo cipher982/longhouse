@@ -173,9 +173,19 @@ def exercise(engine):
             assert completed_at, "idle requires a completed full discovery receipt"
             receipt["build"] = healthy.get("build")
             fail_inventory.write_text("fail\n")
+            # A process inventory failure is published either as a terminal
+            # failure or, since d0812e8c0, as a retry that stays reconciling
+            # while carrying its failure cause. Both must freeze the projection.
             failed = wait_for(
-                lambda projection: projection.get("reconciliation", {}).get("state") == "failed"
-                and projection.get("reconciliation", {}).get("reason") in {"periodic", "wake", "full_reconciliation", "startup"}
+                lambda projection: (
+                    projection.get("reconciliation", {}).get("state") == "failed"
+                    and projection.get("reconciliation", {}).get("reason")
+                    in {"periodic", "wake", "full_reconciliation", "startup"}
+                )
+                or (
+                    projection.get("reconciliation", {}).get("state") == "reconciling"
+                    and projection.get("reconciliation", {}).get("failure_reason") == "process_inventory"
+                )
             )
             frozen = failed["local_projection"]["generated_at"]
             with sqlite3.connect(db, timeout=5) as connection:
