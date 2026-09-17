@@ -68,6 +68,8 @@ struct TimelineView: View {
     @State private var isShowingBugReport = false
     @State private var bugReportAutoStartFix = false
     @State private var isShowingBugReportSavedAlert = false
+    @State private var bugReportSavedPending = false
+    @State private var bugReportSessionToOpen: String?
     @State private var bugReportScreenshot: Data?
     @State private var bugReportContextJSON = Data("{}".utf8)
     @State private var searchText = ""
@@ -172,9 +174,10 @@ struct TimelineView: View {
                     Button {
                         presentBugReport()
                     } label: {
-                        Image(systemName: "exclamationmark.bubble")
-                            .accessibilityLabel("Report a problem")
+                        Label("Report a problem", systemImage: "exclamationmark.bubble")
+                            .labelStyle(.iconOnly)
                     }
+                    .accessibilityHint("Capture diagnostics without opening a session")
                     .accessibilityIdentifier("timeline-report-problem")
                     .transaction { transaction in
                         transaction.animation = nil
@@ -225,17 +228,21 @@ struct TimelineView: View {
                     path.append(SessionRoute(sessionId: sessionId, fallbackTitle: "New session"))
                 }
             }
-            .sheet(isPresented: $isShowingBugReport) {
+            .sheet(isPresented: $isShowingBugReport, onDismiss: finishBugReportDismissal) {
                 BugReportSheet(
                     sourceSessionID: nil,
                     contextJSON: bugReportContextJSON,
                     screenshotData: bugReportScreenshot,
                     autoStartFix: bugReportAutoStartFix,
                     onSent: { sessionID in
-                        path.append(SessionRoute(sessionId: sessionID, fallbackTitle: "Bug report"))
+                        bugReportSavedPending = false
+                        bugReportSessionToOpen = sessionID
+                        isShowingBugReport = false
                     },
                     onSaved: {
-                        showBugReportSavedAlert()
+                        bugReportSessionToOpen = nil
+                        bugReportSavedPending = true
+                        isShowingBugReport = false
                     }
                 )
             }
@@ -244,6 +251,7 @@ struct TimelineView: View {
                     BugReportSavedBanner(
                         onStartFix: {
                             isShowingBugReportSavedAlert = false
+                            bugReportSavedPending = false
                             bugReportAutoStartFix = true
                             isShowingBugReport = true
                         },
@@ -253,6 +261,7 @@ struct TimelineView: View {
                     )
                     .padding(.horizontal, 16)
                     .padding(.bottom, 16)
+                    .safeAreaPadding(.bottom, 8)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
@@ -321,8 +330,21 @@ struct TimelineView: View {
             }
         }
     }
+    private func finishBugReportDismissal() {
+        if let sessionID = bugReportSessionToOpen {
+            bugReportSessionToOpen = nil
+            path.append(SessionRoute(sessionId: sessionID, fallbackTitle: "Bug report"))
+        } else if bugReportSavedPending {
+            bugReportSavedPending = false
+            isShowingBugReportSavedAlert = true
+        }
+    }
     private func presentBugReport() {
+        guard path.isEmpty else { return }
         bugReportAutoStartFix = false
+        bugReportSavedPending = false
+        bugReportSessionToOpen = nil
+        bugReportScreenshot = nil
         bugReportContextJSON = BugReportContext.timeline(serverURL: appState.serverURL)
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 350_000_000)
@@ -331,13 +353,6 @@ struct TimelineView: View {
         }
     }
 
-    private func showBugReportSavedAlert() {
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            guard !Task.isCancelled else { return }
-            isShowingBugReportSavedAlert = true
-        }
-    }
 
     private func timelineBody(sessions: [SessionSummary]) -> some View {
         TimelineSessionList(sessions: sessions, connectivityBanner: effectiveConnectionBanner)

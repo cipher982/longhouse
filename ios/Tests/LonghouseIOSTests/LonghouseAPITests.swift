@@ -316,7 +316,7 @@ struct LonghouseAPITests {
         #expect(response.clientRequestId == "request-1")
     }
     @Test
-    func reportTurnCarriesReportAndIdempotencyIdentities() async throws {
+    func reportTurnCarriesReportAndIdempotencyIdentitiesAcrossRetry() async throws {
         let capture = APIRequestCapture()
         APIRequestMockURLProtocol.handler = { request in
             capture.store(request, body: requestBody(request))
@@ -331,13 +331,14 @@ struct LonghouseAPITests {
               "queued": []
             }
             """
+            let isFirstAttempt = capture.loadBodies().count == 1
             let response = HTTPURLResponse(
                 url: request.url!,
-                statusCode: 200,
+                statusCode: isFirstAttempt ? 503 : 200,
                 httpVersion: nil,
                 headerFields: ["Content-Type": "application/json"]
             )!
-            return (response, Data(body.utf8))
+            return (response, isFirstAttempt ? Data() : Data(body.utf8))
         }
         defer { APIRequestMockURLProtocol.handler = nil }
 
@@ -349,6 +350,20 @@ struct LonghouseAPITests {
             urlSession: URLSession(configuration: configuration)
         )
 
+        do {
+            _ = try await api.sendInput(
+                id: "session-1",
+                text: "Investigate the report",
+                intent: "auto",
+                clientRequestId: "report-request-1",
+                reportID: "report-1"
+            )
+            Issue.record("expected the first dispatch attempt to fail")
+        } catch let error as LonghouseAPIError {
+            #expect(error.isRetryableReportHandoff)
+        } catch {
+            Issue.record("expected a retryable handoff failure, got \(error)")
+        }
         _ = try await api.sendInput(
             id: "session-1",
             text: "Investigate the report",
@@ -358,10 +373,15 @@ struct LonghouseAPITests {
         )
 
         let request = try #require(capture.load())
-        let body = try #require(capture.loadBody())
-        let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
-        #expect(object["report_id"] as? String == "report-1")
-        #expect(object["client_request_id"] as? String == "report-request-1")
+        #expect(request.httpMethod == "POST")
+        #expect(request.url?.path == "/api/sessions/session-1/input")
+        let bodies = capture.loadBodies()
+        #expect(bodies.count == 2)
+        for body in bodies {
+            let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(object["report_id"] as? String == "report-1")
+            #expect(object["client_request_id"] as? String == "report-request-1")
+        }
     }
 
     @Test
@@ -644,16 +664,17 @@ struct LonghouseAPITests {
     }
 
 }
-
 private final class APIRequestCapture: @unchecked Sendable {
     private let lock = NSLock()
     private var storedRequest: URLRequest?
-    private var storedBody: Data?
+    private var storedBodies: [Data] = []
 
     func store(_ request: URLRequest, body: Data?) {
         lock.lock()
         storedRequest = request
-        storedBody = body
+        if let body {
+            storedBodies.append(body)
+        }
         lock.unlock()
     }
 
@@ -663,10 +684,10 @@ private final class APIRequestCapture: @unchecked Sendable {
         return storedRequest
     }
 
-    func loadBody() -> Data? {
+    func loadBodies() -> [Data] {
         lock.lock()
         defer { lock.unlock() }
-        return storedBody
+        return storedBodies
     }
 }
 
