@@ -2707,6 +2707,86 @@ mod tests {
     }
 
     #[test]
+    fn a_locked_archive_database_cannot_make_the_bind_permanent() {
+        // The 2026-09-17 incident, reproduced: another writer holds the archive
+        // database while the session is live and unbound. The repair must lose
+        // the attempt without degrading anything, and the next attempt after the
+        // lock is released must bind the session and restore it to ready.
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let source = temp.path().join("session-b.jsonl");
+        fs::write(
+            &source,
+            b"{\"type\":\"session\",\"id\":\"native-b\",\"cwd\":\"/tmp\"}\n",
+        )
+        .unwrap();
+        let socket_dir = temp.path().join("socket");
+        let socket_path = socket_dir.join("channel.sock");
+        let state_path = temp.path().join("state.json");
+        let mut initial = state();
+        initial.session_id = Uuid::new_v4().to_string();
+        initial.native_session_id = String::new();
+        initial.session_file = String::new();
+        initial.ready = false;
+        initial.status = "degraded".into();
+        initial.terminal_reason = Some("database is locked".into());
+
+        temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
+            let db_path = longhouse_home.join("agent/longhouse-shipper.db");
+            let holder =
+                crate::state::db::open_client_connection(&db_path, Duration::from_secs(1)).unwrap();
+            let server =
+                OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
+            let (sender, _receiver) = mpsc::channel();
+            {
+                let mut shared = server.shared.lock().unwrap();
+                shared.extension_sender = Some(sender);
+                shared.extension_connection_id = Some("connection".into());
+            }
+            let frame = |server: &OmpHelmServer| {
+                json!({
+                    "kind": "agent_start",
+                    "event": {"type": "agent_start"},
+                    "auth_token": "token",
+                    "session_id": server.current_state().session_id,
+                    "native_session_id": "native-b",
+                    "session_file": source.display().to_string(),
+                    "connection_id": "connection",
+                    "lease_generation": "generation"
+                })
+            };
+
+            holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+            server.handle_extension_frame("connection", frame(&server));
+            let current = server.current_state();
+            assert!(
+                current.native_session_id.is_empty(),
+                "the locked database must refuse the bind"
+            );
+            assert_eq!(
+                current.status, "degraded",
+                "a failed repair must not invent a different state"
+            );
+
+            holder.execute_batch("ROLLBACK").unwrap();
+            drop(holder);
+
+            // The reconciliation window is thirty seconds by design; the fixture
+            // moves it rather than sleeping through it.
+            server.shared.lock().unwrap().identity_retry_after =
+                Some(Instant::now() - Duration::from_secs(1));
+            server.handle_extension_frame("connection", frame(&server));
+
+            let recovered = server.current_state();
+            assert_eq!(recovered.native_session_id, "native-b");
+            assert!(recovered.ready, "the recovered session must serve again");
+            assert_eq!(recovered.status, "ready");
+            assert_eq!(recovered.terminal_reason, None);
+            server.shutdown();
+        });
+    }
+
+    #[test]
     fn an_unbound_session_does_not_publish_activity() {
         // The frame cannot bind (a pending transition refuses it) and the
         // launcher holds no identity, so there is nothing to attribute the

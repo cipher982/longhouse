@@ -2390,6 +2390,9 @@ mod tests {
         let db_path = dir.path().join("longhouse-shipper.db");
         Connection::open(&db_path).unwrap();
 
+        // This database has none of the prune tables, so every prune statement
+        // fails. That is deliberate: a failing prune is idempotent housekeeping
+        // the next pass repeats, and only a failed reclaim keeps the pass due.
         run_daily_storage_maintenance(&db_path);
 
         assert!(

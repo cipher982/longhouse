@@ -109,8 +109,14 @@ def collect(db: Path, samples: int, day: str) -> tuple[dict, list[str]]:
             for (name,) in conn.execute(
                 "select name from sqlite_master where type='table' order by name"
             )
+            if not name.startswith("sqlite_")
         ]
         report["tables"] = tables
+        if not tables:
+            # Pages exist, no tables do: every later count would read zero and
+            # the report would look like a clean, uncontended baseline.
+            degraded.append("database_uninitialized: no tables in the database")
+            return finish(report, degraded)
         counts: dict[str, int | None] = {}
         for name in tables:
             if name == "sqlite_sequence":
