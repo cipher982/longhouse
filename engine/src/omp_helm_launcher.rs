@@ -130,6 +130,10 @@ struct SharedState {
     live_assistant_text: String,
     live_text_seq: u64,
     live_turn_seq: u64,
+    /// A non-idle reconnect is provisional until a fresh `agent_start` arrives.
+    /// It keeps the served phase live without allowing delayed drain frames to
+    /// bypass the terminal-turn latch.
+    reconnect_active: bool,
     live_message_seq: u64,
 }
 
@@ -166,6 +170,7 @@ impl OmpHelmServer {
                 live_text_seq: 0,
                 live_turn_seq: 0,
                 live_message_seq: 0,
+                reconnect_active: false,
             })),
             socket_path,
             state_path,
@@ -202,7 +207,6 @@ impl OmpHelmServer {
             .clone();
         write_json_private(&self.state_path, &state)
     }
-
 
     fn handle_connection(&self, stream: std::os::unix::net::UnixStream) {
         let _ = stream.set_read_timeout(Some(SOCKET_TIMEOUT));
@@ -550,7 +554,7 @@ impl OmpHelmServer {
             .and_then(Value::as_str)
             .unwrap_or_default();
         if is_activity_frame_kind(kind)
-            && kind != "agent_start"
+            && !matches!(kind, "agent_start" | "extension_keepalive")
             && self.terminal_turn_is_latched()
         {
             return;
@@ -809,6 +813,7 @@ impl OmpHelmServer {
             return;
         }
         if kind == "agent_start" {
+            state.reconnect_active = false;
             state.live_turn_seq = state.live_turn_seq.saturating_add(1);
             state.live_message_seq = 0;
             state.state.live_turn_seq = state.live_turn_seq;
@@ -910,22 +915,23 @@ impl OmpHelmServer {
         }
     }
 
-
     /// Refresh canonical activity evidence from the extension without
     /// manufacturing a lifecycle event. Keepalive observations are frequent:
-    /// they preserve the current phase and never reopen a settled turn.
+    /// they preserve the current phase, refresh idle evidence, and never
+    /// reopen a settled turn on their own.
     fn record_keepalive(&self, provider_idle: bool) {
         self.record_keepalive_with_policy(provider_idle, false);
     }
 
     /// A reconnect re-samples the provider after the extension may have
-    /// crossed a turn boundary while disconnected. Only this authenticated
-    /// boundary may reopen a terminal latch without a fresh agent_start.
+    /// crossed a turn boundary while disconnected. A non-idle result keeps
+    /// the served phase live provisionally; only `agent_start` clears the
+    /// terminal latch and admits new activity frames.
     fn record_reconnect(&self, provider_idle: bool) {
         self.record_keepalive_with_policy(provider_idle, true);
     }
 
-    fn record_keepalive_with_policy(&self, provider_idle: bool, allow_terminal_reopen: bool) {
+    fn record_keepalive_with_policy(&self, provider_idle: bool, reconnect: bool) {
         let (state, phase, tool) = {
             let _persist_lock = self
                 .persist_lock
@@ -936,27 +942,21 @@ impl OmpHelmServer {
                 return;
             }
             let terminal_turn = shared.state.agent_end_is_terminal == Some(true);
-            if allow_terminal_reopen && terminal_turn && !provider_idle {
-                shared.live_turn_seq = shared.live_turn_seq.saturating_add(1);
-                shared.live_message_seq = 0;
-                shared.state.live_turn_seq = shared.live_turn_seq;
-                shared.state.live_message_seq = 0;
-                shared.state.agent_end_observed = false;
-                shared.state.agent_end_is_terminal = None;
-                shared.state.agent_end_will_continue = None;
-                shared.state.agent_end_is_terminal_present = false;
-                shared.state.agent_end_will_continue_present = false;
-                shared.live_assistant_text.clear();
-                shared.live_text_seq = 0;
+            if reconnect {
+                shared.reconnect_active = terminal_turn && !provider_idle;
+            } else if provider_idle {
+                shared.reconnect_active = false;
             }
-            shared.state.phase = if provider_idle {
+            let terminal_turn = shared.state.agent_end_is_terminal == Some(true);
+            let provisional_active = terminal_turn && shared.reconnect_active;
+            shared.state.phase = if provider_idle || (terminal_turn && !provisional_active) {
                 "idle".into()
             } else if shared.state.phase == "thinking" {
                 "thinking".into()
             } else {
                 "running".into()
             };
-            shared.state.tool_name = if provider_idle {
+            shared.state.tool_name = if provider_idle || (terminal_turn && !provisional_active) {
                 None
             } else {
                 shared.state.tool_name.clone()
@@ -969,7 +969,11 @@ impl OmpHelmServer {
                     snapshot.session_id
                 );
             }
-            (snapshot, shared.state.phase.clone(), shared.state.tool_name.clone())
+            (
+                snapshot,
+                shared.state.phase.clone(),
+                shared.state.tool_name.clone(),
+            )
         };
         let phase = phase.as_str();
         let tool = tool.as_deref();
@@ -2285,6 +2289,7 @@ mod tests {
             live_text_seq: 0,
             live_turn_seq: 0,
             live_message_seq: 0,
+            reconnect_active: false,
         };
 
         settle_pending_terminate_locked(&mut shared);
@@ -2312,6 +2317,7 @@ mod tests {
             live_text_seq: 0,
             live_turn_seq: 0,
             live_message_seq: 0,
+            reconnect_active: false,
         };
         let frame = json!({
             "auth_token": "token",
@@ -2546,6 +2552,31 @@ mod tests {
             assert_eq!(terminal.phase, "idle");
             assert_eq!(terminal.tool_name, None);
             assert_eq!(terminal.agent_end_is_terminal, Some(true));
+            let before_terminal_keepalive = terminal.clone();
+            let local_before_terminal_keepalive = read_json_files(&local_outbox);
+            let runtime_before_terminal_keepalive = read_json_files(&runtime_outbox);
+            server.handle_extension_frame("connection", keepalive(false));
+            let terminal_keepalive_active = server.current_state();
+            assert_eq!(terminal_keepalive_active.phase, "idle");
+            assert_eq!(terminal_keepalive_active.tool_name, None);
+            assert_eq!(terminal_keepalive_active.agent_end_is_terminal, Some(true));
+            assert_ne!(
+                terminal_keepalive_active.updated_at,
+                before_terminal_keepalive.updated_at
+            );
+            assert_eq!(
+                read_json_files(&local_outbox).len(),
+                local_before_terminal_keepalive.len() + 1
+            );
+            assert_eq!(
+                read_json_files(&runtime_outbox).len(),
+                runtime_before_terminal_keepalive.len() + 1
+            );
+            assert_eq!(persisted()["phase"], "idle");
+            assert_eq!(
+                persisted()["agent_end_is_terminal"],
+                serde_json::Value::Bool(true)
+            );
             server.handle_extension_frame("connection", keepalive(true));
             let terminal_keepalive = server.current_state();
             assert_eq!(terminal_keepalive.phase, "idle");
@@ -2746,9 +2777,34 @@ mod tests {
             };
             server.handle_extension_frame(
                 "connection",
-                frame("agent_end", json!({"type": "agent_end", "isTerminal": true})),
+                frame(
+                    "agent_end",
+                    json!({"type": "agent_end", "isTerminal": true}),
+                ),
             );
             assert_eq!(server.current_state().agent_end_is_terminal, Some(true));
+            server.handle_extension_frame(
+                "connection",
+                frame(
+                    "session_reconnect",
+                    json!({"type": "session_reconnect", "provider_idle": true}),
+                ),
+            );
+            let still_settled = server.current_state();
+            assert_eq!(still_settled.phase, "idle");
+            assert_eq!(still_settled.tool_name, None);
+            assert_eq!(still_settled.agent_end_is_terminal, Some(true));
+            server.handle_extension_frame(
+                "connection",
+                frame(
+                    "activity",
+                    json!({"type": "activity", "toolName": "late_tool"}),
+                ),
+            );
+            let delayed_after_reconnect = server.current_state();
+            assert_eq!(delayed_after_reconnect.phase, "idle");
+            assert_eq!(delayed_after_reconnect.tool_name, None);
+            assert_eq!(delayed_after_reconnect.agent_end_is_terminal, Some(true));
 
             server.handle_extension_frame(
                 "connection",
@@ -2760,10 +2816,55 @@ mod tests {
             let reconnected = server.current_state();
             assert_eq!(reconnected.phase, "running");
             assert_eq!(reconnected.tool_name, None);
-            assert_eq!(reconnected.agent_end_is_terminal, None);
+            assert_eq!(reconnected.agent_end_is_terminal, Some(true));
             assert!(reconnected.ready);
             assert_eq!(reconnected.status, "ready");
+            assert_eq!(reconnected.live_turn_seq, still_settled.live_turn_seq);
 
+            server.handle_extension_frame(
+                "connection",
+                frame(
+                    "activity",
+                    json!({"type": "activity", "toolName": "late_tool"}),
+                ),
+            );
+            let delayed_during_provisional = server.current_state();
+            assert_eq!(delayed_during_provisional.phase, "running");
+            assert_eq!(delayed_during_provisional.tool_name, None);
+            assert_eq!(delayed_during_provisional.agent_end_is_terminal, Some(true));
+
+            let before_keepalive = server.current_state();
+            server.handle_extension_frame(
+                "connection",
+                frame(
+                    "extension_keepalive",
+                    json!({"type": "extension_keepalive", "provider_idle": false}),
+                ),
+            );
+            let active_keepalive = server.current_state();
+            assert_eq!(active_keepalive.phase, "running");
+            assert_eq!(active_keepalive.agent_end_is_terminal, Some(true));
+            assert_ne!(active_keepalive.updated_at, before_keepalive.updated_at);
+
+            server.handle_extension_frame(
+                "connection",
+                frame(
+                    "extension_keepalive",
+                    json!({"type": "extension_keepalive", "provider_idle": true}),
+                ),
+            );
+            let settled_again = server.current_state();
+            assert_eq!(settled_again.phase, "idle");
+            assert_eq!(settled_again.tool_name, None);
+            assert_eq!(settled_again.agent_end_is_terminal, Some(true));
+
+            server.handle_extension_frame(
+                "connection",
+                frame("agent_start", json!({"type": "agent_start"})),
+            );
+            let next_turn = server.current_state();
+            assert_eq!(next_turn.phase, "running");
+            assert_eq!(next_turn.agent_end_is_terminal, None);
             server.handle_extension_frame(
                 "connection",
                 frame(
@@ -2992,6 +3093,7 @@ mod tests {
             live_text_seq: 0,
             live_turn_seq: 0,
             live_message_seq: 0,
+            reconnect_active: false,
         };
         fail_pending_locked(&mut shared, "replacement");
         let response = receiver.recv().unwrap();

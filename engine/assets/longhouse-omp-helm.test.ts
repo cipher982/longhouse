@@ -12,7 +12,7 @@ Object.assign(process.env, {
   LONGHOUSE_MANAGED_SESSION_ID: "omp-helm-test-session",
 });
 // Dynamic import is intentional: the extension validates launch-scoped identity at module load.
-const { agentEndIsTerminal, ompProviderIsIdle } = await import("./longhouse-omp-helm");
+const { agentEndIsTerminal, ompProviderIsIdle, ompReconnectProviderIsIdle } = await import("./longhouse-omp-helm");
 for (const key of identityKeys) {
   const value = previousIdentity[key];
   if (value === undefined) delete process.env[key];
@@ -33,6 +33,15 @@ describe("ompProviderIsIdle", () => {
   it("keeps an explicit terminal result idle even if context is stale", () => {
     expect(ompProviderIsIdle(true, false)).toBe(true);
     expect(ompProviderIsIdle(true, true)).toBe(true);
+  });
+});
+
+describe("ompReconnectProviderIsIdle", () => {
+  it("re-samples a terminal result but preserves continuation liveness", () => {
+    expect(ompReconnectProviderIsIdle(true, false)).toBe(false);
+    expect(ompReconnectProviderIsIdle(true, true)).toBe(true);
+    expect(ompReconnectProviderIsIdle(false, true)).toBe(false);
+    expect(ompReconnectProviderIsIdle(undefined, false)).toBe(false);
   });
 });
 

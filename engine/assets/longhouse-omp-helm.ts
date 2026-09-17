@@ -24,6 +24,16 @@ export function ompProviderIsIdle(
 ): boolean {
   return lastAgentEndTerminal ?? contextIdle;
 }
+export function ompReconnectProviderIsIdle(
+  lastAgentEndTerminal: boolean | undefined,
+  contextIdle: boolean,
+): boolean {
+  // A prior continuation must survive reconnect even if OMP briefly reports
+  // an idle context. A terminal result may be re-sampled from the live
+  // context, because the reconnect can cross into a new turn.
+  return lastAgentEndTerminal === false ? false : contextIdle;
+}
+
 export function agentEndIsTerminal(event: Record<string, unknown>): boolean {
   for (const key of ["isTerminal", "willContinue"]) {
     if (key in event && typeof event[key] !== "boolean") return false;
@@ -235,13 +245,19 @@ export default function (pi: any) {
       try {
         await connectChannel(ctx);
         // A reconnect can cross a provider turn boundary while the channel
-        // is down. Re-sample the provider instead of carrying the old
-        // terminal agent_end decision into the new turn.
-        lastAgentEndTerminal = undefined;
+        // is down. Preserve an explicit continuation decision, but let the
+        // launcher keep the terminal latch while it treats a non-idle
+        // reconnect as provisional activity. This prevents delayed drain
+        // frames from fabricating a new turn.
+        const contextIdle = Boolean(ctx.isIdle());
+        if (lastAgentEndTerminal === true && !contextIdle) {
+          lastAgentEndTerminal = undefined;
+        }
+        const providerIdle = ompReconnectProviderIsIdle(lastAgentEndTerminal, contextIdle);
         reconnectAttempts = 0;
         sendEvent(
           "session_reconnect",
-          { type: "session_reconnect", provider_idle: Boolean(ctx.isIdle()) },
+          { type: "session_reconnect", provider_idle: providerIdle },
           ctx,
         );
       } catch {
