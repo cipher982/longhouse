@@ -3441,8 +3441,10 @@ async fn acquire_bridge_lock(lock_path: &Path) -> Result<BridgeLock> {
             return Ok(lock);
         }
         if Instant::now() >= deadline {
+            // Keep the refusal wording stable: the concurrent-resume oracle and
+            // operators both key on "another codex bridge already owns lock".
             bail!(
-                "bridge ownership lock remained busy: {}",
+                "another codex bridge already owns lock {} (still busy after bounded wait)",
                 lock_path.display()
             );
         }
