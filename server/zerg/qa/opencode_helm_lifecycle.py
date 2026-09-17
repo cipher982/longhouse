@@ -524,6 +524,10 @@ def run_opencode_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             "HOME": str(home),
             "CLAUDE_CONFIG_DIR": str(home / ".claude"),
             "LONGHOUSE_ENGINE_BIN": str(args.engine),
+            # The Machine Agent advertises opencode.* control only when it can
+            # resolve the provider binary at channel start. The staged binary is
+            # not on PATH as `opencode`, so bind it before the shipper starts.
+            "LONGHOUSE_OPENCODE_BIN": str(args.provider_bin),
             "LONGHOUSE_ORIGIN_KIND": "test_or_canary",
             "LONGHOUSE_LAUNCH_ACTOR": "automation",
             "LONGHOUSE_LAUNCH_SURFACE": "test",
