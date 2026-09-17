@@ -6,8 +6,8 @@ inputs:
     description: Commit SHA to wait for
     required: true
   head_branch:
-    description: Branch the commit lives on
-    required: true
+    description: Optional branch filter; the exact commit SHA remains authoritative
+    required: false
   github_token:
     description: Token for GitHub API calls
     required: true
@@ -209,12 +209,14 @@ runs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: workflowId,
-              branch,
               // GitHub's workflow-runs API can return an empty set when
               // combining workflow filename + head_sha, so filter SHA below.
               per_page: 50,
             };
 
+            if (branch) {
+              params.branch = branch;
+            }
             if (workflowEvent) {
               params.event = workflowEvent;
             }

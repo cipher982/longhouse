@@ -187,7 +187,6 @@ jobs:
         uses: ./.github/actions/wait-for-ci
         with:
           head_sha: ${{ steps.meta.outputs.runtime_image_tag }}
-          head_branch: ${{ steps.meta.outputs.head_branch }}
           github_token: ${{ github.token }}
           event: ""
           required_jobs: Core E2E tests
@@ -197,7 +196,6 @@ jobs:
         uses: ./.github/actions/wait-for-ci
         with:
           head_sha: ${{ steps.meta.outputs.runtime_image_tag }}
-          head_branch: ${{ steps.meta.outputs.head_branch }}
           github_token: ${{ github.token }}
           event: ""
           required_jobs: Backend tests,Engine tests,Core E2E tests,Accessibility E2E tests,CLI wheel packaging
@@ -208,7 +206,6 @@ jobs:
         uses: ./.github/actions/wait-for-ci
         with:
           head_sha: ${{ steps.meta.outputs.runtime_image_tag }}
-          head_branch: ${{ steps.meta.outputs.head_branch }}
           github_token: ${{ github.token }}
           workflow_id: runtime-image.yml
           event: ""
