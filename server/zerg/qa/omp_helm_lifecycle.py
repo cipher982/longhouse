@@ -840,20 +840,36 @@ def _wait_state(
     predicate: Any = None,
 ) -> dict[str, Any]:
     state_dir = home / "managed-local" / "omp-helm"
+    last_state: dict[str, Any] | None = None
+    last_predicate_satisfied: bool | None = None
 
     def observe() -> dict[str, Any] | None:
+        nonlocal last_state, last_predicate_satisfied
         for path in sorted(state_dir.glob("*.json")):
             state = _read_state(path)
-            if not state or state.get("ready") is not True:
+            if not state:
                 continue
             if session_id is not None and state.get("session_id") != session_id:
                 continue
-            if predicate is not None and not predicate(state):
+            last_state = dict(state)
+            if state.get("ready") is not True:
+                last_predicate_satisfied = False
                 continue
+            if predicate is not None and not predicate(state):
+                last_predicate_satisfied = False
+                continue
+            last_predicate_satisfied = True
             return state
         return None
 
-    return _wait(observe, timeout=timeout, description="OMP Helm state")
+    try:
+        return _wait(observe, timeout=timeout, description="OMP Helm state")
+    except RuntimeError as exc:
+        diagnostic = {
+            "last_state": _redacted_state_snapshot(last_state) if last_state else None,
+            "predicate_satisfied": last_predicate_satisfied,
+        }
+        raise RuntimeError(f"{exc}; diagnostic={json.dumps(diagnostic, sort_keys=True, separators=(',', ':'))}") from exc
 
 
 def _resume_state_is_settled(
@@ -2653,24 +2669,6 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         cleanup_errors: list[str] = []
         cleanup_flush: dict[str, Any] = {}
         shipper_stop: dict[str, Any] = {}
-        if shipper is not None:
-            try:
-                cleanup_flush = shipper.flush("omp-helm-cleanup")
-            except Exception as exc:  # noqa: BLE001 - cleanup evidence must remain visible
-                cleanup_errors.append(f"{type(exc).__name__}: {exc}")
-            try:
-                shipper_stop = shipper.stop()
-            except Exception as exc:  # noqa: BLE001 - cleanup evidence must remain visible
-                cleanup_errors.append(f"{type(exc).__name__}: {exc}")
-                shipper_stop = {"status": "fail", "error": f"{type(exc).__name__}: {exc}"}
-        lifecycle.write_json(root / "transcript-shipper-receipt.json", shipper_stop or {"status": "fail", "stopped": False})
-        flush_receipt: dict[str, Any] = {
-            "initial": dict(initial_flush),
-            "final": dict(final_flush),
-            "terminal": dict(terminal_flush),
-            "cleanup": cleanup_flush,
-        }
-        lifecycle.write_json(root / "transcript-flush-receipt.json", flush_receipt)
         cleanup = (
             _wait_cleanup_receipt(owner_records)
             if owner_records
@@ -2717,6 +2715,27 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             str(current_session_id or ""),
             provider="omp",
         )
+        if shipper is not None:
+            try:
+                cleanup_flush = shipper.flush("omp-helm-cleanup")
+            except Exception as exc:  # noqa: BLE001 - cleanup evidence must remain visible
+                cleanup_errors.append(f"{type(exc).__name__}: {exc}")
+            try:
+                shipper_stop = shipper.stop()
+            except Exception as exc:  # noqa: BLE001 - cleanup evidence must remain visible
+                cleanup_errors.append(f"{type(exc).__name__}: {exc}")
+                shipper_stop = {"status": "fail", "error": f"{type(exc).__name__}: {exc}"}
+        lifecycle.write_json(
+            root / "transcript-shipper-receipt.json",
+            shipper_stop or {"status": "fail", "stopped": False},
+        )
+        flush_receipt: dict[str, Any] = {
+            "initial": dict(initial_flush),
+            "final": dict(final_flush),
+            "terminal": dict(terminal_flush),
+            "cleanup": cleanup_flush,
+        }
+        lifecycle.write_json(root / "transcript-flush-receipt.json", flush_receipt)
         cleanup["termination_dispatch"] = termination_dispatch
         cleanup["session_retirement"] = session_retirement
         cleanup["served_run_inventory"] = served_run_inventory

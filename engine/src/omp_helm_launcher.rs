@@ -203,14 +203,6 @@ impl OmpHelmServer {
         write_json_private(&self.state_path, &state)
     }
 
-    fn persist_state_snapshot(&self, state: &OmpHelmStateFile) -> Result<()> {
-        let _lock = self
-            .persist_lock
-            .lock()
-            .expect("OMP state persist mutex poisoned");
-        write_json_private(&self.state_path, state)
-    }
-
     fn mutate_and_persist_state<F>(&self, update: F) -> Option<OmpHelmStateFile>
     where
         F: FnOnce(&mut OmpHelmStateFile),
@@ -790,6 +782,10 @@ impl OmpHelmServer {
         let live_delta = (kind == "message_update")
             .then(|| omp_live_text_delta(event).map(str::to_string))
             .flatten();
+        let _persist_lock = self
+            .persist_lock
+            .lock()
+            .expect("OMP state persist mutex poisoned");
         let mut state = self.shared.lock().expect("OMP state mutex poisoned");
         if state.state.status == "stopped" || state.state.terminal_state.is_some() {
             return;
@@ -839,9 +835,15 @@ impl OmpHelmServer {
         let live_message_seq = state.live_message_seq;
         let turn_id = live_turn_id(&current.run_id, live_turn_seq, live_message_seq);
         let publish_live = live_delta.is_some() || (turn_completed && !live_text.is_empty());
+        if let Err(error) = write_json_private(&self.state_path, &current) {
+            eprintln!(
+                "[omp-helm] state persistence failed for {}: {error}",
+                current.session_id
+            );
+        }
         drop(state);
-        let _ = self.persist_state_snapshot(&current);
-        let observed_at = Utc::now();
+        drop(_persist_lock);
+        let observed_at = current.updated_at.clone();
         let db_path = crate::config::get_agent_db_path();
         if let Ok(db_path) = db_path {
             if let Err(error) = crate::hook_outbox::enqueue_local_phase(
@@ -851,7 +853,7 @@ impl OmpHelmServer {
                 phase,
                 tool.as_deref(),
                 OMP_HELM_TRANSPORT,
-                &observed_at.to_rfc3339(),
+                &observed_at,
             ) {
                 eprintln!(
                     "[omp-helm] enqueue local phase failed for {}: {error}",
@@ -894,16 +896,18 @@ impl OmpHelmServer {
     /// manufacturing a lifecycle event. Keepalive observations are frequent:
     /// they must preserve an active tool/phase, refresh already-idle evidence,
     /// and never revive a terminal launcher.
+
     fn record_keepalive(&self, provider_idle: bool) {
         let Some(state) = self.mutate_and_persist_state(|state| {
-            state.phase = if provider_idle {
+            let terminal_turn = state.agent_end_is_terminal == Some(true);
+            state.phase = if terminal_turn || provider_idle {
                 "idle".into()
             } else if state.phase == "thinking" {
                 "thinking".into()
             } else {
                 "running".into()
             };
-            state.tool_name = if provider_idle {
+            state.tool_name = if terminal_turn || provider_idle {
                 None
             } else {
                 state.tool_name.clone()
@@ -987,7 +991,7 @@ impl OmpHelmServer {
                     "runtime_key": format!("omp:{}", state.session_id), "session_id": state.session_id,
                     "provider": "omp", "run_id": state.run_id, "source": OMP_HELM_TRANSPORT,
                     "kind": "phase_signal", "phase": phase, "tool_name": tool,
-                    "occurred_at": Utc::now().to_rfc3339(),
+                    "occurred_at": state.updated_at,
                     "dedupe_key": format!("omp-phase:{}:{}:{}:{}", state.session_id, state.run_id, phase, state.updated_at),
                     "payload": {"managed_transport": OMP_HELM_TRANSPORT, "execution_lifetime": "interactive", "structured_remote_approval": false}
                 }),
@@ -1107,6 +1111,10 @@ impl OmpHelmServer {
     }
 
     fn mark_stopped(&self, exit_code: Option<i32>, reason: &str) -> Result<()> {
+        let _persist_lock = self
+            .persist_lock
+            .lock()
+            .expect("OMP state persist mutex poisoned");
         let mut state = self.shared.lock().expect("OMP state mutex poisoned");
         state.state.status = "stopped".into();
         state.state.ready = false;
@@ -1120,8 +1128,9 @@ impl OmpHelmServer {
         state.state.terminal_reason = Some(reason.into());
         state.state.exit_code = exit_code;
         state.state.updated_at = Utc::now().to_rfc3339();
+        let snapshot = state.state.clone();
         drop(state);
-        self.persist_state()
+        write_json_private(&self.state_path, &snapshot)
     }
 
     fn shutdown(&self) {
@@ -2465,6 +2474,30 @@ mod tests {
             assert_eq!(persisted()["phase"], "idle");
             assert_eq!(persisted()["tool_name"], serde_json::Value::Null);
 
+            server.handle_extension_frame(
+                "connection",
+                json!({
+                    "kind": "agent_end",
+                    "event": {"type": "agent_end", "isTerminal": true},
+                    "auth_token": "token",
+                    "session_id": "session",
+                    "native_session_id": "native",
+                    "session_file": "/tmp/session.jsonl",
+                    "connection_id": "connection",
+                    "lease_generation": "generation"
+                }),
+            );
+            let terminal = server.current_state();
+            assert_eq!(terminal.phase, "idle");
+            assert_eq!(terminal.tool_name, None);
+            assert_eq!(terminal.agent_end_is_terminal, Some(true));
+            server.handle_extension_frame("connection", keepalive(false));
+            let terminal_keepalive = server.current_state();
+            assert_eq!(terminal_keepalive.phase, "idle");
+            assert_eq!(terminal_keepalive.tool_name, None);
+            assert_eq!(terminal_keepalive.agent_end_is_terminal, Some(true));
+            assert_eq!(persisted()["phase"], "idle");
+
             server.mark_stopped(None, "provider_exit").unwrap();
             let stopped_runtime_count = read_json_files(&runtime_outbox).len();
             let stopped_local_count = read_json_files(&local_outbox).len();
@@ -2532,6 +2565,40 @@ mod tests {
         assert!(!after.ready);
         assert_eq!(after.phase, "idle");
         server.shutdown();
+    }
+
+    #[test]
+    fn activity_snapshot_waits_for_persistence_lock_before_mutating() {
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let socket_dir = temp.path().join("socket");
+        let socket_path = socket_dir.join("channel.sock");
+        let state_path = temp.path().join("state.json");
+
+        temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
+            let server =
+                OmpHelmServer::start(state(), socket_path, socket_dir, state_path.clone()).unwrap();
+            let persist_guard = server.persist_lock.lock().unwrap();
+            let worker = {
+                let server = server.clone();
+                thread::spawn(move || {
+                    server.record_activity("agent_start", &json!({"type": "agent_start"}));
+                })
+            };
+
+            thread::sleep(Duration::from_millis(50));
+            assert_eq!(server.current_state().phase, "idle");
+            drop(persist_guard);
+            worker.join().unwrap();
+
+            server.mark_stopped(None, "provider_exit").unwrap();
+            let persisted: OmpHelmStateFile =
+                serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+            assert_eq!(persisted.status, "stopped");
+            assert!(persisted.terminal_state.is_some());
+            assert_eq!(persisted.phase, "idle");
+            server.shutdown();
+        });
     }
     #[test]
     fn ordinary_activity_rejects_native_drift_at_an_owned_source_path() {

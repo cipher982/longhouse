@@ -24,6 +24,14 @@ export function ompProviderIsIdle(
 ): boolean {
   return lastAgentEndTerminal ?? contextIdle;
 }
+export function agentEndIsTerminal(event: Record<string, unknown>): boolean {
+  for (const key of ["isTerminal", "willContinue"]) {
+    if (key in event && typeof event[key] !== "boolean") return false;
+  }
+  if (typeof event.isTerminal === "boolean") return event.isTerminal;
+  if (typeof event.willContinue === "boolean") return !event.willContinue;
+  return true;
+}
 
 export default function (pi: any) {
   let socket: Socket | undefined;
@@ -120,6 +128,11 @@ export default function (pi: any) {
         }
       }
     }
+    if (kind === "agent_end") {
+      // Preserve the exact terminal decision used by keepalive polling.
+      // OMP may expose null/undefined lifecycle fields that compaction drops.
+      compact.isTerminal = agentEndIsTerminal(event);
+    }
     if (kind === "message_update" && event.assistantMessageEvent && typeof event.assistantMessageEvent === "object") {
       const update = event.assistantMessageEvent as Frame;
       if (typeof update.type === "string") {
@@ -135,15 +148,6 @@ export default function (pi: any) {
     }
     if (typeof event.status === "string") compact.status = event.status.slice(0, MAX_METADATA_STRING_LENGTH);
     return compact;
-  };
-
-  const agentEndIsTerminal = (event: Frame): boolean => {
-    for (const key of ["isTerminal", "willContinue"]) {
-      if (key in event && typeof event[key] !== "boolean") return false;
-    }
-    if (typeof event.isTerminal === "boolean") return event.isTerminal;
-    if (typeof event.willContinue === "boolean") return !event.willContinue;
-    return true;
   };
 
   // OMP's `agent_end` is not always followed by an idle provider: a
