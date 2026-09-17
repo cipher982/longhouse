@@ -367,6 +367,7 @@ def _opencode_operation_evidence(
         canaries=canaries,
         required=["binary_identity", "server_startup", "session_create", "session_get"],
         canary_name="opencode_server_session_no_token",
+        level="live_no_token",
     )
     if launch_local:
         evidence["launch_local"] = launch_local
