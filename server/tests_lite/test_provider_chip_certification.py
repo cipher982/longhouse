@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -61,12 +63,32 @@ def _proof(assertion, *, outcome=AssertionOutcome.PASS, at: datetime, sha: str =
     )
 
 
-def _payload(monkeypatch, tmp_path: Path, proofs) -> dict:
+def _write_controls(tmp_path: Path, controls: list[dict] | None) -> None:
+    if controls is None:
+        return
+    path = tmp_path / "negative-controls.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "artifact_kind": "provider_negative_control_snapshot",
+                "epoch_digest": "sha256:" + "e" * 64,
+                "published_at": "2026-09-16T11:00:00Z",
+                "controls": controls,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _payload(monkeypatch, tmp_path: Path, proofs, controls: list[dict] | None = None) -> dict:
     store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
     monkeypatch.setattr(routes, "_proof_store", lambda: store)
     monkeypatch.setattr(routes, "_legacy_proof_store", lambda: ProviderCapabilityProofStore(tmp_path / "legacy"))
     for proof in proofs:
         _write_trusted(store, proof)
+    _write_controls(tmp_path, [] if controls is None else controls)
     return routes.build_chip_certification_payload(now=NOW)
 
 
@@ -119,3 +141,56 @@ def test_public_route_needs_no_auth_and_leaks_no_evidence_locations(monkeypatch,
     assert response.json()["artifact_kind"] == "provider_chip_certification"
     for forbidden in ("artifact_id", "run_reference", "raw_reference", "worker_id", "invocation_id"):
         assert forbidden not in body
+
+
+def _steer_control(verdict: str) -> dict:
+    return {"provider": "pi", "target_assertion": "pi_helm_steer_active", "fault": "pi_steer_as_follow_up", "verdict": verdict}
+
+
+def test_a_passing_chip_certifies_only_when_its_declared_negative_controls_passed(monkeypatch, tmp_path: Path) -> None:
+    edge = _edge("pi", "steerMidTurn")
+    proofs = [_proof(a, at=NOW - timedelta(hours=1)) for a in edge]
+    assert _chip(_payload(monkeypatch, tmp_path / "pass", proofs, [_steer_control("pass")]), "pi", "steerMidTurn")["state"] == "certified"
+    for verdict in ("fail", "inconclusive", "not_recorded"):
+        chip = _chip(_payload(monkeypatch, tmp_path / verdict, proofs, [_steer_control(verdict)]), "pi", "steerMidTurn")
+        assert chip["state"] == "unverified" and chip["blocked_by"] == "negative_control", verdict
+
+
+def test_no_published_negative_control_snapshot_certifies_nothing(monkeypatch, tmp_path: Path) -> None:
+    edge = _edge("pi", "resume")
+    store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
+    monkeypatch.setattr(routes, "_proof_store", lambda: store)
+    monkeypatch.setattr(routes, "_legacy_proof_store", lambda: ProviderCapabilityProofStore(tmp_path / "legacy"))
+    for proof in [_proof(a, at=NOW - timedelta(hours=1)) for a in edge]:
+        _write_trusted(store, proof)
+    chip = _chip(routes.build_chip_certification_payload(now=NOW), "pi", "resume")
+    assert chip["state"] == "unverified" and chip["blocked_by"] == "negative_control_snapshot_missing"
+
+
+def test_factory_publishes_the_negative_control_snapshot_with_its_token(monkeypatch, tmp_path: Path) -> None:
+    store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
+    monkeypatch.setattr(routes, "_proof_store", lambda: store)
+    monkeypatch.setattr(routes, "get_settings", lambda: SimpleNamespace(provider_capability_factory_token="fixture-factory-token"))
+    monkeypatch.setattr(routes, "_certification_cache", None)
+    api_app.dependency_overrides.clear()
+    client = TestClient(app, backend="asyncio")
+    snapshot = {
+        "schema_version": 1,
+        "artifact_kind": "provider_negative_control_snapshot",
+        "epoch_digest": "sha256:" + "e" * 64,
+        "published_at": "2026-09-16T11:00:00Z",
+        "controls": [_steer_control("pass")],
+    }
+    url = "/api/internal/provider-negative-controls"
+    assert client.post(url, json=snapshot).status_code == 403
+    assert (
+        client.post(
+            url,
+            json={**snapshot, "controls": [{**_steer_control("pass"), "verdict": "maybe"}]},
+            headers={"X-Provider-Capability-Factory-Token": "fixture-factory-token"},
+        ).status_code
+        == 422
+    )
+    response = client.post(url, json=snapshot, headers={"X-Provider-Capability-Factory-Token": "fixture-factory-token"})
+    assert response.status_code == 201, response.text
+    assert routes._negative_controls_by_requirement() == {("pi", "pi_helm_steer_active"): ["pass"]}
