@@ -20,6 +20,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from socketserver import TCPServer
 from typing import Any
 from urllib.parse import urlparse
 
@@ -654,6 +655,11 @@ class ProofHTTPServer(ThreadingHTTPServer):
     def __init__(self, address: tuple[str, int], proof: ProofState) -> None:
         super().__init__(address, FixtureHandler)
         self.proof = proof
+
+    def server_bind(self) -> None:
+        # This loopback fixture needs no reverse DNS before reporting readiness.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address
 
 
 def main() -> int:
