@@ -8,8 +8,11 @@ IMAGE_REPO="ghcr.io/cipher982/longhouse-runtime"
 PUBLISH_WORKFLOW="Publish Runtime Image"
 DEPLOY_WORKFLOW="Deploy and Verify"
 SHA="${1:-}"
+receipt_zip=""
+receipt_path=""
+trap '[[ -z "$receipt_zip" ]] || rm -f "$receipt_zip"; [[ -z "$receipt_path" ]] || rm -f "$receipt_path"' EXIT
 
-for tool in gh docker jq python3; do
+for tool in gh jq python3 curl unzip; do
   command -v "$tool" >/dev/null 2>&1 || { echo "promote-dogfood needs '$tool' on PATH." >&2; exit 1; }
 done
 if [[ -z "$SHA" ]]; then
@@ -31,34 +34,69 @@ SHA="$(git -C "$ROOT" rev-parse --verify --quiet "${SHA}^{commit}")" || {
   exit 1
 }
 
-deploy_json="$(gh run list --repo "$REPO" --workflow "$DEPLOY_WORKFLOW" --commit "$SHA" --event push --status success --limit 20 --json headSha,databaseId,number,workflowName)"
+deploy_json="$(gh run list --repo "$REPO" --workflow "$DEPLOY_WORKFLOW" --commit "$SHA" --event push --status success --limit 20 --json headSha,databaseId,workflowName)"
 deploy_record="$(jq -c --arg sha "$SHA" 'map(select(.headSha == $sha)) | .[0] // empty' <<<"$deploy_json")"
 if [[ -z "$deploy_record" ]]; then
   echo "Refusing $SHA: no successful push-triggered $DEPLOY_WORKFLOW run." >&2
   exit 1
 fi
-publish_json="$(gh run list --repo "$REPO" --workflow "$PUBLISH_WORKFLOW" --commit "$SHA" --event push --status success --limit 20 --json headSha,databaseId,number,workflowName)"
-publish_record="$(jq -c --arg sha "$SHA" 'map(select(.headSha == $sha)) | .[0] // empty' <<<"$publish_json")"
-if [[ -z "$publish_record" ]]; then
-  echo "Refusing $SHA: no successful push-triggered $PUBLISH_WORKFLOW run." >&2
+deploy_run_id="$(jq -r '.databaseId // empty' <<<"$deploy_record")"
+if [[ ! "$deploy_run_id" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Successful $DEPLOY_WORKFLOW run has no immutable run id." >&2
   exit 1
 fi
-run_number="$(jq -r '.number // empty' <<<"$publish_record")"
-publish_run_id="$(jq -r '.databaseId // empty' <<<"$publish_record")"
-if [[ -z "$run_number" || "$run_number" == "null" || -z "$publish_run_id" || "$publish_run_id" == "null" ]]; then
-  echo "Successful $PUBLISH_WORKFLOW run has no immutable workflow order or run id." >&2
+deploy_view="$(gh run view "$deploy_run_id" --repo "$REPO" --json headSha,attempt,status,conclusion,workflowName)"
+deploy_attempt="$(jq -r '.attempt // empty' <<<"$deploy_view")"
+if [[ "$(jq -r '.headSha // empty' <<<"$deploy_view")" != "$SHA" ||
+      "$(jq -r '.workflowName // empty' <<<"$deploy_view")" != "$DEPLOY_WORKFLOW" ||
+      "$(jq -r '.status // empty' <<<"$deploy_view")" != "completed" ||
+      "$(jq -r '.conclusion // empty' <<<"$deploy_view")" != "success" ]] ||
+   ! [[ "$deploy_attempt" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Selected $DEPLOY_WORKFLOW run is no longer a successful exact-SHA run." >&2
   exit 1
 fi
-publish_attempt="$(gh run view "$publish_run_id" --repo "$REPO" --json attempt --jq '.attempt // empty')"
-if [[ ! "$publish_attempt" =~ ^[1-9][0-9]*$ ]]; then
-  echo "Successful $PUBLISH_WORKFLOW run has no immutable run attempt." >&2
+
+artifact_json="$(gh api "repos/$REPO/actions/runs/$deploy_run_id/artifacts?per_page=100")"
+artifact_id="$(jq -r --arg run_id "$deploy_run_id" --arg attempt "$deploy_attempt" \
+  '[.artifacts[] | select(.expired == false and .name == ("runtime-verification-" + $run_id + "-" + $attempt))] | if length == 1 then .[0].id else empty end' \
+  <<<"$artifact_json")"
+if [[ ! "$artifact_id" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Successful $DEPLOY_WORKFLOW run $deploy_run_id has no canary verification receipt." >&2
   exit 1
 fi
-digest="$(docker buildx imagetools inspect "$IMAGE_REPO:$SHA" --format '{{.Manifest.Digest}}')"
-if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-  echo "Refusing $SHA: image manifest has no immutable digest." >&2
+receipt_zip="$(mktemp)"
+receipt_path="$(mktemp)"
+gh_token="${GH_TOKEN:-$(gh auth token)}"
+curl --fail-with-body --silent --show-error --location \
+  --header "Authorization: Bearer $gh_token" \
+  --header "Accept: application/vnd.github+json" \
+  --header "X-GitHub-Api-Version: 2022-11-28" \
+  --output "$receipt_zip" \
+  "https://api.github.com/repos/$REPO/actions/artifacts/$artifact_id/zip"
+unzip -p "$receipt_zip" runtime-verification.json > "$receipt_path"
+verification_json="$(
+  python3 "$ROOT/scripts/ops/release-artifacts.py" verify-publication \
+    --receipt "$receipt_path" \
+    --source-sha "$SHA" \
+    --require-verification
+)"
+digest="$(jq -er '.image_digest' <<<"$verification_json")"
+publish_run_id="$(jq -er '.build_run_id' <<<"$verification_json")"
+publish_attempt="$(jq -er '.build_attempt' <<<"$verification_json")"
+run_number="$(jq -er '.source_order' <<<"$verification_json")"
+canary_deployment_id="$(jq -er '.canary_deployment_id' <<<"$verification_json")"
+
+publish_view="$(gh run view "$publish_run_id" --repo "$REPO" --json headSha,number,attempt,status,conclusion,workflowName)"
+if [[ "$(jq -r '.headSha // empty' <<<"$publish_view")" != "$SHA" ||
+      "$(jq -r '.workflowName // empty' <<<"$publish_view")" != "$PUBLISH_WORKFLOW" ||
+      "$(jq -r '.status // empty' <<<"$publish_view")" != "completed" ||
+      "$(jq -r '.conclusion // empty' <<<"$publish_view")" != "success" ||
+      "$(jq -r '.number // empty' <<<"$publish_view")" != "$run_number" ||
+      "$(jq -r '.attempt // empty' <<<"$publish_view")" != "$publish_attempt" ]]; then
+  echo "Canary verification receipt links to a publishing run that is not the same successful publication." >&2
   exit 1
 fi
+
 schema_metadata="$(python3 "$ROOT/scripts/ops/release-artifacts.py" inspect --image "$IMAGE_REPO@$digest")" || {
   echo "Refusing $SHA: selected image has no exact catalog schema metadata." >&2
   exit 1
@@ -91,6 +129,6 @@ export LH_DEPLOYMENT_SCHEMA_VERSION="$schema_version"
 export LH_DEPLOYMENT_SCHEMA_MIN_READER="$schema_min_reader"
 export LH_DEPLOYMENT_SCHEMA_MAX_READER="$schema_max_reader"
 export LH_DEPLOYMENT_IDEMPOTENCY_KEY="promote-dogfood-${SUBDOMAIN}-${SHA}"
-export LH_DEPLOYMENT_REASON="manual dogfood promotion of exact source ${SHA}"
+export LH_DEPLOYMENT_REASON="manual dogfood promotion of canary-qualified source ${SHA} (${canary_deployment_id})"
 lh_hosted_reprovision "$LH_INSTANCE_ID" "$IMAGE_REPO@$digest"
-echo "Promoted $SUBDOMAIN to exact digest $digest (source $SHA, workflow run $run_number)."
+echo "Promoted $SUBDOMAIN to exact digest $digest (source $SHA, workflow run $run_number, canary $canary_deployment_id)."
