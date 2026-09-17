@@ -2524,6 +2524,39 @@ mod tests {
             assert_eq!(delayed.tool_name, None);
             assert_eq!(delayed.agent_end_is_terminal, Some(true));
             assert_eq!(persisted()["phase"], "idle");
+            server.handle_extension_frame(
+                "connection",
+                json!({
+                    "kind": "agent_start",
+                    "event": {"type": "agent_start"},
+                    "auth_token": "token",
+                    "session_id": "session",
+                    "native_session_id": "native",
+                    "session_file": "/tmp/session.jsonl",
+                    "connection_id": "connection",
+                    "lease_generation": "generation"
+                }),
+            );
+            let next_turn = server.current_state();
+            assert_eq!(next_turn.phase, "running");
+            assert_eq!(next_turn.agent_end_is_terminal, None);
+            server.handle_extension_frame(
+                "connection",
+                json!({
+                    "kind": "activity",
+                    "event": {"type": "activity", "toolName": "next_tool"},
+                    "auth_token": "token",
+                    "session_id": "session",
+                    "native_session_id": "native",
+                    "session_file": "/tmp/session.jsonl",
+                    "connection_id": "connection",
+                    "lease_generation": "generation"
+                }),
+            );
+            let next_activity = server.current_state();
+            assert_eq!(next_activity.phase, "running");
+            assert_eq!(next_activity.tool_name.as_deref(), Some("next_tool"));
+
             server.mark_stopped(None, "provider_exit").unwrap();
             let stopped_runtime_count = read_json_files(&runtime_outbox).len();
             let stopped_local_count = read_json_files(&local_outbox).len();
