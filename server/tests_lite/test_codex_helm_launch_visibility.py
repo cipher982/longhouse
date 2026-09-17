@@ -220,3 +220,74 @@ def test_stop_launch_refuses_unverified_bridge_and_closes_wrapper(tmp_path, monk
     finally:
         if process.poll() is None:
             close()
+
+
+def _queue_runtime_event(directory, name, dedupe_key):
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / name).write_text(json.dumps({"kind": "terminal_signal", "dedupe_key": dedupe_key}), encoding="utf-8")
+
+
+def test_stop_launch_waits_for_the_shipper_to_deliver_the_terminal_event(tmp_path, monkeypatch):
+    """Stopping the shipper before delivery left the served run `running`."""
+
+    outbox = tmp_path / "longhouse" / "agent" / "runtime-events-outbox"
+    key = "bridge:terminal:owned-session:run-1"
+    _queue_runtime_event(outbox, "queued.json", key)
+    _queue_runtime_event(outbox, "other.json", "bridge:terminal:other-session:run-2")
+    process = subprocess.Popen(["/bin/sleep", "60"])
+
+    def close():
+        process.terminate()
+        process.wait(timeout=5)
+
+    receipt = {"verification": {"verified": True, "state": {"terminal_dedupe_key": key, "terminal_published": True}}}
+    monkeypatch.setattr(launch.bridge_canary, "_stop_bridge", lambda *_args: receipt)
+    # The shipper delivers (removes) the event while the producer waits.
+    threading.Timer(0.6, lambda: (outbox / "queued.json").unlink()).start()
+    try:
+        stop = launch._stop_launch(
+            argparse.Namespace(),
+            tui=SimpleNamespace(process=process, close=close),
+            session_id="owned-session",
+            isolation_root=tmp_path,
+        )
+    finally:
+        if process.poll() is None:
+            close()
+    delivery = stop["terminal_event_delivery"]
+    assert delivery["delivered"] is True and delivery["dedupe_key"] == key
+    assert delivery["wait_seconds"] >= 0.5
+
+
+def test_terminal_event_wait_fails_typed_when_undelivered_or_dead_lettered(tmp_path):
+    outbox = tmp_path / "longhouse" / "agent" / "runtime-events-outbox"
+    key = "bridge:terminal:owned-session:run-1"
+    _queue_runtime_event(outbox, "queued.json", key)
+    with pytest.raises(RuntimeError, match="still queued"):
+        launch._wait_terminal_event_delivered(tmp_path, key, timeout=0.3)
+    (outbox / "queued.json").unlink()
+    _queue_runtime_event(outbox / "dead-letter", "rejected.json", key)
+    with pytest.raises(RuntimeError, match="dead-lettered"):
+        launch._wait_terminal_event_delivered(tmp_path, key, timeout=5)
+
+
+def test_stop_launch_refuses_a_stop_without_a_published_terminal_event(tmp_path, monkeypatch):
+    process = subprocess.Popen(["/bin/sleep", "60"])
+
+    def close():
+        process.terminate()
+        process.wait(timeout=5)
+
+    receipt = {"verification": {"verified": True, "state": {"terminal_published": False}}}
+    monkeypatch.setattr(launch.bridge_canary, "_stop_bridge", lambda *_args: receipt)
+    try:
+        with pytest.raises(RuntimeError, match="did not publish a terminal event"):
+            launch._stop_launch(
+                argparse.Namespace(),
+                tui=SimpleNamespace(process=process, close=close),
+                session_id="owned-session",
+                isolation_root=tmp_path,
+            )
+    finally:
+        if process.poll() is None:
+            close()

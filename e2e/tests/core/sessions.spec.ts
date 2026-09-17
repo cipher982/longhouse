@@ -1132,6 +1132,9 @@ test.describe("Session Detail Page", () => {
             time_remaining_seconds: 295,
             fork_available: true,
           };
+          // The client treats a send whose receipt does not echo its
+          // idempotency key as unconfirmed, so the stub echoes it like the
+          // Runtime Host does.
           await route.fulfill({
             status: 200,
             contentType: "application/json",
@@ -1140,6 +1143,7 @@ test.describe("Session Detail Page", () => {
               input_id: 1,
               client_request_id: requestBody.client_request_id,
               intent: "auto",
+              client_request_id: requestBody.client_request_id,
               queued: [],
             }),
           });

@@ -150,12 +150,12 @@ def test_catalog_wall_handles_empty_snapshot(monkeypatch):
 def test_directed_input_models_reject_oversized_bodies():
     session_id = UUID("22222222-2222-2222-2222-222222222222")
 
-    DirectedInputCreate(target_session_id=session_id, text="x" * 4000)
-    DirectedInputReply(text="x" * 4000)
+    DirectedInputCreate(target_session_id=session_id, text="x" * 4000, client_request_id="req-size-ok")
+    DirectedInputReply(text="x" * 4000, client_request_id="req-reply-size-ok")
     with pytest.raises(ValueError):
-        DirectedInputCreate(target_session_id=session_id, text="x" * 4001)
+        DirectedInputCreate(target_session_id=session_id, text="x" * 4001, client_request_id="req-size-big")
     with pytest.raises(ValueError):
-        DirectedInputReply(text="x" * 4001)
+        DirectedInputReply(text="x" * 4001, client_request_id="req-reply-size-big")
 
 
 def test_directed_input_create_uses_scoped_sender_and_catalog(monkeypatch):
@@ -190,7 +190,7 @@ def test_directed_input_create_uses_scoped_sender_and_catalog(monkeypatch):
     response = asyncio.run(
         create_directed_input(
             request=_request_with_headers(x_longhouse_session_id=str(source_id)),
-            payload=DirectedInputCreate(target_session_id=target_id, text="catalog native"),
+            payload=DirectedInputCreate(target_session_id=target_id, text="catalog native", client_request_id="req-catalog-native"),
             db=None,
             _auth=ManagedSessionToken(
                 owner_id=7,

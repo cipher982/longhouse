@@ -220,6 +220,8 @@ def test_machine_stream_survives_transient_catalog_saturation(monkeypatch):
             return self.messages.pop(0)
 
     class Bus:
+        stream_epoch = "epoch-1"
+
         def peek_latest_seq(self, _topic):
             return 0
 

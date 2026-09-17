@@ -33,7 +33,7 @@ def test_replay_gap_is_none_when_cursor_is_in_buffer():
     seq1 = bus.publish(t, {"event_id": 1})
     bus.publish(t, {"event_id": 2})
 
-    assert bus.replay_gap(t, since_seq=seq1) is None
+    assert bus.replay_gap(t, since_seq=seq1, stream_epoch=bus.stream_epoch) is None
 
 
 def test_replay_gap_reports_cursor_older_than_ring():
@@ -44,10 +44,10 @@ def test_replay_gap_reports_cursor_older_than_ring():
     bus.publish(t, {"event_id": 3})
     bus.publish(t, {"event_id": 4})
 
-    gap = bus.replay_gap(t, since_seq=0)
+    gap = bus.replay_gap(t, since_seq=0, stream_epoch=bus.stream_epoch)
     assert gap is None
 
-    gap = bus.replay_gap(t, since_seq=1)
+    gap = bus.replay_gap(t, since_seq=1, stream_epoch=bus.stream_epoch)
     assert gap is not None
     assert gap.reason == "cursor_too_old"
     assert gap.requested_seq == 1
@@ -55,11 +55,21 @@ def test_replay_gap_reports_cursor_older_than_ring():
     assert gap.latest_seq == 4
 
 
+def test_replay_gap_rejects_cursor_without_matching_stream_epoch():
+    bus = SessionPubsub()
+    t = topic_session("abc")
+
+    assert bus.replay_gap(t, since_seq=1).reason == "stream_epoch_unconfirmed"
+    changed = bus.replay_gap(t, since_seq=1, stream_epoch="prior-process")
+    assert changed.reason == "stream_epoch_changed"
+    assert changed.stream_epoch == bus.stream_epoch
+
+
 def test_replay_gap_reports_cursor_from_prior_process():
     bus = SessionPubsub()
     t = topic_session("abc")
 
-    gap = bus.replay_gap(t, since_seq=777)
+    gap = bus.replay_gap(t, since_seq=777, stream_epoch=bus.stream_epoch)
 
     assert gap is not None
     assert gap.reason == "buffer_unavailable"
@@ -73,7 +83,7 @@ def test_replay_gap_reports_cursor_ahead_of_current_domain():
     t = topic_session("abc")
     bus.publish(t, {"event_id": 1})
 
-    gap = bus.replay_gap(t, since_seq=777)
+    gap = bus.replay_gap(t, since_seq=777, stream_epoch=bus.stream_epoch)
 
     assert gap is not None
     assert gap.reason == "cursor_ahead"

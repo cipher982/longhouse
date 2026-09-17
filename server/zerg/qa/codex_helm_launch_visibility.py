@@ -494,6 +494,52 @@ def _start_tui(
     )
 
 
+# The bridge stop only enqueues the terminal event in the machine's
+# runtime-events outbox; the transcript shipper daemon delivers it. Stopping
+# the shipper right after the bridge raced that delivery: the served run never
+# saw terminal_signal, so canary isolation timed out with the run still
+# `running` although every owned process was dead.
+TERMINAL_EVENT_DELIVERY_TIMEOUT_SEC = 120.0
+
+
+def _wait_terminal_event_delivered(
+    isolation_root: Path,
+    dedupe_key: str,
+    *,
+    timeout: float = TERMINAL_EVENT_DELIVERY_TIMEOUT_SEC,
+) -> dict[str, Any]:
+    """Block until the shipper has posted (removed) the bridge terminal event."""
+
+    outbox = isolation_root / "longhouse" / "agent" / "runtime-events-outbox"
+
+    def holding(directory: Path) -> list[str]:
+        held: list[str] = []
+        for path in directory.glob("*.json"):
+            try:
+                event = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(event, dict) and event.get("dedupe_key") == dedupe_key:
+                held.append(path.name)
+        return held
+
+    started = time.monotonic()
+    while True:
+        dead_lettered = holding(outbox / "dead-letter")
+        if dead_lettered:
+            raise RuntimeError(f"Codex terminal event was dead-lettered by the Runtime Host: {dead_lettered}")
+        pending = holding(outbox)
+        if not pending:
+            return {
+                "dedupe_key": dedupe_key,
+                "delivered": True,
+                "wait_seconds": round(time.monotonic() - started, 3),
+            }
+        if time.monotonic() - started >= timeout:
+            raise RuntimeError(f"Codex terminal event {dedupe_key} was still queued in the runtime-events outbox after {timeout:.0f}s")
+        time.sleep(0.25)
+
+
 def _stop_launch(
     args: argparse.Namespace,
     *,
@@ -508,11 +554,16 @@ def _stop_launch(
     verification = bridge.get("verification")
     if not isinstance(verification, dict) or verification.get("verified") is not True:
         raise RuntimeError(f"Codex bridge cleanup was not verified for session {session_id}")
+    state = verification.get("state") if isinstance(verification.get("state"), dict) else {}
+    dedupe_key = state.get("terminal_dedupe_key")
+    if not isinstance(dedupe_key, str) or not dedupe_key or state.get("terminal_published") is not True:
+        raise RuntimeError(f"Codex bridge stop did not publish a terminal event for session {session_id}")
     return {
         "wrapper_pid": tui.process.pid,
         "wrapper_exit_code": tui.process.returncode,
         "wrapper_dead": _pid_dead(tui.process.pid),
         "bridge": bridge,
+        "terminal_event_delivery": _wait_terminal_event_delivered(isolation_root, dedupe_key),
     }
 
 

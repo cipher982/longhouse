@@ -257,3 +257,52 @@ async def test_catalog_dispatch_failure_releases_and_attempts_next_claimed_turn(
 
     assert result.state == SESSION_TURN_STATE_FAILED
     assert [call["run_id"] for call in catalog.calls] == [str(first_run), str(second_run)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored", "expected_error_code", "expected_error"),
+    [
+        # A run that launched and was interrupted stores its terminal state in
+        # `error` with no error_code. Replay must report the outcome, not a
+        # launch failure (the HTTP route answers 502 whenever error is set).
+        ({"state": "cancelled", "error_code": None, "error": "run_cancelled"}, None, None),
+        ({"state": "failed", "error_code": None, "error": "run_failed"}, None, None),
+        # Dispatch records launch failures with a code; replay keeps surfacing them.
+        (
+            {"state": "failed", "error_code": "provider_launch_failed", "error": "spawn failed"},
+            "provider_launch_failed",
+            "spawn failed",
+        ),
+    ],
+)
+async def test_replayed_terminal_turn_reports_launch_failures_only(monkeypatch, stored, expected_error_code, expected_error):
+    from zerg.services.console_turns import enqueue_catalog_console_turn
+
+    turn = {
+        "turn_id": str(uuid4()),
+        "session_id": str(uuid4()),
+        "thread_id": str(uuid4()),
+        "run_id": str(uuid4()),
+        "provider": "claude",
+        "device_id": "cube",
+        **stored,
+    }
+
+    class Catalog:
+        async def call(self, method, params):
+            assert method == "session.console.turn.enqueue.v2"
+            return {"found": True, "created": False, "turn": turn, "commit_seq": "9"}
+
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: Catalog())
+
+    replayed = await enqueue_catalog_console_turn(
+        owner_id=1,
+        session_id=uuid4(),
+        message="Use the shell tool to run `sleep 8`",
+        client_request_id="console-interrupt-replay",
+    )
+
+    assert replayed.state == stored["state"]
+    assert replayed.error_code == expected_error_code
+    assert replayed.error == expected_error

@@ -202,6 +202,11 @@ PRODUCER_MODULES: tuple[str, ...] = (
     "zerg.qa.title_dependency_live_producer",
     "zerg.qa.title_dependency_recovery_producer",
     "zerg.qa.workspace_suggestions_live_producer",
+    "zerg.qa.claude_helm_lifecycle",
+    "zerg.qa.codex_helm_lifecycle",
+    "zerg.qa.cursor_helm_lifecycle",
+    "zerg.qa.opencode_helm_lifecycle",
+    "zerg.qa.transcript_search_producer",
 )
 
 # contract-first-ci.yml runs `make provider-capability-coordination-proof` on
