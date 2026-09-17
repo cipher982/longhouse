@@ -114,3 +114,26 @@ def test_demo_host_without_a_resolver_refuses_v4_publication(monkeypatch, tmp_pa
         response = _publish(client, bundle)
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "provider_capability_blob_store_unavailable"
+
+
+def test_demo_guard_admits_only_the_token_gated_factory_publication_writes() -> None:
+    import asyncio
+
+    from zerg.middleware.demo_guard import DemoGuardMiddleware
+
+    reached: list[str] = []
+
+    async def app(scope, receive, send):
+        reached.append(scope["path"])
+
+    async def send(message):
+        pass
+
+    guard = DemoGuardMiddleware(app)
+    for path in (
+        "/api/internal/provider-capability-proofs",
+        "/api/internal/provider-negative-controls",
+        "/api/agents/sessions",
+    ):
+        asyncio.run(guard({"type": "http", "method": "POST", "path": path}, None, send))
+    assert reached == ["/api/internal/provider-capability-proofs", "/api/internal/provider-negative-controls"]

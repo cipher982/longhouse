@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 _ALLOWED_POST_PREFIXES: tuple[str, ...] = (
     "/api/system/seed-demo-sessions",
     "/api/auth/",
+    # Factory publication writes are authenticated by the factory token, not
+    # the demo's disabled user auth. The public demo holds mirrored proofs and
+    # negative-control verdicts only to certify landing-page chips.
+    "/api/internal/provider-capability-proofs",
+    "/api/internal/provider-negative-controls",
 )
 
 _SAFE_METHODS: frozenset[str] = frozenset({b"GET", b"HEAD", b"OPTIONS"})
