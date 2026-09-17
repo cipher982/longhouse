@@ -345,9 +345,10 @@ mod tests {
                 extension: "jsonl",
             }],
         ));
-        // Allow the asynchronous FSEvents loop to start before the first write.
+        // FSEvents registration is asynchronous; give the native watcher a
+        // full scheduling interval before exercising the newly enrolled root.
         #[cfg(target_os = "macos")]
-        std::thread::sleep(std::time::Duration::from_millis(250));
+        std::thread::sleep(std::time::Duration::from_secs(1));
         let path = root.join("new-session.jsonl");
         // Native backends can coalesce initial creation until a later write.
         // Exercise a live source; the oracle is still a real OS notification.
