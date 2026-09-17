@@ -240,13 +240,20 @@ async def enqueue_catalog_console_turn(
     run_id = UUID(str(turn["run_id"])) if turn.get("run_id") else None
     state = str(turn.get("state") or "queued")
     if state != SESSION_TURN_STATE_STARTING or run_id is None:
+        # Replay surfaces a launch failure, which dispatch records with an
+        # error_code. A run that launched and later ended cancelled or failed
+        # also stores its terminal state in `error` (runtime.py), but that is
+        # the run's outcome, not a failed start: returning it here made every
+        # idempotent replay of an interrupted turn answer 502
+        # provider_launch_failed/run_cancelled instead of state=cancelled.
+        error_code = str(turn.get("error_code") or "") or None
         return CatalogConsoleTurn(
             turn_id=turn_id,
             run_id=run_id,
             state=state,
             created=bool(result.get("created")),
-            error_code=str(turn.get("error_code") or "") or None,
-            error=str(turn.get("error") or "") or None,
+            error_code=error_code,
+            error=(str(turn.get("error") or "") or None) if error_code else None,
         )
 
     control = registry or get_machine_control_channel_registry()
