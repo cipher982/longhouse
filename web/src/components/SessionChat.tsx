@@ -570,37 +570,62 @@ export function SessionChat({
 
   useEffect(() => {
     if (pendingManagedLocalInputs.length === 0 || !timelineItems) return;
-    const resolvedIds = pendingManagedLocalInputs
-      .filter(
-        (pending) =>
-          ((pending.attachments.length === 0 ||
-            pending.phase === "delivered") &&
-            timelineHasDurableSubmittedInput(timelineItems, pending)) ||
-          timelineShowsDeliveredEcho(timelineItems, pending),
-      )
-      .map((pending) => pending.clientRequestId);
+    // Oldest first: every resolved echo is one user row with that text, so
+    // a later identical send must see one more row before it counts as
+    // echoed. Without this, one echo clears two same-text sends.
+    const echoesClaimed = new Map<string, number>();
+    const resolvedIds: string[] = [];
+    for (const pending of pendingManagedLocalInputs) {
+      const text = normalizeInputText(pending.text);
+      const claimed = echoesClaimed.get(text) ?? 0;
+      const identityEcho =
+        (pending.attachments.length === 0 || pending.phase === "delivered") &&
+        timelineHasDurableSubmittedInput(timelineItems, pending);
+      const textEcho = timelineShowsDeliveredEcho(timelineItems, {
+        ...pending,
+        echoBaseline:
+          pending.echoBaseline == null
+            ? undefined
+            : pending.echoBaseline + claimed,
+      });
+      if (!identityEcho && !textEcho) continue;
+      resolvedIds.push(pending.clientRequestId);
+      echoesClaimed.set(text, claimed + 1);
+    }
     if (resolvedIds.length === 0) return;
     for (const clientRequestId of resolvedIds) {
       clearInputOutbox(session.id, clientRequestId);
     }
+    // The rows those echoes occupy stay loaded, so the surviving same-text
+    // sends carry them in their baseline across later passes too.
     setPendingManagedLocalInputs((current) =>
-      current.filter(
-        (pending) => !resolvedIds.includes(pending.clientRequestId),
-      ),
+      current
+        .filter((pending) => !resolvedIds.includes(pending.clientRequestId))
+        .map((pending) => {
+          const consumed = echoesClaimed.get(normalizeInputText(pending.text));
+          return consumed && pending.echoBaseline != null
+            ? { ...pending, echoBaseline: pending.echoBaseline + consumed }
+            : pending;
+        }),
     );
   }, [pendingManagedLocalInputs, session.id, timelineItems]);
 
   // Delivery is settled once the server confirms it, so the durable retry
   // slot is released immediately; only the visible row waits for the echo.
   const markInputDelivered = useCallback(
-    (clientRequestId: string) => {
+    (clientRequestId: string, serverInputId: number | null | undefined) => {
       clearInputOutbox(session.id, clientRequestId);
       const deliveredAt = Date.now();
       setPendingManagedLocalInputs((current) =>
         current.map((pending) =>
           pending.clientRequestId === clientRequestId &&
           pending.phase !== "delivered"
-            ? { ...pending, phase: "delivered", deliveredAt }
+            ? {
+                ...pending,
+                phase: "delivered",
+                deliveredAt,
+                serverInputId: serverInputId ?? pending.serverInputId,
+              }
             : pending,
         ),
       );
@@ -693,7 +718,12 @@ export function SessionChat({
         if (!receipt || pending.phase === "delivered") return pending;
         if (receipt.status === "delivered") {
           clearInputOutbox(session.id, pending.clientRequestId);
-          return { ...pending, phase: "delivered", deliveredAt: Date.now() };
+          return {
+            ...pending,
+            phase: "delivered",
+            deliveredAt: Date.now(),
+            serverInputId: receipt.id ?? pending.serverInputId,
+          };
         }
         if (
           receipt.status === "cancelled" ||
@@ -830,7 +860,7 @@ export function SessionChat({
         );
         const terminalStatus = receipt?.status;
         if (terminalStatus === "delivered") {
-          markInputDelivered(clientRequestId);
+          markInputDelivered(clientRequestId, result.input_id ?? receipt?.id);
           return true;
         }
         if (
@@ -896,7 +926,7 @@ export function SessionChat({
             2000,
           );
           void refreshCurrentSessionWorkspace();
-          markInputDelivered(clientRequestId);
+          markInputDelivered(clientRequestId, result.input_id ?? receipt?.id);
         } else if (
           receipt?.status !== "cancelled" &&
           hasUnknownDeliveryError(receipt?.last_error)
@@ -966,7 +996,7 @@ export function SessionChat({
           // Preserve the request error when the receipt cannot be refreshed.
         }
         if (persistedReceipt?.status === "delivered") {
-          markInputDelivered(clientRequestId);
+          markInputDelivered(clientRequestId, persistedReceipt.id);
           return true;
         }
         if (
@@ -1077,6 +1107,15 @@ export function SessionChat({
                 : row.id !== input.id,
             ),
         );
+        const clientRequestId = input.client_request_id;
+        if (clientRequestId) {
+          clearInputOutbox(session.id, clientRequestId);
+          setPendingManagedLocalInputs((current) =>
+            current.filter(
+              (pending) => pending.clientRequestId !== clientRequestId,
+            ),
+          );
+        }
         void queuedInputsQuery.refetch();
       } catch (e) {
         setError(
@@ -1342,7 +1381,13 @@ export function SessionChat({
     for (const pending of pendingManagedLocalInputs) {
       const key = `pending:${pending.clientRequestId}`;
       const receipt = receiptFor(pending.clientRequestId);
-      if (pending.phase === "unknown") {
+      // A queued send the server is draining right now is mid-delivery, not
+      // ambiguous; the reconciler files it under `unknown` only for lack of
+      // a closer phase.
+      const serverDelivering =
+        receipt?.status === "delivering" &&
+        !hasUnknownDeliveryError(receipt.last_error);
+      if (pending.phase === "unknown" && !serverDelivering) {
         inFlight.push({
           key,
           text: pending.text,

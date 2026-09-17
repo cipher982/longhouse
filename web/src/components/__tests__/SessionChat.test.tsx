@@ -1696,6 +1696,177 @@ describe("SessionChat", () => {
       await waitFor(() => expect(lastOutbox(onOutboxChange)).toEqual([]));
     });
 
+    it("clears one of two identical sends per identity-less echo", async () => {
+      const user = userEvent.setup();
+      const onOutboxChange = vi.fn();
+      mockSendOutcome("sent", "again");
+      const { rerenderSessionChat } = renderSessionChat({
+        chatMode: "managed_local",
+        timelineItems: [],
+        onOutboxChange,
+      });
+
+      for (let index = 0; index < 2; index += 1) {
+        await user.type(screen.getByRole("textbox"), "again");
+        await user.click(screen.getByRole("button", { name: /send/i }));
+        await waitFor(() =>
+          expect(lastOutbox(onOutboxChange)).toHaveLength(index + 1),
+        );
+      }
+
+      const echo = (id: number): TimelineItem => {
+        const item = makeLonghouseUserItem({ text: "again", authoredVia: null });
+        return item.kind === "message"
+          ? { ...item, event: { ...item.event, id } }
+          : item;
+      };
+      rerenderSessionChat({
+        chatMode: "managed_local",
+        onOutboxChange,
+        timelineItems: [echo(1)],
+      });
+      await waitFor(() => expect(lastOutbox(onOutboxChange)).toHaveLength(1));
+
+      rerenderSessionChat({
+        chatMode: "managed_local",
+        onOutboxChange,
+        timelineItems: [echo(1), echo(2)],
+      });
+      await waitFor(() => expect(lastOutbox(onOutboxChange)).toEqual([]));
+    });
+
+    it("matches a delivered send by the server input id alone", async () => {
+      const user = userEvent.setup();
+      const onOutboxChange = vi.fn();
+      mockSendOutcome("sent", "by id");
+      const { rerenderSessionChat } = renderSessionChat({
+        chatMode: "managed_local",
+        timelineItems: [],
+        onOutboxChange,
+      });
+
+      await user.type(screen.getByRole("textbox"), "by id");
+      await user.click(screen.getByRole("button", { name: /send/i }));
+      await waitFor(() =>
+        expect(lastOutbox(onOutboxChange)).toMatchObject([
+          { state: "sending" },
+        ]),
+      );
+
+      rerenderSessionChat({
+        chatMode: "managed_local",
+        onOutboxChange,
+        timelineItems: [
+          makeLonghouseUserItem({ sessionInputId: 7, text: "reworded" }),
+        ],
+      });
+      await waitFor(() => expect(lastOutbox(onOutboxChange)).toEqual([]));
+    });
+
+    it("shows a rehydrated send the server is delivering as sending", async () => {
+      const onOutboxChange = vi.fn();
+      window.localStorage.setItem(
+        "longhouse:session-input:sess-1:web-draining-1",
+        JSON.stringify({
+          sessionId: "sess-1",
+          text: "on its way",
+          intent: "auto",
+          clientRequestId: "web-draining-1",
+          attachments: [],
+          createdAt: 1,
+        }),
+      );
+      requestMock.mockImplementation((path: string) => {
+        if (String(path).endsWith("/lock")) {
+          return Promise.resolve({ locked: false, fork_available: false });
+        }
+        if (String(path).endsWith("/inputs")) {
+          return Promise.resolve([
+            {
+              id: 3,
+              client_request_id: "web-draining-1",
+              text: "on its way",
+              intent: "auto",
+              status: "delivering",
+              created_at: null,
+            },
+          ]);
+        }
+        return Promise.reject(new Error(`Unexpected request: ${path}`));
+      });
+      renderSessionChat({
+        chatMode: "managed_local",
+        timelineItems: [],
+        onOutboxChange,
+      });
+
+      await waitFor(() =>
+        expect(lastOutbox(onOutboxChange)).toMatchObject([
+          { text: "on its way", state: "sending" },
+        ]),
+      );
+      expect(lastOutbox(onOutboxChange)[0].actions).toBeUndefined();
+    });
+
+    it("drops a cancelled queued send and its stored retry slot", async () => {
+      const user = userEvent.setup();
+      const onOutboxChange = vi.fn();
+      let cancelled = false;
+      requestMock.mockImplementation((path: string, init?: RequestInit) => {
+        if (String(path).endsWith("/lock")) {
+          return Promise.resolve({ locked: false, fork_available: false });
+        }
+        if (String(path).endsWith("/inputs") && !init) {
+          return Promise.resolve([]);
+        }
+        if (init?.method === "DELETE") {
+          cancelled = true;
+          return Promise.resolve({ cancelled: true, input_id: 7 });
+        }
+        if (String(path).endsWith("/input") && init?.method === "POST") {
+          const payload = JSON.parse(String(init.body ?? "{}"));
+          return Promise.resolve({
+            outcome: "queued",
+            input_id: 7,
+            intent: "auto",
+            client_request_id: payload.client_request_id,
+            queued: [
+              {
+                id: 7,
+                client_request_id: payload.client_request_id,
+                text: "never mind",
+                intent: "auto",
+                status: "queued",
+                created_at: null,
+              },
+            ],
+          });
+        }
+        return Promise.reject(new Error(`Unexpected request: ${path}`));
+      });
+      renderSessionChat({
+        chatMode: "managed_local",
+        timelineItems: [],
+        onOutboxChange,
+      });
+
+      await user.type(screen.getByRole("textbox"), "never mind");
+      await user.click(screen.getByRole("button", { name: /send/i }));
+      await waitFor(() =>
+        expect(lastOutbox(onOutboxChange)[0]?.actions?.[0]?.label).toBe(
+          "Cancel",
+        ),
+      );
+
+      act(() => lastOutbox(onOutboxChange)[0].actions?.[0].onClick());
+      await waitFor(() => expect(lastOutbox(onOutboxChange)).toEqual([]));
+      expect(cancelled).toBe(true);
+      const storedSlots = Object.keys(window.localStorage).filter((key) =>
+        key.startsWith("longhouse:session-input:sess-1:"),
+      );
+      expect(storedSlots).toEqual([]);
+    });
+
     it("reports a queued send with a cancel action", async () => {
       const user = userEvent.setup();
       const onOutboxChange = vi.fn();

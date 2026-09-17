@@ -1216,19 +1216,6 @@ export function TimelinePane({
     }
   }, [items]);
 
-  // A new send always brings the tail into view, wherever the reader was:
-  // the user just acted and expects to see their message land.
-  const prevOutboxCountRef = useRef(outbox.length);
-  useLayoutEffect(() => {
-    const container = scrollContainerRef.current;
-    const prevCount = prevOutboxCountRef.current;
-    prevOutboxCountRef.current = outbox.length;
-    if (!container || outbox.length <= prevCount) return;
-    container.scrollTop = container.scrollHeight;
-    wasAtBottomRef.current = true;
-    setUnreadCount(0);
-  }, [outbox.length]);
-
   // Track "at bottom" continuously so the next append knows whether to
   // stick. We read scrollTop on every scroll, not only on mutation, so
   // the user's intent (scrolled up = don't follow) is always current.
@@ -1349,6 +1336,23 @@ export function TimelinePane({
   // reading history, not watching the conversation continue.
   const visibleOutbox =
     eventFilter === "all" && !debouncedSearch.trim() ? outbox : EMPTY_OUTBOX;
+  // A new send always brings the tail into view, wherever the reader was:
+  // the user just acted and expects to see their message land. Filtered or
+  // searched views hide the outbox, so they are left where they are.
+  // Keyed on sends, not visibility: clearing a filter is not a send.
+  const prevOutboxCountRef = useRef(outbox.length);
+  const outboxVisible = visibleOutbox.length > 0;
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    const prevCount = prevOutboxCountRef.current;
+    prevOutboxCountRef.current = outbox.length;
+    if (!container || !outboxVisible || outbox.length <= prevCount) return;
+    container.scrollTop = container.scrollHeight;
+    wasAtBottomRef.current = true;
+    setUnreadCount(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a send, not a visibility change, scrolls
+  }, [outbox.length]);
+
   const showScopedLoading = loading && filteredItems.length === 0;
   const showScopedError = !loading && !!error && filteredItems.length === 0;
 
