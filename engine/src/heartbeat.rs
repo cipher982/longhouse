@@ -6156,7 +6156,11 @@ mod tests {
         );
         assert_eq!(
             control_grants("claude"),
-            vec!["interrupt".to_string(), "send_input".to_string()]
+            vec![
+                "interrupt".to_string(),
+                "send_input".to_string(),
+                "terminate".to_string()
+            ]
         );
         assert_eq!(
             control_grants("opencode"),

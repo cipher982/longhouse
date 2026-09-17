@@ -74,15 +74,21 @@
     "runtime_url": "https://fixture.invalid",
     "token_path": "/tmp/longhouse-fixture-token"
   },
-  "reasons": [],
+  "reasons": [
+    "engine_reconciliation_stale"
+  ],
   "schema_version": 1,
   "severity": "green",
   "spool": {
     "dead_count": 0,
     "pending_count": 0
   },
-  "suggested_action_ids": [],
-  "suggested_actions": [],
+  "suggested_action_ids": [
+    "inspect_native_status"
+  ],
+  "suggested_actions": [
+    "Inspect native local health details"
+  ],
   "transport": {
     "status": "healthy",
     "status_reason": "healthy",

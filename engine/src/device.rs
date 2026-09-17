@@ -6731,6 +6731,7 @@ mod tests {
     fn native_local_health_reports_transport_payload_rejection() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
+        let now = chrono::Utc::now().to_rfc3339();
         let health = native_health_from_parts(
             &path,
             true,
@@ -6739,7 +6740,13 @@ mod tests {
                 "ship_payload_rejections_1h": 1,
                 "spool_pending_count": 0,
                 "spool_dead_count": 0,
-                "is_offline": false
+                "is_offline": false,
+                "local_projection": {
+                    "generated_at": now.clone(),
+                    "engine_pulse_at": now.clone(),
+                    "last_reconciled_at": now,
+                    "reconciliation": {"state": "idle"}
+                }
             })),
             None,
         );
@@ -6754,6 +6761,7 @@ mod tests {
     fn native_local_health_reports_transport_error_burst() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
+        let now = chrono::Utc::now().to_rfc3339();
         let health = native_health_from_parts(
             &path,
             true,
@@ -6764,7 +6772,13 @@ mod tests {
                 "last_ship_result": "server_error",
                 "spool_pending_count": 0,
                 "spool_dead_count": 0,
-                "is_offline": false
+                "is_offline": false,
+                "local_projection": {
+                    "generated_at": now.clone(),
+                    "engine_pulse_at": now.clone(),
+                    "last_reconciled_at": now,
+                    "reconciliation": {"state": "idle"}
+                }
             })),
             None,
         );
@@ -6862,13 +6876,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = engine_status_path(Some(dir.path())).unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
         std::fs::write(
             &path,
             serde_json::to_string(&json!({
                 "last_updated": "2026-06-29T00:00:00Z",
                 "spool_pending_count": 0,
-                "spool_dead_count": 0,
-                "is_offline": false
+                "is_offline": false,
+                "local_projection": {
+                    "generated_at": now.clone(),
+                    "engine_pulse_at": now.clone(),
+                    "last_reconciled_at": now,
+                    "reconciliation": {"state": "idle"}
+                }
             }))
             .unwrap(),
         )
@@ -6889,14 +6909,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
         std::fs::write(
             &path,
             serde_json::to_string(&json!({
-                "last_updated": "2026-06-29T00:00:00Z",
+                "last_updated": now.clone(),
                 "ship_payload_rejections_1h": 2,
                 "spool_pending_count": 0,
-                "spool_dead_count": 0,
-                "is_offline": false
+                "is_offline": false,
+                "local_projection": {
+                    "generated_at": now.clone(),
+                    "engine_pulse_at": now.clone(),
+                    "last_reconciled_at": now,
+                    "reconciliation": {"state": "idle"}
+                }
             }))
             .unwrap(),
         )
