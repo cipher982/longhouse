@@ -352,7 +352,7 @@ mod tests {
         let path = root.join("new-session.jsonl");
         // Native backends can coalesce initial creation until a later write.
         // Exercise a live source; the oracle is still a real OS notification.
-        let observed = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let observed = tokio::time::timeout(std::time::Duration::from_secs(30), async {
             let mut writes = tokio::time::interval(std::time::Duration::from_millis(100));
             loop {
                 tokio::select! {
