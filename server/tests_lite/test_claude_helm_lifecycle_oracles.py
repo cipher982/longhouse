@@ -190,6 +190,46 @@ def test_killed_tool_that_the_model_works_around_is_not_a_stop() -> None:
     assert verdict["tools_executed_after_interrupt"] == 1
 
 
+def test_marker_said_after_a_killed_tool_is_still_a_stop() -> None:
+    """A literal-minded model says the promised reply when its tool is killed.
+
+    The tool errored, nothing ran after, and the turn ended early, so the work
+    was stopped: the wrap-up wording is not evidence the abort failed.
+    """
+
+    rows = [
+        _prompt("run lh_claude_progress_x then reply FORBIDDEN_x"),
+        _bash("for i ...lh_claude_progress_x"),
+        {"type": "user", "timestamp": "2026-09-16T19:40:03Z", "message": {"content": [{"type": "tool_result", "is_error": True}]}},
+        _text("FORBIDDEN_x"),
+        _end("2026-09-16T19:40:05Z"),
+    ]
+
+    verdict = _abort(rows, interrupted_at=1789587600.0)
+
+    assert verdict["passed"] is True
+    assert verdict["forbidden_reply_produced"] is True
+    assert verdict["long_tool_completed"] is False
+
+
+def test_marker_said_after_the_tool_completed_is_rejected() -> None:
+    """The same wording after a *successful* tool means the work was not stopped."""
+
+    rows = [
+        _prompt("run lh_claude_progress_x then reply FORBIDDEN_x"),
+        _bash("for i ...lh_claude_progress_x"),
+        {"type": "user", "timestamp": "2026-09-16T19:39:59Z", "message": {"content": [{"type": "tool_result", "is_error": False}]}},
+        _text("FORBIDDEN_x"),
+        _end("2026-09-16T19:40:04Z"),
+    ]
+
+    verdict = _abort(rows, interrupted_at=1789587600.0)
+
+    assert verdict["passed"] is False
+    assert verdict["failure_code"] == "abort_did_not_stop_turn"
+    assert verdict["forbidden_reply_after_completed_tool"] is True
+
+
 def test_noop_interrupt_that_lets_the_tool_finish_is_rejected() -> None:
     rows = [
         _prompt("run lh_claude_progress_x then reply FORBIDDEN_x"),

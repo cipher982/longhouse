@@ -79,7 +79,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="claude.helm_lifecycle.v1",
     producer_revision=1,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=3,
+    scenario_revision=4,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("claude",),
     # Claude on macOS keeps credentials in the desktop Keychain; a relocated
@@ -261,7 +261,18 @@ def abort_stopped_turn(
     if end is None:
         return {"passed": False, "failure_code": "abort_did_not_stop_turn", "turn_completed": False}
     turn = rows[start : end + 1]
-    forbidden = any(forbidden_marker in text for text in _assistant_texts(turn))
+    said_forbidden = any(forbidden_marker in text for text in _assistant_texts(turn))
+    # The promised reply is only evidence of a failed abort when the long tool
+    # actually completed: the prompt says "when it finishes, reply <marker>".
+    # A killed tool returns an error result, and a literal-minded model (Haiku
+    # 4.5, verified 2026-09-17: tool killed at 3.7s with exit 144, marker
+    # emitted 1.7s later, turn ended) treats that as "finished" and says it
+    # anyway. Counting that as a failed abort tests the model's wrap-up prose,
+    # not whether Longhouse stopped the work -- the early-stop and
+    # nothing-ran-after signals below carry that, and the interrupt_noop
+    # negative control proves they do.
+    tool_completed = any(_successful_tool_result(row) for row in turn)
+    forbidden = said_forbidden and tool_completed
     ended_at = _timestamp(rows[end])
     stop_latency = None if ended_at is None else round(ended_at - interrupted_at, 3)
     early = stop_latency is not None and stop_latency < tool_seconds / 2
@@ -285,7 +296,9 @@ def abort_stopped_turn(
     return {
         "passed": failure is None,
         "failure_code": failure,
-        "forbidden_reply_produced": forbidden,
+        "forbidden_reply_produced": said_forbidden,
+        "forbidden_reply_after_completed_tool": forbidden,
+        "long_tool_completed": tool_completed,
         "turn_stop_latency_seconds": stop_latency,
         "stopped_before_tool_could_finish": early,
         "tools_executed_after_interrupt": tools_after,
