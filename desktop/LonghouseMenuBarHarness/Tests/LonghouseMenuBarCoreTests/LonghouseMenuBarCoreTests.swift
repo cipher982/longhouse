@@ -3621,10 +3621,9 @@ struct LonghouseMenuBarCoreTests {
         #expect(recorded.realtime?.runtimeUrl != nil)
         #expect(recorded.transport?.status == "healthy")
         #expect(recorded.engineStatus?.payload != nil)
-        #expect(
-            recorded.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 1_785_772_800)).headline
-                == "1 Helm session open"
-        )
+        let presentation = recorded.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 1_785_772_800))
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.headline == "Session discovery needs attention")
 
         guard let binary = ProcessInfo.processInfo.environment["LONGHOUSE_HEALTH_BIN"],
               FileManager.default.isExecutableFile(atPath: binary)
