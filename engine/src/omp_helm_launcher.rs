@@ -2833,6 +2833,10 @@ mod tests {
             assert_eq!(delayed_during_provisional.tool_name, None);
             assert_eq!(delayed_during_provisional.agent_end_is_terminal, Some(true));
 
+            {
+                let mut shared = server.shared.lock().unwrap();
+                shared.state.updated_at = "2000-01-01T00:00:00+00:00".into();
+            }
             let before_keepalive = server.current_state();
             server.handle_extension_frame(
                 "connection",
