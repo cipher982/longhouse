@@ -2058,3 +2058,45 @@ def test_omp_cleanup_retirement_is_bound_to_the_exact_hidden_archived_session() 
         },
         "session-1",
     )
+
+
+def test_omp_native_model_evidence_binds_routed_thinking_pin_to_recorded_model(tmp_path) -> None:
+    # Factory pin `openrouter/anthropic/claude-haiku-4.5:off`; OMP 18.2.3 records
+    # message.model `anthropic/claude-haiku-4.5` with provider `openrouter`.
+    first_turn = [
+        {"type": "session", "id": "native-1"},
+        {
+            "type": "message",
+            "message": {
+                "role": "assistant",
+                "provider": "openrouter",
+                "model": "anthropic/claude-haiku-4.5",
+                "stopReason": "stop",
+                "content": [{"type": "text", "text": "OMP_WINDOW_MARKER"}],
+                "usage": {"input": 3, "output": 2},
+            },
+        },
+    ]
+    _write_omp_console_settlement_fixture(tmp_path, first_turn_events=first_turn, later_events=[])
+
+    evidence = omp_native_model_evidence(
+        tmp_path,
+        source_canary="omp_console_lifecycle",
+        qualification_model="openrouter/anthropic/claude-haiku-4.5:off",
+        api_key_configured=True,
+        first_turn_only=True,
+    )
+
+    assert evidence is not None
+    assert evidence["model"] == "anthropic/claude-haiku-4.5"
+    for mismatched in ("openrouter/anthropic/claude-haiku-4.5:batch", "openrouter/anthropic/claude-sonnet-4.5:off"):
+        assert (
+            omp_native_model_evidence(
+                tmp_path,
+                source_canary="omp_console_lifecycle",
+                qualification_model=mismatched,
+                api_key_configured=True,
+                first_turn_only=True,
+            )
+            is None
+        )

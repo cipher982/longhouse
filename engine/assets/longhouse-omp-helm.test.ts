@@ -35,3 +35,24 @@ describe("ompProviderIsIdle", () => {
     expect(ompProviderIsIdle(true, true)).toBe(true);
   });
 });
+
+describe("agentEndIsTerminal", () => {
+  it("reads OMP's own final agent_end shape as terminal", () => {
+    // OMP 18.2.x: emit({ type: "agent_end", messages, willContinue: decision?.willContinue })
+    expect(agentEndIsTerminal({ type: "agent_end", messages: [], willContinue: undefined })).toBe(true);
+    expect(agentEndIsTerminal({ type: "agent_end" })).toBe(true);
+    expect(agentEndIsTerminal({ type: "agent_end", isTerminal: undefined })).toBe(true);
+  });
+
+  it("honours explicit booleans", () => {
+    expect(agentEndIsTerminal({ type: "agent_end", willContinue: true })).toBe(false);
+    expect(agentEndIsTerminal({ type: "agent_end", willContinue: false })).toBe(true);
+    expect(agentEndIsTerminal({ type: "agent_end", isTerminal: true })).toBe(true);
+    expect(agentEndIsTerminal({ type: "agent_end", isTerminal: false, willContinue: false })).toBe(false);
+  });
+
+  it("keeps malformed present values non-terminal", () => {
+    expect(agentEndIsTerminal({ type: "agent_end", willContinue: null })).toBe(false);
+    expect(agentEndIsTerminal({ type: "agent_end", isTerminal: "true" })).toBe(false);
+  });
+});
