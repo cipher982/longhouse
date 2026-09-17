@@ -74,7 +74,12 @@ def collect(db: Path, samples: int, day: str) -> tuple[dict, list[str]]:
         return finish(report, degraded)
 
     uri = f"file:{db}?mode=ro"
-    with sqlite3.connect(uri, uri=True) as conn:
+    try:
+        conn_ctx = sqlite3.connect(uri, uri=True)
+    except sqlite3.Error as error:
+        degraded.append(f"database_open_failed: {error}")
+        return finish(report, degraded)
+    with conn_ctx as conn:
         try:
             report["journal_mode"] = conn.execute("pragma journal_mode").fetchone()[0]
             report["page_size"] = conn.execute("pragma page_size").fetchone()[0]
@@ -189,6 +194,10 @@ def lock_probe(db: Path, samples: int) -> dict:
         time.sleep(0.25)
     if not waits:
         return {"samples": samples, "failures": failures, "degraded": "lock_probe_unavailable"}
+    if failures:
+        partial = f"lock_probe_partial: {failures} of {samples} samples could not take the write lock"
+    else:
+        partial = None
     ordered = sorted(waits)
     return {
         "samples": samples,
@@ -199,7 +208,7 @@ def lock_probe(db: Path, samples: int) -> dict:
         "over_200ms": sum(1 for value in ordered if value > 200),
         "over_1000ms": sum(1 for value in ordered if value > 1000),
         "first_error": first_error if failures else None,
-        "degraded": None,
+        "degraded": partial,
     }
 
 
@@ -274,7 +283,7 @@ def warning_kinds(log_dir: Path, day: str) -> dict:
 
 
 def summarize(report: dict) -> str:
-    lines: list[str] = []
+    lines: list[str] = [f"healthy_baseline={report.get('healthy_baseline')}"]
     for key in ("captured_at", "main_bytes", "wal_bytes", "shm_bytes", "journal_mode",
                 "page_size", "page_count", "freelist_pages", "interior_unused_bytes"):
         lines.append(f"{key}={report.get(key)}")

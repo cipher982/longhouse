@@ -346,6 +346,17 @@ impl OmpHelmServer {
             && state.state.terminal_reason.as_deref()
                 != Some("native_session_transition_not_committed")
     }
+    /// Whether this session's native identity has been committed to the source
+    /// of truth. False means the launcher has nothing to attribute activity to.
+    fn has_committed_identity(&self) -> bool {
+        !self
+            .shared
+            .lock()
+            .expect("OMP state mutex poisoned")
+            .state
+            .native_session_id
+            .is_empty()
+    }
     /// Guards shared by both identity-reconcile paths: a frame may only bind the
     /// session's source when it carries the base authority, the session can
     /// still change identity, and it offers a native identity to bind.
@@ -739,6 +750,15 @@ impl OmpHelmServer {
             if !self.extension_authority_matches(connection_id, &frame) {
                 return;
             }
+        }
+        // Nothing publishes provider activity for a session whose native
+        // identity was never committed. `extension_identity_matches` reads an
+        // empty stored identity as a match, so without this guard an unbound
+        // session looks healthy while its transcript cannot be bound at all —
+        // and an activity frame that was just refused a bind (pending
+        // transition, stopped, terminal-timeout reason) would still publish.
+        if is_activity_frame_kind(kind) && !self.has_committed_identity() {
+            return;
         }
         if is_activity_frame_kind(kind) && kind != "agent_start" {
             self.reconcile_turn_generation(&frame);
@@ -2682,6 +2702,56 @@ mod tests {
                 current.terminal_reason, None,
                 "the repaired session must stop advertising the bind failure"
             );
+            server.shutdown();
+        });
+    }
+
+    #[test]
+    fn an_unbound_session_does_not_publish_activity() {
+        // The frame cannot bind (a pending transition refuses it) and the
+        // launcher holds no identity, so there is nothing to attribute the
+        // activity to: publishing it is how an unbound session looked healthy.
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("longhouse");
+        let socket_dir = temp.path().join("socket");
+        let socket_path = socket_dir.join("channel.sock");
+        let state_path = temp.path().join("state.json");
+        let mut initial = state();
+        initial.native_session_id = String::new();
+        initial.session_file = String::new();
+        initial.pending_transition = true;
+        initial.ready = false;
+        initial.status = "switching".into();
+
+        temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
+            let server =
+                OmpHelmServer::start(initial, socket_path, socket_dir, state_path).unwrap();
+            let (sender, _receiver) = mpsc::channel();
+            {
+                let mut shared = server.shared.lock().unwrap();
+                shared.extension_sender = Some(sender);
+                shared.extension_connection_id = Some("connection".into());
+            }
+            server.handle_extension_frame(
+                "connection",
+                json!({
+                    "kind": "agent_start",
+                    "event": {"type": "agent_start"},
+                    "auth_token": "token",
+                    "session_id": server.current_state().session_id,
+                    "native_session_id": "native-b",
+                    "session_file": "/tmp/session-b.jsonl",
+                    "connection_id": "connection",
+                    "lease_generation": "generation"
+                }),
+            );
+            let current = server.current_state();
+            assert_eq!(
+                current.phase, "idle",
+                "an unbound session must not publish a running phase"
+            );
+            assert_eq!(current.live_message_seq, 0);
+            assert!(current.native_session_id.is_empty());
             server.shutdown();
         });
     }

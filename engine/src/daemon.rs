@@ -2782,6 +2782,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 // pass tracks its own task set so an unrelated maintenance job
                 // can never make a due pass silently skip a day; overlapping
                 // compactions are refused inside the pass.
+                // A tick that arrives while this pass is still running is
+                // consumed rather than queued: the tick is a day apart and a
+                // pass takes minutes, so being self-busy would mean the previous
+                // pass outlived a day, which the next start repairs.
                 if daily_maintenance_tasks.is_empty() {
                     let db_path = projection_db_path.clone();
                     daily_maintenance_tasks.spawn_blocking(move || {

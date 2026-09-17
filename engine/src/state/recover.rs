@@ -1340,6 +1340,10 @@ pub fn daily_maintenance_delay(db_path: &Path, now: DateTime<Utc>) -> Duration {
 /// stop the others, and none of them defers the pass — that was true before this
 /// move and is what keeps a missing table from reading as a maintenance failure.
 fn run_daily_prunes(conn: &Connection) {
+    // A failing statement is logged and ignored on purpose: every one of these
+    // is idempotent housekeeping that the next pass repeats, and none of them is
+    // the reason the marker exists. The marker tracks the reclaim — a pass that
+    // could not compact, or could not open the database at all, stays due.
     // Give dead-lettered ranges another chance before pruning anything. Most
     // dead-lettering is a transient the engine outlived — a host outage, a
     // payload shape since fixed — and without this the range is retained,
