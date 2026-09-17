@@ -1519,11 +1519,20 @@ def _permission_scenario(
     # Since Cursor 2026.09.02 a hook `permission: allow` is advisory: the CLI
     # acts only on `deny` and `ask` and then applies its own command approval
     # policy, so an un-allowlisted command still stops at the TUI "Run this
-    # command?" prompt. Run with --force so the provider's own approval never
-    # decides the outcome; the Longhouse hook decision must then be the only
-    # gate: deny still blocks an auto-approved command (fail-closed) and allow
-    # does not obstruct it.
-    argv = [binary, "--resume", provider_id, "--workspace", str(workspace), "--force"]
+    # command?" prompt. `allow` and `deny` therefore run with --force, so the
+    # provider's own approval never decides the outcome and the Longhouse hook
+    # decision is the only gate: deny still blocks an auto-approved command
+    # (fail-closed) and allow does not obstruct it.
+    #
+    # `ask` is the exception, and it must not use --force. Asking means handing
+    # the decision back to the approval layer; --force *is* an answer to that
+    # question, so a forced run legitimately proceeds and the scenario would be
+    # asserting something the provider never promised. Unforced, an unattended
+    # `ask` executes nothing, which is exactly the promise worth proving.
+    auto_approval = "prompt" if decision == "ask" else "force"
+    argv = [binary, "--resume", provider_id, "--workspace", str(workspace)]
+    if auto_approval == "force":
+        argv.append("--force")
     if model:
         argv.extend(["--model", model])
     argv.append(f"Run exactly `printf ALLOWED > {marker_file}` once, then report the result.")
@@ -1561,7 +1570,7 @@ def _permission_scenario(
             "provider_conversation_id": provider_id,
             "generation_id": shell.get("generation_id"),
             "side_effect_present": marker_file.exists(),
-            "provider_auto_approval": "force",
+            "provider_auto_approval": auto_approval,
             "process_alive": session.alive(),
         }
     finally:

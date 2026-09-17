@@ -358,3 +358,76 @@ def test_cursor_source_ship_rejects_zero_shipped_events(monkeypatch, tmp_path: P
 def test_storage_v2_gate_stub_rejects_an_invalid_envelope_id() -> None:
     with pytest.raises(ValueError, match="canonical expected envelope id"):
         _storage_v2_receipt_payload(b'{"expected_envelope_id":"not-a-hash"}')
+
+
+class _StubPtySession:
+    """A Cursor PTY session that records its argv and starts nothing."""
+
+    def __init__(self, argv: list[str]) -> None:
+        self.argv = argv
+
+    @classmethod
+    def capture(cls, recorded: list[list[str]]):
+        def start(*, argv, cwd, env, terminal_path):  # noqa: ANN001 - test double
+            recorded.append(list(argv))
+            return cls(list(argv))
+
+        return start
+
+    def alive(self) -> bool:
+        return True
+
+    def close(self) -> None:
+        return None
+
+
+def _run_permission_scenario(monkeypatch, tmp_path: Path, decision: str) -> tuple[list[str], dict]:
+    from zerg.qa import cursor_helm_gate0 as gate
+
+    recorded: list[list[str]] = []
+    monkeypatch.setattr(gate.CursorPtySession, "start", _StubPtySession.capture(recorded))
+    monkeypatch.setattr(gate, "read_hook_events", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(gate, "wait_for_hook", lambda *_args, **_kwargs: {"generation_id": "gen-1"})
+    workspace = tmp_path / decision
+    workspace.mkdir()
+    if decision == "allow":
+        # permission=allow must let the command through, so the side effect is present.
+        (workspace / f"permission-{decision}.txt").write_text("ALLOWED", encoding="utf-8")
+    result = gate._permission_scenario(
+        decision=decision,
+        binary="/fixture/cursor-agent",
+        workspace=workspace,
+        events_path=tmp_path / "events.jsonl",
+        terminal_path=tmp_path / f"{decision}.raw",
+        provider_id="conversation-1",
+        timeout=1.0,
+        model=None,
+    )
+    return recorded[0], result
+
+
+@pytest.mark.parametrize("decision", ["allow", "deny"])
+def test_permission_allow_and_deny_force_past_provider_approval(monkeypatch, tmp_path: Path, decision: str) -> None:
+    """The hook decision must be the only gate, not Cursor's own prompt."""
+
+    argv, result = _run_permission_scenario(monkeypatch, tmp_path, decision)
+
+    assert "--force" in argv
+    assert result["provider_auto_approval"] == "force"
+    assert result["status"] == "passed"
+
+
+def test_permission_ask_does_not_force_its_own_answer(monkeypatch, tmp_path: Path) -> None:
+    """--force answers the very question `ask` exists to pose.
+
+    Cursor 2026.09.10 executed the command under `permission=ask` because
+    --force auto-approved it, which failed Gate 0 on a promise the provider
+    never made. Unforced, an unattended ask executes nothing.
+    """
+
+    argv, result = _run_permission_scenario(monkeypatch, tmp_path, "ask")
+
+    assert "--force" not in argv
+    assert result["provider_auto_approval"] == "prompt"
+    assert result["side_effect_present"] is False
+    assert result["status"] == "passed"
