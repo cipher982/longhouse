@@ -69,7 +69,9 @@ from zerg.catalogd.models import StorageSession
 from zerg.catalogd.schema import catalog_meta
 from zerg.catalogd.schema import storage_telemetry_counters
 from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
+from zerg.machine_evidence import MAX_MACHINE_EVIDENCE_BYTES
 from zerg.machine_evidence import canonical_evidence_hash
+from zerg.machine_evidence import machine_evidence_bytes
 from zerg.models.live_store import LiveAPNSDeviceRegistration
 from zerg.models.live_store import LiveAPNSLiveActivityRegistration
 from zerg.models.live_store import LiveArchiveOutbox
@@ -15069,6 +15071,11 @@ def _shadow_facts_from_heartbeat(
     evidence = machine_evidence
     if not isinstance(evidence, dict):
         return "no_evidence", []
+    # The Runtime Host drops oversize evidence before it reaches the wire; this
+    # repeats the bound for anyone calling the RPC directly, and reports it as
+    # evidence state rather than refusing the heartbeat.
+    if machine_evidence_bytes(evidence) > MAX_MACHINE_EVIDENCE_BYTES:
+        return "oversize_evidence", []
     if evidence.get("schema_version") != 3:
         return "unsupported_schema", []
     facts = reducer_facts_from_machine_evidence(evidence)
