@@ -18,6 +18,16 @@ struct SessionViewModelTests {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("lh-viewmodel-cache-\(UUID().uuidString)", isDirectory: true)
     }
+    /// Production uses the shared store for restart-safe sends; each view-model
+    /// fixture gets a unique root so one test cannot restore another's intent.
+    static func isolatedPendingInputStore() -> PendingInputStore {
+        PendingInputStore(directory: tempPendingInputDirectory())
+    }
+
+    static func tempPendingInputDirectory() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-viewmodel-pending-\(UUID().uuidString)", isDirectory: true)
+    }
     private func recordCurrentTranscriptFrame(_ model: SessionViewModel) {
         model.recordTranscriptFrameRendered(
             WebTranscriptRenderReceipt(
@@ -45,7 +55,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [workspace])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
 
@@ -73,7 +83,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [workspace])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
 
@@ -85,7 +95,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [workspace])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         #expect(await api.subagentRequestCount() == 0)
@@ -110,7 +120,7 @@ struct SessionViewModelTests {
 
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
         let startTask = Task { await model.start(sessionId: "session-1", appState: appState) }
 
         await waitForDetailRequestCount(api, atLeast: 1)
@@ -151,7 +161,8 @@ struct SessionViewModelTests {
                 )
             },
             enableRealtime: true,
-            snapshotStore: Self.isolatedSnapshotStore()
+            snapshotStore: Self.isolatedSnapshotStore(),
+            pendingInputStore: Self.isolatedPendingInputStore()
         )
         let startTask = Task { await model.start(sessionId: "session-1", appState: appState) }
 
@@ -185,7 +196,7 @@ struct SessionViewModelTests {
         await api.pauseNextDetailResponse()
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
         let startTask = Task { await model.start(sessionId: "session-1", appState: appState) }
 
         await waitForTailResponseCount(api, atLeast: 1)
@@ -224,7 +235,7 @@ struct SessionViewModelTests {
         await api.pauseNextDetailResponse()
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
         let startTask = Task { await model.start(sessionId: "session-1", appState: appState) }
 
         await waitForTailResponseCount(api, atLeast: 1)
@@ -255,7 +266,7 @@ struct SessionViewModelTests {
 
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
         let firstStart = Task { await model.start(sessionId: "session-1", appState: appState) }
 
         await waitForDetailRequestCount(api, atLeast: 1)
@@ -301,7 +312,8 @@ struct SessionViewModelTests {
             apiFactory: { _ in api },
             streamFactory: { _, _, _, _ in Self.neverConnectingStreamSource() },
             enableRealtime: true,
-            snapshotStore: Self.isolatedSnapshotStore()
+            snapshotStore: Self.isolatedSnapshotStore(),
+            pendingInputStore: Self.isolatedPendingInputStore()
         )
         let startTask = Task { await model.start(sessionId: "session-1", appState: appState) }
 
@@ -344,7 +356,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [workspace])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
 
@@ -358,7 +370,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [before, after])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         await model.start(sessionId: "session-1", appState: appState)
@@ -378,7 +390,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [tail, older])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         await model.loadOlder(sessionId: "session-1", appState: appState)
@@ -401,7 +413,8 @@ struct SessionViewModelTests {
             apiFactory: { _ in api },
             streamFactory: { _, _, _, _ in Self.neverConnectingStreamSource() },
             enableRealtime: true,
-            snapshotStore: Self.isolatedSnapshotStore()
+            snapshotStore: Self.isolatedSnapshotStore(),
+            pendingInputStore: Self.isolatedPendingInputStore()
         )
 
         await model.start(sessionId: "session-1", appState: appState)
@@ -443,7 +456,8 @@ struct SessionViewModelTests {
             apiFactory: { _ in api },
             streamFactory: { _, _, _, _ in Self.neverConnectingStreamSource() },
             enableRealtime: true,
-            snapshotStore: cache
+            snapshotStore: cache,
+            pendingInputStore: Self.isolatedPendingInputStore()
         )
 
         await model.start(sessionId: "session-1", appState: appState)
@@ -476,7 +490,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [tail, older, refreshedTail])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         await model.loadOlder(sessionId: "session-1", appState: appState)
@@ -509,7 +523,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [fresh])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, snapshotStore: cache)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, snapshotStore: cache, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
 
@@ -545,7 +559,7 @@ struct SessionViewModelTests {
         await api.pauseNextTailResponse(offset: 0)
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, snapshotStore: cache)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, snapshotStore: cache, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         await waitForTailRequestCount(api, atLeast: 1)
@@ -644,7 +658,7 @@ struct SessionViewModelTests {
         await api.pauseNextTailResponse(offset: 0)
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, snapshotStore: cache)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, snapshotStore: cache, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         await waitForTailRequestCount(api, atLeast: 1)
@@ -677,13 +691,13 @@ struct SessionViewModelTests {
         appState.serverURL = "https://example.longhouse.ai"
 
         let firstAPI = FakeSessionWorkspaceClient(workspaces: [tail, older])
-        let firstModel = SessionViewModel(apiFactory: { _ in firstAPI }, enableRealtime: false, snapshotStore: cache)
+        let firstModel = SessionViewModel(apiFactory: { _ in firstAPI }, enableRealtime: false, snapshotStore: cache, pendingInputStore: Self.isolatedPendingInputStore())
         await firstModel.start(sessionId: "session-1", appState: appState)
         await firstModel.loadOlder(sessionId: "session-1", appState: appState)
 
         let secondAPI = FakeSessionWorkspaceClient(workspaces: [fresh])
         await secondAPI.pauseNextTailResponse(offset: 0)
-        let secondModel = SessionViewModel(apiFactory: { _ in secondAPI }, enableRealtime: false, snapshotStore: cache)
+        let secondModel = SessionViewModel(apiFactory: { _ in secondAPI }, enableRealtime: false, snapshotStore: cache, pendingInputStore: Self.isolatedPendingInputStore())
         await secondModel.start(sessionId: "session-1", appState: appState)
         await waitForCondition("cached history frame", sourceLocation: #_sourceLocation) {
             secondModel.items.map(\.id) == ["user:1", "user:51"]
@@ -703,7 +717,7 @@ struct SessionViewModelTests {
         await api.failFutureWorkspaceLoads()
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         await waitForCondition("primary detail after tail failure", sourceLocation: #_sourceLocation) {
@@ -742,7 +756,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [before, after])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         await api.failFutureWorkspaceLoads()
@@ -762,7 +776,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [before])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
@@ -778,7 +792,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [before])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         await api.failFutureWorkspaceLoads()
@@ -799,7 +813,7 @@ struct SessionViewModelTests {
         await api.failFutureSends(URLError(.notConnectedToInternet))
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "do not lose this", sessionId: "session-1", appState: appState)
@@ -899,7 +913,7 @@ struct SessionViewModelTests {
         ))
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "conflict", sessionId: "session-1", appState: appState)
@@ -935,7 +949,7 @@ struct SessionViewModelTests {
         )
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "next", sessionId: "session-1", appState: appState, intent: "queue")
@@ -967,7 +981,7 @@ struct SessionViewModelTests {
         )
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         #expect(await model.send(text: "work on this", sessionId: "session-1", appState: appState))
@@ -1002,7 +1016,7 @@ struct SessionViewModelTests {
         ])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         let steered = await model.send(text: "keep going", sessionId: "session-1", appState: appState, intent: "steer")
@@ -1055,7 +1069,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [before, after])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         let request = try #require(model.detail?.activePauseRequest)
@@ -1127,7 +1141,7 @@ struct SessionViewModelTests {
         )
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         let request = try #require(model.detail?.activePauseRequest)
@@ -1205,7 +1219,7 @@ struct SessionViewModelTests {
         )
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
@@ -1239,7 +1253,7 @@ struct SessionViewModelTests {
         )
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
@@ -1276,7 +1290,7 @@ struct SessionViewModelTests {
         )
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
@@ -1298,7 +1312,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [tail, older, sameOlder, sameOlder])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         #expect(model.isTranscriptFrameReady == false)
@@ -1325,7 +1339,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [workspace])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         recordCurrentTranscriptFrameFailure(model)
@@ -1340,7 +1354,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [workspace])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         let staleRevision = model.transcriptRevision
@@ -1367,7 +1381,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [workspace])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         recordCurrentTranscriptFrameFailure(model)
@@ -1405,7 +1419,7 @@ struct SessionViewModelTests {
         )
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
@@ -1430,7 +1444,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [workspace])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
 
@@ -1462,7 +1476,7 @@ struct SessionViewModelTests {
         )
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
@@ -1581,7 +1595,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [before, before, after])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
@@ -1622,7 +1636,7 @@ struct SessionViewModelTests {
         await api.setSendSteps([.requestFailed])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
@@ -1645,7 +1659,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [before, after])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
@@ -1713,7 +1727,7 @@ struct SessionViewModelTests {
         )
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
@@ -1730,7 +1744,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [workspace])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         let baseline = await api.tailRequestCount()
@@ -1754,7 +1768,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [workspace])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
         let diagnostics = RenderBeaconReporter.WebKitDiagnostics(
             stage: "rendered",
             payload_byte_size: 2048,
@@ -1807,7 +1821,7 @@ struct SessionViewModelTests {
         let api = FakeSessionWorkspaceClient(workspaces: [workspace])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
 
         await model.start(sessionId: "session-1", appState: appState)
         await model.recordTranscriptDiagnostics(
@@ -2075,7 +2089,7 @@ struct SessionViewModelTests {
     /// in-place element writes included.
     @Test
     func transcriptRevisionAdvancesForEveryPayloadInputMutation() {
-        let model = SessionViewModel(enableRealtime: false)
+        let model = SessionViewModel(enableRealtime: false, pendingInputStore: Self.isolatedPendingInputStore())
         var revision = model.transcriptRevision
 
         func expectAdvance(_ label: Comment, _ mutate: () -> Void) {
