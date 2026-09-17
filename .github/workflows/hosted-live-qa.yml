@@ -101,6 +101,7 @@ jobs:
               --format '{{json .Image}}' |
               jq --exit-status --raw-output '.config.Labels["org.opencontainers.image.revision"] | select(type == "string" and test("^[0-9a-f]{40}$"))')"
           fi
+          health="$(curl --fail --silent --show-error --max-time 15 "https://${QA_INSTANCE_SUBDOMAIN}.longhouse.ai/api/health")"
           printf '%s\n' "$health" | jq '{source_sha,build_identity,build}'
           actual_sha="$(printf '%s\n' "$health" | jq --exit-status --raw-output '(.source_sha // .build.source_sha // .build.commit) | select(type == "string" and test("^[0-9a-f]{40}$"))')"
           actual_build_identity="$(printf '%s\n' "$health" | jq --raw-output '(.build_identity // .build.build_identity // "-")')"
