@@ -133,15 +133,19 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         .local_db_path
         .clone()
         .or_else(|| crate::config::get_agent_db_path().ok());
-    if let Some(db_path) = local_db_path.as_deref() {
-        let conn = crate::state::db::open_client_connection(db_path, Duration::from_millis(500))?;
-        crate::omp_session::reserve_source_for_thread(
-            &conn,
-            &session_file,
-            &config.session_id,
-            expected_provider_thread_id.as_deref(),
-        )?;
-    }
+    // The Console path claims its source locally, exactly as Helm does: the
+    // daemon projects the claim into the binding discovery reads, so a busy or
+    // unreadable archive cannot fail a launch here either. `local_db_path` stays
+    // for the phase outbox, which is not on the identity path.
+    crate::managed_source_claim::reserve(
+        &config.session_id,
+        "omp",
+        &session_file,
+        &config.cwd,
+        None,
+        None,
+    )
+    .with_context(|| format!("claiming the OMP console source {}", session_file.display()))?;
 
     let launch_id = Uuid::new_v4().to_string();
     let run_dir = crate::config::get_agent_dir()?
@@ -1043,16 +1047,21 @@ impl OmpPrintSink {
             );
         }
         self.provider_thread_id = Some(header.native_id.clone());
-        if let Some(db_path) = self.local_db_path.as_deref() {
-            let conn =
-                crate::state::db::open_client_connection(db_path, Duration::from_millis(500))?;
-            crate::omp_session::bind_source_for_thread(
-                &conn,
-                &self.session_file,
-                &self.session_id,
-                &header.native_id,
-            )?;
-        }
+        crate::managed_source_claim::confirm_identity(
+            &self.session_id,
+            "omp",
+            &self.session_file,
+            &header.native_id,
+            None,
+            None,
+        )
+        .with_context(|| {
+            format!(
+                "binding the OMP console source {} to {}",
+                self.session_file.display(),
+                header.native_id
+            )
+        })?;
         crate::turn_claims::default_registry()?.mark_provider_binding(
             &self.run_id,
             &header.native_id,
@@ -1896,18 +1905,14 @@ for event in events:
         );
         let native_id = first_claim.provider_thread_id.clone().unwrap();
         assert_eq!(native_id, "01a08857-826d-72f6-b816-672b54116504");
-        let conn =
-            crate::state::db::open_client_connection(&local_db_path, Duration::from_millis(500))
-                .unwrap();
-        let binding = crate::state::session_binding::SessionBinding::new(&conn)
-            .get_with_thread_for_provider(
-                &crate::storage_v2_shipper::stable_source_path(Path::new(&first.session_file))
-                    .display()
-                    .to_string(),
-                "omp",
-            )
-            .unwrap();
-        assert_eq!(binding.map(|(session, _)| session), Some(first.session_id));
+        // The console turn owns a local claim, which is what discovery reads
+        // once the daemon projects it; the archive database is no longer written
+        // on this path.
+        let claim = crate::managed_source_claim::read_claim(&first.session_id)
+            .expect("read claim")
+            .expect("a console turn must claim its source");
+        assert_eq!(claim.state, crate::managed_source_claim::ClaimState::Bound);
+        assert_eq!(claim.native_session_id.as_deref(), Some(native_id.as_str()));
         assert!(first
             .argv
             .windows(2)

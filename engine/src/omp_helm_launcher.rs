@@ -614,7 +614,6 @@ impl OmpHelmServer {
             &session_id,
             "omp",
             Path::new(source),
-            Path::new(&state.state.cwd),
             native_id,
             state.state.provider_pid,
             state.state.provider_process_start_time.clone(),

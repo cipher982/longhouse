@@ -162,11 +162,13 @@ pub fn reserve(
 
 /// Commit the provider's native identity after the launcher has verified it
 /// against the provider's own session file.
+/// Commit the provider's native identity. The workspace and source path are the
+/// ones `reserve` recorded: a later caller (a Console monitor, for instance) does
+/// not necessarily know them, and inventing them would corrupt a resume record.
 pub fn confirm_identity(
     session_id: &str,
     provider: &str,
     source_path: &Path,
-    cwd: &Path,
     native_session_id: &str,
     provider_pid: Option<u32>,
     provider_start_time: Option<String>,
@@ -178,7 +180,10 @@ pub fn confirm_identity(
         provider: provider.to_string(),
         source_path: source_path.display().to_string(),
         native_session_id: Some(native_session_id.to_string()),
-        cwd: cwd.display().to_string(),
+        cwd: existing
+            .as_ref()
+            .map(|claim| claim.cwd.clone())
+            .unwrap_or_else(|| String::new()),
         provider_pid: provider_pid.or_else(|| existing.as_ref().and_then(|claim| claim.provider_pid)),
         provider_start_time: provider_start_time.or_else(|| {
             existing
@@ -382,16 +387,8 @@ mod tests {
             );
 
             // Binding carries the verified native identity through.
-            confirm_identity(
-                &session_id,
-                "omp",
-                &source,
-                dir.path(),
-                "native-1",
-                Some(4242),
-                None,
-            )
-            .expect("confirm identity");
+            confirm_identity(&session_id, "omp", &source, "native-1", Some(4242), None)
+                .expect("confirm identity");
             let report = project_claims(&db_path).expect("project bound claim");
             assert_eq!(report.applied, 1);
             let native: Option<String> = conn
@@ -416,16 +413,8 @@ mod tests {
             assert_eq!(reserved.native_session_id, None);
             assert!(reserved.provider_pid.is_some(), "reserve keeps observation");
 
-            let bound = confirm_identity(
-                "session-1",
-                "omp",
-                source,
-                Path::new("/tmp"),
-                "native-1",
-                None,
-                None,
-            )
-            .expect("confirm");
+            let bound =
+                confirm_identity("session-1", "omp", source, "native-1", None, None).expect("confirm");
             assert_eq!(bound.state, ClaimState::Bound);
             assert_eq!(bound.native_session_id.as_deref(), Some("native-1"));
             assert_eq!(bound.created_at, reserved.created_at);
