@@ -18,7 +18,7 @@ use reqwest::Url;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::process_identity::{command_contains_basename, lstart_matches_recorded, ProcessFact};
+use crate::process_identity::{lstart_matches_recorded, ProcessFact};
 
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_millis(750);
 const DEFAULT_USERNAME: &str = "opencode";
@@ -76,6 +76,12 @@ struct OpenCodeServerStateFile {
     owner_wrapper_start_time: Option<String>,
     #[serde(default)]
     process_start_time: Option<String>,
+    /// The resolved provider binary the bridge launched. Users and the
+    /// provider factory may install OpenCode under a name other than
+    /// `opencode` (the factory stages it as `provider`), so process shape
+    /// checks accept this exact path as well as the `opencode` basename.
+    #[serde(default)]
+    provider_binary: Option<String>,
 }
 
 struct OpenCodeCandidate {
@@ -136,7 +142,7 @@ pub(crate) fn collect_observations_from_paths(
         }
         let pid_alive = state.pid.is_some_and(|pid| {
             process_facts.get(&pid).is_some_and(|fact| {
-                command_contains_basename(&fact.command, "opencode")
+                command_names_opencode(&fact.command, state.provider_binary.as_deref())
                     && lstart_matches_recorded(
                         fact,
                         &state.process_start_time.clone().unwrap_or_default(),
@@ -147,8 +153,12 @@ pub(crate) fn collect_observations_from_paths(
             .server_url
             .take()
             .filter(|value| !value.trim().is_empty());
-        let has_tui_attachment =
-            opencode_attach_foreground(server_url.as_deref(), &provider_session_id, process_facts);
+        let has_tui_attachment = opencode_attach_foreground(
+            server_url.as_deref(),
+            &provider_session_id,
+            state.provider_binary.as_deref(),
+            process_facts,
+        );
         candidates.push(OpenCodeCandidate {
             state_file: path.to_path_buf(),
             session_id,
@@ -227,9 +237,28 @@ fn observations_from_candidates(
     out
 }
 
+/// Whether `part` is the OpenCode binary: the `opencode` basename, or the exact
+/// provider binary path the bridge recorded when it launched the server.
+fn is_opencode_binary(part: &str, provider_binary: Option<&str>) -> bool {
+    Path::new(part)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "opencode")
+        || provider_binary
+            .map(str::trim)
+            .is_some_and(|binary| !binary.is_empty() && part == binary)
+}
+
+fn command_names_opencode(command: &str, provider_binary: Option<&str>) -> bool {
+    command
+        .split_whitespace()
+        .any(|part| is_opencode_binary(part, provider_binary))
+}
+
 fn opencode_attach_foreground(
     server_url: Option<&str>,
     provider_session_id: &str,
+    provider_binary: Option<&str>,
     process_facts: &HashMap<u32, ProcessFact>,
 ) -> bool {
     let Some(server_url) = server_url.map(str::trim).filter(|value| !value.is_empty()) else {
@@ -245,13 +274,9 @@ fn opencode_attach_foreground(
             return false;
         }
         let parts = fact.command.split_whitespace().collect::<Vec<_>>();
-        let has_attach_shape = parts.windows(2).any(|window| {
-            Path::new(window[0])
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name == "opencode")
-                && window[1] == "attach"
-        });
+        let has_attach_shape = parts
+            .windows(2)
+            .any(|window| is_opencode_binary(window[0], provider_binary) && window[1] == "attach");
         has_attach_shape && parts.contains(&server_url) && parts.contains(&provider_session_id)
     })
 }
@@ -570,21 +595,25 @@ mod tests {
         assert!(opencode_attach_foreground(
             Some("http://127.0.0.1:12345"),
             "ses_native",
+            None,
             &facts,
         ));
         assert!(!opencode_attach_foreground(
             Some("http://127.0.0.1:54321"),
             "ses_native",
+            None,
             &facts,
         ));
         assert!(!opencode_attach_foreground(
             Some("http://127.0.0.1:12345"),
             "ses_other",
+            None,
             &facts,
         ));
         assert!(!opencode_attach_foreground(
             Some("http://127.0.0.1:12345"),
             "",
+            None,
             &facts,
         ));
     }
@@ -604,8 +633,42 @@ mod tests {
         assert!(!opencode_attach_foreground(
             Some("http://127.0.0.1:12345"),
             "ses_native",
+            None,
             &facts,
         ));
+    }
+
+    #[test]
+    fn opencode_attach_foreground_accepts_recorded_provider_binary_under_another_name() {
+        let binary = "/var/lib/provider-factory/builds/opencode/1.18.30/linux-x86_64/provider";
+        let mut facts = HashMap::new();
+        let (pid, fact) = parse_process_fact(&format!(
+            "  4242 pts/1    S+   Mon May  5 11:58:00 2026 {binary} attach http://127.0.0.1:12345 --session ses_native"
+        ))
+        .unwrap();
+        facts.insert(pid, fact);
+
+        assert!(opencode_attach_foreground(
+            Some("http://127.0.0.1:12345"),
+            "ses_native",
+            Some(binary),
+            &facts,
+        ));
+        // Without the recorded binary, an unrelated `provider attach` is not OpenCode.
+        assert!(!opencode_attach_foreground(
+            Some("http://127.0.0.1:12345"),
+            "ses_native",
+            None,
+            &facts,
+        ));
+        assert!(!opencode_attach_foreground(
+            Some("http://127.0.0.1:12345"),
+            "ses_native",
+            Some("/usr/bin/other"),
+            &facts,
+        ));
+        assert!(command_names_opencode(&format!("{binary} serve --port 0"), Some(binary)));
+        assert!(!command_names_opencode(&format!("{binary} serve --port 0"), None));
     }
 
     fn spawn_health_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
