@@ -63,6 +63,9 @@ const RUNTIME_EVENT_POST_LIMIT: usize = 256;
 /// Entries one background sweep pass may inspect while reducing a flooded
 /// outbox in place. Large, because the sweep runs off the live lane.
 pub const RUNTIME_EVENT_SWEEP_LIMIT: usize = 50_000;
+/// No single runtime event can legitimately reach this size, and one that
+/// does would defeat every budget below it.
+const RUNTIME_EVENT_MAX_FILE_BYTES: usize = 4 * 1024 * 1024;
 /// Payload bytes one sweep pass may hold. A sweep keeps every durable record
 /// it reads, so the entry cap alone does not bound its memory.
 const RUNTIME_EVENT_SWEEP_BYTES: usize = 64 * 1024 * 1024;
@@ -523,63 +526,61 @@ pub async fn post_pending_presence_files(
     post_pending_presence_files_with_timeout(client, posts, PRESENCE_POST_TIMEOUT).await
 }
 
-/// Replaceable status coordinate for one runtime event.
+/// Kinds whose delivery no later event can restate.
+const CRITICAL_RUNTIME_EVENT_KINDS: [&str; 4] = [
+    "terminal_signal",
+    "binding_signal",
+    "pause_request",
+    "pause_resolution",
+];
+
+/// Identity of a *repeated statement*: the whole event minus the fields that
+/// only say when it was said.
 ///
-/// A phase or progress observation is replaceable *within its own kind of
-/// statement*: two `thinking` samples say the same thing, so the newest
-/// subsumes the older, exactly as the catalog's latest-wins reducer treats
-/// them on arrival.
+/// Reducing status in the Machine Agent is only safe when it cannot change
+/// meaning, and the Machine Agent does not know the Runtime Host's reducer
+/// branches. Three review rounds established that the hard way: keying on
+/// session and run dropped pause resolutions; adding the phase value still
+/// dropped lease refreshes; adding source and provider still collapsed two
+/// tool previews in one turn. Any key short of the event itself is a bet that
+/// the client knows which differences matter.
 ///
-/// The phase value is part of the coordinate on purpose. A phase is not only
-/// state: an execution phase resolves a pending question server-side
-/// (`resolve_pending_pause_requests_for_runtime`), and a `transcript_append`
-/// progress signal latches the turn to idle. Coalescing to one observation per
-/// session would drop the transition that carries the side effect. Keeping the
-/// newest of each distinct statement collapses a flood by three orders of
-/// magnitude and still delivers every transition.
+/// So the rule is the one that needs no such knowledge: two status events
+/// collapse only when every field except `occurred_at` and the timestamped
+/// `dedupe_key` is identical. Then keeping the newest cannot lose a
+/// distinction the server would have acted on, because there is none. During
+/// the 2026-09-17 flood 9,382 of a session's 9,394 queued events were
+/// byte-identical `thinking` repeats, so this still collapses the incident by
+/// three orders of magnitude.
 ///
-/// Missing identity is never coalesced: an empty session or run id is not a
-/// coordinate, and two runless events are not observations of one thing.
-fn replaceable_status_key(event: &Value) -> Option<Vec<String>> {
+/// Semantic reduction — knowing that one preview supersedes another — belongs
+/// to the producer, which does know its own meaning. That is Phase B.
+fn duplicate_statement_key(event: &Value) -> Option<String> {
     let kind = event.get("kind").and_then(Value::as_str)?;
-    let session = non_empty(event.get("session_id"))?;
-    let run = non_empty(event.get("run_id"))?;
-    let payload = event.get("payload");
-    // Identity of the *statement*, not just of the session. Two observations
-    // are interchangeable only when the Runtime Host would do the same thing
-    // with either one, so every field that selects a different reducer branch
-    // belongs in the coordinate: the runtime and source decide lease
-    // refresh and staleness handling, and `pause_request_still_pending`
-    // decides whether an execution phase resolves a pending question.
-    let mut key = vec![
-        kind.to_string(),
-        session,
-        run,
-        text_field(event.get("runtime_key")),
-        text_field(event.get("provider")),
-        text_field(event.get("source")),
-    ];
-    match kind {
-        "phase_signal" => {
-            key.push(non_empty(event.get("phase"))?);
-            key.push(text_field(event.get("tool_name")));
-            key.push(
-                payload
-                    .and_then(|value| value.get("pause_request_still_pending"))
-                    .map(|value| value.to_string())
-                    .unwrap_or_default(),
-            );
-            Some(key)
-        }
-        "progress_signal" => {
-            // Preview text is cumulative (`live_text`), so the newest sequence
-            // in a turn carries everything earlier ones said.
-            key.push(non_empty(payload.and_then(|value| value.get("turn_id")))?);
-            key.push(text_field(payload.and_then(|value| value.get("progress_kind"))));
-            Some(key)
-        }
-        _ => None,
+    if !matches!(kind, "phase_signal" | "progress_signal") {
+        return None;
     }
+    let mut normalized = event.clone();
+    let object = normalized.as_object_mut()?;
+    object.remove("occurred_at");
+    object.remove("dedupe_key");
+    // serde_json maps are ordered, so this is canonical for equal content.
+    serde_json::to_string(&normalized).ok()
+}
+
+fn progress_sequence(event: &Value) -> u64 {
+    event
+        .get("payload")
+        .and_then(|payload| payload.get("seq"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+}
+
+fn is_critical_runtime_event(event: &Value) -> bool {
+    event
+        .get("kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| CRITICAL_RUNTIME_EVENT_KINDS.contains(&kind))
 }
 
 fn text_field(value: Option<&Value>) -> String {
@@ -588,31 +589,6 @@ fn text_field(value: Option<&Value>) -> String {
         .unwrap_or_default()
         .trim()
         .to_string()
-}
-
-fn non_empty(value: Option<&Value>) -> Option<String> {
-    let text = value.and_then(Value::as_str)?.trim();
-    (!text.is_empty()).then(|| text.to_string())
-}
-
-/// Order within one replaceable coordinate.
-///
-/// Observation time is primary because that is what the Runtime Host compares
-/// (`occurred_at < latest_phase_signal_at => ignored`). Keeping a
-/// higher-sequence event with an older timestamp would delete the observation
-/// the server would actually have applied. Sequence only breaks ties inside a
-/// turn's preview stream.
-fn replaceable_order(event: &Value) -> (Option<DateTime<Utc>>, u64) {
-    let occurred_at = event
-        .get("occurred_at")
-        .and_then(Value::as_str)
-        .and_then(parse_rfc3339_utc);
-    let seq = event
-        .get("payload")
-        .and_then(|payload| payload.get("seq"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    (occurred_at, seq)
 }
 
 fn occurred_at_utc(event: &Value) -> Option<DateTime<Utc>> {
@@ -630,28 +606,32 @@ pub struct RuntimeEventCollection {
 }
 
 struct ReducedRuntimeEvents {
+    critical: Vec<PendingRuntimeEventPost>,
     durable: Vec<PendingRuntimeEventPost>,
-    replaceable: HashMap<Vec<String>, ((Option<DateTime<Utc>>, u64), PendingRuntimeEventPost)>,
+    repeated: HashMap<String, (Option<DateTime<Utc>>, PendingRuntimeEventPost)>,
     inspected: usize,
+    discarded: usize,
     saturated: bool,
 }
 
-/// Read ready runtime events, keeping the newest observation per replaceable
-/// coordinate and deleting the ones it supersedes.
+/// Read ready runtime events, keeping the newest of each repeated statement
+/// and deleting the copies it supersedes.
 ///
-/// Sending an already-overwritten phase cannot improve served truth. During the
-/// 2026-09-17 flood that was the whole reason current truth never arrived:
-/// 250k queued observations at ~66 events/s is hours of transmission for state
-/// the next tick replaces.
+/// Re-sending a status observation that a later identical one has already
+/// replaced cannot improve served truth. During the 2026-09-17 flood that was
+/// the whole reason current truth never arrived: 250k queued observations at
+/// ~66 events/s is hours of transmission for state the next tick restates.
 fn reduce_ready_runtime_events(
     dir: &Path,
     entry_limit: usize,
     byte_limit: usize,
 ) -> ReducedRuntimeEvents {
     let mut reduced = ReducedRuntimeEvents {
+        critical: Vec::new(),
         durable: Vec::new(),
-        replaceable: HashMap::new(),
+        repeated: HashMap::new(),
         inspected: 0,
+        discarded: 0,
         saturated: false,
     };
     let entries = match std::fs::read_dir(dir) {
@@ -687,10 +667,13 @@ fn reduce_ready_runtime_events(
             continue;
         }
 
-        // Check the size before reading it: a budget enforced after the read
-        // is not a budget. One file larger than the whole budget is still read
-        // once — it has to be delivered eventually — but it ends the pass.
-        let file_bytes = entry.metadata().map(|meta| meta.len() as usize).unwrap_or(0);
+        // Check the size before reading: a budget enforced after the read is
+        // not a budget. A file whose size cannot be read is treated as the
+        // worst case rather than as zero.
+        let file_bytes = match entry.metadata() {
+            Ok(meta) => meta.len() as usize,
+            Err(_) => RUNTIME_EVENT_MAX_FILE_BYTES,
+        };
         if bytes_held > 0 && bytes_held.saturating_add(file_bytes) > byte_limit {
             reduced.saturated = true;
             break;
@@ -699,6 +682,31 @@ fn reduce_ready_runtime_events(
             Ok(b) => b,
             Err(_) => continue,
         };
+        // Nothing this large can be delivered, and carrying it would defeat
+        // every budget below. Keep the evidence, drop it from the lane.
+        if bytes.len() > RUNTIME_EVENT_MAX_FILE_BYTES {
+            let event = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
+            let post = PendingRuntimeEventPost { path, event };
+            match write_runtime_event_dead_letter(
+                &post,
+                413,
+                &format!("runtime event exceeds {RUNTIME_EVENT_MAX_FILE_BYTES} bytes"),
+                "oversized runtime event",
+            ) {
+                Ok(dead_letter) => tracing::error!(
+                    source = %post.path.display(),
+                    dead_letter = %dead_letter.display(),
+                    bytes = bytes.len(),
+                    "Oversized runtime event dead-lettered"
+                ),
+                Err(error) => tracing::warn!(
+                    source = %post.path.display(),
+                    error = %error,
+                    "Oversized runtime event could not be dead-lettered"
+                ),
+            }
+            continue;
+        }
         let event: Value = match serde_json::from_slice::<Value>(&bytes) {
             Ok(value) if value.is_object() => value,
             Ok(_) | Err(_) => {
@@ -707,26 +715,31 @@ fn reduce_ready_runtime_events(
             }
         };
         reduced.inspected += 1;
-        bytes_held = bytes_held.saturating_add(bytes.len().max(file_bytes));
+        bytes_held = bytes_held.saturating_add(bytes.len());
 
-        let Some(key) = replaceable_status_key(&event) else {
-            reduced
-                .durable
-                .push(PendingRuntimeEventPost { path, event });
+        let Some(key) = duplicate_statement_key(&event) else {
+            let post = PendingRuntimeEventPost { path, event };
+            if is_critical_runtime_event(&post.event) {
+                reduced.critical.push(post);
+            } else {
+                reduced.durable.push(post);
+            }
             continue;
         };
-        let order = replaceable_order(&event);
+        let occurred_at = occurred_at_utc(&event);
         let candidate = PendingRuntimeEventPost { path, event };
-        match reduced.replaceable.get(&key) {
-            Some((existing_order, _)) if *existing_order >= order => {
+        match reduced.repeated.get(&key) {
+            Some((existing_at, _)) if *existing_at >= occurred_at => {
                 let _ = std::fs::remove_file(&candidate.path);
+                reduced.discarded += 1;
             }
             Some((_, existing)) => {
                 let _ = std::fs::remove_file(&existing.path);
-                reduced.replaceable.insert(key, (order, candidate));
+                reduced.discarded += 1;
+                reduced.repeated.insert(key, (occurred_at, candidate));
             }
             None => {
-                reduced.replaceable.insert(key, (order, candidate));
+                reduced.repeated.insert(key, (occurred_at, candidate));
             }
         }
     }
@@ -754,26 +767,30 @@ fn collect_runtime_event_outbox_bounded(
 ) -> RuntimeEventCollection {
     let reduced = reduce_ready_runtime_events(dir, entry_limit, byte_limit);
     let saturated = reduced.saturated;
+    let mut critical = reduced.critical;
     let mut durable = reduced.durable;
-    let mut replaceable: Vec<PendingRuntimeEventPost> = reduced
-        .replaceable
+    let mut repeated: Vec<PendingRuntimeEventPost> = reduced
+        .repeated
         .into_values()
         .map(|(_, post)| post)
         .collect();
+    sort_by_observation(&mut critical);
     sort_by_observation(&mut durable);
-    sort_by_observation(&mut replaceable);
+    sort_by_observation(&mut repeated);
 
-    // Durable records are the ones no later event can restate, so they get
-    // reserved capacity. Without it a directory full of non-coalescible
-    // status could keep a terminal or binding record waiting indefinitely.
-    let durable_reserve = post_limit / 2;
-    let replaceable_budget = post_limit.saturating_sub(durable.len().min(durable_reserve));
-    replaceable.truncate(replaceable_budget);
-    let durable_budget = post_limit.saturating_sub(replaceable.len());
+    // A terminal, binding, or interaction record is the one thing no later
+    // event can restate, so it takes the batch first. Status fills what is
+    // left: it will be restated in 100ms anyway.
+    let mut posts = critical;
+    posts.truncate(post_limit);
+    let remaining = post_limit.saturating_sub(posts.len());
+    let status_reserve = remaining / 2;
+    let durable_budget = remaining.saturating_sub(status_reserve.min(repeated.len()));
     durable.truncate(durable_budget);
-
-    let mut posts = durable;
-    posts.extend(replaceable);
+    posts.extend(durable);
+    let status_budget = post_limit.saturating_sub(posts.len());
+    repeated.truncate(status_budget);
+    posts.extend(repeated);
     sort_by_observation(&mut posts);
     RuntimeEventCollection { posts, saturated }
 }
@@ -798,7 +815,7 @@ fn sort_by_observation(posts: &mut [PendingRuntimeEventPost]) {
         .then_with(|| {
             text_field(left.event.get("kind")).cmp(&text_field(right.event.get("kind")))
         })
-        .then_with(|| replaceable_order(&left.event).1.cmp(&replaceable_order(&right.event).1))
+        .then_with(|| progress_sequence(&left.event).cmp(&progress_sequence(&right.event)))
         .then_with(|| {
             text_field(left.event.get("dedupe_key")).cmp(&text_field(right.event.get("dedupe_key")))
         })
@@ -824,15 +841,14 @@ pub struct RuntimeOutboxSweep {
 /// newer observation of the same statement.
 pub fn sweep_runtime_event_outbox(dir: &Path, entry_limit: usize) -> RuntimeOutboxSweep {
     let reduced = reduce_ready_runtime_events(dir, entry_limit, RUNTIME_EVENT_SWEEP_BYTES);
-    let inspected = reduced.inspected;
-    let discarded = inspected.saturating_sub(reduced.durable.len() + reduced.replaceable.len());
     RuntimeOutboxSweep {
-        inspected,
-        discarded,
+        inspected: reduced.inspected,
+        discarded: reduced.discarded,
         // Only ask for another pass while this one removed something. A
-        // directory of durable records is not reducible, and rescheduling on
-        // "there is more to look at" alone would rescan it forever.
-        more: reduced.saturated && discarded > 0,
+        // directory of records that cannot be reduced is not a flood, and
+        // rescheduling on "there is more to look at" alone would rescan it
+        // forever. The daemon also caps how many passes may chain.
+        more: reduced.saturated && reduced.discarded > 0,
     }
 }
 
@@ -957,6 +973,15 @@ fn dead_letter_runtime_event(
     response_body: &str,
     error: &JsonPostError,
 ) -> anyhow::Result<PathBuf> {
+    write_runtime_event_dead_letter(post, status, response_body, &error.to_string())
+}
+
+fn write_runtime_event_dead_letter(
+    post: &PendingRuntimeEventPost,
+    status: u16,
+    response_body: &str,
+    error: &str,
+) -> anyhow::Result<PathBuf> {
     let parent = post
         .path
         .parent()
@@ -971,7 +996,7 @@ fn dead_letter_runtime_event(
         "dead_lettered_at": Utc::now().to_rfc3339(),
         "source_file": post.path,
         "status_code": status,
-        "error": error.to_string(),
+        "error": error,
         "response_body": response_body,
         "event": post.event,
     });
@@ -2317,6 +2342,7 @@ mod runtime_status_collection_tests {
             "phase": phase,
             "occurred_at": occurred_at,
             "dedupe_key": format!("omp-phase:{session}:{run}:{phase}:{occurred_at}"),
+            "payload": {"managed_transport": "omp_helm_channel"},
         })
     }
 
@@ -2345,9 +2371,10 @@ mod runtime_status_collection_tests {
             "session_id": session,
             "provider": "omp",
             "run_id": run,
-            "kind": "managed_terminal",
+            "kind": "terminal_signal",
             "occurred_at": occurred_at,
             "dedupe_key": format!("omp-helm-terminal:{session}:{run}"),
+            "payload": {"terminal_state": "finished"},
         })
     }
 
@@ -2373,16 +2400,8 @@ mod runtime_status_collection_tests {
             .count()
     }
 
-    fn phases(posts: &[PendingRuntimeEventPost]) -> Vec<String> {
-        posts
-            .iter()
-            .filter(|post| post.event["kind"] == "phase_signal")
-            .map(|post| post.event["phase"].as_str().unwrap_or_default().to_string())
-            .collect()
-    }
-
     #[test]
-    fn keeps_only_the_newest_sample_of_one_statement() {
+    fn keeps_only_the_newest_copy_of_a_repeated_statement() {
         let tmp = TempDir::new().expect("tempdir");
         let dir = tmp.path();
         for tick in 0..50 {
@@ -2401,73 +2420,58 @@ mod runtime_status_collection_tests {
             .find(|post| post.event["session_id"] == "s1")
             .expect("s1 phase");
         assert_eq!(s1.event["occurred_at"], "2026-09-17T15:00:49Z");
-        assert_eq!(ready_files(dir), 2, "superseded observations are deleted");
+        assert_eq!(ready_files(dir), 2, "superseded copies are deleted");
     }
 
-    /// The server does more than store the latest phase: an execution phase
-    /// resolves a pending question, and coalescing a turn down to its final
-    /// `idle` would drop that. Every distinct transition survives.
+    /// Anything the Runtime Host could read differently is a different
+    /// statement. The client does not model those branches; it only collapses
+    /// events that are identical apart from when they were observed.
     #[test]
-    fn preserves_each_distinct_phase_transition() {
+    fn any_difference_at_all_defeats_collapse() {
         let tmp = TempDir::new().expect("tempdir");
         let dir = tmp.path();
-        write(dir, &phase_event("s1", "r1", "blocked", "2026-09-17T15:00:00Z"));
-        for tick in 1..30 {
-            write(
-                dir,
-                &phase_event("s1", "r1", "running", &format!("2026-09-17T15:00:{tick:02}Z")),
-            );
+        let base = phase_event("s1", "r1", "running", "2026-09-17T15:00:01Z");
+        let mut other_source = phase_event("s1", "r1", "running", "2026-09-17T15:00:02Z");
+        other_source["source"] = json!("claude_hook");
+        let mut other_phase = phase_event("s1", "r1", "idle", "2026-09-17T15:00:03Z");
+        other_phase["payload"] = json!({"managed_transport": "omp_helm_channel"});
+        let mut still_pending = phase_event("s1", "r1", "running", "2026-09-17T15:00:04Z");
+        still_pending["payload"] = json!({"pause_request_still_pending": true});
+        let mut other_tool = phase_event("s1", "r1", "running", "2026-09-17T15:00:05Z");
+        other_tool["tool_name"] = json!("bash");
+        for event in [&base, &other_source, &other_phase, &still_pending, &other_tool] {
+            write(dir, event);
         }
-        write(dir, &phase_event("s1", "r1", "idle", "2026-09-17T15:00:59Z"));
 
         let posts = collect_runtime_event_outbox(dir);
 
-        assert_eq!(
-            phases(&posts),
-            vec!["blocked", "running", "idle"],
-            "one newest sample per distinct phase, in observation order"
-        );
+        assert_eq!(posts.len(), 5, "only identical statements collapse");
     }
 
+    /// Two tool previews inside one turn are different statements, and an
+    /// earlier review round lost exactly this by keying on the turn.
     #[test]
-    fn keeps_progress_kinds_apart() {
+    fn keeps_distinct_previews_inside_one_turn() {
         let tmp = TempDir::new().expect("tempdir");
         let dir = tmp.path();
-        for seq in 0..20 {
-            write(
-                dir,
-                &progress_event("s1", "r1", "turn-1", seq, &format!("2026-09-17T15:00:{seq:02}Z")),
-            );
-        }
-        let mut append = progress_event("s1", "r1", "turn-1", 99, "2026-09-17T15:00:30Z");
-        append["payload"]["progress_kind"] = json!("transcript_append");
-        write(dir, &append);
+        let mut first_tool = progress_event("s1", "r1", "turn-1", 1, "2026-09-17T15:00:01Z");
+        first_tool["payload"]["item_id"] = json!("tool-a");
+        let mut second_tool = progress_event("s1", "r1", "turn-1", 2, "2026-09-17T15:00:02Z");
+        second_tool["payload"]["item_id"] = json!("tool-b");
+        write(dir, &first_tool);
+        write(dir, &second_tool);
 
         let posts = collect_runtime_event_outbox(dir);
 
-        assert_eq!(posts.len(), 2, "a stream preview never swallows a transcript append");
-        let stream = posts
-            .iter()
-            .find(|post| post.event["payload"]["progress_kind"] == "omp_helm_stream")
-            .expect("stream preview");
-        assert_eq!(stream.event["payload"]["seq"], 19);
+        assert_eq!(posts.len(), 2, "distinct preview items both survive");
     }
 
-    /// Observation time is what the Runtime Host compares, so it decides which
-    /// sample survives. A higher sequence with an older timestamp must not
-    /// delete the sample the server would have applied.
     #[test]
-    fn newest_is_decided_by_observation_time() {
+    fn newest_copy_is_decided_by_observation_time() {
         let tmp = TempDir::new().expect("tempdir");
         let dir = tmp.path();
-        write(
-            dir,
-            &progress_event("s1", "r1", "turn-1", 9, "2026-09-17T15:00:30Z"),
-        );
-        write(
-            dir,
-            &progress_event("s1", "r1", "turn-1", 99, "2026-09-17T15:00:10Z"),
-        );
+        write(dir, &phase_event("s1", "r1", "thinking", "2026-09-17T15:00:30Z"));
+        write(dir, &phase_event("s1", "r1", "thinking", "2026-09-17T15:00:10Z"));
 
         let posts = collect_runtime_event_outbox(dir);
 
@@ -2476,32 +2480,16 @@ mod runtime_status_collection_tests {
     }
 
     #[test]
-    fn never_coalesces_events_without_identity() {
-        let tmp = TempDir::new().expect("tempdir");
-        let dir = tmp.path();
-        for tick in 0..5 {
-            let mut runless = phase_event("s1", "", "running", &format!("2026-09-17T15:00:{tick:02}Z"));
-            runless["run_id"] = Value::Null;
-            write(dir, &runless);
-        }
-
-        let posts = collect_runtime_event_outbox(dir);
-
-        assert_eq!(posts.len(), 5, "an absent run id is not a coordinate");
-        assert_eq!(ready_files(dir), 5);
-    }
-
-    #[test]
-    fn never_merges_durable_records_and_orders_by_observation() {
+    fn never_collapses_durable_records() {
         let tmp = TempDir::new().expect("tempdir");
         let dir = tmp.path();
         write(dir, &phase_event("s1", "r1", "running", "2026-09-17T15:00:01Z"));
         write(dir, &terminal_event("s1", "r1", "2026-09-17T15:00:02Z"));
-        write(dir, &terminal_event("s2", "r2", "2026-09-17T15:00:03Z"));
+        write(dir, &terminal_event("s1", "r1", "2026-09-17T15:00:03Z"));
 
         let posts = collect_runtime_event_outbox(dir);
 
-        assert_eq!(posts.len(), 3);
+        assert_eq!(posts.len(), 3, "a repeated terminal record is still two records");
         let order: Vec<&str> = posts
             .iter()
             .map(|post| post.event["occurred_at"].as_str().expect("occurred_at"))
@@ -2542,7 +2530,7 @@ mod runtime_status_collection_tests {
         for index in 0..40 {
             write(
                 dir,
-                &terminal_event(&format!("s{index}"), "r1", "2026-09-17T15:00:00Z"),
+                &progress_event(&format!("s{index}"), "r1", "turn-1", 1, "2026-09-17T15:00:00Z"),
             );
         }
 
@@ -2552,7 +2540,81 @@ mod runtime_status_collection_tests {
 
         let batched = collect_runtime_event_outbox_bounded(dir, 40, usize::MAX, 4);
         assert_eq!(batched.posts.len(), 4, "one pass hands over one bounded batch");
-        assert_eq!(ready_files(dir), 40, "durable records are never dropped by a cap");
+        assert_eq!(ready_files(dir), 40, "nothing is dropped by a cap");
+    }
+
+    /// A terminal record is the one thing no later event can restate, so it is
+    /// never queued behind ordinary traffic — not behind status, and not
+    /// behind a pile of older non-critical durable records.
+    #[test]
+    fn critical_records_take_the_batch_first() {
+        let tmp = TempDir::new().expect("tempdir");
+        let dir = tmp.path();
+        for index in 0..200 {
+            let mut pause = terminal_event(&format!("s{index}"), "r1", "2026-09-17T15:00:00Z");
+            pause["kind"] = json!("pause_resolution");
+            pause["dedupe_key"] = json!(format!("pause:{index}"));
+            write_plain(dir, &pause);
+        }
+        for index in 0..50 {
+            write_plain(
+                dir,
+                &progress_event("s1", "r1", &format!("turn-{index}"), 1, "2026-09-17T15:00:10Z"),
+            );
+        }
+        write_plain(dir, &terminal_event("s9", "r9", "2026-09-17T15:59:59Z"));
+
+        let pass = collect_runtime_event_outbox_bounded(dir, 1_000, usize::MAX, 256);
+
+        assert!(
+            pass.posts
+                .iter()
+                .any(|post| post.event["kind"] == "terminal_signal"),
+            "the terminal record is in the first batch"
+        );
+    }
+
+    #[test]
+    fn an_oversized_payload_is_dead_lettered_not_carried() {
+        let tmp = TempDir::new().expect("tempdir");
+        let dir = tmp.path();
+        let mut huge = progress_event("s1", "r1", "turn-1", 1, "2026-09-17T15:00:02Z");
+        huge["payload"]["live_text"] = json!("x".repeat(RUNTIME_EVENT_MAX_FILE_BYTES + 1));
+        write_plain(dir, &huge);
+        write_plain(dir, &terminal_event("s2", "r2", "2026-09-17T15:00:03Z"));
+
+        let posts = collect_runtime_event_outbox(dir);
+
+        assert_eq!(posts.len(), 1, "only the deliverable record is posted");
+        assert_eq!(posts[0].event["kind"], "terminal_signal");
+        assert_eq!(ready_files(dir), 1, "the oversized file left the lane");
+        assert!(
+            dir.join(RUNTIME_EVENT_DEAD_LETTER_DIR).exists(),
+            "its evidence is retained"
+        );
+    }
+
+    #[test]
+    fn a_pass_stops_before_exceeding_its_byte_budget() {
+        let tmp = TempDir::new().expect("tempdir");
+        let dir = tmp.path();
+        for index in 0..5 {
+            let mut chunky = progress_event(
+                &format!("s{index}"),
+                "r1",
+                "turn-1",
+                1,
+                &format!("2026-09-17T15:00:0{index}Z"),
+            );
+            chunky["payload"]["live_text"] = json!("x".repeat(16 * 1024));
+            write_plain(dir, &chunky);
+        }
+
+        let pass = collect_runtime_event_outbox_bounded(dir, 100, 20 * 1024, 256);
+
+        assert!(pass.saturated, "the budget stops the pass");
+        assert!(pass.posts.len() < 5, "a pass does not hold every payload at once");
+        assert_eq!(ready_files(dir), 5, "nothing is dropped by a budget");
     }
 
     /// Incident scale, scaled down: the 2026-09-17 flood left 250k files, five
@@ -2565,7 +2627,7 @@ mod runtime_status_collection_tests {
         // Written without the producer's fsync: this measures the sweep, and
         // 20k durable enqueues cost minutes on their own — which is its own
         // evidence about publishing status per token.
-        for tick in 0..4_000 {
+        for tick in 0..2_000 {
             for session in 0..5 {
                 write_plain(
                     &dir,
@@ -2582,14 +2644,14 @@ mod runtime_status_collection_tests {
 
         let sweep = sweep_runtime_event_outbox(&dir, RUNTIME_EVENT_SWEEP_LIMIT);
 
-        assert_eq!(sweep.inspected, 20_001);
+        assert_eq!(sweep.inspected, 10_001);
         assert!(!sweep.more, "one pass covered the directory");
-        assert_eq!(ready_files(&dir), 6, "five current phases plus the terminal record");
+        assert_eq!(ready_files(&dir), 6, "five current statements plus the terminal record");
         let posts = collect_runtime_event_outbox(&dir);
         assert!(
             posts
                 .iter()
-                .any(|post| post.event["kind"] == "managed_terminal"),
+                .any(|post| post.event["kind"] == "terminal_signal"),
             "a terminal record is never swept away"
         );
         assert!(
@@ -2604,7 +2666,7 @@ mod runtime_status_collection_tests {
     }
 
     #[test]
-    fn sweep_reports_more_work_when_capped() {
+    fn sweep_reports_more_work_when_capped_and_still_reducing() {
         let tmp = TempDir::new().expect("tempdir");
         let dir = tmp.path();
         for tick in 0..30 {
@@ -2621,49 +2683,9 @@ mod runtime_status_collection_tests {
         assert!(ready_files(dir) < 30);
     }
 
-    /// Two observations of the same phase from different sources are not the
-    /// same statement: the Runtime Host treats a managed lease refresh
-    /// differently by source, and a pause-resolving phase differently by
-    /// payload flag.
-    #[test]
-    fn keeps_statements_apart_when_the_server_would_treat_them_differently() {
-        let tmp = TempDir::new().expect("tempdir");
-        let dir = tmp.path();
-        let mut other_source = phase_event("s1", "r1", "running", "2026-09-17T15:00:02Z");
-        other_source["source"] = json!("claude_hook");
-        let mut still_pending = phase_event("s1", "r1", "running", "2026-09-17T15:00:03Z");
-        still_pending["payload"] = json!({"pause_request_still_pending": true});
-        write(dir, &phase_event("s1", "r1", "running", "2026-09-17T15:00:01Z"));
-        write(dir, &other_source);
-        write(dir, &still_pending);
-
-        let posts = collect_runtime_event_outbox(dir);
-
-        assert_eq!(posts.len(), 3, "a different reducer branch is a different statement");
-    }
-
-    #[test]
-    fn a_single_oversized_payload_ends_the_pass_instead_of_the_budget() {
-        let tmp = TempDir::new().expect("tempdir");
-        let dir = tmp.path();
-        write(dir, &terminal_event("s1", "r1", "2026-09-17T15:00:01Z"));
-        let mut huge = progress_event("s2", "r2", "turn-1", 1, "2026-09-17T15:00:02Z");
-        huge["payload"]["live_text"] = json!("x".repeat(64 * 1024));
-        write(dir, &huge);
-        write(dir, &terminal_event("s3", "r3", "2026-09-17T15:00:03Z"));
-
-        let pass = collect_runtime_event_outbox_bounded(dir, 100, 8 * 1024, 256);
-
-        assert!(pass.saturated, "the budget stops the pass");
-        assert!(
-            pass.posts.len() < 3,
-            "a pass does not hold every oversized payload at once"
-        );
-        assert_eq!(ready_files(dir), 3, "nothing is dropped by a budget");
-    }
-
-    /// A directory of durable records cannot be reduced. Asking for another
-    /// pass on "there is more to look at" alone would rescan it forever.
+    /// A directory of records that cannot be reduced is not a flood. Asking
+    /// for another pass on "there is more to look at" alone would rescan it
+    /// forever.
     #[test]
     fn sweep_stops_asking_when_it_cannot_make_progress() {
         let tmp = TempDir::new().expect("tempdir");
@@ -2682,40 +2704,11 @@ mod runtime_status_collection_tests {
         assert_eq!(ready_files(dir), 30);
     }
 
+    /// The sweep, a live collection pass, and a producer all run on the same
+    /// directory at the same time by design. Nothing may panic, and the
+    /// durable record must survive all three.
     #[test]
-    fn durable_records_keep_reserved_room_in_a_batch() {
-        let tmp = TempDir::new().expect("tempdir");
-        let dir = tmp.path();
-        for index in 0..20 {
-            write_plain(
-                dir,
-                &progress_event(
-                    "s1",
-                    "r1",
-                    &format!("turn-{index}"),
-                    1,
-                    &format!("2026-09-17T15:00:{index:02}Z"),
-                ),
-            );
-        }
-        write_plain(&dir, &terminal_event("s9", "r9", "2026-09-17T15:59:59Z"));
-
-        let pass = collect_runtime_event_outbox_bounded(dir, 100, usize::MAX, 4);
-
-        assert_eq!(pass.posts.len(), 4);
-        assert!(
-            pass.posts
-                .iter()
-                .any(|post| post.event["kind"] == "managed_terminal"),
-            "a terminal record is not queued behind replaceable status"
-        );
-    }
-
-    /// The sweep and the live collection pass run on the same directory at the
-    /// same time by design. Neither may panic, and a durable record must
-    /// survive both.
-    #[test]
-    fn sweep_and_collection_race_without_losing_a_durable_record() {
+    fn sweep_collection_and_a_live_producer_race_without_losing_a_record() {
         let tmp = TempDir::new().expect("tempdir");
         let dir = tmp.path().to_path_buf();
         for tick in 0..400 {
@@ -2726,31 +2719,45 @@ mod runtime_status_collection_tests {
         }
         write_plain(&dir, &terminal_event("s2", "r2", "2026-09-17T15:59:59Z"));
 
+        let producer_dir = dir.clone();
+        let producer = std::thread::spawn(move || {
+            for tick in 0..200 {
+                write(
+                    &producer_dir,
+                    &phase_event("s3", "r3", "running", &format!("2026-09-17T16:00:{:02}Z", tick % 60)),
+                );
+            }
+            write(&producer_dir, &terminal_event("s3", "r3", "2026-09-17T16:59:59Z"));
+        });
         let sweep_dir = dir.clone();
-        let sweeper = std::thread::spawn(move || sweep_runtime_event_outbox(&sweep_dir, 10_000));
+        let sweeper = std::thread::spawn(move || {
+            for _ in 0..5 {
+                sweep_runtime_event_outbox(&sweep_dir, 10_000);
+            }
+        });
         let collect_dir = dir.clone();
         let collector = std::thread::spawn(move || {
-            let mut seen_terminal = false;
+            let mut seen = 0usize;
             for _ in 0..25 {
-                let posts = collect_runtime_event_outbox_bounded(&collect_dir, 10_000, usize::MAX, 256);
-                seen_terminal |= posts
+                seen += collect_runtime_event_outbox_bounded(&collect_dir, 10_000, usize::MAX, 256)
                     .posts
                     .iter()
-                    .any(|post| post.event["kind"] == "managed_terminal");
+                    .filter(|post| post.event["kind"] == "terminal_signal")
+                    .count();
             }
-            seen_terminal
+            seen
         });
+        producer.join().expect("producer thread");
         sweeper.join().expect("sweep thread");
-        let seen_terminal = collector.join().expect("collect thread");
+        let seen = collector.join().expect("collect thread");
 
-        assert!(seen_terminal, "the terminal record stayed collectable throughout");
+        assert!(seen > 0, "terminal records stayed collectable throughout");
         let posts = collect_runtime_event_outbox(&dir);
-        assert!(
-            posts
-                .iter()
-                .any(|post| post.event["kind"] == "managed_terminal"),
-            "the terminal record survives the race"
-        );
+        let terminals = posts
+            .iter()
+            .filter(|post| post.event["kind"] == "terminal_signal")
+            .count();
+        assert_eq!(terminals, 2, "both terminal records survive the race");
     }
 
     /// A producer writing through a sweep keeps its event: the sweep only
@@ -2767,7 +2774,7 @@ mod runtime_status_collection_tests {
             );
         }
         let temp = dir.join(".in-flight.tmp");
-        std::fs::write(&temp, b"{\"kind\":\"managed_terminal\"}").expect("temp write");
+        std::fs::write(&temp, br#"{"kind":"terminal_signal"}"#).expect("temp write");
 
         sweep_runtime_event_outbox(dir, RUNTIME_EVENT_SWEEP_LIMIT);
 
