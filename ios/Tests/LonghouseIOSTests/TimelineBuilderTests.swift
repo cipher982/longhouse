@@ -232,7 +232,7 @@ final class TimelineBuilderTests: XCTestCase {
         XCTAssertEqual(items.count, 1)
         guard case .activityGroup(let calls) = items[0] else { return XCTFail("expected wait group") }
         XCTAssertEqual(calls.count, 6)
-        XCTAssertEqual(TimelineBuilder.activitySummary(for: calls), "Waited 6")
+        XCTAssertEqual(TimelineBuilder.activitySummary(for: calls), "Waited 6 times")
         let failed = event(
             id: 99,
             role: "tool",
@@ -545,7 +545,7 @@ final class TimelineBuilderTests: XCTestCase {
         guard case .user = items[0] else { return XCTFail("item 0") }
         guard case .activityGroup(let calls) = items[1] else { return XCTFail("item 1") }
         XCTAssertEqual(calls.map(\.call.id), ["2", "4", "6", "8", "10"])
-        XCTAssertEqual(TimelineBuilder.activitySummary(for: calls), "Searched 2 · Listed 2 · Ran 1")
+        XCTAssertEqual(TimelineBuilder.activitySummary(for: calls), "Searched 2 searches, listed 2 directories, ran 1 command")
     }
 
     func testCompletedOpaqueBashCallsCollapse() {
@@ -573,7 +573,7 @@ final class TimelineBuilderTests: XCTestCase {
         let items = TimelineBuilder.build(events: events)
         XCTAssertEqual(items.count, 2)
         guard case .activityGroup(let calls) = items[1] else { return XCTFail("expected activity group") }
-        XCTAssertEqual(TimelineBuilder.activitySummary(for: calls), "Called 2")
+        XCTAssertEqual(TimelineBuilder.activitySummary(for: calls), "Called 2 calls")
     }
 
     func testCodexPassiveNamesAlsoCollapse() {
@@ -638,7 +638,7 @@ final class TimelineBuilderTests: XCTestCase {
         guard case .assistant = items[2] else { return XCTFail("assistant prose") }
         guard case .activityGroup(let grp) = items[3] else { return XCTFail("second group") }
         XCTAssertEqual(grp.map(\.call.id), ["5", "7"])
-        XCTAssertEqual(TimelineBuilder.activitySummary(for: grp), "Searched 1 · Listed 1")
+        XCTAssertEqual(TimelineBuilder.activitySummary(for: grp), "Searched 1 search, listed 1 directory")
     }
 
     func testReadJoinsConsecutiveExplorationRun() {
@@ -657,7 +657,7 @@ final class TimelineBuilderTests: XCTestCase {
             return XCTFail("Read+Grep+Glob should collapse into one exploration run")
         }
         XCTAssertEqual(calls.map(\.call.toolName), ["Read", "Grep", "Glob"])
-        XCTAssertEqual(TimelineBuilder.activitySummary(for: calls), "Searched 1 · Read 1 · Listed 1")
+        XCTAssertEqual(TimelineBuilder.activitySummary(for: calls), "Searched 1 search, read 1 file, listed 1 directory")
     }
 
     func testWebFetchJoinsActivityRun() {
@@ -674,7 +674,7 @@ final class TimelineBuilderTests: XCTestCase {
         XCTAssertEqual(items.count, 2)
         guard case .activityGroup(let calls) = items[1] else { return XCTFail("activity group") }
         XCTAssertEqual(calls.count, 3)
-        XCTAssertEqual(TimelineBuilder.activitySummary(for: calls), "Searched 2 · Viewed 1")
+        XCTAssertEqual(TimelineBuilder.activitySummary(for: calls), "Searched 2 searches, viewed 1 page")
     }
 
     func testPassiveGroupStableID() {

@@ -4,7 +4,11 @@ import Testing
 @testable import Longhouse
 
 @MainActor
+@Suite(.serialized)
 struct SessionViewModelTests {
+    init() {
+        PendingInputStore.shared.removeAllForTesting()
+    }
     /// Throwaway root for a snapshot store's disk tier, so a cache test never
     /// writes into the app container.
     /// An empty cache rooted in a throwaway directory. Passing `nil` here falls

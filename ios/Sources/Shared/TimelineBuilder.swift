@@ -239,6 +239,28 @@ enum TimelineBuilder {
         var editFileOrder: [String] = []
         var unnamedEdits = 0
         var unnamedRuns = 0
+        let nouns: [String: (singular: String, plural: String)] = [
+            "search": ("search", "searches"),
+            "read": ("file", "files"),
+            "list": ("directory", "directories"),
+            "view": ("page", "pages"),
+            "edit": ("file", "files"),
+            "call": ("call", "calls"),
+            "run": ("command", "commands"),
+            "wait": ("time", "times"),
+        ]
+        func lowerFirst(_ text: String) -> String {
+            guard let first = text.first else { return text }
+            return first.lowercased() + text.dropFirst()
+        }
+        func joinWithAnd(_ parts: [String]) -> String {
+            switch parts.count {
+            case 0: return ""
+            case 1: return parts[0]
+            case 2: return "\(parts[0]) and \(parts[1])"
+            default: return "\(parts.dropLast().joined(separator: ", ")) and \(parts[parts.count - 1])"
+            }
+        }
         for call in calls {
             let aggregate = shellSalience(call: call.call, result: call.result)?.aggregate
                 ?? presentationAggregate(call.call)
@@ -294,7 +316,10 @@ enum TimelineBuilder {
             if key == "run" || key == "wait" { return nil }
             let count = counts[key, default: 0]
             guard count > 0 else { return nil }
-            guard key == "edit" else { return "\(label) \(count)" }
+            guard key == "edit" else {
+                let noun = nouns[key] ?? (singular: "item", plural: "items")
+                return "\(label) \(count) \(count == 1 ? noun.singular : noun.plural)"
+            }
             let labels = editFileOrder.compactMap { editFiles[$0] }
             guard !labels.isEmpty else { return "\(label) \(count)" }
             var visible = Array(labels.prefix(editSummaryVisibleFiles))
@@ -304,7 +329,10 @@ enum TimelineBuilder {
         }
         let operations = runOperationOrder.compactMap { runOperations[$0] }
         if operations.isEmpty {
-            if unnamedRuns > 0 { parts.append("Ran \(unnamedRuns)") }
+            if unnamedRuns > 0 {
+                let noun = unnamedRuns == 1 ? "command" : "commands"
+                parts.append("Ran \(unnamedRuns) \(noun)")
+            }
         } else {
             let visibleOperations = operations.count > 2
                 ? [operations[0], operations[operations.count - 1]]
@@ -313,14 +341,17 @@ enum TimelineBuilder {
                 operation.count > 1 ? "\(operation.label) ×\(operation.count)" : operation.label
             }
             let hiddenDistinct = operations.count - visible.count
-            if hiddenDistinct > 0 { visible.append("+\(hiddenDistinct) more") }
-            if unnamedRuns > 0 { visible.append("+\(unnamedRuns) other") }
-            parts.append("Ran \(visible.joined(separator: " · "))")
+            if hiddenDistinct > 0 { visible.append("\(hiddenDistinct) more") }
+            if unnamedRuns > 0 { visible.append("\(unnamedRuns) other") }
+            parts.append("Ran \(joinWithAnd(visible))")
         }
         if counts["wait", default: 0] > 0 {
-            parts.append("Waited \(counts["wait", default: 0])")
+            let count = counts["wait", default: 0]
+            parts.append("Waited \(count) \(count == 1 ? "time" : "times")")
         }
-        return parts.joined(separator: " · ")
+        return parts.enumerated().map { index, part in
+            index == 0 ? part : lowerFirst(part)
+        }.joined(separator: ", ")
     }
 
     static let explorationOverflowVisible = 8

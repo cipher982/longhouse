@@ -137,6 +137,17 @@ struct PendingInputStore: Sendable {
     func remove(_ intent: PendingInputIntent) {
         try? FileManager.default.removeItem(at: fileURL(for: intent))
     }
+    /// Clears persisted intents for isolated test suites. Production callers
+    /// never need to remove another intent's durable record.
+    func removeAllForTesting() {
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        )) ?? []
+        for file in files where file.pathExtension == "json" {
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
 
     func remove(
         serverURL: String,
