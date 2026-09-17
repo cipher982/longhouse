@@ -42,10 +42,14 @@ const TRANSITION_RECONCILE_GRACE: Duration = Duration::from_secs(5);
 const MAX_FRAME_BYTES: usize = 512 * 1024;
 const MAX_PENDING_COMMANDS: usize = 64;
 const MAX_LIVE_TEXT_BYTES: usize = 16 * 1024;
-/// The daemon writes the agent DB continuously, and a source reservation is a
-/// launch-gap guard rather than a precondition, so give the open a real budget
-/// before deciding it is unavailable.
-const SOURCE_BINDING_BUSY_TIMEOUT: Duration = Duration::from_millis(2_000);
+/// The daemon writes the agent DB continuously, and every statement on this
+/// connection — the open, the source reservation, and the final bind — shares
+/// this window. Measured on `cinder` with five managed sessions live:
+/// write-lock waits up to 3.7 s, so the 2 s this used to allow lost often
+/// enough to leave live sessions marked `degraded` with an empty native
+/// identity. A reservation is a launch-gap guard rather than a precondition,
+/// so a real budget costs latency only when the database is genuinely busy.
+const SOURCE_BINDING_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// Attempts and spacing for the *required* native identity binding: a busy DB
 /// must not become a permanently degraded session.
 const SOURCE_BINDING_ATTEMPTS: usize = 3;
