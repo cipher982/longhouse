@@ -18,6 +18,11 @@ struct SessionViewModelTests {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("lh-viewmodel-cache-\(UUID().uuidString)", isDirectory: true)
     }
+    private func isolatedPendingInputStore() -> (PendingInputStore, URL) {
+        let directory = Self.tempCacheDirectory()
+        return (PendingInputStore(directory: directory), directory)
+    }
+
     private func recordCurrentTranscriptFrame(_ model: SessionViewModel) {
         model.recordTranscriptFrameRendered(
             WebTranscriptRenderReceipt(
@@ -899,7 +904,13 @@ struct SessionViewModelTests {
         ))
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let (pendingInputStore, pendingInputDirectory) = isolatedPendingInputStore()
+        defer { try? FileManager.default.removeItem(at: pendingInputDirectory) }
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            pendingInputStore: pendingInputStore
+        )
 
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "conflict", sessionId: "session-1", appState: appState)
@@ -935,7 +946,13 @@ struct SessionViewModelTests {
         )
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let (pendingInputStore, pendingInputDirectory) = isolatedPendingInputStore()
+        defer { try? FileManager.default.removeItem(at: pendingInputDirectory) }
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            pendingInputStore: pendingInputStore
+        )
 
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "next", sessionId: "session-1", appState: appState, intent: "queue")
@@ -967,7 +984,13 @@ struct SessionViewModelTests {
         )
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let (pendingInputStore, pendingInputDirectory) = isolatedPendingInputStore()
+        defer { try? FileManager.default.removeItem(at: pendingInputDirectory) }
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            pendingInputStore: pendingInputStore
+        )
 
         await model.start(sessionId: "session-1", appState: appState)
         #expect(await model.send(text: "work on this", sessionId: "session-1", appState: appState))
@@ -1002,7 +1025,13 @@ struct SessionViewModelTests {
         ])
         let appState = AppState()
         appState.serverURL = "https://example.longhouse.ai"
-        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+        let (pendingInputStore, pendingInputDirectory) = isolatedPendingInputStore()
+        defer { try? FileManager.default.removeItem(at: pendingInputDirectory) }
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            pendingInputStore: pendingInputStore
+        )
 
         await model.start(sessionId: "session-1", appState: appState)
         let steered = await model.send(text: "keep going", sessionId: "session-1", appState: appState, intent: "steer")
