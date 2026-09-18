@@ -195,6 +195,115 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    /// Presentation state is disposable: losing it may cost a re-scan, never a
+    /// re-ship and never a new source epoch.
+    ///
+    /// This is the invariant the plan's "second, delete-on-doubt store" was for.
+    /// The measured reason it stays in the ledger file is that the split would
+    /// touch 69 call sites to relocate 506 rows (phase 57, title 397, run window
+    /// 50, inventory 1, reconciliation 1) out of a 152 MB file that no longer
+    /// grows with payloads — so what is worth having is the *property*, and this
+    /// test is it.
+    #[test]
+    fn losing_presentation_state_costs_a_rescan_not_a_reship() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("state.db");
+        let mut conn = crate::state::db::open_db(Some(&db_path)).unwrap();
+        let source = dir.path().join("session.jsonl");
+        std::fs::write(&source, b"{\"type\":\"session\",\"id\":\"native-1\"}\n").unwrap();
+
+        // A source that has been seen and shipped through position 1. The epoch
+        // is created through the real call, so its file incarnation matches the
+        // file rather than a hand-written guess.
+        let first = crate::state::source_epoch::observe_file(
+            &mut conn,
+            "claude",
+            "opaque-1",
+            &source,
+            crate::state::source_epoch::SourceLane::Durable,
+            1,
+            None,
+            None,
+            crate::state::source_epoch::SourceChangeHint::None,
+        )
+        .unwrap();
+        assert!(first.created, "the fixture's first observation creates the epoch");
+        let epoch = first.source_epoch;
+        // The observation already wrote the lane; advance it to what has shipped.
+        conn.execute(
+            "UPDATE source_epoch_lane_state SET last_position = 1
+             WHERE source_epoch = ?1 AND lane = 'durable'",
+            [epoch.to_string()],
+        )
+        .unwrap();
+        SessionPhaseStore::new(&conn)
+            .record(&SessionPhaseSignal {
+                session_id: "session-1".into(),
+                provider: "claude".into(),
+                phase: "running".into(),
+                tool_name: None,
+                source: "test".into(),
+                observed_at: chrono::Utc::now(),
+            })
+            .unwrap();
+
+        // The cache is deleted: every presentation row goes.
+        conn.execute("DELETE FROM session_phase_state", []).unwrap();
+        conn.execute("DELETE FROM session_title_state", []).unwrap();
+        conn.execute("DELETE FROM session_run_window", []).unwrap();
+        conn.execute("DELETE FROM source_inventory", []).unwrap();
+
+        // Re-observing the same source must not rotate the epoch or move the
+        // durable cursor: those are the ledger's, not presentation's.
+        let resolution = crate::state::source_epoch::observe_file(
+            &mut conn,
+            "claude",
+            "opaque-1",
+            &source,
+            crate::state::source_epoch::SourceLane::Durable,
+            1,
+            None,
+            None,
+            crate::state::source_epoch::SourceChangeHint::None,
+        )
+        .unwrap();
+        assert!(!resolution.created, "losing presentation must not rotate an epoch");
+        assert_eq!(resolution.source_epoch, epoch);
+        let cursor: i64 = conn
+            .query_row(
+                "SELECT last_position FROM source_epoch_lane_state
+                 WHERE source_epoch = ?1 AND lane = 'durable'",
+                [epoch.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cursor, 1, "the durable cursor is ledger state and stays");
+        let pending: i64 = conn
+            .query_row("SELECT COUNT(*) FROM pending_source_envelope", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(pending, 0, "nothing already shipped is re-prepared");
+
+        // And the presentation row is rebuilt by the next observation.
+        assert!(SessionPhaseStore::new(&conn)
+            .record(&SessionPhaseSignal {
+                session_id: "session-1".into(),
+                provider: "claude".into(),
+                phase: "running".into(),
+                tool_name: None,
+                source: "test".into(),
+                observed_at: chrono::Utc::now(),
+            })
+            .unwrap());
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM session_phase_state", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(rows, 1, "the projection is rebuilt from the next observation");
+    }
+
     use super::*;
 
     fn signal(observed_at: &str, phase: &str, tool_name: Option<&str>) -> SessionPhaseSignal {
