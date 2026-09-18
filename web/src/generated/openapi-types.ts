@@ -6051,7 +6051,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "supported" | "read_only" | "unknown" | "unsupported";
+            state: "supported" | "read_only" | "unknown" | "unsupported" | "absent";
             /** Reason Code */
             reason_code: string;
             /** Reason */
@@ -6079,7 +6079,7 @@ export interface components {
             /** Source */
             source: string;
             /** States */
-            states: ("supported" | "read_only" | "unknown" | "unsupported")[];
+            states: ("supported" | "read_only" | "unknown" | "unsupported" | "absent")[];
             /** Providers */
             providers: {
                 [key: string]: components["schemas"]["ProviderActionCoverageProviderResponse"];

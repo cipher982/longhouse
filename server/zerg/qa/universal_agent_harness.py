@@ -4560,12 +4560,16 @@ def orchestration_capability_matrix(package: EvidencePackage, provider: str) -> 
         "read_only": "yellow",
         "unknown": "yellow",
         "unsupported": "red",
+        # Terminal, not a gap. Absence must not read as a failure, or a provider
+        # that will never have the surface fails forever.
+        "absent": "green",
     }
     status_by_state = {
         "supported": STATUS_PASS,
         "read_only": STATUS_PASS,
         "unknown": STATUS_BLOCKED,
         "unsupported": STATUS_UNSUPPORTED_GAP,
+        "absent": STATUS_PASS,
     }
     rows = []
     operation_evidence = {}

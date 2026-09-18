@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-ProviderActionState = Literal["supported", "read_only", "unknown", "unsupported"]
+ProviderActionState = Literal["supported", "read_only", "unknown", "unsupported", "absent"]
 
 
 class ProviderActionProofRefResponse(BaseModel):

@@ -35,7 +35,7 @@ def test_agents_provider_action_coverage_route_exposes_derived_product_actions()
     assert response.status_code == 200
     payload = response.json()
     assert payload["source"] == "zerg.services.provider_action_coverage"
-    assert payload["states"] == ["supported", "read_only", "unknown", "unsupported"]
+    assert payload["states"] == ["supported", "read_only", "unknown", "unsupported", "absent"]
 
     opencode = payload["providers"]["opencode"]
     assert opencode["actions"]["send_prompt"]["state"] == "supported"

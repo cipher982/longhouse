@@ -54,13 +54,37 @@ def test_provider_specific_pause_actions_are_derived_without_manual_matrix():
 
 
 def test_declared_rich_provider_gaps_have_specific_reason_codes():
-    for provider in ("claude", "codex", "opencode", "antigravity"):
+    for provider in ("claude", "opencode", "antigravity"):
         coverage = derive_provider_action_coverage(provider)
 
         assert coverage["switch_actor"].state == ActionCoverageState.UNKNOWN
         assert coverage["switch_actor"].reason_code == ActionCoverageReasonCode.PROVIDER_ACTOR_SWITCH_UNMAPPED
         assert coverage["background_task_status"].state == ActionCoverageState.UNKNOWN
         assert coverage["background_task_status"].reason_code == ActionCoverageReasonCode.PROVIDER_BACKGROUND_STATUS_UNPROVEN
+
+
+def test_a_provider_without_the_surface_reports_absent_not_unproven():
+    """Absence is terminal, and it must not read as an unproven gap.
+
+    Codex declares `delegation.background: upstream_absent` — it writes no
+    in-flight count or registry at all (verified against 728 local rollouts,
+    none of which carry one). Before this state existed that read as `unknown`,
+    which is the same thing the vocabulary said about a provider whose support
+    was merely unproven, and it is what a fail-capable gate would trip over.
+    """
+
+    codex = derive_provider_action_coverage("codex")
+    assert codex["background_task_status"].state == ActionCoverageState.ABSENT
+    assert codex["background_task_status"].reason_code == ActionCoverageReasonCode.PROVIDER_SURFACE_ABSENT
+
+    # Codex does spawn subagents, so that surface is a real gap, not absence.
+    assert codex["observe_child_sessions"].state != ActionCoverageState.ABSENT
+
+    # Pi has no orchestration surface of any kind and says so.
+    pi = derive_provider_action_coverage("pi")
+    assert pi["observe_child_sessions"].state == ActionCoverageState.ABSENT
+    assert pi["classify_subagents"].state == ActionCoverageState.ABSENT
+    assert pi["background_task_status"].state == ActionCoverageState.ABSENT
 
 
 def test_contract_false_operation_derives_unsupported_without_manual_matrix_cell():

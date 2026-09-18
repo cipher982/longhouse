@@ -21,6 +21,11 @@ class ActionCoverageState(StrEnum):
     READ_ONLY = "read_only"
     UNKNOWN = "unknown"
     UNSUPPORTED = "unsupported"
+    #: The provider genuinely has no such surface. This is a terminal state, not
+    #: a gap: reporting it as `unknown` made a provider that will never have a
+    #: feature indistinguishable from one whose support is merely unproven, and
+    #: that is what a fail-capable gate would trip over.
+    ABSENT = "absent"
 
 
 class ActionCoverageReasonCode(StrEnum):
@@ -32,6 +37,7 @@ class ActionCoverageReasonCode(StrEnum):
     PROVIDER_PAUSE_DETECT_ONLY = "provider_pause_detect_only"
     PROVIDER_PROOF_UNDECLARED = "provider_proof_undeclared"
     PROVIDER_SURFACE_UNPROVEN = "provider_surface_unproven"
+    PROVIDER_SURFACE_ABSENT = "provider_surface_absent"
     # Retained for older serialized artifacts; new rich gaps use specific codes.
     PROVIDER_GAP_DECLARED = "provider_gap_declared"
     PROVIDER_ACTOR_SWITCH_UNMAPPED = "provider_actor_switch_unmapped"
@@ -70,6 +76,30 @@ class ActionCoverage:
 
 
 OPENCODE_ORCHESTRATION_PROJECTION = "opencode_orchestration_projection"
+
+#: Which transcript signal proves a provider has an orchestration surface at
+#: all. A provider whose contract declares that signal `upstream_absent` has no
+#: such surface, which is a terminal state rather than a gap. Only the
+#: observe-shaped questions map here: `fork` is governed by the contract's own
+#: `fork_thread` capability, and the control questions have no signal.
+_SURFACE_SIGNAL_BY_ACTION: Mapping[str, str] = {
+    "observe_child_sessions": "delegation.spawn",
+    "classify_subagents": "delegation.spawn",
+    "background_task_status": "delegation.background",
+}
+
+
+def _declared_signal_disposition(provider: str, signal: str) -> str:
+    """The provider contract's own disposition for one transcript signal."""
+
+    contract = contract_for_provider(provider)
+    if contract is None:
+        return ""
+    cell = (contract.transcript_signals or {}).get(signal)
+    if not isinstance(cell, Mapping):
+        return ""
+    return str(cell.get("disposition") or "").strip().lower()
+
 
 ACTION_QUESTIONS: tuple[ActionQuestion, ...] = (
     ActionQuestion(
@@ -168,8 +198,17 @@ def derive_provider_action_coverage(
     proofs = dict(proof_results or {})
     coverage: dict[str, ActionCoverage] = {}
     for question in ACTION_QUESTIONS:
+        surface_signal = _SURFACE_SIGNAL_BY_ACTION.get(question.id)
         provider_specific = _provider_specific_action_state(normalized_provider, question)
-        if provider_specific is not None:
+        if surface_signal is not None and (_declared_signal_disposition(normalized_provider, surface_signal) == "upstream_absent"):
+            # The provider has no such surface at all. Terminal, and a different
+            # statement from "we have not proven it" — the coverage vocabulary
+            # could not say that before, so absence read as an unproven gap.
+            state = ActionCoverageState.ABSENT
+            reason_code = ActionCoverageReasonCode.PROVIDER_SURFACE_ABSENT
+            reason = f"Managed provider contract declares transcript signal {surface_signal}=upstream_absent for {normalized_provider}."
+            proof_refs = ()
+        elif provider_specific is not None:
             state, reason_code, reason = provider_specific
             proof_refs = ()
         elif question.contract_operation is not None:

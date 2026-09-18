@@ -117,6 +117,9 @@ def collect_provider_support_state(
                 "read_only_actions": _action_names_by_state(action_coverage, "read_only"),
                 "unknown_actions": _action_names_by_state(action_coverage, "unknown"),
                 "unsupported_actions": _action_names_by_state(action_coverage, "unsupported"),
+                # Terminal, not a gap: the provider has no such surface. Without
+                # its own list these actions would vanish from every rollup.
+                "absent_actions": _action_names_by_state(action_coverage, "absent"),
                 "machine_control_supports": list(contract.machine_control_supports),
                 "machine_control_operations": list(machine_control_operations),
                 "live_control_operations": list(live_control_operations),

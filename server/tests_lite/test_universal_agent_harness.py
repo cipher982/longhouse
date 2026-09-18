@@ -1521,9 +1521,14 @@ def test_orchestration_capability_matrix_emits_per_capability_evidence(tmp_path:
         assert all("verdict" in item for item in operation_evidence.values())
         assert all("reason_code" in item for item in operation_evidence.values())
         assert all(item["canary"] == "provider_action_coverage" for item in operation_evidence.values())
-        assert operation_evidence["orchestration_background_task_status"]["reason_code"] == "provider_background_status_unproven"
+        # Codex, Pi and OMP declare no in-flight registry at all, so their cell
+        # is terminal absence rather than an unproven gap.
+        expected_background_reason = (
+            "provider_surface_absent" if result["provider"] in {"codex", "omp", "pi"} else "provider_background_status_unproven"
+        )
+        assert operation_evidence["orchestration_background_task_status"]["reason_code"] == expected_background_reason
         background_rows = [row for row in result["data"]["capabilities"] if row["capability"] == "background_task_status"]
-        assert background_rows[0]["reason_code"] == "provider_background_status_unproven"
+        assert background_rows[0]["reason_code"] == expected_background_reason
         summary = result["data"]["summary"]
         assert summary["green"] + summary["yellow"] + summary["red"] == len(operation_evidence)
 
