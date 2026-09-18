@@ -1028,24 +1028,25 @@ impl PiPrintSink {
     }
 
     async fn post_phase(&self, phase: &str, tool_name: Option<String>, activity_seq: u64) {
+        // One slot per session: the daemon records the local ledger from
+        // it and sends it. Only records no later event can restate —
+        // binding, terminal — stay on the durable queue.
         let observed_at = Utc::now();
-        self.persist_local_phase(phase, tool_name.clone(), observed_at);
-        self.post_events(vec![json!({
-            "runtime_key": format!("pi:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "pi",
-            "device_id": self.machine_name,
-            "source": PI_PRINT_ADAPTER,
-            "kind": "phase_signal",
-            "phase": phase,
-            "tool_name": tool_name,
-            "occurred_at": observed_at.to_rfc3339(),
-            "dedupe_key": format!("pi-print:{}:{}:phase:{phase}:{activity_seq}", self.session_id, self.run_id),
-            "payload": {"managed_transport": PI_PRINT_ADAPTER, "execution_lifetime": "one_shot"}
-        })])
-        .await;
+        crate::status_slot::publish_console_phase(
+            "pi",
+            PI_PRINT_ADAPTER,
+            &self.session_id,
+            &self.run_id,
+            &observed_at.to_rfc3339(),
+            phase,
+            tool_name.as_deref(),
+            json!({
+                "execution_lifetime": "one_shot",
+                "thread_id": self.thread_id,
+                "device_id": self.machine_name,
+                "activity_seq": activity_seq,
+            }),
+        );
     }
 
     async fn post_stream_event(&self, seq: u64, event: &Value, projection: &PiStreamProjection) {
