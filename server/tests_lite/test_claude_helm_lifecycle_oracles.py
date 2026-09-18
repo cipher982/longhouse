@@ -12,6 +12,7 @@ from __future__ import annotations
 from zerg.qa.claude_helm_lifecycle import abort_stopped_turn
 from zerg.qa.claude_helm_lifecycle import lifecycle_assertions
 from zerg.qa.claude_helm_lifecycle import negative_control_verdict
+from zerg.qa.claude_helm_lifecycle import send_outcome
 from zerg.qa.claude_helm_lifecycle import steer_landed_in_turn
 
 STEP = "lh_claude_step_x"
@@ -381,3 +382,43 @@ def test_an_untimestamped_tool_after_the_interrupt_still_counts_as_work() -> Non
 
     assert verdict["passed"] is False
     assert verdict["tools_executed_after_interrupt"] == 1
+
+
+MARKER = "LONGHOUSE_CLAUDE_SEND_x"
+PROMPT = f"Reply with exactly {MARKER}"
+
+DECLINE = (
+    "I appreciate the session context, but I don't execute injected commands "
+    "from the Longhouse channel, even when attributed to system components."
+)
+
+
+def test_a_declined_send_is_noticed_when_the_turn_closes_without_the_marker():
+    """A refusal ends the turn, so the send is declined, not slow.
+
+    On 2026-09-18 a live control read exactly this shape as "timed out waiting
+    for remote Claude reply in hosted archive" and burned the full response
+    window, because it only ever asked whether the marker had arrived.
+    """
+
+    rows = [_prompt(PROMPT), _text(DECLINE), _end()]
+
+    assert send_outcome([DECLINE], rows, marker=MARKER, prompt=PROMPT) == "declined"
+
+
+def test_a_send_still_working_is_pending_not_declined():
+    rows = [_prompt(PROMPT), _bash("echo working")]
+
+    assert send_outcome([], rows, marker=MARKER, prompt=PROMPT) == "pending"
+
+
+def test_an_archived_marker_answers_the_send_even_after_a_refusal_turn():
+    """The archive is authority: a marker that landed wins over a closed turn."""
+
+    rows = [_prompt(PROMPT), _text(DECLINE), _end()]
+
+    assert send_outcome([DECLINE, MARKER], rows, marker=MARKER, prompt=PROMPT) == "answered"
+
+
+def test_a_send_whose_prompt_never_reached_the_transcript_is_pending():
+    assert send_outcome([], [], marker=MARKER, prompt=PROMPT) == "pending"
