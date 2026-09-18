@@ -250,7 +250,10 @@ function makeNamedShellActivityGroupItem(): TimelineItem {
   };
 }
 
-function makeAskUserQuestionItem(state: "running" | "dropped" = "dropped"): TimelineItem {
+function makeAskUserQuestionItem(
+  state: "running" | "dropped" = "dropped",
+  resultText?: string,
+): TimelineItem {
   return {
     kind: "tool",
     interaction: {
@@ -286,7 +289,20 @@ function makeAskUserQuestionItem(state: "running" | "dropped" = "dropped"): Time
         timestamp: "2026-03-19T16:48:00Z",
         in_active_context: true,
       },
-      resultEvent: null,
+      resultEvent: resultText
+        ? {
+            id: 5,
+            role: "tool",
+            content_text: null,
+            tool_name: "AskUserQuestion",
+            tool_input_json: null,
+            tool_output_text: resultText,
+            tool_call_id: "toolu-question",
+            tool_call_state: "completed",
+            timestamp: "2026-03-19T16:49:00Z",
+            in_active_context: true,
+          }
+        : null,
       pairing: "id",
       anchorId: 4,
       timestamp: "2026-03-19T16:48:00Z",
@@ -855,6 +871,25 @@ describe("TimelinePane", () => {
     expect(row).toHaveTextContent("Answer this in the terminal.");
     expect(row).not.toHaveTextContent("dropped");
     expect(row).not.toHaveTextContent("running");
+  });
+
+  it("shows the answered choice on the question card instead of only the question", () => {
+    renderPane([
+      makeAskUserQuestionItem(
+        "dropped",
+        'Your questions have been answered: "How should I run the full image download?"="Both back-to-back". You can now continue with these answers in mind.',
+      ),
+    ]);
+
+    const row = screen.getByTestId("session-question-row");
+    expect(row).toHaveAttribute("data-status", "answered");
+    expect(row).toHaveTextContent("Answered");
+    expect(row).not.toHaveTextContent("Needs answer");
+    expect(screen.getByTestId("session-question-answer")).toHaveTextContent(
+      '"How should I run the full image download?"="Both back-to-back".',
+    );
+    expect(row).not.toHaveTextContent("Your questions have been answered:");
+    expect(row).not.toHaveTextContent("You can now continue with these answers in mind.");
   });
 
   it("renders tool result media inside expanded tool details", () => {

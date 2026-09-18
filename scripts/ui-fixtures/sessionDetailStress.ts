@@ -319,13 +319,16 @@ function namedRunPresentation(key: string, label: string): JsonObject {
 const MEDIA_REF_FIXTURE_IMAGE =
   "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='360'%20height='220'%20viewBox='0%200%20360%20220'%3E%3Crect%20width='360'%20height='220'%20fill='%23120f0c'/%3E%3Crect%20x='26'%20y='26'%20width='308'%20height='168'%20rx='12'%20fill='%23231a12'%20stroke='%23d4b87a'%20stroke-width='3'/%3E%3Ccircle%20cx='82'%20cy='82'%20r='22'%20fill='%23cc9054'/%3E%3Crect%20x='124'%20y='64'%20width='154'%20height='16'%20rx='4'%20fill='%23f5dfb2'/%3E%3Crect%20x='124'%20y='94'%20width='112'%20height='12'%20rx='4'%20fill='%239e7c5a'/%3E%3Cpath%20d='M42%20170%20l72-58%2054%2040%2045-34%20105%2052z'%20fill='%233b705f'/%3E%3C/svg%3E";
 
-export function buildSessionDetailStressFixture(): {
+/** The full payload set one session-detail fixture has to serve. */
+export type SessionDetailFixture = {
   session: AgentSession;
   thread: AgentSessionThreadResponse;
   projection: AgentSessionProjectionResponse;
   workspace: AgentSessionWorkspaceResponse;
   turns: AgentSessionTurnsListResponse;
-} {
+};
+
+export function buildSessionDetailStressFixture(): SessionDetailFixture {
   const rootSession = makeSession({
     id: ROOT_SESSION_ID,
     session_state: makeSessionState({
@@ -1024,14 +1027,69 @@ export function buildSessionDetailStressFixture(): {
 }
 
 /**
+ * The same live session with an answered AskUserQuestion as its newest rows.
+ * This is the shape behind "I answered in the terminal — does the card say
+ * what I chose?": a Claude Helm session whose question was answered in the
+ * original TUI, so the transcript carries the result but the runtime badge is
+ * the stale hook state.
+ */
+export function buildSessionQuestionFixture(): SessionDetailFixture {
+  const fixture = buildSessionDetailStressFixture();
+  const sessionId = SESSION_DETAIL_STRESS_SESSION_ID;
+  const toolCallId = "question-tool-1";
+
+  const call: AgentEvent = makeEvent(2500, "assistant", "2026-04-15T16:11:40Z", {
+    tool_name: "AskUserQuestion",
+    tool_input_json: {
+      questions: [
+        {
+          question:
+            "Both canary instances are `failed` in the control plane while their containers serve 200, which blocks all demo deploys. How do you want it cleared?",
+          header: "Canary fix",
+          multiSelect: false,
+          options: [
+            {
+              label: "Deploy T1 to the canary control plane",
+              description:
+                "The proper fix: the canary CP runs private 41bd5379f, which lacks the failed->active recovery I committed.",
+            },
+            {
+              label: "Deprovision and recreate release-canary",
+              description:
+                "Faster, uses the supported /deprovision API on a throwaway tenant created today. Risk: if reprovisioning then fails, the canary is gone entirely.",
+            },
+            {
+              label: "Leave it; I'll handle the canary",
+              description: "I stop touching the canary ring entirely and report the exact state.",
+            },
+          ],
+        },
+      ],
+    },
+    tool_call_id: toolCallId,
+  });
+  const result: AgentEvent = makeEvent(2501, "tool", "2026-04-15T16:11:52Z", {
+    tool_name: "AskUserQuestion",
+    tool_output_text:
+      'Your questions have been answered: "Both canary instances are `failed` in the control plane while their containers serve 200, which blocks all demo deploys. How do you want it cleared?"="Deploy T1 to the canary control plane". You can now continue with these answers in mind.',
+    tool_call_id: toolCallId,
+  });
+
+  fixture.projection.items = [
+    ...fixture.projection.items,
+    projectionEvent(call, sessionId),
+    projectionEvent(result, sessionId),
+  ];
+  return fixture;
+}
+
+/**
  * A live Helm session whose provider activity evidence expired while its
  * control lease stayed healthy: the shape behind "Last observed idle". Cursor
  * posts presence only on hook events, so every quiet session lands here ten
  * minutes after its last turn.
  */
-export function buildSessionStaleObservationFixture(): ReturnType<
-  typeof buildSessionDetailStressFixture
-> {
+export function buildSessionStaleObservationFixture(): SessionDetailFixture {
   const fixture = buildSessionDetailStressFixture();
   const observedAt = "2026-04-15T13:12:00Z";
   const leaseObservedAt = "2026-04-15T16:12:00Z";
@@ -1077,7 +1135,7 @@ export function buildSessionStaleObservationFixture(): ReturnType<
   return fixture;
 }
 
-export function buildSessionResumeFixture(): ReturnType<typeof buildSessionDetailStressFixture> {
+export function buildSessionResumeFixture(): SessionDetailFixture {
   const fixture = buildSessionDetailStressFixture();
   const endedAt = "2026-04-15T16:12:00Z";
   fixture.session.ended_at = endedAt;
@@ -1127,7 +1185,7 @@ export function buildSessionResumeFixture(): ReturnType<typeof buildSessionDetai
 export const SESSION_TONES = ["running", "thinking", "active", "idle", "stalled", "blocked", "closed"] as const;
 export type SessionTone = (typeof SESSION_TONES)[number];
 
-export function buildSessionToneFixture(tone: SessionTone): ReturnType<typeof buildSessionDetailStressFixture> {
+export function buildSessionToneFixture(tone: SessionTone): SessionDetailFixture {
   const fixture = buildSessionDetailStressFixture();
   const now = SESSION_DETAIL_STRESS_NOW;
   const access = { key: "live_control", label: "Live control", tone: "live", observed_at: now };
