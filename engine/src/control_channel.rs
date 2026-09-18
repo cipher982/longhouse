@@ -5661,6 +5661,18 @@ printf '%s\n' '{{"event":"result","result":{{"conversation_id":"{native_id}","st
                     settled.provider_thread_id.as_deref(),
                     Some(native_id.as_str())
                 );
+                // The launcher's durable authority is the claim file; the
+                // database binding is the daemon's projection of it. Assert the
+                // end state discovery actually reads, through the real
+                // projection, rather than a binding written by the launcher.
+                let claim = crate::managed_source_claim::read_claim(&session_id)
+                    .unwrap()
+                    .expect("recovery confirms the source claim");
+                assert_eq!(
+                    claim.native_session_id.as_deref(),
+                    Some(native_id.as_str())
+                );
+                crate::managed_source_claim::project_claims(&db_path).unwrap();
                 let conn = crate::state::db::open_db(Some(&db_path)).unwrap();
                 assert_eq!(
                     crate::state::session_binding::SessionBinding::new(&conn)

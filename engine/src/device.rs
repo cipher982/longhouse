@@ -830,6 +830,71 @@ fn print_shipping_source_evidence(source: &Value) {
     println!();
 }
 
+/// Re-derive durability from the source files and the sealed payload files and
+/// compare it with what this machine and the host claim. Read-only.
+pub fn cmd_durability_audit(
+    receipts: Option<&Path>,
+    sample_bytes: Option<u64>,
+    limit: Option<usize>,
+    json: bool,
+) -> anyhow::Result<()> {
+    let db_path = config::get_agent_db_path()?;
+    if !db_path.exists() {
+        anyhow::bail!("no local shipper database at {}", db_path.display());
+    }
+    let receipts: std::collections::HashMap<String, u64> = match receipts {
+        Some(path) => {
+            let bytes = std::fs::read(path)
+                .with_context(|| format!("reading receipts {}", path.display()))?;
+            serde_json::from_slice(&bytes)
+                .with_context(|| format!("parsing receipts {}", path.display()))?
+        }
+        None => std::collections::HashMap::new(),
+    };
+    let report = crate::durability_audit::audit(&db_path, &receipts, sample_bytes, limit)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "durability audit: {} audited, {} clean, {} alarmed, {} unverifiable",
+            report.audited_epochs,
+            report.clean_epochs,
+            report.alarmed_epochs,
+            report.unverifiable_epochs
+        );
+        for epoch in &report.epochs {
+            let status = match epoch.status() {
+                crate::durability_audit::EpochStatus::Clean => "clean",
+                crate::durability_audit::EpochStatus::Unverifiable => "unverifiable",
+                crate::durability_audit::EpochStatus::Alarmed => "ALARMED",
+            };
+            if status == "clean" {
+                continue;
+            }
+            println!(
+                "  {status} {} {} cursor={} host={} source_len={} payload_files={}",
+                epoch.provider,
+                epoch.source_epoch,
+                epoch.lane_cursor,
+                epoch
+                    .host_accepted_through
+                    .map_or("unknown".to_string(), |value| value.to_string()),
+                epoch
+                    .source_len
+                    .map_or("unknown".to_string(), |value| value.to_string()),
+                epoch.payload_files,
+            );
+            for alarm in &epoch.alarms {
+                println!("      alarm {alarm}");
+            }
+        }
+    }
+    if !report.is_clean() {
+        anyhow::bail!("durability audit found {} alarm(s)", report.epochs.iter().map(|epoch| epoch.alarms.len()).sum::<usize>());
+    }
+    Ok(())
+}
+
 /// Drop a blocked source's retained envelope.
 ///
 /// No `retry` counterpart on purpose: re-posting an identical envelope the host

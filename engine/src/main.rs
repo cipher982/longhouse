@@ -28,6 +28,7 @@ mod cursor_launch_binding;
 mod cursor_print;
 mod cursor_store;
 mod cursor_visibility;
+mod durability_audit;
 mod daemon;
 mod device;
 mod discovery;
@@ -816,6 +817,23 @@ enum DeviceCommands {
     /// structurally refused cannot change the admission fact, so it would only
     /// look like an action. The local transcript file is untouched — this drops
     /// the queued upload attempt, not the evidence.
+    /// Re-derive what should be durable from the source files and the sealed
+    /// payload files, and compare it with the cursors this machine and the host
+    /// claim. Read-only; exits non-zero on any alarm.
+    DurabilityAudit {
+        /// JSON map of `source_epoch` to the host's `accepted_through`.
+        #[arg(long)]
+        receipts: Option<std::path::PathBuf>,
+        /// Audit only this many prefix bytes per epoch (sampled prefix).
+        #[arg(long)]
+        sample_bytes: Option<u64>,
+        /// Audit at most this many of the most recent epochs.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     ShippingDiscard {
         /// The source epoch to discard, as reported by shipping-inspect.
         #[arg(long)]
@@ -1450,6 +1468,7 @@ fn command_name(command: &Commands) -> &'static str {
             DeviceCommands::Status { .. } => "device-status",
             DeviceCommands::LocalHealth { .. } => "device-local-health",
             DeviceCommands::ShippingInspect { .. } => "device-shipping-inspect",
+            DeviceCommands::DurabilityAudit { .. } => "device-durability-audit",
             DeviceCommands::ShippingDiscard { .. } => "device-shipping-discard",
             DeviceCommands::RepairPlan { .. } => "device-repair-plan",
             DeviceCommands::Repair { .. } => "device-repair",
@@ -1984,6 +2003,14 @@ fn main() -> anyhow::Result<()> {
             }
             DeviceCommands::ShippingInspect { source_epoch, json } => {
                 device::cmd_shipping_inspect(source_epoch.as_deref(), json)?;
+            }
+            DeviceCommands::DurabilityAudit {
+                receipts,
+                sample_bytes,
+                limit,
+                json,
+            } => {
+                device::cmd_durability_audit(receipts.as_deref(), sample_bytes, limit, json)?;
             }
             DeviceCommands::ShippingDiscard {
                 source_epoch,
