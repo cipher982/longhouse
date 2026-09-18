@@ -119,6 +119,59 @@ async def test_drain_waits_for_runtime_and_catalog_quiescence() -> None:
 
 
 @pytest.mark.asyncio
+async def test_nonblocking_drain_poll_reaches_drained_after_writer_release(monkeypatch) -> None:
+    from zerg.routers import internal_deployments
+    from zerg.services.runtime_admission import RuntimeAdmission
+
+    runtime = RuntimeAdmission()
+    admitted, _ = await runtime.try_admit(path="/test")
+    assert admitted is True
+
+    async def probe(operation: str) -> dict[str, object]:
+        assert operation == "close"
+        return {"available": True, "state": "closed", "depth": 0, "accepting": False, "active_label": None}
+
+    monkeypatch.setattr(
+        internal_deployments,
+        "get_settings",
+        lambda: SimpleNamespace(internal_api_secret="secret"),
+    )
+    monkeypatch.setattr(internal_deployments, "runtime_admission", lambda: runtime)
+    monkeypatch.setattr(internal_deployments, "_catalog_admission_probe", probe)
+
+    payload = _drain_payload(runtime)
+    payload["grace_seconds"] = 0
+    payload["deadline_utc"] = (datetime.now(timezone.utc) + timedelta(seconds=120)).isoformat()
+    initial_response = await asyncio.wait_for(
+        internal_deployments.drain_runtime(
+            "attempt",
+            body=internal_deployments.DeploymentFenceRequest(**payload),
+            x_internal_token="secret",
+        ),
+        timeout=0.5,
+    )
+    assert initial_response.status_code == 202
+    initial = json.loads(initial_response.body)
+    assert initial["state"] == "draining"
+    fence = runtime.fence
+    assert fence is not None
+    assert fence.request_id == payload["request_id"]
+
+    await runtime.release()
+    polled = await internal_deployments.get_runtime_drain(
+        "attempt",
+        request_id=str(payload["request_id"]),
+        runtime_epoch=runtime.runtime_epoch,
+        x_internal_token="secret",
+    )
+
+    assert polled.status_code == 200
+    body = json.loads(polled.body)
+    assert body["state"] == "drained"
+    assert runtime.fence == fence
+
+
+@pytest.mark.asyncio
 async def test_drain_observes_late_catalog_depth_before_drained() -> None:
     from zerg.services.runtime_admission import RuntimeAdmission
 
