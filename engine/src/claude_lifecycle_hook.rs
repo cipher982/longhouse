@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 pub fn run() -> anyhow::Result<()> {
     // Claude treats hook failures as an interactive interruption. This command
@@ -55,9 +56,10 @@ fn run_inner() -> anyhow::Result<()> {
 /// Split from `run_inner` so a test can hand it a payload instead of a stdin.
 fn handle_input(input: &Value) -> anyhow::Result<()> {
     let event = string(input, "hook_event_name").unwrap_or_default();
-    let Some(state) = state_for_event(&event, input) else {
+    let observation = observation_for_event(&event, input);
+    if observation.status.is_none() && observation.edge.is_none() {
         return Ok(());
-    };
+    }
     let managed_session_id = crate::managed_identity::managed_session_id_for(
         crate::managed_identity_contract::ManagedProvider::Claude,
     );
@@ -102,7 +104,7 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
     }
     let mut payload = json!({
         "session_id": session_id,
-        "state": state,
+        "state": observation.status,
         "tool_name": string(input, "tool_name"),
         "cwd": cwd,
         "provider": "claude",
@@ -125,7 +127,15 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
             payload["provider_pid"] = json!(provider_pid);
         }
     }
-    crate::hook_outbox::enqueue_presence(&longhouse_home()?, &payload)?;
+    // Only when the event actually says something about activity. A
+    // `PermissionRequest` carries no phase, and writing one anyway is how a
+    // dialog became a session-wide "Blocked".
+    if observation.status.is_some() {
+        crate::hook_outbox::enqueue_presence(&longhouse_home()?, &payload)?;
+    }
+    if let Some(edge) = observation.edge.as_ref() {
+        enqueue_interaction_edge(&session_id, edge)?;
+    }
     let marker_event = match event.as_str() {
         "UserPromptSubmit" => Some("prompt_submit"),
         "PermissionRequest" => Some("permission_request"),
@@ -257,19 +267,265 @@ fn string(input: &Value, key: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn state_for_event(event: &str, input: &Value) -> Option<&'static str> {
+/// Claude's structured question tool.
+///
+/// `schemas/managed_providers.yml` owns each provider's `pause_tool_name`; this
+/// restates Claude's because this file is the only place that decides which
+/// hook event is a question, and the engine does not read that schema.
+const PAUSE_TOOL_NAME: &str = "AskUserQuestion";
+
+const PAUSE_SOURCE: &str = "claude_hook";
+
+/// A durable interaction edge: a wait the *user* owes, or the retirement of one.
+///
+/// This is deliberately separate from `status`. A phase is replaceable evidence
+/// about what the provider is doing; an interaction is a semantic record with an
+/// owner and a lifetime. Collapsing them is what produced a session headlined
+/// "Blocked" with nothing behind it, so the hook now states the obligation
+/// itself instead of leaving a client to infer one from the last phase.
+///
+/// Claude's hooks reference settles the keys this needs: `PreToolUse` and
+/// `PostToolUse` carry `tool_use_id`, and `PermissionRequest` explicitly does
+/// *not*. So a question is keyed by the tool call, and an approval — which has
+/// no id anywhere in its own payload — is keyed by a coordinate that both the
+/// request and the resolving tool event can compute without stored state.
+#[derive(Debug, PartialEq)]
+enum InteractionEdge {
+    OpenQuestion {
+        tool_use_id: String,
+        request_payload: Value,
+    },
+    ResolveQuestion {
+        tool_use_id: String,
+    },
+    OpenPermission {
+        request_key: String,
+        tool_name: String,
+        request_payload: Value,
+    },
+    ResolvePermission {
+        request_key: String,
+        tool_name: String,
+    },
+}
+
+/// One hook event's replaceable status and its optional interaction edge.
+///
+/// `status: None` is not "nothing happened" — `PermissionRequest` states an
+/// obligation without stating a phase, and the notification types that carry no
+/// tool identity state neither.
+struct HookObservation {
+    status: Option<&'static str>,
+    edge: Option<InteractionEdge>,
+}
+
+fn observation_for_event(event: &str, input: &Value) -> HookObservation {
+    let tool_name = string(input, "tool_name");
+    let tool_use_id = string(input, "tool_use_id");
+    let tool_input = input.get("tool_input").cloned().unwrap_or(Value::Null);
+    let is_pause_tool = tool_name.as_deref() == Some(PAUSE_TOOL_NAME);
     match event {
-        "SessionStart" | "Stop" => Some("idle"),
-        "UserPromptSubmit" | "PostToolUse" | "PostToolUseFailure" => Some("thinking"),
-        "PreToolUse" => Some("running"),
-        "PermissionRequest" => Some("blocked"),
-        "Notification" => match string(input, "notification_type").as_deref() {
-            Some("idle_prompt") | Some("elicitation_dialog") => Some("needs_user"),
-            Some("permission_prompt") => Some("blocked"),
-            _ => None,
+        "SessionStart" | "Stop" => HookObservation {
+            status: Some("idle"),
+            edge: None,
         },
-        _ => None,
+        "UserPromptSubmit" => HookObservation {
+            status: Some("thinking"),
+            edge: None,
+        },
+        "PreToolUse" => HookObservation {
+            status: Some("running"),
+            edge: match (is_pause_tool, tool_use_id) {
+                (true, Some(tool_use_id)) => Some(InteractionEdge::OpenQuestion {
+                    tool_use_id,
+                    request_payload: tool_input,
+                }),
+                _ => None,
+            },
+        },
+        "PostToolUse" | "PostToolUseFailure" => {
+            // A tool event is the only place a wait is provably over: it names
+            // the call for a question, and repeats the tool and its input for an
+            // approval whose own payload never carried an id.
+            let edge = match (tool_use_id, tool_name.clone()) {
+                (Some(tool_use_id), _) => Some(InteractionEdge::ResolveQuestion { tool_use_id }),
+                (None, Some(tool_name)) if !is_pause_tool && !tool_input.is_null() => {
+                    Some(InteractionEdge::ResolvePermission {
+                        request_key: permission_request_key(&tool_name, &tool_input),
+                        tool_name,
+                    })
+                }
+                _ => None,
+            };
+            HookObservation {
+                status: Some("thinking"),
+                edge,
+            }
+        }
+        "PermissionRequest" => HookObservation {
+            // No phase. "Blocked" was this hook asserting that the user owes
+            // something, on a signal whose own payload carries no tool identity
+            // to key it by; the request is the obligation, and the badge reads
+            // the obligation rather than the phase.
+            status: None,
+            edge: match tool_name {
+                Some(tool_name) if !is_pause_tool && !tool_input.is_null() => {
+                    Some(InteractionEdge::OpenPermission {
+                        request_key: permission_request_key(&tool_name, &tool_input),
+                        tool_name,
+                        request_payload: tool_input,
+                    })
+                }
+                // A question opens at its own PreToolUse, keyed by the id that
+                // event carries. Opening a second, id-less claim for the same
+                // wait is how one dialog becomes two obligations.
+                _ => None,
+            },
+        },
+        "Notification" => match string(input, "notification_type").as_deref() {
+            // Claude is back at its input prompt, so no dialog is up. This is
+            // quiescence, not a claim about the user: the old mapping to
+            // `needs_user` made "Claude has been idle for a minute" read as an
+            // open question for the next ten.
+            Some("idle_prompt") | Some("elicitation_dialog") => HookObservation {
+                status: Some("idle"),
+                edge: None,
+            },
+            // Repeats an obligation already opened by `PermissionRequest`, and
+            // carries no tool identity of its own.
+            _ => HookObservation {
+                status: None,
+                edge: None,
+            },
+        },
+        _ => HookObservation {
+            status: None,
+            edge: None,
+        },
     }
+}
+
+/// The coordinate an approval is held under.
+///
+/// `PermissionRequest` carries `tool_name` and `tool_input` and no id, and the
+/// `PostToolUse`/`PostToolUseFailure` that ends the wait carries both as well,
+/// so hashing the input gives both ends the same key without the hook holding
+/// state. Two identical tool calls prompting at the same moment collapse to one
+/// key; that is strictly narrower than today, where neither is keyed at all, and
+/// the server's single-active and last-seen ordering already pick a winner.
+fn permission_request_key(tool_name: &str, tool_input: &Value) -> String {
+    let canonical = serde_json::to_vec(tool_input).unwrap_or_default();
+    format!(
+        "claude-hook:permission:{tool_name}:{:x}",
+        Sha256::digest(&canonical)
+    )
+}
+
+/// Build the runtime event that opens or retires one interaction.
+///
+/// It rides the durable runtime-events lane the Codex bridge's `pause_request`
+/// already uses, which is what makes a resolution survive a dropped hook, a
+/// killed process, or a restart: replaceable status may be lost, an obligation
+/// may not.
+fn interaction_runtime_event(session_id: &str, edge: &InteractionEdge) -> Value {
+    let runtime_key = format!("claude:{session_id}");
+    let occurred_at = chrono::Utc::now().to_rfc3339();
+    let (kind, tool_name, payload) = match edge {
+        InteractionEdge::OpenQuestion {
+            tool_use_id,
+            request_payload,
+        } => (
+            "pause_request",
+            PAUSE_TOOL_NAME.to_string(),
+            json!({
+                "provider_request_id": tool_use_id,
+                "provider_ref": {"source": PAUSE_SOURCE, "reply_transport": "terminal"},
+                "kind": "question",
+                "title": "Claude needs an answer",
+                "summary": "Answer this in the original terminal.",
+                "request_payload": request_payload,
+                // The dialog is in the provider's terminal. Longhouse surfaced
+                // it; it did not gain the authority to answer it.
+                "can_respond": false,
+                "single_active": true,
+            }),
+        ),
+        InteractionEdge::ResolveQuestion { tool_use_id } => (
+            "pause_resolution",
+            PAUSE_TOOL_NAME.to_string(),
+            json!({
+                "provider_request_id": tool_use_id,
+                "status": "resolved",
+                "response_text": "Answered in the original terminal.",
+            }),
+        ),
+        InteractionEdge::OpenPermission {
+            request_key,
+            tool_name,
+            request_payload,
+        } => (
+            "pause_request",
+            tool_name.clone(),
+            json!({
+                "request_key": request_key,
+                "provider_ref": {"source": PAUSE_SOURCE, "reply_transport": "terminal"},
+                "kind": "permission",
+                "title": "Claude needs permission",
+                "summary": format!("Approve or deny {tool_name} in the original terminal."),
+                "request_payload": request_payload,
+                "can_respond": false,
+                "single_active": true,
+            }),
+        ),
+        InteractionEdge::ResolvePermission {
+            request_key,
+            tool_name,
+        } => (
+            "pause_resolution",
+            tool_name.clone(),
+            json!({
+                "request_key": request_key,
+                "status": "resolved",
+                "response_text": "Decided in the original terminal.",
+            }),
+        ),
+    };
+    // A request is deduped on its own identity so a re-delivery cannot open a
+    // second obligation. A resolution is an event, not a state, and carries a
+    // nonce for the same reason the Codex bridge's does.
+    let dedupe_key = match edge {
+        InteractionEdge::OpenQuestion { tool_use_id, .. } => {
+            format!("claude-hook:open-question:{session_id}:{tool_use_id}")
+        }
+        InteractionEdge::OpenPermission { request_key, .. } => {
+            format!("claude-hook:open-permission:{session_id}:{request_key}")
+        }
+        _ => format!(
+            "claude-hook:{kind}:{session_id}:{}",
+            uuid::Uuid::new_v4()
+        ),
+    };
+    json!({
+        "runtime_key": runtime_key,
+        "session_id": session_id,
+        "provider": "claude",
+        "source": PAUSE_SOURCE,
+        "kind": kind,
+        "phase": Value::Null,
+        "tool_name": tool_name,
+        "occurred_at": occurred_at,
+        "dedupe_key": dedupe_key,
+        "payload": payload,
+    })
+}
+
+fn enqueue_interaction_edge(session_id: &str, edge: &InteractionEdge) -> anyhow::Result<()> {
+    let event = interaction_runtime_event(session_id, edge);
+    crate::outbox::enqueue_runtime_event(
+        &crate::config::get_agent_runtime_events_outbox_dir()?,
+        &event,
+    )?;
+    Ok(())
 }
 
 fn longhouse_home() -> anyhow::Result<PathBuf> {
@@ -348,17 +604,132 @@ mod tests {
 
     #[test]
     fn maps_claude_events_without_guessing_unknown_notifications() {
-        assert_eq!(state_for_event("PreToolUse", &json!({})), Some("running"));
         assert_eq!(
-            state_for_event(
-                "Notification",
-                &json!({"notification_type":"permission_prompt"})
-            ),
-            Some("blocked")
+            observation_for_event("PreToolUse", &json!({})).status,
+            Some("running")
         );
         assert_eq!(
-            state_for_event("Notification", &json!({"notification_type":"other"})),
+            observation_for_event(
+                "Notification",
+                &json!({"notification_type":"idle_prompt"})
+            )
+            .status,
+            Some("idle")
+        );
+        assert_eq!(
+            observation_for_event("Notification", &json!({"notification_type":"other"})).status,
             None
+        );
+    }
+
+    #[test]
+    fn a_permission_request_states_an_obligation_and_no_phase() {
+        // `PermissionRequest` carries no `tool_use_id`, and that absence is
+        // exactly why it must not become a phase: an id-less "blocked" activity
+        // was rendered as a session-wide attention claim with nothing to key it
+        // by, which is the defect this mapping removes.
+        let observation = observation_for_event(
+            "PermissionRequest",
+            &json!({"tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/x"}}),
+        );
+        assert_eq!(observation.status, None);
+        match observation.edge {
+            Some(InteractionEdge::OpenPermission {
+                request_key,
+                tool_name,
+                ..
+            }) => {
+                assert_eq!(tool_name, "Bash");
+                assert!(request_key.starts_with("claude-hook:permission:Bash:"), "{request_key}");
+            }
+            other => panic!("expected an approval edge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_question_opens_at_pretooluse_keyed_by_the_tool_call() {
+        let observation = observation_for_event(
+            "PreToolUse",
+            &json!({"tool_name": "AskUserQuestion", "tool_use_id": "toolu_01abc"}),
+        );
+        assert_eq!(observation.status, Some("running"));
+        assert_eq!(
+            observation.edge,
+            Some(InteractionEdge::OpenQuestion {
+                tool_use_id: "toolu_01abc".to_string(),
+                request_payload: Value::Null,
+            })
+        );
+    }
+
+    #[test]
+    fn a_question_does_not_also_open_an_approval() {
+        // Claude may ask for a permission decision on the question tool itself.
+        // Opening a second, id-less claim for the same dialog is how one wait
+        // becomes two obligations and neither resolution matches.
+        let observation = observation_for_event(
+            "PermissionRequest",
+            &json!({"tool_name": "AskUserQuestion", "tool_input": {"questions": []}}),
+        );
+        assert_eq!(observation.status, None);
+        assert_eq!(observation.edge, None);
+    }
+
+    #[test]
+    fn a_tool_end_retires_both_a_question_and_an_approval() {
+        let question = observation_for_event(
+            "PostToolUse",
+            &json!({"tool_name": "AskUserQuestion", "tool_use_id": "toolu_01abc"}),
+        );
+        assert_eq!(
+            question.edge,
+            Some(InteractionEdge::ResolveQuestion {
+                tool_use_id: "toolu_01abc".to_string(),
+            })
+        );
+        // The approval coordinate is recomputed from the same two fields
+        // `PermissionRequest` supplied, so no state has to be held between them.
+        let permission = observation_for_event(
+            "PostToolUseFailure",
+            &json!({"tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/x"}}),
+        );
+        let opened = observation_for_event(
+            "PermissionRequest",
+            &json!({"tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/x"}}),
+        );
+        let opened_key = match opened.edge {
+            Some(InteractionEdge::OpenPermission { request_key, .. }) => request_key,
+            other => panic!("expected an approval edge, got {other:?}"),
+        };
+        match permission.edge {
+            Some(InteractionEdge::ResolvePermission { request_key, .. }) => {
+                assert_eq!(request_key, opened_key);
+            }
+            other => panic!("expected an approval resolution, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_opened_question_is_a_durable_record_not_a_phase() {
+        let event = interaction_runtime_event(
+            "session-1",
+            &InteractionEdge::OpenQuestion {
+                tool_use_id: "toolu_01abc".to_string(),
+                request_payload: json!({"questions": [{"question": "which?"}]}),
+            },
+        );
+        assert_eq!(event["kind"], "pause_request");
+        assert_eq!(event["runtime_key"], "claude:session-1");
+        assert_eq!(event["phase"], Value::Null);
+        assert_eq!(event["payload"]["kind"], "question");
+        assert_eq!(event["payload"]["provider_request_id"], "toolu_01abc");
+        // The dialog is the provider's. Longhouse surfaced a wait; it did not
+        // gain the authority to answer it.
+        assert_eq!(event["payload"]["can_respond"], false);
+        // Stable, so a re-delivery cannot open a second obligation.
+        assert_eq!(
+            event["dedupe_key"],
+            "claude-hook:open-question:session-1:toolu_01abc"
         );
     }
 
