@@ -36,17 +36,6 @@ def _start_local_embedding_projector(app: FastAPI) -> None:
         logger.exception("Failed to start embeddings-v2 projector (non-fatal)")
 
 
-async def _stop_local_embedding_initializer(app: FastAPI) -> None:
-    task = getattr(app.state, "embedding_initializer_task", None)
-    if task is not None:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-        app.state.embedding_initializer_task = None
-    from zerg.services.local_embedder import stop_local_embedder_initialization
-
-    await stop_local_embedder_initialization()
-
-
 async def _stop_storage_title_services(app: FastAPI) -> None:
     task = getattr(app.state, "storage_title_reconciler_task", None)
     if task is not None:
@@ -346,7 +335,6 @@ async def lifespan(app: FastAPI):
         logger.error(f"Error during startup: {e}")
         if not _settings.testing or owns_test_catalog:
             await _stop_storage_title_services(app)
-            await _stop_local_embedding_initializer(app)
             telemetry_task = getattr(app.state, "storage_telemetry_task", None)
             if telemetry_task is not None:
                 telemetry_task.cancel()
@@ -369,6 +357,10 @@ async def lifespan(app: FastAPI):
                 await stop_embeddings_v2_projector()
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to stop embeddings-v2 projector")
+            finally:
+                from zerg.services.local_embedder import stop_local_embedder_initialization
+
+                await stop_local_embedder_initialization()
             try:
                 from zerg.services.raw_object_workers import close_raw_object_worker_pool
                 from zerg.services.render_object_workers import close_render_object_worker_pool
@@ -422,7 +414,6 @@ async def lifespan(app: FastAPI):
 
         if not _settings.testing or owns_test_catalog:
             await _stop_storage_title_services(app)
-            await _stop_local_embedding_initializer(app)
             telemetry_task = getattr(app.state, "storage_telemetry_task", None)
             if telemetry_task is not None:
                 telemetry_task.cancel()
@@ -445,6 +436,10 @@ async def lifespan(app: FastAPI):
                 await stop_embeddings_v2_projector()
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to stop embeddings-v2 projector")
+            finally:
+                from zerg.services.local_embedder import stop_local_embedder_initialization
+
+                await stop_local_embedder_initialization()
             try:
                 from zerg.services.raw_object_workers import close_raw_object_worker_pool
                 from zerg.services.render_object_workers import close_render_object_worker_pool

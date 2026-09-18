@@ -292,30 +292,17 @@ async def _initialize_local_embedder_with_retries() -> LocalEmbedder:
             delay = min(delay * 2, EMBED_INITIALIZE_RETRY_MAX_SECONDS)
 
 
-def request_local_embedder_initialization() -> asyncio.Task[LocalEmbedder] | None:
-    """Start one background initializer, leaving the non-loading accessor intact."""
+def request_local_embedder_initialization() -> None:
+    """Start one background initializer owned by the application, not its callers."""
 
     global _initializer_task
     if _embedder is not None and _embedder.ready:
-        return _initializer_task
+        return
     if _initializer_task is None or _initializer_task.done():
         _initializer_task = asyncio.create_task(
             _initialize_local_embedder_with_retries(),
             name="local-embedding-initializer",
         )
-    return _initializer_task
-
-
-async def ensure_local_embedder() -> LocalEmbedder:
-    """Wait for the shared initializer without letting callers cancel it."""
-
-    try:
-        return get_local_embedder()
-    except LocalEmbedderUnavailable:
-        task = request_local_embedder_initialization()
-        if task is None:
-            return get_local_embedder()
-        return await asyncio.shield(task)
 
 
 async def stop_local_embedder_initialization() -> None:

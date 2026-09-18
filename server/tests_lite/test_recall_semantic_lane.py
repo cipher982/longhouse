@@ -264,7 +264,6 @@ async def test_semantic_recall_never_turns_missing_test_model_into_a_miss(monkey
         lambda: initialization_requests.append(True),
     )
 
-
     with pytest.raises(agents_search.HTTPException) as unavailable:
         await agents_search._semantic_recall_matches(
             query="anything",

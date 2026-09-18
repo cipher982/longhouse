@@ -69,36 +69,36 @@ def _embedder(vectors, *, output_name="sentence_embedding"):
 
 
 @pytest.mark.asyncio
-async def test_initialization_is_single_flight_and_survives_caller_cancellation(monkeypatch):
+async def test_cold_queries_fail_promptly_and_share_initialization(monkeypatch):
     import zerg.services.local_embedder as local_embedder_module
 
     monkeypatch.setattr(local_embedder_module, "_embedder", None)
     monkeypatch.setattr(local_embedder_module, "_initializer_task", None)
-    started = asyncio.Event()
     release = asyncio.Event()
+    ready = asyncio.Event()
     calls = 0
-    sentinel = object()
 
     async def initialize_once():
         nonlocal calls
         calls += 1
-        started.set()
         await release.wait()
-        return sentinel
+        loaded = _embedder([[1.0, 0.0, 0.0, 0.0]])
+        local_embedder_module._embedder = loaded
+        ready.set()
+        return loaded
 
     monkeypatch.setattr(local_embedder_module, "_initialize_local_embedder_once", initialize_once)
-
-    cancelled_caller = asyncio.create_task(local_embedder_module.ensure_local_embedder())
-    await started.wait()
-    surviving_caller = asyncio.create_task(local_embedder_module.ensure_local_embedder())
-    cancelled_caller.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await cancelled_caller
-    release.set()
-
-    assert await surviving_caller is sentinel
-    assert calls == 1
-    await local_embedder_module.stop_local_embedder_initialization()
+    try:
+        for query in ("first", "second"):
+            with pytest.raises(LocalEmbedderUnavailable):
+                await asyncio.wait_for(local_embedder_module.embed_query(query), timeout=0.5)
+        release.set()
+        await asyncio.wait_for(ready.wait(), timeout=1.0)
+        assert np.allclose(await local_embedder_module.embed_query("warm"), [1.0, 0.0, 0.0, 0.0])
+        assert calls == 1
+    finally:
+        release.set()
+        await local_embedder_module.stop_local_embedder_initialization()
 
 
 @pytest.mark.asyncio
@@ -109,21 +109,28 @@ async def test_initialization_retries_after_a_transient_failure(monkeypatch):
     monkeypatch.setattr(local_embedder_module, "_initializer_task", None)
     monkeypatch.setattr(local_embedder_module, "EMBED_INITIALIZE_RETRY_INITIAL_SECONDS", 0.0)
     monkeypatch.setattr(local_embedder_module, "EMBED_INITIALIZE_RETRY_MAX_SECONDS", 0.0)
+    ready = asyncio.Event()
     attempts = 0
-    sentinel = object()
 
     async def initialize_once():
         nonlocal attempts
         attempts += 1
         if attempts == 1:
             raise RuntimeError("transient model setup failure")
-        return sentinel
+        loaded = _embedder([[1.0, 0.0, 0.0, 0.0]])
+        local_embedder_module._embedder = loaded
+        ready.set()
+        return loaded
 
     monkeypatch.setattr(local_embedder_module, "_initialize_local_embedder_once", initialize_once)
-
-    assert await local_embedder_module.ensure_local_embedder() is sentinel
-    assert attempts == 2
-    await local_embedder_module.stop_local_embedder_initialization()
+    try:
+        with pytest.raises(LocalEmbedderUnavailable):
+            await local_embedder_module.embed_query("cold")
+        await asyncio.wait_for(ready.wait(), timeout=1.0)
+        assert np.allclose(await local_embedder_module.embed_query("warm"), [1.0, 0.0, 0.0, 0.0])
+        assert attempts == 2
+    finally:
+        await local_embedder_module.stop_local_embedder_initialization()
 
 
 def test_unloaded_embedder_raises_rather_than_returning_nothing():

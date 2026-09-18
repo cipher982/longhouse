@@ -9,8 +9,8 @@ from uuid import uuid4
 import numpy as np
 import pytest
 
-from zerg.services.embeddings_v2_projector import PROJECTOR_IDLE_POLL_SECONDS
 from zerg.services.embeddings_v2_projector import PROJECTOR_CLAIM_BATCH
+from zerg.services.embeddings_v2_projector import PROJECTOR_IDLE_POLL_SECONDS
 from zerg.services.embeddings_v2_projector import PROJECTOR_LEASE_SECONDS
 from zerg.services.embeddings_v2_projector import EmbeddingsV2Projector
 from zerg.services.embeddings_v2_projector import _run_forever

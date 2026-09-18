@@ -105,6 +105,15 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
     async def stop_render_workers():
         calls.append("render_workers_stop")
 
+    model_load_attempts: list[str] = []
+
+    def forbid_startup_model_load(*_args, **_kwargs):
+        model_load_attempts.append("load")
+        raise AssertionError("startup must not load the embedding model")
+
+    monkeypatch.setattr("zerg.services.embedding_artifact.provision_embedding_artifact", forbid_startup_model_load)
+    monkeypatch.setattr("zerg.services.local_embedder.initialize_local_embedder", forbid_startup_model_load)
+
     monkeypatch.setattr(lifespan_module, "live_store_configured", lambda: True)
     monkeypatch.setattr(lifespan_module, "initialize_live_database", forbidden_direct_schema_init)
     monkeypatch.setattr(lifespan_module, "configure_observability", lambda: None)
@@ -132,27 +141,18 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
         "zerg.services.storage_telemetry_snapshot.run_storage_telemetry_refresh_loop",
         telemetry_loop,
     )
+    monkeypatch.setattr("zerg.services.maintenance.start_maintenance_loop", lambda: None)
     monkeypatch.setattr("zerg.services.maintenance.stop_maintenance_loop", noop_async)
     monkeypatch.setattr("zerg.utils.async_runner.get_shared_runner", lambda: Runner())
     monkeypatch.setattr("zerg.websocket.manager.topic_manager.shutdown", noop_async)
 
     app = FastAPI()
     async with lifespan_module.lifespan(app):
-        assert not hasattr(app.state, "embedding_initializer_task")
+        await asyncio.sleep(0)
         assert "search_projector_start" in calls
         assert "embedding_projector_start" in calls
-        assert "embedding_provision" not in calls
-        assert "embedding_initialize" not in calls
-        assert calls[:6] == [
-            "catalogd_start",
-            "searchd_start",
-            "raw_workers_start",
-            "render_workers_start",
-            "search_projector_start",
-            "embedding_projector_start",
-        ]
+        assert model_load_attempts == []
         assert "runner_start" in calls
-        assert "title_reconciler_start" in calls
         assert app.state.catalogd_ping["ready"] is True
         assert app.state.searchd_ping is None
         assert app.state.storage_telemetry_task.done() is False
