@@ -553,7 +553,7 @@ def _codex_tool_call_result_scenarios(request: Mapping[str, Any]) -> tuple[str, 
     profile_scenarios = ("probe_identity", "codex_tool_call_result_strict")
     if request.get("producer_class") != "release_factory":
         return profile_scenarios
-    return (*DEFAULT_HARNESS_SCENARIOS, *profile_scenarios)
+    return (*DEFAULT_HARNESS_SCENARIOS, "codex_tool_call_result_strict")
 
 
 def run_codex_tool_call_result(request_path: Path, output_root: Path) -> dict[str, Any]:

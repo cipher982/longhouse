@@ -1171,6 +1171,32 @@ def test_tool_call_result_end_to_end_pass(tmp_path: Path, monkeypatch) -> None:
     assert bundle["execution_metadata"]["semantic_evidence_digest"] == ("sha256:" + hashlib.sha256(semantic_path.read_bytes()).hexdigest())
 
 
+def test_factory_tool_call_result_retains_unique_full_column(tmp_path: Path, monkeypatch) -> None:
+    package_root, binary, identity = _codex_package(tmp_path, behavior="pass")
+    request = _request(
+        tmp_path,
+        profile=codex_tool_call_result.PROFILE,
+        binary=binary,
+        identity=identity,
+        build_identity=f"sha256:{_closure_digest(package_root)}",
+        producer_class="release_factory",
+        run_reference="fixture://factory-tool-call-result",
+    )
+    monkeypatch.setenv(codex_tool_call_result.API_KEY_ENV, "seeded-test-api-key-not-a-real-secret")
+    output_root = tmp_path / "output"
+
+    result = bridge.run(request, output_root)
+
+    assert result["valid"] is True
+    harness = json.loads((output_root / "harness-evidence" / "universal-agent-harness.json").read_text(encoding="utf-8"))
+    assert harness["scenarios"] == [*DEFAULT_HARNESS_SCENARIOS, "codex_tool_call_result_strict"]
+    observation = json.loads((output_root / "semantic-evidence" / "semantic-observation.json").read_text(encoding="utf-8"))
+    gate = observation["full_column_gate"]
+    assert gate["expected_scenario_count"] == len(DEFAULT_HARNESS_SCENARIOS)
+    assert gate["captured_scenario_count"] == len(DEFAULT_HARNESS_SCENARIOS)
+    assert not gate["cardinality_errors"]
+
+
 @pytest.mark.timeout(30)
 def test_tool_call_result_semantic_mismatch_is_not_infrastructure_error(tmp_path: Path, monkeypatch) -> None:
     package_root, binary, identity = _codex_package(tmp_path, behavior="semantic_mismatch")
