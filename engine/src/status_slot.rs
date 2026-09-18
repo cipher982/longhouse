@@ -21,7 +21,8 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -242,6 +243,64 @@ pub fn sweep_abandoned(dir: &Path, older_than: std::time::Duration) -> usize {
 /// that restates itself every few milliseconds. Keeping one implementation is
 /// the point — six copies of this would be six places to get the coalescing
 /// window or the retirement rule subtly wrong.
+/// One statement of a session's current status.
+pub struct StatusUpdate<'a> {
+    pub session_id: &'a str,
+    pub run_id: &'a str,
+    pub observed_at: &'a str,
+    pub phase: &'a str,
+    pub tool: Option<&'a str>,
+    pub preview: Option<StatusPreview>,
+    /// Merged into the published payload, for the fields only this provider
+    /// knows about.
+    pub extra_payload: Option<Value>,
+}
+
+impl<'a> StatusUpdate<'a> {
+    pub fn phase(session_id: &'a str, run_id: &'a str, observed_at: &'a str, phase: &'a str) -> Self {
+        Self {
+            session_id,
+            run_id,
+            observed_at,
+            phase,
+            tool: None,
+            preview: None,
+            extra_payload: None,
+        }
+    }
+
+    pub fn with_tool(mut self, tool: Option<&'a str>) -> Self {
+        self.tool = tool;
+        self
+    }
+
+    pub fn with_preview(mut self, preview: Option<StatusPreview>) -> Self {
+        self.preview = preview;
+        self
+    }
+
+    pub fn with_payload(mut self, extra: Value) -> Self {
+        self.extra_payload = Some(extra);
+        self
+    }
+}
+
+/// Publishers are per session and per process: the epoch and sequence they
+/// carry are how the daemon tells a fresh statement from one it already sent,
+/// so a provider that publishes from free functions shares one here rather
+/// than minting a new epoch per call.
+static PUBLISHERS: std::sync::OnceLock<Mutex<HashMap<(String, String), Arc<StatusPublisher>>>> =
+    std::sync::OnceLock::new();
+
+pub fn publisher_for(provider: &str, transport: &str, session_id: &str) -> Arc<StatusPublisher> {
+    let registry = PUBLISHERS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = registry.lock().expect("status publisher registry poisoned");
+    guard
+        .entry((provider.to_string(), session_id.to_string()))
+        .or_insert_with(|| Arc::new(StatusPublisher::for_provider(provider, transport)))
+        .clone()
+}
+
 pub struct StatusPublisher {
     dir: PathBuf,
     provider: String,
@@ -293,15 +352,16 @@ impl StatusPublisher {
     /// A phase or tool change publishes immediately, and so does a completed
     /// turn: its final preview is what a reader keeps until the next turn
     /// starts, and coalescing it away leaves a truncated answer behind.
-    pub fn publish(
-        &self,
-        session_id: &str,
-        run_id: &str,
-        observed_at: &str,
-        phase: &str,
-        tool: Option<&str>,
-        preview: Option<StatusPreview>,
-    ) {
+    pub fn publish(&self, update: StatusUpdate<'_>) {
+        let StatusUpdate {
+            session_id,
+            run_id,
+            observed_at,
+            phase,
+            tool,
+            preview,
+            extra_payload,
+        } = update;
         // The lock is held across the write. Dropping it first let two frames
         // race and land out of order, so the slot could end up holding the
         // older of two states under the newer sequence.
@@ -335,11 +395,23 @@ impl StatusPublisher {
             phase: phase.to_string(),
             tool_name: tool.map(str::to_string),
             observed_at: observed_at.to_string(),
-            payload: serde_json::json!({
-                "managed_transport": self.transport,
-                "execution_lifetime": "interactive",
-                "structured_remote_approval": false,
-            }),
+            payload: {
+                let mut payload = serde_json::json!({
+                    "managed_transport": self.transport,
+                    "execution_lifetime": "interactive",
+                    "structured_remote_approval": false,
+                });
+                // A provider may have to say something only it knows, such as
+                // the native session id its own events are keyed by.
+                if let (Some(Value::Object(extra)), Some(target)) =
+                    (extra_payload, payload.as_object_mut())
+                {
+                    for (key, value) in extra {
+                        target.insert(key, value);
+                    }
+                }
+                payload
+            },
             preview: guard.preview.clone(),
             producer_epoch: self.epoch.clone(),
             seq: guard.seq,
@@ -493,7 +565,7 @@ mod tests {
         let dir = status_slot_dir(tmp.path());
         let publisher = StatusPublisher::new(dir.clone(), "pi", "pi_helm_channel");
 
-        publisher.publish("s1", "run-1", "2026-09-17T15:00:01Z", "running", Some("bash"), None);
+        publisher.publish(StatusUpdate::phase("s1", "run-1", "2026-09-17T15:00:01Z", "running").with_tool(Some("bash")));
         let first = read_all(&dir).pop().expect("slot");
         assert_eq!(first.provider, "pi");
         assert_eq!(first.runtime_key, "pi:s1");
@@ -501,11 +573,11 @@ mod tests {
         assert_eq!(first.phase, "running");
 
         // The same statement again, inside the coalesce window.
-        publisher.publish("s1", "run-1", "2026-09-17T15:00:02Z", "running", Some("bash"), None);
+        publisher.publish(StatusUpdate::phase("s1", "run-1", "2026-09-17T15:00:02Z", "running").with_tool(Some("bash")));
         assert_eq!(read_all(&dir).pop().expect("slot").seq, first.seq);
 
         // A transition is never coalesced.
-        publisher.publish("s1", "run-1", "2026-09-17T15:00:03Z", "idle", None, None);
+        publisher.publish(StatusUpdate::phase("s1", "run-1", "2026-09-17T15:00:03Z", "idle"));
         let idle = read_all(&dir).pop().expect("slot");
         assert_eq!(idle.phase, "idle");
         assert!(idle.seq > first.seq);
@@ -519,7 +591,7 @@ mod tests {
 
         publisher.retire("s1");
         assert!(read_all(&dir).is_empty());
-        publisher.publish("s1", "run-1", "2026-09-17T15:00:04Z", "running", None, None);
+        publisher.publish(StatusUpdate::phase("s1", "run-1", "2026-09-17T15:00:04Z", "running"));
         assert!(read_all(&dir).is_empty(), "a retired session states nothing further");
     }
 

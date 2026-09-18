@@ -1063,12 +1063,13 @@ impl OmpHelmServer {
 
     fn publish_phase_snapshot(&self, state: &OmpHelmStateFile, phase: &str, tool: Option<&str>) {
         self.status.publish(
-            &state.session_id,
-            &state.run_id,
-            &state.updated_at,
-            phase,
-            tool,
-            None,
+            crate::status_slot::StatusUpdate::phase(
+                &state.session_id,
+                &state.run_id,
+                &state.updated_at,
+                phase,
+            )
+            .with_tool(tool),
         );
         wake_transcript_shipper(
             state,
@@ -1103,12 +1104,14 @@ impl OmpHelmServer {
             (shared.state.phase.clone(), shared.state.tool_name.clone())
         };
         self.status.publish(
-            &state.session_id,
-            &state.run_id,
-            &state.updated_at,
-            &phase,
-            tool.as_deref(),
-            Some(preview),
+            crate::status_slot::StatusUpdate::phase(
+                &state.session_id,
+                &state.run_id,
+                &state.updated_at,
+                &phase,
+            )
+            .with_tool(tool.as_deref())
+            .with_preview(Some(preview)),
         );
         wake_transcript_shipper(
             state,
@@ -2779,19 +2782,20 @@ mod tests {
             let current = server.current_state();
 
             server.status.publish(
-                &current.session_id,
-                &current.run_id,
-                &current.updated_at,
-                "thinking",
-                None,
-                Some(crate::status_slot::StatusPreview {
+                crate::status_slot::StatusUpdate::phase(
+                    &current.session_id,
+                    &current.run_id,
+                    &current.updated_at,
+                    "thinking",
+                )
+                .with_preview(Some(crate::status_slot::StatusPreview {
                     turn_id: "turn-1".into(),
                     seq: 1,
                     live_text: "partial".into(),
                     turn_completed: false,
                     progress_kind: "omp_helm_stream".into(),
                     provider_session_id: None,
-                }),
+                })),
             );
             let opening = slot().expect("slot");
             assert_eq!(opening.preview.expect("preview").live_text, "partial");
@@ -2799,33 +2803,32 @@ mod tests {
             // Immediately after, inside the coalesce window: a completed turn
             // publishes anyway.
             server.status.publish(
-                &current.session_id,
-                &current.run_id,
-                &current.updated_at,
-                "thinking",
-                None,
-                Some(crate::status_slot::StatusPreview {
+                crate::status_slot::StatusUpdate::phase(
+                    &current.session_id,
+                    &current.run_id,
+                    &current.updated_at,
+                    "thinking",
+                )
+                .with_preview(Some(crate::status_slot::StatusPreview {
                     turn_id: "turn-1".into(),
                     seq: 2,
                     live_text: "the whole answer".into(),
                     turn_completed: true,
                     progress_kind: "omp_helm_stream".into(),
                     provider_session_id: None,
-                }),
+                })),
             );
             let completed = slot().expect("slot").preview.expect("preview");
             assert!(completed.turn_completed);
             assert_eq!(completed.live_text, "the whole answer");
 
             server.status.clear_preview();
-            server.status.publish(
+            server.status.publish(crate::status_slot::StatusUpdate::phase(
                 &current.session_id,
                 &current.run_id,
                 &current.updated_at,
                 "running",
-                None,
-                None,
-            );
+            ));
             assert!(
                 slot().expect("slot").preview.is_none(),
                 "a new turn does not inherit the last turn's text"

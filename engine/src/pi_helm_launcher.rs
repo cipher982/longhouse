@@ -609,12 +609,13 @@ impl PiHelmServer {
         // file per frame is the cost this lane exists to remove.
         let state = self.current_state();
         self.status.publish(
-            &state.session_id,
-            &state.run_id,
-            &Utc::now().to_rfc3339(),
-            phase,
-            tool_name.as_deref(),
-            None,
+            crate::status_slot::StatusUpdate::phase(
+                &state.session_id,
+                &state.run_id,
+                &Utc::now().to_rfc3339(),
+                phase,
+            )
+            .with_tool(tool_name.as_deref()),
         );
         wake_transcript_shipper(
             &state,

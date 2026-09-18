@@ -3948,7 +3948,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "b079e5a0cc8d69458fe5a833836d304bf0d08e9bbeba3b856c1dccee9de823d1"
+      "adapter_digest": "2fa3c19d4df750a1f4135dc94aa35689ef2d562cc3b5ea9e4293fffcd7fc8b59"
     },
     {
       "provider": "omp",
@@ -4505,7 +4505,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "9a334c0459e93d05d5a1bd162daebebd669f27c3fc1aba5b1589cfee1ca48c43"
+      "adapter_digest": "8af47669a7fb1585b833d7533a0bbb1201654c4db7e26c55bd8c84018206956c"
     }
   ]
 }

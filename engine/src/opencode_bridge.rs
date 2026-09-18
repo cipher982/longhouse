@@ -636,6 +636,8 @@ fn status_phase(event: &Value) -> Option<(&str, &'static str)> {
     Some((session_id, phase))
 }
 
+const OPENCODE_BRIDGE_TRANSPORT: &str = "opencode_server_bridge";
+
 /// Enqueue one phase signal for the bound provider session only; child
 /// sessions (subagents) share the event stream but not the Longhouse turn.
 fn publish_phase_signal(
@@ -656,45 +658,20 @@ fn publish_phase_signal(
         return Ok(());
     };
     let occurred_at = chrono::Utc::now();
-    let event = phase_signal_event(
-        longhouse_session_id,
-        run_id,
-        provider_session_id,
-        phase,
-        occurred_at,
-    );
-    crate::outbox::enqueue_runtime_event(
-        &crate::config::get_agent_runtime_events_outbox_dir()?,
-        &event,
-    )
-}
-
-fn phase_signal_event(
-    longhouse_session_id: &str,
-    run_id: &str,
-    provider_session_id: &str,
-    phase: &str,
-    occurred_at: chrono::DateTime<chrono::Utc>,
-) -> Value {
-    json!({
-        "runtime_key": format!("opencode:{longhouse_session_id}"),
-        "session_id": longhouse_session_id,
-        "run_id": run_id,
-        "provider": "opencode",
-        "device_id": std::env::var("HOSTNAME").ok(),
-        "source": "opencode_server_bridge",
-        "kind": "phase_signal",
-        "phase": phase,
-        "occurred_at": occurred_at.to_rfc3339(),
-        "dedupe_key": format!(
-            "opencode-phase:{longhouse_session_id}:{run_id}:{phase}:{}",
-            occurred_at.timestamp_micros()
-        ),
-        "payload": {
-            "managed_transport": "opencode_server_bridge",
-            "provider_session_id": provider_session_id,
-        },
-    })
+    // One slot per session, overwritten in place. The bridge publishes from a
+    // free function, so it shares this session's publisher rather than minting
+    // a new epoch on every event.
+    crate::status_slot::publisher_for("opencode", OPENCODE_BRIDGE_TRANSPORT, longhouse_session_id)
+        .publish(
+            crate::status_slot::StatusUpdate::phase(
+                longhouse_session_id,
+                run_id,
+                &occurred_at.to_rfc3339(),
+                phase,
+            )
+            .with_payload(json!({"provider_session_id": provider_session_id})),
+        );
+    Ok(())
 }
 
 fn idle_session_id(event: &Value) -> Option<&str> {
@@ -1284,8 +1261,30 @@ mod tests {
         let legacy =
             json!({"payload": {"type": "session.idle", "properties": {"sessionID": "ses_1"}}});
         assert_eq!(status_phase(&legacy), Some(("ses_1", "idle")));
-        let event = phase_signal_event("lh-1", "run-1", "ses_1", "running", chrono::Utc::now());
+        // The bridge states its phase in the session's status slot now, and
+        // the slot projects the same wire event the server already accepts.
+        let temp = tempfile::tempdir().unwrap();
+        let publisher = crate::status_slot::StatusPublisher::new(
+            crate::status_slot::status_slot_dir(temp.path()),
+            "opencode",
+            OPENCODE_BRIDGE_TRANSPORT,
+        );
+        publisher.publish(
+            crate::status_slot::StatusUpdate::phase(
+                "lh-1",
+                "run-1",
+                &chrono::Utc::now().to_rfc3339(),
+                "running",
+            )
+            .with_payload(json!({"provider_session_id": "ses_1"})),
+        );
+        let slot = crate::status_slot::read_all(&crate::status_slot::status_slot_dir(temp.path()))
+            .pop()
+            .expect("slot");
+        assert_eq!(slot.payload["provider_session_id"], "ses_1");
+        let event = crate::status_slot::runtime_events(&slot).remove(0);
         assert_eq!(event["kind"], "phase_signal");
+        assert_eq!(event["provider"], "opencode");
         assert!(crate::managed_phase_contract::is_wire_phase(
             event["phase"].as_str().unwrap()
         ));
