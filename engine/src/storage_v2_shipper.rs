@@ -75,6 +75,16 @@ pub(crate) enum CursorPreparationOutcome {
     Continue,
 }
 
+/// The variant's name, for assertions that must say what they got instead.
+fn outcome_name(outcome: &CursorPreparationOutcome) -> &'static str {
+    match outcome {
+        CursorPreparationOutcome::Envelope(_) => "Envelope",
+        CursorPreparationOutcome::Current => "Current",
+        CursorPreparationOutcome::WaitingOnClaim => "WaitingOnClaim",
+        CursorPreparationOutcome::Continue => "Continue",
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum CursorStorageV2ShipResult {
     Shipped(StorageV2ShipOutcome),
@@ -8618,7 +8628,10 @@ mod tests {
         .unwrap()
         {
             CursorPreparationOutcome::Envelope(prepared) => prepared,
-            _ => panic!("the initial exact page must prepare an envelope"),
+            other => panic!(
+                "the initial exact page must prepare an envelope, got {}",
+                outcome_name(&other)
+            ),
         };
         acknowledge_prepared(&mut conn, &first);
         assert!(matches!(
@@ -9073,7 +9086,7 @@ mod tests {
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
         let correct = prepare_next_envelope(&mut conn, &capabilities(), &path, "cursor", None)
             .unwrap()
-            .unwrap();
+            .expect("a fresh Cursor transcript must prepare an envelope");
         assert_eq!(correct.envelope.session_id, conversation_id);
         let stale_session_id = Uuid::new_v4().to_string();
         let pending = pending_source_envelope::load_for_epoch(&conn, correct.source_epoch)
