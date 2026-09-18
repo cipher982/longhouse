@@ -301,9 +301,7 @@ def _reduce_activity(engine, *, observed_at: datetime, received_at: datetime, se
 
 def _head_received_at(engine) -> datetime:
     with engine.begin() as connection:
-        return connection.execute(
-            select(FactHead.__table__.c.received_at).where(FactHead.__table__.c.family == "activity")
-        ).scalar_one()
+        return connection.execute(select(FactHead.__table__.c.received_at).where(FactHead.__table__.c.family == "activity")).scalar_one()
 
 
 def _project_stored_heads(engine, *, now: datetime):
@@ -352,9 +350,7 @@ def test_a_replayed_observation_does_not_renew_the_stored_lease(catalog_engine):
         catalog_engine,
         now=first_receipt + ACTIVITY_OBSERVATION_LEASE + timedelta(seconds=120),
     )
-    assert projection.activity.state == "unknown", (
-        "a session that only ever had one observation still expires, however often it is resent"
-    )
+    assert projection.activity.state == "unknown", "a session that only ever had one observation still expires, however often it is resent"
 
 
 def test_an_old_observation_gets_no_lease_even_as_a_fresh_head(catalog_engine):
