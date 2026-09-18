@@ -363,10 +363,9 @@ jobs:
       deployment_id: ${{ steps.submit_demo.outputs.deployment_id }}
     env:
       PUBLIC_DEMO_URL: https://longhouse.ai
-      # The public demo is a real hosted tenant managed by the primary
-      # control-plane authority, never the isolated canary control plane.
-      CONTROL_PLANE_URL: https://control.longhouse.ai
-      CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
+      # The public demo is served by its own host-local stack, so this job
+      # records a disposition instead of submitting a deployment. See the
+      # step summary; the canary remains the automated gate.
       INSTANCE_SUBDOMAIN: demo
       RUNTIME_SOURCE_SHA: ${{ needs.gate.outputs.runtime_source_sha }}
       RUNTIME_BUILD_IDENTITY: ${{ needs.gate.outputs.runtime_build_identity }}
@@ -408,13 +407,28 @@ jobs:
       - name: Verify runtime image exists
         run: docker manifest inspect "${{ needs.gate.outputs.runtime_image_ref }}" >/dev/null
 
-      - name: Submit public demo deployment
+      - name: Record demo deploy disposition
         id: submit_demo
         run: |
-          ./scripts/ops/runtime-deploy.sh \
-            longhouse-demo \
-            --docker-ref "${{ needs.gate.outputs.runtime_image_ref }}" \
-            --timeout 900
+          set -euo pipefail
+          image_ref="${{ needs.gate.outputs.runtime_image_ref }}"
+          {
+            echo "## Public demo runtime"
+            echo ""
+            echo "Not submitted by this workflow. \`longhouse.ai\` is a host-local"
+            echo "manual app (\`/home/zerg/manual-apps/longhouse-demo\` on zerg, direct"
+            echo "Docker Compose plus a static Caddy route), not a control-plane tenant:"
+            echo "registering it as one removes the container the site is served from."
+            echo "\`promote-dogfood.sh\` refuses the same target for the same reason."
+            echo ""
+            echo "Image qualified for this SHA: \`$image_ref\`"
+            echo "Promote it by hand, from the demo's own stack:"
+            echo ""
+            echo '```'
+            echo "LONGHOUSE_DEMO_IMAGE=$image_ref docker compose up -d --force-recreate"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "deployment_id=" >> "$GITHUB_OUTPUT"
 
   reprovision_canary:
     name: "Reprovision hosted canary"
