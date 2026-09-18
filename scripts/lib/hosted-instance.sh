@@ -162,9 +162,13 @@ if expected_target:
             target_found = "yes"
             target_state = str(target.get("deploy_state") or "")
             break
+# Tab-delimited, with a placeholder for an absent value: `read` with a tab IFS
+# collapses adjacent empty fields, which silently shifted every later field by
+# one and made a successful deployment look like a digest mismatch.
+_EMPTY = "__LH_EMPTY__"
 print(
     "\t".join(
-        str(value or "")
+        str(value) if value else _EMPTY
         for value in (
             deployment_id,
             payload.get("status"),
@@ -269,6 +273,16 @@ lh_hosted_wait_for_deployment() {
       }
       rm -f "$response_file"
       IFS=$'\t' read -r receipt_id state receipt_image receipt_digest target_found target_state <<< "$parsed"
+      # The parser writes __LH_EMPTY__ where a value is absent; empty is the
+      # meaning the callers below test for.
+      for _field in receipt_image receipt_digest target_state; do
+        if [[ "${!_field}" == "__LH_EMPTY__" ]]; then
+          printf -v "$_field" '%s' ""
+        fi
+      done
+      if [[ "$target_found" == "__LH_EMPTY__" ]]; then
+        target_found=""
+      fi
       LH_DEPLOYMENT_STATUS="$state"
       LH_DEPLOYMENT_IMAGE="$receipt_image"
       LH_DEPLOYMENT_IMAGE_DIGEST="$receipt_digest"
