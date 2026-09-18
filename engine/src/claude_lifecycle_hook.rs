@@ -47,14 +47,21 @@ fn run_inner() -> anyhow::Result<()> {
     let Ok(input) = serde_json::from_str::<Value>(&raw) else {
         return Ok(());
     };
-    let event = string(&input, "hook_event_name").unwrap_or_default();
-    let Some(state) = state_for_event(&event, &input) else {
+    handle_input(&input)
+}
+
+/// Everything the hook does once its input is parsed.
+///
+/// Split from `run_inner` so a test can hand it a payload instead of a stdin.
+fn handle_input(input: &Value) -> anyhow::Result<()> {
+    let event = string(input, "hook_event_name").unwrap_or_default();
+    let Some(state) = state_for_event(&event, input) else {
         return Ok(());
     };
     let managed_session_id = crate::managed_identity::managed_session_id_for(
         crate::managed_identity_contract::ManagedProvider::Claude,
     );
-    let provider_session_id = string(&input, "session_id");
+    let provider_session_id = string(input, "session_id");
     let session_id = managed_session_id
         .clone()
         .or_else(|| provider_session_id.clone());
@@ -64,13 +71,26 @@ fn run_inner() -> anyhow::Result<()> {
     // Turn control runs before observability, which may fail and return early.
     if let Some(managed) = managed_session_id.as_deref() {
         if let Some(output) =
-            crate::claude_channel_control::lifecycle_hook_turn_control(managed, &event, &input)
+            crate::claude_channel_control::lifecycle_hook_turn_control(managed, &event, input)
         {
             println!("{output}");
         }
     }
-    let cwd = string(&input, "cwd");
-    let transcript_path = string(&input, "transcript_path");
+    // A subagent's tool events fire these same hooks and carry `agent_id`
+    // (with `agent_type` beside it). Presence is keyed by session id, and a
+    // managed child inherits `LONGHOUSE_MANAGED_SESSION_ID`, so without this
+    // guard a child's PreToolUse writes the *parent's* activity head: the
+    // parent reads "Using Bash" while its own turn sits idle waiting on that
+    // child. Suppress rather than retarget, because at PreToolUse there is
+    // usually no child run to key to yet — the child arrives as a nested
+    // session after ingest. Turn control above stays: it is what honours an
+    // interrupt at a tool boundary, and it writes control-plane markers
+    // rather than served state.
+    if string(input, "agent_id").is_some() {
+        return Ok(());
+    }
+    let cwd = string(input, "cwd");
+    let transcript_path = string(input, "transcript_path");
     if event == "SessionStart" {
         if let (Some(managed), Some(native)) = (
             managed_session_id.as_deref(),
@@ -83,7 +103,7 @@ fn run_inner() -> anyhow::Result<()> {
     let mut payload = json!({
         "session_id": session_id,
         "state": state,
-        "tool_name": string(&input, "tool_name"),
+        "tool_name": string(input, "tool_name"),
         "cwd": cwd,
         "provider": "claude",
         "transcript_path": transcript_path,
@@ -314,5 +334,77 @@ mod tests {
         let mut missing = json!({"session_id": "lh-id", "state": "idle"});
         attach_provider_session_id(&mut missing, true, None);
         assert!(missing.get("provider_session_id").is_none());
+    }
+
+    /// Serialize an environment mutation against the shared lock and restore it.
+    fn with_home<T>(home: &std::path::Path, body: impl FnOnce() -> T) -> T {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let previous = std::env::var_os("LONGHOUSE_HOME");
+        std::env::set_var("LONGHOUSE_HOME", home);
+        let result = body();
+        match previous {
+            Some(value) => std::env::set_var("LONGHOUSE_HOME", value),
+            None => std::env::remove_var("LONGHOUSE_HOME"),
+        }
+        result
+    }
+
+    fn outbox_files(home: &std::path::Path) -> Vec<String> {
+        let outbox = home.join("agent").join("outbox");
+        let Ok(entries) = std::fs::read_dir(&outbox) else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn tool_use_payload(extra: Value) -> Value {
+        let mut payload = json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-unmanaged",
+            "tool_name": "Bash",
+            "cwd": "/tmp",
+        });
+        if let Value::Object(extra) = extra {
+            for (key, value) in extra {
+                payload[key] = value;
+            }
+        }
+        payload
+    }
+
+    #[test]
+    fn a_subagent_tool_event_does_not_write_the_parents_presence() {
+        // Claude fires the configured hooks inside subagents, and the input
+        // carries agent_id/agent_type. Presence is keyed by session id and a
+        // managed child inherits the parent's, so before this guard a child's
+        // PreToolUse landed on the parent's activity head and the parent read
+        // "Using Bash" while its own turn sat idle waiting on that child.
+        let home = tempfile::tempdir().unwrap();
+
+        let parent_wrote = with_home(home.path(), || {
+            handle_input(&tool_use_payload(json!({}))).unwrap();
+            outbox_files(home.path()).len()
+        });
+        assert_eq!(
+            parent_wrote, 1,
+            "a parent-thread tool event must still write presence"
+        );
+
+        let subagent_wrote = with_home(home.path(), || {
+            handle_input(&tool_use_payload(
+                json!({"agent_id": "a123", "agent_type": "Explore"}),
+            ))
+            .unwrap();
+            outbox_files(home.path()).len()
+        });
+        assert_eq!(
+            subagent_wrote, 1,
+            "a subagent tool event must not add a second presence observation"
+        );
     }
 }
