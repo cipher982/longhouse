@@ -39,6 +39,45 @@ import { fileURLToPath } from "url";
 import {
   buildSessionDetailStressFixture,
   buildSessionQuestionFixture,
+  buildSessionAttentionFixture,
+  buildSessionResumeFixture,
+  buildSessionStaleObservationFixture,
+  buildSessionToneFixture,
+  SESSION_DETAIL_STRESS_NOW,
+  SESSION_DETAIL_STRESS_SESSION_ID,
+  SESSION_TONES,
+  type SessionTone,
+} from "./ui-fixtures/sessionDetailStress";
+import { buildTimelineCardStressFixture } from "./ui-fixtures/timelineCardStress";
+import {
+  LANDING_SEARCH_QUERY,
+  buildLandingSessionFixture,
+  buildLandingTimelineFixture,
+} from "./ui-fixtures/landingShowcase";
+
+const PAGE_DEFINITIONS = {
+  timeline: { path: "/timeline" },
+  "session-detail": { path: `/timeline/${SESSION_DETAIL_STRESS_SESSION_ID}` },
+  machines: { path: "/runners" },
+  health: { path: "/health" },
+  settings: { path: "/settings" },
+  profile: { path: "/profile" },
+  integrations: { path: "/settings/integrations" },
+  devices: { path: "/settings/devices" },
+  admin: { path: "/admin" },
+} as const;
+type PageName = keyof typeof PAGE_DEFINITIONS;
+const PAGES = Object.keys(PAGE_DEFINITIONS) as PageName[];
+const ALL_CAPTURE_PAGES = PAGES.filter((pageName) => pageName !== "session-detail");
+
+const SCENES = [
+  "empty",
+  "demo",
+  "onboarding-modal",
+  "missing-api-key",
+  "timeline-card-stress",
+  "session-detail-stress",
+  "session-question",
   "session-attention",
   "session-resume",
   "session-stale-observation",
@@ -57,6 +96,147 @@ const SESSION_DETAIL_SCENES: readonly SceneName[] = [
   "landing-session",
   "session-detail-stress",
   "session-question",
+  "session-attention",
+  "session-resume",
+  "session-stale-observation",
+  "session-tones",
+];
+
+const VIEWPORT_PRESETS = {
+  desktop: {
+    width: 1280,
+    height: 720,
+    isMobile: false,
+    hasTouch: false,
+    deviceScaleFactor: 1,
+  },
+  mobile: {
+    width: 390,
+    height: 844,
+    isMobile: true,
+    hasTouch: true,
+    deviceScaleFactor: 3,
+  },
+  "mobile-small": {
+    width: 375,
+    height: 667,
+    isMobile: true,
+    hasTouch: true,
+    deviceScaleFactor: 2,
+  },
+} as const;
+type ViewportPresetName = keyof typeof VIEWPORT_PRESETS;
+type ViewportConfig = {
+  width: number;
+  height: number;
+  isMobile: boolean;
+  hasTouch: boolean;
+  deviceScaleFactor: number;
+};
+
+interface Options {
+  page: PageName;
+  scene: SceneName;
+  output: string;
+  baseUrl: string;
+  backendUrl: string;
+  trace: boolean;
+  all: boolean;
+  viewportName: string;
+  viewport: ViewportConfig;
+  probe: string[];
+}
+
+type A11yFormat = "json" | "yaml" | "none";
+
+interface CaptureResult {
+  screenshotPath?: string;
+  a11yPath?: string;
+  a11yFormat: A11yFormat;
+  error?: string;
+}
+
+function formatError(error: unknown): { message: string; detail: string } {
+  if (error instanceof Error) {
+    return { message: error.message, detail: error.stack ?? error.message };
+  }
+  const message = String(error);
+  return { message, detail: message };
+}
+
+function parseArgs(): Options {
+  const args = process.argv.slice(2);
+
+  // Find page argument (positional, not prefixed with --)
+  const pageArg = args.find((a): a is PageName => {
+    return !a.startsWith("--") && a in PAGE_DEFINITIONS;
+  });
+
+  // Parse named arguments
+  const sceneArg = args
+    .find((a) => a.startsWith("--scene="))
+    ?.split("=")[1] as SceneName | undefined;
+  const viewportArg = args.find((a) => a.startsWith("--viewport="))?.split("=")[1];
+  const outputArg = args.find((a) => a.startsWith("--output="))?.split("=")[1];
+  const noTrace = args.includes("--no-trace");
+  const probeArg = args.find((a) => a.startsWith("--probe="))?.slice("--probe=".length);
+  const all = args.includes("--all");
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const parsedViewport = parseViewport(viewportArg);
+
+  return {
+    page: (pageArg as PageName) || "timeline",
+    scene: sceneArg || "demo",
+    output: outputArg || `artifacts/ui-capture/${timestamp}`,
+    baseUrl: process.env.FRONTEND_URL || "http://localhost:47200",
+    backendUrl: process.env.BACKEND_URL || "http://localhost:47300",
+    trace: !noTrace,
+    all,
+    viewportName: viewportArg || "desktop",
+    viewport: parsedViewport,
+    probe: probeArg ? probeArg.split(",").map((s) => s.trim()).filter(Boolean) : [],
+  };
+}
+
+function parseViewport(value: string | undefined): ViewportConfig {
+  if (!value || value === "desktop") {
+    return { ...VIEWPORT_PRESETS.desktop };
+  }
+
+  if (value in VIEWPORT_PRESETS) {
+    return { ...VIEWPORT_PRESETS[value as ViewportPresetName] };
+  }
+
+  const match = /^(\d+)x(\d+)(?:@(\d+))?$/.exec(value);
+  if (!match) {
+    throw new Error(
+      `Unsupported viewport "${value}". Use one of ${Object.keys(VIEWPORT_PRESETS).join(", ")}, WIDTHxHEIGHT, or WIDTHxHEIGHT@SCALE.`,
+    );
+  }
+
+  const width = Number.parseInt(match[1], 10);
+  const height = Number.parseInt(match[2], 10);
+  if (match[3]) {
+    return { width, height, isMobile: false, hasTouch: false, deviceScaleFactor: Number.parseInt(match[3], 10) };
+  }
+
+  return {
+    width,
+    height,
+    isMobile: width <= 768,
+    hasTouch: width <= 768,
+    deviceScaleFactor: width <= 768 ? 3 : 1,
+  };
+}
+
+function sceneUsesMockApi(scene: SceneName): boolean {
+  return (
+    scene === "timeline-card-stress" ||
+    LANDING_TIMELINE_SCENES.includes(scene) ||
+    scene === "landing-session" ||
+    scene === "session-detail-stress" ||
+    scene === "session-question" ||
     scene === "session-attention" ||
     scene === "session-resume" ||
     scene === "session-stale-observation" ||
