@@ -442,7 +442,14 @@ def _wait_for_session_events(
     session_id: str,
     *,
     min_events: int,
-    timeout: float = 8.0,
+    # The daemon's startup capability negotiation is 4 attempts, each a 5s
+    # request timeout plus a 5s backoff (engine/src/shipping/client.rs), so a
+    # host that is slow to answer the first probe legitimately delays the first
+    # shipped envelope by ~40s. An 8s wait asserted a readiness contract the
+    # engine never offered and failed the whole suite together whenever the
+    # runner was loaded enough to lose attempt 1. The loop still returns as
+    # soon as the events arrive, so a healthy run is unchanged.
+    timeout: float = 60.0,
 ) -> list[dict]:
     http = requests.Session()
     http.trust_env = False
@@ -480,7 +487,10 @@ def _wait_for_session_events(
     raise AssertionError(f"Timed out waiting for {min_events} events for {session_id}; last_error={last_error!r}")
 
 
-def _wait_for_log_contains(log_dir: Path, needle: str, *, timeout: float = 8.0) -> str:
+def _wait_for_log_contains(log_dir: Path, needle: str, *, timeout: float = 60.0) -> str:
+    # Same startup-negotiation window as _wait_for_session_events above: the
+    # line being waited for is usually written after the daemon's first
+    # successful ship.
     deadline = time.monotonic() + timeout
     last_text = ""
     while time.monotonic() < deadline:
