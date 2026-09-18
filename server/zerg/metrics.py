@@ -199,6 +199,18 @@ try:
         labelnames=("reason",),
     )
 
+    agents_heartbeat_rejected_total = Counter(
+        "agents_heartbeat_rejected_total",
+        "Machine heartbeats the catalog refused, by error code and retryability",
+        labelnames=("code", "retryable"),
+    )
+
+    agents_machine_evidence_dropped_total = Counter(
+        "agents_machine_evidence_dropped_total",
+        "Machine evidence dropped before it changed anything, by reason",
+        labelnames=("reason",),
+    )
+
     managed_codex_runtime_observations_total = Counter(
         "managed_codex_runtime_observations_total",
         "Managed Codex runtime observations by source, kind, and reducer outcome",
@@ -552,6 +564,8 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     agents_heartbeat_requests_total = _NoopCounter()  # type: ignore[assignment]
     managed_session_heartbeat_lease_rows_total = _NoopCounter()  # type: ignore[assignment]
     agents_heartbeat_snapshot_skipped_total = _NoopCounter()  # type: ignore[assignment]
+    agents_heartbeat_rejected_total = _NoopCounter()  # type: ignore[assignment]
+    agents_machine_evidence_dropped_total = _NoopCounter()  # type: ignore[assignment]
     managed_codex_runtime_observations_total = _NoopCounter()  # type: ignore[assignment]
     managed_codex_bridge_freshness_total = _NoopCounter()  # type: ignore[assignment]
     session_input_attachments_total = _NoopCounter()  # type: ignore[assignment]
