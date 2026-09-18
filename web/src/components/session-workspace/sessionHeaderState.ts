@@ -81,15 +81,14 @@ export function getSessionHeaderState(
       facts.activity.state === "executing");
 
   if (pending) {
-    // A real provider question always reads as "Waiting for approval";
-    // a blocked/stalled tone without one (e.g. "No progress for 31m")
-    // uses the server's own label so the wording never disagrees with
-    // the runtime strip right below it.
-    const label =
-      facts.pending_interaction != null
-        ? "Waiting for approval"
-        : facts.presentation.primary?.label?.trim() || "Needs attention";
-    return { tone: "attention", text: label };
+    // Always the server's own copy. It distinguishes a question ("Needs
+    // answer") from an approval ("Needs approval"); synthesizing "Waiting for
+    // approval" here made a Claude question read as something it is not, and a
+    // client that invents copy will disagree with the runtime strip below it.
+    return {
+      tone: "attention",
+      text: facts.presentation.primary?.label?.trim() || "Needs attention",
+    };
   }
 
   if (working) {
