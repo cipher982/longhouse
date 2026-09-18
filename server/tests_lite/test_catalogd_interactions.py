@@ -1068,3 +1068,61 @@ def test_a_claude_hook_permission_event_registers_and_retires_a_keyed_wait(inter
     with Session(ctx.engine) as db:
         assert db.get(LiveRuntimeState, ctx.runtime_key).pending_interaction_id is None
         assert db.query(LiveInteractionRequest).one().status == "resolved"
+
+
+def test_a_question_resolution_that_arrives_first_cannot_be_revived_by_its_opening(interaction_store):
+    """Both halves are events, so the resolution can outrun the request.
+
+    Discarding an unmatched resolution left no trace, and the opening then
+    materialized a *pending* wait for a dialog the provider had already closed -
+    the badge claiming an answer the user had already given. The terminal record
+    is what makes the later opening a no-op; without it this test's second half
+    fails with a pending interaction nobody can retire.
+    """
+
+    ctx = interaction_store
+    provider_request_id = "toolu_01abc"
+    resolution = RuntimeEventIngest(
+        runtime_key=ctx.runtime_key,
+        session_id=UUID(ctx.session_id),
+        provider="claude",
+        source="claude_hook",
+        kind="pause_resolution",
+        occurred_at=ctx.now + timedelta(seconds=1),
+        dedupe_key=f"claude-hook:pause_resolution:{ctx.session_id}:{uuid4()}",
+        payload={
+            "provider_request_id": provider_request_id,
+            "status": "resolved",
+            "response_text": "Answered in the original terminal.",
+        },
+    )
+    ctx.store.apply_session_runtime(events=[resolution])
+
+    with Session(ctx.engine) as db:
+        rows = db.query(LiveInteractionRequest).all()
+        assert [(row.request_key.endswith(provider_request_id), row.status) for row in rows] == [(True, "resolved")]
+        assert db.get(LiveRuntimeState, ctx.runtime_key).pending_interaction_id is None
+
+    opening = RuntimeEventIngest(
+        runtime_key=ctx.runtime_key,
+        session_id=UUID(ctx.session_id),
+        provider="claude",
+        source="claude_hook",
+        kind="pause_request",
+        occurred_at=ctx.now + timedelta(seconds=2),
+        dedupe_key=f"claude-hook:open-question:{ctx.session_id}:{provider_request_id}",
+        payload={
+            "provider_request_id": provider_request_id,
+            "provider_ref": {"source": "claude_hook", "reply_transport": "terminal"},
+            "kind": "question",
+            "title": "Claude needs an answer",
+            "summary": "Answer this in the original terminal.",
+            "can_respond": False,
+            "single_active": True,
+        },
+    )
+    ctx.store.apply_session_runtime(events=[opening])
+
+    assert ctx.store.list_interactions(session_id=ctx.session_id, status="pending", limit=20)["interactions"] == []
+    with Session(ctx.engine) as db:
+        assert db.get(LiveRuntimeState, ctx.runtime_key).pending_interaction_id is None

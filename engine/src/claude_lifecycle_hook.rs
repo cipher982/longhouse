@@ -347,15 +347,29 @@ fn observation_for_event(event: &str, input: &Value) -> HookObservation {
             // A tool event is the only place a wait is provably over: it names
             // the call for a question, and repeats the tool and its input for an
             // approval whose own payload never carried an id.
-            let edge = match (tool_use_id, tool_name.clone()) {
-                (Some(tool_use_id), _) => Some(InteractionEdge::ResolveQuestion { tool_use_id }),
-                (None, Some(tool_name)) if !is_pause_tool && !tool_input.is_null() => {
-                    Some(InteractionEdge::ResolvePermission {
-                        request_key: permission_request_key(&tool_name, &tool_input),
-                        tool_name,
-                    })
-                }
-                _ => None,
+            //
+            // The arms are exclusive, and ordered by what the event actually
+            // proves. `PostToolUse` carries `tool_use_id` for *every* tool, so
+            // keying on the id first would emit a question resolution for a
+            // `Bash` call: the id matches no question, while the approval that
+            // `PermissionRequest` opened for that same call went unretired and
+            // stayed pending after the user had answered it. Only the pause
+            // tool's own completion resolves a question.
+            let edge = if is_pause_tool {
+                tool_use_id
+                    .clone()
+                    .map(|tool_use_id| InteractionEdge::ResolveQuestion { tool_use_id })
+            } else {
+                tool_name.clone().and_then(|tool_name| {
+                    if tool_input.is_null() {
+                        None
+                    } else {
+                        Some(InteractionEdge::ResolvePermission {
+                            request_key: permission_request_key(&tool_name, &tool_input),
+                            tool_name,
+                        })
+                    }
+                })
             };
             HookObservation {
                 status: Some("thinking"),
@@ -689,9 +703,18 @@ mod tests {
         );
         // The approval coordinate is recomputed from the same two fields
         // `PermissionRequest` supplied, so no state has to be held between them.
+        // `PostToolUse` carries `tool_use_id` for *every* tool, and the approval
+        // case below keeps one for exactly that reason: an id-first mapping
+        // resolved the question instead, whose id matches nothing, and left the
+        // approval `PermissionRequest` had opened pending after the user had
+        // answered it.
         let permission = observation_for_event(
             "PostToolUseFailure",
-            &json!({"tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/x"}}),
+            &json!({
+                "tool_name": "Bash",
+                "tool_use_id": "toolu_01bash",
+                "tool_input": {"command": "rm -rf /tmp/x"},
+            }),
         );
         let opened = observation_for_event(
             "PermissionRequest",

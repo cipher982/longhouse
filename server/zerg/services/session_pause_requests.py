@@ -199,6 +199,64 @@ def expire_live_interactions_for_terminal(db: Session, event: Any) -> int:
     return expired
 
 
+def _record_resolution_without_request(
+    db: Session,
+    event: Any,
+    *,
+    request_key: str,
+    occurred_at: datetime,
+    payload: Mapping[str, Any],
+) -> None:
+    """Record a question resolution whose opening has not arrived, as terminal.
+
+    A resolution is an event, so it can reach the reducer before the request it
+    closes. Discarding it leaves no trace, and the opening then materializes a
+    *pending* wait for a dialog the provider had already closed — the badge
+    claims an answer the user has already given, which is the failure this
+    slice exists to remove.
+
+    Only a question is recorded. Its payload carries the provider's own tool
+    id, so a row here means a real dialog; an approval resolution carries a
+    coordinate that any ordinary tool call recomputes, and recording those
+    would write one row per tool call.
+    """
+
+    provider_request_id = _clean_str(payload.get("provider_request_id") or payload.get("request_id"))
+    if event.session_id is None or not provider_request_id:
+        return
+    provider_ref = _mapping(payload.get("provider_ref") or payload.get("provider_ref_json"))
+    projection = build_pause_runtime_projection(event)
+    row = LiveInteractionRequest(
+        id=projection["id"],
+        request_key=request_key,
+        created_at=occurred_at,
+    )
+    row.session_id = str(event.session_id)
+    row.runtime_key = _clean_str(event.runtime_key) or ""
+    row.run_id = str(event.run_id) if getattr(event, "run_id", None) is not None else None
+    row.provider = _clean_str(event.provider) or "unknown"
+    row.provider_request_id = provider_request_id
+    row.source = _clean_str(provider_ref.get("source")) or _clean_str(event.source)
+    row.reply_transport = _clean_str(provider_ref.get("reply_transport"))
+    row.kind = _clean_str(payload.get("kind")) or PAUSE_KIND_STRUCTURED_QUESTION
+    row.status = _terminal_status(str(payload.get("status") or "resolved"))
+    row.can_respond = 0
+    row.request_payload_json = _request_payload(payload)
+    row.projection_json = {
+        **projection,
+        "run_id": row.run_id,
+        "status": row.status,
+        "resolved_at": occurred_at.isoformat(),
+    }
+    row.response_text = _clean_str(payload.get("response_text") or payload.get("message"))
+    row.expires_at = _datetime_payload(projection.get("expires_at"))
+    row.occurred_at = occurred_at
+    row.resolved_at = occurred_at
+    row.last_seen_at = occurred_at
+    row.updated_at = occurred_at
+    db.add(row)
+
+
 def apply_live_interaction_event(db: Session, event: Any, state: LiveRuntimeState) -> bool:
     """Reduce request history and its runtime pointer together, in event order."""
     payload = event.payload if isinstance(event.payload, dict) else {}
@@ -208,7 +266,20 @@ def apply_live_interaction_event(db: Session, event: Any, state: LiveRuntimeStat
     if event.kind == "pause_resolution":
         if row is None and state.pending_interaction_id == request_key:
             row = materialize_live_interaction(db, state, persist=False)
-        if row is None or row.status != "pending" or normalize_utc(row.last_seen_at) > occurred_at:
+        if row is None:
+            # No opening this pointer or the history knows about, so the
+            # resolution is early rather than spurious: leave a terminal record
+            # so the opening cannot revive a wait the provider has closed. The
+            # pointer is untouched, so nothing pending changes here.
+            _record_resolution_without_request(
+                db,
+                event,
+                request_key=request_key,
+                occurred_at=occurred_at,
+                payload=payload,
+            )
+            return False
+        if row.status != "pending" or normalize_utc(row.last_seen_at) > occurred_at:
             return False
         row.status = _terminal_status(str(payload.get("status") or "resolved"))
         row.can_respond = 0
