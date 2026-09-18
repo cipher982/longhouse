@@ -225,7 +225,11 @@ fn delegation_snapshot(input: &Value) -> Option<Value> {
         // Claude's labels are friendly strings ("shell", "subagent", "cloud
         // session", "MCP task"); normalize the multi-word ones so a consumer
         // can key on them without guessing.
-        let raw = task.get("type").and_then(Value::as_str).unwrap_or("").trim();
+        let raw = task
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
         let kind = match raw.to_ascii_lowercase().replace([' ', '-'], "_").as_str() {
             "shell" => "shell",
             "subagent" => "subagent",
