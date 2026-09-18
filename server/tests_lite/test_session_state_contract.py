@@ -239,6 +239,61 @@ def test_pending_question_outranks_quiescent_without_mutating_activity():
     assert facts.presentation.primary.label == "Needs answer"
 
 
+#: A primary whose whole meaning is "the user owes something".
+ATTENTION_PRIMARY_KEYS = ("blocked", "needs_answer", "needs_approval")
+
+
+@pytest.mark.parametrize("phase", ["idle", "needs_user", "blocked", "stalled", "thinking", "running"])
+def test_no_activity_phase_alone_claims_the_user_owes_something(phase):
+    """The 2026-09-18 regression, as a table over every provider phase.
+
+    A Claude Helm session read "Blocked" beside a timeline that already said its
+    question had been answered in the terminal. Nothing was stuck: the badge was
+    rendering an activity observation, which carries no key, as a claim about
+    *the user*. Either axis may describe what the provider is doing. Only the
+    interaction axis may say the user owes something, so every phase is checked
+    in the exact shape that produced the defect — no pending interaction.
+    """
+
+    facts = _facts(runtime=_runtime(phase=phase))
+
+    assert facts.pending_interaction is None
+    primary = facts.presentation.primary
+    assert primary is not None, phase
+    assert primary.key not in ATTENTION_PRIMARY_KEYS, (phase, primary)
+    assert primary.tone != "blocked", (phase, primary)
+
+
+def test_a_keyed_interaction_is_still_what_makes_a_wait_visible():
+    """The other half of the invariant: deleting the fiction must not lose the fact.
+
+    The defect was never that Longhouse showed a wait. It was that it invented
+    one with no owner. A held question has an owner, so it still reads — and it
+    says which kind of wait it is rather than one generic sentence.
+    """
+
+    for kind, key, label in (
+        ("structured_question", "needs_answer", "Needs answer"),
+        ("permission_prompt", "needs_approval", "Needs approval"),
+        ("plan_approval", "needs_approval", "Needs approval"),
+    ):
+        facts = _facts(
+            runtime=_runtime(phase="blocked"),
+            pause_request={
+                "id": f"pause-{kind}",
+                "kind": kind,
+                "status": "pending",
+                "occurred_at": NOW - timedelta(seconds=4),
+                "can_respond": False,
+            },
+        )
+
+        primary = facts.presentation.primary
+        assert primary is not None, kind
+        assert primary.key == key, kind
+        assert primary.label == label, kind
+
+
 def test_transcript_lag_never_becomes_provider_working():
     facts = _facts(
         runtime=_runtime(phase="idle"),

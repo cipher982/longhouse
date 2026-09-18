@@ -37,6 +37,7 @@ from zerg.services.session_state_contract import SessionActionAvailability
 from zerg.services.session_state_contract import SessionActivityFacts
 from zerg.services.session_state_contract import SessionControlActions
 from zerg.services.session_state_contract import SessionControlFacts
+from zerg.services.session_state_contract import SessionDelegationFacts
 from zerg.services.session_state_contract import SessionDispositionFacts
 from zerg.services.session_state_contract import SessionHostFacts
 from zerg.services.session_state_contract import SessionTranscriptFacts
@@ -86,6 +87,7 @@ def test_live_activity_push_uses_canonical_session_contract(tmp_path):
             source="provider_runtime",
             observed_at=observed_at,
         ),
+        delegation=SessionDelegationFacts(),
         control=SessionControlFacts(
             ownership="owned",
             connection="unknown",

@@ -78,7 +78,13 @@ _ACTIVITY_STATE = {
     "running": "executing",
     "idle": "quiescent",
     "needs_user": "quiescent",
-    "blocked": "blocked",
+    # A block is a provider saying *it* is waiting. It is not a claim that the
+    # user owes something: only a keyed interaction licenses that, and it is a
+    # separate axis. Mapping the state to `blocked` let an id-less observation
+    # become the session's headline — the 2026-09-18 incident, where a Claude
+    # session read "Blocked" while its transcript showed the question already
+    # answered. The raw kind survives for disclosure; the state does not assert.
+    "blocked": "quiescent",
     "stalled": "stalled",
 }
 _ACTION_OPERATION = {

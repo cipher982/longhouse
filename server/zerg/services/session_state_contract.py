@@ -116,7 +116,9 @@ _ACTIVITY_MAP: dict[str, ActivityState] = {
     "running": "executing",
     "idle": "quiescent",
     "needs_user": "quiescent",
-    "blocked": "blocked",
+    # See `_ACTIVITY_STATE` in the live projector: a block states that the
+    # provider is waiting, never that the user owes an answer.
+    "blocked": "quiescent",
     "stalled": "stalled",
 }
 
@@ -991,12 +993,15 @@ def _primary(
         return SessionPresentationLabel(key="executing", label=label, tone="running", observed_at=activity.observed_at)
     if activity.state == "stalled":
         return SessionPresentationLabel(key="stalled", label="Stalled", tone="stalled", observed_at=activity.observed_at)
-    if activity.state == "blocked":
-        return SessionPresentationLabel(key="blocked", label="Blocked", tone="blocked", observed_at=activity.observed_at)
+    # There is deliberately no `blocked` rung. A block is a provider statement
+    # about itself; presenting it as the session's headline asserted that *the
+    # user* owed something, on an observation carrying no key. Only the
+    # interaction axis above may claim a wait. A raw block still reaches the
+    # reader through `_LAST_SEEN_LABEL` once its evidence is past.
     # Delegated work outlives the parent's own activity, so it is the one thing
     # that may speak for a session whose loop is not doing anything. It never
-    # outranks a question, a block, or the main loop actually working: those are
-    # all decided above.
+    # outranks a question or the main loop actually working: those are both
+    # decided above, and a block no longer competes for this rung.
     if delegation.state == "pending" and delegation.count > 0 and activity.state in {"quiescent", "unknown"}:
         return SessionPresentationLabel(
             key="delegated_work",

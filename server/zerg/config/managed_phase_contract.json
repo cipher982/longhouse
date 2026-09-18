@@ -18,7 +18,7 @@
       "display_label": "needs permission",
       "tool_display_format": "blocked on {tool_name}",
       "attention": "blocked",
-      "freshness_seconds": 86400
+      "freshness_seconds": 90
     },
     {
       "raw_phase": "needs_user",

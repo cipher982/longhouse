@@ -906,6 +906,84 @@ def test_new_run_terminal_before_phase_ends_owner_and_cannot_be_reopened(interac
     assert ctx.store.list_interactions(session_id=ctx.session_id, status="pending", limit=20)["interactions"] == []
 
 
+def test_a_terminal_dialog_wait_is_retired_when_the_provider_moves_on(interaction_store):
+    """A dialog in the provider's TUI is execution-owned, so a lost hook cannot strand it.
+
+    `claude-lifecycle-hook` opens a question or an approval whose dialog lives in
+    Claude's own terminal. If the record that would retire it never arrives — a
+    killed process, a dropped write — nothing else would close it, because it is
+    not a durable Longhouse question: the wait would be immortal rather than
+    merely late. The provider demonstrably continuing is the positive evidence
+    that the dialog is gone.
+    """
+
+    ctx = interaction_store
+    ctx.store.apply_session_runtime(
+        events=[
+            _interaction_event(
+                ctx,
+                "pause_request",
+                1,
+                request_key="dialog",
+                kind="structured_question",
+                provider_ref={"source": "claude_hook", "reply_transport": "terminal"},
+            ),
+            _interaction_event(
+                ctx,
+                "pause_request",
+                2,
+                request_key="durable",
+                kind="structured_question",
+                provider_ref={},
+                single_active=False,
+            ),
+        ]
+    )
+    with Session(ctx.engine) as db:
+        state = db.get(LiveRuntimeState, ctx.runtime_key)
+        state.phase = "idle"
+        state.execution_started_at = ctx.now + timedelta(seconds=3)
+        state.last_progress_at = ctx.now + timedelta(seconds=4)
+        db.commit()
+
+    repair = ctx.store.expire_due_interactions(now=ctx.now + timedelta(days=40))
+
+    assert repair["expired_count"] == 1
+    pending = ctx.store.list_interactions(session_id=ctx.session_id, status="pending", limit=20)["interactions"]
+    assert [row["request_key"] for row in pending] == ["durable"]
+
+
+def test_a_dropped_hook_cannot_strand_a_terminal_question_past_its_run(interaction_store):
+    """Run exit is the other half, and it is the half a question lacked.
+
+    A terminal question was neither execution-owned nor answerable through
+    Longhouse, so before this it had no retirement path at all: not continuation,
+    not run exit. Both faces of the same rule are pinned here because they fail
+    for different reasons.
+    """
+
+    ctx = interaction_store
+    ctx.store.apply_session_runtime(
+        events=[
+            _interaction_event(
+                ctx,
+                "pause_request",
+                1,
+                request_key="dialog",
+                kind="structured_question",
+                provider_ref={"source": "claude_hook", "reply_transport": "terminal"},
+            )
+        ]
+    )
+    ctx.store.apply_session_runtime(
+        events=[_interaction_event(ctx, "terminal_signal", 2, terminal_state="session_ended", terminal_reason="helm_exit")]
+    )
+
+    assert ctx.store.list_interactions(session_id=ctx.session_id, status="pending", limit=20)["interactions"] == []
+    history = ctx.store.list_interactions(session_id=ctx.session_id, status=None, limit=20)["interactions"]
+    assert history[0]["status"] == "expired"
+
+
 def test_ignored_events_do_not_materialize_unrelated_or_newer_legacy_wait(interaction_store):
     ctx = interaction_store
     ctx.store.apply_session_runtime(events=[_interaction_event(ctx, "pause_request", 2)])
@@ -926,6 +1004,67 @@ def test_ignored_events_do_not_materialize_unrelated_or_newer_legacy_wait(intera
         assert db.get(LiveRuntimeState, ctx.runtime_key).pending_interaction_id == "held"
         assert db.query(LiveInteractionRequest).count() == 0
     ctx.store.apply_session_runtime(events=[_interaction_event(ctx, "pause_resolution", 4)])
+    with Session(ctx.engine) as db:
+        assert db.get(LiveRuntimeState, ctx.runtime_key).pending_interaction_id is None
+        assert db.query(LiveInteractionRequest).one().status == "resolved"
+
+
+def test_a_claude_hook_permission_event_registers_and_retires_a_keyed_wait(interaction_store):
+    """The engine's exact payload shape, reduced.
+
+    `claude-lifecycle-hook` writes these records for a `PermissionRequest` and
+    the tool end that follows it. Nothing else in the suite starts from the
+    bytes the hook actually emits, so a change to either side could pass on its
+    own while the seam between them broke.
+    """
+
+    ctx = interaction_store
+    request_key = "claude-hook:permission:Bash:5112e679ae51d6954ce4260da4302c76b6267cb9c7e41fa02d04219a256fd555"
+    opened = RuntimeEventIngest(
+        runtime_key=ctx.runtime_key,
+        session_id=UUID(ctx.session_id),
+        provider="claude",
+        source="claude_hook",
+        kind="pause_request",
+        occurred_at=ctx.now,
+        dedupe_key=f"claude-hook:open-permission:{ctx.session_id}:{request_key}",
+        payload={
+            "request_key": request_key,
+            "provider_ref": {"source": "claude_hook", "reply_transport": "terminal"},
+            "kind": "permission",
+            "title": "Claude needs permission",
+            "summary": "Approve or deny Bash in the original terminal.",
+            "request_payload": {"command": "rm -rf /tmp/x"},
+            # The dialog is the provider's: Longhouse surfaced the wait without
+            # gaining the authority to answer it.
+            "can_respond": False,
+            "single_active": True,
+        },
+    )
+    ctx.store.apply_session_runtime(events=[opened])
+
+    pending = ctx.store.list_interactions(session_id=ctx.session_id, status="pending", limit=20)["interactions"]
+    assert [row["request_key"] for row in pending] == [request_key]
+    with Session(ctx.engine) as db:
+        row = db.query(LiveInteractionRequest).one()
+        assert row.kind == "permission"
+        assert row.source == "claude_hook"
+        assert row.can_respond == 0
+        assert db.get(LiveRuntimeState, ctx.runtime_key).pending_interaction_id == request_key
+
+    resolution = RuntimeEventIngest(
+        runtime_key=ctx.runtime_key,
+        session_id=UUID(ctx.session_id),
+        provider="claude",
+        source="claude_hook",
+        kind="pause_resolution",
+        occurred_at=ctx.now + timedelta(seconds=2),
+        dedupe_key=f"claude-hook:pause_resolution:{ctx.session_id}:{uuid4()}",
+        payload={"request_key": request_key, "status": "resolved", "response_text": "Decided in the original terminal."},
+    )
+    ctx.store.apply_session_runtime(events=[resolution])
+
+    assert ctx.store.list_interactions(session_id=ctx.session_id, status="pending", limit=20)["interactions"] == []
     with Session(ctx.engine) as db:
         assert db.get(LiveRuntimeState, ctx.runtime_key).pending_interaction_id is None
         assert db.query(LiveInteractionRequest).one().status == "resolved"

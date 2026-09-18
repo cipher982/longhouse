@@ -46,8 +46,10 @@ from zerg.machine_evidence import MAX_MACHINE_EVIDENCE_BYTES
 from zerg.machine_evidence import machine_evidence_bytes
 from zerg.machine_evidence import validate_machine_evidence_identities
 from zerg.metrics import agents_heartbeat_payload_bytes
+from zerg.metrics import agents_heartbeat_rejected_total
 from zerg.metrics import agents_heartbeat_requests_total
 from zerg.metrics import agents_heartbeat_write_seconds
+from zerg.metrics import agents_machine_evidence_dropped_total
 from zerg.metrics import managed_session_heartbeat_lease_rows_total
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
@@ -523,11 +525,13 @@ def _accepted_machine_evidence(evidence: object, *, device_id: str) -> dict | No
     if evidence is None:
         return None
     if not isinstance(evidence, dict):
+        agents_machine_evidence_dropped_total.labels(reason="not_an_object").inc()
         logger.warning("Dropping machine evidence device=%s reason=not_an_object", device_id)
         return None
     try:
         parsed = MachineEvidenceIn.model_validate(evidence)
     except ValidationError as exc:
+        agents_machine_evidence_dropped_total.labels(reason="invalid").inc()
         logger.warning(
             "Dropping invalid machine evidence device=%s reason=%s",
             device_id,
@@ -537,6 +541,7 @@ def _accepted_machine_evidence(evidence: object, *, device_id: str) -> dict | No
     serialized = parsed.model_dump(mode="json", exclude_none=True)
     size = machine_evidence_bytes(serialized)
     if size > MAX_MACHINE_EVIDENCE_BYTES:
+        agents_machine_evidence_dropped_total.labels(reason="oversize").inc()
         logger.warning(
             "Dropping oversized machine evidence device=%s bytes=%d budget=%d",
             device_id,
@@ -1117,7 +1122,13 @@ async def ingest_heartbeat(
                     request_status_label = "write_backpressure" if exc.retryable else "internal_error"
                     # A refused heartbeat is a machine that stops looking
                     # alive, so the reason belongs in the log next to the
-                    # device it silenced rather than only in the response.
+                    # device it silenced rather than only in the response --
+                    # and in a counter, because the 2026-09-17 outage was a
+                    # refused heartbeat that nothing surfaced.
+                    agents_heartbeat_rejected_total.labels(
+                        code=str(exc.code),
+                        retryable=str(bool(exc.retryable)).lower(),
+                    ).inc()
                     logger.warning(
                         "Heartbeat rejected device=%s code=%s retryable=%s reason=%s",
                         _device_id,

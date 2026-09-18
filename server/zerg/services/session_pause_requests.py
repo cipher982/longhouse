@@ -31,14 +31,26 @@ QUESTION_PAYLOAD_KEYS = ("questions", "question", "prompt", "input", "schema", "
 # How an answered pause request is delivered back to the provider. PULL = the
 # provider polls Longhouse for the resolved row (Claude PreToolUse hook); PUSH =
 # Longhouse pushes the decision to the running provider over managed control
-# (Codex app-server, OpenCode bridge). Carried in provider_ref.reply_transport.
+# (Codex app-server, OpenCode bridge); TERMINAL = the dialog lives in the
+# provider's own TUI and the user answers it there. Carried in
+# provider_ref.reply_transport.
 REPLY_TRANSPORT_CLAUDE_PULL = "claude_pretooluse_pull"
 REPLY_TRANSPORT_CURSOR_POLL = "cursor_permission_poll"
 REPLY_TRANSPORT_MANAGED_PUSH = "managed_push"
+REPLY_TRANSPORT_TERMINAL = "terminal"
 PULL_REPLY_TRANSPORTS = {REPLY_TRANSPORT_CLAUDE_PULL, REPLY_TRANSPORT_CURSOR_POLL}
 
-# A stale lease is not proof of exit. Permission waits and managed-push provider
-# questions belong to an execution; durable Longhouse questions do not.
+# A stale lease is not proof of exit. Permission waits, managed-push provider
+# questions, and terminal-dialog waits belong to an execution; durable Longhouse
+# questions do not.
+#
+# A terminal dialog is execution-owned for the same reason a managed-push
+# question is: the provider owns it and can move on without Longhouse. If the
+# hook that would retire it is dropped — a killed process, a lost record — the
+# wait would otherwise be immortal, because nothing else would ever retire it.
+# The provider continuing or its run ending is the positive evidence that the
+# dialog is gone.
+EXECUTION_OWNED_REPLY_TRANSPORTS = {REPLY_TRANSPORT_MANAGED_PUSH, REPLY_TRANSPORT_TERMINAL}
 EXECUTION_TERMINAL_STATES = {"session_ended", "process_gone", "run_completed", "run_failed", "run_cancelled", "user_closed"}
 
 
@@ -73,7 +85,7 @@ def expire_live_interaction(db: Session, row: LiveInteractionRequest, *, occurre
 
 
 def _execution_owned_interaction(row: LiveInteractionRequest) -> bool:
-    return row.kind == PAUSE_KIND_PERMISSION_PROMPT or row.reply_transport == REPLY_TRANSPORT_MANAGED_PUSH
+    return row.kind == PAUSE_KIND_PERMISSION_PROMPT or row.reply_transport in EXECUTION_OWNED_REPLY_TRANSPORTS
 
 
 def live_interaction_terminal_reason(db: Session, row: LiveInteractionRequest) -> str | None:
@@ -93,7 +105,7 @@ def live_interaction_terminal_reason(db: Session, row: LiveInteractionRequest) -
     resumed_at = normalize_utc(state.execution_started_at)
     progress_at = normalize_utc(state.last_progress_at)
     if (
-        row.reply_transport == REPLY_TRANSPORT_MANAGED_PUSH
+        row.reply_transport in EXECUTION_OWNED_REPLY_TRANSPORTS
         and state.phase == "idle"
         and resumed_at is not None
         and last_seen_at is not None

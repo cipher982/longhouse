@@ -156,11 +156,14 @@ def test_a_backlog_drained_later_does_not_look_current():
 
 
 def test_the_lease_never_shortens_a_contract_window():
-    """`blocked` waits on a person, not on a keepalive.
+    """The lease is a floor, even for a phase that no longer asserts.
 
-    The lease is a floor. A session waiting for permission keeps its day-long
-    window, because expiring it to `unknown` would lose the one fact an
-    operator needs.
+    A block is the provider saying it is waiting, and since 2026-09-18 the
+    *wait itself* is carried by the interaction axis, not by this window — so
+    the served state is quiescent and only the raw kind still reports what was
+    observed. The floor is unchanged and still has to hold: whatever window a
+    phase declares is the phase's to keep, and the lease may only ever extend
+    it.
     """
 
     observed_at = _at()
@@ -177,7 +180,8 @@ def test_the_lease_never_shortens_a_contract_window():
         now=received_at + timedelta(minutes=30),
     )
 
-    assert projection.activity.state == "blocked"
+    assert projection.activity.state == "quiescent"
+    assert projection.activity.raw_kind == "blocked"
     assert projection.activity.valid_until == observed_at + day
 
 

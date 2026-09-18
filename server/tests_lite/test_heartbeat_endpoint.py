@@ -912,6 +912,17 @@ def test_heartbeat_drops_evidence_over_the_transport_budget_and_still_lands(live
     assert "machine_evidence" not in json.loads(stamp["raw_json"])
     assert _leases() == []
 
+    # The drop is a counter, not only a log line: the 2026-09-17 outage ran for
+    # twenty minutes because a refused heartbeat had no signal anyone watched.
+    pytest.importorskip("prometheus_client")
+    from prometheus_client import REGISTRY
+
+    dropped = REGISTRY.get_sample_value(
+        "agents_machine_evidence_dropped_total",
+        {"reason": "oversize"},
+    )
+    assert dropped == 1
+
 
 def test_heartbeat_accepts_reducer_grade_identity_without_promoting_authority(live_catalog, live_catalog_client):
     evidence = _machine_evidence_payload()
