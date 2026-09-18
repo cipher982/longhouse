@@ -880,6 +880,9 @@ mod tests {
 
     #[test]
     fn omp_candidate_is_profile_aware_and_only_accepts_its_cwd_bucket() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let home = tempfile::tempdir().unwrap();
         let cwd = home.path().join("workspace");
         let xdg_data = home.path().join("xdg-data");
@@ -931,6 +934,9 @@ mod tests {
 
     #[test]
     fn omp_owned_session_override_is_additive_and_ignores_profile() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let home = tempfile::tempdir().unwrap();
         let cwd = home.path().join("workspace");
         std::fs::create_dir_all(&cwd).unwrap();
@@ -950,6 +956,9 @@ mod tests {
 
     #[test]
     fn omp_default_profile_uses_upstream_xdg_sessions_layout() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let home = tempfile::tempdir().unwrap();
         let cwd = home.path().join("workspace");
         let xdg_data = home.path().join("xdg-data");
@@ -1039,6 +1048,9 @@ mod tests {
 
     #[test]
     fn omp_shadow_factory_certification_covers_restart_reload_serving_profiles_and_pi_separation() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/golden/omp/native.jsonl");
         let dir = tempfile::tempdir().unwrap();

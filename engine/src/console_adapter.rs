@@ -127,11 +127,22 @@ pub async fn cleanup_process_group(tag: &str, process_group_id: Option<i32>) {
 /// daemon tests raced `cursor_print`'s process-group test. One lock for all of
 /// them; no test holds a second lock while holding this one.
 #[cfg(test)]
-pub async fn longhouse_home_test_guard() -> tokio::sync::MutexGuard<'static, ()> {
-    static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
-    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
-        .lock()
-        .await
+pub fn longhouse_home_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    agent_state_guard()
+}
+
+/// One lock for every test that points process-global agent state at its own
+/// tree — `LONGHOUSE_HOME`, `HOME`, `LONGHOUSE_MANAGED_PROVIDER`, the outbox
+/// dirs, the claim dir.
+///
+/// Each module used to keep its own lock, which meant a test in one module could
+/// mutate the environment while a test in another read it: the suite passed one
+/// test at a time and failed under parallel execution in a different place on
+/// every run. No test holds a second lock while holding this one.
+#[cfg(test)]
+pub fn agent_state_guard() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|err| err.into_inner())
 }
 
 #[cfg(test)]

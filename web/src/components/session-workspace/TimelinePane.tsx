@@ -1015,12 +1015,31 @@ function ActivityChip({
   );
 }
 
+// Claude Code wraps an AskUserQuestion result in fixed boilerplate. The card
+// has to say what the user chose, not repeat the wrapper, so strip the two
+// known sentences and keep whatever the provider put between them.
+const QUESTION_ANSWER_PREFIX = "Your questions have been answered:";
+const QUESTION_ANSWER_SUFFIX = "You can now continue with these answers in mind.";
+
+function questionAnswerText(resultText: string): string {
+  let text = resultText.trim();
+  if (text.startsWith(QUESTION_ANSWER_PREFIX)) {
+    text = text.slice(QUESTION_ANSWER_PREFIX.length).trim();
+  }
+  if (text.endsWith(QUESTION_ANSWER_SUFFIX)) {
+    text = text.slice(0, -QUESTION_ANSWER_SUFFIX.length).trim();
+  }
+  return text;
+}
+
 function AskUserQuestionRow({ interaction, rowId }: { interaction: ToolInteraction; rowId: string }) {
   const rawInput = getToolInputRecord(interaction.callEvent?.tool_input_json);
   const questions = normalizeTranscriptQuestions(rawInput);
   const title = questions[0]?.header || "Question";
   const resultText = nonEmptyText(interaction.resultEvent?.tool_output_text);
-  const status = resultText ? "answered" : "waiting";
+  const answered = resultText != null;
+  const status = answered ? "answered" : "waiting";
+  const answer = resultText ? questionAnswerText(resultText) : null;
 
   return (
     <article
@@ -1031,10 +1050,15 @@ function AskUserQuestionRow({ interaction, rowId }: { interaction: ToolInteracti
       className="tl-question"
     >
       <div className="tl-question__head">
-        <span className="tl-question__eyebrow">Needs answer</span>
+        <span className="tl-question__eyebrow">{answered ? "Answered" : "Needs answer"}</span>
         <h3>{title}</h3>
-        <p>{resultText ? "Answered in the original session." : "Answer this in the terminal."}</p>
+        <p>{answered ? "Answered in the original session." : "Answer this in the terminal."}</p>
       </div>
+      {answer ? (
+        <div className="tl-question__answer" data-testid="session-question-answer">
+          <span className="tl-question__answer-text">{answer}</span>
+        </div>
+      ) : null}
       {questions.length > 0 ? (
         <div className="tl-question__items">
           {questions.map((question) => (
@@ -1046,7 +1070,11 @@ function AskUserQuestionRow({ interaction, rowId }: { interaction: ToolInteracti
               {question.options.length > 0 ? (
                 <div className="tl-question__options" aria-label="Answer options">
                   {question.options.map((option, index) => (
-                    <div key={`${question.id}-${option.label}-${index}`} className="tl-question__option" aria-disabled="true">
+                    <div
+                      key={`${question.id}-${option.label}-${index}`}
+                      className={`tl-question__option${resultText?.includes(option.label) ? " is-selected" : ""}`}
+                      aria-disabled="true"
+                    >
                       <span className="tl-question__option-label">{option.label}</span>
                       {option.description ? (
                         <span className="tl-question__option-description">{option.description}</span>

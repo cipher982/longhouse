@@ -231,10 +231,10 @@ mod tests {
     // So a panicking test leaves the environment clean, and the poison flag carries no
     // information -- it only converts one real failure into a wall of PoisonError noise
     // from every other test that shares the lock.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 
     fn with_provider<T>(value: Option<&str>, body: impl FnOnce() -> T) -> T {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let _guard = crate::console_adapter::agent_state_guard();
         let previous = std::env::var_os("LONGHOUSE_MANAGED_PROVIDER");
         match value {
             Some(value) => std::env::set_var("LONGHOUSE_MANAGED_PROVIDER", value),

@@ -431,11 +431,6 @@ pub(crate) fn is_provider_process(command: &str) -> Option<&'static str> {
     }
 }
 
-pub fn process_info_for_pid(pid: u32, provider: &str) -> Option<ProcessInfo> {
-    let fact = crate::process_identity::try_collect_process_fact(pid)?;
-    process_info_from_fact(fact, provider)
-}
-
 /// The same lookup against an inventory the caller already collected. The
 /// per-pid probe it replaces spawned `ps` once per outbox payload, on a tick
 /// that runs every 100 ms.

@@ -5270,7 +5270,7 @@ mod tests {
         "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
     const CURSOR_MESSAGE_C: &str =
         "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-    static CURSOR_BINDING_ENV_LOCK: Mutex<()> = Mutex::new(());
+
 
     #[test]
     fn preparation_errors_are_distinct_from_transport_failures() {
@@ -5373,9 +5373,7 @@ mod tests {
 
     #[test]
     fn fresh_cursor_source_waits_for_launch_reservation_before_materializing_shadow() {
-        let _guard = CURSOR_BINDING_ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = crate::console_adapter::agent_state_guard();
         let dir = tempfile::tempdir().unwrap();
         let state_root = dir
             .path()
@@ -5417,9 +5415,7 @@ mod tests {
 
     #[test]
     fn fresh_cursor_agent_transcript_waits_for_and_then_uses_managed_claim() {
-        let _guard = CURSOR_BINDING_ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = crate::console_adapter::agent_state_guard();
         let dir = tempfile::tempdir().unwrap();
         let longhouse_home = dir.path().join("longhouse");
         let reservation_dir = longhouse_home.join("managed-local/cursor-helm/launch-reservations");
@@ -5609,9 +5605,7 @@ mod tests {
 
     #[test]
     fn cursor_archives_keep_source_activity_across_replay_and_progress() {
-        let _guard = CURSOR_BINDING_ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = crate::console_adapter::agent_state_guard();
         let dir = tempfile::tempdir().unwrap();
         let cursor_home = dir.path().join("cursor");
         let store_path = cursor_home
@@ -5772,9 +5766,7 @@ mod tests {
 
     #[test]
     fn cursor_transcript_without_clock_still_archives_exact_raw_records() {
-        let _guard = CURSOR_BINDING_ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = crate::console_adapter::agent_state_guard();
         let dir = tempfile::tempdir().unwrap();
         let conversation = Uuid::new_v4().to_string();
         let path = dir
@@ -8066,7 +8058,7 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let _guard = runtime.block_on(crate::console_adapter::longhouse_home_test_guard());
+        let _guard = crate::console_adapter::longhouse_home_test_guard();
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("longhouse");
         let agent_dir = home.join("agent");

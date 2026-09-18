@@ -5450,6 +5450,9 @@ mod tests {
 
     #[test]
     fn shipping_discard_advances_durable_lane_cursor() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let dir = tempfile::tempdir().unwrap();
         let agent_dir = dir.path().join("agent");
         std::fs::create_dir_all(&agent_dir).unwrap();
@@ -6915,6 +6918,9 @@ mod tests {
 
     #[test]
     fn native_local_health_collects_malformed_status_file() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -7221,6 +7227,9 @@ mod tests {
 
     #[test]
     fn native_repair_plan_prefers_native_setup_when_machine_state_unreadable() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let dir = tempfile::tempdir().unwrap();
         let machine_path = dir.path().join("machine").join("state.json");
         std::fs::create_dir_all(machine_path.parent().unwrap()).unwrap();
@@ -7864,6 +7873,9 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
 
     #[test]
     fn native_repair_execution_rejects_default_service_without_longhouse_home() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let state = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         write_configured_machine_state(state.path());
@@ -8015,6 +8027,9 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
 
     #[test]
     fn native_service_repair_public_stable_home_dry_run_is_allowed() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let home = tempfile::tempdir().unwrap();
         let state = home.path().join(".longhouse");
         write_configured_machine_state(&state);
@@ -8050,6 +8065,9 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
 
     #[test]
     fn native_service_repair_public_rejects_scratch_state_root() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let state = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         write_configured_machine_state(state.path());
@@ -8080,6 +8098,9 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
 
     #[test]
     fn native_service_repair_public_rejects_scratch_longhouse_home_env() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let home = tempfile::tempdir().unwrap();
         let scratch = tempfile::tempdir().unwrap();
         let state = home.path().join(".longhouse");
@@ -8111,6 +8132,9 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
 
     #[test]
     fn native_service_repair_public_rejects_scratch_claude_config_dir_env() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let home = tempfile::tempdir().unwrap();
         let scratch = tempfile::tempdir().unwrap();
         let state = home.path().join(".longhouse");
@@ -8165,6 +8189,9 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
 
     #[test]
     fn native_service_repair_rejects_unreadable_machine_state_json() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let state = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let engine = write_fake_engine(home.path());
@@ -8237,6 +8264,9 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
 
     #[test]
     fn native_service_repair_rejects_unavailable_engine_executable() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let state = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let path_dir = tempfile::tempdir().unwrap();

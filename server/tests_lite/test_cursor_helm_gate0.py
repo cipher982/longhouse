@@ -358,3 +358,125 @@ def test_cursor_source_ship_rejects_zero_shipped_events(monkeypatch, tmp_path: P
 def test_storage_v2_gate_stub_rejects_an_invalid_envelope_id() -> None:
     with pytest.raises(ValueError, match="canonical expected envelope id"):
         _storage_v2_receipt_payload(b'{"expected_envelope_id":"not-a-hash"}')
+
+
+class _StubPtySession:
+    """A Cursor PTY session that records its argv and starts nothing."""
+
+    def __init__(self, argv: list[str], alive: bool = True) -> None:
+        self.argv = argv
+        self._alive = alive
+
+    @classmethod
+    def capture(cls, recorded: list[list[str]], *, alive: bool = True):
+        def start(*, argv, cwd, env, terminal_path):  # noqa: ANN001 - test double
+            recorded.append(list(argv))
+            return cls(list(argv), alive=alive)
+
+        return start
+
+    def alive(self) -> bool:
+        return self._alive
+
+    def close(self) -> None:
+        return None
+
+
+def _run_permission_scenario(
+    monkeypatch,
+    tmp_path: Path,
+    decision: str,
+    *,
+    hook_events: list[dict] | None = None,
+    alive: bool = True,
+) -> tuple[list[str], dict]:
+    from zerg.qa import cursor_helm_gate0 as gate
+
+    recorded: list[list[str]] = []
+    monkeypatch.setattr(gate.CursorPtySession, "start", _StubPtySession.capture(recorded, alive=alive))
+    # The scenario counts existing events before the run and reads again after,
+    # so the stub must start empty and only then report what the run produced.
+    reads = {"count": 0}
+
+    def _read_hook_events(*_args, **_kwargs):
+        reads["count"] += 1
+        return [] if reads["count"] == 1 else list(hook_events or [])
+
+    monkeypatch.setattr(gate, "read_hook_events", _read_hook_events)
+    monkeypatch.setattr(gate, "wait_for_hook", lambda *_args, **_kwargs: {"generation_id": "gen-1"})
+    workspace = tmp_path / decision
+    workspace.mkdir()
+    if decision == "allow":
+        # permission=allow must let the command through, so the side effect is present.
+        (workspace / f"permission-{decision}.txt").write_text("ALLOWED", encoding="utf-8")
+    result = gate._permission_scenario(
+        decision=decision,
+        binary="/fixture/cursor-agent",
+        workspace=workspace,
+        events_path=tmp_path / "events.jsonl",
+        terminal_path=tmp_path / f"{decision}.raw",
+        provider_id="conversation-1",
+        timeout=1.0,
+        model=None,
+    )
+    return recorded[0], result
+
+
+@pytest.mark.parametrize("decision", ["allow", "deny"])
+def test_permission_allow_and_deny_force_past_provider_approval(monkeypatch, tmp_path: Path, decision: str) -> None:
+    """The hook decision must be the only gate, not Cursor's own prompt."""
+
+    argv, result = _run_permission_scenario(monkeypatch, tmp_path, decision)
+
+    assert "--force" in argv
+    assert result["provider_auto_approval"] == "force"
+    assert result["status"] == "passed"
+
+
+def test_permission_ask_does_not_force_its_own_answer(monkeypatch, tmp_path: Path) -> None:
+    """--force answers the very question `ask` exists to pose.
+
+    Cursor 2026.09.10 executed the command under `permission=ask` because
+    --force auto-approved it, which failed Gate 0 on a promise the provider
+    never made. Unforced, an unattended ask executes nothing.
+    """
+
+    argv, result = _run_permission_scenario(monkeypatch, tmp_path, "ask")
+
+    assert "--force" not in argv
+    assert result["provider_auto_approval"] == "prompt"
+    assert result["side_effect_present"] is False
+    assert result["status"] == "passed"
+
+
+def test_permission_ask_needs_more_than_an_absent_side_effect(monkeypatch, tmp_path: Path) -> None:
+    """A blocked command, a dead session, and a shell that ran elsewhere all
+    leave the same empty marker path.
+
+    `ask` runs unforced, so an absent side effect is not by itself evidence
+    that the decision was honoured. Both other readings must fail.
+    """
+
+    from uuid import UUID
+
+    from zerg.qa import cursor_helm_gate0 as gate
+
+    fixed = UUID("00000000-0000-4000-8000-000000000001")
+    monkeypatch.setattr(gate, "uuid4", lambda: fixed)
+
+    dead_root = tmp_path / "dead"
+    dead_root.mkdir()
+    with pytest.raises(RuntimeError, match="died"):
+        _run_permission_scenario(monkeypatch, dead_root, "ask", alive=False)
+
+    executed = [
+        {
+            "longhouse_session_id": str(fixed),
+            "event": "afterShellExecution",
+            "conversation_id": "conversation-1",
+        }
+    ]
+    executed_root = tmp_path / "executed"
+    executed_root.mkdir()
+    with pytest.raises(RuntimeError, match="reported shell execution"):
+        _run_permission_scenario(monkeypatch, executed_root, "ask", hook_events=executed)

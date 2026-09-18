@@ -113,7 +113,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   gate:
-    timeout-minutes: 15
+    # Source qualification may wait 20m and publication 45m. Both upstream
+    # workflows run independently; allow their waits plus metadata resolution.
+    timeout-minutes: 75
     name: "Resolve exact-SHA deploy metadata"
     runs-on: cube
     needs: changes
@@ -125,9 +127,14 @@ jobs:
       runtime_image_name: ${{ steps.meta.outputs.runtime_image_name }}
       runtime_image_tag: ${{ steps.meta.outputs.runtime_image_tag }}
       runtime_image_ref: ${{ steps.digest.outputs.image_ref }}
+      runtime_image_digest: ${{ steps.digest.outputs.image_digest }}
       runtime_source_sha: ${{ steps.artifact_schema.outputs.source_sha }}
+      runtime_build_identity: ${{ steps.identity.outputs.build_identity }}
       runtime_source_order: ${{ steps.source.outputs.source_order }}
+      runtime_source_run_id: ${{ steps.source.outputs.source_run_id }}
+      runtime_source_attempt: ${{ steps.source.outputs.source_attempt }}
       runtime_source_workflow: ${{ steps.source.outputs.source_workflow }}
+      runtime_qualification_id: ${{ steps.source.outputs.qualification_id }}
       runtime_schema_version: ${{ steps.artifact_schema.outputs.schema_version }}
       runtime_schema_min_reader: ${{ steps.artifact_schema.outputs.schema_min_reader }}
       runtime_schema_max_reader: ${{ steps.artifact_schema.outputs.schema_max_reader }}
@@ -136,6 +143,7 @@ jobs:
         with:
           sparse-checkout: |
             .github/actions
+            scripts/lib/hosted-instance.sh
             scripts/ops/release-artifacts.py
           sparse-checkout-cone-mode: false
           fetch-depth: 1
@@ -151,12 +159,20 @@ jobs:
           IMAGE_TAG=""
 
           if [[ "${{ github.event_name }}" == "push" ]]; then
-          PREDECESSOR_SHA="${{ github.event.before }}"
-          if [[ "$PREDECESSOR_SHA" =~ ^0+$ ]]; then
-            PREDECESSOR_SHA=""
-          fi
+            PREDECESSOR_SHA="${{ github.event.before }}"
+            if [[ "$PREDECESSOR_SHA" =~ ^0+$ ]]; then
+              PREDECESSOR_SHA=""
+            fi
           else
             IMAGE_TAG="${{ github.event.inputs.runtime_image_tag || '' }}"
+            if [[ -z "$IMAGE_TAG" ]]; then
+              IMAGE_TAG="$HEAD_SHA"
+            fi
+            # A manual override selects its own immutable source. Every
+            # downstream checkout and gate must use that same source rather
+            # than silently qualifying the workflow dispatch commit.
+            HEAD_SHA="$IMAGE_TAG"
+            HEAD_BRANCH=""
           fi
 
           if [[ -z "$IMAGE_TAG" ]]; then
@@ -166,6 +182,10 @@ jobs:
             fi
             IMAGE_TAG="$HEAD_SHA"
           fi
+          [[ "$IMAGE_TAG" =~ ^[0-9a-fA-F]{40}$ ]] || {
+            echo "Runtime image tag must be a full source SHA: $IMAGE_TAG" >&2
+            exit 1
+          }
 
           {
             echo "predecessor_sha=$PREDECESSOR_SHA"
@@ -173,40 +193,38 @@ jobs:
             echo "head_branch=$HEAD_BRANCH"
             echo "runtime_image_name=ghcr.io/${{ github.repository_owner }}/longhouse-runtime"
             echo "runtime_image_tag=$IMAGE_TAG"
-            echo "runtime_image_ref=ghcr.io/${{ github.repository_owner }}/longhouse-runtime:$IMAGE_TAG"
           } >> "$GITHUB_OUTPUT"
 
       - name: Wait for core E2E gate
-        if: ${{ github.event_name == 'push' && needs.changes.outputs.runtime_image == 'true' && vars.DEPLOY_WAIT_FULL_CI != 'true' }}
+        if: ${{ needs.changes.outputs.runtime_image == 'true' && vars.DEPLOY_WAIT_FULL_CI != 'true' }}
         uses: ./.github/actions/wait-for-ci
         with:
-          head_sha: ${{ steps.meta.outputs.head_sha }}
-          head_branch: ${{ steps.meta.outputs.head_branch }}
+          head_sha: ${{ steps.meta.outputs.runtime_image_tag }}
           github_token: ${{ github.token }}
+          event: ""
           required_jobs: Core E2E tests
 
       - name: Wait for full CI gate (temporary opt-in)
-        if: ${{ github.event_name == 'push' && needs.changes.outputs.runtime_image == 'true' && vars.DEPLOY_WAIT_FULL_CI == 'true' }}
+        if: ${{ needs.changes.outputs.runtime_image == 'true' && vars.DEPLOY_WAIT_FULL_CI == 'true' }}
         uses: ./.github/actions/wait-for-ci
         with:
-          head_sha: ${{ steps.meta.outputs.head_sha }}
-          head_branch: ${{ steps.meta.outputs.head_branch }}
+          head_sha: ${{ steps.meta.outputs.runtime_image_tag }}
           github_token: ${{ github.token }}
+          event: ""
           required_jobs: Backend tests,Engine tests,Core E2E tests,Accessibility E2E tests,CLI wheel packaging
           ignored_failure_jobs: OSS onboarding smoke
 
       - name: Wait for exact runtime image publication
-        if: ${{ needs.changes.outputs.runtime_image == 'true' && github.event_name == 'push' }}
+        if: ${{ needs.changes.outputs.runtime_image == 'true' }}
         uses: ./.github/actions/wait-for-ci
         with:
-          head_sha: ${{ steps.meta.outputs.head_sha }}
-          head_branch: ${{ steps.meta.outputs.head_branch }}
+          head_sha: ${{ steps.meta.outputs.runtime_image_tag }}
           github_token: ${{ github.token }}
           workflow_id: runtime-image.yml
-          event: ${{ github.event_name }}
-          timeout_seconds: "1200"
+          event: ""
+          timeout_seconds: "2700"
 
-      - name: Resolve publishing workflow order
+      - name: Resolve publishing workflow and publication artifact
         id: source
         if: ${{ needs.changes.outputs.runtime_image == 'true' }}
         env:
@@ -218,50 +236,86 @@ jobs:
             echo "Runtime image tag must be a full source SHA for deployment metadata: $SOURCE_SHA" >&2
             exit 1
           }
-          run_number="$(curl --fail-with-body --silent --show-error \
+          run_info="$(curl --fail-with-body --silent --show-error \
             --header "Authorization: Bearer $GH_TOKEN" \
             --header "Accept: application/vnd.github+json" \
             --header "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/${{ github.repository }}/actions/workflows/runtime-image.yml/runs?head_sha=$SOURCE_SHA&status=success&per_page=1" \
-            | jq -r '.workflow_runs[0].run_number // empty')"
-          [[ "$run_number" =~ ^[0-9]+$ ]] || {
+            | jq -c '.workflow_runs[0] // empty')"
+          [[ -n "$run_info" ]] || {
             echo "No successful runtime-image publishing run for $SOURCE_SHA" >&2
             exit 1
           }
-          {
-            echo "source_order=$run_number"
-            echo "source_workflow=Publish Runtime Image"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Verify exact runtime image publication
-        if: ${{ needs.changes.outputs.runtime_image == 'true' }}
-        env:
-          IMAGE_REF: ${{ steps.meta.outputs.runtime_image_ref }}
-        run: docker manifest inspect "$IMAGE_REF" >/dev/null
-      - name: Resolve immutable runtime image digest
-        id: digest
-        env:
-          IMAGE_REF: ${{ steps.meta.outputs.runtime_image_ref }}
-        run: |
-          set -euo pipefail
-          digest="$(docker buildx imagetools inspect "$IMAGE_REF" --format '{{.Manifest.Digest}}')"
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-            echo "Runtime image $IMAGE_REF did not resolve to an immutable digest" >&2
+          run_id="$(jq -r '.id // empty' <<<"$run_info")"
+          run_number="$(jq -r '.run_number // empty' <<<"$run_info")"
+          run_attempt="$(jq -r '.run_attempt // empty' <<<"$run_info")"
+          [[ "$run_id" =~ ^[1-9][0-9]*$ && "$run_number" =~ ^[1-9][0-9]*$ && "$run_attempt" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Successful runtime-image publishing run has incomplete identity metadata." >&2
             exit 1
           }
-          echo "image_ref=${{ steps.meta.outputs.runtime_image_name }}@$digest" >> "$GITHUB_OUTPUT"
+          artifact_id="$(curl --fail-with-body --silent --show-error \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/$run_id/artifacts?per_page=100" \
+            | jq -r --arg run_id "$run_id" --arg run_attempt "$run_attempt" \
+              '[.artifacts[] | select(.expired == false and .name == ("runtime-publication-" + $run_id + "-" + $run_attempt))] | if length == 1 then .[0].id else empty end')"
+          [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]] || {
+            echo "Publishing run $run_id does not have its immutable publication receipt artifact." >&2
+            exit 1
+          }
+          {
+            echo "source_run_id=$run_id"
+            echo "source_order=$run_number"
+            echo "source_attempt=$run_attempt"
+            echo "source_artifact_id=$artifact_id"
+            echo "source_workflow=Publish Runtime Image"
+            echo "qualification_id=runtime-image-${run_id}-${run_attempt}"
+          } >> "$GITHUB_OUTPUT"
+      - name: Resolve immutable runtime image from publication receipt
+        id: digest
+        if: ${{ needs.changes.outputs.runtime_image == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ steps.source.outputs.source_run_id }}
+          SOURCE_ORDER: ${{ steps.source.outputs.source_order }}
+          SOURCE_ATTEMPT: ${{ steps.source.outputs.source_attempt }}
+          SOURCE_ARTIFACT_ID: ${{ steps.source.outputs.source_artifact_id }}
+          SOURCE_SHA: ${{ steps.meta.outputs.runtime_image_tag }}
+          IMAGE_NAME: ${{ steps.meta.outputs.runtime_image_name }}
+        run: |
+          set -euo pipefail
+          receipt_zip="$RUNNER_TEMP/runtime-publication.zip"
+          curl --fail-with-body --silent --show-error --location \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            --output "$receipt_zip" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$SOURCE_ARTIFACT_ID/zip"
+          receipt_path="$RUNNER_TEMP/runtime-publication.json"
+          unzip -p "$receipt_zip" runtime-publication.json > "$receipt_path"
+          validated="$(python3 scripts/ops/release-artifacts.py verify-publication \
+            --receipt "$receipt_path" \
+            --source-sha "$SOURCE_SHA" \
+            --source-order "$SOURCE_ORDER" \
+            --build-run-id "$SOURCE_RUN_ID" \
+            --build-attempt "$SOURCE_ATTEMPT")"
+          digest="$(jq -er '.image_digest' <<<"$validated")"
+          {
+            echo "image_ref=$IMAGE_NAME@$digest"
+            echo "image_digest=$digest"
+          } >> "$GITHUB_OUTPUT"
       - name: Resolve exact artifact catalog schema and source
         id: artifact_schema
         env:
           IMAGE_REF: ${{ steps.digest.outputs.image_ref }}
           HEAD_SHA: ${{ steps.meta.outputs.head_sha }}
-          EVENT_NAME: ${{ github.event_name }}
           REGISTRY_USERNAME: ${{ github.actor }}
           REGISTRY_PASSWORD: ${{ github.token }}
         run: |
           set -euo pipefail
           metadata="$(python3 scripts/ops/release-artifacts.py inspect --image "$IMAGE_REF")"
-          SCHEMA_METADATA="$metadata" HEAD_SHA="$HEAD_SHA" EVENT_NAME="$EVENT_NAME" python3 - "$GITHUB_OUTPUT" <<'PY'
+          SCHEMA_METADATA="$metadata" HEAD_SHA="$HEAD_SHA" python3 - "$GITHUB_OUTPUT" <<'PY'
           import json
           import os
           import re
@@ -271,9 +325,9 @@ jobs:
           source_sha = metadata.get("source_sha")
           if not isinstance(source_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", source_sha):
               raise SystemExit("selected immutable image has no full source revision label; bootstrap historical images before deployment")
-          if os.environ["EVENT_NAME"] == "push" and source_sha != os.environ["HEAD_SHA"]:
+          if source_sha != os.environ["HEAD_SHA"]:
               raise SystemExit(
-                  f"selected immutable image source {source_sha} does not match workflow SHA {os.environ['HEAD_SHA']}"
+                  f"selected immutable image source {source_sha} does not match selected workflow source {os.environ['HEAD_SHA']}"
               )
           with open(sys.argv[1], "a", encoding="utf-8") as output:
               print(f"source_sha={source_sha}", file=output)
@@ -283,6 +337,20 @@ jobs:
                       raise SystemExit(f"artifact schema metadata {name} is not a non-negative integer")
                   print(f"{name}={value}", file=output)
           PY
+      - name: Resolve immutable runtime build identity
+        id: identity
+        env:
+          IMAGE_REF: ${{ steps.digest.outputs.image_ref }}
+          EXPECTED_SOURCE_SHA: ${{ steps.artifact_schema.outputs.source_sha }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          . scripts/lib/hosted-instance.sh
+          _lh_hosted_resolve_build_identity "$IMAGE_REF"
+          normalized="$(_lh_hosted_normalize_build_identity \
+            "$EXPECTED_SOURCE_SHA" "$LH_DEPLOYMENT_BUILD_IDENTITY")"
+          printf 'build_identity=%s\n' "$normalized" >> "$GITHUB_OUTPUT"
 
 
   deploy_demo:
@@ -290,7 +358,7 @@ jobs:
     runs-on: cube-deploy
     if: github.repository == 'cipher982/longhouse'
     timeout-minutes: 60
-    needs: [changes, gate, fast_smoke]
+    needs: [changes, gate, fast_smoke, reprovision_canary]
     outputs:
       deployment_id: ${{ steps.submit_demo.outputs.deployment_id }}
     env:
@@ -301,8 +369,10 @@ jobs:
       CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
       INSTANCE_SUBDOMAIN: demo
       RUNTIME_SOURCE_SHA: ${{ needs.gate.outputs.runtime_source_sha }}
+      RUNTIME_BUILD_IDENTITY: ${{ needs.gate.outputs.runtime_build_identity }}
       RUNTIME_SOURCE_WORKFLOW: ${{ needs.gate.outputs.runtime_source_workflow }}
       RUNTIME_SOURCE_ORDER: ${{ needs.gate.outputs.runtime_source_order }}
+      RUNTIME_QUALIFICATION_ID: ${{ needs.gate.outputs.runtime_qualification_id }}
       RUNTIME_SCHEMA_VERSION: ${{ needs.gate.outputs.runtime_schema_version }}
       RUNTIME_SCHEMA_MIN_READER: ${{ needs.gate.outputs.runtime_schema_min_reader }}
       RUNTIME_SCHEMA_MAX_READER: ${{ needs.gate.outputs.runtime_schema_max_reader }}
@@ -318,6 +388,22 @@ jobs:
           show-progress: false
 
 
+
+      - name: Resolve the deployed image build identity
+        env:
+          IMAGE_REF: ${{ needs.gate.outputs.runtime_image_ref }}
+        run: |
+          set -euo pipefail
+          # Same identity contract as the canary: the control plane refuses a
+          # ready deployment that carries no build identity, and compares the
+          # submitted value with what the served runtime reports.
+          identity="$(docker run --rm --network none --entrypoint cat "$IMAGE_REF" /app/zerg/build_identity.json | jq -c .)"
+          [[ "$identity" == "{"*"}" ]] || {
+            echo "Runtime image $IMAGE_REF carries no readable build identity" >&2
+            exit 1
+          }
+          echo "RUNTIME_BUILD_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "resolved build identity for $IMAGE_REF"
 
       - name: Verify runtime image exists
         run: docker manifest inspect "${{ needs.gate.outputs.runtime_image_ref }}" >/dev/null
@@ -347,8 +433,10 @@ jobs:
       CONTROL_PLANE_URL: ${{ vars.HOSTED_CANARY_CONTROL_PLANE_URL }}
       INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
       LH_DEPLOYMENT_SOURCE_SHA: ${{ needs.gate.outputs.runtime_source_sha }}
+      LH_DEPLOYMENT_BUILD_IDENTITY: ${{ needs.gate.outputs.runtime_build_identity }}
       LH_DEPLOYMENT_SOURCE_WORKFLOW: ${{ needs.gate.outputs.runtime_source_workflow }}
       LH_DEPLOYMENT_SOURCE_ORDER: ${{ needs.gate.outputs.runtime_source_order }}
+      LH_DEPLOYMENT_QUALIFICATION_ID: ${{ needs.gate.outputs.runtime_qualification_id }}
       LH_DEPLOYMENT_SCHEMA_VERSION: ${{ needs.gate.outputs.runtime_schema_version }}
       LH_DEPLOYMENT_SCHEMA_MIN_READER: ${{ needs.gate.outputs.runtime_schema_min_reader }}
       LH_DEPLOYMENT_SCHEMA_MAX_READER: ${{ needs.gate.outputs.runtime_schema_max_reader }}
@@ -375,6 +463,22 @@ jobs:
 
       - name: Wait for control plane
         run: ./scripts/ci/wait-for-http.sh "$CONTROL_PLANE_URL/health" "Control plane"
+
+      - name: Resolve the deployed image build identity
+        env:
+          IMAGE_REF: ${{ needs.gate.outputs.runtime_image_ref }}
+        run: |
+          set -euo pipefail
+          # The control plane compares the submitted build identity against the
+          # one the served runtime reports, and refuses a ready deployment that
+          # carries none. Read it from the image being deployed.
+          identity="$(docker run --rm --network none --entrypoint cat "$IMAGE_REF" /app/zerg/build_identity.json | jq -c .)"
+          [[ "$identity" == "{"*"}" ]] || {
+            echo "Runtime image $IMAGE_REF carries no readable build identity" >&2
+            exit 1
+          }
+          echo "LH_DEPLOYMENT_BUILD_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "resolved build identity for $IMAGE_REF"
 
 
       - name: Resolve hosted canary instance
@@ -413,6 +517,12 @@ jobs:
       FRONTEND_URL: ${{ needs.reprovision_canary.outputs.frontend_url }}
       INSTANCE_URL: ${{ needs.reprovision_canary.outputs.instance_url }}
       CANARY_DEPLOYMENT_ID: ${{ needs.reprovision_canary.outputs.deployment_id }}
+      RUNTIME_IMAGE_DIGEST: ${{ needs.gate.outputs.runtime_image_digest }}
+      RUNTIME_SOURCE_SHA: ${{ needs.gate.outputs.runtime_source_sha }}
+      RUNTIME_SOURCE_WORKFLOW: ${{ needs.gate.outputs.runtime_source_workflow }}
+      RUNTIME_SOURCE_ORDER: ${{ needs.gate.outputs.runtime_source_order }}
+      RUNTIME_SOURCE_RUN_ID: ${{ needs.gate.outputs.runtime_source_run_id }}
+      RUNTIME_SOURCE_ATTEMPT: ${{ needs.gate.outputs.runtime_source_attempt }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -445,10 +555,62 @@ jobs:
             echo "- **Hosted canary URL:** $INSTANCE_URL"
             echo "- **Control plane:** $CONTROL_PLANE_URL"
             echo "- **Commit:** ${{ needs.gate.outputs.head_sha }}"
-            echo "- **Candidate image:** \`${{ needs.gate.outputs.runtime_image_name }}:${{ needs.gate.outputs.runtime_image_tag }}\`"
+            echo "- **Candidate image:** \`${{ needs.gate.outputs.runtime_image_ref }}\`"
             echo "- **Canary deployment receipt:** \`$CANARY_DEPLOYMENT_ID\`"
             echo "- **canary smoke:** \`${{ steps.fast_smoke.outcome || 'skipped' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Write successful canary verification receipt
+        if: steps.fast_smoke.outcome == 'success'
+        run: |
+          set -euo pipefail
+          receipt_path="$RUNNER_TEMP/runtime-verification.json"
+          python3 - "$receipt_path" <<'PY'
+          import json
+          import os
+          import sys
+
+          with open(sys.argv[1], "w", encoding="utf-8") as handle:
+              json.dump(
+                  {
+                      "schema": "longhouse.runtime-verification.v1",
+                      "image_digest": os.environ["RUNTIME_IMAGE_DIGEST"],
+                      "source_sha": os.environ["RUNTIME_SOURCE_SHA"],
+                      "source_workflow": os.environ["RUNTIME_SOURCE_WORKFLOW"],
+                      "source_order": int(os.environ["RUNTIME_SOURCE_ORDER"]),
+                      "build_run_id": os.environ["RUNTIME_SOURCE_RUN_ID"],
+                      "build_attempt": int(os.environ["RUNTIME_SOURCE_ATTEMPT"]),
+                      "qualification_id": (
+                          f"runtime-image-{os.environ['RUNTIME_SOURCE_RUN_ID']}-"
+                          f"{os.environ['RUNTIME_SOURCE_ATTEMPT']}"
+                      ),
+                      "verification": {
+                          "functional_smoke": "success",
+                          "canary_deployment_id": os.environ["CANARY_DEPLOYMENT_ID"],
+                      },
+                  },
+                  handle,
+                  sort_keys=True,
+              )
+              handle.write("\n")
+          PY
+          python3 scripts/ops/release-artifacts.py verify-publication \
+            --receipt "$receipt_path" \
+            --source-sha "$RUNTIME_SOURCE_SHA" \
+            --source-workflow "$RUNTIME_SOURCE_WORKFLOW" \
+            --source-order "$RUNTIME_SOURCE_ORDER" \
+            --build-run-id "$RUNTIME_SOURCE_RUN_ID" \
+            --build-attempt "$RUNTIME_SOURCE_ATTEMPT" \
+            --require-verification >/dev/null
+
+      - name: Upload successful canary verification receipt
+        if: steps.fast_smoke.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runtime-verification.json
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Upload live QA artifacts
         if: failure()

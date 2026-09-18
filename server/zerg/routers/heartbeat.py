@@ -71,6 +71,56 @@ _catalog_db_dependency = catalog_db_dependency()
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
+# ``raw_json`` is meant to be a bounded forensic copy, but it was only bounded
+# by catalogd's 512 KiB refusal. These two keys are per-session arrays, so they
+# grow with how busy a machine is: they are 9.6 KB of a 20 KB heartbeat today
+# and were far larger historically. Every other key is a fixed set of scalars
+# and small maps. Dropping these two is what makes the copy actually bounded.
+#
+# Nothing reads them back. The two readers of this column are catalogd's
+# machine-health projection (``_MACHINE_HEALTH_RAW_FIELDS``, ``store.py``) and
+# ``services/transport_health.py``; session state is materialized into its own
+# tables at ingest.
+_UNBOUNDED_HEARTBEAT_FIELDS = ("sessions", "managed_sessions")
+
+# The reader projects to 32 KiB (``_MACHINE_HEALTH_RAW_MAX_BYTES``), so storing
+# more than that can never reach anyone. Anything still over the cap falls back
+# to exactly what the readers consume rather than being truncated into invalid
+# JSON or refused -- a refused heartbeat reports the machine offline.
+_RETAINED_HEARTBEAT_MAX_BYTES = 32 * 1024
+_HEARTBEAT_READER_FIELDS = (
+    "archive_backlog",
+    "history_import",
+    "shipping_progress",
+    "last_ship_at",
+    "last_ship_result",
+    "last_ship_error_kind",
+    "last_ship_error_message",
+    "last_ship_http_status",
+    "ship_attempts_10m",
+    "ship_successes_10m",
+    "ship_rate_limited_10m",
+    "ship_server_errors_10m",
+    "ship_retryable_client_errors_10m",
+    "ship_connect_errors_10m",
+)
+
+
+def _retained_heartbeat_evidence(payload: dict) -> dict:
+    """Bound the retained forensic copy of a heartbeat payload.
+
+    Absence is meaningful downstream and survives both paths:
+    ``_shipping_progress_from_payload`` reports ``valid=False`` for a missing
+    ``shipping_progress`` rather than reading it as zero, and ``history_import``
+    is already popped upstream when the sender did not set it. So a key is
+    emitted only when the payload carried it.
+    """
+    retained = {key: value for key, value in payload.items() if key not in _UNBOUNDED_HEARTBEAT_FIELDS}
+    if len(json.dumps(retained).encode("utf-8")) <= _RETAINED_HEARTBEAT_MAX_BYTES:
+        return retained
+    return {field: payload[field] for field in _HEARTBEAT_READER_FIELDS if field in payload}
+
+
 MANAGED_SESSION_LEASE_SOURCE = "engine_attached_lease"
 UNMANAGED_PROCESS_SNAPSHOT_SOURCE = "engine_process_snapshot"
 DEFAULT_MANAGED_SESSION_LEASE_TTL_MS = 15 * 60 * 1000
@@ -897,7 +947,7 @@ async def ingest_heartbeat(
                     payload_for_retention.pop("history_import", None)
                 payload_for_retention.pop("machine_evidence", None)
                 machine_evidence = _accepted_machine_evidence(payload.machine_evidence, device_id=device_id)
-                payload_json = json.dumps(payload_for_retention)
+                payload_json = json.dumps(_retained_heartbeat_evidence(payload_for_retention))
                 agents_heartbeat_payload_bytes.observe(wire_bytes)
                 set_span_attributes(
                     validate_span,

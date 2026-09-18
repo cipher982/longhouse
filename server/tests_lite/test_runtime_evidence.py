@@ -152,6 +152,38 @@ async def test_drain_catalog_unavailable_stays_unknown() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reopened_runtime_accepts_next_drain_without_reusing_fence(monkeypatch) -> None:
+    from zerg.services.runtime_admission import RuntimeAdmission
+
+    monkeypatch.setenv("LONGHOUSE_DEPLOYMENT_PENDING", "0")
+    runtime = RuntimeAdmission()
+    operations: list[str] = []
+
+    async def probe(operation: str) -> dict[str, object]:
+        operations.append(operation)
+        if operation == "open":
+            return {"available": True, "state": "open", "depth": 0, "accepting": True, "active_label": None}
+        return {"available": True, "state": "closed", "depth": 0, "accepting": False, "active_label": None}
+
+    first = _drain_payload(runtime)
+    first.update({"request_id": "first-drain", "grace_seconds": 0})
+    drained = await runtime.drain(first, attempt_id="first-attempt", catalog_probe=probe)
+    assert drained["state"] == "drained"
+
+    reopened = await runtime.reopen(first, attempt_id="first-attempt", catalog_probe=probe)
+    assert reopened["state"] == "reopened"
+
+    replayed = await runtime.drain(first, attempt_id="first-attempt", catalog_probe=probe)
+    assert replayed["state"] == "reopened"
+    assert operations == ["close", "open"]
+
+    next_request = {**first, "request_id": "next-drain", "deployment_id": "next-deployment"}
+    next_drained = await runtime.drain(next_request, attempt_id="next-attempt", catalog_probe=probe)
+    assert next_drained["state"] == "drained"
+    assert operations == ["close", "open", "close"]
+
+
+@pytest.mark.asyncio
 async def test_get_drain_promotes_when_catalog_gate_and_runtime_are_quiescent(monkeypatch) -> None:
     from zerg.routers import internal_deployments
     from zerg.services.runtime_admission import RuntimeAdmission

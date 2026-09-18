@@ -781,7 +781,7 @@
           "owner_action": "render reasoning as collapsed thinking records"
         }
       },
-      "adapter_digest": "ca9a79735b94fcc3e24fdd23772e3ed1281f4a50c978d4134fdf8fa4a474b2b5"
+      "adapter_digest": "0e3e89c1ca60707b106d7afd3031b7b398d18503fe1c01e28dce335c88873da3"
     },
     {
       "provider": "claude",
@@ -1170,56 +1170,56 @@
               "id": "claude_helm_launch_registration",
               "scenario_id": "claude_helm_lifecycle",
               "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "91b4f3505aa5e6f40a45ad1abd118f975713599af1152c90a28d30d270c4e3a7"
+              "oracle_digest": "67b0d921c251fe1f4baeca719289b3432fb2edd641f770ecd6219a644df63acd"
             },
             {
               "id": "claude_helm_send_idle",
               "scenario_id": "claude_helm_lifecycle",
               "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "91b4f3505aa5e6f40a45ad1abd118f975713599af1152c90a28d30d270c4e3a7"
+              "oracle_digest": "67b0d921c251fe1f4baeca719289b3432fb2edd641f770ecd6219a644df63acd"
             },
             {
               "id": "claude_helm_steer_active",
               "scenario_id": "claude_helm_lifecycle",
               "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "91b4f3505aa5e6f40a45ad1abd118f975713599af1152c90a28d30d270c4e3a7"
+              "oracle_digest": "67b0d921c251fe1f4baeca719289b3432fb2edd641f770ecd6219a644df63acd"
             },
             {
               "id": "claude_helm_abort_native",
               "scenario_id": "claude_helm_lifecycle",
               "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "91b4f3505aa5e6f40a45ad1abd118f975713599af1152c90a28d30d270c4e3a7"
+              "oracle_digest": "67b0d921c251fe1f4baeca719289b3432fb2edd641f770ecd6219a644df63acd"
             },
             {
               "id": "claude_helm_terminate_owned",
               "scenario_id": "claude_helm_lifecycle",
               "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "91b4f3505aa5e6f40a45ad1abd118f975713599af1152c90a28d30d270c4e3a7"
+              "oracle_digest": "67b0d921c251fe1f4baeca719289b3432fb2edd641f770ecd6219a644df63acd"
             }
           ]
         },
@@ -1406,12 +1406,12 @@
               "id": "claude_helm_launch_registration",
               "scenario_id": "claude_helm_lifecycle",
               "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "91b4f3505aa5e6f40a45ad1abd118f975713599af1152c90a28d30d270c4e3a7"
+              "oracle_digest": "67b0d921c251fe1f4baeca719289b3432fb2edd641f770ecd6219a644df63acd"
             }
           ],
           "level": "live_token",
@@ -1437,12 +1437,12 @@
               "id": "claude_helm_send_idle",
               "scenario_id": "claude_helm_lifecycle",
               "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "91b4f3505aa5e6f40a45ad1abd118f975713599af1152c90a28d30d270c4e3a7"
+              "oracle_digest": "67b0d921c251fe1f4baeca719289b3432fb2edd641f770ecd6219a644df63acd"
             }
           ],
           "level": "live_token",
@@ -1455,12 +1455,12 @@
               "id": "claude_helm_abort_native",
               "scenario_id": "claude_helm_lifecycle",
               "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "91b4f3505aa5e6f40a45ad1abd118f975713599af1152c90a28d30d270c4e3a7"
+              "oracle_digest": "67b0d921c251fe1f4baeca719289b3432fb2edd641f770ecd6219a644df63acd"
             }
           ],
           "level": "live_token",
@@ -1473,12 +1473,12 @@
               "id": "claude_helm_steer_active",
               "scenario_id": "claude_helm_lifecycle",
               "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "91b4f3505aa5e6f40a45ad1abd118f975713599af1152c90a28d30d270c4e3a7"
+              "oracle_digest": "67b0d921c251fe1f4baeca719289b3432fb2edd641f770ecd6219a644df63acd"
             }
           ],
           "level": "live_token",
@@ -1498,12 +1498,12 @@
               "id": "claude_helm_terminate_owned",
               "scenario_id": "claude_helm_lifecycle",
               "oracle_source": "server/zerg/qa/claude_helm_lifecycle.py",
-              "minimum_scenario_revision": 3,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "91b4f3505aa5e6f40a45ad1abd118f975713599af1152c90a28d30d270c4e3a7"
+              "oracle_digest": "67b0d921c251fe1f4baeca719289b3432fb2edd641f770ecd6219a644df63acd"
             }
           ],
           "level": "live_token",
@@ -1636,7 +1636,7 @@
           "owner_action": "render as collapsed thinking records with a thinking interaction kind"
         }
       },
-      "adapter_digest": "cccfc49dc1c27b6a2b819de23608211c63fb4af7fdc7c9ff865dba33b96f4112"
+      "adapter_digest": "95322dfd47a3d12a773bf850fc898076997cec0355d6e1a572074fa2fae85750"
     },
     {
       "provider": "opencode",
@@ -2317,7 +2317,7 @@
           "owner_action": "render reasoning parts as collapsed thinking records"
         }
       },
-      "adapter_digest": "73057faa98fd57d782299a437ae770eb0db56d628c89ee92ffac8ab711887e1c"
+      "adapter_digest": "a7990b8b3678409acb6a69ec2f8ca812528134ff66a3c6f281d3f72d3f2e1214"
     },
     {
       "provider": "antigravity",
@@ -2706,7 +2706,7 @@
           "owner_action": "run the transcript census for antigravity and name the raw source"
         }
       },
-      "adapter_digest": "0f51942e7206350904c93569a86cf4cecd688be1bc68b715912b6a51c85a665a"
+      "adapter_digest": "ef8296c0162d22499a82629cefc7a1fa04630f29301de2360866b76594fbccaa"
     },
     {
       "provider": "cursor",
@@ -3390,7 +3390,7 @@
           "owner_action": "run the transcript census for cursor and name the raw source"
         }
       },
-      "adapter_digest": "bc8a3ad364777d2091e7cd88ea5072651fee8d3aa2f5b7fd7a4aa44fa3290f5d"
+      "adapter_digest": "93cc2c344efc6cd0e6f79f4622e18583362aeeddaad48712f852d1c7e31065e9"
     },
     {
       "provider": "pi",
@@ -3948,7 +3948,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "fc511425aeeba0e4f7fd6d8deded05793e3b0858fe991746303fd7d2f6796177"
+      "adapter_digest": "09465abb9cd4476e7093cd6eea657fc53ecf328ffb245e503e77f0755e9f009a"
     },
     {
       "provider": "omp",
@@ -4505,7 +4505,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "1c968bbf78fde198812690c6a7e944d4f3672fe97dde7db26ad852e75a15e5a0"
+      "adapter_digest": "50e6836a4fda60474e89c74055c107cf74537a8327dfdc6d4776e5dd4ad559d2"
     }
   ]
 }

@@ -7,10 +7,10 @@ store.  The sealed image manifest is deliberately written last, so an interrupte
 run leaves reusable blobs but never a recovery-ready receipt.
 
 Commands:
-  publish  Fetch a registry digest and seal its archive manifest.
-  inspect  Read source/schema labels from one exact registry image config.
-  fetch    Rebuild an OCI image layout using the archive store only.
-
+  publish             Fetch a registry digest and seal its archive manifest.
+  inspect             Read source/schema labels from one exact registry image config.
+  fetch               Rebuild an OCI image layout using the archive store only.
+  verify-publication  Validate a publication or post-canary verification receipt.
 The object store uses ordinary AWS credentials (AWS_ACCESS_KEY_ID,
 AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_REGION) and an explicit
 S3-compatible endpoint, bucket, and prefix.  Runtime-specific environment names
@@ -505,6 +505,82 @@ def _json_object(data: bytes, what: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ArtifactError(f"{what} must be a JSON object")
     return value
+
+
+def validate_publication_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    source_sha: str,
+    source_workflow: str,
+    source_order: int | None = None,
+    build_run_id: str | None = None,
+    build_attempt: int | None = None,
+    require_verification: bool = False,
+) -> dict[str, Any]:
+    """Validate one immutable publication/verification envelope."""
+
+    schema = receipt.get("schema")
+    allowed_schemas = {
+        "longhouse.runtime-publication.v1",
+        "longhouse.runtime-verification.v1",
+    }
+    if schema not in allowed_schemas:
+        raise ArtifactError("publication receipt has an unsupported schema")
+    receipt_sha = receipt.get("source_sha")
+    if not isinstance(receipt_sha, str) or not _GIT_SHA_RE.fullmatch(receipt_sha):
+        raise ArtifactError("publication receipt has no full source revision")
+    if receipt_sha != source_sha:
+        raise ArtifactError("publication receipt source revision does not match the requested source")
+    receipt_workflow = receipt.get("source_workflow")
+    if receipt_workflow != source_workflow:
+        raise ArtifactError("publication receipt workflow does not match the selected publishing workflow")
+    receipt_order = receipt.get("source_order")
+    if type(receipt_order) is not int or receipt_order < 1:
+        raise ArtifactError("publication receipt has no positive workflow run number")
+    if source_order is not None and receipt_order != source_order:
+        raise ArtifactError("publication receipt workflow order does not match the selected publishing run")
+    receipt_run_id = receipt.get("build_run_id")
+    if not isinstance(receipt_run_id, str) or not re.fullmatch(r"[1-9][0-9]*", receipt_run_id):
+        raise ArtifactError("publication receipt has no positive publishing run id")
+    if build_run_id is not None and receipt_run_id != build_run_id:
+        raise ArtifactError("publication receipt run id does not match the selected publishing run")
+    receipt_attempt = receipt.get("build_attempt")
+    if type(receipt_attempt) is not int or receipt_attempt < 1:
+        raise ArtifactError("publication receipt has no positive publishing run attempt")
+    if build_attempt is not None and receipt_attempt != build_attempt:
+        raise ArtifactError("publication receipt attempt does not match the selected publishing run")
+    qualification_id = receipt.get("qualification_id")
+    expected_qualification = f"runtime-image-{receipt_run_id}-{receipt_attempt}"
+    if qualification_id != expected_qualification:
+        raise ArtifactError("publication receipt qualification is not tied to its publishing run")
+    image_digest = receipt.get("image_digest")
+    if not isinstance(image_digest, str) or not _SHA256_RE.fullmatch(image_digest):
+        raise ArtifactError("publication receipt has no immutable image digest")
+
+    canary_deployment_id: str | None = None
+    if schema == "longhouse.runtime-verification.v1" or require_verification:
+        verification = receipt.get("verification")
+        if not isinstance(verification, Mapping):
+            raise ArtifactError("publication receipt has no functional canary verification")
+        if verification.get("functional_smoke") != "success":
+            raise ArtifactError("publication receipt has no successful functional canary smoke")
+        value = verification.get("canary_deployment_id")
+        if not isinstance(value, str) or not value:
+            raise ArtifactError("publication receipt has no canary deployment id")
+        canary_deployment_id = value
+    result = {
+        "schema": schema,
+        "image_digest": image_digest,
+        "source_sha": receipt_sha,
+        "source_workflow": receipt_workflow,
+        "source_order": receipt_order,
+        "build_run_id": receipt_run_id,
+        "build_attempt": receipt_attempt,
+        "qualification_id": qualification_id,
+    }
+    if canary_deployment_id is not None:
+        result["canary_deployment_id"] = canary_deployment_id
+    return result
 
 
 def inspect_runtime_schema(*, registry: Registry, image_digest: str) -> dict[str, Any]:
@@ -1037,6 +1113,16 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("--registry-password")
     inspect.add_argument("--registry-token")
 
+    verify = subparsers.add_parser("verify-publication", help="validate a publication or canary verification receipt")
+    verify.add_argument("--receipt", required=True, type=Path)
+    verify.add_argument("--source-sha", required=True)
+    verify.add_argument("--source-workflow", default="Publish Runtime Image")
+    verify.add_argument("--source-order", type=int)
+    verify.add_argument("--build-run-id")
+    verify.add_argument("--build-attempt", type=int)
+    verify.add_argument("--require-verification", action="store_true")
+
+
     fetch = subparsers.add_parser("fetch", help="restore an archived digest into an OCI layout")
     fetch.add_argument("--image-digest", required=True)
     fetch.add_argument("--output", required=True, type=Path)
@@ -1051,6 +1137,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "inspect":
             registry = _registry_from_environment(args, args.image)
             result = inspect_runtime_schema(registry=registry, image_digest=registry.image_digest)
+        elif args.command == "verify-publication":
+            receipt = _load_json_path(str(args.receipt), "publication receipt")
+            result = validate_publication_receipt(
+                receipt,
+                source_sha=args.source_sha,
+                source_workflow=args.source_workflow,
+                source_order=args.source_order,
+                build_run_id=args.build_run_id,
+                build_attempt=args.build_attempt,
+                require_verification=args.require_verification,
+            )
         else:
             store = store_from_environment(args)
             if args.command == "publish":

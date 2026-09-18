@@ -190,3 +190,56 @@ jobs:
             --build-identity .build/build-identity.json \
             --qualification-json "$RUNNER_TEMP/qualification.json" \
             --qualification-id "runtime-image-${{ github.run_id }}-${{ github.run_attempt }}"
+      - name: Write immutable publication receipt
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          SOURCE_SHA: ${{ github.sha }}
+          SOURCE_WORKFLOW: ${{ github.workflow }}
+          SOURCE_ORDER: ${{ github.run_number }}
+          BUILD_RUN_ID: ${{ github.run_id }}
+          BUILD_ATTEMPT: ${{ github.run_attempt }}
+          QUALIFICATION_ID: runtime-image-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          python3 - "$RUNNER_TEMP/runtime-publication.json" <<'PY'
+          import json
+          import os
+          import re
+          import sys
+
+          digest = os.environ["IMAGE_DIGEST"]
+          source_sha = os.environ["SOURCE_SHA"]
+          source_order = os.environ["SOURCE_ORDER"]
+          build_run_id = os.environ["BUILD_RUN_ID"]
+          build_attempt = os.environ["BUILD_ATTEMPT"]
+          if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+              raise SystemExit("Build output did not provide an immutable image digest")
+          if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+              raise SystemExit("Publication source is not a full commit SHA")
+          if not source_order.isdigit() or int(source_order) < 1:
+              raise SystemExit("Publication source order is not a positive workflow run number")
+          if not build_run_id.isdigit() or not build_attempt.isdigit():
+              raise SystemExit("Publication run identity is malformed")
+          with open(sys.argv[1], "w", encoding="utf-8") as handle:
+              json.dump(
+                  {
+                      "schema": "longhouse.runtime-publication.v1",
+                      "image_digest": digest,
+                      "source_sha": source_sha,
+                      "source_workflow": os.environ["SOURCE_WORKFLOW"],
+                      "source_order": int(source_order),
+                      "build_run_id": build_run_id,
+                      "build_attempt": int(build_attempt),
+                      "qualification_id": os.environ["QUALIFICATION_ID"],
+                  },
+                  handle,
+                  sort_keys=True,
+              )
+              handle.write("\n")
+          PY
+      - name: Upload immutable publication receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runtime-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/runtime-publication.json
+          if-no-files-found: error
+          retention-days: 90

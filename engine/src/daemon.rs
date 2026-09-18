@@ -142,6 +142,9 @@ const WAKE_GAP_THRESHOLD_SECS: u64 = 5;
 const MACHINE_PRESENCE_INTERVAL_SECS: u64 = 60;
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 60;
 const FLIGHT_SAMPLE_INTERVAL_SECS: u64 = 5;
+/// Status sends in flight. Sessions are independent; one that keeps failing
+/// must not hold up everyone else's current status.
+const STATUS_POST_CONCURRENCY: usize = 8;
 
 const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const OUTBOX_DRAIN_INTERVAL: Duration = Duration::from_millis(100);
@@ -329,8 +332,23 @@ struct MachinePresencePostResult {
 
 struct OutboxCollectResult {
     presence: outbox::OutboxLocalDrainResult,
-    runtime_posts: Vec<outbox::PendingRuntimeEventPost>,
     elapsed_ms: u64,
+}
+
+/// One pass over the session status slots.
+struct StatusSlotResult {
+    slots: Vec<crate::status_slot::StatusSlot>,
+    recorded: Vec<(String, (String, u64))>,
+    elapsed_ms: u64,
+}
+
+/// Runtime status collection is its own lane. It shares no gate with presence,
+/// because a runtime backlog used to stop Claude presence and local-phase
+/// collection outright: one flooded producer starved every other provider.
+struct RuntimeCollectResult {
+    posts: Vec<outbox::PendingRuntimeEventPost>,
+    elapsed_ms: u64,
+    saturated: bool,
 }
 
 struct UnmanagedBindingRefreshResult {
@@ -752,52 +770,6 @@ fn archive_startup_replay_warmup_delay(
 ///
 /// Best-effort by construction: the process is already exiting on a real error,
 /// and failing to write the explanation must not replace it with an I/O error.
-/// Attempts and spacing for the startup capability negotiation.
-///
-/// The window is deliberately short: it exists to survive a deploy or a blip,
-/// not to hold the daemon open against a host that is genuinely gone. Covering
-/// a long outage requires capturing locally without a negotiated capability,
-/// which needs cached capabilities and a renegotiation path so a cached tenant
-/// can never outlive the tenant it was issued for.
-const STARTUP_NEGOTIATION_ATTEMPTS: usize = 4;
-const STARTUP_NEGOTIATION_BACKOFF: Duration = Duration::from_secs(5);
-const STARTUP_NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(5);
-
-async fn negotiate_storage_v2_with_retries(
-    client: &ShipperClient,
-    machine_name: &str,
-) -> anyhow::Result<Option<StorageV2Capabilities>> {
-    let mut last_error = None;
-    for attempt in 1..=STARTUP_NEGOTIATION_ATTEMPTS {
-        match client
-            .storage_v2_capabilities(machine_name, Some(STARTUP_NEGOTIATION_TIMEOUT))
-            .await
-        {
-            Ok(negotiated) => {
-                // A host that answered and does not offer storage-v2 is a
-                // refusal, not a blip: retrying cannot change its mind.
-                if attempt > 1 && negotiated.is_some() {
-                    tracing::info!(attempt, "Runtime Host answered after a startup retry");
-                }
-                return Ok(negotiated);
-            }
-            Err(error) => {
-                tracing::warn!(
-                    attempt,
-                    attempts = STARTUP_NEGOTIATION_ATTEMPTS,
-                    error = %error,
-                    "Runtime Host capability negotiation failed"
-                );
-                last_error = Some(error);
-                if attempt < STARTUP_NEGOTIATION_ATTEMPTS {
-                    tokio::time::sleep(STARTUP_NEGOTIATION_BACKOFF).await;
-                }
-            }
-        }
-    }
-    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("capability negotiation never ran")))
-}
-
 fn record_startup_refusal(reason: &str, message: &str) {
     let Ok(status_path) = config::get_agent_status_path() else {
         return;
@@ -892,7 +864,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // inside a bounded window first; a host that is genuinely gone still gets a
     // refusal rather than a shipping loop that drops history in silence.
     let negotiated =
-        match negotiate_storage_v2_with_retries(&client, &config.shipper_config.machine_name).await
+        match client
+            .negotiate_storage_v2_at_startup(&config.shipper_config.machine_name)
+            .await
         {
             Ok(negotiated) => negotiated,
             Err(error) => {
@@ -1181,6 +1155,18 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
     let mut outbox_collect_tasks: JoinSet<OutboxCollectResult> = JoinSet::new();
+    let mut runtime_collect_tasks: JoinSet<RuntimeCollectResult> = JoinSet::new();
+    let mut runtime_sweep_tasks: JoinSet<outbox::RuntimeOutboxSweep> = JoinSet::new();
+    let mut status_slot_tasks: JoinSet<StatusSlotResult> = JoinSet::new();
+    let mut status_post_tasks: JoinSet<Vec<(String, (String, u64))>> = JoinSet::new();
+    // What the Runtime Host has already accepted, per session. Nothing is
+    // queued: an unsent or failed slot is simply sent again, with whatever
+    // value it holds by then.
+    let mut status_sent: HashMap<String, (String, u64)> = HashMap::new();
+    // What the local phase ledger already holds. Recording an unchanged phase
+    // every 100ms bumps its revision, and the projection debounce watches that
+    // watermark: the daemon would schedule a rebuild forever.
+    let mut status_recorded: HashMap<String, (String, u64)> = HashMap::new();
     let mut outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut runtime_outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
@@ -1196,6 +1182,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
     let outbox_dir = config::get_agent_outbox_dir()?;
     let runtime_events_outbox_dir = config::get_agent_runtime_events_outbox_dir()?;
+    let agent_dir_for_status = config::get_agent_dir()?;
     let status_path = config::get_agent_status_path()?;
     if let Some(parent) = status_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -1555,7 +1542,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             tracing::warn!(
                                 elapsed_ms = result.elapsed_ms,
                                 presence_posts = result.presence.posts.len(),
-                                runtime_posts = result.runtime_posts.len(),
                                 "Outbox collection was slow"
                             );
                         }
@@ -1620,10 +1606,103 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 );
                             }
                         }
-                        if !result.runtime_posts.is_empty() {
+                    }
+                    Some(Err(err)) => {
+                        tracing::warn!("Outbox collection task failed: {}", err);
+                    }
+                    None => {}
+                }
+            }
+
+            status_slot_result = status_slot_tasks.join_next(), if !status_slot_tasks.is_empty() => {
+                match status_slot_result {
+                    Some(Ok(result)) => {
+                        if result.elapsed_ms > 100 {
+                            tracing::warn!(
+                                elapsed_ms = result.elapsed_ms,
+                                slots = result.slots.len(),
+                                recorded = result.recorded.len(),
+                                "Status slot pass was slow"
+                            );
+                        }
+                        let live: HashSet<String> = result
+                            .slots
+                            .iter()
+                            .map(|slot| slot.session_id.clone())
+                            .collect();
+                        for (session_id, version) in result.recorded {
+                            status_recorded.insert(session_id, version);
+                        }
+                        // A session with no slot has no current status, so
+                        // neither map needs to remember it.
+                        status_sent.retain(|session_id, _| live.contains(session_id));
+                        status_recorded.retain(|session_id, _| live.contains(session_id));
+                        // A slot the host has already accepted is not resent.
+                        // Everything else is sent as it stands now, not as it
+                        // stood when it changed.
+                        let pending: Vec<crate::status_slot::StatusSlot> = result
+                            .slots
+                            .into_iter()
+                            .filter(|slot| {
+                                status_sent.get(&slot.session_id) != Some(&slot.version())
+                            })
+                            .collect();
+                        if !pending.is_empty() && status_post_tasks.is_empty() {
+                            let client = client.clone();
+                            status_post_tasks.spawn(async move {
+                                post_status_slots(&client, pending).await
+                            });
+                        }
+                    }
+                    Some(Err(err)) => {
+                        tracing::warn!("Status slot task failed: {}", err);
+                    }
+                    None => {}
+                }
+            }
+
+            status_post_result = status_post_tasks.join_next(), if !status_post_tasks.is_empty() => {
+                match status_post_result {
+                    Some(Ok(accepted)) => {
+                        for (session_id, version) in accepted {
+                            status_sent.insert(session_id, version);
+                        }
+                    }
+                    Some(Err(err)) => {
+                        tracing::warn!("Status slot POST task failed: {}", err);
+                    }
+                    None => {}
+                }
+            }
+
+            runtime_collect_result = runtime_collect_tasks.join_next(), if !runtime_collect_tasks.is_empty() => {
+                match runtime_collect_result {
+                    Some(Ok(result)) => {
+                        // A saturated pass means the directory holds more than
+                        // one pass can inspect, so the newest observation is
+                        // not reliably in it. Reduce it to current status in a
+                        // task of its own: the live lane must keep collecting
+                        // and posting while that runs.
+                        if result.saturated && runtime_sweep_tasks.is_empty() {
+                            let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
+                            runtime_sweep_tasks.spawn_blocking(move || {
+                                outbox::sweep_runtime_event_outbox(
+                                    &runtime_events_outbox_dir,
+                                    outbox::RUNTIME_EVENT_SWEEP_LIMIT,
+                                )
+                            });
+                        }
+                        if result.elapsed_ms > 100 {
+                            tracing::warn!(
+                                elapsed_ms = result.elapsed_ms,
+                                runtime_posts = result.posts.len(),
+                                "Runtime-event collection was slow"
+                            );
+                        }
+                        if !result.posts.is_empty() {
                             if runtime_outbox_post_tasks.is_empty() {
                                 let client = client.clone();
-                                let runtime_posts = result.runtime_posts;
+                                let runtime_posts = result.posts;
                                 let post_count = runtime_posts.len();
                                 // spawn, not spawn_local: see the presence path
                                 // above. This is the live-transcript lane, so a
@@ -1662,14 +1741,35 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 });
                             } else {
                                 tracing::debug!(
-                                    pending_posts = result.runtime_posts.len(),
+                                    pending_posts = result.posts.len(),
                                     "Skipping outbox runtime-event POST while previous POST is still in flight"
                                 );
                             }
                         }
                     }
                     Some(Err(err)) => {
-                        tracing::warn!("Outbox collection task failed: {}", err);
+                        tracing::warn!("Runtime-event collection task failed: {}", err);
+                    }
+                    None => {}
+                }
+            }
+
+            runtime_sweep_result = runtime_sweep_tasks.join_next(), if !runtime_sweep_tasks.is_empty() => {
+                match runtime_sweep_result {
+                    Some(Ok(sweep)) => {
+                        tracing::warn!(
+                            inspected = sweep.inspected,
+                            discarded = sweep.discarded,
+                            more = sweep.more,
+                            "Swept superseded runtime status out of a flooded outbox"
+                        );
+                        // More work does not mean another pass right now. The
+                        // next saturated collection arms the next sweep on the
+                        // ordinary tick; chaining blocking passes back to back
+                        // would starve every other lane on this loop.
+                    }
+                    Some(Err(err)) => {
+                        tracing::warn!("Runtime-event outbox sweep task failed: {}", err);
                     }
                     None => {}
                 }
@@ -2742,12 +2842,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 // Files remain durable while a POST is in flight. Do not scan,
                 // parse, and persist them again every 100ms until that attempt
                 // has either removed them or made them eligible for retry.
-                if outbox_collect_tasks.is_empty()
-                    && outbox_post_tasks.is_empty()
-                    && runtime_outbox_post_tasks.is_empty()
-                {
+                if outbox_collect_tasks.is_empty() && outbox_post_tasks.is_empty() {
                     let outbox_dir = outbox_dir.clone();
-                    let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
                     let db_path = config.shipper_config.db_path.clone();
                     outbox_collect_tasks.spawn_blocking(move || {
                         let started = Instant::now();
@@ -2755,12 +2851,45 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &outbox_dir,
                             db_path.as_deref(),
                         );
-                        let runtime_posts =
-                            outbox::collect_runtime_event_outbox(&runtime_events_outbox_dir);
                         OutboxCollectResult {
                             presence,
-                            runtime_posts,
                             elapsed_ms: started.elapsed().as_millis() as u64,
+                        }
+                    });
+                }
+                if status_slot_tasks.is_empty() {
+                    let agent_dir = runtime_events_outbox_dir
+                        .parent()
+                        .map(Path::to_path_buf)
+                        .unwrap_or_else(|| runtime_events_outbox_dir.clone());
+                    let db_path = config.shipper_config.db_path.clone();
+                    let already_recorded = status_recorded.clone();
+                    status_slot_tasks.spawn_blocking(move || {
+                        let started = Instant::now();
+                        let dir = crate::status_slot::status_slot_dir(&agent_dir);
+                        let slots = crate::status_slot::read_all(&dir);
+                        // The phase ledger is local truth, and the daemon is
+                        // its single writer. Recording here is what lets a
+                        // provider callback stop writing a file per frame.
+                        let recorded =
+                            record_status_slot_phases(db_path.as_deref(), &slots, &already_recorded);
+                        StatusSlotResult {
+                            slots,
+                            recorded,
+                            elapsed_ms: started.elapsed().as_millis() as u64,
+                        }
+                    });
+                }
+                if runtime_collect_tasks.is_empty() && runtime_outbox_post_tasks.is_empty() {
+                    let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
+                    runtime_collect_tasks.spawn_blocking(move || {
+                        let started = Instant::now();
+                        let pass =
+                            outbox::collect_runtime_event_outbox_pass(&runtime_events_outbox_dir);
+                        RuntimeCollectResult {
+                            posts: pass.posts,
+                            elapsed_ms: started.elapsed().as_millis() as u64,
+                            saturated: pass.saturated,
                         }
                     });
                 }
@@ -2803,17 +2932,39 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 });
             }
             _ = prune_timer.tick() => {
-                // The whole daily pass — prunes, revive, compaction — runs on
-                // the blocking maintenance thread with its own connection. It
-                // used to run four write statements inline here, on a `biased`
-                // select whose loop connection is shared with shipping. The
-                // pass tracks its own task set so an unrelated maintenance job
-                // can never make a due pass silently skip a day; overlapping
-                // compactions are refused inside the pass.
-                // A tick that arrives while this pass is still running is
-                // consumed rather than queued: the tick is a day apart and a
-                // pass takes minutes, so being self-busy would mean the previous
-                // pass outlived a day, which the next start repairs.
+                // A launcher that crashed cannot retire its own slot.
+                let status_dir = crate::status_slot::status_slot_dir(&agent_dir_for_status);
+                let swept = crate::status_slot::sweep_abandoned(
+                    &status_dir,
+                    crate::status_slot::STATUS_SLOT_ABANDONED_AFTER,
+                );
+                if swept > 0 {
+                    tracing::info!(swept, "Removed status slots no producer is maintaining");
+                }
+                // Give dead-lettered ranges another chance before pruning
+                // anything. Most dead-lettering is a transient the engine
+                // outlived — a host outage, a payload shape since fixed — and
+                // without this the range is retained, displayed, and never
+                // retried. Bounded so a large graveyard drains over days rather
+                // than flooding the shipper in one tick.
+                let spool = Spool::new(&conn);
+                match spool.revive_dead_with_readable_sources(200) {
+                    Ok(n) if n > 0 => tracing::info!("Daily revive: returned {} dead ranges to pending", n),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("Dead-range revive error: {}", e),
+                }
+                let fs = FileState::new(&conn);
+                match fs.prune_stale(30) {
+                    Ok(n) if n > 0 => tracing::info!("Daily prune: removed {} stale file_state entries", n),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("Daily prune error: {}", e),
+                }
+                let sb = crate::state::session_binding::SessionBinding::new(&conn);
+                match sb.prune_stale(30) {
+                    Ok(n) if n > 0 => tracing::info!("Daily prune: removed {} stale session_binding entries", n),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("Session binding prune error: {}", e),
+                }
                 if daily_maintenance_tasks.is_empty() {
                     let db_path = projection_db_path.clone();
                     daily_maintenance_tasks.spawn_blocking(move || {
@@ -2971,6 +3122,88 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 /// enough — the Codex bridge posts a phase per item start, completion, and
 /// thread-status change — that a busy turn could starve the rebuild
 /// indefinitely, which is the failure this whole change exists to remove.
+/// Record each slot's phase in the local ledger. The daemon is the ledger's
+/// single writer, which is why a provider callback no longer needs to hand it
+/// a file per frame.
+fn record_status_slot_phases(
+    db_path: Option<&Path>,
+    slots: &[crate::status_slot::StatusSlot],
+    already_recorded: &HashMap<String, (String, u64)>,
+) -> Vec<(String, (String, u64))> {
+    let pending: Vec<&crate::status_slot::StatusSlot> = slots
+        .iter()
+        .filter(|slot| already_recorded.get(&slot.session_id) != Some(&slot.version()))
+        .collect();
+    if pending.is_empty() {
+        return Vec::new();
+    }
+    let Ok(path) = crate::state::db::resolve_db_path(db_path) else {
+        return Vec::new();
+    };
+    let Ok(conn) = crate::state::db::open_connection(&path) else {
+        return Vec::new();
+    };
+    let store = crate::state::session_phase::SessionPhaseStore::new(&conn);
+    let mut recorded = Vec::new();
+    for slot in pending {
+        let Ok(observed_at) = chrono::DateTime::parse_from_rfc3339(&slot.observed_at) else {
+            continue;
+        };
+        let signal = crate::state::session_phase::SessionPhaseSignal {
+            session_id: slot.session_id.clone(),
+            provider: slot.provider.clone(),
+            phase: slot.phase.clone(),
+            tool_name: slot.tool_name.clone(),
+            source: slot.source.clone(),
+            observed_at: observed_at.with_timezone(&chrono::Utc),
+            // The slot already carries the run the launcher was started into, so
+            // the phase row keeps its own identity rather than being attributed
+            // by time later.
+            run_id: (!slot.run_id.trim().is_empty()).then(|| slot.run_id.clone()),
+        };
+        match store.record(&signal) {
+            Ok(_) => recorded.push((slot.session_id.clone(), slot.version())),
+            Err(error) => {
+                tracing::warn!(
+                    session_id = %slot.session_id,
+                    error = %error,
+                    "Recording a status slot phase failed"
+                );
+            }
+        }
+    }
+    recorded
+}
+
+/// Deliver current status and report which versions the host accepted.
+///
+/// Nothing is queued and nothing is deleted: the slot is the durable copy, so
+/// a session whose send fails is simply sent again next tick with whatever it
+/// says by then.
+#[allow(unused_imports)]
+async fn post_status_slots(
+    client: &crate::shipping::client::ShipperClient,
+    slots: Vec<crate::status_slot::StatusSlot>,
+) -> Vec<(String, (String, u64))> {
+    use futures_util::StreamExt;
+    // Sessions are independent, so one whose send keeps failing must not hold
+    // up everyone else's current status.
+    futures_util::stream::iter(slots.into_iter().map(|slot| async move {
+        let events: Vec<outbox::PendingRuntimeEventPost> =
+            crate::status_slot::runtime_events(&slot)
+                .into_iter()
+                .map(outbox::PendingRuntimeEventPost::from_event)
+                .collect();
+        let expected = events.len();
+        let (sent, _kept) = outbox::post_pending_runtime_event_files(client, events).await;
+        (sent == expected).then(|| (slot.session_id.clone(), slot.version()))
+    }))
+    .buffer_unordered(STATUS_POST_CONCURRENCY)
+    .filter_map(|accepted| async move { accepted })
+    .collect()
+    .await
+}
+
 fn arm_phase_projection(pending: &mut bool) -> bool {
     if *pending {
         return false;
@@ -5500,6 +5733,112 @@ fn finish_path_task(mut result: PathTaskResult, started: Instant) -> PathTaskRes
 
 #[cfg(test)]
 mod tests {
+    /// The daemon is the phase ledger's single writer, which is what lets an
+    /// OMP callback stop handing it a file per frame. It records from the
+    /// session's status slot instead — but only what changed, because an
+    /// unchanged phase rewritten every 100ms bumps the ledger revision, and
+    /// the projection debounce watches that watermark: the daemon would
+    /// schedule a rebuild forever.
+    #[test]
+    fn status_slots_write_the_phase_ledger_only_when_they_change() {
+        use std::collections::HashMap;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db_path = temp.path().join("agent.db");
+        // The daemon bootstraps the schema once at startup; this stands in for
+        // that, because the recorder deliberately uses the hot-path opener.
+        crate::state::db::open_db(Some(&db_path)).expect("bootstrap ledger schema");
+        let slot = |seq: u64, phase: &str, observed_at: &str| crate::status_slot::StatusSlot {
+            schema: crate::status_slot::STATUS_SLOT_SCHEMA,
+            session_id: "session-1".into(),
+            provider: "omp".into(),
+            runtime_key: "omp:session-1".into(),
+            run_id: "run-1".into(),
+            source: "omp_helm_channel".into(),
+            phase: phase.into(),
+            tool_name: None,
+            observed_at: observed_at.into(),
+            payload: serde_json::json!({}),
+            preview: None,
+            producer_epoch: "epoch-1".into(),
+            seq,
+        };
+
+        let mut recorded: HashMap<String, (String, u64)> = HashMap::new();
+        let first = super::record_status_slot_phases(
+            Some(&db_path),
+            &[slot(1, "thinking", "2026-09-17T15:00:01Z")],
+            &recorded,
+        );
+        assert_eq!(first.len(), 1, "a new observation reaches the ledger");
+        for (session_id, version) in first {
+            recorded.insert(session_id, version);
+        }
+
+        // The same slot, seen again on the next tick.
+        let unchanged = super::record_status_slot_phases(
+            Some(&db_path),
+            &[slot(1, "thinking", "2026-09-17T15:00:01Z")],
+            &recorded,
+        );
+        assert!(unchanged.is_empty(), "an unchanged slot writes nothing");
+
+        let advanced = super::record_status_slot_phases(
+            Some(&db_path),
+            &[slot(2, "idle", "2026-09-17T15:00:02Z")],
+            &recorded,
+        );
+        assert_eq!(advanced.len(), 1, "a real transition is recorded");
+
+        let connection = crate::state::db::open_connection(&db_path).expect("open ledger");
+        let phase: String = connection
+            .query_row(
+                "SELECT phase FROM session_phase_state WHERE session_id = ?1",
+                rusqlite::params!["session-1"],
+                |row| row.get(0),
+            )
+            .expect("ledger row");
+        assert_eq!(phase, "idle");
+    }
+
+    /// A slot whose timestamp the ledger cannot parse is skipped, not fatal.
+    #[test]
+    fn an_unparseable_slot_timestamp_does_not_stop_the_others() {
+        use std::collections::HashMap;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db_path = temp.path().join("agent.db");
+        crate::state::db::open_db(Some(&db_path)).expect("bootstrap ledger schema");
+        let mut broken = crate::status_slot::StatusSlot {
+            schema: crate::status_slot::STATUS_SLOT_SCHEMA,
+            session_id: "broken".into(),
+            provider: "omp".into(),
+            runtime_key: "omp:broken".into(),
+            run_id: "run-1".into(),
+            source: "omp_helm_channel".into(),
+            phase: "thinking".into(),
+            tool_name: None,
+            observed_at: "not-a-timestamp".into(),
+            payload: serde_json::json!({}),
+            preview: None,
+            producer_epoch: "epoch-1".into(),
+            seq: 1,
+        };
+        let mut healthy = broken.clone();
+        healthy.session_id = "healthy".into();
+        healthy.observed_at = "2026-09-17T15:00:01Z".into();
+        broken.observed_at = "not-a-timestamp".into();
+
+        let recorded = super::record_status_slot_phases(
+            Some(&db_path),
+            &[broken, healthy],
+            &HashMap::new(),
+        );
+
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].0, "healthy");
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn blocking_path_work_does_not_delay_live_dispatch() {
         tokio::task::LocalSet::new()
@@ -7167,6 +7506,9 @@ mod tests {
 
     #[test]
     fn test_storage_v2_pending_retry_resumes_without_process_restart() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         temp_env::with_vars(
             [
@@ -7299,6 +7641,9 @@ mod tests {
 
     #[test]
     fn test_paused_mode_does_not_queue_failed_shipment_retry_paths() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         temp_env::with_vars(
             [
@@ -7352,6 +7697,9 @@ mod tests {
 
     #[test]
     fn test_running_control_file_can_resume_paused_archive_replay_as_trickle() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         temp_env::with_vars(
             [
@@ -7686,6 +8034,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_paused_mode_skips_reconciliation_scan_task() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         temp_env::with_vars(
             [
@@ -7828,6 +8179,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn test_spawn_caffeinate_uses_correct_args() {
+        // Spawns by name and reads the process table: hold the shared agent-state
+        // lock so a concurrent test cannot empty PATH under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let pid = std::process::id();
         let mut child = spawn_caffeinate(pid).expect("caffeinate should spawn");
         let id = child.id().expect("child should have a PID");
@@ -7864,6 +8218,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn test_caffeinate_child_exits_when_dropped() {
+        // Spawns by name and reads the process table: hold the shared agent-state
+        // lock so a concurrent test cannot empty PATH under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let pid = std::process::id();
         let child = spawn_caffeinate(pid).expect("caffeinate should spawn");
         let caffeinate_pid = child.id().expect("child should have a PID");

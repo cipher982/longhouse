@@ -7433,6 +7433,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn bridge_attach_keeps_tokens_private_and_rejects_stale_authority() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         use std::os::unix::fs::PermissionsExt;
 
         struct Owner(std::process::Child);
@@ -7687,6 +7691,10 @@ mod tests {
     /// a failure cannot leave it poisoned for the next test.
     #[tokio::test]
     async fn the_app_server_child_is_handed_no_device_token() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let mut config = make_test_run_config(&temp);
         config.api_token = "device-token-sentinel-9f3c4d".to_string();
@@ -7839,6 +7847,9 @@ mod tests {
 
     #[test]
     fn resolve_bridge_paths_defaults_under_longhouse_home() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         temp_env::with_vars(
             [
@@ -7877,6 +7888,9 @@ mod tests {
 
     #[test]
     fn resolve_bridge_paths_prefers_longhouse_home_over_home() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
         let longhouse_home = temp.path().join("isolated-longhouse");
@@ -7908,6 +7922,9 @@ mod tests {
 
     #[test]
     fn default_bridge_writer_and_scanner_use_same_state_dir() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
         let longhouse_home = temp.path().join("isolated-longhouse");
@@ -7931,6 +7948,9 @@ mod tests {
 
     #[test]
     fn resolve_bridge_paths_maps_claude_config_dir_to_longhouse_sibling() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
         let claude_home = temp.path().join(".claude");
@@ -8236,6 +8256,9 @@ mod tests {
 
     #[test]
     fn persist_local_phase_survives_locked_sqlite_db_without_stalling() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         temp_env::with_var(
             "LONGHOUSE_HOME",
@@ -8276,6 +8299,9 @@ mod tests {
 
     #[test]
     fn commit_bridge_terminal_persists_stopped_state_even_when_db_is_locked() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         temp_env::with_var(
             "LONGHOUSE_HOME",
@@ -8329,6 +8355,9 @@ mod tests {
 
     #[test]
     fn codex_bridge_stop_fails_cleanly_when_child_survives_sigkill() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         temp_env::with_var(
             "LONGHOUSE_HOME",
@@ -9052,6 +9081,10 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn owned_child_exit_is_observed_while_the_transport_channel_remains_open() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let child = Command::new("sh").args(["-c", "exit 17"]).spawn().unwrap();
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         let (outbound_tx, _outbound_rx) = mpsc::unbounded_channel();
@@ -9080,6 +9113,10 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn closed_transport_with_a_live_child_is_not_a_terminal_event() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let child = Command::new("sh").args(["-c", "sleep 30"]).spawn().unwrap();
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         drop(events_tx);
@@ -9107,6 +9144,10 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn detach_reconciliation_does_not_invent_exit_for_a_live_child() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let child = Command::new("sh").args(["-c", "sleep 30"]).spawn().unwrap();
         let (_events_tx, events_rx) = mpsc::unbounded_channel();
         let (outbound_tx, _outbound_rx) = mpsc::unbounded_channel();

@@ -1519,11 +1519,29 @@ def _permission_scenario(
     # Since Cursor 2026.09.02 a hook `permission: allow` is advisory: the CLI
     # acts only on `deny` and `ask` and then applies its own command approval
     # policy, so an un-allowlisted command still stops at the TUI "Run this
-    # command?" prompt. Run with --force so the provider's own approval never
-    # decides the outcome; the Longhouse hook decision must then be the only
-    # gate: deny still blocks an auto-approved command (fail-closed) and allow
-    # does not obstruct it.
-    argv = [binary, "--resume", provider_id, "--workspace", str(workspace), "--force"]
+    # command?" prompt. `allow` and `deny` therefore run with --force, so the
+    # provider's own approval never decides the outcome and the Longhouse hook
+    # decision is the only gate: deny still blocks an auto-approved command
+    # (fail-closed) and allow does not obstruct it.
+    #
+    # `ask` is the exception, and it must not use --force. Asking means handing
+    # the decision back to the approval layer; --force *is* an answer to that
+    # question, so a forced run legitimately proceeds and the scenario would be
+    # asserting something the provider never promised. Unforced, an unattended
+    # `ask` executes nothing, which is exactly the promise worth proving.
+    #
+    # Read the `ask` result for what it is. Since 2026.09.02 an un-allowlisted
+    # command stops at the CLI's own "Run this command?" prompt regardless of
+    # the hook, so this scenario proves that an unattended `ask` executes
+    # nothing -- the user-facing safety promise -- and NOT that the Longhouse
+    # hook decision is what stopped it. `deny` is where hook causation is
+    # proven, because --force removes the provider's own prompt and a
+    # still-absent side effect can only be the hook. Do not restate this
+    # scenario as evidence that `ask` is honoured.
+    auto_approval = "prompt" if decision == "ask" else "force"
+    argv = [binary, "--resume", provider_id, "--workspace", str(workspace)]
+    if auto_approval == "force":
+        argv.append("--force")
     if model:
         argv.extend(["--model", model])
     argv.append(f"Run exactly `printf ALLOWED > {marker_file}` once, then report the result.")
@@ -1555,13 +1573,31 @@ def _permission_scenario(
             time.sleep(1)
             if marker_file.exists():
                 raise RuntimeError(f"Cursor executed shell after permission={decision}")
+            # A blocked command has to be distinguishable from a run that never
+            # got anywhere. Absence of a side effect is the same observation
+            # whether the decision held, the session died, or the shell ran
+            # somewhere this scenario never looks. Require the positive
+            # witnesses: nothing executed (no afterShellExecution for the
+            # proposal we just saw) and the session is still alive to have
+            # honoured the decision at all.
+            executed = [
+                row
+                for row in read_hook_events(events_path)[before:]
+                if row.get("longhouse_session_id") == longhouse_session_id
+                and row.get("event") == "afterShellExecution"
+                and row.get("conversation_id") == provider_id
+            ]
+            if executed:
+                raise RuntimeError(f"Cursor reported shell execution after permission={decision}")
+            if not session.alive():
+                raise RuntimeError(f"Cursor session died before permission={decision} could be observed")
         return {
             "status": "passed",
             "decision": decision,
             "provider_conversation_id": provider_id,
             "generation_id": shell.get("generation_id"),
             "side_effect_present": marker_file.exists(),
-            "provider_auto_approval": "force",
+            "provider_auto_approval": auto_approval,
             "process_alive": session.alive(),
         }
     finally:

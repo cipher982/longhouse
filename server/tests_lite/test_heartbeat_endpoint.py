@@ -1242,11 +1242,16 @@ def test_heartbeat_resolved_sessions_materialize_managed_control(live_catalog, l
     assert lease["machine_id"] == DEVICE_ID
     assert _lease_payload(lease)["control_state"] == "online"
 
+    # The control materialization above is what this test is for. The stamp's
+    # forensic copy no longer carries ``sessions``/``managed_sessions``: they
+    # are per-session arrays that nothing reads back and that made the copy
+    # grow without bound (see ``_UNBOUNDED_HEARTBEAT_FIELDS``). Process
+    # identity round-trips are asserted through session facts, above and in
+    # test_catalogd_heartbeat.py.
     raw = json.loads(_one_stamp()["raw_json"])
-    assert raw["sessions"][0]["control_path"] == "managed"
-    assert raw["sessions"][0]["process"]["process_start_time"] == "Mon May  5 11:20:00 2026"
-    assert raw["sessions"][0]["process"]["boot_id"] == "macos:1777970400:0"
-    assert raw["managed_sessions"] == []
+    assert "sessions" not in raw
+    assert "managed_sessions" not in raw
+    assert raw["version"] == "0.7.0"
 
 
 def test_heartbeat_resolved_sessions_ignore_legacy_session_identity(live_catalog, live_catalog_client):
@@ -1320,9 +1325,10 @@ def test_heartbeat_legacy_managed_sessions_still_materialize_control(live_catalo
     assert leases[0]["machine_id"] == "self-reported-host"
     assert _lease_payload(leases[0])["control_state"] == "online"
 
-    retained_lease = json.loads(_one_stamp()["raw_json"])["managed_sessions"][0]
-    assert "phase" not in retained_lease
-    assert "tool_name" not in retained_lease
+    # This used to assert that ``phase`` and ``tool_name`` were stripped from
+    # the retained lease. The whole ``managed_sessions`` array is now dropped
+    # from the forensic copy, which satisfies that property outright.
+    assert "managed_sessions" not in json.loads(_one_stamp()["raw_json"])
 
 
 @pytest.mark.parametrize("scope_present", [False, True])

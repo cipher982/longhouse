@@ -2280,6 +2280,33 @@
   line-height: 1.3;
 }
 
+/* The answer the user gave, in the original terminal. Without it the card
+   shows the question and the options but never the choice that was made. */
+.tl-question__answer {
+  display: flex;
+  flex-direction: column;
+  padding: 7px 9px;
+  border-radius: 7px;
+  border-left: 2px solid rgba(122, 196, 140, 0.55);
+  background: rgba(24, 38, 28, 0.42);
+}
+
+.tl-question__answer-text {
+  color: var(--color-text-primary);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.tl-question__option.is-selected {
+  border-color: rgba(122, 196, 140, 0.5);
+  background: rgba(24, 38, 28, 0.42);
+}
+
+.tl-question__option.is-selected .tl-question__option-label {
+  color: rgba(190, 235, 203, 0.95);
+}
+
 /* --- Context lines: a single indented ↳ row, no card. --- */
 .tl-context {
   display: block;

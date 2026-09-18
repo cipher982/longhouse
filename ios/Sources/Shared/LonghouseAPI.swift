@@ -1,6 +1,15 @@
 import Foundation
 import OSLog
 
+/// Which retrieval lane a session search asked for.
+enum TimelineSearchLane: String, Sendable, Equatable {
+    case lexical
+    case semantic
+}
+
+/// Search range shared by the app and widget targets.
+let timelineSearchScopeDays = 90
+
 /// Client-side realtime latency beacon.
 ///
 /// Measures provider-emitted → iOS-rendered latency. Posts fire-and-forget

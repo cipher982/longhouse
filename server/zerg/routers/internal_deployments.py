@@ -107,7 +107,13 @@ async def _catalog_admission_probe(operation: str) -> dict[str, Any]:
             call_catalogd_sync,
             catalog_socket,
             method,
-            timeout_seconds=0.05 if operation == "close" else 0.75,
+            # Closing the writer gate is a deployment control operation, not a
+            # hot-path observation: the local catalogd answers it in about a
+            # millisecond, but a 50 ms budget made the drain abort on ordinary
+            # scheduling hiccups. A drained attempt that aborts here leaves its
+            # fence in place, and every later deployment is then refused with
+            # `different_active_fence` (release-canary-a, 2026-09-17).
+            timeout_seconds=2.0 if operation == "close" else 0.75,
         )
     except Exception as exc:
         return {

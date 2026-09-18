@@ -117,6 +117,9 @@ mod tests {
 
     #[test]
     fn timeout_is_clamped_to_twenty_seconds() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         temp_env::with_var("LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S", Some("999"), || {
             assert_eq!(timeout_from_env(), DEFAULT_TIMEOUT);
         });
@@ -124,6 +127,9 @@ mod tests {
 
     #[test]
     fn negative_timeout_matches_legacy_immediate_expiry() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         temp_env::with_var("LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S", Some("-1"), || {
             assert_eq!(timeout_from_env(), Duration::ZERO);
         });

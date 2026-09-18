@@ -661,6 +661,9 @@ mod tests {
 
     #[test]
     fn expired_reservation_remains_active_for_its_live_owner() {
+        // Spawns by name and reads the process table: hold the shared agent-state
+        // lock so a concurrent test cannot empty PATH under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let root = tempdir().unwrap();
         let reservations = root.path().join("launch-reservations");
         fs::create_dir_all(&reservations).unwrap();

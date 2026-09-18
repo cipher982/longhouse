@@ -1130,8 +1130,25 @@ impl OmpPrintSink {
         self.post_events(vec![json!({"runtime_key": format!("omp:{}", self.session_id), "session_id": self.session_id, "thread_id": self.thread_id, "run_id": self.run_id, "provider": "omp", "device_id": self.machine_name, "source": OMP_PRINT_ADAPTER, "kind": "binding_signal", "occurred_at": Utc::now().to_rfc3339(), "dedupe_key": format!("omp-print:{}:{}:binding", self.session_id, self.launch_id), "payload": {"provider_session_id": provider_thread_id, "source_path": self.session_file.to_string_lossy(), "managed_transport": OMP_PRINT_ADAPTER, "execution_lifetime": "one_shot"}})]).await;
     }
     async fn post_phase(&self, phase: &str, tool_name: Option<String>, activity_seq: u64) {
-        self.persist_local_phase(phase, tool_name.clone(), Utc::now());
-        self.post_events(vec![json!({"runtime_key": format!("omp:{}", self.session_id), "session_id": self.session_id, "thread_id": self.thread_id, "run_id": self.run_id, "provider": "omp", "device_id": self.machine_name, "source": OMP_PRINT_ADAPTER, "kind": "phase_signal", "phase": phase, "tool_name": tool_name, "occurred_at": Utc::now().to_rfc3339(), "dedupe_key": format!("omp-print:{}:{}:phase:{phase}:{activity_seq}", self.session_id, self.run_id), "payload": {"managed_transport": OMP_PRINT_ADAPTER, "execution_lifetime": "one_shot"}})]).await;
+        // One slot per session: the daemon records the local ledger from it and
+        // sends it. Only records no later event can restate — binding,
+        // terminal — stay on the durable queue.
+        let observed_at = Utc::now();
+        crate::status_slot::publish_console_phase(
+            "omp",
+            OMP_PRINT_ADAPTER,
+            &self.session_id,
+            &self.run_id,
+            &observed_at.to_rfc3339(),
+            phase,
+            tool_name.as_deref(),
+            json!({
+                "execution_lifetime": "one_shot",
+                "thread_id": self.thread_id,
+                "device_id": self.machine_name,
+                "activity_seq": activity_seq,
+            }),
+        );
     }
     async fn post_stream_event(&self, seq: u64, event: &Value, projection: &OmpStreamProjection) {
         self.post_events(vec![json!({
@@ -1656,6 +1673,10 @@ for event in events:
 
     #[tokio::test]
     async fn recovered_cleanup_signals_matching_pid_after_process_group_change() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         use std::process::Command as StdCommand;
 
         let mut child = StdCommand::new("sleep").arg("30").spawn().unwrap();
@@ -1680,6 +1701,10 @@ for event in events:
 
     #[tokio::test]
     async fn recovered_cleanup_still_consumes_owned_pids_when_group_is_untrusted() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         use std::process::Command as StdCommand;
 
         let temp = tempfile::tempdir().unwrap();
@@ -1729,7 +1754,7 @@ for event in events:
     async fn live_cleanup_consumes_owned_pids_after_leader_identity_is_lost() {
         use std::process::Command as StdCommand;
 
-        let _home_guard = crate::console_adapter::longhouse_home_test_guard().await;
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
         let temp = tempfile::tempdir().unwrap();
         let longhouse_home = temp.path().join("longhouse");
         let previous_home = std::env::var_os("LONGHOUSE_HOME");
@@ -1785,7 +1810,7 @@ for event in events:
     async fn live_cleanup_reaps_owned_child_before_verifying_group_death() {
         use std::os::unix::process::CommandExt;
 
-        let _home_guard = crate::console_adapter::longhouse_home_test_guard().await;
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
         let temp = tempfile::tempdir().unwrap();
         let longhouse_home = temp.path().join("longhouse");
         let previous_home = std::env::var_os("LONGHOUSE_HOME");
@@ -1857,7 +1882,7 @@ for event in events:
 
     #[tokio::test]
     async fn fake_stock_omp_completes_and_continues_through_exact_native_file() {
-        let _home_guard = crate::console_adapter::longhouse_home_test_guard().await;
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
         let temp = tempfile::tempdir().unwrap();
         let previous_home = std::env::var_os("LONGHOUSE_HOME");
         unsafe {

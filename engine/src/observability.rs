@@ -120,6 +120,9 @@ mod tests {
 
     #[test]
     fn otlp_endpoint_configured_checks_traces_endpoint() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let _guard = temp_env::with_var(
             "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
             Some("http://127.0.0.1:4318/v1/traces"),
@@ -131,6 +134,9 @@ mod tests {
 
     #[test]
     fn build_otel_setup_is_disabled_without_endpoint() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         temp_env::with_vars(
             [
                 ("OTEL_EXPORTER_OTLP_ENDPOINT", None::<String>),

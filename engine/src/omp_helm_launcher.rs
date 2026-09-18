@@ -159,6 +159,7 @@ struct OmpHelmServer {
     socket_dir: PathBuf,
     stop: Arc<AtomicBool>,
     terminate_requested: Arc<AtomicBool>,
+    status: Arc<crate::status_slot::StatusPublisher>,
 }
 
 impl OmpHelmServer {
@@ -192,6 +193,10 @@ impl OmpHelmServer {
             socket_dir,
             stop: Arc::new(AtomicBool::new(false)),
             terminate_requested: Arc::new(AtomicBool::new(false)),
+            status: Arc::new(crate::status_slot::StatusPublisher::for_provider(
+                "omp",
+                OMP_HELM_TRANSPORT,
+            )),
         };
         server.persist_state()?;
         let acceptor = server.clone();
@@ -403,6 +408,10 @@ impl OmpHelmServer {
         }
         shared.observed_turn_generation = generation;
         Self::start_new_turn_locked(&mut shared);
+        drop(shared);
+        // A new turn starts with no preview. Without this the next phase
+        // snapshot carries the previous turn's text.
+        self.status.clear_preview();
     }
 
     fn reconcile_terminal_snapshot(&self, frame: &Value) {
@@ -1001,6 +1010,7 @@ impl OmpHelmServer {
                 state.observed_turn_generation = generation;
             }
             Self::start_new_turn_locked(&mut state);
+            self.status.clear_preview();
         } else if kind == "message_start" {
             state.live_message_seq = state.live_message_seq.saturating_add(1);
             state.state.live_message_seq = state.live_message_seq;
@@ -1042,25 +1052,9 @@ impl OmpHelmServer {
         }
         drop(state);
         drop(_persist_lock);
-        let observed_at = current.updated_at.clone();
-        let db_path = crate::config::get_agent_db_path();
-        if let Ok(db_path) = db_path {
-            if let Err(error) = crate::hook_outbox::enqueue_local_phase(
-                &db_path,
-                &current.session_id,
-                "omp",
-                phase,
-                tool.as_deref(),
-                OMP_HELM_TRANSPORT,
-                &observed_at,
-                Some(current.run_id.as_str()),
-            ) {
-                eprintln!(
-                    "[omp-helm] enqueue local phase failed for {}: {error}",
-                    current.session_id
-                );
-            }
-        }
+        // The local phase ledger is written by the daemon from this session's
+        // status slot. A callback that wrote its own file per frame is exactly
+        // the cost this lane exists to remove.
         self.publish_phase_snapshot(&current, phase, tool.as_deref());
         if publish_live {
             self.publish_live_text(
@@ -1148,23 +1142,6 @@ impl OmpHelmServer {
         };
         let phase = phase.as_str();
         let tool = tool.as_deref();
-        if let Ok(db_path) = crate::config::get_agent_db_path() {
-            if let Err(error) = crate::hook_outbox::enqueue_local_phase(
-                &db_path,
-                &state.session_id,
-                "omp",
-                phase,
-                tool,
-                OMP_HELM_TRANSPORT,
-                &state.updated_at,
-                Some(state.run_id.as_str()),
-            ) {
-                eprintln!(
-                    "[omp-helm] enqueue keepalive phase failed for {}: {error}",
-                    state.session_id
-                );
-            }
-        }
         self.publish_phase_snapshot(&state, phase, tool);
     }
 
@@ -1209,25 +1186,16 @@ impl OmpHelmServer {
         let _ = self.persist_state();
     }
 
-    fn publish_phase(&self, phase: &str, tool: Option<String>) {
-        let state = self.current_state();
-        self.publish_phase_snapshot(&state, phase, tool.as_deref());
-    }
-
     fn publish_phase_snapshot(&self, state: &OmpHelmStateFile, phase: &str, tool: Option<&str>) {
-        if let Ok(outbox) = crate::config::get_agent_runtime_events_outbox_dir() {
-            let _ = crate::outbox::enqueue_runtime_event(
-                &outbox,
-                &json!({
-                    "runtime_key": format!("omp:{}", state.session_id), "session_id": state.session_id,
-                    "provider": "omp", "run_id": state.run_id, "source": OMP_HELM_TRANSPORT,
-                    "kind": "phase_signal", "phase": phase, "tool_name": tool,
-                    "occurred_at": state.updated_at,
-                    "dedupe_key": format!("omp-phase:{}:{}:{}:{}", state.session_id, state.run_id, phase, state.updated_at),
-                    "payload": {"managed_transport": OMP_HELM_TRANSPORT, "execution_lifetime": "interactive", "structured_remote_approval": false}
-                }),
-            );
-        }
+        self.status.publish(
+            crate::status_slot::StatusUpdate::phase(
+                &state.session_id,
+                &state.run_id,
+                &state.updated_at,
+                phase,
+            )
+            .with_tool(tool),
+        );
         wake_transcript_shipper(
             state,
             Path::new(&state.session_file),
@@ -1239,38 +1207,37 @@ impl OmpHelmServer {
         &self,
         state: &OmpHelmStateFile,
         turn_id: &str,
-        delta: &str,
+        _delta: &str,
         live_text: &str,
         seq: u64,
         turn_completed: bool,
     ) {
-        if let Ok(outbox) = crate::config::get_agent_runtime_events_outbox_dir() {
-            let _ = crate::outbox::enqueue_runtime_event(
-                &outbox,
-                &json!({
-                    "runtime_key": format!("omp:{}", state.session_id),
-                    "session_id": state.session_id,
-                    "provider": "omp",
-                    "run_id": state.run_id,
-                    "source": OMP_HELM_TRANSPORT,
-                    "kind": "progress_signal",
-                    "occurred_at": Utc::now().to_rfc3339(),
-                    "dedupe_key": format!("omp-progress:{}:{}:{}:{}", state.session_id, state.run_id, turn_id, seq),
-                    "payload": {
-                        "progress_kind": "omp_helm_stream",
-                        "turn_id": turn_id,
-                        "seq": seq,
-                        "run_id": state.run_id,
-                        "delta": delta,
-                        "live_text": live_text,
-                        "turn_completed": turn_completed,
-                        "managed_transport": OMP_HELM_TRANSPORT,
-                        "execution_lifetime": "interactive",
-                        "provider_session_id": state.native_session_id,
-                    }
-                }),
-            );
-        }
+        // The preview rides the status slot. `live_text` is cumulative, so the
+        // newest value says everything the deltas said, and the delta itself
+        // has no reader on the Runtime Host.
+        let preview = crate::status_slot::StatusPreview {
+            turn_id: turn_id.to_string(),
+            seq,
+            live_text: live_text.to_string(),
+            turn_completed,
+            progress_kind: "omp_helm_stream".into(),
+            provider_session_id: (!state.native_session_id.is_empty())
+                .then(|| state.native_session_id.clone()),
+        };
+        let (phase, tool) = {
+            let shared = self.shared.lock().expect("OMP state mutex poisoned");
+            (shared.state.phase.clone(), shared.state.tool_name.clone())
+        };
+        self.status.publish(
+            crate::status_slot::StatusUpdate::phase(
+                &state.session_id,
+                &state.run_id,
+                &state.updated_at,
+                &phase,
+            )
+            .with_tool(tool.as_deref())
+            .with_preview(Some(preview)),
+        );
         wake_transcript_shipper(
             state,
             Path::new(&state.session_file),
@@ -2283,7 +2250,16 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         exit_code: Some(exit),
     }
     .to_json();
-    let _ = crate::managed_terminal::enqueue(&root.join("agent/runtime-events-outbox"), &event);
+    // Retire the slot only once the terminal record is durable. Retiring first
+    // and failing here would leave neither a current status nor the evidence
+    // that the run ended.
+    match crate::managed_terminal::enqueue(&root.join("agent/runtime-events-outbox"), &event) {
+        Ok(()) => server.status.retire(&current.session_id),
+        Err(error) => eprintln!(
+            "[omp-helm] terminal record enqueue failed for {}: {error}; keeping the status slot",
+            current.session_id
+        ),
+    }
     server.shutdown();
     stop_result?;
     drop(degraded);
@@ -2493,6 +2469,9 @@ mod tests {
     }
     #[test]
     fn ordinary_activity_reconciles_native_drift_before_publishing_phase() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let longhouse_home = temp.path().join("longhouse");
         let source_a = temp.path().join("session-a.jsonl");
@@ -2573,6 +2552,9 @@ mod tests {
 
     #[test]
     fn a_failed_binding_is_reconciled_by_ordinary_activity() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         // Regression for the incident: a bind that failed at session start
         // (busy archive database) left `native_session_id` empty, and an empty
         // committed identity read as "no drift", so nothing ever retried. The
@@ -2634,6 +2616,9 @@ mod tests {
 
     #[test]
     fn a_locked_archive_database_cannot_make_the_bind_permanent() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         // The 2026-09-17 incident, reproduced and then made unreachable: another
         // writer holds the archive database for the whole test while the session
         // is live and unbound. The identity is a local claim now, so the lock
@@ -2708,6 +2693,9 @@ mod tests {
 
     #[test]
     fn an_unbound_session_does_not_publish_activity() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         // The frame cannot bind (a pending transition refuses it) and the
         // launcher holds no identity, so there is nothing to attribute the
         // activity to: publishing it is how an unbound session looked healthy.
@@ -2758,6 +2746,9 @@ mod tests {
 
     #[test]
     fn transition_cancellation_clears_a_pending_transition_without_a_committed_identity() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         // A cancelled transition must not be left pending just because the first
         // bind never committed: the frame carries the provider's real identity
         // while the launcher's stored one is empty.
@@ -2812,6 +2803,9 @@ mod tests {
 
     #[test]
     fn initial_prompt_request_is_answered_while_identity_is_uncommitted() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         // Regression guard for the fix itself: a repair must not be paid for by
         // dropping the frames that do not publish provider activity. The
         // provider retries `initial_prompt_request` for about a minute and then
@@ -2863,6 +2857,9 @@ mod tests {
 
     #[test]
     fn a_late_bind_lets_the_initial_prompt_through() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         // The end-to-end repair: bind late, then grant the prompt the provider
         // is still retrying.
         let temp = tempfile::tempdir().unwrap();
@@ -2932,6 +2929,9 @@ mod tests {
 
     #[test]
     fn a_stale_frame_cannot_arm_the_identity_retry_window() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         // The window must be armed only by a frame that carries the base
         // authority; otherwise a stale connection or lease generation could
         // postpone the retry a valid frame deserves.
@@ -3005,6 +3005,9 @@ mod tests {
 
     #[test]
     fn extension_keepalive_refreshes_activity_without_losing_detail_or_reviving_stopped_state() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let longhouse_home = temp.path().join("longhouse");
         let socket_dir = temp.path().join("socket");
@@ -3071,11 +3074,29 @@ mod tests {
                 )
                 .unwrap()
             };
-            let local_outbox = longhouse_home.join("agent/outbox");
-            let runtime_outbox = longhouse_home.join("agent/runtime-events-outbox");
-
-            let local_before = read_json_files(&local_outbox);
-            let runtime_before = read_json_files(&runtime_outbox);
+            let status_dir = longhouse_home.join("agent/status");
+            // Status lives in one slot per session now, so the assertions are
+            // about what the slot says rather than how many files appeared.
+            let slot = || {
+                crate::status_slot::read_all(&status_dir)
+                    .into_iter()
+                    .find(|slot| slot.session_id == "session")
+            };
+            let slot_files = || {
+                std::fs::read_dir(&status_dir)
+                    .map(|entries| {
+                        entries
+                            .flatten()
+                            .filter(|entry| {
+                                entry
+                                    .file_name()
+                                    .to_str()
+                                    .is_some_and(|name| name.ends_with(".json"))
+                            })
+                            .count()
+                    })
+                    .unwrap_or(0)
+            };
             server.handle_extension_frame("connection", keepalive(false));
             let active = server.current_state();
             assert_eq!(active.phase, "thinking");
@@ -3084,29 +3105,17 @@ mod tests {
             assert_eq!(persisted_active["phase"], "thinking");
             assert_eq!(persisted_active["tool_name"], "shell");
             assert_eq!(persisted_active["updated_at"], active.updated_at);
-            let local_active = read_json_files(&local_outbox);
-            let runtime_active = read_json_files(&runtime_outbox);
-            assert_eq!(
-                new_json_file(&local_before, &local_active)["state"],
-                "thinking"
-            );
-            assert_eq!(
-                new_json_file(&runtime_before, &runtime_active)["kind"],
-                "phase_signal"
-            );
-            assert_eq!(
-                new_json_file(&runtime_before, &runtime_active)["phase"],
-                "thinking"
-            );
+            let active_slot = slot().expect("a live session has a status slot");
+            assert_eq!(active_slot.phase, "thinking");
+            assert_eq!(active_slot.tool_name.as_deref(), Some("shell"));
+            assert_eq!(slot_files(), 1);
 
+            // A second keepalive restating the same phase within the coalesce
+            // window writes nothing: the slot already says it.
             server.handle_extension_frame("connection", keepalive(false));
-            let local_active_again = read_json_files(&local_outbox);
-            let runtime_active_again = read_json_files(&runtime_outbox);
-            assert_eq!(local_active_again.len(), local_active.len() + 1);
-            assert_eq!(runtime_active_again.len(), runtime_active.len() + 1);
+            assert_eq!(slot_files(), 1, "one slot per session, always");
+            assert_eq!(slot().expect("slot").seq, active_slot.seq);
 
-            let local_before_idle = local_active_again.clone();
-            let runtime_before_idle = runtime_active_again.clone();
             server.handle_extension_frame("connection", keepalive(true));
             let idle = server.current_state();
             assert_eq!(idle.phase, "idle");
@@ -3115,27 +3124,12 @@ mod tests {
             assert_eq!(persisted_idle["phase"], "idle");
             assert_eq!(persisted_idle["tool_name"], serde_json::Value::Null);
             assert_eq!(persisted_idle["updated_at"], idle.updated_at);
-            let local_idle = read_json_files(&local_outbox);
-            let runtime_idle = read_json_files(&runtime_outbox);
-            assert_eq!(
-                new_json_file(&local_before_idle, &local_idle)["state"],
-                "idle"
-            );
-            assert_eq!(
-                new_json_file(&runtime_before_idle, &runtime_idle)["kind"],
-                "phase_signal"
-            );
-            assert_eq!(
-                new_json_file(&runtime_before_idle, &runtime_idle)["phase"],
-                "idle"
-            );
-
-            server.handle_extension_frame("connection", keepalive(true));
-            assert_eq!(read_json_files(&local_outbox).len(), local_idle.len() + 1);
-            assert_eq!(
-                read_json_files(&runtime_outbox).len(),
-                runtime_idle.len() + 1
-            );
+            // A transition publishes immediately, coalescing or not.
+            let idle_slot = slot().expect("slot");
+            assert_eq!(idle_slot.phase, "idle");
+            assert_eq!(idle_slot.tool_name, None);
+            assert!(idle_slot.seq > active_slot.seq);
+            assert_eq!(slot_files(), 1);
 
             {
                 let mut shared = server.shared.lock().unwrap();
@@ -3177,8 +3171,6 @@ mod tests {
             assert_eq!(terminal.tool_name, None);
             assert_eq!(terminal.agent_end_is_terminal, Some(true));
             let before_terminal_keepalive = terminal.clone();
-            let local_before_terminal_keepalive = read_json_files(&local_outbox);
-            let runtime_before_terminal_keepalive = read_json_files(&runtime_outbox);
             server.handle_extension_frame("connection", keepalive(false));
             let terminal_keepalive_active = server.current_state();
             assert_eq!(terminal_keepalive_active.phase, "running");
@@ -3188,28 +3180,8 @@ mod tests {
                 terminal_keepalive_active.updated_at,
                 before_terminal_keepalive.updated_at
             );
-            assert_eq!(
-                read_json_files(&local_outbox).len(),
-                local_before_terminal_keepalive.len() + 1
-            );
-            assert_eq!(
-                read_json_files(&runtime_outbox).len(),
-                runtime_before_terminal_keepalive.len() + 1
-            );
-            assert_eq!(
-                new_json_file(
-                    &local_before_terminal_keepalive,
-                    &read_json_files(&local_outbox),
-                )["state"],
-                "running"
-            );
-            assert_eq!(
-                new_json_file(
-                    &runtime_before_terminal_keepalive,
-                    &read_json_files(&runtime_outbox),
-                )["phase"],
-                "running"
-            );
+            assert_eq!(slot_files(), 1);
+            assert_eq!(slot().expect("slot").phase, "running");
             assert_eq!(persisted()["phase"], "running");
             assert_eq!(
                 persisted()["agent_end_is_terminal"],
@@ -3240,8 +3212,7 @@ mod tests {
                     shared.live_assistant_text.clone(),
                 )
             };
-            let local_before_delayed = read_json_files(&local_outbox);
-            let runtime_before_delayed = read_json_files(&runtime_outbox);
+            let slot_before_delayed = slot().map(|slot| slot.seq);
             for (kind, event) in [
                 (
                     "message_start",
@@ -3296,12 +3267,9 @@ mod tests {
             };
             assert_eq!(delayed_live, before_delayed_live);
             assert_eq!(
-                read_json_files(&local_outbox).len(),
-                local_before_delayed.len()
-            );
-            assert_eq!(
-                read_json_files(&runtime_outbox).len(),
-                runtime_before_delayed.len()
+                slot().map(|slot| slot.seq),
+                slot_before_delayed,
+                "a delayed frame after a settled turn states nothing new"
             );
             assert_eq!(persisted()["phase"], "idle");
             assert_eq!(persisted()["updated_at"], before_delayed.updated_at);
@@ -3358,24 +3326,112 @@ mod tests {
             assert_eq!(next_activity.tool_name.as_deref(), Some("next_tool"));
 
             server.mark_stopped(None, "provider_exit").unwrap();
-            let stopped_runtime_count = read_json_files(&runtime_outbox).len();
-            let stopped_local_count = read_json_files(&local_outbox).len();
+            // Retirement waits for the terminal record to be durable, so the
+            // slot still holds the run's last status here. What a stopped run
+            // must never do is state something new.
+            let stopped_slot = slot().map(|slot| slot.seq);
             server.handle_extension_frame("connection", keepalive(false));
             let stopped = server.current_state();
             assert_eq!(stopped.status, "stopped");
             assert_eq!(stopped.phase, "idle");
             assert!(stopped.terminal_state.is_some());
-            assert_eq!(
-                read_json_files(&runtime_outbox).len(),
-                stopped_runtime_count
+            assert_eq!(slot().map(|slot| slot.seq), stopped_slot);
+
+            // Once the terminal record is durable the slot goes, and nothing
+            // that arrives afterwards recreates it.
+            server.status.retire("session");
+            assert!(slot().is_none(), "a retired run has no current status");
+            server.handle_extension_frame("connection", keepalive(false));
+            assert_eq!(slot_files(), 0, "a retired slot is never recreated");
+            server.shutdown();
+        });
+    }
+
+    /// A turn's final preview is what a reader keeps until the next turn
+    /// starts, and a new turn must not inherit the previous one's text.
+    #[test]
+    fn preview_completion_publishes_and_a_new_turn_clears_it() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let longhouse_home = temp.path().join("home");
+        let socket_dir = temp.path().join("sock");
+        let socket_path = socket_dir.join("omp.sock");
+        let state_path = temp.path().join("state.json");
+
+        temp_env::with_var("LONGHOUSE_HOME", Some(&longhouse_home), || {
+            let server =
+                OmpHelmServer::start(state(), socket_path, socket_dir, state_path).unwrap();
+            let status_dir = longhouse_home.join("agent/status");
+            let slot = || {
+                crate::status_slot::read_all(&status_dir)
+                    .into_iter()
+                    .find(|slot| slot.session_id == "session")
+            };
+            let current = server.current_state();
+
+            server.status.publish(
+                crate::status_slot::StatusUpdate::phase(
+                    &current.session_id,
+                    &current.run_id,
+                    &current.updated_at,
+                    "thinking",
+                )
+                .with_preview(Some(crate::status_slot::StatusPreview {
+                    turn_id: "turn-1".into(),
+                    seq: 1,
+                    live_text: "partial".into(),
+                    turn_completed: false,
+                    progress_kind: "omp_helm_stream".into(),
+                    provider_session_id: None,
+                })),
             );
-            assert_eq!(read_json_files(&local_outbox).len(), stopped_local_count);
+            let opening = slot().expect("slot");
+            assert_eq!(opening.preview.expect("preview").live_text, "partial");
+
+            // Immediately after, inside the coalesce window: a completed turn
+            // publishes anyway.
+            server.status.publish(
+                crate::status_slot::StatusUpdate::phase(
+                    &current.session_id,
+                    &current.run_id,
+                    &current.updated_at,
+                    "thinking",
+                )
+                .with_preview(Some(crate::status_slot::StatusPreview {
+                    turn_id: "turn-1".into(),
+                    seq: 2,
+                    live_text: "the whole answer".into(),
+                    turn_completed: true,
+                    progress_kind: "omp_helm_stream".into(),
+                    provider_session_id: None,
+                })),
+            );
+            let completed = slot().expect("slot").preview.expect("preview");
+            assert!(completed.turn_completed);
+            assert_eq!(completed.live_text, "the whole answer");
+
+            server.status.clear_preview();
+            server.status.publish(crate::status_slot::StatusUpdate::phase(
+                &current.session_id,
+                &current.run_id,
+                &current.updated_at,
+                "running",
+            ));
+            assert!(
+                slot().expect("slot").preview.is_none(),
+                "a new turn does not inherit the last turn's text"
+            );
             server.shutdown();
         });
     }
 
     #[test]
     fn reconnect_resamples_active_provider_after_terminal_turn() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let longhouse_home = temp.path().join("longhouse");
         let source = temp.path().join("session.jsonl");
@@ -3702,6 +3758,9 @@ mod tests {
 
     #[test]
     fn activity_snapshot_waits_for_persistence_lock_before_mutating() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let longhouse_home = temp.path().join("longhouse");
         let socket_dir = temp.path().join("socket");
@@ -3735,6 +3794,9 @@ mod tests {
     }
     #[test]
     fn ordinary_activity_rejects_native_drift_at_an_owned_source_path() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let longhouse_home = temp.path().join("longhouse");
         let source = temp.path().join("session.jsonl");
@@ -3789,6 +3851,9 @@ mod tests {
 
     #[test]
     fn stopped_identity_reconciliation_cannot_restore_readiness() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let longhouse_home = temp.path().join("longhouse");
         let source_a = temp.path().join("session-a.jsonl");
@@ -4003,6 +4068,9 @@ mod tests {
 
     #[test]
     fn in_flight_replacement_cannot_commit_after_lease_timeout() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let longhouse_home = temp.path().join("longhouse");
         let replacement_source = temp.path().join("late-replacement.jsonl");
@@ -4174,6 +4242,9 @@ mod tests {
 
     #[test]
     fn fresh_launch_captures_ambient_omp_profile_for_resume() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let config = LaunchConfig {
             cwd: temp.path().to_path_buf(),

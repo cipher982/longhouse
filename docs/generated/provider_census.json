@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 280,
+  "file_count": 281,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -242,7 +242,8 @@
       "providers": [
         "antigravity",
         "claude",
-        "codex"
+        "codex",
+        "omp"
       ]
     },
     {
@@ -365,6 +366,14 @@
       "providers": [
         "claude",
         "codex"
+      ]
+    },
+    {
+      "path": "engine/src/status_slot.rs",
+      "providers": [
+        "codex",
+        "omp",
+        "pi"
       ]
     },
     {

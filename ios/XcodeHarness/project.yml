@@ -52,6 +52,9 @@ targets:
       - script: "\"$PROJECT_DIR/../../scripts/build/stage_ios_build_identity.sh\""
         name: Stage build identity
         basedOnDependencyAnalysis: false
+      - script: "\"$PROJECT_DIR/../../scripts/build/check_ios_project_fresh.sh\""
+        name: Check Xcode project freshness
+        basedOnDependencyAnalysis: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.longhouse.ios

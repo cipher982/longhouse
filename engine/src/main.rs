@@ -83,6 +83,7 @@ mod scheduler;
 mod shipping;
 mod shipping_stats;
 mod state;
+mod status_slot;
 mod storage_v2_contract;
 mod storage_v2_shipper;
 mod text;
