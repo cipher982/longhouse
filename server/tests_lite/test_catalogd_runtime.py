@@ -188,6 +188,7 @@ async def test_runtime_apply_owns_state_resume_preview_and_commit_sequence(daemo
             "accepted": 1,
             "duplicates": 0,
             "updated_runtime_keys": ["codex:catalog-runtime"],
+            "ignored": 0,
             "activity_facts": {
                 "changed_heads": 0,
                 "duplicates": 0,
@@ -223,6 +224,26 @@ async def test_runtime_apply_owns_state_resume_preview_and_commit_sequence(daemo
         preview = await client.call("session.runtime.apply.v2", {"events": [preview_event]})
         assert preview["updated_runtime_keys"] == ["codex:catalog-preview"]
         assert preview["commit_seq"] == "3"
+        unknown = await client.call(
+            "session.runtime.apply.v2",
+            {
+                "events": [
+                    {
+                        **_event(
+                            session_id=session_id,
+                            runtime_key="codex:catalog-future",
+                            dedupe_key="catalog-future-1",
+                            occurred_at=now,
+                        ),
+                        "kind": "future_telemetry_probe",
+                    }
+                ]
+            },
+        )
+        assert unknown["accepted"] == 1
+        assert unknown["ignored"] == 1
+        assert unknown["updated_runtime_keys"] == []
+        assert unknown["commit_seq"] == "4"
     finally:
         await client.close()
         await daemon.close()
@@ -247,7 +268,7 @@ async def test_runtime_apply_owns_state_resume_preview_and_commit_sequence(daemo
             .one()
         )
         assert live_preview["preview_text"] == "streaming output"
-        assert read_catalog_meta(engine).commit_seq == 3
+        assert read_catalog_meta(engine).commit_seq == 4
     engine.dispose()
 
 

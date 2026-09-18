@@ -116,7 +116,13 @@ async def ingest_runtime_observation_batch(
         # in order, in bounded chunks: each keeps its writer hold short and stays
         # inside the reducer's fact bound. Observations are idempotent by dedupe
         # key, so a batch retried after a partial failure replays safely.
-        raw_result: dict = {"accepted": 0, "duplicates": 0, "updated_runtime_keys": [], "commit_seq": None}
+        raw_result: dict = {
+            "accepted": 0,
+            "duplicates": 0,
+            "ignored": 0,
+            "updated_runtime_keys": [],
+            "commit_seq": None,
+        }
         for start in range(0, len(events), CATALOG_RUNTIME_APPLY_LIMIT):
             chunk = events[start : start + CATALOG_RUNTIME_APPLY_LIMIT]
             try:
@@ -147,6 +153,7 @@ async def ingest_runtime_observation_batch(
                 ) from exc
             raw_result["accepted"] += int(chunk_result.get("accepted") or 0)
             raw_result["duplicates"] += int(chunk_result.get("duplicates") or 0)
+            raw_result["ignored"] += int(chunk_result.get("ignored") or 0)
             for key in chunk_result.get("updated_runtime_keys") or ():
                 if key not in raw_result["updated_runtime_keys"]:
                     raw_result["updated_runtime_keys"].append(key)
