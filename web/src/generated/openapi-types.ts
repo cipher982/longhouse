@@ -7174,6 +7174,11 @@ export interface components {
             duplicates: number;
             /** Updated Runtime Keys */
             updated_runtime_keys: string[];
+            /**
+             * Ignored
+             * @default 0
+             */
+            ignored: number;
         };
         /** RuntimeEventIngest */
         RuntimeEventIngest: {
@@ -7191,11 +7196,8 @@ export interface components {
             device_id?: string | null;
             /** Source */
             source: string;
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "phase_signal" | "progress_signal" | "terminal_signal" | "binding_signal" | "status_assertion" | "pause_request" | "pause_resolution";
+            /** Kind */
+            kind: string;
             /** Phase */
             phase?: string | null;
             /** Tool Name */
