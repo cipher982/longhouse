@@ -475,6 +475,39 @@ providers:
   - codex.resume_run_once
   - codex.turn_start
   transcript_signals:
+    delegation.spawn:
+      disposition: not_implemented
+      raw_source: session_meta/source.subagent.thread_spawn
+      entrypoints: [cli]
+      canary: codex_orchestration_signals
+      trigger: spawn_subagent
+      owner_action: "widen CodexSubagentSource to carry depth/agent_nickname/agent_role and expose lineage_kind; parent_thread_id alone is already read"
+    delegation.background:
+      disposition: not_implemented
+      raw_source: event_msg/turn_duration.pendingBackgroundAgentCount
+      entrypoints: [cli]
+      canary: codex_orchestration_signals
+      trigger: background_work
+      owner_action: "consume the pending_background_agents provider fact the engine already ships with no reader"
+    delegation.workflow:
+      disposition: upstream_absent
+      raw_source: none
+      canary: codex_orchestration_signals
+      trigger: census
+      owner_action: "no dynamic-workflow surface observed in 728 rollouts; the release census closes this cell if one appears"
+    delegation.scheduled:
+      disposition: upstream_absent
+      raw_source: none
+      canary: codex_orchestration_signals
+      trigger: census
+      owner_action: "no session-scoped scheduled-wakeup surface observed"
+    delegation.peer_message:
+      disposition: not_implemented
+      raw_source: response_item/agent_message.author+recipient
+      entrypoints: [cli]
+      canary: codex_orchestration_signals
+      trigger: peer_send
+      owner_action: "project author/recipient agent messages and inter_agent_communication_metadata as a delegation edge"
     turn.duration:
       disposition: implemented
       raw_source: event_msg/task_complete + event_msg/turn_aborted
@@ -944,6 +977,46 @@ providers:
   # proves the provider still writes it, and the trigger that canary must
   # perform. Signal ids are shared vocabulary across providers.
   transcript_signals:
+    delegation.spawn:
+      disposition: not_implemented
+      raw_source: subagents/agent-*.meta.json
+      entrypoints: [cli]
+      first_seen_version: "2.1.150"
+      canary: claude_orchestration_signals
+      trigger: spawn_subagent
+      owner_action: "read agent_id/agent_type from every hook so a child's tool event stops writing the parent's activity head; read requestShape/spawnDepth from the spawn sidecar"
+    delegation.background:
+      disposition: not_implemented
+      raw_source: hook:Stop.background_tasks
+      entrypoints: [cli]
+      first_seen_version: "2.1.259"
+      canary: claude_orchestration_signals
+      trigger: background_work
+      owner_action: "carry background_tasks[] and session_crons[] through the presence payload into the delegated-work dimension"
+    delegation.workflow:
+      disposition: not_implemented
+      raw_source: subagents/workflows/<run>/journal.jsonl
+      entrypoints: [cli]
+      first_seen_version: "2.1.150"
+      canary: claude_orchestration_signals
+      trigger: workflow_run
+      owner_action: "read the started/result/failed ledger for fan-out width and per-branch verdicts instead of skipping the file at discovery"
+    delegation.scheduled:
+      disposition: not_implemented
+      raw_source: system/scheduled_task_fire
+      entrypoints: [cli]
+      first_seen_version: "2.1.161"
+      canary: claude_orchestration_signals
+      trigger: cron_create
+      owner_action: "add the scheduled_task_fire shape to the parser and the fired cron to the delegated-work dimension"
+    delegation.peer_message:
+      disposition: not_implemented
+      raw_source: tool_use/SendMessage
+      entrypoints: [cli]
+      first_seen_version: "2.1.150"
+      canary: claude_orchestration_signals
+      trigger: peer_send
+      owner_action: "model the SendMessage call and its pin/resume result as a delegation edge"
     turn.duration:
       disposition: implemented
       raw_source: system/turn_duration
@@ -1293,6 +1366,36 @@ providers:
   - opencode.turn_start
   - opencode.turn_interrupt
   transcript_signals:
+    delegation.spawn:
+      disposition: not_implemented
+      raw_source: session.parent_id + part.data.callID
+      canary: opencode_orchestration_signals
+      trigger: spawn_subagent
+      owner_action: "consume the task_child lineage the parser already resolves as a served delegation signal; nested depth is not modelled (opencode_task_child_evidence walks one level)"
+    delegation.background:
+      disposition: not_implemented
+      raw_source: part.data.state.metadata.background+jobId
+      canary: opencode_orchestration_signals
+      trigger: background_work
+      owner_action: "read background/jobId into OpenCodeTaskChildEvidence; only reachable when OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS is set"
+    delegation.workflow:
+      disposition: upstream_absent
+      raw_source: none
+      canary: opencode_orchestration_signals
+      trigger: census
+      owner_action: "no durable workflow-run id exists; child sessions are the concrete primitive"
+    delegation.scheduled:
+      disposition: upstream_absent
+      raw_source: none
+      canary: opencode_orchestration_signals
+      trigger: census
+      owner_action: "no session-scoped scheduled-wakeup surface observed"
+    delegation.peer_message:
+      disposition: upstream_absent
+      raw_source: none
+      canary: opencode_orchestration_signals
+      trigger: census
+      owner_action: "no agent-to-agent message record observed"
     turn.duration:
       disposition: not_implemented
       raw_source: sidecar:opencode.db/message.data.time
@@ -1630,6 +1733,36 @@ providers:
   # Unsurveyed provider: every signal starts as work, and the census lane is
   # the canary that characterises which lines this provider writes at all.
   transcript_signals:
+    delegation.spawn:
+      disposition: not_implemented
+      raw_source: INVOKE_SUBAGENT
+      canary: antigravity_orchestration_signals
+      trigger: spawn_subagent
+      owner_action: "parse INVOKE_SUBAGENT for the child conversationId and logAbsoluteUri; today it is downgraded to a tool-result string, and the child brain/<id> becomes an unlinked session"
+    delegation.background:
+      disposition: not_implemented
+      raw_source: GENERIC/task-<N> + .system_generated/tasks/<id>.log
+      canary: antigravity_orchestration_signals
+      trigger: background_work
+      owner_action: "promote task ids and task logs into structured async-task observations; the status message is currently tool text"
+    delegation.workflow:
+      disposition: upstream_absent
+      raw_source: none
+      canary: antigravity_orchestration_signals
+      trigger: census
+      owner_action: "no workflow-run surface observed"
+    delegation.scheduled:
+      disposition: upstream_absent
+      raw_source: none
+      canary: antigravity_orchestration_signals
+      trigger: census
+      owner_action: "no scheduled-wakeup surface observed"
+    delegation.peer_message:
+      disposition: upstream_absent
+      raw_source: none
+      canary: antigravity_orchestration_signals
+      trigger: census
+      owner_action: "SYSTEM_MESSAGE sender=<childId> carries child returns, not peer messages"
     turn.duration:
       disposition: not_implemented
       raw_source: unsurveyed
@@ -2012,6 +2145,36 @@ providers:
   # Unsurveyed provider: every signal starts as work, and the census lane is
   # the canary that characterises which lines this provider writes at all.
   transcript_signals:
+    delegation.spawn:
+      disposition: not_implemented
+      raw_source: tool-call/Task + input.subagent_type
+      canary: cursor_orchestration_signals
+      trigger: spawn_subagent
+      owner_action: "tag the Task tool call as an orchestration node and retain subagent_type; no provider lineage key exists, so the child stays a visible top-level session with lineage_source unknown"
+    delegation.background:
+      disposition: not_implemented
+      raw_source: tool-call/Shell block_until_ms:0 + terminals/<id>.txt
+      canary: cursor_orchestration_signals
+      trigger: background_work
+      owner_action: "correlate AwaitShell with the terminal sidecar into a background-task observation"
+    delegation.workflow:
+      disposition: upstream_absent
+      raw_source: none
+      canary: cursor_orchestration_signals
+      trigger: census
+      owner_action: "no workflow surface observed"
+    delegation.scheduled:
+      disposition: upstream_absent
+      raw_source: none
+      canary: cursor_orchestration_signals
+      trigger: census
+      owner_action: "no scheduled-wakeup surface observed"
+    delegation.peer_message:
+      disposition: upstream_absent
+      raw_source: none
+      canary: cursor_orchestration_signals
+      trigger: census
+      owner_action: "no agent-to-agent message record observed"
     turn.duration:
       disposition: not_implemented
       raw_source: unsurveyed
@@ -2347,6 +2510,36 @@ providers:
   - pi.turn_start
   - pi.turn_interrupt
   transcript_signals:
+    delegation.spawn:
+      disposition: upstream_absent
+      raw_source: none
+      canary: pi_orchestration_signals
+      trigger: census
+      owner_action: "Pi ships no child-session concept; the id/parentId chain is a linear append chain inside one file, not a session tree"
+    delegation.background:
+      disposition: upstream_absent
+      raw_source: none
+      canary: pi_orchestration_signals
+      trigger: census
+      owner_action: "native steer and follow-up are live control, not durable transcript records"
+    delegation.workflow:
+      disposition: upstream_absent
+      raw_source: none
+      canary: pi_orchestration_signals
+      trigger: census
+      owner_action: "no workflow surface observed"
+    delegation.scheduled:
+      disposition: upstream_absent
+      raw_source: none
+      canary: pi_orchestration_signals
+      trigger: census
+      owner_action: "no scheduled-wakeup surface observed"
+    delegation.peer_message:
+      disposition: upstream_absent
+      raw_source: none
+      canary: pi_orchestration_signals
+      trigger: census
+      owner_action: "no agent-to-agent message record observed"
     turn.duration:
       disposition: upstream_absent
       raw_source: none
@@ -2648,6 +2841,36 @@ providers:
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
   transcript_signals:
+    delegation.spawn:
+      disposition: not_implemented
+      raw_source: session_header/parentSession
+      canary: omp_orchestration_signals
+      trigger: spawn_subagent
+      owner_action: "parentSession is already read into child-session lineage; the served delegation signal still has to consume it"
+    delegation.background:
+      disposition: upstream_absent
+      raw_source: none
+      canary: omp_orchestration_signals
+      trigger: census
+      owner_action: "no background or async work surface observed beyond parallel tool calls within one turn"
+    delegation.workflow:
+      disposition: upstream_absent
+      raw_source: none
+      canary: omp_orchestration_signals
+      trigger: census
+      owner_action: "no workflow surface observed"
+    delegation.scheduled:
+      disposition: upstream_absent
+      raw_source: none
+      canary: omp_orchestration_signals
+      trigger: census
+      owner_action: "no scheduled-wakeup surface observed"
+    delegation.peer_message:
+      disposition: upstream_absent
+      raw_source: none
+      canary: omp_orchestration_signals
+      trigger: census
+      owner_action: "no agent-to-agent message record observed"
     turn.duration: {disposition: not_implemented, raw_source: none, canary: omp_transcript_signals, trigger: turn_end, owner_action: "Survey OMP turn duration in Phase 2"}
     session.recap: {disposition: not_implemented, raw_source: none, canary: omp_transcript_signals, trigger: idle_after_turn, owner_action: "Survey OMP recaps in Phase 2"}
     session.title: {disposition: implemented, raw_source: title/title_change, fixture: engine/tests/fixtures/golden/omp/native.jsonl, canary: omp_transcript_signals, trigger: none_reliable}

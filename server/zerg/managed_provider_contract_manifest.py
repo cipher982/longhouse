@@ -469,10 +469,33 @@ TRANSCRIPT_SIGNAL_IDS = frozenset(
         "context.compaction",
         "input.queue",
         "turn.thinking",
+        # Delegation: work a session hands to another worker, or that runs
+        # beside it. Same axis as the turn signals — these are things the
+        # provider writes that the render surface never shows, and they carry
+        # the same obligation: every provider declares every id, so absence is
+        # a decision rather than an omission.
+        "delegation.spawn",
+        "delegation.background",
+        "delegation.workflow",
+        "delegation.scheduled",
+        "delegation.peer_message",
     }
 )
 _TRANSCRIPT_SIGNAL_TRIGGERS = frozenset(
-    {"turn_end", "first_turn", "idle_after_turn", "send_while_working", "slash_compact", "none_reliable", "census"}
+    {
+        "turn_end",
+        "first_turn",
+        "idle_after_turn",
+        "send_while_working",
+        "slash_compact",
+        "none_reliable",
+        "census",
+        "spawn_subagent",
+        "background_work",
+        "workflow_run",
+        "cron_create",
+        "peer_send",
+    }
 )
 _TRANSCRIPT_SIGNAL_KEYS = frozenset(
     {"disposition", "raw_source", "entrypoints", "first_seen_version", "fixture", "canary", "trigger", "owner_action"}
