@@ -93,6 +93,13 @@ export function getSessionHeaderState(
   }
 
   if (working) {
+    // Delegated work is the one live state the client must not re-derive: the
+    // sentence names the work ("Waiting on 1 background agent"), and the tool
+    // field belongs to the main loop, which is idle. The server composes it.
+    const primary = facts.presentation.primary;
+    if (primary?.key === "delegated_work" && primary.label) {
+      return { tone: "live", text: primary.label };
+    }
     // A finished tool leaves its name on the activity fact, so a non-empty
     // `tool` is not evidence that one is running: only `executing` claims
     // that. Without this gate a session that just ran Bash keeps reading

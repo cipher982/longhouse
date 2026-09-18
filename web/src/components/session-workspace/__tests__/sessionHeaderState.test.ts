@@ -15,6 +15,7 @@ function session(overrides: {
   observedAt?: string | null;
   primaryTone?: string | null;
   primaryLabel?: string | null;
+  primaryKey?: string | null;
   lastResultAt?: string | null;
 }): Pick<AgentSession, "session_state"> {
   return {
@@ -29,7 +30,11 @@ function session(overrides: {
       presentation: {
         primary:
           overrides.primaryTone != null
-            ? { tone: overrides.primaryTone, label: overrides.primaryLabel ?? "" }
+            ? {
+                key: overrides.primaryKey ?? "idle",
+                tone: overrides.primaryTone,
+                label: overrides.primaryLabel ?? "",
+              }
             : null,
       },
       last_result_at: overrides.lastResultAt ?? null,
@@ -67,6 +72,24 @@ describe("getSessionHeaderState", () => {
     );
     expect(state.tone).toBe("live");
     expect(state.text).toBe("Using hub for 35 minutes");
+  });
+
+  it("uses the server's delegated label instead of a tool name", () => {
+    // The main loop is idle; something it started is not. The tool field
+    // belongs to the loop, so the client must not re-derive this sentence.
+    const now = Date.parse("2026-04-15T16:30:00Z");
+    const state = getSessionHeaderState(
+      session({
+        activityState: "quiescent",
+        tool: "Bash",
+        observedAt: "2026-04-15T16:29:00Z",
+        primaryTone: "active",
+        primaryKey: "delegated_work",
+        primaryLabel: "Waiting on 1 background agent",
+      }),
+      now,
+    );
+    expect(state).toEqual({ tone: "live", text: "Waiting on 1 background agent" });
   });
 
   it("does not name a tool for a thinking activity that still carries one", () => {

@@ -1537,11 +1537,16 @@ export function SessionChat({
   // it there is what made a finished Bash look like running work.
   const activityTool =
     activity.state === "executing" ? activity.tool?.trim() || null : null;
+  const composerDelegatedLabel =
+    session.session_state.presentation.primary?.key === "delegated_work"
+      ? session.session_state.presentation.primary.label || null
+      : null;
   const composerElapsedSeconds =
     composerState.tone === "live" && turnStartMs != null
       ? Math.max(0, Math.floor((activityNowMs - turnStartMs) / 1_000))
       : null;
-  const composerUsingLabel = activityTool ? `Using ${activityTool}` : "Working";
+  const composerUsingLabel =
+    composerDelegatedLabel ?? (activityTool ? `Using ${activityTool}` : "Working");
   const composerLastTurnMs = Date.parse(
     session.session_state.last_result_at ?? activity.observed_at ?? "",
   );
