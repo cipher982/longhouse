@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 282,
+  "file_count": 281,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -2197,13 +2197,6 @@
       "path": "server/zerg/services/managed_provider_contracts.py",
       "providers": [
         "antigravity",
-        "opencode"
-      ]
-    },
-    {
-      "path": "server/zerg/services/provider_action_coverage.py",
-      "providers": [
-        "codex",
         "opencode"
       ]
     },

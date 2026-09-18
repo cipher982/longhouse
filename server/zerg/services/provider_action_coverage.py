@@ -35,7 +35,6 @@ class ActionCoverageReasonCode(StrEnum):
     CONTRACT_PROVEN = "contract_proven"
     PROVIDER_PAUSE_ANSWER_SUPPORTED = "provider_pause_answer_supported"
     PROVIDER_PAUSE_DETECT_ONLY = "provider_pause_detect_only"
-    PROVIDER_PROOF_UNDECLARED = "provider_proof_undeclared"
     PROVIDER_SURFACE_UNPROVEN = "provider_surface_unproven"
     PROVIDER_SURFACE_ABSENT = "provider_surface_absent"
     # Retained for older serialized artifacts; new rich gaps use specific codes.
@@ -44,7 +43,6 @@ class ActionCoverageReasonCode(StrEnum):
     PROVIDER_BACKGROUND_STATUS_UNPROVEN = "provider_background_status_unproven"
     REQUIRED_PROOF_PASSED = "required_proof_passed"
     REQUIRED_PROOF_MISSING = "required_proof_missing"
-    OBSERVATION_PROOF_UNDECLARED = "observation_proof_undeclared"
     OBSERVATION_PROOF_PASSED = "observation_proof_passed"
     OBSERVATION_PROOF_MISSING = "observation_proof_missing"
     PROOF_REQUIREMENT_UNDECLARED = "proof_requirement_undeclared"
@@ -218,11 +216,14 @@ def derive_provider_action_coverage(
             )
             proof_refs: tuple[ProofRef, ...] = ()
         elif question.support_requires:
-            if normalized_provider != "opencode":
-                state = ActionCoverageState.UNKNOWN
-                reason_code = ActionCoverageReasonCode.PROVIDER_PROOF_UNDECLARED
-                reason = "No provider-specific proof requirement is declared."
-            elif _all_proofs_pass(question.support_requires, proofs):
+            # The requirement is declared for every provider; whether a given
+            # provider has met it is the question. This used to short-circuit to
+            # `unknown` for anything that was not opencode, which reported
+            # "no provider-specific proof requirement is declared" about a
+            # shared requirement that was declared, and made the module's own
+            # docs ("humans author questions and proof requirements, this module
+            # derives states") untrue for six of seven providers.
+            if _all_proofs_pass(question.support_requires, proofs):
                 state = ActionCoverageState.SUPPORTED
                 reason_code = ActionCoverageReasonCode.REQUIRED_PROOF_PASSED
                 reason = "Required harness assertions passed."
@@ -232,11 +233,7 @@ def derive_provider_action_coverage(
                 reason = "Required harness assertions are missing or not passing."
             proof_refs = question.support_requires
         elif question.observe_requires:
-            if normalized_provider != "opencode":
-                state = ActionCoverageState.UNKNOWN
-                reason_code = ActionCoverageReasonCode.OBSERVATION_PROOF_UNDECLARED
-                reason = "No provider-specific observation proof is declared."
-            elif _all_proofs_pass(question.observe_requires, proofs):
+            if _all_proofs_pass(question.observe_requires, proofs):
                 state = ActionCoverageState.READ_ONLY
                 reason_code = ActionCoverageReasonCode.OBSERVATION_PROOF_PASSED
                 reason = "Observation proof passed, but no Longhouse control contract exists."
