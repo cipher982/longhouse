@@ -11,7 +11,18 @@ import json
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from pathlib import Path
+from uuid import uuid4
 
+import pytest
+from sqlalchemy import select
+
+from zerg.catalogd.fact_reducer import ReducerFact
+from zerg.catalogd.fact_reducer import read_session_fact_heads
+from zerg.catalogd.fact_reducer import reduce_fact_batch
+from zerg.catalogd.models import FactHead
+from zerg.catalogd.schema import create_catalog_engine
+from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.machine_evidence import canonical_evidence_hash
 from zerg.services.session_state_facts_projector import ACTIVITY_OBSERVATION_LEASE
 from zerg.services.session_state_facts_projector import MAX_OBSERVATION_DELAY
@@ -239,3 +250,128 @@ def test_the_lease_outlasts_the_slowest_producer_keepalive():
     """A lease shorter than a producer's keepalive flaps a healthy session."""
 
     assert ACTIVITY_OBSERVATION_LEASE >= timedelta(seconds=40)
+
+
+@pytest.fixture
+def catalog_engine(tmp_path: Path):
+    engine = create_catalog_engine(tmp_path / f"lease-{uuid4().hex[:8]}.db")
+    initialize_catalog_schema(engine)
+    yield engine
+    engine.dispose()
+
+
+def _reduce_activity(engine, *, observed_at: datetime, received_at: datetime, seq: int = 1):
+    """Put one activity observation through the real reducer."""
+
+    value = {
+        "authority_class": "provider_runtime",
+        "provider": "omp",
+        "session_id": SESSION_ID,
+        "run_id": RUN_ID,
+        "kind": "thinking",
+        "raw_kind": "thinking",
+        "tool_name": None,
+        "source": "omp_helm_channel",
+        "observed_at": observed_at.isoformat(),
+        "valid_until": (observed_at + timedelta(seconds=90)).isoformat(),
+    }
+    with engine.begin() as connection:
+        result = reduce_fact_batch(
+            connection,
+            [
+                ReducerFact(
+                    family="activity",
+                    subject_key=f"run:{RUN_ID}",
+                    source="omp_helm_channel",
+                    source_epoch=RUN_ID,
+                    source_seq=seq,
+                    dedupe_key=canonical_evidence_hash(value),
+                    evidence_hash=canonical_evidence_hash(value),
+                    value=value,
+                    observed_at=observed_at,
+                    session_id=SESSION_ID,
+                    valid_until=observed_at + timedelta(seconds=90),
+                    raw_locator="runtime:omp_helm_channel:test",
+                )
+            ],
+            received_at=received_at,
+        )
+    return result
+
+
+def _head_received_at(engine) -> datetime:
+    with engine.begin() as connection:
+        return connection.execute(
+            select(FactHead.__table__.c.received_at).where(FactHead.__table__.c.family == "activity")
+        ).scalar_one()
+
+
+def _project_stored_heads(engine, *, now: datetime):
+    with engine.begin() as connection:
+        _commit_seq, heads = read_session_fact_heads(connection, session_id=SESSION_ID)
+    return project_shadow_session_state_facts(
+        session_id=SESSION_ID,
+        commit_seq=1,
+        catalog_facts=_catalog_facts(),
+        heads=heads,
+        supported_operations=(),
+        now=now,
+    )
+
+
+def test_a_replayed_observation_does_not_renew_the_stored_lease(catalog_engine):
+    """Replay safety through the reducer, not around it.
+
+    The earlier version of this test reused one in-memory head, which proved
+    nothing: it could not tell a duplicate from a new observation because it
+    never asked the thing that decides. This one replays the identical fact
+    through the real reducer and asserts the head's receipt does not move.
+    """
+
+    observed_at = _at()
+    first_receipt = observed_at + timedelta(seconds=5)
+
+    first = _reduce_activity(catalog_engine, observed_at=observed_at, received_at=first_receipt)
+    assert first.changed_heads == 1, "the first observation becomes the head"
+    assert _head_received_at(catalog_engine).replace(tzinfo=timezone.utc) == first_receipt
+
+    # The same observation arrives again, a minute later.
+    replay = _reduce_activity(
+        catalog_engine,
+        observed_at=observed_at,
+        received_at=first_receipt + timedelta(seconds=60),
+    )
+
+    assert replay.changed_heads == 0, "a duplicate never becomes the head"
+    assert replay.duplicates == 1
+    assert _head_received_at(catalog_engine).replace(tzinfo=timezone.utc) == first_receipt, (
+        "the lease anchor did not move, so the replay renewed nothing"
+    )
+
+    projection = _project_stored_heads(
+        catalog_engine,
+        now=first_receipt + ACTIVITY_OBSERVATION_LEASE + timedelta(seconds=120),
+    )
+    assert projection.activity.state == "unknown", (
+        "a session that only ever had one observation still expires, however often it is resent"
+    )
+
+
+def test_an_old_observation_gets_no_lease_even_as_a_fresh_head(catalog_engine):
+    """The delay cap is what bounds every 'could a head be rewritten' path.
+
+    Whatever makes an old observation into a new head — an epoch that rotated,
+    a pruned head, a restored backup — the cap decides: delivery long after
+    the fact earns no lease at all, so it cannot masquerade as current.
+    """
+
+    observed_at = _at()
+    late_receipt = observed_at + MAX_OBSERVATION_DELAY + timedelta(minutes=30)
+
+    result = _reduce_activity(catalog_engine, observed_at=observed_at, received_at=late_receipt)
+    assert result.changed_heads == 1, "it did become the head"
+
+    projection = _project_stored_heads(catalog_engine, now=late_receipt + timedelta(seconds=1))
+
+    assert projection.activity.state == "unknown"
+    assert projection.activity.valid_until == observed_at + timedelta(seconds=90)
