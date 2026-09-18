@@ -213,6 +213,7 @@ SCENARIOS = (
     "baseline_compare",
     "parse_ingest_project",
     "orchestration_capability_matrix",
+    "delegation_projection",
     "session_projection",
     "timeline_projection",
     "tool_presentation_projection",
@@ -4625,6 +4626,197 @@ def orchestration_capability_matrix(package: EvidencePackage, provider: str) -> 
     return payload
 
 
+def delegation_projection(package: EvidencePackage, provider: str) -> dict[str, Any]:
+    """Prove the delegated-work chain hermetically, through the real code.
+
+    An observation carrying an orchestration registry must become its own fact
+    and serve as pending work for a session whose own loop is idle. The
+    negative controls carry more weight than the positive one: this axis exists
+    because a session looked idle while its children worked, and the failure to
+    guard against is the mirror image — claiming delegated work nobody
+    observed, or letting an aged-out observation read as "nothing running".
+
+    Hermetic: a throwaway catalog, no provider process. The runner exercises
+    the real runtime writer, the real reducer and the real served projector.
+    """
+
+    import tempfile
+
+    from zerg.catalogd.fact_reducer import read_session_fact_heads
+    from zerg.catalogd.schema import create_catalog_engine
+    from zerg.catalogd.schema import initialize_catalog_schema
+    from zerg.catalogd.store import CatalogStore
+    from zerg.models.live_store import LiveSessionCatalog
+    from zerg.models.live_store import LiveSessionRun
+    from zerg.models.live_store import LiveSessionThread
+    from zerg.services.session_runtime import RuntimeEventIngest
+    from zerg.services.session_state_contract import SessionHostFacts
+    from zerg.services.session_state_contract import project_transcript_facts
+    from zerg.services.session_state_facts_projector import project_served_session_state_facts
+
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = uuid4()
+    thread_id = uuid4()
+    run_id = uuid4()
+
+    with tempfile.TemporaryDirectory() as raw_root:
+        database = Path(raw_root) / "catalog.db"
+        engine = create_catalog_engine(database)
+        initialize_catalog_schema(engine)
+        with engine.begin() as connection:
+            connection.execute(
+                LiveSessionCatalog.__table__.insert().values(
+                    session_id=str(session_id),
+                    provider=provider,
+                    environment="harness",
+                    started_at=now,
+                    user_state="active",
+                )
+            )
+            connection.execute(
+                LiveSessionThread.__table__.insert().values(
+                    id=str(thread_id),
+                    session_id=str(session_id),
+                    provider=provider,
+                    is_primary=1,
+                    branch_kind="root",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            connection.execute(
+                LiveSessionRun.__table__.insert().values(
+                    id=str(run_id),
+                    thread_id=str(thread_id),
+                    provider=provider,
+                    host_id="harness",
+                    launch_origin="longhouse_spawned",
+                    started_at=now,
+                )
+            )
+        store = CatalogStore(engine)
+
+        def apply(*, occurred_at: datetime, payload: dict[str, Any], key: str) -> dict[str, Any]:
+            return store.apply_session_runtime(
+                events=[
+                    RuntimeEventIngest(
+                        runtime_key=f"{provider}:delegation-projection",
+                        session_id=session_id,
+                        run_id=run_id,
+                        provider=provider,
+                        source="provider_hook",
+                        kind="phase_signal",
+                        phase="idle",
+                        occurred_at=occurred_at,
+                        freshness_ms=600_000,
+                        dedupe_key=key,
+                        payload=payload,
+                    )
+                ]
+            )
+
+        registry = {"count": 2, "kinds": {"subagent": 1, "shell": 1}}
+        promoted = apply(occurred_at=now, payload={"delegation": registry}, key="delegation-with")
+        silent = apply(occurred_at=now, payload={}, key="delegation-without")
+
+        with engine.connect() as connection:
+            _commit_seq, heads = read_session_fact_heads(connection, session_id=str(session_id))
+        engine.dispose()
+
+        delegation_heads = [head for head in heads if str(head.get("family")) == "delegation"]
+
+        def served(head_rows: list[dict[str, Any]], *, at: datetime) -> Any:
+            return project_served_session_state_facts(
+                session_id=str(session_id),
+                commit_seq=1,
+                catalog_facts={
+                    "catalog": {"provider": provider},
+                    "latest_run": {"id": str(run_id), "started_at": now, "ended_at": None},
+                },
+                heads=head_rows,
+                supported_operations=(),
+                pending_interaction=None,
+                transcript=project_transcript_facts(
+                    session=SimpleNamespace(started_at=now, ended_at=None, launch_surface=None, transcript_revision=1),
+                    last_activity_at=now,
+                    user_messages=1,
+                    assistant_messages=1,
+                    archive_state="current",
+                    source_revision=1,
+                    durable_revision=1,
+                    render_revision=1,
+                ),
+                host=SessionHostFacts(state="unknown"),
+                now=at,
+            )
+
+        live = served(delegation_heads, at=now)
+        expired = served(delegation_heads, at=now + timedelta(seconds=31 * 60))
+
+        assertions = {
+            # The registry is its own fact, bound to the run that observed it,
+            # and a later observation that carries no registry neither adds nor
+            # replaces one.
+            "registry_promoted_as_its_own_fact": int(promoted["delegation_facts"]["promoted"]) == 1 and len(delegation_heads) == 1,
+            "silent_observation_never_invents_a_registry": int(silent["delegation_facts"]["promoted"]) == 0 and len(delegation_heads) == 1,
+            # Served: pending work speaks for an idle session, with the count and
+            # kinds it observed and its own sentence.
+            "served_as_pending_for_an_idle_session": live.delegation.state == "pending"
+            and live.delegation.count == 2
+            and live.delegation.kinds == {"subagent": 1, "shell": 1}
+            and live.presentation.primary is not None
+            and live.presentation.primary.key == "delegated_work"
+            and live.working_set == "open",
+            # An observation that aged out is the absence of a claim, never a
+            # claim that nothing is running.
+            "expired_evidence_reads_unknown_never_none": expired.delegation.state == "unknown" and expired.working_set != "open",
+        }
+
+        payload_path = package.write_json(
+            "longhouse/delegation-projection.json",
+            {
+                "provider": provider,
+                "promoted": promoted["delegation_facts"],
+                "silent": silent["delegation_facts"],
+                "delegation_heads": len(delegation_heads),
+                "served_live": live.delegation.model_dump(mode="json"),
+                "served_expired": expired.delegation.model_dump(mode="json"),
+                "primary_key": live.presentation.primary.key if live.presentation.primary else None,
+                "working_set": live.working_set,
+            },
+        )
+
+    passed = all(assertions.values())
+    return {
+        "status": STATUS_PASS if passed else STATUS_FAIL,
+        "scenario": "delegation_projection",
+        "provider": provider,
+        "assertions": assertions,
+        "artifact_path": str(payload_path),
+        "failure_code": None if passed else "delegation_projection_mismatch",
+        "operation_evidence": {
+            "delegation_projection": {
+                "status": STATUS_PASS if passed else STATUS_FAIL,
+                "level": "hermetic",
+                "canary": "universal_delegation_projection",
+                "failure_code": None if passed else "delegation_projection_mismatch",
+            }
+        },
+    }
+
+
+def run_delegation_projection(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = delegation_projection(package, adapter.config.provider)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="delegation_projection",
+        package=package,
+        payload=payload,
+    )
+
+
 def _provider_action_coverage_table(provider: str) -> dict[str, dict[str, str]]:
     coverage = serialize_provider_action_coverage(derive_provider_action_coverage(provider))
     return {
@@ -5554,6 +5746,7 @@ SCENARIO_RUNNERS = {
     "full_action_suite": run_full_action_suite,
     "parse_ingest_project": run_parse_ingest_project,
     "orchestration_capability_matrix": run_orchestration_capability_matrix,
+    "delegation_projection": run_delegation_projection,
     "tool_presentation_projection": run_tool_presentation_projection,
     "run_prompt_once": run_prompt_once,
     "send_receive": run_send_receive,

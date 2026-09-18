@@ -1582,6 +1582,34 @@ def test_orchestration_matrix_status_follows_the_capability_rows(tmp_path: Path,
     assert contradicted["results"][0]["status"] == "unsupported_gap"
 
 
+def test_delegation_projection_proves_the_chain_and_its_negative_controls(tmp_path: Path) -> None:
+    """The producer for the delegated-work cell, run for real.
+
+    Drives the runtime writer, the reducer and the served projector over a
+    throwaway catalog. The two negative controls are the ones worth having: a
+    silent observation must not invent a registry, and an observation that aged
+    out must not read as "nothing is running".
+    """
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("claude",),
+            scenarios=("delegation_projection",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
+        )
+    )
+
+    result = payload["results"][0]
+    assert result["scenario"] == "delegation_projection"
+    assert result["status"] == "pass", result["data"]
+    assert result["data"]["assertions"] == {
+        "registry_promoted_as_its_own_fact": True,
+        "silent_observation_never_invents_a_registry": True,
+        "served_as_pending_for_an_idle_session": True,
+        "expired_evidence_reads_unknown_never_none": True,
+    }
+
+
 def test_projection_scenarios_emit_comparable_artifacts_for_all_providers(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
