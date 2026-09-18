@@ -21,6 +21,8 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -92,8 +94,8 @@ pub fn runtime_events(slot: &StatusSlot) -> Vec<Value> {
         "tool_name": slot.tool_name,
         "occurred_at": slot.observed_at,
         "dedupe_key": format!(
-            "omp-phase:{}:{}:{}:{}",
-            slot.session_id, slot.run_id, slot.phase, slot.observed_at
+            "{}-phase:{}:{}:{}:{}",
+            slot.provider, slot.session_id, slot.run_id, slot.phase, slot.observed_at
         ),
         "payload": slot.payload,
     })];
@@ -107,8 +109,8 @@ pub fn runtime_events(slot: &StatusSlot) -> Vec<Value> {
             "kind": "progress_signal",
             "occurred_at": slot.observed_at,
             "dedupe_key": format!(
-                "omp-progress:{}:{}:{}:{}",
-                slot.session_id, slot.run_id, preview.turn_id, preview.seq
+                "{}-progress:{}:{}:{}:{}",
+                slot.provider, slot.session_id, slot.run_id, preview.turn_id, preview.seq
             ),
             "payload": {
                 "progress_kind": preview.progress_kind,
@@ -233,6 +235,141 @@ pub fn sweep_abandoned(dir: &Path, older_than: std::time::Duration) -> usize {
     removed
 }
 
+/// Writes one session's status slot.
+///
+/// Every managed provider needs the same thing: state the current phase, carry
+/// the newest preview, publish a transition immediately, and coalesce a stream
+/// that restates itself every few milliseconds. Keeping one implementation is
+/// the point — six copies of this would be six places to get the coalescing
+/// window or the retirement rule subtly wrong.
+pub struct StatusPublisher {
+    dir: PathBuf,
+    provider: String,
+    transport: String,
+    epoch: String,
+    coalesce: Duration,
+    state: Mutex<StatusPublisherState>,
+}
+
+#[derive(Default)]
+struct StatusPublisherState {
+    preview: Option<StatusPreview>,
+    last_written: Option<Instant>,
+    last_phase: Option<(String, Option<String>)>,
+    seq: u64,
+    /// A retired session has no current status. Nothing may recreate its slot,
+    /// including a frame that was already in flight when the run ended.
+    retired: bool,
+}
+
+/// How long a preview-only update waits before the slot is rewritten. A token
+/// stream restates the preview every few milliseconds; the reader only ever
+/// wants the newest one.
+pub const STATUS_SLOT_COALESCE: Duration = Duration::from_millis(100);
+
+impl StatusPublisher {
+    pub fn new(dir: PathBuf, provider: &str, transport: &str) -> Self {
+        Self {
+            dir,
+            provider: provider.to_string(),
+            transport: transport.to_string(),
+            epoch: uuid::Uuid::new_v4().to_string(),
+            coalesce: STATUS_SLOT_COALESCE,
+            state: Mutex::new(StatusPublisherState::default()),
+        }
+    }
+
+    /// Where this machine's status slots live. A launcher that cannot resolve
+    /// the agent directory writes nowhere rather than guessing at a path.
+    pub fn for_provider(provider: &str, transport: &str) -> Self {
+        let dir = crate::config::get_agent_dir()
+            .map(|agent| status_slot_dir(&agent))
+            .unwrap_or_else(|_| PathBuf::from("/dev/null/longhouse-status"));
+        Self::new(dir, provider, transport)
+    }
+
+    /// Publish the current phase, and the newest preview if there is one.
+    ///
+    /// A phase or tool change publishes immediately, and so does a completed
+    /// turn: its final preview is what a reader keeps until the next turn
+    /// starts, and coalescing it away leaves a truncated answer behind.
+    pub fn publish(
+        &self,
+        session_id: &str,
+        run_id: &str,
+        observed_at: &str,
+        phase: &str,
+        tool: Option<&str>,
+        preview: Option<StatusPreview>,
+    ) {
+        // The lock is held across the write. Dropping it first let two frames
+        // race and land out of order, so the slot could end up holding the
+        // older of two states under the newer sequence.
+        let mut guard = self.state.lock().expect("status publisher mutex poisoned");
+        if guard.retired {
+            return;
+        }
+        let completes_turn = preview.as_ref().is_some_and(|preview| preview.turn_completed);
+        if let Some(preview) = preview {
+            guard.preview = Some(preview);
+        }
+        let phase_key = (phase.to_string(), tool.map(str::to_string));
+        let transition = guard.last_phase.as_ref() != Some(&phase_key);
+        let due = guard
+            .last_written
+            .map(|written| written.elapsed() >= self.coalesce)
+            .unwrap_or(true);
+        if !transition && !due && !completes_turn {
+            return;
+        }
+        guard.last_phase = Some(phase_key);
+        guard.last_written = Some(Instant::now());
+        guard.seq += 1;
+        let slot = StatusSlot {
+            schema: STATUS_SLOT_SCHEMA,
+            session_id: session_id.to_string(),
+            provider: self.provider.clone(),
+            runtime_key: format!("{}:{session_id}", self.provider),
+            run_id: run_id.to_string(),
+            source: self.transport.clone(),
+            phase: phase.to_string(),
+            tool_name: tool.map(str::to_string),
+            observed_at: observed_at.to_string(),
+            payload: serde_json::json!({
+                "managed_transport": self.transport,
+                "execution_lifetime": "interactive",
+                "structured_remote_approval": false,
+            }),
+            preview: guard.preview.clone(),
+            producer_epoch: self.epoch.clone(),
+            seq: guard.seq,
+        };
+        if let Err(error) = publish(&self.dir, &slot) {
+            eprintln!(
+                "[{}-helm] status slot publish failed for {}: {error}",
+                self.provider, slot.session_id
+            );
+        }
+    }
+
+    /// A new turn starts with no preview. Without this the next phase snapshot
+    /// carries the previous turn's text.
+    pub fn clear_preview(&self) {
+        let mut guard = self.state.lock().expect("status publisher mutex poisoned");
+        guard.preview = None;
+    }
+
+    /// The run is over: there is no current status to state. Callers retire
+    /// only once the terminal record is durable, so a failure in between
+    /// cannot lose both the status and the evidence that the run ended.
+    pub fn retire(&self, session_id: &str) {
+        let mut guard = self.state.lock().expect("status publisher mutex poisoned");
+        guard.retired = true;
+        guard.preview = None;
+        retire(&self.dir, session_id);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,6 +482,45 @@ mod tests {
 
         assert!(read_all(&dir).is_empty());
         assert!(slot_path(&dir, "s1").exists(), "and it is not deleted");
+    }
+
+    /// Every provider shares one publisher, so the contract is proven once:
+    /// a transition publishes immediately, a restatement inside the window
+    /// does not, and the wire events carry that provider's own identity.
+    #[test]
+    fn the_publisher_is_provider_generic() {
+        let tmp = TempDir::new().expect("tempdir");
+        let dir = status_slot_dir(tmp.path());
+        let publisher = StatusPublisher::new(dir.clone(), "pi", "pi_helm_channel");
+
+        publisher.publish("s1", "run-1", "2026-09-17T15:00:01Z", "running", Some("bash"), None);
+        let first = read_all(&dir).pop().expect("slot");
+        assert_eq!(first.provider, "pi");
+        assert_eq!(first.runtime_key, "pi:s1");
+        assert_eq!(first.source, "pi_helm_channel");
+        assert_eq!(first.phase, "running");
+
+        // The same statement again, inside the coalesce window.
+        publisher.publish("s1", "run-1", "2026-09-17T15:00:02Z", "running", Some("bash"), None);
+        assert_eq!(read_all(&dir).pop().expect("slot").seq, first.seq);
+
+        // A transition is never coalesced.
+        publisher.publish("s1", "run-1", "2026-09-17T15:00:03Z", "idle", None, None);
+        let idle = read_all(&dir).pop().expect("slot");
+        assert_eq!(idle.phase, "idle");
+        assert!(idle.seq > first.seq);
+
+        let events = runtime_events(&idle);
+        assert_eq!(events[0]["provider"], "pi");
+        assert!(
+            events[0]["dedupe_key"].as_str().expect("key").starts_with("pi-phase:"),
+            "each provider's events carry its own identity"
+        );
+
+        publisher.retire("s1");
+        assert!(read_all(&dir).is_empty());
+        publisher.publish("s1", "run-1", "2026-09-17T15:00:04Z", "running", None, None);
+        assert!(read_all(&dir).is_empty(), "a retired session states nothing further");
     }
 
     #[test]

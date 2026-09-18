@@ -49,10 +49,6 @@ const MAX_LIVE_TEXT_BYTES: usize = 16 * 1024;
 /// enough to leave live sessions marked `degraded` with an empty native
 /// identity. A reservation is a launch-gap guard rather than a precondition,
 /// so a real budget costs latency only when the database is genuinely busy.
-/// How long a preview-only update waits before the slot is rewritten. A token
-/// stream restates the preview every few milliseconds; the reader only ever
-/// wants the newest one.
-const STATUS_SLOT_COALESCE: Duration = Duration::from_millis(100);
 const SOURCE_BINDING_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// Attempts and spacing for the *required* native identity binding: a busy DB
 /// must not become a permanently degraded session.
@@ -154,127 +150,7 @@ struct OmpHelmServer {
     socket_dir: PathBuf,
     stop: Arc<AtomicBool>,
     terminate_requested: Arc<AtomicBool>,
-    status: Arc<StatusPublisher>,
-}
-
-/// Writes this session's one status slot.
-///
-/// Status is replaceable, so it is overwritten rather than queued: a streamed
-/// turn used to leave three fsynced files per token in a shared directory, and
-/// the Machine Agent then had to guess which of them still mattered.
-struct StatusPublisher {
-    dir: PathBuf,
-    epoch: String,
-    state: Mutex<StatusPublisherState>,
-}
-
-#[derive(Default)]
-struct StatusPublisherState {
-    preview: Option<crate::status_slot::StatusPreview>,
-    last_written: Option<Instant>,
-    last_phase: Option<(String, Option<String>)>,
-    seq: u64,
-    /// A retired session has no current status. Nothing may recreate its slot,
-    /// including a frame that was already in flight when the run ended.
-    retired: bool,
-}
-
-/// Where this machine's status slots live. A launcher that cannot resolve the
-/// agent directory writes nowhere rather than guessing at a path.
-fn status_slot_dir_or_default() -> PathBuf {
-    crate::config::get_agent_dir()
-        .map(|agent| crate::status_slot::status_slot_dir(&agent))
-        .unwrap_or_else(|_| PathBuf::from("/dev/null/longhouse-status"))
-}
-
-impl StatusPublisher {
-    fn new(dir: PathBuf) -> Self {
-        Self {
-            dir,
-            epoch: uuid::Uuid::new_v4().to_string(),
-            state: Mutex::new(StatusPublisherState::default()),
-        }
-    }
-
-    /// Publish the current phase, and the newest preview if there is one.
-    ///
-    /// A phase or tool change is published immediately; a preview-only update
-    /// is coalesced, because a token stream restates it every few
-    /// milliseconds and the reader only ever wants the latest.
-    fn publish(
-        &self,
-        state: &OmpHelmStateFile,
-        phase: &str,
-        tool: Option<&str>,
-        preview: Option<crate::status_slot::StatusPreview>,
-    ) {
-        // The lock is held across the write. Dropping it first let two frames
-        // race and land out of order, so the slot could end up holding the
-        // older of two states with the newer sequence.
-        let mut guard = self.state.lock().expect("OMP status publisher mutex poisoned");
-        if guard.retired {
-            return;
-        }
-        let completes_turn = preview.as_ref().is_some_and(|preview| preview.turn_completed);
-        if let Some(preview) = preview {
-            guard.preview = Some(preview);
-        }
-        let phase_key = (phase.to_string(), tool.map(str::to_string));
-        let transition = guard.last_phase.as_ref() != Some(&phase_key);
-        let due = guard
-            .last_written
-            .map(|written| written.elapsed() >= STATUS_SLOT_COALESCE)
-            .unwrap_or(true);
-        // A turn's last preview is the one a reader keeps until the next turn
-        // starts. Coalescing it away leaves the finished answer truncated
-        // until the 20s keepalive, or forever if the run ends first.
-        if !transition && !due && !completes_turn {
-            return;
-        }
-        guard.last_phase = Some(phase_key);
-        guard.last_written = Some(Instant::now());
-        guard.seq += 1;
-        let seq = guard.seq;
-        let slot = crate::status_slot::StatusSlot {
-            schema: crate::status_slot::STATUS_SLOT_SCHEMA,
-            session_id: state.session_id.clone(),
-            provider: "omp".into(),
-            runtime_key: format!("omp:{}", state.session_id),
-            run_id: state.run_id.clone(),
-            source: OMP_HELM_TRANSPORT.into(),
-            phase: phase.to_string(),
-            tool_name: tool.map(str::to_string),
-            observed_at: state.updated_at.clone(),
-            payload: json!({
-                "managed_transport": OMP_HELM_TRANSPORT,
-                "execution_lifetime": "interactive",
-                "structured_remote_approval": false,
-            }),
-            preview: guard.preview.clone(),
-            producer_epoch: self.epoch.clone(),
-            seq,
-        };
-        if let Err(error) = crate::status_slot::publish(&self.dir, &slot) {
-            eprintln!(
-                "[omp-helm] status slot publish failed for {}: {error}",
-                slot.session_id
-            );
-        }
-    }
-
-    /// A new turn starts with no preview. Without this the next phase snapshot
-    /// carries the previous turn's text.
-    fn clear_preview(&self) {
-        let mut guard = self.state.lock().expect("OMP status publisher mutex poisoned");
-        guard.preview = None;
-    }
-
-    fn retire(&self, session_id: &str) {
-        let mut guard = self.state.lock().expect("OMP status publisher mutex poisoned");
-        guard.retired = true;
-        guard.preview = None;
-        crate::status_slot::retire(&self.dir, session_id);
-    }
+    status: Arc<crate::status_slot::StatusPublisher>,
 }
 
 impl OmpHelmServer {
@@ -307,7 +183,10 @@ impl OmpHelmServer {
             socket_dir,
             stop: Arc::new(AtomicBool::new(false)),
             terminate_requested: Arc::new(AtomicBool::new(false)),
-            status: Arc::new(StatusPublisher::new(status_slot_dir_or_default())),
+            status: Arc::new(crate::status_slot::StatusPublisher::for_provider(
+                "omp",
+                OMP_HELM_TRANSPORT,
+            )),
         };
         server.persist_state()?;
         let acceptor = server.clone();
@@ -1183,7 +1062,14 @@ impl OmpHelmServer {
     }
 
     fn publish_phase_snapshot(&self, state: &OmpHelmStateFile, phase: &str, tool: Option<&str>) {
-        self.status.publish(state, phase, tool, None);
+        self.status.publish(
+            &state.session_id,
+            &state.run_id,
+            &state.updated_at,
+            phase,
+            tool,
+            None,
+        );
         wake_transcript_shipper(
             state,
             Path::new(&state.session_file),
@@ -1216,8 +1102,14 @@ impl OmpHelmServer {
             let shared = self.shared.lock().expect("OMP state mutex poisoned");
             (shared.state.phase.clone(), shared.state.tool_name.clone())
         };
-        self.status
-            .publish(state, &phase, tool.as_deref(), Some(preview));
+        self.status.publish(
+            &state.session_id,
+            &state.run_id,
+            &state.updated_at,
+            &phase,
+            tool.as_deref(),
+            Some(preview),
+        );
         wake_transcript_shipper(
             state,
             Path::new(&state.session_file),
@@ -2887,7 +2779,9 @@ mod tests {
             let current = server.current_state();
 
             server.status.publish(
-                &current,
+                &current.session_id,
+                &current.run_id,
+                &current.updated_at,
                 "thinking",
                 None,
                 Some(crate::status_slot::StatusPreview {
@@ -2905,7 +2799,9 @@ mod tests {
             // Immediately after, inside the coalesce window: a completed turn
             // publishes anyway.
             server.status.publish(
-                &current,
+                &current.session_id,
+                &current.run_id,
+                &current.updated_at,
                 "thinking",
                 None,
                 Some(crate::status_slot::StatusPreview {
@@ -2922,7 +2818,14 @@ mod tests {
             assert_eq!(completed.live_text, "the whole answer");
 
             server.status.clear_preview();
-            server.status.publish(&current, "running", None, None);
+            server.status.publish(
+                &current.session_id,
+                &current.run_id,
+                &current.updated_at,
+                "running",
+                None,
+                None,
+            );
             assert!(
                 slot().expect("slot").preview.is_none(),
                 "a new turn does not inherit the last turn's text"

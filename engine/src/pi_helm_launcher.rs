@@ -105,6 +105,7 @@ struct PiHelmServer {
     socket_dir: PathBuf,
     stop: Arc<AtomicBool>,
     terminate_requested: Arc<AtomicBool>,
+    status: Arc<crate::status_slot::StatusPublisher>,
 }
 
 impl PiHelmServer {
@@ -133,6 +134,10 @@ impl PiHelmServer {
             socket_dir,
             stop: Arc::new(AtomicBool::new(false)),
             terminate_requested: Arc::new(AtomicBool::new(false)),
+            status: Arc::new(crate::status_slot::StatusPublisher::for_provider(
+                "pi",
+                PI_HELM_TRANSPORT,
+            )),
         };
         server.persist_state()?;
         let acceptor = server.clone();
@@ -599,46 +604,18 @@ impl PiHelmServer {
     }
 
     fn publish_phase(&self, phase: &str, tool_name: Option<String>) {
+        // One slot per session, overwritten in place. The local phase ledger is
+        // written by the daemon from that slot: a callback that wrote its own
+        // file per frame is the cost this lane exists to remove.
         let state = self.current_state();
-        let observed_at = Utc::now();
-        if let Ok(db_path) = crate::config::get_agent_db_path() {
-            if let Err(error) = crate::hook_outbox::enqueue_local_phase(
-                &db_path,
-                &state.session_id,
-                "pi",
-                phase,
-                tool_name.as_deref(),
-                PI_HELM_TRANSPORT,
-                &observed_at.to_rfc3339(),
-            ) {
-                eprintln!(
-                    "[pi-helm] enqueue local phase failed for {}: {error}",
-                    state.session_id
-                );
-            }
-        }
-        if let Ok(outbox) = crate::config::get_agent_runtime_events_outbox_dir() {
-            let _ = crate::outbox::enqueue_runtime_event(
-                &outbox,
-                &json!({
-                    "runtime_key": format!("pi:{}", state.session_id),
-                    "session_id": state.session_id,
-                    "provider": "pi",
-                    "run_id": state.run_id,
-                    "source": "pi_helm_channel",
-                    "kind": "phase_signal",
-                    "phase": phase,
-                    "tool_name": tool_name,
-                    "occurred_at": Utc::now().to_rfc3339(),
-                    "dedupe_key": format!("pi-helm:{}:{}:phase:{}:{}", state.session_id, state.run_id, phase, state.updated_at),
-                    "payload": {
-                        "managed_transport": PI_HELM_TRANSPORT,
-                        "execution_lifetime": "interactive",
-                        "structured_remote_approval": false,
-                    }
-                }),
-            );
-        }
+        self.status.publish(
+            &state.session_id,
+            &state.run_id,
+            &Utc::now().to_rfc3339(),
+            phase,
+            tool_name.as_deref(),
+            None,
+        );
         wake_transcript_shipper(
             &state,
             Path::new(&state.session_file.clone().unwrap_or_default()),
@@ -1480,7 +1457,16 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         Path::new(&final_state.cwd),
         None,
     );
-    let _ = enqueue_terminal_event(&final_state, &machine_name, exit_code, reason);
+    // Retire the slot only once the terminal record is durable: retiring first
+    // and failing here would leave neither a current status nor the evidence
+    // that the run ended.
+    match enqueue_terminal_event(&final_state, &machine_name, exit_code, reason) {
+        Ok(()) => server.status.retire(&final_state.session_id),
+        Err(error) => eprintln!(
+            "[pi-helm] terminal record enqueue failed for {}: {error}; keeping the status slot",
+            final_state.session_id
+        ),
+    }
     server.shutdown();
     drop(degraded);
     if let Some(message) = exit_code.filter(|code| *code != 0) {
