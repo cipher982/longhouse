@@ -1146,6 +1146,8 @@ def test_tool_call_result_end_to_end_pass(tmp_path: Path, monkeypatch) -> None:
     output_root = tmp_path / "output"
 
     result = bridge.run(request, output_root)
+    harness = json.loads((output_root / "harness-evidence" / "universal-agent-harness.json").read_text(encoding="utf-8"))
+    assert harness["scenarios"] == ["probe_identity", "codex_tool_call_result_strict"]
 
     assert result["valid"] is True
     bundle = json.loads(Path(result["proof_bundle"]).read_text(encoding="utf-8"))

@@ -548,6 +548,14 @@ def _full_column_gate(
     }
 
 
+def _codex_tool_call_result_scenarios(request: Mapping[str, Any]) -> tuple[str, ...]:
+    """Select only profile scenarios for diagnostics; factories request the full column."""
+    profile_scenarios = ("probe_identity", "codex_tool_call_result_strict")
+    if request.get("producer_class") != "release_factory":
+        return profile_scenarios
+    return (*DEFAULT_HARNESS_SCENARIOS, *profile_scenarios)
+
+
 def run_codex_tool_call_result(request_path: Path, output_root: Path) -> dict[str, Any]:
     request = codex_tool_call_result._load_request(request_path)  # noqa: SLF001
     provider_bin, pre_execution_identity, runner_sha = identity_bridge._preflight(  # noqa: SLF001
@@ -572,11 +580,12 @@ def run_codex_tool_call_result(request_path: Path, output_root: Path) -> dict[st
             evidence_class=EvidenceClass.LIVE_NO_TOKEN,
         )
 
+    scenarios = _codex_tool_call_result_scenarios(request)
     with _managed_package_root(build_ref):
         harness_payload = run_harness(
             HarnessOptions(
                 providers=("codex",),
-                scenarios=(*DEFAULT_HARNESS_SCENARIOS, "codex_tool_call_result_strict"),
+                scenarios=scenarios,
                 evidence_root=output_root / "harness-evidence",
                 provider_bins={"codex": provider_bin},
                 provider_builds={"codex": build_ref},
@@ -585,10 +594,19 @@ def run_codex_tool_call_result(request_path: Path, output_root: Path) -> dict[st
         )
     probe_result = _scenario_result(harness_payload, provider="codex", scenario="probe_identity")
     strict_result = _scenario_result(harness_payload, provider="codex", scenario="codex_tool_call_result_strict")
-    full_column_gate = _full_column_gate(
-        harness_payload,
-        qualification_request_digest=request.get("semantic_digest"),
-        interaction_evidence_class=(request.get("scenario_evidence") or {}).get("interaction_semantics"),
+    full_column_gate = (
+        _full_column_gate(
+            harness_payload,
+            qualification_request_digest=request.get("semantic_digest"),
+            interaction_evidence_class=(request.get("scenario_evidence") or {}).get("interaction_semantics"),
+        )
+        if request.get("producer_class") == "release_factory"
+        else {
+            "status": "not_requested",
+            "provider": "codex",
+            "failure_code": None,
+            "reason": "local_diagnostic_request",
+        }
     )
 
     post_execution_identity = provider_release_identity.sha256_file(provider_bin)
@@ -603,10 +621,9 @@ def run_codex_tool_call_result(request_path: Path, output_root: Path) -> dict[st
     }
     ran_strict_check = strict_result.get("status") in {"pass", "fail"}
     evidence_class = EvidenceClass.LIVE_TOKEN if ran_strict_check else EvidenceClass.LIVE_NO_TOKEN
-    # The profile owns the four outcomes above.  The universal full-column
-    # gate is retained as separate coverage evidence; it must not turn a
-    # successful codex_tool_call_result proof into an infrastructure failure
-    # because an unrelated requirement was unavailable.
+    # Factory requests retain the universal full-column gate as separate
+    # coverage evidence; local diagnostics intentionally run only the profile
+    # scenarios and therefore do not claim that unrelated column coverage ran.
     if AssertionOutcome.INFRASTRUCTURE_ERROR in outcomes.values():
         execution_status = "infrastructure_error"
     elif all(outcome == AssertionOutcome.BLOCKED for outcome in outcomes.values()):
