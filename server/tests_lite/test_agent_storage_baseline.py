@@ -78,9 +78,7 @@ def test_missing_engine_status_and_log_are_named(baseline, tmp_path: Path) -> No
     assert report["healthy_baseline"] is False
 
 
-def test_a_partially_failed_lock_probe_is_not_a_clean_measurement(
-    baseline, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_partially_failed_lock_probe_is_not_a_clean_measurement(baseline, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     database = tmp_path / "longhouse-shipper.db"
     conn = sqlite3.connect(database)
     conn.execute("CREATE TABLE file_state (path TEXT)")
