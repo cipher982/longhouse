@@ -26,6 +26,7 @@ class ProviderPtySession:
     _write_lock: threading.Lock
     text_settle_seconds: float = 0.3
     escape_settle_seconds: float = 0.1
+    steer_queue_settle_seconds: float = 0.5
 
     @classmethod
     def start(
@@ -125,7 +126,26 @@ class ProviderPtySession:
         self.write(b"\x03")
 
     def submit_active(self, text: str) -> None:
-        self.submit_line(text)
+        """Inject text into the generation that is already running.
+
+        Cursor's TUI needs two Enters: text plus Enter only *queues* a
+        follow-up, and Enter on the now-empty prompt injects that queued
+        message into the running generation at its next tool boundary. One
+        Enter is exactly the `cursor_steer_queue_only` negative control
+        (engine/src/cursor_helm_launcher.rs pops the second CR to simulate a
+        broken steer), so a one-Enter harness reports a working provider as
+        unsupported -- which is what factory run aa7770ad did against
+        2026.09.10, a version with native steer. No ESC: it clears the queue.
+        """
+
+        if not self.alive():
+            raise RuntimeError(f"provider process exited before submit ({self.process.returncode})")
+        with self._write_lock:
+            os.write(self.master_fd, text.encode("utf-8"))
+            time.sleep(self.text_settle_seconds)
+            os.write(self.master_fd, b"\r")
+            time.sleep(self.steer_queue_settle_seconds)
+            os.write(self.master_fd, b"\r")
 
     def close(self) -> None:
         self._stop_reader.set()

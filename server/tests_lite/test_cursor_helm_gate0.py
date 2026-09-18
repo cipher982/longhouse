@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import threading
 from pathlib import Path
 from subprocess import CompletedProcess
+from types import SimpleNamespace
+from typing import Any
+from typing import cast
 
 import pytest
 
@@ -22,6 +27,7 @@ from zerg.qa.cursor_helm_gate0 import _storage_v2_receipt_payload
 from zerg.qa.cursor_helm_gate0 import find_cursor_store
 from zerg.qa.cursor_helm_gate0 import read_hook_events
 from zerg.qa.cursor_helm_gate0 import write_project_hooks
+from zerg.qa.pty_session import ProviderPtySession
 
 
 def test_decode_cursor_meta_accepts_hex_encoded_json() -> None:
@@ -480,3 +486,40 @@ def test_permission_ask_needs_more_than_an_absent_side_effect(monkeypatch, tmp_p
     executed_root.mkdir()
     with pytest.raises(RuntimeError, match="reported shell execution"):
         _run_permission_scenario(monkeypatch, executed_root, "ask", hook_events=executed)
+
+
+def test_submit_active_steers_with_two_enters_not_one(tmp_path: Path) -> None:
+    """Gate 0's steer must send the sequence that actually steers Cursor.
+
+    Text plus one Enter only *queues* a follow-up; Enter on the now-empty
+    prompt injects it into the running generation. One Enter is exactly the
+    `cursor_steer_queue_only` negative control (the engine pops the second
+    CR to simulate a broken steer), so a one-Enter harness reports a working
+    provider as unsupported -- which is what factory run aa7770ad did against
+    2026.09.10, a version with native steer. Proven live 2026-09-18: same
+    binary and credential, one Enter -> response_was_steered false, two
+    Enters -> true. No ESC: that clears Cursor's follow-up queue.
+    """
+
+    read_fd, write_fd = os.pipe()
+    session = ProviderPtySession(
+        process=cast(Any, SimpleNamespace(poll=lambda: None, returncode=None)),
+        master_fd=write_fd,
+        terminal_path=tmp_path / "terminal.raw",
+        _reader=cast(Any, SimpleNamespace(join=lambda timeout=None: None)),
+        _stop_reader=threading.Event(),
+        _write_lock=threading.Lock(),
+        text_settle_seconds=0.0,
+        escape_settle_seconds=0.0,
+        steer_queue_settle_seconds=0.0,
+    )
+    try:
+        session.submit_active("STEER")
+    finally:
+        os.close(write_fd)
+    written = os.read(read_fd, 4096)
+    os.close(read_fd)
+
+    assert written == b"STEER\r\r"
+    assert written.count(b"\r") == 2
+    assert b"\x1b" not in written
