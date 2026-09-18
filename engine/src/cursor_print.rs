@@ -609,24 +609,24 @@ impl CursorPrintSink {
     }
 
     async fn post_phase(&self, phase: &str, tool_name: Option<String>) {
+        // The phase goes to this session's status slot; the daemon records the
+        // local ledger from it and sends it. Only the records no later event
+        // can restate — binding, terminal — stay on the durable queue.
         let observed_at = Utc::now();
-        self.persist_local_phase(phase, tool_name.clone(), observed_at);
-        self.post_events(vec![json!({
-            "runtime_key": format!("cursor:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "cursor",
-            "device_id": self.machine_name,
-            "source": CURSOR_PRINT_ADAPTER,
-            "kind": "phase_signal",
-            "phase": phase,
-            "tool_name": tool_name,
-            "occurred_at": observed_at.to_rfc3339(),
-            "dedupe_key": format!("cursor-print:{}:{}:phase:{phase}", self.session_id, self.run_id),
-            "payload": {"managed_transport": CURSOR_PRINT_ADAPTER, "execution_lifetime": "one_shot"}
-        })])
-        .await;
+        crate::status_slot::publish_console_phase(
+            "cursor",
+            CURSOR_PRINT_ADAPTER,
+            &self.session_id,
+            &self.run_id,
+            &observed_at.to_rfc3339(),
+            phase,
+            tool_name.as_deref(),
+            json!({
+                "execution_lifetime": "one_shot",
+                "thread_id": self.thread_id,
+                "device_id": self.machine_name,
+            }),
+        );
     }
 
     async fn post_stream_event(&self, seq: u64, event: Value) {

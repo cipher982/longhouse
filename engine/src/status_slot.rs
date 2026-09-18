@@ -84,7 +84,13 @@ impl StatusSlot {
 /// slot is the durable copy, so a failed send simply sends the newer value on
 /// the next tick, and a daemon restart is current as soon as it reads them.
 pub fn runtime_events(slot: &StatusSlot) -> Vec<Value> {
-    let mut events = vec![serde_json::json!({
+    let mut events = Vec::new();
+    // Some phases are local-health vocabulary the Runtime Host does not accept
+    // — `finished` is the one a Console turn ends on. The durable enqueue path
+    // refused those at the producer; the slot path has to refuse them here, or
+    // the daemon posts a 422 every tick until the slot is retired.
+    if crate::managed_phase_contract::is_wire_phase(&slot.phase) {
+        events.push(serde_json::json!({
         "runtime_key": slot.runtime_key,
         "session_id": slot.session_id,
         "provider": slot.provider,
@@ -99,7 +105,8 @@ pub fn runtime_events(slot: &StatusSlot) -> Vec<Value> {
             slot.provider, slot.session_id, slot.run_id, slot.phase, slot.observed_at
         ),
         "payload": slot.payload,
-    })];
+        }));
+    }
     if let Some(preview) = slot.preview.as_ref() {
         events.push(serde_json::json!({
             "runtime_key": slot.runtime_key,
@@ -283,6 +290,30 @@ impl<'a> StatusUpdate<'a> {
         self.extra_payload = Some(extra);
         self
     }
+}
+
+/// State a Console turn's phase in the session's slot.
+///
+/// Console adapters are one-shot and headless, but their status is the same
+/// kind of claim a Helm session makes: replaceable, restated often, and worth
+/// exactly one file. What ends a Console turn is its terminal record, which
+/// stays on the durable queue — so the slot carrying the last phase is not
+/// load-bearing for knowing the run finished.
+pub fn publish_console_phase(
+    provider: &str,
+    transport: &str,
+    session_id: &str,
+    run_id: &str,
+    observed_at: &str,
+    phase: &str,
+    tool: Option<&str>,
+    extra_payload: Value,
+) {
+    publisher_for(provider, transport, session_id).publish(
+        StatusUpdate::phase(session_id, run_id, observed_at, phase)
+            .with_tool(tool)
+            .with_payload(extra_payload),
+    );
 }
 
 /// Publishers are per session and per process: the epoch and sequence they
@@ -521,6 +552,32 @@ mod tests {
         // Cumulative text carries everything the deltas said, so no delta is
         // transported at all.
         assert!(events[1]["payload"].get("delta").is_none());
+    }
+
+    /// `finished` is local-health vocabulary, not a wire phase. The durable
+    /// enqueue path refused it at the producer; the slot path has to refuse it
+    /// in the projection, or the daemon posts a rejected event every tick
+    /// until the slot is retired.
+    #[test]
+    fn a_local_health_phase_is_never_projected_onto_the_wire() {
+        let mut finished = slot("s1", "finished", 1);
+        finished.preview = Some(StatusPreview {
+            turn_id: "turn-1".into(),
+            seq: 1,
+            live_text: "the answer".into(),
+            turn_completed: true,
+            progress_kind: "cursor_print_stream".into(),
+            provider_session_id: None,
+        });
+
+        let events = runtime_events(&finished);
+
+        assert!(
+            events.iter().all(|event| event["kind"] != "phase_signal"),
+            "a phase the host rejects is never sent"
+        );
+        assert_eq!(events.len(), 1, "the preview still ships");
+        assert_eq!(events[0]["kind"], "progress_signal");
     }
 
     #[test]
