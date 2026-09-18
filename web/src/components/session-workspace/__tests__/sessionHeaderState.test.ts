@@ -69,6 +69,27 @@ describe("getSessionHeaderState", () => {
     expect(state.text).toBe("Using hub for 35 minutes");
   });
 
+  it("does not name a tool for a thinking activity that still carries one", () => {
+    // A finished tool leaves its name on the activity fact, so a non-empty
+    // `tool` is not evidence that one is running. Without the gate this read
+    // "Using Bash for 1 minute" while the session was only thinking — the
+    // defect that made an idle parent look busy on the strength of a child's
+    // tool name.
+    const now = Date.parse("2026-04-15T16:30:00Z");
+    const state = getSessionHeaderState(
+      session({
+        activityState: "thinking",
+        tool: "Bash",
+        observedAt: "2026-04-15T16:29:00Z",
+        primaryTone: "thinking",
+      }),
+      now,
+    );
+    expect(state.tone).toBe("live");
+    expect(state.text).toMatch(/^Working for /);
+    expect(state.text).not.toContain("Bash");
+  });
+
   it("does not turn expired activity evidence into a positive idle claim", () => {
     const now = Date.parse("2026-04-15T16:30:00Z");
     const state = getSessionHeaderState(

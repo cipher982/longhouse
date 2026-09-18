@@ -1532,7 +1532,11 @@ export function SessionChat({
     activityNowMs,
     turnStartMs,
   );
-  const activityTool = activity.tool?.trim() || null;
+  // Same rule as getSessionHeaderState: only an executing activity may claim a
+  // tool. A thinking phase keeps the last tool name on the fact, and rendering
+  // it there is what made a finished Bash look like running work.
+  const activityTool =
+    activity.state === "executing" ? activity.tool?.trim() || null : null;
   const composerElapsedSeconds =
     composerState.tone === "live" && turnStartMs != null
       ? Math.max(0, Math.floor((activityNowMs - turnStartMs) / 1_000))

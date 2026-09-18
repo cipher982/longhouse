@@ -93,7 +93,12 @@ export function getSessionHeaderState(
   }
 
   if (working) {
-    const tool = facts.activity.tool?.trim();
+    // A finished tool leaves its name on the activity fact, so a non-empty
+    // `tool` is not evidence that one is running: only `executing` claims
+    // that. Without this gate a session that just ran Bash keeps reading
+    // "Using Bash for 4 minutes" while it is actually thinking.
+    const tool =
+      facts.activity.state === "executing" ? facts.activity.tool?.trim() : undefined;
     const fallbackAnchorMs = Date.parse(facts.activity.observed_at ?? "");
     const anchorMs = turnStartMs ?? (Number.isFinite(fallbackAnchorMs) ? fallbackAnchorMs : null);
     const elapsedSeconds = anchorMs != null
