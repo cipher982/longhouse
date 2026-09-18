@@ -111,7 +111,7 @@ def test_transit_delay_no_longer_expires_a_working_session():
             received_at=received_at,
             contract_window=timedelta(seconds=90),
         ),
-        now=received_at + timedelta(seconds=30),
+        now=received_at + timedelta(seconds=10),
     )
 
     assert projection.activity.state == "thinking"
@@ -207,37 +207,46 @@ def test_a_backlog_drained_later_does_not_look_current():
     )
 
     assert projection.activity.state == "unknown"
-    assert projection.activity.valid_until == observed_at + timedelta(seconds=90)
+    # No lease and no declared window to fall back to: an observation that
+    # arrives late is history, and freshness that nothing anchors is not
+    # freshness.
+    assert projection.activity.valid_until == observed_at
 
 
-def test_the_lease_never_shortens_a_contract_window():
-    """The lease is a floor, even for a phase that no longer asserts.
+def test_a_phase_that_outlives_its_lease_is_kept_current_by_the_assertion():
+    """No declared window can stand in for the machine still reporting.
 
-    A block is the provider saying it is waiting, and since 2026-09-18 the
-    *wait itself* is carried by the interaction axis, not by this window — so
-    the served state is quiescent and only the raw kind still reports what was
-    observed. The floor is unchanged and still has to hold: whatever window a
-    phase declares is the phase's to keep, and the lease may only ever extend
-    it.
+    A `blocked` used to be declared current for a day, which is how a session
+    headlined "Blocked" long after the dialog closed. What keeps a genuinely
+    long phase current is the Machine Agent asserting that the session is still
+    running — and when the assertions stop, the phase stops being current, no
+    matter what it declared.
     """
 
     observed_at = _at()
     received_at = observed_at + timedelta(seconds=2)
     day = timedelta(hours=24)
-
-    projection = _project(
-        _activity_head(
-            phase="blocked",
-            observed_at=observed_at,
-            received_at=received_at,
-            contract_window=day,
-        ),
-        now=received_at + timedelta(minutes=30),
+    head = _activity_head(
+        phase="blocked",
+        observed_at=observed_at,
+        received_at=received_at,
+        contract_window=day,
     )
 
-    assert projection.activity.state == "quiescent"
-    assert projection.activity.raw_kind == "blocked"
-    assert projection.activity.valid_until == observed_at + day
+    asserted = received_at + timedelta(minutes=29)
+    asserted_projection = _project(head, now=asserted + timedelta(seconds=5), asserted_at=asserted)
+
+    assert asserted_projection.activity.state == "quiescent"
+    assert asserted_projection.activity.raw_kind == "blocked"
+    assert asserted_projection.activity.valid_until == asserted + ACTIVITY_OBSERVATION_LEASE
+
+    # The same head, the same declared day, once the assertions stop.
+    stale_projection = _project(
+        head,
+        now=asserted + ACTIVITY_OBSERVATION_LEASE + timedelta(seconds=1),
+        asserted_at=asserted,
+    )
+    assert stale_projection.activity.state == "unknown"
 
 
 def test_a_redelivered_observation_cannot_renew_the_lease():
@@ -262,18 +271,16 @@ def test_a_redelivered_observation_cannot_renew_the_lease():
     replayed = _project(head, now=received_at + timedelta(seconds=40))
 
     assert first.activity.valid_until == replayed.activity.valid_until
-    assert replayed.activity.valid_until == max(
-        observed_at + timedelta(seconds=90),
-        received_at + ACTIVITY_OBSERVATION_LEASE,
-    )
+    assert replayed.activity.valid_until == received_at + ACTIVITY_OBSERVATION_LEASE
 
 
 def test_an_unreadable_receipt_costs_the_lease_not_the_head():
     """The lease may never reject a head.
 
     SQLite hands back naive datetimes, and a receipt this code cannot parse is
-    not evidence that the session is dead. Raising here would serve a live
-    session as `unknown`, which is the failure the lease exists to prevent.
+    not evidence that the session is dead. Raising would reject the head
+    outright; what a missing anchor costs is the lease, so the phase is still
+    reported and only its freshness is unknown.
     """
 
     observed_at = _at()
@@ -286,10 +293,11 @@ def test_an_unreadable_receipt_costs_the_lease_not_the_head():
         )
         head["received_at"] = unreadable
 
-        projection = _project(head, now=observed_at + timedelta(seconds=30))
+        projection = _project(head, now=observed_at + timedelta(seconds=5))
 
-        assert projection.activity.state == "thinking", unreadable
-        assert projection.activity.valid_until == observed_at + timedelta(seconds=90)
+        assert projection.rejected_heads == 0, unreadable
+        assert projection.activity.raw_kind == "thinking", unreadable
+        assert projection.activity.state == "unknown", unreadable
 
     naive = _activity_head(
         phase="thinking",
@@ -297,18 +305,43 @@ def test_an_unreadable_receipt_costs_the_lease_not_the_head():
         received_at=observed_at,
         contract_window=timedelta(seconds=90),
     )
-    naive["received_at"] = (observed_at + timedelta(seconds=50)).replace(tzinfo=None)
+    naive["received_at"] = (observed_at + timedelta(seconds=5)).replace(tzinfo=None)
 
-    projection = _project(naive, now=observed_at + timedelta(seconds=60))
+    projection = _project(naive, now=observed_at + timedelta(seconds=10))
 
     assert projection.activity.state == "thinking"
-    assert projection.activity.valid_until == observed_at + timedelta(seconds=50) + ACTIVITY_OBSERVATION_LEASE
+    assert projection.activity.valid_until == observed_at + timedelta(seconds=5) + ACTIVITY_OBSERVATION_LEASE
 
 
-def test_the_lease_outlasts_the_slowest_producer_keepalive():
-    """A lease shorter than a producer's keepalive flaps a healthy session."""
+def test_the_assertion_covers_a_keepalive_gap_a_short_lease_would_not():
+    """A lease shorter than a producer's keepalive must not flap a live session.
 
-    assert ACTIVITY_OBSERVATION_LEASE >= timedelta(seconds=40)
+    The lease is deliberately short — it measures whether the machine is still
+    reporting — and the gap between a hook provider's own events is often
+    longer. The assertion is what spans it, which is why the lease no longer
+    has to be long enough to cover the slowest producer on its own.
+    """
+
+    assert ACTIVITY_OBSERVATION_LEASE < timedelta(seconds=40)
+
+    observed_at = _at()
+    received_at = observed_at + timedelta(seconds=1)
+    head = _activity_head(
+        phase="thinking",
+        observed_at=observed_at,
+        received_at=received_at,
+        contract_window=timedelta(seconds=90),
+    )
+
+    quiet = _project(head, now=received_at + timedelta(seconds=400))
+    assert quiet.activity.state == "unknown", "a silent machine is not current, however long its declared window"
+
+    still_reporting = _project(
+        head,
+        now=received_at + timedelta(seconds=400),
+        asserted_at=received_at + timedelta(seconds=395),
+    )
+    assert still_reporting.activity.state == "thinking"
 
 
 @pytest.fixture
@@ -429,4 +462,4 @@ def test_an_old_observation_gets_no_lease_even_as_a_fresh_head(catalog_engine):
     projection = _project_stored_heads(catalog_engine, now=late_receipt + timedelta(seconds=1))
 
     assert projection.activity.state == "unknown"
-    assert projection.activity.valid_until == observed_at + timedelta(seconds=90)
+    assert projection.activity.valid_until == observed_at

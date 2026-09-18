@@ -921,11 +921,13 @@ def _valid_until(
     declared = _wire_datetime(raw, "valid_until")
     if family != "activity":
         return declared
-    # C1 landed first: the lease renews from the machine's assertion as well as
-    # from a delivery. The producer's per-phase window still stands until C2
-    # removes it, which is what makes this step verifiable on its own — nothing
-    # served shortens here, only what keeps a working session current extends.
-    return max(declared, _activity_lease_until(head, observed_at, asserted_at) or declared)
+    # One lease, and nothing else. The producer's per-phase window used to be a
+    # floor here: `thinking` was declared current for 90s and `blocked` for a
+    # day, and neither was a statement about transport — they were guesses about
+    # how long a phase ought to last, which is how a session headlined "Blocked"
+    # long after the dialog closed. A phase that genuinely lasts is kept current
+    # by the machine asserting it, not by a window that outlives the evidence.
+    return _activity_lease_until(head, observed_at, asserted_at) or observed_at
 
 
 # Activity used to expire purely on producer time: a `thinking` observation was
@@ -943,7 +945,7 @@ def _valid_until(
 # becomes the head, and so cannot renew anything; an assertion carries the time
 # it was minted and only a strictly newer one is accepted, so replaying an old
 # frame renews nothing either.
-ACTIVITY_OBSERVATION_LEASE = timedelta(seconds=45)
+ACTIVITY_OBSERVATION_LEASE = timedelta(seconds=15)
 MAX_OBSERVATION_DELAY = timedelta(seconds=60)
 
 

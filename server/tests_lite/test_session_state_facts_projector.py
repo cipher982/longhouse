@@ -14,6 +14,7 @@ from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.session_state_contract import SessionHostFacts
 from zerg.services.session_state_contract import SessionTranscriptFacts
+from zerg.services.session_state_facts_projector import ACTIVITY_OBSERVATION_LEASE
 from zerg.services.session_state_facts_projector import CONTINUATION_RETENTION
 from zerg.services.session_state_facts_projector import authorize_exact_control_fact
 from zerg.services.session_state_facts_projector import project_served_session_state_facts
@@ -102,6 +103,10 @@ def _head(
         "evidence_hash": evidence_hash or canonical_evidence_hash(value),
         "value_json": json.dumps(value),
         "valid_until": value.get("valid_until"),
+        # Every stored head carries the receipt the reducer stamped on it, and
+        # the activity lease is anchored to that. A fixture without one is a head
+        # no producer can emit.
+        "received_at": value.get("observed_at"),
     }
 
 
@@ -169,7 +174,9 @@ def test_projector_selects_newest_unexpired_head_without_commit_or_receive_ranki
     assert projection.control is None
     assert projection.fact_sources["activity"].source == "a-source"
     assert projection.fact_sources["activity"].subject_key == "run:run-1"
-    assert projection.fact_sources["activity"].valid_until == NOW + timedelta(minutes=5)
+    # The lease, not the declared window: freshness is whether the machine is
+    # still reporting, and the newer head was received one second after NOW.
+    assert projection.fact_sources["activity"].valid_until == NOW + timedelta(seconds=1) + ACTIVITY_OBSERVATION_LEASE
     assert "control" not in projection.fact_sources
     assert projection.mode == "shadow"
     assert projection.disposition.state == "open"
@@ -264,7 +271,7 @@ def test_projector_expires_activity_and_derives_control_lease_from_ttl():
     assert projection.activity.raw_kind == "running"
     assert projection.activity.tool == "Shell"
     assert projection.activity.observed_at == NOW
-    assert projection.activity.valid_until == NOW + timedelta(seconds=1)
+    assert projection.activity.valid_until == NOW + ACTIVITY_OBSERVATION_LEASE
     assert projection.fact_sources["activity"].source == "provider_a"
     assert projection.control is not None
     assert projection.control.connection == "connected"
@@ -506,7 +513,7 @@ def test_served_projector_describes_expired_activity_without_claiming_it_is_curr
     assert served.activity.state == "unknown"
     assert served.activity.raw_kind == "running"
     assert served.activity.observed_at == NOW
-    assert served.activity.valid_until == NOW + timedelta(seconds=1)
+    assert served.activity.valid_until == NOW + ACTIVITY_OBSERVATION_LEASE
     assert served.presentation.primary is not None
     assert served.presentation.primary.key == "no_recent_activity"
     assert served.presentation.primary.label == "Last observed running a tool"

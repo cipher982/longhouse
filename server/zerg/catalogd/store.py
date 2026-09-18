@@ -5872,6 +5872,9 @@ class CatalogStore:
                                         "value_json": head["value_json"],
                                         "valid_until": (head["valid_until"].isoformat() if head["valid_until"] is not None else None),
                                         "updated_commit_seq": head["updated_commit_seq"],
+                                        # What the activity lease anchors to. Omitted, every
+                                        # head this path serializes reads as expired.
+                                        "received_at": (head["received_at"].isoformat() if head["received_at"] is not None else None),
                                     }
                                     for head in heads_by_session[str(item["catalog"]["session_id"])][0]
                                 ],
@@ -5976,6 +5979,9 @@ class CatalogStore:
                         "value_json": head["value_json"],
                         "valid_until": head["valid_until"].isoformat() if head["valid_until"] is not None else None,
                         "updated_commit_seq": head["updated_commit_seq"],
+                        # What the activity lease anchors to. Omitted, every
+                        # head this path serializes reads as expired.
+                        "received_at": head["received_at"].isoformat() if head["received_at"] is not None else None,
                     }
                     for head in heads
                 ],
@@ -6039,6 +6045,9 @@ class CatalogStore:
                                 "value_json": head["value_json"],
                                 "valid_until": head["valid_until"].isoformat() if head["valid_until"] is not None else None,
                                 "updated_commit_seq": head["updated_commit_seq"],
+                                # What the activity lease anchors to. Omitted, every
+                                # head this path serializes reads as expired.
+                                "received_at": head["received_at"].isoformat() if head["received_at"] is not None else None,
                             }
                             for head in heads
                         ],
