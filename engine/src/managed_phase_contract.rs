@@ -46,7 +46,7 @@ pub fn is_wire_phase(value: &str) -> bool {
 pub const PHASE_FRESHNESS_SECONDS: &[(&str, i64)] = &[
     (PHASE_THINKING, 90),
     (PHASE_RUNNING, 600),
-    (PHASE_BLOCKED, 86400),
+    (PHASE_BLOCKED, 90),
     (PHASE_NEEDS_USER, 600),
     (PHASE_STALLED, 600),
     (PHASE_IDLE, 600),
