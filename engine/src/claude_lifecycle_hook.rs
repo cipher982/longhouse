@@ -109,6 +109,12 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
         "transcript_path": transcript_path,
         "control_path": if managed_session_id.is_some() { "managed" } else { "unmanaged" },
     });
+    // The in-flight registry rides every presence observation that carries it.
+    // The daemon re-posts the latest observation per session, so the snapshot
+    // stays asserted until Claude stops reporting it.
+    if let Some(snapshot) = delegation_snapshot(input) {
+        payload["delegation"] = snapshot;
+    }
     attach_provider_session_id(
         &mut payload,
         managed_session_id.is_some(),
@@ -197,6 +203,45 @@ fn parse_process_row(row: &str) -> Option<(&str, u32)> {
     let command = fields.next()?;
     let parent = fields.last()?.parse().ok()?;
     Some((command, parent))
+}
+
+/// Bounded in-flight registry from Claude's Stop and SubagentStop hooks.
+///
+/// `background_tasks[]` is how Claude distinguishes "session is done" from
+/// "session is paused waiting for background work to wake it back up", and it
+/// is scoped to the parent session. The server reduces this into the
+/// `delegation` fact family — a separate axis, because activity expires in
+/// 90-600s while a background agent outlives turns.
+///
+/// `session_crons[]` is deliberately not folded in here: a scheduled wakeup is
+/// future work, not work in flight, and the two are separate signals
+/// (`delegation.background` and `delegation.scheduled`).
+fn delegation_snapshot(input: &Value) -> Option<Value> {
+    const KIND_LIMIT: usize = 8;
+    const COUNT_LIMIT: usize = 256;
+    let tasks = input.get("background_tasks").and_then(Value::as_array)?;
+    let mut kinds: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    for task in tasks {
+        // Claude's labels are friendly strings ("shell", "subagent", "cloud
+        // session", "MCP task"); normalize the multi-word ones so a consumer
+        // can key on them without guessing.
+        let raw = task.get("type").and_then(Value::as_str).unwrap_or("").trim();
+        let kind = match raw.to_ascii_lowercase().replace([' ', '-'], "_").as_str() {
+            "shell" => "shell",
+            "subagent" => "subagent",
+            "monitor" => "monitor",
+            "workflow" => "workflow",
+            "teammate" => "teammate",
+            "cloud_session" => "cloud_session",
+            "mcp_task" => "mcp_task",
+            _ => "other",
+        };
+        *kinds.entry(kind.to_string()).or_insert(0) += 1;
+    }
+    Some(json!({
+        "count": tasks.len().min(COUNT_LIMIT),
+        "kinds": kinds.into_iter().take(KIND_LIMIT).collect::<std::collections::BTreeMap<_, _>>(),
+    }))
 }
 
 fn string(input: &Value, key: &str) -> Option<String> {
@@ -334,6 +379,46 @@ mod tests {
         let mut missing = json!({"session_id": "lh-id", "state": "idle"});
         attach_provider_session_id(&mut missing, true, None);
         assert!(missing.get("provider_session_id").is_none());
+    }
+
+    #[test]
+    fn a_stop_payload_reports_its_in_flight_registry() {
+        // Claude publishes this on Stop and SubagentStop so a hook can tell
+        // "session is done" from "session is paused waiting for background
+        // work". Before this it reached the machine and was discarded.
+        let input = json!({
+            "hook_event_name": "Stop",
+            "background_tasks": [
+                {"id": "t1", "type": "subagent", "status": "running", "agent_type": "Explore"},
+                {"id": "t2", "type": "shell", "status": "running", "command": "tail -f /var/log/syslog"},
+                {"id": "t3", "type": "cloud session", "status": "running"},
+                {"id": "t4", "type": "MCP task", "status": "running"},
+            ],
+            "session_crons": [{"id": "c1", "schedule": "0 9 * * 1-5", "recurring": true}],
+        });
+
+        let snapshot = delegation_snapshot(&input).expect("a registry must be reported");
+
+        // Multi-word labels normalize; crons are future work, not in flight,
+        // and belong to a separate signal.
+        assert_eq!(snapshot["count"], json!(4));
+        assert_eq!(snapshot["kinds"]["subagent"], json!(1));
+        assert_eq!(snapshot["kinds"]["shell"], json!(1));
+        assert_eq!(snapshot["kinds"]["cloud_session"], json!(1));
+        assert_eq!(snapshot["kinds"]["mcp_task"], json!(1));
+        assert!(snapshot["kinds"].get("scheduled").is_none());
+    }
+
+    #[test]
+    fn an_empty_registry_is_an_observation_and_a_missing_one_is_not() {
+        // `count: 0` is a positive observation that the task registry was
+        // reachable and empty; no array at all is the absence of a claim. The
+        // server serves those as `none` and `unknown` respectively.
+        assert!(delegation_snapshot(&json!({"hook_event_name": "PreToolUse"})).is_none());
+
+        let empty = delegation_snapshot(&json!({"background_tasks": []})).unwrap();
+        assert_eq!(empty["count"], json!(0));
+        assert_eq!(empty["kinds"], json!({}));
     }
 
     /// Serialize an environment mutation against the shared lock and restore it.
