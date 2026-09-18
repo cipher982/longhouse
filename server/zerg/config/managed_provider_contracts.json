@@ -730,14 +730,11 @@
           "owner_action": "widen CodexSubagentSource to carry depth/agent_nickname/agent_role and expose lineage_kind; parent_thread_id alone is already read"
         },
         "delegation.background": {
-          "disposition": "not_implemented",
-          "raw_source": "event_msg/turn_duration.pendingBackgroundAgentCount",
-          "entrypoints": [
-            "cli"
-          ],
+          "disposition": "upstream_absent",
+          "raw_source": "none",
           "canary": "codex_orchestration_signals",
-          "trigger": "background_work",
-          "owner_action": "consume the pending_background_agents provider fact the engine already ships with no reader"
+          "trigger": "census",
+          "owner_action": "Codex writes no in-flight count or registry; pendingBackgroundAgentCount is a Claude system/turn_duration field and appears in zero Codex rollouts (verified: the single hit in the local corpus is a transcript quoting this documentation)"
         },
         "delegation.workflow": {
           "disposition": "upstream_absent",
@@ -1601,14 +1598,14 @@
         },
         "delegation.background": {
           "disposition": "not_implemented",
-          "raw_source": "hook:Stop.background_tasks",
+          "raw_source": "system/turn_duration.pendingBackgroundAgentCount",
           "entrypoints": [
             "cli"
           ],
           "first_seen_version": "2.1.259",
           "canary": "claude_orchestration_signals",
           "trigger": "background_work",
-          "owner_action": "carry background_tasks[] and session_crons[] through the presence payload into the delegated-work dimension"
+          "owner_action": "consume the pending_background_agents provider fact the engine already ships with no reader; the live typed registry (hook Stop background_tasks[]) is a product seam, not a transcript signal, because the release census cannot fingerprint hook stdin"
         },
         "delegation.workflow": {
           "disposition": "not_implemented",
