@@ -427,7 +427,7 @@ mod tests {
 
     /// Serialize an environment mutation against the shared lock and restore it.
     fn with_home<T>(home: &std::path::Path, body: impl FnOnce() -> T) -> T {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let _guard = crate::console_adapter::agent_state_guard();
         let previous = std::env::var_os("LONGHOUSE_HOME");
         std::env::set_var("LONGHOUSE_HOME", home);
         let result = body();
