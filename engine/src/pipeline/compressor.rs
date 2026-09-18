@@ -97,6 +97,12 @@ pub struct IngestPayload<'a> {
     pub subagent_prompt_id: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subagent_tool_use_id: Option<&'a str>,
+    /// Nesting depth and the provider's own name for the worker. Both walk the
+    /// same lineage path as the ids above.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_depth: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_name: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workflow_run_id: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -392,6 +398,8 @@ pub fn build_payload_with_source_lines<'a>(
         subagent_id: metadata.subagent_id.as_deref(),
         subagent_prompt_id: metadata.subagent_prompt_id.as_deref(),
         subagent_tool_use_id: metadata.subagent_tool_use_id.as_deref(),
+        subagent_depth: metadata.subagent_depth,
+        subagent_name: metadata.subagent_name.as_deref(),
         workflow_run_id: metadata.workflow_run_id.as_deref(),
         attribution_agent: metadata.attribution_agent.as_deref(),
         attribution_skill: metadata.attribution_skill.as_deref(),

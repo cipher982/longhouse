@@ -122,6 +122,13 @@ pub struct SessionMetadata {
     pub subagent_id: Option<String>,
     pub subagent_prompt_id: Option<String>,
     pub subagent_tool_use_id: Option<String>,
+    /// How deep a worker sits below its root agent, when the provider says.
+    /// Codex stamps it on every subagent spawn; without it a nested worker and
+    /// a direct child are the same shape.
+    pub subagent_depth: Option<u32>,
+    /// The provider's own name for the worker (Codex calls it a nickname).
+    /// Preferred over anything inferred from the prompt it was handed.
+    pub subagent_name: Option<String>,
     /// Claude dynamic-workflow run id, derived from the
     /// `.../subagents/workflows/<run>/agent-*.jsonl` path segment.
     pub workflow_run_id: Option<String>,
@@ -415,6 +422,11 @@ enum NativeFlavor {
 struct CodexPayloadParentage {
     forked_from_session_id: Option<String>,
     is_sidechain: bool,
+    /// Nesting depth and the provider's own name for the worker. Both were
+    /// parsed and dropped before; without them a subagent of a subagent is
+    /// indistinguishable from a direct child.
+    subagent_depth: Option<u32>,
+    subagent_name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1164,6 +1176,8 @@ fn codex_payload_parentage(payload: &CodexPayload) -> CodexPayloadParentage {
                 .filter(|candidate| Uuid::parse_str(candidate).is_ok())
                 .or(forked_from_session_id),
             is_sidechain: true,
+            subagent_depth: source.depth,
+            subagent_name: source.agent_nickname.or(source.agent_role),
         };
     }
 
@@ -1174,6 +1188,8 @@ fn codex_payload_parentage(payload: &CodexPayload) -> CodexPayloadParentage {
     CodexPayloadParentage {
         forked_from_session_id,
         is_sidechain: false,
+        subagent_depth: None,
+        subagent_name: None,
     }
 }
 
@@ -2075,6 +2091,12 @@ fn collect_metadata(
                 }
                 if parentage.is_sidechain {
                     meta.is_sidechain = true;
+                }
+                if meta.subagent_depth.is_none() {
+                    meta.subagent_depth = parentage.subagent_depth;
+                }
+                if meta.subagent_name.is_none() {
+                    meta.subagent_name = parentage.subagent_name;
                 }
             }
             // Extract git branch and remote URL directly from session_meta.
@@ -7424,6 +7446,10 @@ mod tests {
             Some(parent_id)
         );
         assert!(result.metadata.is_sidechain);
+        // The spawn record carried a depth and a name all along. Dropping them
+        // is why a nested worker and a direct child parsed identically.
+        assert_eq!(result.metadata.subagent_depth, Some(1));
+        assert_eq!(result.metadata.subagent_name.as_deref(), Some("Ptolemy"));
         assert_eq!(result.events[0].session_id, child_id);
     }
 
