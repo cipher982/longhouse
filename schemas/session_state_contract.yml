@@ -1,5 +1,5 @@
 schema_version: 1
-state_contract_version: 2
+state_contract_version: 3
 presentation_policy_version: 2
 
 # Canonical state vocabulary. Provider adapters may retain raw evidence, but
@@ -48,6 +48,7 @@ presentation:
     - needs_approval
     - thinking
     - executing
+    - delegated_work
     - stalled
     - blocked
     - idle
@@ -89,11 +90,15 @@ providers:
 # projector, OpenAPI DTO, TypeScript, Swift, and Rust fixture decoder all use
 # these names; nullable fields are marked with `?`.
 fact_families:
-  session_state: [state_contract_version, presentation_policy_version, mode, disposition, 'launch?', 'run?', activity, control, 'pending_interaction?', transcript, host, working_set, unread, 'last_result_at?', 'last_result_outcome?', presentation, 'commit_seq?']
+  session_state: [state_contract_version, presentation_policy_version, mode, disposition, 'launch?', 'run?', activity, delegation, control, 'pending_interaction?', transcript, host, working_set, unread, 'last_result_at?', 'last_result_outcome?', presentation, 'commit_seq?']
   disposition: [state, 'closed_at?', 'close_reason?']
   launch: [state, 'error_code?', 'error_message?']
   run: ['id?', lifecycle, 'started_at?', 'ended_at?', 'end_reason?']
   activity: [state, 'raw_kind?', 'tool?', 'source?', 'observed_at?', 'valid_until?']
+  # Delegated work is its own axis: activity is per-tool and expires in 90-600s,
+  # while a background agent outlives turns. `unknown` means nothing was
+  # observed; `none` is a positive observation of an empty task registry.
+  delegation: [state, count, kinds, 'source?', 'observed_at?', 'valid_until?']
   control: [ownership, connection, 'connection_id?', 'lease_generation?', 'control_plane?', 'observed_at?', 'valid_until?', actions]
   interaction: [id, kind, 'opened_at?', 'resolved_at?', 'provider_request_id?', can_respond]
   transcript: [convergence, 'source_revision?', 'durable_revision?', 'render_revision?', 'last_append_at?', searchable, live_observation]

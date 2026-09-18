@@ -90,6 +90,7 @@ async def test_runtime_apply_owns_state_resume_preview_and_commit_sequence(daemo
                 "stale": 0,
                 "conflicts": 0,
             },
+            "delegation_facts": {"promoted": 0},
             "commit_seq": "1",
         }
         assert replay["accepted"] == 1

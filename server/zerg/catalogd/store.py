@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Mapping
 from contextlib import contextmanager
 from datetime import UTC
 from datetime import datetime
@@ -2599,14 +2600,20 @@ class CatalogStore:
             finally:
                 orm.close()
             commit_seq = _advance_commit_seq(connection, observed_at)
+            updated_runtime_keys = set(result.updated_runtime_keys)
             activity_facts = _runtime_activity_facts(
                 connection,
                 events=events,
-                updated_runtime_keys=set(result.updated_runtime_keys),
+                updated_runtime_keys=updated_runtime_keys,
+            )
+            delegation_facts = _runtime_delegation_facts(
+                connection,
+                events=events,
+                updated_runtime_keys=updated_runtime_keys,
             )
             reduced = reduce_fact_batch_setwise(
                 connection,
-                activity_facts,
+                [*activity_facts, *delegation_facts],
                 received_at=observed_at,
                 commit_seq_override=commit_seq,
             )
@@ -2619,6 +2626,10 @@ class CatalogStore:
                     "stale": reduced.stale,
                     "conflicts": reduced.conflicts,
                 },
+                # Only the delegation-specific number: the reduction counters
+                # above already describe this batch as a whole, and copying
+                # them here would read as if they were delegation's own.
+                "delegation_facts": {"promoted": len(delegation_facts)},
             }
 
     def register_interaction(self, *, interaction: dict[str, Any]) -> dict[str, Any]:
@@ -14641,6 +14652,99 @@ def _runtime_activity_facts(
         facts.append(
             ReducerFact(
                 family="activity",
+                subject_key=f"run:{run_id}",
+                source=raw_source,
+                source_epoch=run_id,
+                source_seq=None,
+                dedupe_key=dedupe_key,
+                evidence_hash=canonical_evidence_hash(value),
+                value=value,
+                observed_at=occurred_at,
+                session_id=session_id,
+                valid_until=occurred_at + timedelta(milliseconds=freshness_ms),
+                raw_locator=f"runtime:{raw_source}:{event.dedupe_key}"[:1024],
+            )
+        )
+    return facts
+
+
+#: How long one observed delegation snapshot may speak for the session. Its own
+#: clock on purpose: activity expires in 90-600s, but a background agent
+#: outlives turns, and a snapshot that vanished while the work continued is the
+#: defect this axis exists to fix. The producer may narrow it per observation.
+_DELEGATION_DEFAULT_FRESHNESS_MS = 30 * 60 * 1000
+_DELEGATION_KIND_LIMIT = 8
+_DELEGATION_COUNT_LIMIT = 256
+
+
+def _runtime_delegation_facts(
+    connection,
+    *,
+    events: list[Any],
+    updated_runtime_keys: set[str],
+) -> list[ReducerFact]:
+    """Promote an observed orchestration snapshot into its own fact family.
+
+    The registry arrives on the provider hook that observes it — Claude's Stop
+    ``background_tasks[]`` and ``session_crons[]``. It cannot ride the activity
+    head: ``_runtime_activity_facts`` rebuilds that head closed from each phase
+    signal, so the next parent PreToolUse would erase the registry. See
+    ``control-plane/docs/specs/provider-orchestration-representation.md``.
+    """
+
+    run_table = LiveSessionRun.__table__
+    thread_table = LiveSessionThread.__table__
+    facts: list[ReducerFact] = []
+    for event in events:
+        if event.runtime_key not in updated_runtime_keys or event.kind != "phase_signal":
+            continue
+        if event.session_id is None or event.run_id is None:
+            continue
+        snapshot = (event.payload or {}).get("delegation")
+        if not isinstance(snapshot, Mapping):
+            continue
+        session_id = str(event.session_id)
+        run_id = str(event.run_id)
+        bound = connection.execute(
+            select(run_table.c.id)
+            .select_from(run_table.join(thread_table, thread_table.c.id == run_table.c.thread_id))
+            .where(run_table.c.id == run_id, thread_table.c.session_id == session_id)
+        ).scalar_one_or_none()
+        if bound is None:
+            continue
+        occurred_at = _as_aware_utc(event.occurred_at)
+        if occurred_at is None:
+            continue
+        kinds: dict[str, int] = {}
+        raw_kinds = snapshot.get("kinds")
+        if isinstance(raw_kinds, Mapping):
+            for kind, count in list(raw_kinds.items())[:_DELEGATION_KIND_LIMIT]:
+                if isinstance(kind, str) and kind and type(count) is int and 0 < count <= _DELEGATION_COUNT_LIMIT:
+                    kinds[kind] = count
+        raw_count = snapshot.get("count")
+        count = raw_count if type(raw_count) is int and 0 <= raw_count <= _DELEGATION_COUNT_LIMIT else sum(kinds.values())
+        raw_freshness = snapshot.get("freshness_ms")
+        freshness_ms = (
+            raw_freshness
+            if type(raw_freshness) is int and 0 < raw_freshness <= _DELEGATION_DEFAULT_FRESHNESS_MS
+            else _DELEGATION_DEFAULT_FRESHNESS_MS
+        )
+        raw_source = str(event.source or "runtime_event").strip() or "runtime_event"
+        value = {
+            "authority_class": "provider_runtime",
+            "provider": str(event.provider),
+            "session_id": session_id,
+            "run_id": run_id,
+            "count": count,
+            "kinds": kinds,
+            "source": raw_source,
+            "observed_at": occurred_at.isoformat(),
+            "valid_until": (occurred_at + timedelta(milliseconds=freshness_ms)).isoformat(),
+        }
+        dedupe_key = hashlib.sha256(f"runtime-delegation:{raw_source}:{event.dedupe_key}:{run_id}".encode()).hexdigest()
+        facts.append(
+            ReducerFact(
+                family="delegation",
                 subject_key=f"run:{run_id}",
                 source=raw_source,
                 source_epoch=run_id,

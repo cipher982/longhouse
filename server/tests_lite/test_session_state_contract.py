@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import replace
 from datetime import datetime
@@ -12,6 +13,7 @@ import pytest
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
+from zerg.machine_evidence import canonical_evidence_hash
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.console_control_projection import project_console_control
 from zerg.services.managed_provider_contracts import managed_provider_names
@@ -349,6 +351,134 @@ def test_no_reply_turn_convergence_is_independent_of_run_outcome(end_reason, ren
         assert facts.presentation.primary is not None
         assert facts.presentation.primary.key == "ended"
         assert (facts.presentation.primary.tone == "blocked") == (end_reason == "failed")
+
+
+def _delegation_head(
+    *,
+    session_id: str,
+    run_id: str,
+    count: int,
+    kinds: dict[str, int],
+    observed_at: datetime,
+    valid_until: datetime,
+    source: str = "claude_hook",
+):
+    """One delegation reducer head, shaped exactly as the writer emits it."""
+    value = {
+        "authority_class": "provider_runtime",
+        "provider": "claude",
+        "session_id": session_id,
+        "run_id": run_id,
+        "count": count,
+        "kinds": kinds,
+        "source": source,
+        "observed_at": observed_at.isoformat(),
+        "valid_until": valid_until.isoformat(),
+    }
+    return {
+        "family": "delegation",
+        "subject_key": f"run:{run_id}",
+        "source": source,
+        "source_epoch": run_id,
+        "session_id": session_id,
+        "evidence_hash": canonical_evidence_hash(value),
+        "value_json": json.dumps(value),
+        "valid_until": valid_until,
+    }
+
+
+def _served_with_delegation(heads, *, now=NOW):
+    return project_served_session_state_facts(
+        session_id="session-1",
+        commit_seq=7,
+        catalog_facts={
+            "catalog": {"provider": "claude"},
+            "latest_run": {"id": "run-1", "started_at": NOW - timedelta(minutes=5), "ended_at": None},
+        },
+        heads=heads,
+        supported_operations=(),
+        pending_interaction=None,
+        transcript=project_transcript_facts(
+            session=_session(),
+            last_activity_at=NOW,
+            user_messages=1,
+            assistant_messages=1,
+            archive_state="current",
+            source_revision=3,
+            durable_revision=3,
+            render_revision=3,
+        ),
+        host=SessionHostFacts(state="unknown"),
+        now=now,
+    )
+
+
+def test_pending_delegation_speaks_for_a_session_whose_own_loop_is_idle():
+    # The whole point of the axis: the main loop is done, something it started
+    # is not. Before this the session read "Idle" while a background agent ran.
+    facts = _served_with_delegation(
+        (
+            _delegation_head(
+                session_id="session-1",
+                run_id="run-1",
+                count=1,
+                kinds={"subagent": 1},
+                observed_at=NOW - timedelta(minutes=1),
+                valid_until=NOW + timedelta(minutes=29),
+            ),
+        )
+    )
+
+    assert facts.delegation.state == "pending"
+    assert facts.delegation.count == 1
+    assert facts.delegation.kinds == {"subagent": 1}
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.key == "delegated_work"
+    assert facts.presentation.primary.label == "Waiting on 1 background agent"
+    assert facts.working_set == "open"
+
+
+def test_expired_delegation_evidence_is_unknown_not_an_empty_registry():
+    # An observation that aged out is the absence of a claim, never a claim that
+    # nothing is running. It must not read as "none" and must not hold the
+    # session open.
+    facts = _served_with_delegation(
+        (
+            _delegation_head(
+                session_id="session-1",
+                run_id="run-1",
+                count=3,
+                kinds={"subagent": 2, "shell": 1},
+                observed_at=NOW - timedelta(hours=2),
+                valid_until=NOW - timedelta(hours=1),
+            ),
+        )
+    )
+
+    assert facts.delegation.state == "unknown"
+    assert facts.delegation.count == 0
+    assert facts.delegation.observed_at is not None
+    assert facts.working_set != "open"
+
+
+def test_a_reachable_but_empty_registry_is_none_not_unknown():
+    # `none` is a positive observation and has to be distinguishable from never
+    # having looked, or a client cannot tell "finished" from "no evidence".
+    facts = _served_with_delegation(
+        (
+            _delegation_head(
+                session_id="session-1",
+                run_id="run-1",
+                count=0,
+                kinds={},
+                observed_at=NOW - timedelta(seconds=5),
+                valid_until=NOW + timedelta(minutes=29),
+            ),
+        )
+    )
+
+    assert facts.delegation.state == "none"
+    assert facts.presentation.primary.key != "delegated_work"
 
 
 @pytest.mark.parametrize("archive_state", ["current", "pending", None])

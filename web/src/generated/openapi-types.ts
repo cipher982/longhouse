@@ -4156,6 +4156,28 @@ export interface components {
              */
             created_at: string;
         };
+        /**
+         * DelegationSnapshotIn
+         * @description An orchestration snapshot from the hook that observed it.
+         *
+         *     Claude publishes this on Stop and SubagentStop as `background_tasks[]` and
+         *     `session_crons[]`. Bounded here so a buggy or hostile producer cannot widen
+         *     the fact; `freshness_ms` lets the producer state how long its own
+         *     observation may speak for the session.
+         */
+        DelegationSnapshotIn: {
+            /**
+             * Count
+             * @default 0
+             */
+            count: number;
+            /** Kinds */
+            kinds?: {
+                [key: string]: number;
+            };
+            /** Freshness Ms */
+            freshness_ms?: number | null;
+        };
         /** DeploymentFenceRequest */
         DeploymentFenceRequest: {
             /** Request Id */
@@ -4468,7 +4490,7 @@ export interface components {
              * Family
              * @enum {string}
              */
-            family: "activity" | "control";
+            family: "activity" | "delegation" | "control";
             /** Subject Key */
             subject_key: string;
             /** Source */
@@ -5876,6 +5898,7 @@ export interface components {
             occurred_at?: string | null;
             /** Dedupe Key */
             dedupe_key?: string | null;
+            delegation?: components["schemas"]["DelegationSnapshotIn"] | null;
             /** Provider Session Id */
             provider_session_id?: string | null;
         };
@@ -7750,6 +7773,43 @@ export interface components {
              */
             attach_command?: string | null;
         };
+        /**
+         * SessionDelegationFacts
+         * @description Work this session handed to another worker, or that runs beside it.
+         *
+         *     Its own axis rather than a field on activity, because the two have
+         *     different lifetimes by nature: activity is per-tool and expires in 90-600s
+         *     (config/managed_phase_contract.json), while a background agent can outlive
+         *     several turns. The activity head is last-write-wins by construction, so a
+         *     registry written at Stop would be destroyed by the next parent PreToolUse.
+         *
+         *     `unknown` is the honest default: nothing observed is not "nothing running".
+         *     `none` is a positive observation that the provider's task registry was
+         *     reachable and empty.
+         */
+        SessionDelegationFacts: {
+            /**
+             * State
+             * @default unknown
+             * @enum {string}
+             */
+            state: "pending" | "none" | "unknown";
+            /**
+             * Count
+             * @default 0
+             */
+            count: number;
+            /** Kinds */
+            kinds?: {
+                [key: string]: number;
+            };
+            /** Source */
+            source?: string | null;
+            /** Observed At */
+            observed_at?: string | null;
+            /** Valid Until */
+            valid_until?: string | null;
+        };
         /** SessionDeletionResponse */
         SessionDeletionResponse: {
             /** Session Id */
@@ -8972,7 +9032,7 @@ export interface components {
         SessionStateFacts: {
             /**
              * State Contract Version
-             * @default 2
+             * @default 3
              */
             state_contract_version: number;
             /**
@@ -8989,6 +9049,7 @@ export interface components {
             launch?: components["schemas"]["SessionLaunchFacts"] | null;
             run?: components["schemas"]["SessionRunFacts"] | null;
             activity: components["schemas"]["SessionActivityFacts"];
+            delegation?: components["schemas"]["SessionDelegationFacts"];
             control: components["schemas"]["SessionControlFacts"];
             pending_interaction?: components["schemas"]["SessionPendingInteractionFacts"] | null;
             transcript: components["schemas"]["SessionTranscriptFacts"];
@@ -9120,6 +9181,7 @@ export interface components {
              *       "launch",
              *       "run",
              *       "activity",
+             *       "delegation",
              *       "control"
              *     ]
              */
@@ -9536,7 +9598,7 @@ export interface components {
         ShadowSessionStateProjection: {
             /**
              * State Contract Version
-             * @default 2
+             * @default 3
              */
             state_contract_version: number;
             /** Commit Seq */
@@ -9550,6 +9612,7 @@ export interface components {
             launch?: components["schemas"]["SessionLaunchFacts"] | null;
             run?: components["schemas"]["SessionRunFacts"] | null;
             activity: components["schemas"]["SessionActivityFacts"];
+            delegation?: components["schemas"]["SessionDelegationFacts"];
             control: components["schemas"]["SessionControlFacts"] | null;
             /** Control Run Id */
             control_run_id?: string | null;
@@ -9567,6 +9630,11 @@ export interface components {
              * @default 0
              */
             rejected_activity_heads: number;
+            /**
+             * Rejected Delegation Heads
+             * @default 0
+             */
+            rejected_delegation_heads: number;
             /**
              * Rejected Control Heads
              * @default 0

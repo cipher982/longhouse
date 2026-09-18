@@ -40,6 +40,7 @@ from fastapi import HTTPException
 from fastapi import Request
 from fastapi import Response
 from fastapi import status
+from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.auth.caller import caller_principal
@@ -107,6 +108,20 @@ def _source_for_provider_hook(provider: str | None) -> str:
     return f"{normalized[:58]}_hook"
 
 
+class DelegationSnapshotIn(UTCBaseModel):
+    """An orchestration snapshot from the hook that observed it.
+
+    Claude publishes this on Stop and SubagentStop as `background_tasks[]` and
+    `session_crons[]`. Bounded here so a buggy or hostile producer cannot widen
+    the fact; `freshness_ms` lets the producer state how long its own
+    observation may speak for the session.
+    """
+
+    count: int = 0
+    kinds: dict[str, int] = Field(default_factory=dict)
+    freshness_ms: Optional[int] = None
+
+
 class PresenceIn(UTCBaseModel):
     """Payload from a Claude Code hook."""
 
@@ -117,6 +132,7 @@ class PresenceIn(UTCBaseModel):
     provider: Optional[str] = "claude"
     occurred_at: Optional[datetime] = None
     dedupe_key: Optional[str] = None
+    delegation: Optional[DelegationSnapshotIn] = None
     # Managed hooks report under the Longhouse session id; the provider-native
     # id rides along so the server can re-bind the alias without waiting for a
     # transcript ship (e.g. after an out-of-band resume rotates the native id).
@@ -167,7 +183,7 @@ async def upsert_presence(
         occurred_at=now,
         freshness_ms=phase_freshness_ms(payload.state),
         dedupe_key=runtime_dedupe_key,
-        payload={},
+        payload=({"delegation": payload.delegation.model_dump(exclude_none=True)} if payload.delegation is not None else {}),
     )
     runtime_events = [runtime_event]
     provider_session_id = str(payload.provider_session_id or "").strip()

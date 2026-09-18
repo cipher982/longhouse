@@ -541,7 +541,7 @@ def test_reducer_health_route_reports_failures_without_claiming_cutover(monkeypa
     payload = response.json()
     assert payload["status"] == "degraded"
     assert payload["catalog_commit_seq"] == 21
-    assert payload["projected_families"] == ["mode", "disposition", "launch", "run", "activity", "control"]
+    assert payload["projected_families"] == ["mode", "disposition", "launch", "run", "activity", "delegation", "control"]
     assert "transcript" in payload["unsupported_families"]
     assert "cutover_active" not in payload
     assert payload["contract"]["state_contract_version"] == STATE_CONTRACT_VERSION

@@ -38,6 +38,7 @@ from zerg.services.session_state_contract import SessionActionAvailability
 from zerg.services.session_state_contract import SessionActivityFacts
 from zerg.services.session_state_contract import SessionControlActions
 from zerg.services.session_state_contract import SessionControlFacts
+from zerg.services.session_state_contract import SessionDelegationFacts
 from zerg.services.session_state_contract import SessionDispositionFacts
 from zerg.services.session_state_contract import SessionHostFacts
 from zerg.services.session_state_contract import SessionLaunchFacts
@@ -59,7 +60,7 @@ UnsupportedFactFamily = Literal[
     "presentation",
 ]
 
-SHADOW_SUPPORTED_FAMILIES: tuple[str, ...] = ("mode", "disposition", "launch", "run", "activity", "control")
+SHADOW_SUPPORTED_FAMILIES: tuple[str, ...] = ("mode", "disposition", "launch", "run", "activity", "delegation", "control")
 SHADOW_UNSUPPORTED_FAMILIES: tuple[UnsupportedFactFamily, ...] = (
     "pending_interaction",
     "transcript",
@@ -68,6 +69,7 @@ SHADOW_UNSUPPORTED_FAMILIES: tuple[UnsupportedFactFamily, ...] = (
 )
 _AUTHORITY_RANK = {
     ("activity", "provider_runtime"): 1,
+    ("delegation", "provider_runtime"): 1,
     ("control", "provider_control"): 1,
     ("continuation", "retained_launch_contract"): 1,
 }
@@ -100,11 +102,13 @@ class ShadowSessionStateProjection(BaseModel):
     launch: SessionLaunchFacts | None = None
     run: SessionRunFacts | None = None
     activity: SessionActivityFacts
+    delegation: SessionDelegationFacts = Field(default_factory=SessionDelegationFacts)
     control: SessionControlFacts | None
     control_run_id: str | None = None
     fact_sources: dict[str, "FactHeadDiagnostic"] = Field(default_factory=dict)
     rejected_heads: int = 0
     rejected_activity_heads: int = 0
+    rejected_delegation_heads: int = 0
     rejected_control_heads: int = 0
     unsupported_families: tuple[UnsupportedFactFamily, ...] = SHADOW_UNSUPPORTED_FAMILIES
 
@@ -114,7 +118,7 @@ class FactHeadDiagnostic(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    family: Literal["activity", "control"]
+    family: Literal["activity", "delegation", "control"]
     subject_key: str
     source: str
     source_epoch: str
@@ -166,9 +170,22 @@ def project_shadow_session_state_facts(
         require_run_binding=True,
         allowed_control_coordinates=_bound_control_coordinates(catalog_facts),
     )
+    delegation_head, rejected_delegation = _effective_head(
+        heads,
+        session_id=session_id,
+        family="delegation",
+        now=normalized_now,
+        expected_run_id=durable_run_id,
+        require_run_binding=True,
+        retain_expired=True,
+    )
     fact_sources = {
         family: diagnostic
-        for family, winner in (("activity", activity_head), ("control", control_head))
+        for family, winner in (
+            ("activity", activity_head),
+            ("delegation", delegation_head),
+            ("control", control_head),
+        )
         if (diagnostic := _head_diagnostic(family, winner)) is not None
     }
     launch = _project_launch(catalog_facts)
@@ -179,11 +196,13 @@ def project_shadow_session_state_facts(
         launch=launch,
         run=_project_run(catalog_facts, launch=launch),
         activity=_project_activity(activity_head, now=normalized_now),
+        delegation=_project_delegation(delegation_head, now=normalized_now),
         control=_project_control(control_head, supported_operations=set(supported_operations)),
         control_run_id=_control_run_id(control_head),
         fact_sources=fact_sources,
-        rejected_heads=rejected_activity + rejected_control,
+        rejected_heads=rejected_activity + rejected_delegation + rejected_control,
         rejected_activity_heads=rejected_activity,
+        rejected_delegation_heads=rejected_delegation,
         rejected_control_heads=rejected_control,
     )
 
@@ -236,6 +255,7 @@ def project_served_session_state_facts(
         launch=shadow.launch,
         run=shadow.run,
         activity=shadow.activity,
+        delegation=shadow.delegation,
         control=control,
         pending_interaction=pending_interaction,
         transcript=transcript,
@@ -633,7 +653,7 @@ def _effective_head(
     heads: Collection[Mapping[str, Any]],
     *,
     session_id: str,
-    family: Literal["activity", "control", "continuation"],
+    family: Literal["activity", "delegation", "control", "continuation"],
     now: datetime,
     expected_run_id: str | None = None,
     require_run_binding: bool = False,
@@ -737,6 +757,46 @@ def _project_activity(
     )
 
 
+def _project_delegation(
+    winner: tuple[Mapping[str, Any], dict[str, Any], datetime, datetime] | None,
+    *,
+    now: datetime,
+) -> SessionDelegationFacts:
+    """Project the delegated-work axis, expired evidence included.
+
+    An expired observation is not a claim that nothing is running — it is the
+    absence of a claim. It keeps its timestamps so a client can render the age,
+    but it never asserts `pending` or `none`.
+    """
+    if winner is None:
+        return SessionDelegationFacts()
+    head, value, observed_at, valid_until = winner
+    source = str(head.get("source") or "").strip() or None
+    if valid_until <= now:
+        return SessionDelegationFacts(
+            state="unknown",
+            source=source,
+            observed_at=observed_at,
+            valid_until=valid_until,
+        )
+    kinds: dict[str, int] = {}
+    raw_kinds = value.get("kinds")
+    if isinstance(raw_kinds, Mapping):
+        for kind, count in raw_kinds.items():
+            if isinstance(kind, str) and kind and type(count) is int and count > 0:
+                kinds[kind] = count
+    raw_count = value.get("count")
+    count = raw_count if type(raw_count) is int and raw_count >= 0 else sum(kinds.values())
+    return SessionDelegationFacts(
+        state="pending" if count > 0 else "none",
+        count=count,
+        kinds=kinds,
+        source=source,
+        observed_at=observed_at,
+        valid_until=valid_until,
+    )
+
+
 def _project_control(
     winner: tuple[Mapping[str, Any], dict[str, Any], datetime, datetime] | None,
     *,
@@ -795,7 +855,7 @@ def _control_run_id(
 
 
 def _head_diagnostic(
-    family: Literal["activity", "control"],
+    family: Literal["activity", "delegation", "control"],
     winner: tuple[Mapping[str, Any], dict[str, Any], datetime, datetime] | None,
 ) -> FactHeadDiagnostic | None:
     if winner is None:
@@ -833,7 +893,7 @@ def _valid_until(
 def _head_value(
     head: Mapping[str, Any],
     *,
-    family: Literal["activity", "control", "continuation"],
+    family: Literal["activity", "delegation", "control", "continuation"],
     session_id: str,
 ) -> dict[str, Any]:
     raw = head.get("value_json")
@@ -849,10 +909,10 @@ def _head_value(
         raise ValueError("fact head source does not match its value")
     if canonical_evidence_hash(value) != head.get("evidence_hash"):
         raise ValueError("fact head evidence_hash does not match its value")
-    if family == "activity":
+    if family in {"activity", "delegation"}:
         run_id = str(value.get("run_id") or "").strip()
         if not run_id:
-            raise ValueError("activity run_id is missing")
+            raise ValueError(f"{family} run_id is missing")
         expected_subject = f"run:{run_id}"
     elif family == "control":
         connection_id = str(value.get("connection_id") or "").strip()

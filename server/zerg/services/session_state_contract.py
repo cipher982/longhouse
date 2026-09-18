@@ -30,7 +30,7 @@ from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime_display import compact_runtime_tool_label
 from zerg.utils.time import normalize_utc
 
-STATE_CONTRACT_VERSION = 2
+STATE_CONTRACT_VERSION = 3
 PRESENTATION_POLICY_VERSION = 2
 
 PRIMARY_PRESENTATION_KEYS: tuple[str, ...] = (
@@ -41,6 +41,7 @@ PRIMARY_PRESENTATION_KEYS: tuple[str, ...] = (
     "needs_approval",
     "thinking",
     "executing",
+    "delegated_work",
     "stalled",
     "blocked",
     "idle",
@@ -153,6 +154,32 @@ class SessionActivityFacts(_FrozenModel):
     valid_until: datetime | None = None
 
 
+DelegationState = Literal["pending", "none", "unknown"]
+
+
+class SessionDelegationFacts(_FrozenModel):
+    """Work this session handed to another worker, or that runs beside it.
+
+    Its own axis rather than a field on activity, because the two have
+    different lifetimes by nature: activity is per-tool and expires in 90-600s
+    (config/managed_phase_contract.json), while a background agent can outlive
+    several turns. The activity head is last-write-wins by construction, so a
+    registry written at Stop would be destroyed by the next parent PreToolUse.
+
+    `unknown` is the honest default: nothing observed is not "nothing running".
+    `none` is a positive observation that the provider's task registry was
+    reachable and empty.
+    """
+
+    state: DelegationState = "unknown"
+    count: int = 0
+    #: Task-type label -> how many are in flight, e.g. {"subagent": 1}.
+    kinds: dict[str, int] = Field(default_factory=dict)
+    source: str | None = None
+    observed_at: datetime | None = None
+    valid_until: datetime | None = None
+
+
 class SessionActionAvailability(_FrozenModel):
     state: ActionState
     reason: str | None = None
@@ -242,6 +269,7 @@ class SessionStateFacts(_FrozenModel):
     launch: SessionLaunchFacts | None = None
     run: SessionRunFacts | None = None
     activity: SessionActivityFacts
+    delegation: SessionDelegationFacts = Field(default_factory=SessionDelegationFacts)
     control: SessionControlFacts
     pending_interaction: SessionPendingInteractionFacts | None = None
     transcript: SessionTranscriptFacts
@@ -730,6 +758,9 @@ def build_archive_session_state_facts(
         ),
         run=None,
         activity=SessionActivityFacts(state="unknown"),
+        # A cold archive row has no live delegation evidence; `unknown` is the
+        # honest value and must not be read as "nothing is running".
+        delegation=SessionDelegationFacts(),
         control=control,
         pending_interaction=project_pending_interaction_facts(pause_request),
         transcript=_transcript(
@@ -756,6 +787,7 @@ def assemble_session_state_facts(
     launch: SessionLaunchFacts | None,
     run: SessionRunFacts | None,
     activity: SessionActivityFacts,
+    delegation: SessionDelegationFacts,
     control: SessionControlFacts,
     pending_interaction: SessionPendingInteractionFacts | None,
     transcript: SessionTranscriptFacts,
@@ -773,6 +805,7 @@ def assemble_session_state_facts(
         launch=launch,
         run=run,
         activity=activity,
+        delegation=delegation,
         control=control,
         interaction=pending_interaction,
     )
@@ -793,6 +826,7 @@ def assemble_session_state_facts(
         launch=launch,
         run=run,
         activity=activity,
+        delegation=delegation,
         control=control,
         pending_interaction=pending_interaction,
         transcript=transcript,
@@ -802,6 +836,7 @@ def assemble_session_state_facts(
             run=run,
             disposition=disposition,
             activity=activity,
+            delegation=delegation,
             control=control,
             interaction=pending_interaction,
         ),
@@ -852,6 +887,7 @@ def _working_set(
     activity: SessionActivityFacts,
     control: SessionControlFacts,
     interaction: SessionPendingInteractionFacts | None,
+    delegation: SessionDelegationFacts | None = None,
     mode: SessionMode = "unknown",
     run: SessionRunFacts | None = None,
 ) -> WorkingSet:
@@ -888,9 +924,33 @@ def _working_set(
         return "open"
     if activity.state in {"thinking", "executing"}:
         return "open"
+    # Delegated work is the fourth positive condition: the session is idle, but
+    # something it started is still running, so it is not history yet.
+    if delegation is not None and delegation.state == "pending" and delegation.count > 0:
+        return "open"
     if control.terminal_attached is True:
         return "open"
     return "history"
+
+
+_DELEGATION_NOUNS: dict[str, str] = {
+    "subagent": "agent",
+    "shell": "shell",
+    "workflow": "workflow",
+    "teammate": "teammate",
+    "monitor": "monitor",
+    "mcp_task": "MCP task",
+    "cloud_session": "cloud session",
+}
+
+
+def _delegation_label(delegation: SessionDelegationFacts) -> str:
+    """Name the work, not just the count, when the count is one of one kind."""
+    count = delegation.count
+    if count == 1 and len(delegation.kinds) == 1:
+        kind = next(iter(delegation.kinds))
+        return f"Waiting on 1 background {_DELEGATION_NOUNS.get(kind, 'task')}"
+    return f"Waiting on {count} background tasks"
 
 
 def _primary(
@@ -900,6 +960,7 @@ def _primary(
     launch: SessionLaunchFacts | None,
     run: SessionRunFacts | None,
     activity: SessionActivityFacts,
+    delegation: SessionDelegationFacts,
     control: SessionControlFacts,
     interaction: SessionPendingInteractionFacts | None,
 ) -> SessionPresentationLabel | None:
@@ -932,6 +993,17 @@ def _primary(
         return SessionPresentationLabel(key="stalled", label="Stalled", tone="stalled", observed_at=activity.observed_at)
     if activity.state == "blocked":
         return SessionPresentationLabel(key="blocked", label="Blocked", tone="blocked", observed_at=activity.observed_at)
+    # Delegated work outlives the parent's own activity, so it is the one thing
+    # that may speak for a session whose loop is not doing anything. It never
+    # outranks a question, a block, or the main loop actually working: those are
+    # all decided above.
+    if delegation.state == "pending" and delegation.count > 0 and activity.state in {"quiescent", "unknown"}:
+        return SessionPresentationLabel(
+            key="delegated_work",
+            label=_delegation_label(delegation),
+            tone="active",
+            observed_at=delegation.observed_at,
+        )
     if activity.state == "quiescent":
         return SessionPresentationLabel(key="idle", label="Idle", tone="idle", observed_at=activity.observed_at)
     if run is not None and run.lifecycle == "ended":
@@ -1130,6 +1202,7 @@ def build_session_state_facts(
     assistant_messages: int = 0,
     archive_state: str | None = None,
     now: datetime | None = None,
+    delegation: SessionDelegationFacts | None = None,
 ) -> SessionStateFacts:
     """Project the target contract from legacy evidence without serving legacy copy."""
 
@@ -1191,6 +1264,7 @@ def build_session_state_facts(
         launch=launch,
         run=run,
         activity=activity,
+        delegation=delegation or SessionDelegationFacts(),
         control=control,
         pending_interaction=interaction,
         transcript=transcript,

@@ -239,6 +239,15 @@ struct APISessionControlFacts: Codable, Hashable, Sendable {
     let actions: APISessionControlActions
 }
 
+struct APISessionDelegationFacts: Codable, Hashable, Sendable {
+    let state: String?
+    let count: Int?
+    let kinds: [String: Int]?
+    let source: String?
+    let observedAt: String?
+    let validUntil: String?
+}
+
 struct APISessionDispositionFacts: Codable, Hashable, Sendable {
     let state: String
     let closedAt: String?
@@ -304,6 +313,7 @@ struct APISessionStateFacts: Codable, Hashable, Sendable {
     let launch: APISessionLaunchFacts?
     let run: APISessionRunFacts?
     let activity: APISessionActivityFacts
+    let delegation: APISessionDelegationFacts?
     let control: APISessionControlFacts
     let pendingInteraction: APISessionPendingInteractionFacts?
     let transcript: APISessionTranscriptFacts

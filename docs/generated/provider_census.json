@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 279,
+  "file_count": 280,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -1610,6 +1610,13 @@
         "codex",
         "cursor",
         "opencode"
+      ]
+    },
+    {
+      "path": "server/tests_lite/test_session_state_contract.py",
+      "providers": [
+        "claude",
+        "cursor"
       ]
     },
     {
