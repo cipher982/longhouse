@@ -751,11 +751,11 @@ def _bound_control_coordinates(catalog_facts: Mapping[str, Any]) -> set[tuple[st
     coordinates: set[tuple[str, str, str]] = set()
     for connection in connections:
         row = _mapping(connection)
-        # The mutable connection state can lag the canonical control head
-        # during teardown. Keep the durable identity binding here, while the
-        # fresh head remains the authority for attached/degraded state and
-        # action grants. A released row is still never eligible.
-        if row.get("released_at") is not None:
+        # A binding is usable only while the durable connection remains open.
+        # `released_at` is authoritative, while terminal state protects older
+        # rows that predate that marker. This keeps late old-run heads from
+        # competing with the current run even if the reducer retained them.
+        if row.get("released_at") is not None or (_text(row.get("state")) or "").lower() in {"released", "ended"}:
             continue
         coordinate = (
             _text(row.get("run_id")) or "",

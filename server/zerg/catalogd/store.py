@@ -243,6 +243,7 @@ def _empty_human_helm_is_open(*, session_id, thread_id, observed_at: datetime) -
             or_(thread_id.is_(None), run.c.thread_id == thread_id),
             run.c.ended_at.is_(None),
             control.c.released_at.is_(None),
+            control.c.state.notin_(("released", "ended")),
             control.c.adapter_connection_id.is_not(None),
             control.c.lease_generation.is_not(None),
             head.c.family == "control",
@@ -14931,13 +14932,12 @@ def _apply_exact_run_terminal_evidence(connection, facts) -> dict[str, int]:
 
 
 def _bind_control_evidence_identities(connection, facts, *, device_id: str) -> dict[str, int]:
-    """Bind adapter UUIDs to their exact catalog connection and generation.
+    """Bind adapter UUIDs to an exact live catalog connection and generation.
 
-    The adapter identity is exposed to command preparation once bound. Boolean
-    capability grants remain the authorization authority until the explicit
-    Phase 4 command cutover. A same-run rotation is accepted only when the
-    incoming observation is newer than the bound fact and is the sole incoming
-    generation for that session/run; otherwise the old grant remains fenced.
+    A control coordinate is usable only while its exact durable run is open and
+    its exact connection has not been released. This is the fencing invariant:
+    late evidence may remain auditable in the reducer, but it must never bind a
+    released coordinate or replace authority belonging to a newer run.
     """
 
     from zerg.services.managed_provider_contracts import contract_for_provider
@@ -14984,6 +14984,9 @@ def _bind_control_evidence_identities(connection, facts, *, device_id: str) -> d
                 select(
                     connection_table.c.id,
                     run_table.c.provider,
+                    connection_table.c.released_at,
+                    connection_table.c.state,
+                    run_table.c.ended_at,
                     connection_table.c.adapter_connection_id,
                     connection_table.c.lease_generation,
                 )
@@ -15007,6 +15010,18 @@ def _bind_control_evidence_identities(connection, facts, *, device_id: str) -> d
             counts["unbound"] += 1
             continue
         if str(row["provider"] or "").strip().lower() != str(value.get("provider") or "").strip().lower():
+            counts["mismatched"] += 1
+            continue
+        # Binding is an authority transition, not historical bookkeeping.
+        # Once either side of the exact coordinate is terminal, late evidence
+        # must not populate it (or make it eligible to compete with a newer
+        # run). Keep the fact itself for audit/reducer diagnostics; only the
+        # durable identity binding is fenced here.
+        if (
+            row["ended_at"] is not None
+            or row["released_at"] is not None
+            or str(row["state"] or "").strip().lower() in {"released", "ended"}
+        ):
             counts["mismatched"] += 1
             continue
         current_adapter = str(row["adapter_connection_id"] or "")

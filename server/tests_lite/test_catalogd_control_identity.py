@@ -9,9 +9,9 @@ from sqlalchemy import select
 
 from zerg.catalogd.fact_reducer import ReducerFact
 from zerg.catalogd.fact_reducer import canonical_evidence_hash
+from zerg.catalogd.fact_reducer import reduce_fact_batch
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
-from zerg.catalogd.fact_reducer import reduce_fact_batch
 from zerg.catalogd.store import _bind_control_evidence_identities
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
@@ -145,6 +145,102 @@ def test_control_evidence_identity_does_not_bind_across_run_mismatch(tmp_path):
         result = _bind_control_evidence_identities(connection, [fact], device_id=DEVICE_ID)
 
     assert result == {"bound": 0, "matched": 0, "unbound": 1, "mismatched": 0}
+
+
+def test_late_control_coordinate_for_ended_run_cannot_bind_after_new_run_exists(tmp_path):
+    engine = create_catalog_engine(tmp_path / "catalog.db")
+    initialize_catalog_schema(engine)
+    session_id = str(uuid4())
+    thread_id = str(uuid4())
+    old_run_id = str(uuid4())
+    new_run_id = str(uuid4())
+    old_connection_id = str(uuid4())
+    old_generation = str(uuid4())
+    new_connection_id = str(uuid4())
+    new_generation = str(uuid4())
+    now = datetime.now(UTC)
+    ended_at = now - timedelta(minutes=1)
+    with engine.begin() as connection:
+        connection.execute(
+            LiveSessionThread.__table__.insert().values(
+                id=thread_id,
+                session_id=session_id,
+                provider="codex",
+                branch_kind="root",
+                is_primary=1,
+                created_at=now - timedelta(hours=1),
+                updated_at=now,
+            )
+        )
+        connection.execute(
+            LiveSessionRun.__table__.insert().values(
+                id=old_run_id,
+                thread_id=thread_id,
+                provider="codex",
+                launch_origin="longhouse_spawned",
+                started_at=now - timedelta(hours=1),
+                ended_at=ended_at,
+                exit_status="completed",
+            )
+        )
+        connection.execute(
+            LiveSessionConnection.__table__.insert().values(
+                run_id=old_run_id,
+                adapter_connection_id=old_connection_id,
+                lease_generation=old_generation,
+                control_plane="codex_bridge",
+                acquisition_kind="spawned_control",
+                state="ended",
+                device_id=DEVICE_ID,
+                acquired_at=now - timedelta(hours=1),
+                released_at=ended_at,
+            )
+        )
+        connection.execute(
+            LiveSessionRun.__table__.insert().values(
+                id=new_run_id,
+                thread_id=thread_id,
+                provider="codex",
+                launch_origin="longhouse_continued",
+                started_at=now,
+            )
+        )
+        connection.execute(
+            LiveSessionConnection.__table__.insert().values(
+                run_id=new_run_id,
+                adapter_connection_id=new_connection_id,
+                lease_generation=new_generation,
+                control_plane="codex_bridge",
+                acquisition_kind="spawned_control",
+                state="attached",
+                device_id=DEVICE_ID,
+                acquired_at=now,
+            )
+        )
+        late = _control_fact(
+            session_id=session_id,
+            run_id=old_run_id,
+            connection_id=old_connection_id,
+            lease_generation=old_generation,
+            observed_at=now,
+        )
+        result = _bind_control_evidence_identities(connection, [late], device_id=DEVICE_ID)
+        assert result == {"bound": 0, "matched": 0, "unbound": 0, "mismatched": 1}
+        old = (
+            connection.execute(select(LiveSessionConnection.__table__).where(LiveSessionConnection.__table__.c.run_id == old_run_id))
+            .mappings()
+            .one()
+        )
+        new = (
+            connection.execute(select(LiveSessionConnection.__table__).where(LiveSessionConnection.__table__.c.run_id == new_run_id))
+            .mappings()
+            .one()
+        )
+
+    assert old["adapter_connection_id"] == old_connection_id
+    assert old["lease_generation"] == old_generation
+    assert new["adapter_connection_id"] == new_connection_id
+    assert new["lease_generation"] == new_generation
 
 
 def test_omp_control_identity_accepts_a_safe_generation_only_replacement(tmp_path):

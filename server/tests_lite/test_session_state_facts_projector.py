@@ -353,6 +353,68 @@ def test_projector_rejects_heads_not_bound_to_durable_run_and_connection():
     assert released_connection.control is None
 
 
+def test_projector_rejects_late_old_run_control_after_a_new_run_is_active():
+    late_old = _control(observed_at=NOW, grants=["send_input"])
+    old_value = json.loads(late_old["value_json"])
+    old_value.update(
+        {
+            "run_id": "run-old",
+            "connection_id": "connection-old",
+            "lease_generation": "lease-old",
+        }
+    )
+    late_old.update(
+        subject_key="connection:connection-old:lease-old",
+        value_json=json.dumps(old_value),
+        evidence_hash=canonical_evidence_hash(old_value),
+    )
+    new_run_facts = {
+        **BOUND_CONTROL_CATALOG_FACTS,
+        "latest_run": {
+            "id": "run-new",
+            "started_at": NOW.isoformat(),
+            "ended_at": None,
+        },
+        "connections": [
+            {
+                **BOUND_CONTROL_CATALOG_FACTS["connections"][0],
+                "run_id": "run-new",
+            }
+        ],
+    }
+
+    projection = project_shadow_session_state_facts(
+        session_id="session-1",
+        commit_seq=13,
+        catalog_facts=new_run_facts,
+        heads=[late_old],
+        supported_operations={"send_input"},
+        now=NOW,
+    )
+
+    assert projection.control is None
+    assert projection.control_run_id is None
+    assert projection.rejected_control_heads == 1
+
+
+def test_projector_rejects_terminal_connection_without_release_timestamp():
+    terminal_connection_facts = {
+        **BOUND_CONTROL_CATALOG_FACTS,
+        "connections": [{**BOUND_CONTROL_CATALOG_FACTS["connections"][0], "state": "ended", "released_at": None}],
+    }
+    projection = project_shadow_session_state_facts(
+        session_id="session-1",
+        commit_seq=14,
+        catalog_facts=terminal_connection_facts,
+        heads=[_control(observed_at=NOW, grants=["send_input"])],
+        supported_operations={"send_input"},
+        now=NOW,
+    )
+
+    assert projection.control is None
+    assert projection.rejected_control_heads == 1
+
+
 def test_projector_uses_stable_source_coordinate_for_exact_timestamp_tie():
     first = _activity(observed_at=NOW, valid_until=NOW + timedelta(minutes=1), source="a-source")
     second = _activity(observed_at=NOW, valid_until=NOW + timedelta(minutes=1), source="z-source")
