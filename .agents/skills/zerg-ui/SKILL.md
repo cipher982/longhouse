@@ -74,6 +74,13 @@ the actual simulator app. `simlab_proxy.py` places a loopback TCP relay only
 in the client path; the engine keeps shipping while the client is offline.
 Do not run concurrent simlab jobs against its shared `current` state/simulator.
 
+`simlab up` runs the newest binary it finds across the `release` and `ci`
+cargo profiles, and neither is guaranteed to match `HEAD`. On 2026-09-18 a
+`ci` engine built at 05:12 predated interaction-edge code landed that morning,
+so hook events produced no interactions and the silence read as product
+behavior. Compare `longhouse-engine --version` with the commit under test, or
+run `simlab.py up --build`, before believing a negative result.
+
 Six scenarios: open imported history; live appended turns; abandon/resend;
 malformed/split/delayed transcript input; terminate/reopen after new output;
 network loss and reconnect without relaunch. They are hidden **Shadow**
