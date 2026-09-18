@@ -72,19 +72,34 @@ impl SourceClaim {
 /// Where every launcher's claim lives. Shared across providers so the daemon
 /// reads one directory rather than learning each launcher's state dir.
 pub fn claims_dir() -> Result<PathBuf> {
-    let home = crate::config::get_longhouse_home()?;
     #[cfg(test)]
     {
-        // A claim is authority over a real transcript path: one written into the
-        // developer's own home can refuse a real launch. Tests isolate the home
-        // with `LONGHOUSE_HOME`, and this makes forgetting that loud instead of
-        // polluting a machine.
-        anyhow::ensure!(
-            std::env::var("LONGHOUSE_HOME").is_ok(),
-            "tests must set LONGHOUSE_HOME to a temporary directory before writing a claim"
-        );
+        // A claim is authority over a real transcript path, so a test that
+        // forgot to set `LONGHOUSE_HOME` must not write into the developer's
+        // own home: it wrote a file that could refuse a real launch once
+        // already. Tests that isolate the home keep doing so; the rest share a
+        // per-process temporary directory, which still exercises the claim path
+        // instead of skipping it.
+        if std::env::var("LONGHOUSE_HOME").is_err() {
+            return Ok(test_claims_dir());
+        }
     }
-    Ok(home.join("managed-local").join("claims"))
+    Ok(crate::config::get_longhouse_home()?
+        .join("managed-local")
+        .join("claims"))
+}
+
+/// One temporary claims directory per test process.
+#[cfg(test)]
+fn test_claims_dir() -> PathBuf {
+    use std::sync::OnceLock;
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join(format!("longhouse-test-claims-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).ok();
+        dir
+    })
+    .clone()
 }
 
 fn claim_path(session_id: &str) -> Result<PathBuf> {
@@ -318,15 +333,102 @@ pub fn ensure_bindable(session_id: &str, source_path: &Path, native_id: &str) ->
     Ok(())
 }
 
-/// Drop a session's claim. Called when a launcher exits; the projection is
-/// retired by the daemon on its next pass.
+/// Release a session's claim. Called when a launcher exits.
+///
+/// The file becomes a tombstone rather than disappearing: the daemon needs to
+/// see that the claim *ended* to retire the projection it wrote, and a claim that
+/// simply vanishes would leave a binding row naming a session nobody released.
+/// `retire_released` removes the file once it has.
 pub fn release(session_id: &str) -> Result<()> {
-    let path = claim_path(session_id)?;
-    match std::fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error).with_context(|| format!("removing the claim {}", path.display())),
+    let Some(mut claim) = read_claim(session_id)? else {
+        return Ok(());
+    };
+    if claim.state == ClaimState::Released {
+        return Ok(());
     }
+    claim.state = ClaimState::Released;
+    claim.native_session_id = None;
+    claim.updated_at = now().to_rfc3339();
+    claim.expires_at = expiry();
+    write_claim(&claim)
+}
+
+/// Retire the projections of claims that ended, then remove their tombstones.
+///
+/// The binding row is *marked exited*, not deleted: it stays as the ownership
+/// evidence a later reader needs, which is what `SessionBinding::mark_exited`
+/// exists for. A row that cannot be marked is left and the tombstone is kept, so
+/// the next pass tries again rather than losing the obligation.
+pub fn retire_released(conn: &rusqlite::Connection) -> Result<usize> {
+    let dir = claims_dir()?;
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error).context("reading the claim directory"),
+    };
+    let mut retired = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        let Ok(claim) = serde_json::from_slice::<SourceClaim>(&bytes) else {
+            continue;
+        };
+        if claim.state != ClaimState::Released {
+            continue;
+        }
+        let binding = crate::state::session_binding::SessionBinding::new(conn);
+        // The projection binds the normalized path, so retirement must look up
+        // the same one (macOS `/tmp` is a symlink, and a raw comparison misses).
+        let projected_path = crate::storage_v2_shipper::stable_source_path(Path::new(
+            &claim.source_path,
+        ))
+        .to_string_lossy()
+        .into_owned();
+        match binding.get_with_thread_for_provider(&projected_path, &claim.provider) {
+            // Nobody owns it: nothing to retire.
+            Ok(None) => {}
+            Ok(Some((owner, _))) if owner == claim.session_id => {
+                if let Err(error) = binding.mark_exited(&projected_path) {
+                    tracing::warn!(
+                        session_id = %claim.session_id,
+                        error = %format!("{error:#}"),
+                        "retiring a released source claim failed; the next pass retries it"
+                    );
+                    continue;
+                }
+            }
+            // A later session owns the path now: the tombstone is stale and the
+            // row is not ours to touch.
+            Ok(Some((owner, _))) => tracing::debug!(
+                released = %claim.session_id,
+                owner = %owner,
+                "a released claim's path belongs to another session; dropping the tombstone"
+            ),
+            Err(error) => {
+                tracing::warn!(
+                    session_id = %claim.session_id,
+                    error = %format!("{error:#}"),
+                    "reading a binding to retire a released claim failed; the next pass retries it"
+                );
+                continue;
+            }
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => retired += 1,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => retired += 1,
+            Err(error) => tracing::warn!(
+                path = %path.display(),
+                error = %error,
+                "removing a retired claim failed"
+            ),
+        }
+    }
+    Ok(retired)
 }
 
 /// What one projection pass did.
@@ -343,17 +445,16 @@ pub struct ProjectionReport {
 /// the same rows — so a pass that fails or is missed costs nothing but the next
 /// pass, and a session never becomes degraded because a projection was late.
 pub fn project_claims(db_path: &Path) -> Result<ProjectionReport> {
+    let conn = crate::state::db::open_connection(db_path).with_context(|| {
+        format!("opening {} to project managed source claims", db_path.display())
+    })?;
+    // Retire what ended before applying what is live, so a released path is not
+    // re-bound in the same pass.
+    retire_released(&conn)?;
     let claims = active_claims()?;
     if claims.is_empty() {
         return Ok(ProjectionReport::default());
     }
-    let conn = crate::state::db::open_connection(db_path).with_context(|| {
-        format!(
-            "opening {} to project {} source claim(s)",
-            db_path.display(),
-            claims.len()
-        )
-    })?;
     let mut report = ProjectionReport::default();
     for claim in claims {
         let outcome = project_claim(&conn, &claim);
@@ -509,6 +610,55 @@ mod tests {
 
             release("session-1").expect("release");
             assert!(active_claims().expect("active claims").is_empty());
+        });
+    }
+
+    #[test]
+    fn releasing_a_claim_retires_its_binding_and_keeps_the_evidence() {
+        // The lifecycle end: a session stops, the daemon marks the binding it
+        // wrote as exited (the row is ownership evidence and stays), and only
+        // then does the tombstone go.
+        let dir = tempfile::tempdir().unwrap();
+        with_home(&dir.path().join("longhouse"), || {
+            let db_path = dir.path().join("agent/longhouse-shipper.db");
+            let source = dir.path().join("session.jsonl");
+            std::fs::write(&source, b"{}\n").unwrap();
+            let session_id = uuid::Uuid::new_v4().to_string();
+            let conn = crate::state::db::open_db(Some(&db_path)).expect("open agent db");
+
+            reserve(&session_id, "codex", &source, dir.path(), None, None).expect("claim");
+            confirm_identity(&session_id, "codex", &source, "native-1", None, None)
+                .expect("bind");
+            project_claims(&db_path).expect("project");
+            let claimed_path: String = conn
+                .query_row(
+                    "SELECT path FROM session_binding WHERE session_id = ?1",
+                    [session_id.as_str()],
+                    |row| row.get(0),
+                )
+                .expect("the claim must be projected");
+
+            release(&session_id).expect("release");
+            assert_eq!(
+                read_claim(&session_id).expect("read").map(|claim| claim.state),
+                Some(ClaimState::Released),
+                "release leaves a tombstone the daemon can see"
+            );
+
+            project_claims(&db_path).expect("project again");
+            let state: String = conn
+                .query_row(
+                    "SELECT state FROM session_binding WHERE session_id = ?1",
+                    [session_id.as_str()],
+                    |row| row.get(0),
+                )
+                .expect("the row stays as ownership evidence");
+            assert_eq!(state, "exited");
+            assert!(
+                read_claim(&session_id).expect("read").is_none(),
+                "a retired tombstone is removed, not accumulated"
+            );
+            assert!(Path::new(&claimed_path).exists() || !claimed_path.is_empty());
         });
     }
 

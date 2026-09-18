@@ -5294,24 +5294,37 @@ fn sync_thread_binding(
         return;
     }
 
+    // The new path is claimed locally; the daemon projects it into
+    // `session_binding`, which is the view discovery reads. The *old* path still
+    // needs a direct unbind: a claim is per session, so it cannot name a path the
+    // session has left behind.
+    if let Some(new) = new_canonical.as_deref() {
+        if let Err(error) = crate::managed_source_claim::reserve(
+            session_id,
+            "codex",
+            Path::new(new),
+            &config.cwd,
+            None,
+            None,
+        ) {
+            eprintln!("[codex-bridge] session claim failed: {error:#}");
+        }
+    }
     match resolve_bridge_agent_db_path(config.longhouse_home.as_deref()).and_then(|db_path| {
         crate::state::db::open_client_connection(&db_path, Duration::from_millis(500))
     }) {
         Ok(conn) => {
-            let sb = crate::state::session_binding::SessionBinding::new(&conn);
             if let Some(old) = old_canonical.as_deref() {
+                let sb = crate::state::session_binding::SessionBinding::new(&conn);
                 if let Err(e) = sb.unbind(old) {
                     eprintln!("[codex-bridge] session_binding clear failed: {e}");
                 }
             }
-            if let Some(new) = new_canonical.as_deref() {
-                if let Err(e) = sb.bind(new, session_id, "codex") {
-                    eprintln!("[codex-bridge] session_binding seed failed: {e}");
-                }
-                wake_daemon_for_transcript(config, new, "running", "binding", None);
-            }
         }
         Err(e) => eprintln!("[codex-bridge] open shipper DB for binding: {e}"),
+    }
+    if let Some(new) = new_canonical.as_deref() {
+        wake_daemon_for_transcript(config, new, "running", "binding", None);
     }
 }
 
