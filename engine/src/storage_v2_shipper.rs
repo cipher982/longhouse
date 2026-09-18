@@ -522,6 +522,33 @@ fn prepare_next_envelope_with_limit(
     {
         tracing::warn!(session_id, error = %error, "Unable to persist local prompt title");
     }
+    // The hook is the authority on interactions and it can miss. The transcript
+    // carries the same outcome, so the wait a question opened is closed here too
+    // — a backstop for an Esc, a dropped write, a killed process, or a machine
+    // that never registered the hook. Resolution only: nothing here opens a wait.
+    if provider.eq_ignore_ascii_case("claude") {
+        for event in crate::claude_lifecycle_hook::transcript_resolutions_for_events(
+            &session_id,
+            &parse_result.events,
+        ) {
+            match crate::config::get_agent_runtime_events_outbox_dir() {
+                Ok(dir) => {
+                    if let Err(error) = crate::outbox::enqueue_runtime_event(&dir, &event) {
+                        tracing::warn!(
+                            session_id,
+                            error = %error,
+                            "Unable to queue a transcript-derived interaction resolution"
+                        );
+                    }
+                }
+                Err(error) => tracing::warn!(
+                    session_id,
+                    error = %error,
+                    "No runtime-events outbox for a transcript-derived interaction resolution"
+                ),
+            }
+        }
+    }
     let raw_bytes: Vec<Vec<u8>> = raw_batch
         .records
         .iter()

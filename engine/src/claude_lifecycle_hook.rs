@@ -4,12 +4,17 @@
 //! enqueue a presence record, and exit 0. The daemon owns durable local
 //! projections such as managed transcript bindings.
 
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{LazyLock, Mutex};
 
+use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+
+use crate::pipeline::parser::{ParsedEvent, Role};
 
 pub fn run() -> anyhow::Result<()> {
     // Claude treats hook failures as an interactive interruption. This command
@@ -542,6 +547,92 @@ fn enqueue_interaction_edge(session_id: &str, edge: &InteractionEdge) -> anyhow:
     Ok(())
 }
 
+/// Where a resolution that came from the transcript, not the hook, says it came
+/// from. The two are distinguishable on purpose: the hook is the authority, and
+/// a reader deciding whether a wait was closed by the provider's callback or by
+/// the transcript catching up should not have to guess.
+const TRANSCRIPT_SOURCE: &str = "claude_transcript";
+
+/// Question calls a shipped transcript has shown but not yet closed.
+///
+/// The hook can miss: an Esc, a dropped write, a killed process, a machine that
+/// never registered the hook at all. The transcript carries the same outcome —
+/// the tool result names the call the wait was keyed by — so the shipping path
+/// closes the wait there rather than leaving a badge claiming an answer the
+/// user has already given.
+///
+/// Only a *question* is tracked, and only between its own two events. A result
+/// cannot say which tool it belongs to, and a question's call and its result are
+/// by definition in different batches: the user is answering in between. So the
+/// id is remembered when the call ships and dropped when the result does. What
+/// is never closed is bounded by the questions one session asked, and a restart
+/// loses it — which costs one backstop, never a wrong state.
+static OPEN_QUESTION_CALLS: LazyLock<Mutex<HashMap<String, HashSet<String>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// The resolutions a shipped batch proves, for the caller to enqueue.
+///
+/// Kept out of `enqueue_interaction_edge` because a hook resolution is an event
+/// (a nonce) and this one is a statement about a named call: the watcher
+/// re-reads ranges, so the same resolution must restate under the same key
+/// instead of arriving as a second one.
+pub(crate) fn transcript_resolutions_for_events(
+    session_id: &str,
+    events: &[ParsedEvent],
+) -> Vec<Value> {
+    let mut resolutions = Vec::new();
+    let Ok(mut open) = OPEN_QUESTION_CALLS.lock() else {
+        return resolutions;
+    };
+    let session_open = open.entry(session_id.to_string()).or_default();
+    for event in events {
+        let Some(tool_call_id) = event.tool_call_id.as_deref() else {
+            continue;
+        };
+        match event.role {
+            Role::Assistant if event.tool_name.as_deref() == Some(PAUSE_TOOL_NAME) => {
+                session_open.insert(tool_call_id.to_string());
+            }
+            Role::Tool if session_open.remove(tool_call_id) => {
+                resolutions.push(transcript_resolution_event(
+                    session_id,
+                    tool_call_id,
+                    event.timestamp,
+                ));
+            }
+            _ => {}
+        }
+    }
+    if session_open.is_empty() {
+        open.remove(session_id);
+    }
+    resolutions
+}
+
+/// The resolution a transcript tool end proves, in the shape the hook's rides.
+fn transcript_resolution_event(
+    session_id: &str,
+    tool_use_id: &str,
+    occurred_at: DateTime<Utc>,
+) -> Value {
+    json!({
+        "runtime_key": format!("claude:{session_id}"),
+        "session_id": session_id,
+        "provider": "claude",
+        "source": TRANSCRIPT_SOURCE,
+        "kind": "pause_resolution",
+        "phase": Value::Null,
+        "tool_name": PAUSE_TOOL_NAME,
+        "occurred_at": occurred_at.to_rfc3339(),
+        "dedupe_key": format!("claude-transcript:resolve:{session_id}:{tool_use_id}"),
+        "payload": {
+            "provider_request_id": tool_use_id,
+            "status": "resolved",
+            "response_text": "Answered in the original terminal.",
+        },
+    })
+}
+
 fn longhouse_home() -> anyhow::Result<PathBuf> {
     if let Some(home) = std::env::var_os("LONGHOUSE_HOME") {
         return Ok(PathBuf::from(home));
@@ -730,6 +821,55 @@ mod tests {
             }
             other => panic!("expected an approval resolution, got {other:?}"),
         }
+    }
+
+    fn parsed_event(role: Role, tool_name: Option<&str>, tool_call_id: Option<&str>) -> ParsedEvent {
+        ParsedEvent {
+            uuid: format!("uuid-{}", tool_call_id.unwrap_or("none")),
+            parent_uuid: None,
+            session_id: "session-transcript".to_string(),
+            timestamp: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            role,
+            content_text: None,
+            tool_name: tool_name.map(str::to_string),
+            tool_input_json: None,
+            tool_output_text: None,
+            tool_call_id: tool_call_id.map(str::to_string),
+            source_offset: 0,
+            raw_type: "test".to_string(),
+            raw_line: None,
+        }
+    }
+
+    #[test]
+    fn a_shipped_question_result_closes_the_wait_its_call_opened() {
+        let session = "session-transcript";
+        let call = parsed_event(Role::Assistant, Some(PAUSE_TOOL_NAME), Some("toolu_01shipped"));
+        let result = parsed_event(Role::Tool, None, Some("toolu_01shipped"));
+
+        // An ordinary tool end proves nothing about a question: the result does
+        // not say which tool it belongs to, so only a call this watched can
+        // close a wait.
+        assert!(
+            transcript_resolutions_for_events(session, &[parsed_event(Role::Tool, None, Some("toolu_01other"))])
+                .is_empty()
+        );
+
+        let resolutions = transcript_resolutions_for_events(session, &[call.clone(), result.clone()]);
+        assert_eq!(resolutions.len(), 1);
+        assert_eq!(resolutions[0]["kind"], "pause_resolution");
+        assert_eq!(resolutions[0]["payload"]["provider_request_id"], "toolu_01shipped");
+        assert_eq!(resolutions[0]["source"], TRANSCRIPT_SOURCE);
+        assert_eq!(resolutions[0]["runtime_key"], "claude:session-transcript");
+        // Deterministic rather than a nonce: the watcher re-reads ranges, so a
+        // replayed pass must restate this resolution, not add a second one.
+        assert_eq!(
+            resolutions[0]["dedupe_key"],
+            "claude-transcript:resolve:session-transcript:toolu_01shipped"
+        );
+
+        // The entry is spent, so the same result cannot close a later wait.
+        assert!(transcript_resolutions_for_events(session, &[result.clone()]).is_empty());
     }
 
     #[test]
