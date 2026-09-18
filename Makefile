@@ -672,6 +672,7 @@ validate-ship-monitor: ## @internal Ship monitor regression tests
 
 validate-dogfood-runtime: ## @internal Dogfood runtime helper regression tests
 	@bash scripts/tests/dogfood-runtime.test.sh
+	@python3 scripts/tests/promote-dogfood.test.py
 
 validate-build-identity: ## @internal Build identity freshness check
 	@python3 scripts/build/generate_build_identity.py >/dev/null

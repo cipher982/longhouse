@@ -34,34 +34,40 @@ SHA="$(git -C "$ROOT" rev-parse --verify --quiet "${SHA}^{commit}")" || {
   exit 1
 }
 
-deploy_json="$(gh run list --repo "$REPO" --workflow "$DEPLOY_WORKFLOW" --commit "$SHA" --event push --status success --limit 20 --json headSha,databaseId,workflowName)"
-deploy_record="$(jq -c --arg sha "$SHA" 'map(select(.headSha == $sha)) | .[0] // empty' <<<"$deploy_json")"
-if [[ -z "$deploy_record" ]]; then
-  echo "Refusing $SHA: no successful push-triggered $DEPLOY_WORKFLOW run." >&2
-  exit 1
-fi
-deploy_run_id="$(jq -r '.databaseId // empty' <<<"$deploy_record")"
-if [[ ! "$deploy_run_id" =~ ^[1-9][0-9]*$ ]]; then
-  echo "Successful $DEPLOY_WORKFLOW run has no immutable run id." >&2
-  exit 1
-fi
-deploy_view="$(gh run view "$deploy_run_id" --repo "$REPO" --json headSha,attempt,status,conclusion,workflowName)"
-deploy_attempt="$(jq -r '.attempt // empty' <<<"$deploy_view")"
-if [[ "$(jq -r '.headSha // empty' <<<"$deploy_view")" != "$SHA" ||
-      "$(jq -r '.workflowName // empty' <<<"$deploy_view")" != "$DEPLOY_WORKFLOW" ||
-      "$(jq -r '.status // empty' <<<"$deploy_view")" != "completed" ||
-      "$(jq -r '.conclusion // empty' <<<"$deploy_view")" != "success" ]] ||
-   ! [[ "$deploy_attempt" =~ ^[1-9][0-9]*$ ]]; then
-  echo "Selected $DEPLOY_WORKFLOW run is no longer a successful exact-SHA run." >&2
-  exit 1
-fi
+deploy_json="$(gh run list --repo "$REPO" --workflow "$DEPLOY_WORKFLOW" --commit "$SHA" --status success --limit 20 --json headSha,databaseId,workflowName,event)"
+deploy_run_ids="$(jq -r --arg sha "$SHA" \
+  '.[] | select(.headSha == $sha and (.event == "push" or .event == "workflow_dispatch")) | .databaseId' \
+  <<<"$deploy_json")"
+artifact_id=""
+while IFS= read -r deploy_run_id; do
+  [[ -n "$deploy_run_id" ]] || continue
+  if [[ ! "$deploy_run_id" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Successful $DEPLOY_WORKFLOW run has no immutable run id." >&2
+    exit 1
+  fi
+  deploy_view="$(gh run view "$deploy_run_id" --repo "$REPO" --json headSha,attempt,status,conclusion,workflowName)"
+  deploy_attempt="$(jq -r '.attempt // empty' <<<"$deploy_view")"
+  if [[ "$(jq -r '.headSha // empty' <<<"$deploy_view")" != "$SHA" ||
+        "$(jq -r '.workflowName // empty' <<<"$deploy_view")" != "$DEPLOY_WORKFLOW" ||
+        "$(jq -r '.status // empty' <<<"$deploy_view")" != "completed" ||
+        "$(jq -r '.conclusion // empty' <<<"$deploy_view")" != "success" ]] ||
+     ! [[ "$deploy_attempt" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Selected $DEPLOY_WORKFLOW run is no longer a successful exact-SHA run." >&2
+    exit 1
+  fi
 
-artifact_json="$(gh api "repos/$REPO/actions/runs/$deploy_run_id/artifacts?per_page=100")"
-artifact_id="$(jq -r --arg run_id "$deploy_run_id" --arg attempt "$deploy_attempt" \
-  '[.artifacts[] | select(.expired == false and .name == ("runtime-verification-" + $run_id + "-" + $attempt))] | if length == 1 then .[0].id else empty end' \
-  <<<"$artifact_json")"
+  artifact_json="$(gh api "repos/$REPO/actions/runs/$deploy_run_id/artifacts?per_page=100")"
+  artifact_id="$(jq -r --arg run_id "$deploy_run_id" --arg attempt "$deploy_attempt" \
+    '[.artifacts[] | select(.expired == false and .name == ("runtime-verification-" + $run_id + "-" + $attempt))] | if length == 1 then .[0].id else empty end' \
+    <<<"$artifact_json")"
+  # A successful path-filtered run may not have deployed anything.
+  # Only an exact-attempt canary receipt can authorize promotion.
+  if [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]]; then
+    break
+  fi
+done <<<"$deploy_run_ids"
 if [[ ! "$artifact_id" =~ ^[1-9][0-9]*$ ]]; then
-  echo "Successful $DEPLOY_WORKFLOW run $deploy_run_id has no canary verification receipt." >&2
+  echo "Refusing $SHA: no successful $DEPLOY_WORKFLOW run has a usable canary verification receipt." >&2
   exit 1
 fi
 receipt_zip="$(mktemp)"
