@@ -101,6 +101,14 @@ def test_engine_runtime_batch_limit_matches_the_server_cap():
     )
     assert server_cap is not None, "RuntimeEventBatchIngest.events lost its max_length"
 
-    assert engine_limit == server_cap, (
-        f"engine chunks {engine_limit} runtime observations per POST but the server accepts at most {server_cap}; change both together"
+    # The hazard is one-sided: a chunk larger than the cap 422s forever and the
+    # outbox never drains. A smaller chunk is only more round trips, and the
+    # engine picked one deliberately -- 357692716 lowered it to 128 so that one
+    # POST is one catalogd apply, after a 1024-event request was split into up
+    # to eight serial applies and the client timed out on a request the server
+    # had already committed. Pinning the two to the same number would force the
+    # engine to give that back, so assert the invariant the docstring states.
+    assert engine_limit > 0, "engine/src/outbox.rs declares a non-positive batch limit"
+    assert engine_limit <= server_cap, (
+        f"engine chunks {engine_limit} runtime observations per POST but the server accepts at most {server_cap}; lower the engine chunk or raise the server cap"
     )
