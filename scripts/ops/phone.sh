@@ -111,9 +111,7 @@ cmd_build() {
   [[ -n "$team" ]] || die "no Apple team id; set PHONE_TEAM_ID"
   (
     cd "$ROOT_DIR"
-    python3 scripts/build/generate_build_identity.py
-    bash scripts/build/stage_ios_build_identity.sh
-    xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness >/dev/null
+    make ios-project >/dev/null
     mkdir -p "$DERIVED" "$OUT_DIR"
     local log="$OUT_DIR/build-$(stamp).log"
     # The build's exit status is the verdict; a filtered pipeline would hide

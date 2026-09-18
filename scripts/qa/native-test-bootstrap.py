@@ -207,25 +207,7 @@ def main() -> int:
             in {"ios-ui-shot", "ios-previews", "benchmark-ios-transcript", "simlab-run"}
         ):
             subprocess.run(
-                ["python3", "scripts/build/generate_build_identity.py"],
-                cwd=ROOT,
-                env=environment,
-                check=True,
-            )
-            subprocess.run(
-                ["bash", "scripts/build/stage_ios_build_identity.sh"],
-                cwd=ROOT,
-                env=environment,
-                check=True,
-            )
-            subprocess.run(
-                [
-                    "xcodegen",
-                    "--spec",
-                    "ios/XcodeHarness/project.yml",
-                    "--project-root",
-                    "ios/XcodeHarness",
-                ],
+                ["make", "ios-project"],
                 cwd=ROOT,
                 env=environment,
                 check=True,

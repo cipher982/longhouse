@@ -102,9 +102,7 @@ def slug(value: str) -> str:
 
 
 def prepare_project() -> None:
-    run(["python3", "scripts/build/generate_build_identity.py"])
-    run(["bash", "scripts/build/stage_ios_build_identity.sh"])
-    run(["xcodegen", "--spec", "ios/XcodeHarness/project.yml", "--project-root", "ios/XcodeHarness"])
+    run(["make", "ios-project"])
 
 
 def run_profile(device: SimDevice, label: str, event_count: int, delayed_tail_ms: int, out_dir: Path) -> list[dict]:

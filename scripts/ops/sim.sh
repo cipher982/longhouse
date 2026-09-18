@@ -58,9 +58,7 @@ ensure_project() {
   [[ -d "$PROJECT" ]] && return
   (
     cd "$ROOT_DIR"
-    python3 scripts/build/generate_build_identity.py
-    bash scripts/build/stage_ios_build_identity.sh
-    xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness >/dev/null
+    make ios-project >/dev/null
   )
 }
 
@@ -117,9 +115,7 @@ cmd_build() {
   log="$OUT_DIR/build-$(stamp).log"
   (
     cd "$ROOT_DIR"
-    python3 scripts/build/generate_build_identity.py
-    bash scripts/build/stage_ios_build_identity.sh
-    xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness >/dev/null
+    make ios-project >/dev/null
   )
   # The build's exit status is the verdict; a filtered pipeline would hide a
   # failure behind a still-present .app from last time.

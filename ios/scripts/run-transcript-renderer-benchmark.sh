@@ -44,7 +44,7 @@ metadata_settings+=(
   "LONGHOUSE_BENCHMARK_TEMPERATURE=$temperature"
 )
 
-xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
+make ios-project
 
 if [[ -z "$destination" ]]; then
   destination="$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj LonghouseChatStress)"

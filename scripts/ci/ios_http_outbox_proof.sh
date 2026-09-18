@@ -119,9 +119,7 @@ export TEST_RUNNER_LONGHOUSE_HTTP_PROOF_STATE_URL="$STATE_URL"
 export TEST_RUNNER_LONGHOUSE_HTTP_PROOF_ENABLE_RECEIPT_URL="$ENABLE_RECEIPT_URL"
 export TEST_RUNNER_LONGHOUSE_HTTP_PROOF_SESSION_ID="$SESSION_ID"
 
-python3 "$ROOT/scripts/build/generate_build_identity.py"
-bash "$ROOT/scripts/build/stage_ios_build_identity.sh"
-xcodegen --spec "$ROOT/ios/XcodeHarness/project.yml" --project-root "$ROOT/ios/XcodeHarness"
+make -C "$ROOT" ios-project
 DESTINATION="platform=iOS Simulator,id=$SIM_UDID"
 set +e
 xcodebuild -project "$PROJECT" -scheme "$SCHEME" -destination "$DESTINATION" \
