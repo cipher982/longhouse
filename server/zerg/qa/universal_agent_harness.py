@@ -4581,7 +4581,6 @@ def orchestration_capability_matrix(package: EvidencePackage, provider: str) -> 
                 "reason_code": entry.get("reason_code"),
                 "reason": entry.get("reason"),
                 "verdict": verdict,
-                "source": entry.get("source"),
             }
         )
         operation_evidence[key] = {
@@ -4619,7 +4618,6 @@ def _provider_action_coverage_table(provider: str) -> dict[str, dict[str, str]]:
             "state": str(info.get("state") or "unknown"),
             "reason_code": str(info.get("reason_code") or ""),
             "reason": str(info.get("reason") or ""),
-            "source": str(info.get("reason") or ""),
         }
         for action_id, info in coverage.items()
     }
