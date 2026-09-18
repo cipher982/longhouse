@@ -1162,7 +1162,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // What the Runtime Host has already accepted, per session. Nothing is
     // queued: an unsent or failed slot is simply sent again, with whatever
     // value it holds by then.
-    let mut status_sent: HashMap<String, (String, u64)> = HashMap::new();
+    let mut status_sent: HashMap<String, ((String, u64), Instant)> = HashMap::new();
     // What the local phase ledger already holds. Recording an unchanged phase
     // every 100ms bumps its revision, and the projection debounce watches that
     // watermark: the daemon would schedule a rebuild forever.
@@ -1637,14 +1637,28 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         // neither map needs to remember it.
                         status_sent.retain(|session_id, _| live.contains(session_id));
                         status_recorded.retain(|session_id, _| live.contains(session_id));
-                        // A slot the host has already accepted is not resent.
-                        // Everything else is sent as it stands now, not as it
-                        // stood when it changed.
-                        let pending: Vec<crate::status_slot::StatusSlot> = result
+                        // A slot the host has already accepted is not resent
+                        // as a change. Everything else is sent as it stands
+                        // now, not as it stood when it changed — and a slot it
+                        // has accepted is still *asserted* on an interval, so a
+                        // provider that has gone quiet between its own events
+                        // does not age out of freshness while it works.
+                        let pending: Vec<(crate::status_slot::StatusSlot, bool)> = result
                             .slots
                             .into_iter()
-                            .filter(|slot| {
-                                status_sent.get(&slot.session_id) != Some(&slot.version())
+                            .filter_map(|slot| {
+                                match status_sent.get(&slot.session_id) {
+                                    None => Some((slot, true)),
+                                    Some((version, sent_at)) => {
+                                        if version != &slot.version() {
+                                            Some((slot, true))
+                                        } else if sent_at.elapsed() >= crate::status_slot::STATUS_ASSERTION_INTERVAL {
+                                            Some((slot, false))
+                                        } else {
+                                            None
+                                        }
+                                    }
+                                }
                             })
                             .collect();
                         if !pending.is_empty() && status_post_tasks.is_empty() {
@@ -1665,7 +1679,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 match status_post_result {
                     Some(Ok(accepted)) => {
                         for (session_id, version) in accepted {
-                            status_sent.insert(session_id, version);
+                            status_sent.insert(session_id, (version, Instant::now()));
                         }
                     }
                     Some(Err(err)) => {
@@ -3183,17 +3197,24 @@ fn record_status_slot_phases(
 #[allow(unused_imports)]
 async fn post_status_slots(
     client: &crate::shipping::client::ShipperClient,
-    slots: Vec<crate::status_slot::StatusSlot>,
+    slots: Vec<(crate::status_slot::StatusSlot, bool)>,
 ) -> Vec<(String, (String, u64))> {
     use futures_util::StreamExt;
     // Sessions are independent, so one whose send keeps failing must not hold
     // up everyone else's current status.
-    futures_util::stream::iter(slots.into_iter().map(|slot| async move {
-        let events: Vec<outbox::PendingRuntimeEventPost> =
+    futures_util::stream::iter(slots.into_iter().map(|(slot, changed)| async move {
+        let events: Vec<outbox::PendingRuntimeEventPost> = if changed {
             crate::status_slot::runtime_events(&slot)
-                .into_iter()
-                .map(outbox::PendingRuntimeEventPost::from_event)
-                .collect();
+        } else {
+            // Unchanged: the machine is restating, not reporting. A phase
+            // shipped again would bump the host's runtime revision and
+            // re-anchor the phase for a statement that says nothing new about
+            // the provider.
+            vec![crate::status_slot::assertion_runtime_event(&slot, chrono::Utc::now())]
+        }
+        .into_iter()
+        .map(outbox::PendingRuntimeEventPost::from_event)
+        .collect();
         let expected = events.len();
         let (sent, _kept) = outbox::post_pending_runtime_event_files(client, events).await;
         (sent == expected).then(|| (slot.session_id.clone(), slot.version()))

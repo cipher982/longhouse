@@ -1070,6 +1070,68 @@ def test_a_claude_hook_permission_event_registers_and_retires_a_keyed_wait(inter
         assert db.query(LiveInteractionRequest).one().status == "resolved"
 
 
+def test_a_status_assertion_renews_without_restating_the_session(interaction_store):
+    """C1: the Machine Agent vouching for a state it is not restating.
+
+    A hook provider says nothing between its own events, so its observation ages
+    while the session demonstrably runs, and the lease needs a renewal that is
+    not a new observation. It must leave the phase, its signal time and every
+    revision exactly as they were — a renewal that restated the state would be a
+    second observation wearing the first one's name.
+    """
+
+    ctx = interaction_store
+    ctx.store.apply_session_runtime(events=[_interaction_event(ctx, "phase_signal", 0, run_id=ctx.run_id)])
+    with Session(ctx.engine) as db:
+        state = db.get(LiveRuntimeState, ctx.runtime_key)
+        baseline = (state.phase, state.runtime_version, normalize_utc(state.last_runtime_signal_at))
+        assert normalize_utc(state.last_asserted_at) is None
+
+    def assertion(at: datetime, key: str) -> RuntimeEventIngest:
+        return RuntimeEventIngest(
+            runtime_key=ctx.runtime_key,
+            session_id=UUID(ctx.session_id),
+            provider="cursor",
+            source="cursor_hook",
+            kind="status_assertion",
+            occurred_at=at,
+            dedupe_key=key,
+            payload={},
+        )
+
+    ctx.store.apply_session_runtime(events=[assertion(ctx.now + timedelta(seconds=30), f"assert:{uuid4()}")])
+    with Session(ctx.engine) as db:
+        state = db.get(LiveRuntimeState, ctx.runtime_key)
+        assert normalize_utc(state.last_asserted_at) == ctx.now + timedelta(seconds=30)
+        assert (state.phase, state.runtime_version, normalize_utc(state.last_runtime_signal_at)) == baseline
+
+    # A replay carries the time it was minted with, so it cannot extend
+    # anything: only a strictly newer assertion renews.
+    ctx.store.apply_session_runtime(events=[assertion(ctx.now + timedelta(seconds=30), f"assert:{uuid4()}")])
+    with Session(ctx.engine) as db:
+        assert normalize_utc(db.get(LiveRuntimeState, ctx.runtime_key).last_asserted_at) == ctx.now + timedelta(seconds=30)
+
+    # It renews; it never creates. A session with no runtime state is not one a
+    # machine is asserting about, and inventing an idle row would put a session
+    # on the board that never reported anything.
+    ctx.store.apply_session_runtime(
+        events=[
+            RuntimeEventIngest(
+                runtime_key="cursor:no-such-session",
+                session_id=UUID(ctx.session_id),
+                provider="cursor",
+                source="cursor_hook",
+                kind="status_assertion",
+                occurred_at=ctx.now + timedelta(seconds=40),
+                dedupe_key=f"assert:{uuid4()}",
+                payload={},
+            )
+        ]
+    )
+    with Session(ctx.engine) as db:
+        assert db.get(LiveRuntimeState, "cursor:no-such-session") is None
+
+
 def test_a_question_resolution_that_arrives_first_cannot_be_revived_by_its_opening(interaction_store):
     """Both halves are events, so the resolution can outrun the request.
 

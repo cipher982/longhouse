@@ -166,6 +166,7 @@ def project_shadow_session_state_facts(
         expected_run_id=durable_run_id,
         require_run_binding=True,
         retain_expired=True,
+        asserted_at=_runtime_assertion(catalog_facts),
     )
     control_head, rejected_control = _effective_head(
         heads,
@@ -655,6 +656,22 @@ def _project_run(
     )
 
 
+def _runtime_assertion(catalog_facts: Mapping[str, Any]) -> datetime | None:
+    """When the Machine Agent last vouched for this session's state.
+
+    Read from the runtime DTO the catalog already carries, so the lease does not
+    need a second read of a row every projection already has.
+    """
+
+    raw = _mapping(catalog_facts.get("runtime")).get("last_asserted_at")
+    if raw is None or raw == "":
+        return None
+    try:
+        return _optional_wire_datetime(raw, "runtime.last_asserted_at")
+    except ValueError:
+        return None
+
+
 def _effective_head(
     heads: Collection[Mapping[str, Any]],
     *,
@@ -665,6 +682,7 @@ def _effective_head(
     require_run_binding: bool = False,
     allowed_control_coordinates: set[tuple[str, str, str]] | None = None,
     retain_expired: bool = False,
+    asserted_at: datetime | None = None,
 ) -> tuple[tuple[Mapping[str, Any], dict[str, Any], datetime, datetime] | None, int]:
     candidates: list[tuple[tuple[Any, ...], Mapping[str, Any], dict[str, Any], datetime, datetime]] = []
     rejected = 0
@@ -680,7 +698,13 @@ def _effective_head(
             if rank is None:
                 raise ValueError(f"unsupported {family} authority_class")
             observed_at = _wire_datetime(value.get("observed_at"), "observed_at")
-            valid_until = _valid_until(family, head=head, value=value, observed_at=observed_at)
+            valid_until = _valid_until(
+                family,
+                head=head,
+                value=value,
+                observed_at=observed_at,
+                asserted_at=asserted_at,
+            )
             run_id = _text(value.get("run_id"))
             if require_run_binding and (expected_run_id is None or run_id != expected_run_id):
                 raise ValueError(f"{family} run_id is not bound to the durable latest run")
@@ -886,6 +910,7 @@ def _valid_until(
     head: Mapping[str, Any],
     value: Mapping[str, Any],
     observed_at: datetime,
+    asserted_at: datetime | None = None,
 ) -> datetime:
     if family == "control":
         ttl_ms = value.get("lease_ttl_ms")
@@ -896,7 +921,11 @@ def _valid_until(
     declared = _wire_datetime(raw, "valid_until")
     if family != "activity":
         return declared
-    return max(declared, _activity_lease_until(head, observed_at) or declared)
+    # C1 landed first: the lease renews from the machine's assertion as well as
+    # from a delivery. The producer's per-phase window still stands until C2
+    # removes it, which is what makes this step verifiable on its own — nothing
+    # served shortens here, only what keeps a working session current extends.
+    return max(declared, _activity_lease_until(head, observed_at, asserted_at) or declared)
 
 
 # Activity used to expire purely on producer time: a `thinking` observation was
@@ -904,23 +933,45 @@ def _valid_until(
 # On 2026-09-17 a delivery backlog made every OMP session's activity arrive
 # already expired, and sessions that were alive and working left Live now.
 #
-# The lease is a floor, never a ceiling: it cannot shorten a window the
-# contract gives a phase, so a `blocked` session still waits out its day. It is
-# anchored to the head's receipt, which is what makes it replay-safe — a
-# re-delivered copy of an observation is a duplicate, never becomes the head,
-# and so cannot renew anything. An observation delivered long after it was made
-# gets no lease at all, so a drained backlog cannot make a finished session
-# look busy.
+# The lease is anchored to evidence that the session is *still* being reported.
+# Two things can be that: the host receiving an observation, and the Machine
+# Agent asserting a status it is not restating. The second is what a hook
+# provider needs — it says nothing between its own events, so a ten-minute tool
+# call would otherwise age out of freshness while the session demonstrably runs.
+#
+# It stays replay-safe. An observation re-delivered is a duplicate, never
+# becomes the head, and so cannot renew anything; an assertion carries the time
+# it was minted and only a strictly newer one is accepted, so replaying an old
+# frame renews nothing either.
 ACTIVITY_OBSERVATION_LEASE = timedelta(seconds=45)
 MAX_OBSERVATION_DELAY = timedelta(seconds=60)
 
 
-def _activity_lease_until(head: Mapping[str, Any], observed_at: datetime) -> datetime | None:
-    # The lease can only ever extend a window, so a receipt it cannot read is
-    # not an error: it simply means no lease. Raising here would reject the
-    # whole head and serve the session as `unknown` — the exact failure this
-    # code exists to prevent. SQLite hands back naive datetimes, which is the
-    # ordinary case, not a malformed one.
+def _activity_lease_until(
+    head: Mapping[str, Any],
+    observed_at: datetime,
+    asserted_at: datetime | None = None,
+) -> datetime | None:
+    # A receipt it cannot read is not an error: it means no lease from that
+    # anchor. Raising here would reject the whole head and serve the session as
+    # `unknown` — the exact failure this code exists to prevent. SQLite hands
+    # back naive datetimes, which is the ordinary case, not a malformed one.
+    anchors: list[datetime] = []
+    received_at = _head_receipt(head)
+    if received_at is not None and received_at - observed_at <= MAX_OBSERVATION_DELAY:
+        # An observation delivered long after it was made gets no lease of its
+        # own, so a drained backlog cannot make a finished session look busy.
+        anchors.append(received_at)
+    if asserted_at is not None:
+        # Not subject to that delay: an assertion is a *current* statement by a
+        # live machine about a phase it is not claiming to have just observed.
+        anchors.append(asserted_at)
+    if not anchors:
+        return None
+    return max(anchors) + ACTIVITY_OBSERVATION_LEASE
+
+
+def _head_receipt(head: Mapping[str, Any]) -> datetime | None:
     raw = head.get("received_at")
     if raw is None or raw == "":
         return None
@@ -930,9 +981,7 @@ def _activity_lease_until(head: Mapping[str, Any], observed_at: datetime) -> dat
         return None
     if received_at.tzinfo is None:
         received_at = received_at.replace(tzinfo=UTC)
-    if received_at - observed_at > MAX_OBSERVATION_DELAY:
-        return None
-    return received_at + ACTIVITY_OBSERVATION_LEASE
+    return received_at
 
 
 def _head_value(

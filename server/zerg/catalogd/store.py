@@ -13596,6 +13596,10 @@ _RUNTIME_FIELDS = frozenset(
         "last_runtime_signal_at",
         "last_progress_at",
         "last_live_at",
+        # What the activity lease reads when the provider has gone quiet: a
+        # hook provider states its phase once and says nothing for the length
+        # of a tool call, so the observation above ages while the session runs.
+        "last_asserted_at",
         "timeline_anchor_at",
         "freshness_expires_at",
         "terminal_state",

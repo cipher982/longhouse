@@ -797,6 +797,9 @@ class SessionRuntimeState(AgentsBase):
     last_runtime_signal_at = Column(DateTime(timezone=True), nullable=True)
     last_progress_at = Column(DateTime(timezone=True), nullable=True)
     last_live_at = Column(DateTime(timezone=True), nullable=True)
+    # Mirrors the live model: the two runtime-state shapes stay in sync, and the
+    # archive copy is where a served state can be explained after the fact.
+    last_asserted_at = Column(DateTime(timezone=True), nullable=True)
     timeline_anchor_at = Column(DateTime(timezone=True), nullable=False, index=True)
     freshness_expires_at = Column(DateTime(timezone=True), nullable=True)
     terminal_state = Column(String(32), nullable=True)

@@ -605,6 +605,11 @@ class LiveRuntimeState(LiveBase):
     last_runtime_signal_at = Column(DateTime(timezone=True), nullable=True)
     last_progress_at = Column(DateTime(timezone=True), nullable=True)
     last_live_at = Column(DateTime(timezone=True), nullable=True)
+    # When the Machine Agent last vouched for this state without restating it.
+    # A hook provider says nothing between its own events, so the observation
+    # above stops being fresh while the session is demonstrably running; the
+    # lease reads this instead of guessing how long a phase ought to last.
+    last_asserted_at = Column(DateTime(timezone=True), nullable=True)
     timeline_anchor_at = Column(DateTime(timezone=True), nullable=False, index=True)
     freshness_expires_at = Column(DateTime(timezone=True), nullable=True)
     terminal_state = Column(String(32), nullable=True)

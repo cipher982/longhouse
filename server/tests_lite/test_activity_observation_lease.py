@@ -81,11 +81,13 @@ def _activity_head(
     }
 
 
-def _project(head: dict, *, now: datetime):
+def _project(head: dict, *, now: datetime, asserted_at: datetime | None = None):
+    catalog_facts = _catalog_facts()
+    catalog_facts["runtime"] = {"last_asserted_at": asserted_at.isoformat() if asserted_at else None}
     return project_shadow_session_state_facts(
         session_id=SESSION_ID,
         commit_seq=1,
-        catalog_facts=_catalog_facts(),
+        catalog_facts=catalog_facts,
         heads=[head],
         supported_operations=(),
         now=now,
@@ -130,6 +132,59 @@ def test_a_session_that_stops_reporting_still_goes_unknown():
             contract_window=timedelta(seconds=90),
         ),
         now=received_at + ACTIVITY_OBSERVATION_LEASE + timedelta(seconds=120),
+    )
+
+    assert projection.activity.state == "unknown"
+
+
+def test_a_machine_assertion_keeps_a_quiet_session_current():
+    """C1: the machine vouching for a state it is not restating.
+
+    A hook provider says nothing between its own events, so a ten-minute tool
+    call's observation is far past `MAX_OBSERVATION_DELAY` and its receipt-based
+    lease is gone. The assertion is the machine saying the session is still
+    running, and it is what the lease reads then — without it the badge blanks
+    while the session is demonstrably working.
+    """
+
+    observed_at = _at()
+    received_at = observed_at + timedelta(seconds=1)
+    asserted_at = received_at + timedelta(minutes=9)
+
+    projection = _project(
+        _activity_head(
+            phase="thinking",
+            observed_at=observed_at,
+            received_at=received_at,
+            contract_window=timedelta(seconds=90),
+        ),
+        now=asserted_at + timedelta(seconds=5),
+        asserted_at=asserted_at,
+    )
+
+    assert projection.activity.state == "thinking"
+    # The phase keeps its own observation time: the assertion renews the lease,
+    # it does not pretend the phase was observed now.
+    assert projection.activity.observed_at == observed_at
+    assert projection.activity.valid_until == asserted_at + ACTIVITY_OBSERVATION_LEASE
+
+
+def test_an_assertion_older_than_the_lease_does_not_keep_it_current():
+    """A lease is a lease: an assertion that has itself gone stale proves nothing."""
+
+    observed_at = _at()
+    received_at = observed_at + timedelta(seconds=1)
+    asserted_at = received_at + timedelta(minutes=3)
+
+    projection = _project(
+        _activity_head(
+            phase="thinking",
+            observed_at=observed_at,
+            received_at=received_at,
+            contract_window=timedelta(seconds=90),
+        ),
+        now=asserted_at + ACTIVITY_OBSERVATION_LEASE + timedelta(seconds=1),
+        asserted_at=asserted_at,
     )
 
     assert projection.activity.state == "unknown"

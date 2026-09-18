@@ -145,6 +145,50 @@ pub fn runtime_events(slot: &StatusSlot) -> Vec<Value> {
     events
 }
 
+/// How often a live slot restates that the session is still running.
+///
+/// The lease is short by design — freshness is about whether the machine is
+/// reporting, not about how long a phase ought to last — and a hook provider
+/// says nothing between its own events. This is the Machine Agent saying so
+/// anyway, which is what keeps a ten-minute tool call current without inventing
+/// a phase: the assertion carries the phase and its observation time unchanged.
+pub const STATUS_ASSERTION_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The assertion a live slot states: the same status, restated, with no phase.
+///
+/// Deliberately not a `phase_signal`. Shipping the same phase again is a change
+/// the host would apply — bumping the runtime revision and re-anchoring the
+/// phase — for a statement that says nothing new about the provider. This says
+/// only what the phase cannot: the machine is still here and still willing to
+/// report. Its identity is the assertion time, so a replay restates one the host
+/// has already accepted rather than renewing anything.
+pub fn assertion_runtime_event(slot: &StatusSlot, asserted_at: chrono::DateTime<chrono::Utc>) -> Value {
+    let run_id: Value = if slot.run_id.trim().is_empty() {
+        Value::Null
+    } else {
+        Value::String(slot.run_id.clone())
+    };
+    let asserted = asserted_at.to_rfc3339();
+    serde_json::json!({
+        "runtime_key": slot.runtime_key,
+        "session_id": slot.session_id,
+        "provider": slot.provider,
+        "run_id": run_id,
+        "source": slot.source,
+        "kind": "status_assertion",
+        "phase": Value::Null,
+        "tool_name": slot.tool_name,
+        "occurred_at": asserted,
+        "dedupe_key": format!("{}-assert:{}:{}:{}", slot.provider, slot.session_id, slot.run_id, asserted),
+        "payload": {
+            // What the assertion is about, so a reader can tell the machine's
+            // freshness from the provider's without reading the phase back out.
+            "asserted_at": asserted,
+            "observed_at": slot.observed_at,
+        },
+    })
+}
+
 pub fn status_slot_dir(agent_dir: &Path) -> PathBuf {
     agent_dir.join("status")
 }
@@ -580,6 +624,31 @@ mod tests {
             producer_epoch: "epoch-1".into(),
             seq,
         }
+    }
+
+    #[test]
+    fn an_assertion_restates_the_status_without_stating_a_phase() {
+        let live = slot("s1", "running", 3);
+        let asserted = chrono::DateTime::from_timestamp(1_758_120_000, 0).expect("ts");
+        let event = assertion_runtime_event(&live, asserted);
+
+        // Phase-less on purpose: the host applies a phase, and applying this one
+        // again would bump its runtime revision and re-anchor the phase for a
+        // statement that says nothing new about the provider.
+        assert_eq!(event["kind"], "status_assertion");
+        assert_eq!(event["phase"], Value::Null);
+        // What the assertion is about, kept separate from when it was made.
+        assert_eq!(event["payload"]["observed_at"], live.observed_at);
+        assert_eq!(event["payload"]["asserted_at"], asserted.to_rfc3339());
+        assert_eq!(event["occurred_at"], asserted.to_rfc3339());
+        // Identity is the assertion itself, so a replay restates one the host
+        // has already accepted instead of renewing anything.
+        assert_eq!(
+            event["dedupe_key"],
+            format!("omp-assert:s1:run-1:{}", asserted.to_rfc3339())
+        );
+        let later = assertion_runtime_event(&live, asserted + chrono::Duration::seconds(5));
+        assert_ne!(later["dedupe_key"], event["dedupe_key"]);
     }
 
     #[test]

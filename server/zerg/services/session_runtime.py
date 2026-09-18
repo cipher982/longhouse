@@ -52,6 +52,7 @@ RuntimeEventKind = Literal[
     "progress_signal",
     "terminal_signal",
     "binding_signal",
+    "status_assertion",
     "pause_request",
     "pause_resolution",
 ]
@@ -1099,6 +1100,31 @@ def _apply_runtime_event(
         from zerg.services.session_pause_requests import apply_pause_runtime_event
 
         return "applied" if apply_pause_runtime_event(db, event) else "ignored"
+
+    if event.kind == "status_assertion":
+        # The Machine Agent vouching for a state it is *not* restating: the
+        # phase, its observed_at, every revision and the phase-ledger watermark
+        # stay exactly as they were. Only the lease reads this, which is what
+        # lets one short lease mean "the machine is reporting" without inventing
+        # a phase or making the projector rebuild on every tick.
+        #
+        # It renews; it never creates. A session with no runtime state is not
+        # one a machine is asserting about, and inventing an idle row for it
+        # would put a session on the board that never reported anything.
+        if event.session_id is None:
+            return "ignored"
+        state = db.query(state_model).filter(state_model.runtime_key == event.runtime_key).first()
+        if state is None:
+            return "ignored"
+        occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
+        if state.last_asserted_at is not None and normalize_utc(state.last_asserted_at) >= occurred_at:
+            # A replay carries the assertion time it was minted with, so it
+            # cannot extend anything. Only a strictly newer assertion renews.
+            return "ignored"
+        state.last_asserted_at = occurred_at
+        db.add(state)
+        db.flush()
+        return "applied"
 
     state = _ensure_state(
         db,
