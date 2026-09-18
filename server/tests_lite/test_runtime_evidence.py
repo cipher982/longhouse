@@ -236,6 +236,7 @@ def test_read_consistency_reports_catalog_failure_as_503_not_conflict(evidence_r
     from zerg.catalogd.client import CatalogUnavailable
     from zerg.routers import internal_deployments
 
+    monkeypatch.setattr(internal_deployments, "_READ_CONSISTENCY_READY_BUDGET_SECONDS", 0.0)
     monkeypatch.setattr(
         internal_deployments,
         "call_catalogd_sync",
@@ -248,6 +249,53 @@ def test_read_consistency_reports_catalog_failure_as_503_not_conflict(evidence_r
     )
     assert unavailable.status_code == 503
     assert unavailable.json()["outcome"] == "unknown"
+
+
+def test_read_consistency_waits_out_a_cold_catalogd(evidence_runtime, monkeypatch):
+    """A just-started catalogd is not a failed cutover.
+
+    The canary's first probe hit the catalog writer while it was still coming up
+    and rolled a healthy candidate back; the same reads succeed a moment later,
+    so the gate retries inside its budget and then reports the real outcome.
+    """
+    client, runtime, _ping = evidence_runtime
+    # The gate is consistency *of a ready candidate*, so readiness comes first.
+    runtime.mark_candidate_ready(attempt_id="owned-attempt")
+
+    from zerg.catalogd.client import CatalogUnavailable
+    from zerg.catalogd.schema import CATALOG_SCHEMA_GENERATION
+    from zerg.catalogd.schema import CATALOG_SCHEMA_VERSION
+    from zerg.routers import internal_deployments
+
+    def catalogd(method: str) -> dict[str, object]:
+        if method == "schema.v2":
+            return {"schema_generation": CATALOG_SCHEMA_GENERATION}
+        return {
+            "ready": True,
+            "schema_version": CATALOG_SCHEMA_VERSION,
+            "schema_generation": CATALOG_SCHEMA_GENERATION,
+            "commit_seq": "5",
+            "session_ids": [],
+        }
+
+    attempts = {"count": 0}
+
+    def flaky(socket_path, method, **kwargs):
+        attempts["count"] += 1
+        # The first read set lands while catalogd is still starting.
+        if attempts["count"] <= 4:
+            raise CatalogUnavailable(f"catalogd unavailable for {method}")
+        return catalogd(method)
+
+    monkeypatch.setattr(internal_deployments, "call_catalogd_sync", flaky)
+    response = client.get(
+        "/internal/deployments/owned-attempt/read-consistency",
+        params={"runtime_epoch": runtime.runtime_epoch},
+        headers={"X-Internal-Token": "evidence-test-only"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["outcome"] == "pass"
+    assert attempts["count"] > 4
 
 
 def _activation_payload(runtime) -> dict[str, object]:

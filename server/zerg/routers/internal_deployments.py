@@ -11,6 +11,7 @@ import hashlib
 import hmac
 import json
 import os
+import time
 from datetime import datetime
 from datetime import timezone
 from typing import Any
@@ -442,6 +443,50 @@ async def runtime_readiness(
     return JSONResponse(status_code=200 if ready else 503, content=payload)
 
 
+# A cutover gate is that the candidate's reads are *consistent*, not that a
+# just-started catalogd answers instantly. On a cold start the catalog writer is
+# still coming up, and its RPC deadline is short by design; treating that first
+# timeout as a failed cutover rolled a healthy canary back and paused the
+# deployment, which blocked the release lane for every SHA. The reads are retried
+# inside a bounded budget, and a catalog that never answers still fails.
+_READ_CONSISTENCY_READY_BUDGET_SECONDS = 6.0
+_READ_CONSISTENCY_POLL_SECONDS = 0.25
+
+
+async def _catalog_reads_for_cutover(catalog_socket) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Read the catalog through the gateway, waiting out a cold catalogd.
+
+    The four reads are the same concrete metadata reads as before; only the
+    willingness to retry an unavailable catalog within a bounded window is new.
+    """
+    deadline = time.monotonic() + _READ_CONSISTENCY_READY_BUDGET_SECONDS
+    while True:
+        try:
+            schema = call_catalogd_sync(catalog_socket, "schema.v2", timeout_seconds=0.75)
+            active = call_catalogd_sync(
+                catalog_socket,
+                "session.active.list.v2",
+                params={
+                    "limit": 1,
+                    "days_back": 1,
+                    "observed_at": datetime.now(timezone.utc).isoformat(),
+                },
+                timeout_seconds=0.75,
+            )
+            queued = call_catalogd_sync(
+                catalog_socket,
+                "session.input.queued.list.v2",
+                params={"limit": 1},
+                timeout_seconds=0.75,
+            )
+            ping = call_catalogd_sync(catalog_socket, "ping.v2", timeout_seconds=0.75)
+            return schema, active, queued, ping
+        except (CatalogUnavailable, CatalogRemoteError):
+            if time.monotonic() >= deadline:
+                raise
+            await asyncio.sleep(_READ_CONSISTENCY_POLL_SECONDS)
+
+
 @router.get("/{attempt_id}/read-consistency", response_model=ReadConsistencyResponse)
 async def read_consistency(
     attempt_id: str,
@@ -479,24 +524,7 @@ async def read_consistency(
 
         build_identity = load_build_identity().as_dict()
         _database_path, catalog_socket = catalogd_paths()
-        schema = call_catalogd_sync(catalog_socket, "schema.v2", timeout_seconds=0.75)
-        active = call_catalogd_sync(
-            catalog_socket,
-            "session.active.list.v2",
-            params={
-                "limit": 1,
-                "days_back": 1,
-                "observed_at": datetime.now(timezone.utc).isoformat(),
-            },
-            timeout_seconds=0.75,
-        )
-        queued = call_catalogd_sync(
-            catalog_socket,
-            "session.input.queued.list.v2",
-            params={"limit": 1},
-            timeout_seconds=0.75,
-        )
-        ping = call_catalogd_sync(catalog_socket, "ping.v2", timeout_seconds=0.75)
+        schema, active, queued, ping = await _catalog_reads_for_cutover(catalog_socket)
         catalog_revision = str(ping.get("commit_seq") or "")
         served_revision = str(active.get("commit_seq") or "")
         machine_revision = str(queued.get("commit_seq") or "")
