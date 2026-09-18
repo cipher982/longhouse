@@ -17,6 +17,56 @@ use uuid::Uuid;
 pub const CURSOR_DRAIN_BATCH_RECORDS: u64 = 128;
 pub const CURSOR_DRAIN_BATCH_BYTES: u64 = 4 * 1024 * 1024;
 
+/// The payload store's subdirectory for Cursor raw records, beside the database.
+fn records_root(conn: &Connection) -> Result<std::path::PathBuf> {
+    Ok(crate::state::payload_store::root_for_connection(conn)?.join("records"))
+}
+
+/// Seal one record and return the columns its row keeps: an empty blob (the
+/// bytes are a file now), the byte length, and the file's path.
+fn seal_record(
+    conn: &Connection,
+    hash: &str,
+    bytes: &[u8],
+) -> Result<(Vec<u8>, i64, String)> {
+    let root = records_root(conn)?;
+    let sealed = crate::state::payload_store::seal_record(&root, bytes)?;
+    anyhow::ensure!(
+        sealed.sha256 == hash,
+        "Cursor record hash {hash} does not match its sealed payload {}",
+        sealed.sha256
+    );
+    Ok((
+        Vec::new(),
+        i64::try_from(sealed.len).context("Cursor record exceeds SQLite INTEGER")?,
+        sealed.relative_path,
+    ))
+}
+
+/// Read a record's bytes back, whether it is file-backed or a legacy blob.
+///
+/// A drained row (`record_bytes_len` zero) has no bytes by design: the host has
+/// receipted them. Anything else must produce the exact bytes or an error.
+fn record_bytes_for(
+    conn: &Connection,
+    hash: &str,
+    blob: &[u8],
+    len: i64,
+) -> Result<Vec<u8>> {
+    if !blob.is_empty() {
+        return Ok(blob.to_vec());
+    }
+    if len == 0 {
+        return Ok(Vec::new());
+    }
+    let root = records_root(conn)?;
+    crate::state::payload_store::read(
+        &root,
+        &crate::state::payload_store::relative_path_for(hash, "rec"),
+        hash,
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CursorRawRecord {
     pub source_position: u64,
@@ -40,12 +90,16 @@ pub fn append_unseen_cursor_records(
     let mut next = next;
     for bytes in records {
         let hash = hex_hash(bytes);
+        // Seal before the row exists: an orphan from a rolled-back savepoint is
+        // swept, while a row without its bytes could never be shipped.
+        let (blob, len, _path) = seal_record(&transaction, &hash, bytes)?;
         let inserted = transaction.execute(
             "INSERT INTO cursor_store_raw_record (
-                 source_epoch, record_hash, source_position, record_bytes, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5)
+                 source_epoch, record_hash, source_position, record_bytes,
+                 record_bytes_len, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(source_epoch, record_hash) DO NOTHING",
-            params![epoch, hash, next, bytes, Utc::now().to_rfc3339()],
+            params![epoch, hash, next, blob, len, Utc::now().to_rfc3339()],
         )?;
         if inserted == 1 {
             next = next
@@ -55,6 +109,27 @@ pub fn append_unseen_cursor_records(
     }
     transaction.commit()?;
     Ok(next)
+}
+
+/// Payloads of records that still hold unshipped bytes.
+///
+/// The startup reconciliation needs these: without them it would see a live
+/// record's file as an orphan and delete the only copy of evidence that has not
+/// been receipted yet.
+pub fn referenced_payloads(conn: &Connection) -> Result<Vec<String>> {
+    let mut statement = conn.prepare(
+        "SELECT record_hash FROM cursor_store_raw_record WHERE record_bytes_len > 0",
+    )?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    let mut referenced = Vec::new();
+    for hash in rows {
+        let hash = hash?;
+        referenced.push(format!(
+            "records/{}",
+            crate::state::payload_store::relative_path_for(&hash, "rec")
+        ));
+    }
+    Ok(referenced)
 }
 
 pub fn cursor_record_count(conn: &Connection, source_epoch: Uuid) -> Result<u64> {
@@ -171,11 +246,12 @@ pub fn drain_receipted_cursor_records(conn: &Connection) -> Result<u64> {
                  SELECT raw.rowid AS raw_rowid,
                         raw.source_epoch,
                         raw.source_position,
-                        length(raw.record_bytes) AS record_bytes_len
+                        raw.record_hash,
+                        raw.record_bytes_len AS record_bytes_len
                  FROM cursor_store_raw_record AS raw
                  JOIN eligible_epochs AS epoch
                    ON epoch.source_epoch = raw.source_epoch
-                 WHERE length(raw.record_bytes) > 0
+                 WHERE raw.record_bytes_len > 0
                  ORDER BY raw.source_epoch, raw.source_position
                  LIMIT ?1
              ), ranked AS (
@@ -189,7 +265,7 @@ pub fn drain_receipted_cursor_records(conn: &Connection) -> Result<u64> {
                         ) AS cumulative_bytes
                  FROM candidates
              )
-             SELECT raw_rowid, source_epoch, source_position, record_bytes_len
+             SELECT raw_rowid, source_epoch, source_position, record_hash, record_bytes_len
              FROM ranked
              WHERE batch_position = 1 OR cumulative_bytes <= ?2
              ORDER BY source_epoch, source_position",
@@ -199,7 +275,8 @@ pub fn drain_receipted_cursor_records(conn: &Connection) -> Result<u64> {
                 raw_rowid: row.get(0)?,
                 source_epoch: row.get(1)?,
                 source_position: row.get(2)?,
-                record_bytes_len: row.get(3)?,
+                record_hash: row.get(3)?,
+                record_bytes_len: row.get(4)?,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()?
@@ -213,14 +290,15 @@ pub fn drain_receipted_cursor_records(conn: &Connection) -> Result<u64> {
     let transaction = conn.unchecked_transaction()?;
     let mut drained_records = 0_u64;
     let mut drained_bytes = 0_u64;
+    let mut drained_hashes: Vec<String> = Vec::new();
     let mut update = transaction.prepare(
         "UPDATE cursor_store_raw_record
-            SET record_bytes = X''
+            SET record_bytes = X'', record_bytes_len = 0
           WHERE rowid = ?1
             AND source_epoch = ?2
             AND source_position = ?3
-            AND length(record_bytes) = ?4
-            AND length(record_bytes) > 0
+            AND record_bytes_len = ?4
+            AND record_bytes_len > 0
             AND NOT EXISTS (
                 SELECT 1 FROM pending_source_envelope AS pending
                 WHERE pending.source_epoch = cursor_store_raw_record.source_epoch
@@ -266,10 +344,22 @@ pub fn drain_receipted_cursor_records(conn: &Connection) -> Result<u64> {
             drained_bytes = drained_bytes
                 .checked_add(record_bytes_len)
                 .context("Cursor drain byte count overflow")?;
+            drained_hashes.push(candidate.record_hash.clone());
         }
     }
     drop(update);
     transaction.commit()?;
+
+    // Only now, with the rows cleared, may the bytes go: the reverse order would
+    // leave a row that claims to hold a receipted payload it cannot produce.
+    // A legacy row has no file, and removal tolerates that.
+    let root = records_root(conn)?;
+    for hash in drained_hashes {
+        crate::state::payload_store::remove(
+            &root,
+            &crate::state::payload_store::relative_path_for(&hash, "rec"),
+        )?;
+    }
     Ok(drained_records)
 }
 
@@ -278,6 +368,7 @@ struct CursorDrainCandidate {
     raw_rowid: i64,
     source_epoch: String,
     source_position: i64,
+    record_hash: String,
     record_bytes_len: i64,
 }
 
@@ -363,7 +454,7 @@ pub fn cursor_records_from(
     let start = i64::try_from(start).context("Cursor source position exceeds SQLite INTEGER")?;
     let max_records = i64::try_from(max_records).context("record limit exceeds SQLite INTEGER")?;
     let mut statement = conn.prepare(
-        "SELECT source_position, record_bytes
+        "SELECT source_position, record_bytes, record_bytes_len, record_hash
          FROM cursor_store_raw_record
          WHERE source_epoch = ?1 AND source_position >= ?2
          ORDER BY source_position ASC
@@ -374,15 +465,18 @@ pub fn cursor_records_from(
         |row| {
             let source_position: i64 = row.get(0)?;
             let bytes: Vec<u8> = row.get(1)?;
-            Ok((source_position, bytes))
+            let len: i64 = row.get(2)?;
+            let hash: String = row.get(3)?;
+            Ok((source_position, bytes, len, hash))
         },
     )?;
     let mut result = Vec::new();
     let mut total_bytes = 0u64;
     for row in rows {
-        let (source_position, bytes) = row?;
+        let (source_position, blob, len, hash) = row?;
         let source_position =
             u64::try_from(source_position).context("negative Cursor source position")?;
+        let bytes = record_bytes_for(conn, &hash, &blob, len)?;
         let byte_len = u64::try_from(bytes.len()).context("Cursor record length exceeds u64")?;
         if byte_len > max_bytes {
             anyhow::bail!("one Cursor raw record exceeds the negotiated storage-v2 object bound");
@@ -537,7 +631,7 @@ mod tests {
         );
         let payload_bytes = |epoch: Uuid| -> i64 {
             conn.query_row(
-                "SELECT COALESCE(SUM(length(record_bytes)), 0)
+                "SELECT COALESCE(SUM(record_bytes_len), 0)
                  FROM cursor_store_raw_record WHERE source_epoch = ?1",
                 [epoch.to_string()],
                 |row| row.get(0),
@@ -680,7 +774,7 @@ mod tests {
         .unwrap();
         conn.execute(
             "UPDATE cursor_store_raw_record
-             SET record_bytes = X''
+             SET record_bytes = X'', record_bytes_len = 0
              WHERE source_epoch = ?1 AND source_position = 0",
             [blocked.to_string()],
         )
@@ -713,16 +807,43 @@ mod tests {
             total_records as u64
         );
         assert_eq!(cursor_record_count(&conn, blocked).unwrap(), 2);
-        let blocked_tail: Vec<u8> = conn
-            .query_row(
-                "SELECT record_bytes
-                 FROM cursor_store_raw_record
-                 WHERE source_epoch = ?1 AND source_position = 1",
-                [blocked.to_string()],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(blocked_tail, b"held");
+        // Read the retained tail the way the shipper does, so the assertion
+        // covers the payload store rather than a raw column.
+        let retained =
+            cursor_records_from(&conn, blocked, 1, 4, 64 * 1024).expect("read retained tail");
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained[0].bytes, b"held");
+    }
+
+    #[test]
+    fn a_live_record_payload_is_not_an_orphan() {
+        // The startup reconciliation deletes files no row references. A record
+        // that still holds unshipped bytes references its payload through
+        // `record_bytes_len`, so the sweep must keep it — losing it would lose
+        // the only copy of evidence the host has not receipted.
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let mut conn = open_db(Some(temp.path())).unwrap();
+        let epoch = Uuid::new_v4();
+        seed_epoch(&conn, epoch);
+        append_unseen_cursor_records(&mut conn, epoch, &[b"unshipped-evidence".to_vec()]).unwrap();
+
+        let referenced = referenced_payloads(&conn).unwrap();
+        assert_eq!(referenced.len(), 1, "a live record references its payload");
+        let root = crate::state::payload_store::root_for_connection(&conn).unwrap();
+        assert!(root.join(&referenced[0]).exists(), "and the payload is on disk");
+
+        let report = crate::state::pending_source_envelope::reconcile_frozen_payloads(&conn).unwrap();
+        assert_eq!(report.orphans_removed, 0, "a live payload must not be swept");
+        assert_eq!(report.missing_blocked, 0);
+        assert!(root.join(&referenced[0]).exists());
+
+        // Once drained, the row no longer references it and the sweep owns it.
+        set_durable_cursor(&conn, epoch, 1);
+        drain_receipted_cursor_records(&conn).unwrap();
+        assert!(referenced_payloads(&conn).unwrap().is_empty());
+        let report = crate::state::pending_source_envelope::reconcile_frozen_payloads(&conn).unwrap();
+        assert_eq!(report.orphans_removed, 0, "the drain removed it already");
+        assert!(!root.join(&referenced[0]).exists());
     }
 
     #[test]

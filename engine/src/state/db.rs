@@ -432,6 +432,22 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
         }
     }
 
+    // Cursor raw records move to the payload store too. `record_bytes_len` is
+    // what the drain and the accounting read, so a file-backed row and a legacy
+    // blob row are measured the same way; existing rows are backfilled once from
+    // the bytes they still hold.
+    let raw_record_columns: std::collections::HashSet<String> = conn
+        .prepare("PRAGMA table_info(cursor_store_raw_record)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<_, _>>()?;
+    if !raw_record_columns.contains("record_bytes_len") {
+        conn.execute_batch(
+            "ALTER TABLE cursor_store_raw_record ADD COLUMN record_bytes_len INTEGER;
+             UPDATE cursor_store_raw_record SET record_bytes_len = length(record_bytes)
+             WHERE record_bytes_len IS NULL;",
+        )?;
+    }
+
     // Deletion migration, not a rewrite: `live_file_state` had no reader or
     // writer anywhere in the engine (only its own DDL), and its rows describe
     // v1 per-file offsets that `source_epoch_lane_state` owns now. Dropping it

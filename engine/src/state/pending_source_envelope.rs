@@ -2003,6 +2003,11 @@ pub fn reconcile_frozen_payloads(conn: &Connection) -> Result<PayloadReconciliat
         }
     }
 
+    // Cursor raw records own payloads too, and a live record's file must not be
+    // mistaken for an orphan: that would delete the only copy of evidence the
+    // host has not receipted.
+    referenced.extend(crate::state::cursor_store_records::referenced_payloads(conn)?);
+
     let report = crate::state::payload_store::sweep(&root, &referenced)?;
     let now = Utc::now().to_rfc3339();
     let mut missing_blocked = 0;

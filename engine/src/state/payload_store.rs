@@ -44,12 +44,21 @@ pub struct SealedPayload {
 }
 
 /// Where sealed payloads live for a given shipper database.
+///
+/// Named after the database, not just placed beside it: one directory can hold
+/// several databases (`agent/` has held dev, demo and live files at once, and a
+/// test suite puts many temporary ones in the same folder), and a shared payload
+/// root would let one database's reconciliation sweep another's live payloads.
 pub fn root_for_db(db_path: &Path) -> PathBuf {
-    db_path
+    let parent = db_path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."))
-        .join(PAYLOAD_DIR)
+        .unwrap_or_else(|| Path::new("."));
+    let stem = db_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("shipper");
+    parent.join(format!("{stem}.{PAYLOAD_DIR}"))
 }
 
 /// The payload root of the connection that is reading or writing the row.
@@ -77,8 +86,27 @@ pub fn hash_bytes(bytes: &[u8]) -> String {
 /// reader never sees a partial payload and a crash leaves either the old file or
 /// the new one.
 pub fn seal(root: &Path, bytes: &[u8]) -> Result<SealedPayload> {
+    seal_with_extension(root, bytes, "zst")
+}
+
+/// Seal a Cursor raw record. Named for its kind, and addressed by the record's
+/// own content hash — which is the hash the row already carries.
+pub fn seal_record(root: &Path, bytes: &[u8]) -> Result<SealedPayload> {
+    seal_with_extension(root, bytes, "rec")
+}
+
+/// The relative path a payload with this hash occupies, under this extension.
+///
+/// The hash *is* the identity: a caller that knows only the hash — a drained row,
+/// a Cursor record — can find its payload without a stored path.
+pub fn relative_path_for(sha256: &str, extension: &str) -> String {
+    format!("{}/{}.{}", &sha256[..2.min(sha256.len())], sha256, extension)
+}
+
+/// Seal with an extension that names the payload kind.
+pub fn seal_with_extension(root: &Path, bytes: &[u8], extension: &str) -> Result<SealedPayload> {
     let sha256 = hash_bytes(bytes);
-    let relative_path = format!("{}/{}.zst", &sha256[..2], sha256);
+    let relative_path = relative_path_for(&sha256, extension);
     let target = root.join(&relative_path);
     let sealed = SealedPayload {
         relative_path,
@@ -98,7 +126,7 @@ pub fn seal(root: &Path, bytes: &[u8]) -> Result<SealedPayload> {
         std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).ok();
     }
 
-    let temporary = target.with_extension("zst.tmp");
+    let temporary = target.with_extension(format!("{extension}.tmp"));
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
@@ -180,38 +208,7 @@ pub fn sweep(root: &Path, referenced: &[String]) -> Result<PayloadSweep> {
         referenced.iter().map(String::as_str).collect();
 
     if root.exists() {
-        for shard in std::fs::read_dir(root)
-            .with_context(|| format!("reading the payload root {}", root.display()))?
-            .flatten()
-        {
-            let shard_path = shard.path();
-            if !shard_path.is_dir() {
-                // A stray file (including a temporary) is an orphan by
-                // definition: nothing references a payload outside its shard.
-                if std::fs::remove_file(&shard_path).is_ok() {
-                    report.orphans_removed += 1;
-                }
-                continue;
-            }
-            let Some(shard_name) = shard_path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            for entry in std::fs::read_dir(&shard_path)
-                .with_context(|| format!("reading the payload shard {}", shard_path.display()))?
-                .flatten()
-            {
-                let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
-                    continue;
-                };
-                let relative = format!("{shard_name}/{name}");
-                if referenced.contains(relative.as_str()) {
-                    continue;
-                }
-                if std::fs::remove_file(entry.path()).is_ok() {
-                    report.orphans_removed += 1;
-                }
-            }
-        }
+        walk_payloads(root, root, "", &referenced, &mut report)?;
     }
 
     for reference in referenced {
@@ -220,6 +217,43 @@ pub fn sweep(root: &Path, referenced: &[String]) -> Result<PayloadSweep> {
         }
     }
     Ok(report)
+}
+
+/// Delete every file under `dir` that no row references.
+///
+/// Recursive on purpose: payloads live in shards, and a kind directory (records,
+/// media) adds a level. A two-level walk silently stopped seeing the deeper
+/// files, which is how a live record's payload first looked like an orphan.
+fn walk_payloads(
+    root: &Path,
+    dir: &Path,
+    prefix: &str,
+    referenced: &std::collections::HashSet<&str>,
+    report: &mut PayloadSweep,
+) -> Result<()> {
+    for entry in std::fs::read_dir(dir)
+        .with_context(|| format!("reading the payload directory {}", dir.display()))?
+        .flatten()
+    {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let relative = if prefix.is_empty() {
+            name
+        } else {
+            format!("{prefix}/{name}")
+        };
+        let path = entry.path();
+        if path.is_dir() {
+            walk_payloads(root, &path, &relative, referenced, report)?;
+            continue;
+        }
+        if referenced.contains(relative.as_str()) {
+            continue;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            report.orphans_removed += 1;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
