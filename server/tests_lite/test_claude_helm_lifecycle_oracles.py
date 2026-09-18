@@ -190,7 +190,9 @@ def test_killed_tool_that_the_model_works_around_is_not_a_stop() -> None:
     verdict = _abort(rows, interrupted_at=1789587600.0)
 
     assert verdict["passed"] is False
-    assert verdict["tools_executed_after_interrupt"] == 1
+    # Two rows now count: the untimestamped `wc -l` the model started after the
+    # interrupt (previously skipped for want of a timestamp) and its result.
+    assert verdict["tools_executed_after_interrupt"] == 2
 
 
 def test_marker_said_after_a_killed_tool_is_still_a_stop() -> None:
@@ -336,3 +338,46 @@ def test_lifecycle_assertions_require_completion_and_cleanup() -> None:
     assert all(lifecycle_assertions(lifecycle, completed=True, cleanup_ok=True).values())
     assert lifecycle_assertions(lifecycle, completed=True, cleanup_ok=False)["claude_helm_terminate_owned"] is False
     assert lifecycle_assertions(lifecycle, completed=False, cleanup_ok=True)["claude_helm_steer_active"] is False
+
+
+def test_a_turn_that_ended_before_the_interrupt_is_not_an_abort() -> None:
+    """Negative stop latency proved the model finished first, not that we stopped it.
+
+    `stop_latency < tool_seconds / 2` admitted any negative value, so a turn
+    that ended before the interrupt was ever sent certified the abort.
+    """
+
+    rows = [
+        _prompt("run lh_claude_progress_x then reply FORBIDDEN_x"),
+        _bash("for i ...lh_claude_progress_x"),
+        _end("2026-09-16T19:39:58Z"),
+    ]
+
+    verdict = _abort(rows, interrupted_at=1789587600.0)
+
+    assert verdict["passed"] is False
+    assert verdict["failure_code"] == "abort_turn_ended_before_interrupt"
+    assert verdict["turn_stop_latency_seconds"] == -2.0
+
+
+def test_an_untimestamped_tool_after_the_interrupt_still_counts_as_work() -> None:
+    """Missing evidence must count against the abort, not vanish from the count.
+
+    `tools_after` skipped every row without a timestamp, so a tool the model
+    started after the interrupt dropped out of the count and the abort passed.
+    """
+
+    rows = [
+        _prompt("run lh_claude_progress_x then reply FORBIDDEN_x"),
+        _bash("for i ...lh_claude_progress_x", timestamp="2026-09-16T19:39:59Z"),
+        # the killed tool's error result lands after the interrupt, so the turn
+        # is known to have passed it; the untimestamped tool below is new work
+        {"type": "user", "timestamp": "2026-09-16T19:40:01Z", "message": {"content": [{"type": "tool_result", "is_error": True}]}},
+        _bash("wc -l lh_claude_progress_x.txt"),
+        _end("2026-09-16T19:40:04Z"),
+    ]
+
+    verdict = _abort(rows, interrupted_at=1789587600.0)
+
+    assert verdict["passed"] is False
+    assert verdict["tools_executed_after_interrupt"] == 1
