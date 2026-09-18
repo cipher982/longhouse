@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 
 import httpx
@@ -169,6 +170,16 @@ def _print_branch_stream(response: httpx.Response) -> int:
 def _should_use_live_send(session_payload: dict[str, object]) -> bool:
     capabilities = session_payload.get("capabilities")
     return bool(capabilities.get("live_control_available")) if isinstance(capabilities, dict) else False
+
+
+def _parse_retry_after(response: httpx.Response, default: float = 1.0, max_delay: float = 5.0) -> float:
+    header = response.headers.get("Retry-After")
+    if header:
+        try:
+            return max(0.5, min(float(header), max_delay))
+        except ValueError:
+            pass
+    return default
 
 
 def _format_api_error(response: httpx.Response) -> str:
@@ -455,46 +466,58 @@ def continue_session(
             label="current_session_id",
         )
 
+    send_url = f"{base_url.rstrip('/')}/api/agents/sessions/{resolved_session_id}/send-live"
+    send_payload = {"message": message}
+    max_429_retries = 3
+
     try:
         with httpx.Client(timeout=None) as client:
-            with client.stream(
-                "POST",
-                f"{base_url.rstrip('/')}/api/agents/sessions/{resolved_session_id}/send-live",
-                headers=headers,
-                json={"message": message},
-            ) as response:
-                if response.status_code == 401:
-                    typer.secho("Authentication failed. Run 'longhouse auth' to re-authenticate.", fg=typer.colors.RED)
-                    raise typer.Exit(code=1)
-                if response.status_code == 404:
-                    typer.secho(f"Session not found: {resolved_session_id}", fg=typer.colors.RED)
-                    raise typer.Exit(code=1)
-                if response.status_code != 200:
-                    detail = response.read().decode(errors="replace")[:200]
-                    typer.secho(f"API error: {response.status_code} {detail}", fg=typer.colors.RED)
-                    raise typer.Exit(code=1)
+            for attempt in range(max_429_retries + 1):
+                with client.stream(
+                    "POST",
+                    send_url,
+                    headers=headers,
+                    json=send_payload,
+                ) as response:
+                    if response.status_code == 429 and attempt < max_429_retries:
+                        response.read()
+                        delay = _parse_retry_after(response)
+                        time.sleep(delay)
+                        continue
 
-                content_type = str(response.headers.get("content-type") or "")
-                if content_type.startswith("application/json"):
-                    response.read()
-                    payload = response.json()
-                    if payload.get("accepted"):
-                        typer.secho(
-                            f"Accepted by session {payload.get('session_id')}",
-                            fg=typer.colors.CYAN,
-                            bold=True,
-                        )
-                        dispatch_ms = payload.get("dispatch_ms")
-                        if dispatch_ms is not None:
-                            typer.echo(f"dispatch_ms: {dispatch_ms}")
-                        return
+                    if response.status_code == 401:
+                        typer.secho("Authentication failed. Run 'longhouse auth' to re-authenticate.", fg=typer.colors.RED)
+                        raise typer.Exit(code=1)
+                    if response.status_code == 404:
+                        typer.secho(f"Session not found: {resolved_session_id}", fg=typer.colors.RED)
+                        raise typer.Exit(code=1)
+                    if response.status_code != 200:
+                        detail = response.read().decode(errors="replace")[:200]
+                        typer.secho(f"API error: {response.status_code} {detail}", fg=typer.colors.RED)
+                        raise typer.Exit(code=1)
 
-                    typer.secho(json.dumps(payload, indent=2), fg=typer.colors.RED)
-                    raise typer.Exit(code=1)
+                    content_type = str(response.headers.get("content-type") or "")
+                    if content_type.startswith("application/json"):
+                        response.read()
+                        payload = response.json()
+                        if payload.get("accepted"):
+                            typer.secho(
+                                f"Accepted by session {payload.get('session_id')}",
+                                fg=typer.colors.CYAN,
+                                bold=True,
+                            )
+                            dispatch_ms = payload.get("dispatch_ms")
+                            if dispatch_ms is not None:
+                                typer.echo(f"dispatch_ms: {dispatch_ms}")
+                            return
 
-                exit_code = _print_branch_stream(response)
-                if exit_code:
-                    raise typer.Exit(code=exit_code)
+                        typer.secho(json.dumps(payload, indent=2), fg=typer.colors.RED)
+                        raise typer.Exit(code=1)
+
+                    exit_code = _print_branch_stream(response)
+                    if exit_code:
+                        raise typer.Exit(code=exit_code)
+                    return
     except httpx.ConnectError:
         typer.secho(f"Could not connect to {base_url}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
@@ -542,12 +565,18 @@ def interrupt(
             label="current_session_id",
         )
 
+    interrupt_url = f"{base_url.rstrip('/')}/api/agents/sessions/{resolved_session_id}/interrupt-live"
+    max_429_retries = 3
+
     try:
         with httpx.Client(timeout=30) as client:
-            response = client.post(
-                f"{base_url.rstrip('/')}/api/agents/sessions/{resolved_session_id}/interrupt-live",
-                headers=headers,
-            )
+            for attempt in range(max_429_retries + 1):
+                response = client.post(interrupt_url, headers=headers)
+                if response.status_code == 429 and attempt < max_429_retries:
+                    delay = _parse_retry_after(response)
+                    time.sleep(delay)
+                    continue
+                break
     except httpx.ConnectError:
         typer.secho(f"Could not connect to {base_url}", fg=typer.colors.RED)
         raise typer.Exit(code=1)

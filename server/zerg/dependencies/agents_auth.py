@@ -102,6 +102,41 @@ def _managed_session_token_allowed(request: Request, token: ManagedSessionToken)
     return False
 
 
+_CONTROL_PATH_SUBSTRINGS = (
+    "/send-live",
+    "/interrupt-live",
+    "/terminate-live",
+    "/directed-inputs",
+    "/pause-responses",
+    "/pause-requests",
+)
+
+_CONTROL_PATH_SUFFIXES = (
+    "/interrupt",
+    "/inputs",
+)
+
+
+def _rate_limit_lane(request: Request) -> str:
+    """Classify requests into distinct rate-limit buckets.
+
+    Bulk data ingest (events, envelopes, presence) must never exhaust the rate
+    bucket for interactive control (send-live, interrupts, directed inputs) or
+    reads.
+    """
+    method = request.method.upper()
+    if method in ("GET", "HEAD", "OPTIONS"):
+        return "read"
+    path = _normalized_agents_path(request)
+    for sub in _CONTROL_PATH_SUBSTRINGS:
+        if sub in path:
+            return "control"
+    for suffix in _CONTROL_PATH_SUFFIXES:
+        if path.endswith(suffix):
+            return "control"
+    return "ingest"
+
+
 def _validate_device_token_for_request(token: str) -> DeviceToken | None:
     """Validate a device token without holding a DB session for the request lifetime."""
 
@@ -175,6 +210,7 @@ def verify_agents_token(request: Request) -> DeviceToken | ManagedSessionToken |
     settings = get_settings()
     if settings.auth_disabled:
         request.state.agents_rate_key = "auth-disabled"
+        request.state.principal = "auth-disabled"
         # Local/dev mode does not require a token, but a configured Machine
         # Agent still sends its device token. Preserve that owner binding so
         # storage-v2 writes and reads share the same single-tenant identity.
@@ -182,10 +218,12 @@ def verify_agents_token(request: Request) -> DeviceToken | ManagedSessionToken |
         if provided_token and provided_token.startswith("zdt_"):
             device_token = _validate_device_token_for_request(provided_token)
             if device_token is not None:
+                request.state.principal = f"device:{device_token.id}"
                 return device_token
         if provided_token:
             session_token = validate_managed_session_token(provided_token)
             if session_token is not None and _managed_session_token_allowed(request, session_token):
+                request.state.principal = f"session:{session_token.session_id}"
                 return session_token
         return None
 
@@ -200,7 +238,9 @@ def verify_agents_token(request: Request) -> DeviceToken | ManagedSessionToken |
         device_token = _validate_device_token_for_request(provided_token)
         if device_token:
             logger.debug("Device token validated for device %s", device_token.device_id)
-            rate_key = f"device:{device_token.id}"
+            request.state.principal = f"device:{device_token.id}"
+            lane = _rate_limit_lane(request)
+            rate_key = f"device:{device_token.id}:{lane}"
             request.state.agents_rate_key = rate_key
             if not settings.testing:
                 _enforce_rate_limit(rate_key)
@@ -213,7 +253,9 @@ def verify_agents_token(request: Request) -> DeviceToken | ManagedSessionToken |
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Managed-session token scope is not allowed on this endpoint",
                 )
-            rate_key = f"managed-session:{session_token.scope}:{session_token.session_id}"
+            request.state.principal = f"session:{session_token.session_id}"
+            lane = _rate_limit_lane(request)
+            rate_key = f"managed-session:{session_token.scope}:{session_token.session_id}:{lane}"
             request.state.agents_rate_key = rate_key
             if not settings.testing:
                 _enforce_rate_limit(rate_key)
