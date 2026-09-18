@@ -46,15 +46,25 @@ pub enum HelmExtensionFault {
     SteerAsFollowUp,
     /// Acknowledge abort without forwarding it to the provider.
     AbortNoop,
+    /// Acknowledge a send without forwarding it: the caller is told the message
+    /// landed and no turn ever starts, the silent-drop shape a send oracle must
+    /// reject.
+    SendNoop,
+    /// Acknowledge terminate without forwarding it, so the recorded owners stay
+    /// alive while the caller is told the session is gone.
+    TerminateNoop,
 }
 
-/// `<provider>_steer_as_follow_up` or `<provider>_abort_noop`.
+/// `<provider>_steer_as_follow_up`, `<provider>_abort_noop`,
+/// `<provider>_send_noop` or `<provider>_terminate_noop`.
 #[cfg(feature = "qa-fault-injection")]
 pub fn helm_extension_fault(provider: &str) -> Option<HelmExtensionFault> {
     let value = std::env::var("LONGHOUSE_QA_FAULT").ok()?;
     match value.strip_prefix(provider)?.strip_prefix('_')? {
         "steer_as_follow_up" => Some(HelmExtensionFault::SteerAsFollowUp),
         "abort_noop" => Some(HelmExtensionFault::AbortNoop),
+        "send_noop" => Some(HelmExtensionFault::SendNoop),
+        "terminate_noop" => Some(HelmExtensionFault::TerminateNoop),
         _ => None,
     }
 }

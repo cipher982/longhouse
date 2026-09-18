@@ -1858,7 +1858,21 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             # provider owners must be dead before this close can precede resume.
             launch.close()
         observations["terminate_owned"] = terminate["accepted"] and not launch.alive()
-        if not observations["terminate_owned"]:
+        observations["terminate_verdict"] = {
+            "passed": observations["terminate_owned"],
+            "accepted": terminate["accepted"],
+            "owners_alive_after_terminate": launch.alive(),
+            "code": (
+                None
+                if observations["terminate_owned"]
+                # Accepted and the recorded owners are still running: the
+                # caller was told the session ended and it did not.
+                else "terminate_left_owners_alive"
+                if terminate["accepted"]
+                else "terminate_not_accepted"
+            ),
+        }
+        if not observations["terminate_owned"] and negative_control != "terminate":
             raise RuntimeError("Pi Helm terminate was not proven after the recorded execution owners exited")
         observations["control_receipts"]["terminate"] = _control_receipt(
             "terminate",

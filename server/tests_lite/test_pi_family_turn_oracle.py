@@ -110,3 +110,80 @@ def test_later_turn_from_a_backgrounded_job_does_not_void_the_steer() -> None:
     verdict = steer_turn_verdict(entries, task_marker=TASK, steer_marker=STEER, task_done_marker=DONE)
     assert verdict["passed"] is True, verdict
     assert verdict["task_done_rows"] == 1
+
+
+def _control(control: str, *, provider: str = "pi", assertions: dict, observation: dict, fired: bool = True) -> dict:
+    from zerg.qa.pi_family_turn_oracle import negative_control_verdict
+    from zerg.qa.pi_family_turn_oracle import fault_name
+
+    receipts = [{"fault": fault_name(provider, control), "session_id": "sess-1"}] if fired else []
+    return negative_control_verdict(
+        control,
+        provider=provider,
+        assertions=assertions,
+        observation=observation,
+        fault_receipts=receipts,
+        session_id="sess-1",
+    )
+
+
+def test_terminate_control_passes_when_the_oracle_catches_surviving_owners() -> None:
+    # The terminate no-op fault: the command is accepted and the recorded
+    # owners keep running. The oracle must reject terminate_owned for that
+    # exact reason, or the Interrupt chip is not fail-closed.
+    verdict = _control(
+        "terminate",
+        assertions={
+            "pi_helm_launch_registration": True,
+            "pi_helm_send_idle": True,
+            "pi_helm_terminate_owned": False,
+        },
+        observation={"terminate_verdict": {"code": "terminate_left_owners_alive"}},
+    )
+    assert verdict["status"] == "pass", verdict
+    assert verdict["target_assertion"] == "pi_helm_terminate_owned"
+
+
+def test_terminate_control_is_not_a_pass_when_the_oracle_misses_it() -> None:
+    # A weak oracle would call terminate proven while the owners survived.
+    verdict = _control(
+        "terminate",
+        assertions={
+            "pi_helm_launch_registration": True,
+            "pi_helm_send_idle": True,
+            "pi_helm_terminate_owned": True,
+        },
+        observation={"terminate_verdict": {"code": None}},
+    )
+    assert verdict["status"] != "pass", verdict
+    assert verdict["target_rejected"] is False
+
+
+def test_send_control_does_not_require_its_own_target_as_a_precondition() -> None:
+    # send_idle is the target, so requiring it to hold would make the control
+    # unsatisfiable - the same defect that made the OMP Console check
+    # impossible to pass.
+    verdict = _control(
+        "send",
+        assertions={
+            "pi_helm_launch_registration": True,
+            "pi_helm_send_idle": False,
+        },
+        observation={"send_turn_verdict": {"code": "send_accepted_without_a_turn"}},
+    )
+    assert verdict["preconditions_held"] is True, verdict
+    assert verdict["status"] == "pass", verdict
+
+
+def test_a_control_whose_fault_never_fired_is_inconclusive_not_a_pass() -> None:
+    verdict = _control(
+        "terminate",
+        assertions={
+            "pi_helm_launch_registration": True,
+            "pi_helm_send_idle": True,
+            "pi_helm_terminate_owned": False,
+        },
+        observation={"terminate_verdict": {"code": "terminate_left_owners_alive"}},
+        fired=False,
+    )
+    assert verdict["status"] == "inconclusive", verdict

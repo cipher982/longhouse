@@ -1277,6 +1277,24 @@ impl OmpHelmServer {
                 );
                 return json!({"kind": "command_result", "ok": true, "status": "active"});
             }
+            if kind == "send" && fault == Some(crate::qa_fault::HelmExtensionFault::SendNoop) {
+                crate::qa_fault::record_fired_named(
+                    "omp_send_noop",
+                    &state.state.session_id,
+                    json!({"forwarded": false}),
+                );
+                return json!({"kind": "command_result", "ok": true, "status": "active"});
+            }
+            if kind == "terminate"
+                && fault == Some(crate::qa_fault::HelmExtensionFault::TerminateNoop)
+            {
+                crate::qa_fault::record_fired_named(
+                    "omp_terminate_noop",
+                    &state.state.session_id,
+                    json!({"forwarded": false}),
+                );
+                return json!({"kind": "command_result", "ok": true, "status": "ended"});
+            }
             let Some(extension) = state.extension_sender.clone() else {
                 return channel_error(
                     "session_not_attached",

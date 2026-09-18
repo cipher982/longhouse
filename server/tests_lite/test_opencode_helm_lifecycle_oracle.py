@@ -192,3 +192,27 @@ def test_terminate_that_needed_forced_cleanup_fails() -> None:
     )
 
     assert opencode_helm_lifecycle_assertions(observation)["opencode_helm_terminate_owned"] is False
+
+
+def test_a_send_accepted_and_never_answered_is_typed_for_its_control() -> None:
+    # The send no-op fault: the caller is told the message landed and no turn
+    # ever starts. Without this typed code the Launch chip has no control that
+    # can prove its send edge fails.
+    observation = _healthy({"send": {"dispatch_accepted": True, "idle_before_send": True, "answered": False}})
+    assertions = opencode_helm_lifecycle_assertions(observation)
+
+    assert assertions["opencode_helm_send_idle"] is False
+    assert failure_codes(assertions, observation)["opencode_helm_send_idle"] == "send_accepted_without_a_turn"
+
+
+def test_terminate_that_left_owners_alive_is_typed_for_its_control() -> None:
+    # The terminate no-op fault: accepted, and only forced cleanup got rid of
+    # the owners. The Interrupt chip depends on terminate, so this must be
+    # distinguishable from an unverified cleanup.
+    observation = _healthy(
+        {"terminate": {"dispatch_accepted": True, "launcher_exited": False, "cleanup_verified": True, "forced_cleanup": True}}
+    )
+    assertions = opencode_helm_lifecycle_assertions(observation)
+
+    assert assertions["opencode_helm_terminate_owned"] is False
+    assert failure_codes(assertions, observation)["opencode_helm_terminate_owned"] == "terminate_left_owners_alive"

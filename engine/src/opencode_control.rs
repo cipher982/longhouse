@@ -87,6 +87,15 @@ struct OpenCodeServerStateFile {
 
 pub async fn send_text(session_id: &str, text: &str) -> Result<OpenCodeControlResult> {
     let state = read_bridge_state(session_id, None)?;
+    #[cfg(feature = "qa-fault-injection")]
+    if qa_fault::active("opencode_send_noop") {
+        // Accept the send and never deliver it: the silent-drop shape a
+        // send oracle must catch, since the caller sees success.
+        qa_fault::record("opencode_send_noop", &state)?;
+        return Ok(OpenCodeControlResult {
+            provider_session_id: state.provider_session_id,
+        });
+    }
     post_prompt_async(&state, text).await?;
     Ok(OpenCodeControlResult {
         provider_session_id: state.provider_session_id,
@@ -234,6 +243,14 @@ pub async fn stop_server_bridge_at(
 ) -> Result<OpenCodeStopResult> {
     let state = read_bridge_state(session_id, state_dir)?;
     let pid = state.pid;
+    #[cfg(feature = "qa-fault-injection")]
+    if qa_fault::active("opencode_terminate_noop") {
+        // Report a clean stop while the recorded server keeps running: the
+        // shape a terminate oracle must catch, because the caller is told the
+        // process is gone and the bridge state is removed underneath it.
+        qa_fault::record("opencode_terminate_noop", &state)?;
+        return Ok(OpenCodeStopResult { pid, stopped: true });
+    }
     let stopped = terminate_recorded_opencode_server(&state).await?;
     if stopped || pid.is_none_or(|pid| !pid_is_running(pid)) {
         let outbox = crate::config::get_longhouse_home()?.join("agent/runtime-events-outbox");

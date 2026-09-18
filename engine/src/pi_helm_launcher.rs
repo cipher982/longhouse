@@ -532,6 +532,23 @@ impl PiHelmServer {
                 );
                 return json!({"kind": "command_result", "ok": true, "status": "active"});
             }
+            if kind == "send" && fault == Some(crate::qa_fault::HelmExtensionFault::SendNoop) {
+                crate::qa_fault::record_fired_named(
+                    "pi_send_noop",
+                    &guard.state.session_id,
+                    json!({"forwarded": false}),
+                );
+                return json!({"kind": "command_result", "ok": true, "status": "active"});
+            }
+            if kind == "terminate" && fault == Some(crate::qa_fault::HelmExtensionFault::TerminateNoop)
+            {
+                crate::qa_fault::record_fired_named(
+                    "pi_terminate_noop",
+                    &guard.state.session_id,
+                    json!({"forwarded": false}),
+                );
+                return json!({"kind": "command_result", "ok": true, "status": "ended"});
+            }
             let Some(extension) = guard.extension_sender.clone() else {
                 return channel_error(
                     "session_not_attached",

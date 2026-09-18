@@ -2439,6 +2439,20 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             "control_identity": replacement_control_receipt,
         }
         observation["terminate_owned"] = terminate.get("accepted") is True and stopped.get("terminal_reason") == "remote_terminate"
+        observation["terminate_verdict"] = {
+            "passed": observation["terminate_owned"],
+            "accepted": terminate.get("accepted") is True,
+            "terminal_reason": stopped.get("terminal_reason"),
+            "code": (
+                None
+                if observation["terminate_owned"]
+                # Accepted while the session never reached a remote-terminate
+                # terminal state: the owners outlived the command.
+                else "terminate_left_owners_alive"
+                if terminate.get("accepted") is True
+                else "terminate_not_accepted"
+            ),
+        }
 
         resume_marker = f"OMP_HELM_RESUME_{os.urandom(8).hex()}"
         resume_offset = _read_source_size(current_session_file)

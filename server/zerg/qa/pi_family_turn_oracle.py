@@ -236,7 +236,15 @@ def step_tool_calls(entries: list[Mapping[str, Any]], step_token: str) -> int:
 NEGATIVE_CONTROLS = {
     "steer": ("steer_as_follow_up", "helm_steer_active", "steer_turn_verdict", "steer_delivered_as_queued_follow_up"),
     "abort": ("abort_noop", "helm_abort_native", "abort_turn_verdict", "abort_did_not_stop_active_turn"),
+    "send": ("send_noop", "helm_send_idle", "send_turn_verdict", "send_accepted_without_a_turn"),
+    "terminate": ("terminate_noop", "helm_terminate_owned", "terminate_verdict", "terminate_left_owners_alive"),
 }
+# A control whose target IS one of the healthy preconditions cannot also
+# require that precondition to hold; `send` drops itself from the list.
+_CONTROL_PRECONDITION_SUFFIXES = {
+    "send": ("helm_launch_registration",),
+}
+_DEFAULT_PRECONDITION_SUFFIXES = ("helm_launch_registration", "helm_send_idle")
 
 
 def fault_name(provider: str, control: str) -> str:
@@ -275,7 +283,10 @@ def negative_control_verdict(
     target = f"{provider}_{target_suffix}"
     fired = [item for item in fault_receipts if item.get("fault") == fault and item.get("session_id") == session_id]
     verdict = observation.get(verdict_key) if isinstance(observation.get(verdict_key), Mapping) else {}
-    preconditions = assertions.get(f"{provider}_helm_launch_registration") is True and assertions.get(f"{provider}_helm_send_idle") is True
+    preconditions = all(
+        assertions.get(f"{provider}_{suffix}") is True
+        for suffix in _CONTROL_PRECONDITION_SUFFIXES.get(control, _DEFAULT_PRECONDITION_SUFFIXES)
+    )
     rejected = assertions.get(target) is False and verdict.get("code") == expected_code
     return {
         "control": control,

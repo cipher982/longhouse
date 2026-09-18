@@ -71,7 +71,15 @@ NEGATIVE_CONTROLS = {
     # engine fault name -> (target assertion, typed failure code it must produce)
     "opencode_steer_as_queued_follow_up": ("opencode_helm_steer_active", "steer_delivered_as_queued_follow_up"),
     "opencode_abort_noop": ("opencode_helm_abort_native", "abort_did_not_stop_active_turn"),
+    "opencode_send_noop": ("opencode_helm_send_idle", "send_accepted_without_a_turn"),
+    "opencode_terminate_noop": ("opencode_helm_terminate_owned", "terminate_left_owners_alive"),
 }
+# A control whose target IS a healthy precondition cannot also require it to
+# hold. Each entry names the preconditions that still apply.
+_CONTROL_PRECONDITIONS = {
+    "opencode_send_noop": ("opencode_helm_launch_registration",),
+}
+_DEFAULT_PRECONDITIONS = ("opencode_helm_launch_registration", "opencode_helm_send_idle")
 _TASK_STEPS = 5
 _STEP_SLEEP_SECS = 4
 
@@ -479,6 +487,26 @@ def failure_codes(assertions: dict[str, bool], observation: dict[str, Any]) -> d
             codes["opencode_helm_steer_active"] = "not_reached"
         else:
             codes["opencode_helm_steer_active"] = "steer_did_not_change_active_turn"
+    send = observation.get("send") or {}
+    if not assertions.get("opencode_helm_send_idle"):
+        if not send:
+            codes["opencode_helm_send_idle"] = "not_reached"
+        elif send.get("dispatch_accepted") is True and send.get("answered") is not True:
+            # Accepted and never answered: the send was dropped after the
+            # caller was told it landed.
+            codes["opencode_helm_send_idle"] = "send_accepted_without_a_turn"
+        else:
+            codes["opencode_helm_send_idle"] = "send_not_dispatched"
+    terminate = observation.get("terminate") or {}
+    if not assertions.get("opencode_helm_terminate_owned"):
+        if not terminate:
+            codes["opencode_helm_terminate_owned"] = "not_reached"
+        elif terminate.get("forced_cleanup") is True or terminate.get("launcher_exited") is not True:
+            # The owners outlived a terminate the caller was told succeeded;
+            # only forced cleanup got rid of them.
+            codes["opencode_helm_terminate_owned"] = "terminate_left_owners_alive"
+        else:
+            codes["opencode_helm_terminate_owned"] = "terminate_cleanup_unverified"
     abort = observation.get("abort") or {}
     if not assertions.get("opencode_helm_abort_native"):
         if abort.get("task_completed") is True or abort.get("final_task_step_ran") is True:
@@ -534,6 +562,7 @@ def run_opencode_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         }
     )
     fault_receipt_path = root / "qa-fault-receipt.jsonl"
+    control_target = NEGATIVE_CONTROLS.get(args.negative_control, (None, None))[0] if args.negative_control else None
     if args.negative_control:
         environment["LONGHOUSE_QA_FAULT"] = args.negative_control
         environment["LONGHOUSE_QA_FAULT_RECEIPT"] = str(fault_receipt_path)
@@ -601,69 +630,73 @@ def run_opencode_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         }
         _write_json(root / "native-messages-send.json", send_rows)
 
-        # steer_active
-        steer_done = _marker("STEER_TASK_DONE")
-        steer_marker = _marker("STEER")
-        task_text = _task_prompt(steer_done, "steer")
-        steer_text = f"STOP. Change of plan: do not run any more commands. Reply with only {steer_marker}."
-        control_receipts["steer_task"] = _runtime_input(
-            args.api_url, args.agents_token, session_id, task_text, intent="auto", timeout=timeout
-        )
-        _wait_first_tool_completed(state, task_text, timeout=timeout)
-        steer_posted_at = time.time()
-        with _BusySampler(state) as sampler:
-            control_receipts["steer"] = _runtime_input(
-                args.api_url, args.agents_token, session_id, steer_text, intent="steer", timeout=timeout
+        # A control whose target is the send itself cannot exercise the
+        # steps that depend on a delivered send; stop at the target and
+        # go straight to terminate so cleanup evidence stays intact.
+        if control_target != "opencode_helm_send_idle":
+            # steer_active
+            steer_done = _marker("STEER_TASK_DONE")
+            steer_marker = _marker("STEER")
+            task_text = _task_prompt(steer_done, "steer")
+            steer_text = f"STOP. Change of plan: do not run any more commands. Reply with only {steer_marker}."
+            control_receipts["steer_task"] = _runtime_input(
+                args.api_url, args.agents_token, session_id, task_text, intent="auto", timeout=timeout
             )
-            _watch_until_idle(state, timeout=timeout)
-        samples = sampler.samples
-        steer_rows = _summarize(_messages(state))
-        observation["steer"] = {
-            "dispatch_accepted": control_receipts["steer"]["accepted"],
-            **steer_observation(
-                steer_rows,
-                task_text=task_text,
-                steer_text=steer_text,
-                completion_marker=steer_done,
-                steer_marker=steer_marker,
-                samples=samples,
-                steer_posted_at=steer_posted_at,
-            ),
-        }
-        _write_json(root / "native-messages-steer.json", steer_rows)
+            _wait_first_tool_completed(state, task_text, timeout=timeout)
+            steer_posted_at = time.time()
+            with _BusySampler(state) as sampler:
+                control_receipts["steer"] = _runtime_input(
+                    args.api_url, args.agents_token, session_id, steer_text, intent="steer", timeout=timeout
+                )
+                _watch_until_idle(state, timeout=timeout)
+            samples = sampler.samples
+            steer_rows = _summarize(_messages(state))
+            observation["steer"] = {
+                "dispatch_accepted": control_receipts["steer"]["accepted"],
+                **steer_observation(
+                    steer_rows,
+                    task_text=task_text,
+                    steer_text=steer_text,
+                    completion_marker=steer_done,
+                    steer_marker=steer_marker,
+                    samples=samples,
+                    steer_posted_at=steer_posted_at,
+                ),
+            }
+            _write_json(root / "native-messages-steer.json", steer_rows)
 
-        # abort_native
-        abort_done = _marker("ABORT_TASK_DONE")
-        abort_task = _task_prompt(abort_done, "abort")
-        control_receipts["abort_task"] = _runtime_input(
-            args.api_url, args.agents_token, session_id, abort_task, intent="auto", timeout=timeout
-        )
-        _wait_first_tool_completed(state, abort_task, timeout=timeout)
-        control_receipts["abort"] = _runtime_post(args.api_url, args.agents_token, f"{session_id}/interrupt-live", None)
-        abort_samples = _watch_until_idle(state, timeout=timeout)
-        idle_after_abort = not abort_samples[-1].get("timeout")
-        follow_marker = _marker("AFTER_ABORT")
-        follow_text = f"Reply with exactly {follow_marker} and nothing else."
-        control_receipts["after_abort_send"] = _runtime_input(
-            args.api_url, args.agents_token, session_id, follow_text, intent="auto", timeout=timeout
-        )
-        try:
-            abort_rows = _wait_marker_answer(state, follow_text, follow_marker, timeout=timeout)
-        except TimeoutError:
-            abort_rows = _summarize(_messages(state))
-        observation["abort"] = {
-            "dispatch_accepted": control_receipts["abort"]["accepted"],
-            "samples": abort_samples,
-            **abort_observation(
-                abort_rows,
-                task_text=abort_task,
-                completion_marker=abort_done,
-                follow_text=follow_text,
-                follow_marker=follow_marker,
-                idle_after_abort=idle_after_abort,
-            ),
-        }
-        _write_json(root / "native-messages-abort.json", abort_rows)
+            # abort_native
+            abort_done = _marker("ABORT_TASK_DONE")
+            abort_task = _task_prompt(abort_done, "abort")
+            control_receipts["abort_task"] = _runtime_input(
+                args.api_url, args.agents_token, session_id, abort_task, intent="auto", timeout=timeout
+            )
+            _wait_first_tool_completed(state, abort_task, timeout=timeout)
+            control_receipts["abort"] = _runtime_post(args.api_url, args.agents_token, f"{session_id}/interrupt-live", None)
+            abort_samples = _watch_until_idle(state, timeout=timeout)
+            idle_after_abort = not abort_samples[-1].get("timeout")
+            follow_marker = _marker("AFTER_ABORT")
+            follow_text = f"Reply with exactly {follow_marker} and nothing else."
+            control_receipts["after_abort_send"] = _runtime_input(
+                args.api_url, args.agents_token, session_id, follow_text, intent="auto", timeout=timeout
+            )
+            try:
+                abort_rows = _wait_marker_answer(state, follow_text, follow_marker, timeout=timeout)
+            except TimeoutError:
+                abort_rows = _summarize(_messages(state))
+            observation["abort"] = {
+                "dispatch_accepted": control_receipts["abort"]["accepted"],
+                "samples": abort_samples,
+                **abort_observation(
+                    abort_rows,
+                    task_text=abort_task,
+                    completion_marker=abort_done,
+                    follow_text=follow_text,
+                    follow_marker=follow_marker,
+                    idle_after_abort=idle_after_abort,
+                ),
+            }
+            _write_json(root / "native-messages-abort.json", abort_rows)
 
         # terminate_owned
         control_receipts["terminate"] = _runtime_post(args.api_url, args.agents_token, f"{session_id}/terminate-live", None)
@@ -797,7 +830,9 @@ def run_opencode_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
     if args.negative_control:
         target, expected_code = NEGATIVE_CONTROLS[args.negative_control]
         preconditions = [
-            assertion for assertion in ("opencode_helm_launch_registration", "opencode_helm_send_idle") if not assertions[assertion]
+            assertion
+            for assertion in _CONTROL_PRECONDITIONS.get(args.negative_control, _DEFAULT_PRECONDITIONS)
+            if not assertions[assertion]
         ]
         verdict = {
             "fault": args.negative_control,
