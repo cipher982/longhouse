@@ -30,6 +30,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import signal
 import socket
 import struct
@@ -1084,6 +1085,9 @@ def save_verdict(state: dict, scenario: str, envelope: dict) -> dict:
     served = scenario_artifact_dir(state, scenario) / "workspace.json"
     if served.exists():
         (RUN_DIR / f"workspace-{re.sub(r'[^a-zA-Z0-9_-]', '_', scenario)}.json").write_text(served.read_text())
+    for screenshot_path in envelope["artifacts"].get("screenshots", {}).values():
+        frame = Path(screenshot_path)
+        shutil.copyfile(frame, RUN_DIR / f"{re.sub(r'[^a-zA-Z0-9_-]', '_', scenario)}-{frame.name}")
     save_state(state)
     return envelope
 
