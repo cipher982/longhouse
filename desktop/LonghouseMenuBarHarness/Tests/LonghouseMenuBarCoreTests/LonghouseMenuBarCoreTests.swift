@@ -50,6 +50,15 @@ private final class FlakyHealthSnapshotSource: HealthSnapshotSource, @unchecked 
 private actor ChangeCounter {
     private(set) var value = 0
     func increment() { value += 1 }
+
+    func waitForChange(after previousValue: Int, timeout: Duration = .seconds(3)) async throws -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while value <= previousValue, clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        return value > previousValue
+    }
 }
 
 private final class CountingHealthSnapshotSource: HealthSnapshotSource, @unchecked Sendable {
@@ -1088,26 +1097,49 @@ struct LonghouseMenuBarCoreTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let statusURL = directory.appendingPathComponent("engine-status.json")
-        try Data(#"{"last_updated":"one","sessions_sequence":1,"local_projection":{"version":1,"engine_pulse_at":"one","reconciliation":{"state":"idle"}}}"#.utf8).write(to: statusURL, options: .atomic)
+        func writeStatus(pulse: String, reconciliation: String = "idle", sequence: Int = 1) throws {
+            let payload: [String: Any] = [
+                "sessions_sequence": sequence,
+                "local_projection": [
+                    "version": 1,
+                    "engine_pulse_at": pulse,
+                    "reconciliation": ["state": reconciliation],
+                ],
+            ]
+            try JSONSerialization.data(withJSONObject: payload).write(to: statusURL, options: .atomic)
+        }
+
+        try writeStatus(pulse: "initial")
         let changed = ChangeCounter()
         let monitor = LocalStatusMonitor(statusPath: statusURL.path) { _ in
             Task { await changed.increment() }
         }
         monitor.start()
-        try await Task.sleep(for: .milliseconds(75))
+        defer { monitor.stop() }
 
-        try Data(#"{"last_updated":"two","sessions_sequence":1,"local_projection":{"version":1,"engine_pulse_at":"two","reconciliation":{"state":"idle"}}}"#.utf8).write(to: statusURL, options: .atomic)
-        try await Task.sleep(for: .milliseconds(100))
-        #expect(await changed.value == 1)
+        // start() arms the directory watcher asynchronously. Observe a pulse
+        // rather than assuming registration and delivery fit a fixed sleep.
+        var pulse = ""
+        var observedPulse = false
+        for attempt in 0..<30 {
+            pulse = "pulse-\(attempt)"
+            try writeStatus(pulse: pulse)
+            if try await changed.waitForChange(after: 0, timeout: .milliseconds(100)) {
+                observedPulse = true
+                break
+            }
+        }
+        try #require(observedPulse)
 
-        try Data(#"{"last_updated":"three","sessions_sequence":1,"local_projection":{"version":1,"engine_pulse_at":"three","reconciliation":{"state":"reconciling","reason":"wake"}}}"#.utf8).write(to: statusURL, options: .atomic)
-        try await Task.sleep(for: .milliseconds(150))
-        #expect(await changed.value == 2)
+        // Change one semantic axis at a time; a changing pulse must not mask a
+        // regression that drops reconciliation or session-sequence wakeups.
+        let beforeReconciliation = await changed.value
+        try writeStatus(pulse: pulse, reconciliation: "reconciling")
+        #expect(try await changed.waitForChange(after: beforeReconciliation))
 
-        try Data(#"{"last_updated":"four","sessions_sequence":2,"local_projection":{"version":2,"engine_pulse_at":"four","reconciliation":{"state":"idle"}}}"#.utf8).write(to: statusURL, options: .atomic)
-        try await Task.sleep(for: .milliseconds(150))
-        monitor.stop()
-        #expect(await changed.value == 3)
+        let beforeSessions = await changed.value
+        try writeStatus(pulse: pulse, reconciliation: "reconciling", sequence: 2)
+        #expect(try await changed.waitForChange(after: beforeSessions))
     }
 
     @Test
