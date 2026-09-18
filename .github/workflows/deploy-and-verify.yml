@@ -684,7 +684,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ needs.gate.outputs.head_sha }}
           RUNTIME_IMAGE_TAG: ${{ needs.gate.outputs.runtime_image_tag }}
-          DEPLOYMENT_ID: ${{ needs.deploy_demo.outputs.deployment_id }}
+          # The durable receipt this observer follows is the canary's: the demo
+          # is served by its own host-local stack and records a disposition
+          # rather than a control-plane deployment.
+          DEPLOYMENT_ID: ${{ needs.reprovision_canary.outputs.deployment_id }}
         run: |
           set -euo pipefail
           curl --fail-with-body --silent --show-error \
@@ -694,7 +697,7 @@ jobs:
             --header "X-GitHub-Api-Version: 2022-11-28" \
             --header "Content-Type: application/json" \
             --data "$(jq -cn \
-              --arg ref "$SOURCE_SHA" \
+              --arg ref "${GITHUB_REF_NAME:-main}" \
               --arg source_sha "$SOURCE_SHA" \
               --arg runtime_image_tag "$RUNTIME_IMAGE_TAG" \
               --arg deployment_id "$DEPLOYMENT_ID" \
