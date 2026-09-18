@@ -808,6 +808,7 @@ impl CursorPrintSink {
             tool_name.as_deref(),
             CURSOR_PRINT_ADAPTER,
             &observed_at.to_rfc3339(),
+            Some(self.run_id.as_str()),
         ) {
             eprintln!(
                 "[cursor-print] enqueue local phase failed for {}: {err}",

@@ -1151,6 +1151,7 @@ impl PiPrintSink {
             tool_name.as_deref(),
             PI_PRINT_ADAPTER,
             &observed_at.to_rfc3339(),
+            Some(self.run_id.as_str()),
         ) {
             eprintln!(
                 "[pi-print] enqueue local phase failed for {}: {err}",

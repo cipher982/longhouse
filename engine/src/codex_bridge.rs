@@ -6381,6 +6381,7 @@ impl BridgeRuntimeSink {
             tool_name.as_deref(),
             BRIDGE_RUNTIME_SOURCE,
             &observed_at.to_rfc3339(),
+            None,
         ) {
             eprintln!(
                 "[codex-bridge] enqueue local phase failed for {}: {err}",

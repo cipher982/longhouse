@@ -1450,7 +1450,6 @@ pub(crate) fn machine_evidence_from_observations(
     pi_observations: &[PiHelmObservation],
     unmanaged_bindings: &[UnmanagedSessionBinding],
     phase_rows: &[PhaseLedgerRow],
-    run_windows: &crate::state::session_run_binding::RunWindowIndex,
     managed_snapshot_complete: bool,
     unmanaged_snapshot_complete: bool,
     now: DateTime<Utc>,
@@ -1468,7 +1467,6 @@ pub(crate) fn machine_evidence_from_observations(
         &[],
         unmanaged_bindings,
         phase_rows,
-        run_windows,
         managed_snapshot_complete,
         unmanaged_snapshot_complete,
         now,
@@ -1488,7 +1486,6 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
     omp_observations: &[OmpHelmObservation],
     unmanaged_bindings: &[UnmanagedSessionBinding],
     phase_rows: &[PhaseLedgerRow],
-    run_windows: &crate::state::session_run_binding::RunWindowIndex,
     managed_snapshot_complete: bool,
     unmanaged_snapshot_complete: bool,
     now: DateTime<Utc>,
@@ -2262,26 +2259,18 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
                 .map(|run_id| (observation.session_id.as_str(), run_id))
         }))
         .collect::<HashMap<_, _>>();
-    // Live observations are the preferred run binding, but they vanish the
-    // moment a launcher exits. Falling back to the recorded window is what lets
-    // the closing `idle` of a session still ship; without it the served
-    // activity head stays frozen on whatever phase was live at the last
-    // observation and then expires to `unknown` instead of going quiescent.
-    //
-    // The fallback resolves by the phase's own observation time, not by "most
-    // recent run". A session that resumed would otherwise ship the previous
-    // run's trailing phase stamped with the new run id, and the Runtime Host
-    // would accept it because that run is the durable latest.
+    // The row's own run id is the authority: the producer observed the phase in
+    // that run, so a session that resumed cannot ship the previous run's
+    // trailing phase stamped with the new run id. A live observation is the
+    // fallback for rows whose producer could not name a run — and it vanishes
+    // the moment a launcher exits, which is why the closing `idle` of a managed
+    // session depends on the row carrying its own identity.
     let mut activity = phase_rows
         .iter()
         .filter_map(|row| {
-            let run_id = match managed_run_ids.get(row.session_id.as_str()).copied() {
+            let run_id = match row.run_id.as_deref() {
                 Some(run_id) => Some(run_id),
-                None => chrono::DateTime::parse_from_rfc3339(&row.observed_at)
-                    .ok()
-                    .and_then(|observed_at| {
-                        run_windows.resolve(&row.session_id, observed_at.with_timezone(&Utc))
-                    }),
+                None => managed_run_ids.get(row.session_id.as_str()).copied(),
             }?;
             Some(activity_evidence_from_phase_row(row, Some(run_id)))
         })
@@ -4080,7 +4069,6 @@ fn disk_free_bytes(_path: &std::path::Path) -> u64 {
 mod tests {
     use super::*;
     use crate::state::db::open_db;
-    use crate::state::session_run_binding::RunWindowIndex;
     use std::path::PathBuf;
 
     #[test]
@@ -4445,6 +4433,7 @@ mod tests {
                 tool_name: Some("Shell".to_string()),
                 source: "codex_bridge".to_string(),
                 observed_at: now,
+                run_id: None,
             })
             .unwrap();
 
@@ -4876,6 +4865,7 @@ mod tests {
                 tool_name: None,
                 source: "claude_hook".to_string(),
                 observed_at: now,
+                run_id: None,
             })
             .unwrap();
 
@@ -5802,6 +5792,7 @@ mod tests {
                 tool_name: Some("Bash".to_string()),
                 source: "claude_hook".to_string(),
                 observed_at: Utc::now(),
+                run_id: Some("run-live".to_string()),
             })
             .unwrap();
 
@@ -6053,6 +6044,7 @@ mod tests {
             source: "codex_bridge".to_string(),
             observed_at: "2026-05-08T12:00:00Z".to_string(),
             valid_until: "2026-05-08T12:10:00Z".to_string(),
+            run_id: Some("run-codex-session".to_string()),
         };
 
         let codex_observations = [codex];
@@ -6080,7 +6072,6 @@ mod tests {
             &[],
             &unmanaged_bindings,
             std::slice::from_ref(&phase),
-            &RunWindowIndex::default(),
             true,
             true,
             now,
@@ -6230,6 +6221,7 @@ mod tests {
                 source: "future_hook".to_string(),
                 observed_at: "2026-05-08T12:00:00Z".to_string(),
                 valid_until: "2026-05-08T12:01:00Z".to_string(),
+                run_id: None,
             },
             None,
         );
@@ -6249,6 +6241,7 @@ mod tests {
                 source: "codex_bridge".to_string(),
                 observed_at: "2026-05-08T12:00:00Z".to_string(),
                 valid_until: "2026-05-08T12:10:00Z".to_string(),
+                run_id: None,
             },
             None,
         );
@@ -6269,7 +6262,6 @@ mod tests {
             &[],
             &unmanaged_bindings,
             &[],
-            &RunWindowIndex::default(),
             false,
             false,
             now,
@@ -6451,7 +6443,6 @@ mod tests {
             &[],
             &[],
             &[],
-            &RunWindowIndex::default(),
             true,
             true,
             now,
@@ -6758,7 +6749,6 @@ mod tests {
             &[],
             &[binding.clone()],
             &[],
-            &RunWindowIndex::default(),
             true,
             true,
             first_now,
@@ -6775,7 +6765,6 @@ mod tests {
             &[],
             &[rescanned],
             &[],
-            &RunWindowIndex::default(),
             true,
             true,
             first_now + chrono::Duration::minutes(5),
@@ -6811,7 +6800,6 @@ mod tests {
             &[],
             &[missing_mtime],
             &[],
-            &RunWindowIndex::default(),
             true,
             true,
             first_now,
@@ -6836,6 +6824,7 @@ mod tests {
             source: "codex_bridge".to_string(),
             observed_at: "2026-05-08T12:00:00Z".to_string(),
             valid_until: "2026-05-08T12:10:00Z".to_string(),
+                run_id: None,
         };
 
         let evidence = machine_evidence_from_observations(
@@ -6848,7 +6837,6 @@ mod tests {
             &[],
             &[],
             &[phase],
-            &RunWindowIndex::default(),
             true,
             true,
             now,
@@ -6890,7 +6878,6 @@ mod tests {
             &[],
             &[],
             &[],
-            &RunWindowIndex::default(),
             true,
             true,
             now,
@@ -6908,47 +6895,13 @@ mod tests {
         }));
     }
 
-    /// Build an index the way the daemon would, from (run_id, run_started_at).
-    fn run_window_index(runs: &[(&str, &str)]) -> RunWindowIndex {
-        use crate::state::session_run_binding::{SessionRunWindow, SessionRunWindowStore};
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE session_run_window (
-                session_id TEXT NOT NULL,
-                run_id TEXT NOT NULL,
-                provider TEXT NOT NULL,
-                run_started_at TEXT NOT NULL,
-                last_observed_at TEXT NOT NULL,
-                PRIMARY KEY (session_id, run_id)
-            );",
-        )
-        .unwrap();
-        let store = SessionRunWindowStore::new(&conn);
-        let observed = DateTime::parse_from_rfc3339("2026-08-01T13:11:53Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        for (run_id, started_at) in runs {
-            store
-                .record(&SessionRunWindow {
-                    session_id: "cursor-session".to_string(),
-                    run_id: (*run_id).to_string(),
-                    provider: "cursor".to_string(),
-                    run_started_at: DateTime::parse_from_rfc3339(started_at)
-                        .unwrap()
-                        .with_timezone(&Utc),
-                    observed_at: observed,
-                })
-                .unwrap();
-        }
-        store.index(observed).unwrap()
-    }
-
     #[test]
     fn trailing_phase_is_not_restamped_onto_a_later_run() {
         // A session that resumes opens a second run while the previous run's
-        // phase can still be inside its freshness window. Binding by "most
-        // recent run" would ship run A's idle as run B's activity, and the
-        // Runtime Host would accept it because B is the durable latest run.
+        // phase can still be inside its freshness window. The row carries the
+        // run it was observed in, so it cannot inherit the newer run from a live
+        // observation — which the Runtime Host would accept, because the newer
+        // run is the durable latest.
         let now = DateTime::parse_from_rfc3339("2026-08-01T13:30:00Z")
             .unwrap()
             .with_timezone(&Utc);
@@ -6960,11 +6913,9 @@ mod tests {
             source: "cursor_hook".to_string(),
             observed_at: "2026-08-01T13:11:51Z".to_string(),
             valid_until: "2026-08-01T13:21:51Z".to_string(),
+            run_id: Some("run-a".to_string()),
         };
-        let windows = run_window_index(&[
-            ("run-a", "2026-08-01T13:10:35Z"),
-            ("run-b", "2026-08-01T13:20:00Z"),
-        ]);
+        let live = test_cursor_observation("cursor-session");
 
         let evidence = machine_evidence_from_observations(
             "cinder",
@@ -6972,11 +6923,10 @@ mod tests {
             &[],
             &[],
             &[],
-            &[],
+            &[live],
             &[],
             &[],
             std::slice::from_ref(&phase),
-            &windows,
             true,
             true,
             now,
@@ -6995,13 +6945,13 @@ mod tests {
     fn closing_phase_ships_after_the_provider_observation_disappears() {
         // Cursor Helm deletes its per-session state file on exit, so the final
         // `idle` arrives in the ledger with no live observation left to name a
-        // run. Before the remembered binding existed the row was filtered out
-        // and the served activity head stayed frozen on the previous
-        // `thinking`, which is what made a finished turn read as working.
+        // run. The row names its own run, which is what lets a finished turn
+        // ship as quiescent instead of staying frozen on the previous
+        // `thinking`.
         let now = DateTime::parse_from_rfc3339("2026-08-01T13:11:53Z")
             .unwrap()
             .with_timezone(&Utc);
-        let phase = PhaseLedgerRow {
+        let phase = |run_id: Option<&str>| PhaseLedgerRow {
             session_id: "cursor-session".to_string(),
             provider: "cursor".to_string(),
             phase: "idle".to_string(),
@@ -7009,8 +6959,8 @@ mod tests {
             source: "cursor_hook".to_string(),
             observed_at: "2026-08-01T13:11:51Z".to_string(),
             valid_until: "2026-08-01T13:21:51Z".to_string(),
+            run_id: run_id.map(str::to_string),
         };
-        let remembered = run_window_index(&[("run-cursor-session", "2026-08-01T13:10:35Z")]);
 
         let stranded = machine_evidence_from_observations(
             "cinder",
@@ -7021,8 +6971,7 @@ mod tests {
             &[],
             &[],
             &[],
-            std::slice::from_ref(&phase),
-            &RunWindowIndex::default(),
+            std::slice::from_ref(&phase(None)),
             true,
             true,
             now,
@@ -7031,7 +6980,7 @@ mod tests {
         );
         assert!(
             stranded.activity.is_empty(),
-            "without a run binding the closing phase has nothing to attach to"
+            "a phase row with no run of its own has nothing to attach to"
         );
 
         let evidence = machine_evidence_from_observations(
@@ -7043,8 +6992,7 @@ mod tests {
             &[],
             &[],
             &[],
-            std::slice::from_ref(&phase),
-            &remembered,
+            std::slice::from_ref(&phase(Some("run-cursor-session"))),
             true,
             true,
             now,
@@ -7149,8 +7097,7 @@ mod tests {
                 &[],
                 &[],
                 &[],
-                &RunWindowIndex::default(),
-                true,
+                    true,
                 true,
                 now,
                 Some(&[]),
@@ -7198,7 +7145,6 @@ mod tests {
             &[test_pi_observation("ready", true, true, true)],
             &[],
             &[],
-            &RunWindowIndex::default(),
             true,
             true,
             now,

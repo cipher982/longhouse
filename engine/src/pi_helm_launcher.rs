@@ -618,6 +618,7 @@ impl PiHelmServer {
                 tool_name.as_deref(),
                 PI_HELM_TRANSPORT,
                 &observed_at.to_rfc3339(),
+                Some(state.run_id.as_str()),
             ) {
                 eprintln!(
                     "[pi-helm] enqueue local phase failed for {}: {error}",

@@ -3264,16 +3264,6 @@ fn build_local_status_projection_with_omp(
                 )
             }
         };
-    let run_windows = record_and_read_run_bindings_with_omp(
-        conn,
-        observations,
-        claude_observations,
-        opencode_observations,
-        cursor_observations,
-        pi_observations,
-        omp_observations,
-        now,
-    );
     payload.machine_evidence = Some(heartbeat::machine_evidence_from_observations_with_omp(
         machine_id,
         observations,
@@ -3285,7 +3275,6 @@ fn build_local_status_projection_with_omp(
         omp_observations,
         unmanaged_session_bindings,
         &phase_ledger,
-        &run_windows,
         managed_snapshot_complete,
         unmanaged_snapshot_complete,
         now,
@@ -3306,135 +3295,6 @@ fn build_local_status_projection_with_omp(
     heartbeat::apply_local_titles(conn, &mut payload.sessions);
     session_snapshot_state.annotate(&mut payload);
     heartbeat::build_status_file_projection(payload, &stats, phase_ledger, ledger_status)
-}
-
-fn record_and_read_run_bindings(
-    conn: &rusqlite::Connection,
-    codex_observations: &[managed_bridge_scan::CodexBridgeObservation],
-    claude_observations: &[managed_claude_scan::ClaudeChannelObservation],
-    opencode_observations: &[managed_opencode_scan::OpenCodeServerObservation],
-    cursor_observations: &[managed_cursor_helm_scan::CursorHelmObservation],
-    pi_observations: &[managed_pi_helm_scan::PiHelmObservation],
-    now: chrono::DateTime<chrono::Utc>,
-) -> crate::state::session_run_binding::RunWindowIndex {
-    record_and_read_run_bindings_with_omp(
-        conn,
-        codex_observations,
-        claude_observations,
-        opencode_observations,
-        cursor_observations,
-        pi_observations,
-        &[],
-        now,
-    )
-}
-
-fn record_and_read_run_bindings_with_omp(
-    conn: &rusqlite::Connection,
-    codex_observations: &[managed_bridge_scan::CodexBridgeObservation],
-    claude_observations: &[managed_claude_scan::ClaudeChannelObservation],
-    opencode_observations: &[managed_opencode_scan::OpenCodeServerObservation],
-    cursor_observations: &[managed_cursor_helm_scan::CursorHelmObservation],
-    pi_observations: &[managed_pi_helm_scan::PiHelmObservation],
-    omp_observations: &[managed_omp_helm_scan::OmpHelmObservation],
-    now: chrono::DateTime<chrono::Utc>,
-) -> crate::state::session_run_binding::RunWindowIndex {
-    use crate::state::session_run_binding::{
-        RunWindowIndex, SessionRunWindow, SessionRunWindowStore,
-    };
-
-    let store = SessionRunWindowStore::new(conn);
-    let parse_started = |raw: Option<&str>| -> Option<chrono::DateTime<chrono::Utc>> {
-        let raw = raw.map(str::trim).filter(|value| !value.is_empty())?;
-        chrono::DateTime::parse_from_rfc3339(raw)
-            .ok()
-            .map(|at| at.with_timezone(&chrono::Utc))
-    };
-    let observed: Vec<(&str, &str, Option<&str>, Option<&str>)> = codex_observations
-        .iter()
-        .map(|obs| {
-            (
-                "codex",
-                obs.session_id.as_str(),
-                obs.run_id.as_deref(),
-                obs.bridge_process_start_time.as_deref(),
-            )
-        })
-        .chain(claude_observations.iter().map(|obs| {
-            (
-                "claude",
-                obs.session_id.as_str(),
-                obs.run_id.as_deref(),
-                Some(obs.started_at.as_str()),
-            )
-        }))
-        .chain(opencode_observations.iter().map(|obs| {
-            (
-                "opencode",
-                obs.session_id.as_str(),
-                obs.run_id.as_deref(),
-                Some(obs.started_at.as_str()),
-            )
-        }))
-        .chain(cursor_observations.iter().map(|obs| {
-            (
-                "cursor",
-                obs.session_id.as_str(),
-                obs.run_id.as_deref(),
-                Some(obs.started_at.as_str()),
-            )
-        }))
-        .chain(pi_observations.iter().map(|obs| {
-            (
-                "pi",
-                obs.session_id.as_str(),
-                obs.run_id.as_deref(),
-                Some(obs.started_at.as_str()),
-            )
-        }))
-        .chain(omp_observations.iter().map(|obs| {
-            (
-                "omp",
-                obs.session_id.as_str(),
-                obs.run_id.as_deref(),
-                Some(obs.started_at.as_str()),
-            )
-        }))
-        .collect();
-    for (provider, session_id, run_id, started_at) in observed {
-        let Some(run_id) = run_id.map(str::trim).filter(|value| !value.is_empty()) else {
-            continue;
-        };
-        if session_id.trim().is_empty() {
-            continue;
-        }
-        // An observation with no parseable start cannot bound a window. Falling
-        // back to `now` would silently reintroduce the misbinding.
-        let Some(run_started_at) = parse_started(started_at) else {
-            continue;
-        };
-        let window = SessionRunWindow {
-            session_id: session_id.to_string(),
-            run_id: run_id.to_string(),
-            provider: provider.to_string(),
-            run_started_at,
-            observed_at: now,
-        };
-        if let Err(err) = store.record(&window) {
-            tracing::warn!(
-                error = %err,
-                session_id = %window.session_id,
-                "persisting session run window failed"
-            );
-        }
-    }
-    match store.index(now) {
-        Ok(index) => index,
-        Err(err) => {
-            tracing::warn!(error = %err, "reading session run windows failed");
-            RunWindowIndex::default()
-        }
-    }
 }
 
 fn history_runtime_work_active(
@@ -5749,6 +5609,7 @@ mod tests {
                 observed_at: chrono::DateTime::parse_from_rfc3339(observed_at)
                     .unwrap()
                     .with_timezone(&chrono::Utc),
+                run_id: None,
             }
         };
 

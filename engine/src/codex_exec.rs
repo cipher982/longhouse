@@ -1815,6 +1815,7 @@ impl CodexExecRuntimeSink {
             tool_name.as_deref(),
             CODEX_EXEC_RUNTIME_SOURCE,
             &observed_at.to_rfc3339(),
+            Some(self.run_id.as_str()),
         ) {
             eprintln!(
                 "[codex-exec] enqueue local phase failed for {}: {err}",

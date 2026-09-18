@@ -73,6 +73,11 @@ pub struct SessionPhaseSignal {
     pub tool_name: Option<String>,
     pub source: String,
     pub observed_at: DateTime<Utc>,
+    /// The run this phase was observed in, from the producer's own evidence
+    /// (`LONGHOUSE_RUN_ID` in the provider environment). A row that carries its
+    /// own run needs no timestamp join to be attributed, so an overlapping or
+    /// resumed run cannot inherit the previous run's trailing phase.
+    pub run_id: Option<String>,
 }
 
 pub struct SessionPhaseStore<'a> {
@@ -97,6 +102,7 @@ impl<'a> SessionPhaseStore<'a> {
     pub fn record(&self, signal: &SessionPhaseSignal) -> Result<bool> {
         let observed_at = signal.observed_at.to_rfc3339();
         let tool_name = normalize_optional_string(signal.tool_name.clone());
+        let run_id = normalize_optional_string(signal.run_id.clone());
         let rows = self.conn.execute(
             "INSERT INTO session_phase_state (
                 session_id,
@@ -105,9 +111,10 @@ impl<'a> SessionPhaseStore<'a> {
                 tool_name,
                 source,
                 observed_at,
+                run_id,
                 revision
             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6,
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7,
                 COALESCE((SELECT MAX(revision) FROM session_phase_state), 0) + 1
             )
             ON CONFLICT(session_id) DO UPDATE SET
@@ -116,6 +123,7 @@ impl<'a> SessionPhaseStore<'a> {
                 tool_name = excluded.tool_name,
                 source = excluded.source,
                 observed_at = excluded.observed_at,
+                run_id = excluded.run_id,
                 revision = excluded.revision
              WHERE session_phase_state.observed_at <= excluded.observed_at",
             params![
@@ -125,6 +133,7 @@ impl<'a> SessionPhaseStore<'a> {
                 tool_name,
                 signal.source,
                 observed_at,
+                run_id,
             ],
         )?;
         Ok(rows > 0)
@@ -144,6 +153,9 @@ pub struct PhaseLedgerRow {
     pub source: String,
     pub observed_at: String,
     pub valid_until: String,
+    /// The run this phase was observed in, as the producer reported it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
 }
 
 impl<'a> SessionPhaseStore<'a> {
@@ -152,7 +164,7 @@ impl<'a> SessionPhaseStore<'a> {
     /// and are projected as canonical `unknown` by the heartbeat envelope.
     pub fn fresh_rows(&self, now: DateTime<Utc>) -> Result<Vec<PhaseLedgerRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT session_id, provider, phase, tool_name, source, observed_at
+            "SELECT session_id, provider, phase, tool_name, source, observed_at, run_id
              FROM session_phase_state",
         )?;
         let mut rows = stmt.query([])?;
@@ -163,6 +175,7 @@ impl<'a> SessionPhaseStore<'a> {
                 continue;
             };
             let observed_at: String = row.get(5)?;
+            let run_id: Option<String> = row.get(6)?;
             let observed = match DateTime::parse_from_rfc3339(&observed_at) {
                 Ok(dt) => dt.with_timezone(&Utc),
                 Err(_) => continue,
@@ -179,6 +192,7 @@ impl<'a> SessionPhaseStore<'a> {
                 source: row.get(4)?,
                 observed_at,
                 valid_until: (observed + chrono::Duration::seconds(window_secs)).to_rfc3339(),
+                run_id,
             });
         }
         out.sort_by(|a, b| a.session_id.cmp(&b.session_id));
@@ -244,13 +258,13 @@ mod tests {
                 tool_name: None,
                 source: "test".into(),
                 observed_at: chrono::Utc::now(),
+                run_id: Some("run-1".into()),
             })
             .unwrap();
 
         // The cache is deleted: every presentation row goes.
         conn.execute("DELETE FROM session_phase_state", []).unwrap();
         conn.execute("DELETE FROM session_title_state", []).unwrap();
-        conn.execute("DELETE FROM session_run_window", []).unwrap();
         conn.execute("DELETE FROM source_inventory", []).unwrap();
 
         // Re-observing the same source must not rotate the epoch or move the
@@ -294,14 +308,22 @@ mod tests {
                 tool_name: None,
                 source: "test".into(),
                 observed_at: chrono::Utc::now(),
+                run_id: Some("run-1".into()),
             })
             .unwrap());
-        let rows: i64 = conn
-            .query_row("SELECT COUNT(*) FROM session_phase_state", [], |row| {
-                row.get(0)
-            })
+        let rebuilt: (i64, Option<String>) = conn
+            .query_row(
+                "SELECT COUNT(*), MAX(run_id) FROM session_phase_state",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
             .unwrap();
-        assert_eq!(rows, 1, "the projection is rebuilt from the next observation");
+        assert_eq!(rebuilt.0, 1, "the projection is rebuilt from the next observation");
+        assert_eq!(
+            rebuilt.1.as_deref(),
+            Some("run-1"),
+            "the rebuilt row carries the run its producer named"
+        );
     }
 
     use super::*;
@@ -313,6 +335,7 @@ mod tests {
             phase: phase.to_string(),
             tool_name: tool_name.map(ToString::to_string),
             source: "claude_hook".to_string(),
+            run_id: None,
             observed_at: DateTime::parse_from_rfc3339(observed_at)
                 .unwrap()
                 .with_timezone(&Utc),

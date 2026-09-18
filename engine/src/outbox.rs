@@ -73,6 +73,9 @@ struct PresenceOutboxPayload {
     local_only: bool,
     #[serde(default)]
     phase_source: Option<String>,
+    /// The run the producing provider was launched into, when it knew one.
+    #[serde(default)]
+    run_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -408,6 +411,7 @@ fn collect_outbox_impl(
                 tool_name: payload.tool_name.clone(),
                 source: source.to_string(),
                 observed_at: pending.observed_at,
+                run_id: payload.run_id.clone(),
             };
             match SessionPhaseStore::new(conn).record(&signal) {
                 Ok(_) => {
@@ -475,6 +479,7 @@ fn collect_outbox_impl(
                     .as_str()
                     .to_string(),
                 observed_at,
+                run_id: payload.run_id.clone(),
             };
             if let Err(err) = SessionPhaseStore::new(conn).record(&signal) {
                 warn!(
@@ -1980,6 +1985,7 @@ mod tests {
             None,
             "codex_exec",
             "2026-04-19T00:00:00+00:00",
+            None,
         )
         .unwrap();
 

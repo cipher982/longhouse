@@ -774,6 +774,7 @@ impl OpenCodeRunSink {
             tool_name.as_deref(),
             OPENCODE_RUN_ADAPTER,
             &observed_at.to_rfc3339(),
+            Some(self.run_id.as_str()),
         ) {
             eprintln!(
                 "[opencode-run] enqueue local phase failed for {}: {err}",

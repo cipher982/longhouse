@@ -1198,6 +1198,7 @@ impl OmpPrintSink {
             tool_name.as_deref(),
             OMP_PRINT_ADAPTER,
             &observed_at.to_rfc3339(),
+            Some(self.run_id.as_str()),
         ) {
             eprintln!(
                 "[omp-print] enqueue local phase failed for {}: {err}",

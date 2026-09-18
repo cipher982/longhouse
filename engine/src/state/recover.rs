@@ -1284,13 +1284,6 @@ fn run_daily_prunes(conn: &Connection) {
         Ok(_) => {}
         Err(err) => tracing::warn!("Session binding prune error: {}", err),
     }
-    match crate::state::session_run_binding::SessionRunWindowStore::new(conn).prune(Utc::now()) {
-        Ok(n) if n > 0 => {
-            tracing::info!("Daily prune: removed {} stale session_run_window entries", n)
-        }
-        Ok(_) => {}
-        Err(err) => tracing::warn!("Session run window prune error: {}", err),
-    }
 }
 
 /// Run one daily maintenance pass and record that it completed.

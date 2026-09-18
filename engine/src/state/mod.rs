@@ -10,7 +10,6 @@ pub mod pending_source_envelope;
 pub mod recover;
 pub mod session_binding;
 pub mod session_phase;
-pub mod session_run_binding;
 pub mod session_title;
 pub mod source_epoch;
 pub mod source_inventory;

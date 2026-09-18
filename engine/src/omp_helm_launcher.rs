@@ -1053,6 +1053,7 @@ impl OmpHelmServer {
                 tool.as_deref(),
                 OMP_HELM_TRANSPORT,
                 &observed_at,
+                Some(current.run_id.as_str()),
             ) {
                 eprintln!(
                     "[omp-helm] enqueue local phase failed for {}: {error}",
@@ -1156,6 +1157,7 @@ impl OmpHelmServer {
                 tool,
                 OMP_HELM_TRANSPORT,
                 &state.updated_at,
+                Some(state.run_id.as_str()),
             ) {
                 eprintln!(
                     "[omp-helm] enqueue keepalive phase failed for {}: {error}",
