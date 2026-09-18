@@ -39,6 +39,7 @@ import { fileURLToPath } from "url";
 import {
   buildSessionDetailStressFixture,
   buildSessionQuestionFixture,
+  buildSessionAttentionFixture,
   buildSessionResumeFixture,
   buildSessionStaleObservationFixture,
   buildSessionToneFixture,
@@ -77,6 +78,7 @@ const SCENES = [
   "timeline-card-stress",
   "session-detail-stress",
   "session-question",
+  "session-attention",
   "session-resume",
   "session-stale-observation",
   "session-tones",
@@ -94,6 +96,7 @@ const SESSION_DETAIL_SCENES: readonly SceneName[] = [
   "landing-session",
   "session-detail-stress",
   "session-question",
+  "session-attention",
   "session-resume",
   "session-stale-observation",
   "session-tones",
@@ -234,6 +237,7 @@ function sceneUsesMockApi(scene: SceneName): boolean {
     scene === "landing-session" ||
     scene === "session-detail-stress" ||
     scene === "session-question" ||
+    scene === "session-attention" ||
     scene === "session-resume" ||
     scene === "session-stale-observation" ||
     scene === "session-tones"
@@ -360,6 +364,8 @@ async function installSceneMocks(
         ? buildSessionResumeFixture()
         : scene === "session-question"
           ? buildSessionQuestionFixture()
+          : scene === "session-attention"
+          ? buildSessionAttentionFixture()
           : scene === "session-stale-observation"
           ? buildSessionStaleObservationFixture()
           : scene === "session-tones"
