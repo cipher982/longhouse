@@ -345,7 +345,7 @@ pub struct StatusPublisher {
 struct StatusPublisherState {
     preview: Option<StatusPreview>,
     last_written: Option<Instant>,
-    last_phase: Option<(String, Option<String>)>,
+    last_phase: Option<(String, Option<String>, Option<String>)>,
     seq: u64,
     /// A retired session has no current status. Nothing may recreate its slot,
     /// including a frame that was already in flight when the run ended.
@@ -404,7 +404,16 @@ impl StatusPublisher {
         if let Some(preview) = preview {
             guard.preview = Some(preview);
         }
-        let phase_key = (phase.to_string(), tool.map(str::to_string));
+        // The payload is part of the statement, not decoration. Codex carries
+        // `pause_request_still_pending` and stall evidence there, and the
+        // Runtime Host takes a different branch on each — coalescing a payload
+        // change away because the phase name held still would drop a
+        // transition that resolves a pending question.
+        let phase_key = (
+            phase.to_string(),
+            tool.map(str::to_string),
+            extra_payload.as_ref().map(|value| value.to_string()),
+        );
         let transition = guard.last_phase.as_ref() != Some(&phase_key);
         let due = guard
             .last_written
@@ -650,6 +659,35 @@ mod tests {
         assert!(read_all(&dir).is_empty());
         publisher.publish(StatusUpdate::phase("s1", "run-1", "2026-09-17T15:00:04Z", "running"));
         assert!(read_all(&dir).is_empty(), "a retired session states nothing further");
+    }
+
+    /// Codex carries `pause_request_still_pending` and stall evidence in its
+    /// payload, and the Runtime Host takes a different branch on each. A
+    /// payload change is therefore a transition, even when the phase name
+    /// holds still: coalescing it away would drop the statement that resolves
+    /// a pending question.
+    #[test]
+    fn a_payload_change_publishes_even_inside_the_coalesce_window() {
+        let tmp = TempDir::new().expect("tempdir");
+        let dir = status_slot_dir(tmp.path());
+        let publisher = StatusPublisher::new(dir.clone(), "codex", "codex_app_server");
+
+        publisher.publish(
+            StatusUpdate::phase("s1", "run-1", "2026-09-17T15:00:01Z", "running")
+                .with_payload(json!({"pause_request_still_pending": true})),
+        );
+        let pending = read_all(&dir).pop().expect("slot");
+        assert_eq!(pending.payload["pause_request_still_pending"], true);
+
+        // Same phase, same tool, immediately after — but it now says the
+        // question is no longer pending.
+        publisher.publish(
+            StatusUpdate::phase("s1", "run-1", "2026-09-17T15:00:01Z", "running")
+                .with_payload(json!({"pause_request_still_pending": false})),
+        );
+        let resolved = read_all(&dir).pop().expect("slot");
+        assert_eq!(resolved.payload["pause_request_still_pending"], false);
+        assert!(resolved.seq > pending.seq, "the change was published, not coalesced");
     }
 
     #[test]

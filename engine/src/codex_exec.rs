@@ -1394,35 +1394,26 @@ impl CodexExecRuntimeSink {
     }
 
     async fn post_phase(&self, phase: &str, tool_name: Option<String>) {
+        // One slot per session: the daemon records the local ledger from it
+        // and sends it. A tool start is a transition of its own because the
+        // tool name is part of the statement, so it publishes immediately.
         let observed_at = Utc::now();
-        // Each tool start is its own observation, so it needs its own dedupe
-        // identity; a run's plain phase transitions collapse by phase name.
-        let phase_identity = match tool_name.as_deref() {
-            Some(_) => format!("{phase}:{}", uuid::Uuid::new_v4()),
-            None => phase.to_string(),
-        };
-        self.persist_local_phase(phase, tool_name.clone(), observed_at);
-        self.post_events(vec![json!({
-            "runtime_key": format!("codex:{}", self.session_id),
-            "session_id": self.session_id,
-            "run_id": self.run_id,
-            "thread_id": self.thread_id,
-            "provider": "codex",
-            "device_id": self.machine_name,
-            "source": CODEX_EXEC_RUNTIME_SOURCE,
-            "kind": "phase_signal",
-            "phase": phase,
-            "tool_name": tool_name,
-            "occurred_at": observed_at.to_rfc3339(),
-            "dedupe_key": format!("codex-app-server:{}:{}:phase:{}", self.session_id, self.run_id, phase_identity),
-            "payload": {
-                "managed_transport": CODEX_EXEC_RUNTIME_SOURCE,
+        crate::status_slot::publish_console_phase(
+            "codex",
+            CODEX_EXEC_RUNTIME_SOURCE,
+            &self.session_id,
+            &self.run_id,
+            &observed_at.to_rfc3339(),
+            phase,
+            tool_name.as_deref(),
+            json!({
                 "execution_lifetime": "one_shot",
+                "thread_id": self.thread_id,
+                "device_id": self.machine_name,
                 "turn_id": self.turn_id,
                 "client_request_id": self.client_request_id,
-            }
-        })])
-        .await;
+            }),
+        );
     }
 
     async fn post_live_user_item(&self, text: &str) {

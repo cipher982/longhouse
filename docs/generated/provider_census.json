@@ -363,6 +363,7 @@
     {
       "path": "engine/src/status_slot.rs",
       "providers": [
+        "codex",
         "omp",
         "pi"
       ]
