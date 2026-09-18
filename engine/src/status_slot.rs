@@ -85,6 +85,15 @@ impl StatusSlot {
 /// the next tick, and a daemon restart is current as soon as it reads them.
 pub fn runtime_events(slot: &StatusSlot) -> Vec<Value> {
     let mut events = Vec::new();
+    // A producer without a run identity says so by omission rather than by
+    // sending an empty string. The Codex bridge has none: its activity has
+    // never bound to a run, and inventing one here to satisfy the shape would
+    // bind it to a run that does not exist.
+    let run_id: Value = if slot.run_id.trim().is_empty() {
+        Value::Null
+    } else {
+        Value::String(slot.run_id.clone())
+    };
     // Some phases are local-health vocabulary the Runtime Host does not accept
     // — `finished` is the one a Console turn ends on. The durable enqueue path
     // refused those at the producer; the slot path has to refuse them here, or
@@ -94,7 +103,7 @@ pub fn runtime_events(slot: &StatusSlot) -> Vec<Value> {
         "runtime_key": slot.runtime_key,
         "session_id": slot.session_id,
         "provider": slot.provider,
-        "run_id": slot.run_id,
+        "run_id": run_id,
         "source": slot.source,
         "kind": "phase_signal",
         "phase": slot.phase,
@@ -112,7 +121,7 @@ pub fn runtime_events(slot: &StatusSlot) -> Vec<Value> {
             "runtime_key": slot.runtime_key,
             "session_id": slot.session_id,
             "provider": slot.provider,
-            "run_id": slot.run_id,
+            "run_id": run_id,
             "source": slot.source,
             "kind": "progress_signal",
             "occurred_at": slot.observed_at,
@@ -587,6 +596,20 @@ mod tests {
         );
         assert_eq!(events.len(), 1, "the preview still ships");
         assert_eq!(events[0]["kind"], "progress_signal");
+    }
+
+    /// A producer with no run identity says so by omission. Shipping an empty
+    /// string would bind activity to a run that does not exist; the Codex
+    /// bridge is the live example, and its events carry no run id today.
+    #[test]
+    fn a_slot_without_a_run_omits_it_rather_than_sending_an_empty_one() {
+        let mut runless = slot("s1", "running", 1);
+        runless.run_id = String::new();
+
+        let events = runtime_events(&runless);
+
+        assert_eq!(events[0]["run_id"], Value::Null);
+        assert_eq!(events[0]["session_id"], "s1");
     }
 
     #[test]
