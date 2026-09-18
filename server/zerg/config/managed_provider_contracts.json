@@ -2706,7 +2706,7 @@
           "owner_action": "run the transcript census for antigravity and name the raw source"
         }
       },
-      "adapter_digest": "40dfb2c7baab2f74be62e943e09889271a6de1ccc6fed6f3d69b988d3a85de91"
+      "adapter_digest": "b7079523ef3a47aaaa7fb0c8da99bea0eb69b4131e52b7c17f5649da36f03702"
     },
     {
       "provider": "cursor",
@@ -4505,7 +4505,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "2f6b8a8b6b45f2d1c25d63b94bf8aa46e71529c09c27f8873cf5459b88e545df"
+      "adapter_digest": "36e0d5adc3cc6468fc8e646ddafb25df4293a1ee36d5e87d055a8da9152e5903"
     }
   ]
 }

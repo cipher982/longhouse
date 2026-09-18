@@ -5819,6 +5819,112 @@ fn finish_path_task(mut result: PathTaskResult, started: Instant) -> PathTaskRes
 
 #[cfg(test)]
 mod tests {
+    /// The daemon is the phase ledger's single writer, which is what lets an
+    /// OMP callback stop handing it a file per frame. It records from the
+    /// session's status slot instead — but only what changed, because an
+    /// unchanged phase rewritten every 100ms bumps the ledger revision, and
+    /// the projection debounce watches that watermark: the daemon would
+    /// schedule a rebuild forever.
+    #[test]
+    fn status_slots_write_the_phase_ledger_only_when_they_change() {
+        use std::collections::HashMap;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db_path = temp.path().join("agent.db");
+        // The daemon bootstraps the schema once at startup; this stands in for
+        // that, because the recorder deliberately uses the hot-path opener.
+        crate::state::db::open_db(Some(&db_path)).expect("bootstrap ledger schema");
+        let slot = |seq: u64, phase: &str, observed_at: &str| crate::status_slot::StatusSlot {
+            schema: crate::status_slot::STATUS_SLOT_SCHEMA,
+            session_id: "session-1".into(),
+            provider: "omp".into(),
+            runtime_key: "omp:session-1".into(),
+            run_id: "run-1".into(),
+            source: "omp_helm_channel".into(),
+            phase: phase.into(),
+            tool_name: None,
+            observed_at: observed_at.into(),
+            payload: serde_json::json!({}),
+            preview: None,
+            producer_epoch: "epoch-1".into(),
+            seq,
+        };
+
+        let mut recorded: HashMap<String, (String, u64)> = HashMap::new();
+        let first = super::record_status_slot_phases(
+            Some(&db_path),
+            &[slot(1, "thinking", "2026-09-17T15:00:01Z")],
+            &recorded,
+        );
+        assert_eq!(first.len(), 1, "a new observation reaches the ledger");
+        for (session_id, version) in first {
+            recorded.insert(session_id, version);
+        }
+
+        // The same slot, seen again on the next tick.
+        let unchanged = super::record_status_slot_phases(
+            Some(&db_path),
+            &[slot(1, "thinking", "2026-09-17T15:00:01Z")],
+            &recorded,
+        );
+        assert!(unchanged.is_empty(), "an unchanged slot writes nothing");
+
+        let advanced = super::record_status_slot_phases(
+            Some(&db_path),
+            &[slot(2, "idle", "2026-09-17T15:00:02Z")],
+            &recorded,
+        );
+        assert_eq!(advanced.len(), 1, "a real transition is recorded");
+
+        let connection = crate::state::db::open_connection(&db_path).expect("open ledger");
+        let phase: String = connection
+            .query_row(
+                "SELECT phase FROM session_phase_state WHERE session_id = ?1",
+                rusqlite::params!["session-1"],
+                |row| row.get(0),
+            )
+            .expect("ledger row");
+        assert_eq!(phase, "idle");
+    }
+
+    /// A slot whose timestamp the ledger cannot parse is skipped, not fatal.
+    #[test]
+    fn an_unparseable_slot_timestamp_does_not_stop_the_others() {
+        use std::collections::HashMap;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db_path = temp.path().join("agent.db");
+        crate::state::db::open_db(Some(&db_path)).expect("bootstrap ledger schema");
+        let mut broken = crate::status_slot::StatusSlot {
+            schema: crate::status_slot::STATUS_SLOT_SCHEMA,
+            session_id: "broken".into(),
+            provider: "omp".into(),
+            runtime_key: "omp:broken".into(),
+            run_id: "run-1".into(),
+            source: "omp_helm_channel".into(),
+            phase: "thinking".into(),
+            tool_name: None,
+            observed_at: "not-a-timestamp".into(),
+            payload: serde_json::json!({}),
+            preview: None,
+            producer_epoch: "epoch-1".into(),
+            seq: 1,
+        };
+        let mut healthy = broken.clone();
+        healthy.session_id = "healthy".into();
+        healthy.observed_at = "2026-09-17T15:00:01Z".into();
+        broken.observed_at = "not-a-timestamp".into();
+
+        let recorded = super::record_status_slot_phases(
+            Some(&db_path),
+            &[broken, healthy],
+            &HashMap::new(),
+        );
+
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].0, "healthy");
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn blocking_path_work_does_not_delay_live_dispatch() {
         tokio::task::LocalSet::new()
