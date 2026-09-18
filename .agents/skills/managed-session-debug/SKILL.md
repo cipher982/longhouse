@@ -32,6 +32,55 @@ For "is transcript shipping live/slow?" questions, check `~/.longhouse/agent/eng
    test -f ~/.claude/channels/longhouse/sessions/<session-id>.json && jq . ~/.claude/channels/longhouse/sessions/<session-id>.json
    ```
 
+## "How close to 1:1 was it?" — one command
+
+For a post-hoc trace across every hop, run the trace tool instead of hand-writing
+SQL. It prints the provider events, the engine's ships, the hosted chunk commits,
+the activity-fact receipts, and the served payload, then names the slow hop:
+
+```bash
+python scripts/ops/session-realtime-trace.py --subdomain <subdomain> --session <session-id>
+python scripts/ops/session-realtime-trace.py ... --since 2026-09-18T01:10:00Z --until 2026-09-18T01:35:00Z --json
+```
+
+Run it on the machine that owns the session for the first two sections; the rest
+come from the Runtime Host over SSH (`--ssh`, default `zerg`). It is read-only and
+needs no environment beyond a machine device token
+(`~/.longhouse/machine/device-token`) for the served section.
+
+### Read the result
+
+- **provider -> hosted-commit lag** is `render_objects.created_at` minus the
+  chunk's last transcript event. Steady state is ~1-7s. A single chunk far above
+  that is a *write* gap: either the provider held the transcript line (Claude
+  buffers while a dialog is open) or the engine's fsevent was late — check
+  whether the engine shipped other paths normally in the same seconds.
+- **engine queue/ship ms** comes from the path-job log
+  (`~/.longhouse/agent/logs/engine.log.<utc-date>`). `queue_ms` is observation ->
+  enqueue; `ship_ms` is enqueue -> accepted. Both in the tens of ms means the
+  agent is healthy; seconds means the daemon is starved, and the same log will
+  show `Outbox collection was slow`, `Heartbeat POST was slow`, or
+  `Local status projection exceeded background budget`.
+- **activity receipts** are the provider hook's presence posts as the host
+  committed them. `fact_receipts` keeps only the newest handful per subject, so
+  an *older* window legitimately shows none; use the local `session_phase_state`
+  ledger (printed in the engine section) and the served `activity` fact instead.
+- **served activity / presentation.primary** is the badge. It is a 10-minute
+  provider-hook observation, never the transcript, so a session that has been
+  working for minutes can still read `Idle`/`Blocked`/"Last observed idle".
+
+### The state plane is not the transcript
+
+The rows below the badge come from the transcript and are near-real-time. The
+badge comes from the `activity` fact family (`run:<run-id>`, source
+`claude_hook`, 10-minute freshness). `needs_user`/`idle` map to `quiescent`;
+only `blocked`/`stalled` render as attention. Claude emits no presence event for
+`AskUserQuestion` itself, so during a pending question the badge shows whatever
+the last hook event said, and for a minute after a turn ends it shows the
+`idle_prompt` notification. When the badge contradicts the rows, that is the
+expected shape, not a stuck UI: say "state-plane staleness", not "ingest lag".
+
+
 ## Read The Result
 
 - Slow `assistant_tool_to_tool_result` means the tool itself or Claude hook/tool execution is slow.
@@ -91,6 +140,8 @@ End with a verdict:
 - `provider latency`
 - `tool/hook latency`
 - `hosted ingest lag`
+- `provider write gap` — the transcript line itself was late; nothing Longhouse-side was slow
+- `state-plane staleness` — the transcript is current but the badge is a stale hook fact
 - `runtime state mismatch`
 - `unknown`
 
