@@ -18,6 +18,7 @@ from zerg.runtime_boot import RUNTIME_BOOT_ID
 from zerg.services.internal_sessions import SYNTHETIC_BENCH_PROJECTS
 from zerg.services.local_embedder import LocalEmbedderUnavailable
 from zerg.services.local_embedder import get_local_embedder
+from zerg.services.local_embedder import request_local_embedder_initialization
 from zerg.services.session_processing.embeddings import EMBEDDING_BATCH_SIZE
 from zerg.services.session_processing.embeddings import EMBEDDING_MAX_CHUNKS_PER_PASS
 from zerg.services.session_processing.embeddings import embedding_to_bytes
@@ -133,18 +134,18 @@ class EmbeddingsV2Projector:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            # A local model/output contract failure will produce the identical
-            # result on every retry. Every other exception here
-            # (including this file's own ValueErrors for generation or
-            # revision drift) is
-            # genuinely transient and should keep retrying quickly, so this
-            # must check the specific subclass, not ValueError broadly.
-            is_permanent = isinstance(exc, LocalEmbedderUnavailable)
+            # A loaded local model/output contract failure will produce the
+            # identical result on every retry and is quarantined. A cold model
+            # has an async initializer in flight and must release this claim
+            # for a later attempt once that initializer succeeds.
+            is_embedder_failure = isinstance(exc, LocalEmbedderUnavailable)
+            is_cold_embedder = is_embedder_failure and exc.retryable
+            is_permanent = is_embedder_failure and not is_cold_embedder
             is_publication_pending = isinstance(exc, EmbeddingPublicationPending)
             if isinstance(session_id, str):
                 failures = int(state.get("failure_count", 0)) if isinstance(state, dict) else 0
                 failed_at = datetime.now(UTC)
-                retry_delay = timedelta(seconds=min(300, 5 * 2 ** min(failures, 6))) if not is_permanent else timedelta(0)
+                retry_delay = timedelta(seconds=min(300, 5 * 2 ** min(failures, 6)))
                 error_code = (
                     "embedding_config_permanent"
                     if is_permanent
@@ -202,6 +203,12 @@ class EmbeddingsV2Projector:
             await self.search.call("search.session.delete.v2", {"session_id": session_id})
             return True
         expected_owner_id = snapshot_session["owner_id"]
+        try:
+            embedder = get_local_embedder()
+        except LocalEmbedderUnavailable as exc:
+            if exc.retryable:
+                request_local_embedder_initialization()
+            raise
         records: list[dict[str, object]] = []
         owner_id: str | None = None
         provider: str | None = None
@@ -268,7 +275,7 @@ class EmbeddingsV2Projector:
         # Budget with the model's own tokenizer so the text hashed here is
         # exactly the text the model reads. Anything else re-truncates inside
         # the encoder and drops the episode's tail without a trace.
-        chunks = list(iter_turn_chunks(records, provider=provider, truncate_to_budget=get_local_embedder().truncate_document))
+        chunks = list(iter_turn_chunks(records, provider=provider, truncate_to_budget=embedder.truncate_document))
         hashes_result = await self.search.call(
             "search.embedding.hashes.v2", {"session_id": session_id, "model": config.model, "dims": config.dims}
         )
@@ -302,7 +309,7 @@ class EmbeddingsV2Projector:
         batches = [missing[start : start + max(1, EMBEDDING_BATCH_SIZE)] for start in range(0, len(missing), max(1, EMBEDDING_BATCH_SIZE))]
         for index, batch in enumerate(batches):
             is_last_batch = complete and index == len(batches) - 1
-            vectors = await asyncio.to_thread(get_local_embedder().embed_documents, [chunk.text for chunk in batch])
+            vectors = await asyncio.to_thread(embedder.embed_documents, [chunk.text for chunk in batch])
             await self.search.call(
                 "search.embedding.write.v2",
                 {

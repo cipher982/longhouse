@@ -56,6 +56,8 @@ EMBED_MAX_TOKENS = int(os.getenv("LONGHOUSE_EMBED_MAX_TOKENS", "2048"))
 # document per quantum bounds interactive waiting at one document forward pass;
 # operators can raise it only when throughput matters more than recall latency.
 EMBED_DOCUMENT_MICROBATCH = int(os.getenv("LONGHOUSE_EMBED_DOCUMENT_MICROBATCH", "1"))
+EMBED_INITIALIZE_RETRY_INITIAL_SECONDS = 1.0
+EMBED_INITIALIZE_RETRY_MAX_SECONDS = 30.0
 
 
 class LocalEmbedderUnavailable(RuntimeError):
@@ -64,7 +66,14 @@ class LocalEmbedderUnavailable(RuntimeError):
     A dense lane that answers with an empty list when its model is missing is
     indistinguishable from one that legitimately found nothing, which is exactly
     how the previous remote lane stayed dead without anyone noticing.
+
+    ``retryable`` distinguishes a cold process (where the shared initializer is
+    still working) from a loaded model that rejected its output contract.
     """
+
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable
 
 
 class LocalEmbedder:
@@ -238,11 +247,14 @@ class LocalEmbedder:
 
 
 _embedder: LocalEmbedder | None = None
+_initializer_task: asyncio.Task[LocalEmbedder] | None = None
 
 
 def get_local_embedder() -> LocalEmbedder:
+    """Return the loaded process-wide embedder without starting any work."""
+
     if _embedder is None or not _embedder.ready:
-        raise LocalEmbedderUnavailable("local embedder has not been initialized")
+        raise LocalEmbedderUnavailable("local embedder has not been initialized", retryable=True)
     return _embedder
 
 
@@ -254,12 +266,81 @@ def initialize_local_embedder(config: "EmbeddingSpaceConfig", model_dir: str | P
     return embedder
 
 
+async def _initialize_local_embedder_once() -> LocalEmbedder:
+    from zerg.models_config import get_embedding_space_config
+    from zerg.services.embedding_artifact import provision_embedding_artifact
+
+    config = get_embedding_space_config()
+    model_dir = await asyncio.to_thread(provision_embedding_artifact)
+    return await asyncio.to_thread(initialize_local_embedder, config, model_dir)
+
+
+async def _initialize_local_embedder_with_retries() -> LocalEmbedder:
+    delay = EMBED_INITIALIZE_RETRY_INITIAL_SECONDS
+    while True:
+        try:
+            return await _initialize_local_embedder_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Local embedding initialization failed; retrying in %.1fs: %s",
+                delay,
+                exc,
+            )
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, EMBED_INITIALIZE_RETRY_MAX_SECONDS)
+
+
+def request_local_embedder_initialization() -> asyncio.Task[LocalEmbedder] | None:
+    """Start one background initializer, leaving the non-loading accessor intact."""
+
+    global _initializer_task
+    if _embedder is not None and _embedder.ready:
+        return _initializer_task
+    if _initializer_task is None or _initializer_task.done():
+        _initializer_task = asyncio.create_task(
+            _initialize_local_embedder_with_retries(),
+            name="local-embedding-initializer",
+        )
+    return _initializer_task
+
+
+async def ensure_local_embedder() -> LocalEmbedder:
+    """Wait for the shared initializer without letting callers cancel it."""
+
+    try:
+        return get_local_embedder()
+    except LocalEmbedderUnavailable:
+        task = request_local_embedder_initialization()
+        if task is None:
+            return get_local_embedder()
+        return await asyncio.shield(task)
+
+
+async def stop_local_embedder_initialization() -> None:
+    global _initializer_task
+    task = _initializer_task
+    if task is None:
+        return
+    _initializer_task = None
+    if not task.done():
+        task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
 async def embed_query(text: str) -> np.ndarray:
     """Embed one query off the event loop.
 
-    The forward pass is CPU-bound; running it inline would block every other
-    request on this worker for the duration.
+    A cold query reports the existing unavailable error immediately while a
+    shared background initializer prepares the next query. This keeps the
+    dense deadline bounded and lets the model load continue after cancellation.
     """
 
-    embedder = get_local_embedder()
+    try:
+        embedder = get_local_embedder()
+    except LocalEmbedderUnavailable as exc:
+        if exc.retryable:
+            request_local_embedder_initialization()
+        raise
     return (await asyncio.to_thread(embedder.embed_queries, [text]))[0]

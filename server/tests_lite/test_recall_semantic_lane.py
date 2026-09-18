@@ -252,8 +252,18 @@ async def test_malformed_projector_coverage_is_typed_unavailable(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_semantic_recall_never_turns_missing_test_model_into_a_miss():
+async def test_semantic_recall_never_turns_missing_test_model_into_a_miss(monkeypatch):
     """TESTING is not permission to make an unavailable lane look empty."""
+    import zerg.services.local_embedder as local_embedder_module
+
+    monkeypatch.setattr(local_embedder_module, "_embedder", None)
+    initialization_requests = []
+    monkeypatch.setattr(
+        local_embedder_module,
+        "request_local_embedder_initialization",
+        lambda: initialization_requests.append(True),
+    )
+
 
     with pytest.raises(agents_search.HTTPException) as unavailable:
         await agents_search._semantic_recall_matches(
@@ -269,6 +279,7 @@ async def test_semantic_recall_never_turns_missing_test_model_into_a_miss():
         )
     assert unavailable.value.status_code == 503
     assert unavailable.value.detail["code"] == "embedder_unavailable"
+    assert initialization_requests == [True]
 
 
 @pytest.mark.asyncio

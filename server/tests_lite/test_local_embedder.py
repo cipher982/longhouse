@@ -14,6 +14,7 @@ would be skipped exactly when it mattered.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 import threading
@@ -65,6 +66,64 @@ def _embedder(vectors, *, output_name="sentence_embedding"):
     embedder._tokenizer = _StubTokenizer()
     embedder._embedding_output = 0
     return embedder
+
+
+@pytest.mark.asyncio
+async def test_initialization_is_single_flight_and_survives_caller_cancellation(monkeypatch):
+    import zerg.services.local_embedder as local_embedder_module
+
+    monkeypatch.setattr(local_embedder_module, "_embedder", None)
+    monkeypatch.setattr(local_embedder_module, "_initializer_task", None)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+    sentinel = object()
+
+    async def initialize_once():
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        return sentinel
+
+    monkeypatch.setattr(local_embedder_module, "_initialize_local_embedder_once", initialize_once)
+
+    cancelled_caller = asyncio.create_task(local_embedder_module.ensure_local_embedder())
+    await started.wait()
+    surviving_caller = asyncio.create_task(local_embedder_module.ensure_local_embedder())
+    cancelled_caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_caller
+    release.set()
+
+    assert await surviving_caller is sentinel
+    assert calls == 1
+    await local_embedder_module.stop_local_embedder_initialization()
+
+
+@pytest.mark.asyncio
+async def test_initialization_retries_after_a_transient_failure(monkeypatch):
+    import zerg.services.local_embedder as local_embedder_module
+
+    monkeypatch.setattr(local_embedder_module, "_embedder", None)
+    monkeypatch.setattr(local_embedder_module, "_initializer_task", None)
+    monkeypatch.setattr(local_embedder_module, "EMBED_INITIALIZE_RETRY_INITIAL_SECONDS", 0.0)
+    monkeypatch.setattr(local_embedder_module, "EMBED_INITIALIZE_RETRY_MAX_SECONDS", 0.0)
+    attempts = 0
+    sentinel = object()
+
+    async def initialize_once():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("transient model setup failure")
+        return sentinel
+
+    monkeypatch.setattr(local_embedder_module, "_initialize_local_embedder_once", initialize_once)
+
+    assert await local_embedder_module.ensure_local_embedder() is sentinel
+    assert attempts == 2
+    await local_embedder_module.stop_local_embedder_initialization()
 
 
 def test_unloaded_embedder_raises_rather_than_returning_nothing():

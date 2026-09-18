@@ -22,37 +22,29 @@ _settings = get_settings()
 logger = logging.getLogger(__name__)
 
 
-async def _initialize_local_embedding_projector(app: FastAPI) -> None:
-    """Provision dense recall without delaying the Runtime Host launch loop."""
+def _start_local_embedding_projector(app: FastAPI) -> None:
+    """Start projection without provisioning the model during startup."""
 
     try:
-        with _timed_startup_step("local_embedding_model"):
-            from zerg.models_config import get_embedding_space_config
-            from zerg.services.embedding_artifact import provision_embedding_artifact
-            from zerg.services.local_embedder import initialize_local_embedder
-
-            model_dir = await asyncio.to_thread(provision_embedding_artifact)
-            await asyncio.to_thread(initialize_local_embedder, get_embedding_space_config(), model_dir)
-            app.state.embedding_model_dir = str(model_dir)
         from zerg.services.embeddings_v2_projector import start_embeddings_v2_projector
 
         app.state.embeddings_v2_projector_started = start_embeddings_v2_projector()
         if not app.state.embeddings_v2_projector_started:
             logger.warning("Embeddings-v2 projector is degraded; hot Runtime Host readiness is unaffected")
-    except asyncio.CancelledError:
-        raise
     except Exception:
         app.state.embeddings_v2_projector_started = False
-        logger.exception("Failed to initialize local embeddings (non-fatal)")
+        logger.exception("Failed to start embeddings-v2 projector (non-fatal)")
 
 
 async def _stop_local_embedding_initializer(app: FastAPI) -> None:
     task = getattr(app.state, "embedding_initializer_task", None)
-    if task is None:
-        return
-    task.cancel()
-    await asyncio.gather(task, return_exceptions=True)
-    app.state.embedding_initializer_task = None
+    if task is not None:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        app.state.embedding_initializer_task = None
+    from zerg.services.local_embedder import stop_local_embedder_initialization
+
+    await stop_local_embedder_initialization()
 
 
 async def _stop_storage_title_services(app: FastAPI) -> None:
@@ -244,10 +236,7 @@ async def lifespan(app: FastAPI):
             except Exception:
                 app.state.search_v2_projector_started = False
                 logger.exception("Failed to start search-v2 projector (non-fatal)")
-            app.state.embedding_initializer_task = asyncio.create_task(
-                _initialize_local_embedding_projector(app),
-                name="local-embedding-initializer",
-            )
+            _start_local_embedding_projector(app)
             try:
                 from zerg.services.storage_telemetry_snapshot import run_storage_telemetry_refresh_loop
 

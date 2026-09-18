@@ -488,6 +488,32 @@ def _minimal_claim_setup(session_id, generation_id, store_id):
 
 
 @pytest.mark.asyncio
+async def test_cold_embedder_claim_is_released_for_retry(monkeypatch):
+    session_id, generation_id, store_id = (str(uuid4()) for _ in range(3))
+    catalog, search = _minimal_claim_setup(session_id, generation_id, store_id)
+    monkeypatch.setattr("zerg.models_config.get_embedding_space_config", lambda: SimpleNamespace(model="test-model", dims=2))
+    cold_error = LocalEmbedderUnavailable("local embedder is still initializing", retryable=True)
+    initialization_requests = []
+
+    def cold_embedder():
+        raise cold_error
+
+    monkeypatch.setattr("zerg.services.embeddings_v2_projector.get_local_embedder", cold_embedder)
+    monkeypatch.setattr(
+        "zerg.services.embeddings_v2_projector.request_local_embedder_initialization",
+        lambda: initialization_requests.append(True),
+    )
+    projector = EmbeddingsV2Projector(catalog=catalog, search=search, worker_id="test")
+
+    await projector.run_once(now=datetime.now(UTC))
+
+    failed = next(params for method, params in catalog.calls if method == "projector.state.fail.v2")
+    assert failed["error_code"] == "embedding_projection_failed"
+    assert datetime.fromisoformat(failed["retry_at"]) > datetime.fromisoformat(failed["failed_at"])
+    assert initialization_requests == [True]
+
+
+@pytest.mark.asyncio
 async def test_permanent_config_error_is_marked_for_quarantine_and_error_log(monkeypatch, caplog):
     """A deterministic config error is handed to catalog quarantine, not a retry timer."""
     session_id, generation_id, store_id = (str(uuid4()) for _ in range(3))
