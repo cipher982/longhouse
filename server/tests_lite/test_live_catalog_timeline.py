@@ -43,6 +43,7 @@ from zerg.services.live_catalog_timeline import project_catalog_session_facts
 from zerg.services.live_catalog_timeline import project_catalog_sessions_snapshot
 from zerg.services.live_catalog_timeline import project_catalog_timeline_snapshot
 from zerg.services.live_catalog_timeline import read_live_catalog_session
+from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_views import RecallMatch
 from zerg.services.session_views import SessionResponse
 from zerg.services.timeline_session_listing import TimelineSessionListParams
@@ -839,6 +840,7 @@ def _add_live_kernel(
             last_health_at=now,
         )
     )
+    return run_id
 
 
 def test_live_catalog_timeline_lists_card_and_runtime_without_archive(tmp_path):
@@ -929,6 +931,156 @@ def test_live_catalog_timeline_lists_card_and_runtime_without_archive(tmp_path):
     assert card.head.capabilities.observe_only is False
     assert card.head.session_state.control.actions.send_input.state == "unavailable"
     assert card.head.session_state.control.actions.resume.state == "unavailable"
+
+
+def test_catalog_delegation_reaches_canonical_timeline_and_detail(tmp_path, monkeypatch):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'delegation-canonical.db'}")
+    initialize_catalog_schema(engine)
+    store = CatalogStore(engine)
+    LiveSession = make_sessionmaker(engine)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    cases = {
+        "pending": {"count": 2, "kinds": {"subagent": 1, "shell": 1}},
+        "empty": {"count": 0, "kinds": {}},
+        "absent": None,
+    }
+    session_ids = {name: str(uuid4()) for name in cases}
+    run_ids: dict[str, str] = {}
+
+    with LiveSession() as db:
+        db.add_all(
+            [
+                LiveUser(id=1, email="owner@example.com", is_active=True),
+                LiveUser(id=2, email="other@example.com", is_active=True),
+            ]
+        )
+        for name, delegation in cases.items():
+            session_id = session_ids[name]
+            thread_id = str(uuid4())
+            db.add(
+                LiveSessionCatalog(
+                    session_id=session_id,
+                    provider="claude",
+                    environment="production",
+                    project="longhouse",
+                    device_id="cinder",
+                    device_name="Cinder",
+                    cwd="/workspace/longhouse",
+                    started_at=now,
+                    last_activity_at=now,
+                    user_messages=1,
+                    assistant_messages=1,
+                    summary_title=name,
+                    first_user_message_preview="Wait for the background work",
+                    primary_thread_id=thread_id,
+                    launch_actor="human_shell",
+                    launch_surface="terminal",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            db.add(
+                LiveTimelineCard(
+                    session_id=session_id,
+                    provider="claude",
+                    environment="production",
+                    project="longhouse",
+                    device_id="cinder",
+                    cwd="/workspace/longhouse",
+                    started_at=now,
+                    last_activity_at=now,
+                    summary_title=name,
+                    first_user_message_preview="Wait for the background work",
+                    user_messages=1,
+                    assistant_messages=1,
+                    archive_state="legacy_hot",
+                    derived_state="current",
+                    parser_revision="test",
+                    updated_at=now,
+                )
+            )
+            db.add(
+                LiveSessionRow(
+                    session_id=session_id,
+                    owner_id="1",
+                    provider="claude",
+                    device_id="cinder",
+                    state="running",
+                    started_at=now,
+                    last_seen_at=now,
+                    updated_at=now,
+                )
+            )
+            run_ids[name] = _add_live_kernel(
+                db,
+                session_id=session_id,
+                thread_id=thread_id,
+                now=now,
+                provider="claude",
+            )
+        db.commit()
+
+    applied = store.apply_session_runtime(
+        events=[
+            RuntimeEventIngest(
+                runtime_key=f"claude:{name}",
+                session_id=session_ids[name],
+                run_id=run_ids[name],
+                provider="claude",
+                device_id="cinder",
+                source="claude_hook",
+                kind="phase_signal",
+                phase="idle",
+                occurred_at=now,
+                freshness_ms=60_000,
+                dedupe_key=f"delegation-{name}",
+                payload={"delegation": delegation} if delegation is not None else {},
+            )
+            for name, delegation in cases.items()
+        ]
+    )
+    assert applied["delegation_facts"] == {"promoted": 2}
+
+    monkeypatch.setattr(
+        live_catalog_timeline,
+        "canonical_timeline_snapshot",
+        lambda params, *, owner_id: store.list_session_timeline(
+            **params,
+            owner_id=owner_id,
+            include_state_heads=True,
+        ),
+    )
+    monkeypatch.setattr(
+        live_catalog_timeline,
+        "shadow_session_state_snapshot",
+        lambda session_id, *, owner_id: store.read_shadow_session_state(session_id=session_id, owner_id=owner_id),
+    )
+
+    timeline = list_live_catalog_timeline(params=_params(days_back=1), owner_id=1)
+    cards = {card.head.id: card.head for card in timeline.sessions}
+    assert set(cards) == set(session_ids.values())
+
+    pending = cards[session_ids["pending"]].session_state
+    empty = cards[session_ids["empty"]].session_state
+    absent = cards[session_ids["absent"]].session_state
+    assert pending.activity.state == "quiescent"
+    assert pending.delegation.state == "pending"
+    assert pending.delegation.count == 2
+    assert pending.presentation.primary.key == "delegated_work"
+    assert pending.presentation.primary.label == "Waiting on 2 background tasks"
+    assert pending.working_set == "open"
+    assert empty.delegation.state == "none"
+    assert empty.presentation.primary.key == "idle"
+    assert absent.delegation.state == "unknown"
+    assert absent.presentation.primary.key == "idle"
+
+    detail, _provider_alias, _commit_seq = read_live_catalog_session(session_ids["pending"], owner_id=1)
+    assert detail is not None
+    assert detail.session_state.delegation.state == "pending"
+    assert detail.session_state.presentation.primary.key == "delegated_work"
+    wrong_owner, _provider_alias, _commit_seq = read_live_catalog_session(session_ids["pending"], owner_id=2)
+    assert wrong_owner is None
+    engine.dispose()
 
 
 def test_failed_matching_anchor_and_summary_fall_back_to_project_title():

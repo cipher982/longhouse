@@ -177,7 +177,7 @@ def _timeline_window_order_at(session_id_column, activity_at) -> Any:
     head = FactHead.__table__
     live_at = (
         select(func.max(head.c.observed_at))
-        .where(head.c.session_id == session_id_column, head.c.family.in_(("activity", "control")))
+        .where(head.c.session_id == session_id_column, head.c.family.in_(("activity", "control", "delegation")))
         .scalar_subquery()
     )
     return func.max(func.coalesce(live_at, activity_at), activity_at)
@@ -5846,7 +5846,7 @@ class CatalogStore:
                 _head_commit_seq, grouped_heads, truncated_sessions = read_bounded_sessions_fact_heads(
                     connection,
                     session_ids=session_ids,
-                    families=("activity", "control", "continuation"),
+                    families=("activity", "control", "continuation", "delegation"),
                     limit_per_session=SHADOW_STATE_FACT_HEAD_LIMIT,
                 )
                 heads_by_session = {session_id: (heads, session_id in truncated_sessions) for session_id, heads in grouped_heads.items()}
@@ -5957,7 +5957,7 @@ class CatalogStore:
             commit_seq, heads, heads_truncated = read_bounded_session_fact_heads(
                 connection,
                 session_id=session_id,
-                families=("activity", "control", "continuation"),
+                families=("activity", "control", "continuation", "delegation"),
                 limit=SHADOW_STATE_FACT_HEAD_LIMIT,
             )
             return {
@@ -6018,7 +6018,7 @@ class CatalogStore:
             commit_seq, heads_by_session, truncated = read_bounded_sessions_fact_heads(
                 connection,
                 session_ids=owned_ids,
-                families=("activity", "control", "continuation"),
+                families=("activity", "control", "continuation", "delegation"),
                 limit_per_session=SHADOW_STATE_FACT_HEAD_LIMIT,
             )
             sessions = []

@@ -341,6 +341,25 @@ struct StatusSlotResult {
     recorded: Vec<(String, (String, u64))>,
     elapsed_ms: u64,
 }
+#[derive(Debug, Default)]
+struct StatusPostResult {
+    accepted: Vec<(String, (String, u64))>,
+    rejected: Vec<StatusPostRejection>,
+}
+
+#[derive(Debug, Clone)]
+struct StatusPostRejection {
+    session_id: String,
+    version: (String, u64),
+    changed: bool,
+}
+
+#[derive(Debug, Clone)]
+struct RejectedStatusSlot {
+    version: (String, u64),
+    changed: bool,
+    retry_at: Instant,
+}
 
 /// Runtime status collection is its own lane. It shares no gate with presence,
 /// because a runtime backlog used to stop Claude presence and local-phase
@@ -863,17 +882,16 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // cost the user their local history with no local record of it. Retry
     // inside a bounded window first; a host that is genuinely gone still gets a
     // refusal rather than a shipping loop that drops history in silence.
-    let negotiated =
-        match client
-            .negotiate_storage_v2_at_startup(&config.shipper_config.machine_name)
-            .await
-        {
-            Ok(negotiated) => negotiated,
-            Err(error) => {
-                record_startup_refusal("runtime_unavailable", &format!("{error:#}"));
-                return Err(error);
-            }
-        };
+    let negotiated = match client
+        .negotiate_storage_v2_at_startup(&config.shipper_config.machine_name)
+        .await
+    {
+        Ok(negotiated) => negotiated,
+        Err(error) => {
+            record_startup_refusal("runtime_unavailable", &format!("{error:#}"));
+            return Err(error);
+        }
+    };
     let storage_v2 = match require_storage_v2_cutover(negotiated, &config.shipper_config.api_url) {
         Ok(capabilities) => {
             tracing::info!(
@@ -1066,7 +1084,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // `state::recover::daily_maintenance_delay`.
     let mut prune_timer = tokio::time::interval_at(
         tokio::time::Instant::now()
-            + crate::state::recover::daily_maintenance_delay(&projection_db_path, chrono::Utc::now()),
+            + crate::state::recover::daily_maintenance_delay(
+                &projection_db_path,
+                chrono::Utc::now(),
+            ),
         prune_interval,
     );
 
@@ -1158,11 +1179,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut runtime_collect_tasks: JoinSet<RuntimeCollectResult> = JoinSet::new();
     let mut runtime_sweep_tasks: JoinSet<outbox::RuntimeOutboxSweep> = JoinSet::new();
     let mut status_slot_tasks: JoinSet<StatusSlotResult> = JoinSet::new();
-    let mut status_post_tasks: JoinSet<Vec<(String, (String, u64))>> = JoinSet::new();
+    let mut status_post_tasks: JoinSet<StatusPostResult> = JoinSet::new();
     // What the Runtime Host has already accepted, per session. Nothing is
     // queued: an unsent or failed slot is simply sent again, with whatever
     // value it holds by then.
     let mut status_sent: HashMap<String, ((String, u64), Instant)> = HashMap::new();
+    // Rejected observations remain durable slots; only their exact version
+    // waits for the assertion interval before retrying.
+    let mut status_rejected: HashMap<String, RejectedStatusSlot> = HashMap::new();
     // What the local phase ledger already holds. Recording an unchanged phase
     // every 100ms bumps its revision, and the projection debounce watches that
     // watermark: the daemon would schedule a rebuild forever.
@@ -1637,28 +1661,30 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         // neither map needs to remember it.
                         status_sent.retain(|session_id, _| live.contains(session_id));
                         status_recorded.retain(|session_id, _| live.contains(session_id));
+                        // A newer slot observation replaces a rejected one,
+                        // while an unchanged rejection remains suppressed
+                        // until its bounded retry time.
+                        status_rejected.retain(|session_id, rejected| {
+                            result.slots.iter().any(|slot| {
+                                slot.session_id == *session_id && slot.version() == rejected.version
+                            })
+                        });
                         // A slot the host has already accepted is not resent
                         // as a change. Everything else is sent as it stands
-                        // now, not as it stood when it changed — and a slot it
-                        // has accepted is still *asserted* on an interval, so a
-                        // provider that has gone quiet between its own events
-                        // does not age out of freshness while it works.
+                        // now, not as it stood when it changed — and a slot
+                        // it has accepted is still asserted on an interval.
+                        let now = Instant::now();
                         let pending: Vec<(crate::status_slot::StatusSlot, bool)> = result
                             .slots
                             .into_iter()
                             .filter_map(|slot| {
-                                match status_sent.get(&slot.session_id) {
-                                    None => Some((slot, true)),
-                                    Some((version, sent_at)) => {
-                                        if version != &slot.version() {
-                                            Some((slot, true))
-                                        } else if sent_at.elapsed() >= crate::status_slot::STATUS_ASSERTION_INTERVAL {
-                                            Some((slot, false))
-                                        } else {
-                                            None
-                                        }
-                                    }
-                                }
+                                status_slot_pending(
+                                    &slot,
+                                    status_sent.get(&slot.session_id),
+                                    status_rejected.get(&slot.session_id),
+                                    now,
+                                )
+                                .map(|changed| (slot, changed))
                             })
                             .collect();
                         if !pending.is_empty() && status_post_tasks.is_empty() {
@@ -1674,12 +1700,23 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     None => {}
                 }
             }
-
             status_post_result = status_post_tasks.join_next(), if !status_post_tasks.is_empty() => {
                 match status_post_result {
-                    Some(Ok(accepted)) => {
-                        for (session_id, version) in accepted {
+                    Some(Ok(result)) => {
+                        for (session_id, version) in result.accepted {
+                            status_rejected.remove(&session_id);
                             status_sent.insert(session_id, (version, Instant::now()));
+                        }
+                        for rejection in result.rejected {
+                            status_rejected.insert(
+                                rejection.session_id,
+                                RejectedStatusSlot {
+                                    version: rejection.version,
+                                    changed: rejection.changed,
+                                    retry_at: Instant::now()
+                                        + crate::status_slot::STATUS_ASSERTION_INTERVAL,
+                                },
+                            );
                         }
                     }
                     Some(Err(err)) => {
@@ -3189,40 +3226,96 @@ fn record_status_slot_phases(
     recorded
 }
 
-/// Deliver current status and report which versions the host accepted.
-///
-/// Nothing is queued and nothing is deleted: the slot is the durable copy, so
-/// a session whose send fails is simply sent again next tick with whatever it
-/// says by then.
+/// Select the current slot observation for delivery without confusing a
+/// permanent rejection with an accepted watermark. Rejected versions retry at
+/// the assertion cadence; a newer version always replaces the marker.
+fn status_slot_pending(
+    slot: &crate::status_slot::StatusSlot,
+    sent: Option<&((String, u64), Instant)>,
+    rejected: Option<&RejectedStatusSlot>,
+    now: Instant,
+) -> Option<bool> {
+    let version = slot.version();
+    if let Some(rejected) = rejected.filter(|rejected| rejected.version == version) {
+        return (rejected.retry_at <= now).then_some(rejected.changed);
+    }
+    match sent {
+        None => Some(true),
+        Some((sent_version, _)) if sent_version != &version => Some(true),
+        Some((_, sent_at))
+            if sent_at.elapsed() >= crate::status_slot::STATUS_ASSERTION_INTERVAL =>
+        {
+            Some(false)
+        }
+        Some(_) => None,
+    }
+}
+/// Deliver current status and report which versions the host accepted or
+/// permanently rejected. Nothing is queued and nothing is deleted: the slot
+/// is the durable copy, so a session whose send fails is simply sent again
+/// with whatever it says by then.
 #[allow(unused_imports)]
 async fn post_status_slots(
     client: &crate::shipping::client::ShipperClient,
     slots: Vec<(crate::status_slot::StatusSlot, bool)>,
-) -> Vec<(String, (String, u64))> {
+) -> StatusPostResult {
     use futures_util::StreamExt;
     // Sessions are independent, so one whose send keeps failing must not hold
     // up everyone else's current status.
-    futures_util::stream::iter(slots.into_iter().map(|(slot, changed)| async move {
-        let events: Vec<outbox::PendingRuntimeEventPost> = if changed {
-            crate::status_slot::runtime_events(&slot)
-        } else {
-            // Unchanged: the machine is restating, not reporting. A phase
-            // shipped again would bump the host's runtime revision and
-            // re-anchor the phase for a statement that says nothing new about
-            // the provider.
-            vec![crate::status_slot::assertion_runtime_event(&slot, chrono::Utc::now())]
-        }
+    let outcomes =
+        futures_util::stream::iter(slots.into_iter().map(|(slot, changed)| async move {
+            let events: Vec<outbox::PendingRuntimeEventPost> = if changed {
+                crate::status_slot::runtime_events(&slot)
+            } else {
+                // Unchanged: the machine is restating, not reporting. A phase
+                // shipped again would bump the host's runtime revision and
+                // re-anchor the phase for a statement that says nothing new about
+                // the provider.
+                vec![crate::status_slot::assertion_runtime_event(
+                    &slot,
+                    chrono::Utc::now(),
+                )]
+            }
+            .into_iter()
+            .map(outbox::PendingRuntimeEventPost::from_event)
+            .collect();
+            let expected = events.len();
+            let version = slot.version();
+            let outcome =
+                outbox::post_pending_runtime_event_files_with_outcome(client, events).await;
+            if outcome.sent == expected && outcome.kept == 0 {
+                StatusPostResult {
+                    accepted: vec![(slot.session_id, version)],
+                    rejected: Vec::new(),
+                }
+            } else if outcome
+                .permanent_rejections
+                .iter()
+                .any(|rejection| rejection.session_id == slot.session_id)
+            {
+                StatusPostResult {
+                    accepted: Vec::new(),
+                    rejected: vec![StatusPostRejection {
+                        session_id: slot.session_id,
+                        version,
+                        changed,
+                    }],
+                }
+            } else {
+                StatusPostResult::default()
+            }
+        }))
+        .buffer_unordered(STATUS_POST_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
+
+    outcomes
         .into_iter()
-        .map(outbox::PendingRuntimeEventPost::from_event)
-        .collect();
-        let expected = events.len();
-        let (sent, _kept) = outbox::post_pending_runtime_event_files(client, events).await;
-        (sent == expected).then(|| (slot.session_id.clone(), slot.version()))
-    }))
-    .buffer_unordered(STATUS_POST_CONCURRENCY)
-    .filter_map(|accepted| async move { accepted })
-    .collect()
-    .await
+        .fold(StatusPostResult::default(), |mut total, outcome| {
+            total.accepted.extend(outcome.accepted);
+            total.rejected.extend(outcome.rejected);
+            total
+        })
 }
 
 fn arm_phase_projection(pending: &mut bool) -> bool {
@@ -5822,6 +5915,71 @@ mod tests {
         assert_eq!(phase, "idle");
     }
 
+    #[test]
+    fn rejected_status_slots_retry_on_cadence_and_newer_versions_replace_them() {
+        use std::time::{Duration, Instant};
+
+        let slot = |seq| crate::status_slot::StatusSlot {
+            schema: crate::status_slot::STATUS_SLOT_SCHEMA,
+            session_id: "session-1".into(),
+            provider: "omp".into(),
+            runtime_key: "omp:session-1".into(),
+            run_id: "run-1".into(),
+            source: "omp_helm_channel".into(),
+            phase: "thinking".into(),
+            tool_name: None,
+            observed_at: "2026-09-17T15:00:01Z".into(),
+            payload: serde_json::json!({}),
+            preview: None,
+            producer_epoch: "epoch-1".into(),
+            seq,
+        };
+        let current = slot(1);
+        let now = Instant::now();
+        let accepted = (current.version(), now);
+        assert_eq!(
+            super::status_slot_pending(&current, None, None, now),
+            Some(true),
+            "a transient failure does not advance the accepted watermark"
+        );
+        assert_eq!(
+            super::status_slot_pending(&current, Some(&accepted), None, now),
+            None,
+            "an accepted slot is not resent before its assertion interval"
+        );
+
+        let suppressed = super::RejectedStatusSlot {
+            version: current.version(),
+            changed: true,
+            retry_at: now + Duration::from_secs(5),
+        };
+        assert_eq!(
+            super::status_slot_pending(&current, Some(&accepted), Some(&suppressed), now),
+            None,
+            "a permanent rejection is bounded rather than retried every tick"
+        );
+        assert_eq!(
+            super::status_slot_pending(
+                &current,
+                Some(&accepted),
+                Some(&super::RejectedStatusSlot {
+                    retry_at: now - Duration::from_secs(1),
+                    ..suppressed.clone()
+                }),
+                now,
+            ),
+            Some(true),
+            "the same rejected observation remains retryable"
+        );
+
+        let newer = slot(2);
+        assert_eq!(
+            super::status_slot_pending(&newer, Some(&accepted), Some(&suppressed), now),
+            Some(true),
+            "a newer observation replaces a rejected version immediately"
+        );
+    }
+
     /// A slot whose timestamp the ledger cannot parse is skipped, not fatal.
     #[test]
     fn an_unparseable_slot_timestamp_does_not_stop_the_others() {
@@ -5850,11 +6008,8 @@ mod tests {
         healthy.observed_at = "2026-09-17T15:00:01Z".into();
         broken.observed_at = "not-a-timestamp".into();
 
-        let recorded = super::record_status_slot_phases(
-            Some(&db_path),
-            &[broken, healthy],
-            &HashMap::new(),
-        );
+        let recorded =
+            super::record_status_slot_phases(Some(&db_path), &[broken, healthy], &HashMap::new());
 
         assert_eq!(recorded.len(), 1);
         assert_eq!(recorded[0].0, "healthy");

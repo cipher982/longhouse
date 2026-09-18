@@ -139,7 +139,11 @@ def test_source_batches_bound_dense_render_payloads():
     assert [batch.range_start for batch in batches] == [0, 1, 2]
 
 
-@pytest.mark.timeout(30)
+# 12k rows through the streaming converter: ~16 s locally, and the CI container
+# is slower than that. The marker is a hang guard, not a speed assertion — at 30 s
+# it failed the whole backend job on a slow container while the behaviour under
+# test was fine.
+@pytest.mark.timeout(180)
 @pytest.mark.asyncio
 async def test_high_row_session_streams_inline_archive_and_events_in_bounded_batches(
     legacy_db,

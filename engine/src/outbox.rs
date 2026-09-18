@@ -148,8 +148,7 @@ pub struct PendingPresencePost {
     bytes: Vec<u8>,
 }
 
-#[derive(Debug)]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct PendingRuntimeEventPost {
     /// The durable file this event came from, if it came from one. Status read
     /// from a session's slot has no file to delete: the slot is the durable
@@ -167,6 +166,18 @@ impl PendingRuntimeEventPost {
     pub fn session_id(&self) -> String {
         text_field(self.event.get("session_id"))
     }
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RuntimeEventPermanentRejection {
+    pub(crate) session_id: String,
+    pub(crate) status: u16,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct RuntimeEventPostOutcome {
+    pub(crate) sent: usize,
+    pub(crate) kept: usize,
+    pub(crate) permanent_rejections: Vec<RuntimeEventPermanentRejection>,
 }
 
 /// Is this event's phase one an adapter is allowed to ship?
@@ -696,6 +707,27 @@ fn post_path_display(post: &PendingRuntimeEventPost) -> String {
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "<status slot>".to_string())
 }
+const RUNTIME_EVENT_RESPONSE_LOG_CHARS: usize = 1024;
+
+/// Keep rejection diagnostics useful without allowing an untrusted response to
+/// flood or structure the daemon log.
+fn safe_response_body(body: &str) -> String {
+    let mut safe: String = body
+        .chars()
+        .take(RUNTIME_EVENT_RESPONSE_LOG_CHARS)
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect();
+    if body.chars().nth(RUNTIME_EVENT_RESPONSE_LOG_CHARS).is_some() {
+        safe.push('…');
+    }
+    safe
+}
 
 fn text_field(value: Option<&Value>) -> String {
     value
@@ -816,7 +848,10 @@ fn reduce_ready_runtime_events(
         bytes_held = bytes_held.saturating_add(bytes.len());
 
         let Some(key) = duplicate_statement_key(&event) else {
-            let post = PendingRuntimeEventPost { path: Some(path), event };
+            let post = PendingRuntimeEventPost {
+                path: Some(path),
+                event,
+            };
             if is_critical_runtime_event(&post.event) {
                 reduced.critical.push(post);
             } else {
@@ -825,7 +860,10 @@ fn reduce_ready_runtime_events(
             continue;
         };
         let occurred_at = occurred_at_utc(&event);
-        let candidate = PendingRuntimeEventPost { path: Some(path), event };
+        let candidate = PendingRuntimeEventPost {
+            path: Some(path),
+            event,
+        };
         match reduced.repeated.get(&key) {
             Some((existing_at, _)) if *existing_at >= occurred_at => {
                 // Count removals, not attempts: "this pass made progress" is
@@ -920,7 +958,9 @@ fn sort_by_observation(posts: &mut [PendingRuntimeEventPost]) {
 /// that only make an equal-time batch deterministic instead of dependent on
 /// map iteration order. An event with no parseable time sorts last rather
 /// than silently ahead of everything.
-fn observation_order(post: &PendingRuntimeEventPost) -> (bool, Option<DateTime<Utc>>, String, String, u64, String) {
+fn observation_order(
+    post: &PendingRuntimeEventPost,
+) -> (bool, Option<DateTime<Utc>>, String, String, u64, String) {
     let observed_at = occurred_at_utc(&post.event);
     (
         observed_at.is_none(),
@@ -1094,25 +1134,38 @@ pub async fn post_pending_runtime_event_files(
     client: &ShipperClient,
     posts: Vec<PendingRuntimeEventPost>,
 ) -> (usize, usize) {
+    let outcome = post_pending_runtime_event_files_with_outcome(client, posts).await;
+    (outcome.sent, outcome.kept)
+}
+
+/// Deliver runtime events and retain which pathless status-slot observations
+/// were permanently rejected. The daemon uses that distinction to suppress
+/// a rejected slot until the assertion interval, without advancing its
+/// accepted watermark.
+pub(crate) async fn post_pending_runtime_event_files_with_outcome(
+    client: &ShipperClient,
+    posts: Vec<PendingRuntimeEventPost>,
+) -> RuntimeEventPostOutcome {
     let sessions = group_posts_by_session(posts);
 
     let outcomes = stream::iter(sessions.into_iter().map(|events| async move {
-        let mut sent = 0usize;
-        let mut kept = 0usize;
+        let mut outcome = RuntimeEventPostOutcome::default();
         for chunk in events.chunks(RUNTIME_EVENT_BATCH_LIMIT) {
-            let (chunk_sent, chunk_kept) =
-                post_one_runtime_event_request(client, chunk.to_vec()).await;
-            sent += chunk_sent;
-            kept += chunk_kept;
-            if chunk_kept > 0 {
+            let chunk_outcome = post_one_runtime_event_request(client, chunk.to_vec()).await;
+            outcome.sent += chunk_outcome.sent;
+            outcome.kept += chunk_outcome.kept;
+            outcome
+                .permanent_rejections
+                .extend(chunk_outcome.permanent_rejections);
+            if chunk_outcome.kept > 0 {
                 // Everything after this in the same session stays queued: it
                 // must not arrive before the events it follows.
-                let remaining: usize = events.len() - (sent + kept);
-                kept += remaining;
+                let remaining: usize = events.len() - (outcome.sent + outcome.kept);
+                outcome.kept += remaining;
                 break;
             }
         }
-        (sent, kept)
+        outcome
     }))
     .buffer_unordered(RUNTIME_EVENT_POST_CONCURRENCY)
     .collect::<Vec<_>>()
@@ -1120,8 +1173,13 @@ pub async fn post_pending_runtime_event_files(
 
     outcomes
         .into_iter()
-        .fold((0usize, 0usize), |(sent, kept), (chunk_sent, chunk_kept)| {
-            (sent + chunk_sent, kept + chunk_kept)
+        .fold(RuntimeEventPostOutcome::default(), |mut total, outcome| {
+            total.sent += outcome.sent;
+            total.kept += outcome.kept;
+            total
+                .permanent_rejections
+                .extend(outcome.permanent_rejections);
+            total
         })
 }
 
@@ -1129,7 +1187,9 @@ pub async fn post_pending_runtime_event_files(
 ///
 /// This is the unit of concurrency: groups may be sent in parallel, the
 /// contents of a group may not.
-fn group_posts_by_session(posts: Vec<PendingRuntimeEventPost>) -> Vec<Vec<PendingRuntimeEventPost>> {
+fn group_posts_by_session(
+    posts: Vec<PendingRuntimeEventPost>,
+) -> Vec<Vec<PendingRuntimeEventPost>> {
     let mut by_session: HashMap<String, Vec<PendingRuntimeEventPost>> = HashMap::new();
     let mut order: Vec<String> = Vec::new();
     for post in posts {
@@ -1148,15 +1208,14 @@ fn group_posts_by_session(posts: Vec<PendingRuntimeEventPost>) -> Vec<Vec<Pendin
 async fn post_one_runtime_event_request(
     client: &ShipperClient,
     posts: Vec<PendingRuntimeEventPost>,
-) -> (usize, usize) {
-    let mut sent = 0usize;
-    let mut kept = 0usize;
+) -> RuntimeEventPostOutcome {
+    let mut outcome = RuntimeEventPostOutcome::default();
     for chunk in posts.chunks(RUNTIME_EVENT_BATCH_LIMIT) {
         let events: Vec<Value> = chunk.iter().map(|post| post.event.clone()).collect();
         let body = match serde_json::to_vec(&serde_json::json!({ "events": events })) {
             Ok(value) => value,
             Err(_) => {
-                kept += chunk.len();
+                outcome.kept += chunk.len();
                 continue;
             }
         };
@@ -1172,29 +1231,30 @@ async fn post_one_runtime_event_request(
                 for post in chunk {
                     remove_post_file(post);
                 }
-                sent += chunk.len();
+                outcome.sent += chunk.len();
             }
             Err(error) if error.permanent_status_code().is_some() => {
-                let (chunk_sent, chunk_kept) =
-                    isolate_permanent_runtime_event_rejection(client, chunk).await;
-                sent += chunk_sent;
-                kept += chunk_kept;
+                let chunk_outcome = isolate_permanent_runtime_event_rejection(client, chunk).await;
+                outcome.sent += chunk_outcome.sent;
+                outcome.kept += chunk_outcome.kept;
+                outcome
+                    .permanent_rejections
+                    .extend(chunk_outcome.permanent_rejections);
             }
             Err(error) => {
                 tracing::warn!(error = %error, event_count = chunk.len(), "Runtime event batch kept for retry");
-                kept += chunk.len();
+                outcome.kept += chunk.len();
             }
         }
     }
-    (sent, kept)
+    outcome
 }
 
 async fn isolate_permanent_runtime_event_rejection(
     client: &ShipperClient,
     chunk: &[PendingRuntimeEventPost],
-) -> (usize, usize) {
-    let mut sent = 0usize;
-    let mut kept = 0usize;
+) -> RuntimeEventPostOutcome {
+    let mut outcome = RuntimeEventPostOutcome::default();
     for post in chunk {
         let body = match serde_json::to_vec(&serde_json::json!({
             "events": [post.event.clone()],
@@ -1206,7 +1266,7 @@ async fn isolate_permanent_runtime_event_rejection(
                     error = %error,
                     "Runtime event could not be serialized for rejection isolation"
                 );
-                kept += 1;
+                outcome.kept += 1;
                 continue;
             }
         };
@@ -1221,29 +1281,48 @@ async fn isolate_permanent_runtime_event_rejection(
         {
             Ok(()) => {
                 remove_post_file(post);
-                sent += 1;
+                outcome.sent += 1;
             }
             Err(error) if error.permanent_status_code().is_some() => {
                 let status = error
                     .permanent_status_code()
                     .expect("permanent JSON POST errors have a status code");
                 let response_body = error.response_body().unwrap_or_default();
-                match dead_letter_runtime_event(post, status, response_body, &error) {
-                    Ok(path) => {
-                        tracing::error!(
-                            source = %post_path_display(post),
-                            dead_letter = %path.display(),
+                if post.path.is_none() {
+                    // A status slot is the durable replacement-aware record.
+                    // There is no file to dead-letter, and retaining it lets
+                    // a server upgrade accept the same current observation.
+                    tracing::warn!(
+                        source = %post_path_display(post),
+                        status,
+                        response_body = %safe_response_body(response_body),
+                        "Runtime status slot was permanently rejected; retaining current observation"
+                    );
+                    outcome
+                        .permanent_rejections
+                        .push(RuntimeEventPermanentRejection {
+                            session_id: post.session_id(),
                             status,
-                            "Runtime event permanently rejected and dead-lettered"
-                        );
-                    }
-                    Err(dead_letter_error) => {
-                        tracing::warn!(
-                            source = %post_path_display(post),
-                            error = %dead_letter_error,
-                            "Runtime event rejection could not be dead-lettered; keeping for retry"
-                        );
-                        kept += 1;
+                        });
+                    outcome.kept += 1;
+                } else {
+                    match dead_letter_runtime_event(post, status, response_body, &error) {
+                        Ok(path) => {
+                            tracing::error!(
+                                source = %post_path_display(post),
+                                dead_letter = %path.display(),
+                                status,
+                                "Runtime event permanently rejected and dead-lettered"
+                            );
+                        }
+                        Err(dead_letter_error) => {
+                            tracing::warn!(
+                                source = %post_path_display(post),
+                                error = %dead_letter_error,
+                                "Runtime event rejection could not be dead-lettered; keeping for retry"
+                            );
+                            outcome.kept += 1;
+                        }
                     }
                 }
             }
@@ -1253,11 +1332,11 @@ async fn isolate_permanent_runtime_event_rejection(
                     error = %error,
                     "Runtime event rejection isolation hit a transient failure"
                 );
-                kept += 1;
+                outcome.kept += 1;
             }
         }
     }
-    (sent, kept)
+    outcome
 }
 
 fn dead_letter_runtime_event(
@@ -2014,6 +2093,74 @@ mod tests {
         let odd = json!({"kind": "terminal_signal", "phase": "tool", "session_id": "sess"});
         enqueue_runtime_event(dir.path(), &odd).unwrap();
     }
+    #[tokio::test(flavor = "current_thread")]
+    async fn pathless_status_rejection_keeps_one_slot_and_newer_observation_recovers() {
+        use crate::config::ShipperConfig;
+        use crate::pipeline::compressor::CompressionAlgo;
+        use crate::shipping::client::ShipperClient;
+
+        let (addr, requests, server) = spawn_runtime_validation_server().await;
+        let dir = tempfile::tempdir().unwrap();
+        let rejected = json!({
+            "session_id": "sess-slot",
+            "kind": "progress_signal",
+            "tool_name": "x".repeat(129),
+        });
+        let first = PendingRuntimeEventPost::from_event(rejected);
+
+        let url = format!("http://{addr}");
+        let cfg = ShipperConfig::default().with_overrides(Some(&url), None, None, None, None, None);
+        let client = ShipperClient::with_compression(&cfg, CompressionAlgo::Gzip).unwrap();
+
+        let outcome = post_pending_runtime_event_files_with_outcome(&client, vec![first]).await;
+        assert_eq!(outcome.sent, 0);
+        assert_eq!(outcome.kept, 1);
+        assert_eq!(outcome.permanent_rejections.len(), 1);
+        assert_eq!(outcome.permanent_rejections[0].status, 422);
+        assert!(
+            !dir.path().join(RUNTIME_EVENT_DEAD_LETTER_DIR).exists(),
+            "a rejected status slot has no filesystem dead-letter"
+        );
+        assert_eq!(
+            fs::read_dir(dir.path()).unwrap().count(),
+            0,
+            "pathless status rejection cannot grow the outbox"
+        );
+
+        let recovered = json!({
+            "session_id": "sess-slot",
+            "kind": "progress_signal",
+            "tool_name": "bash",
+        });
+        let outcome = post_pending_runtime_event_files_with_outcome(
+            &client,
+            vec![PendingRuntimeEventPost::from_event(recovered)],
+        )
+        .await;
+        server.abort();
+
+        assert_eq!(
+            outcome.sent, 1,
+            "a newer observation can recover after upgrade"
+        );
+        assert_eq!(outcome.kept, 0);
+        assert!(outcome.permanent_rejections.is_empty());
+        let requests = requests.lock().unwrap().clone();
+        assert!(requests.iter().any(|(status, _)| *status == 422));
+        assert!(requests.iter().any(|(status, _)| *status == 204));
+    }
+
+    #[test]
+    fn status_rejection_diagnostics_are_bounded_and_single_line() {
+        let body = format!(
+            "detail:\n{}",
+            "x".repeat(RUNTIME_EVENT_RESPONSE_LOG_CHARS + 10)
+        );
+        let safe = safe_response_body(&body);
+        assert!(!safe.contains('\n'));
+        assert!(safe.ends_with('…'));
+        assert!(safe.chars().count() <= RUNTIME_EVENT_RESPONSE_LOG_CHARS + 1);
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn rate_limited_runtime_events_are_retried_not_dead_lettered() {
@@ -2712,10 +2859,18 @@ mod runtime_status_collection_tests {
         for tick in 0..50 {
             write(
                 dir,
-                &phase_event("s1", "r1", "thinking", &format!("2026-09-17T15:00:{tick:02}Z")),
+                &phase_event(
+                    "s1",
+                    "r1",
+                    "thinking",
+                    &format!("2026-09-17T15:00:{tick:02}Z"),
+                ),
             );
         }
-        write(dir, &phase_event("s2", "r2", "running", "2026-09-17T15:00:10Z"));
+        write(
+            dir,
+            &phase_event("s2", "r2", "running", "2026-09-17T15:00:10Z"),
+        );
 
         let posts = collect_runtime_event_outbox(dir);
 
@@ -2744,7 +2899,13 @@ mod runtime_status_collection_tests {
         still_pending["payload"] = json!({"pause_request_still_pending": true});
         let mut other_tool = phase_event("s1", "r1", "running", "2026-09-17T15:00:05Z");
         other_tool["tool_name"] = json!("bash");
-        for event in [&base, &other_source, &other_phase, &still_pending, &other_tool] {
+        for event in [
+            &base,
+            &other_source,
+            &other_phase,
+            &still_pending,
+            &other_tool,
+        ] {
             write(dir, event);
         }
 
@@ -2775,8 +2936,14 @@ mod runtime_status_collection_tests {
     fn newest_copy_is_decided_by_observation_time() {
         let tmp = TempDir::new().expect("tempdir");
         let dir = tmp.path();
-        write(dir, &phase_event("s1", "r1", "thinking", "2026-09-17T15:00:30Z"));
-        write(dir, &phase_event("s1", "r1", "thinking", "2026-09-17T15:00:10Z"));
+        write(
+            dir,
+            &phase_event("s1", "r1", "thinking", "2026-09-17T15:00:30Z"),
+        );
+        write(
+            dir,
+            &phase_event("s1", "r1", "thinking", "2026-09-17T15:00:10Z"),
+        );
 
         let posts = collect_runtime_event_outbox(dir);
 
@@ -2788,13 +2955,20 @@ mod runtime_status_collection_tests {
     fn never_collapses_durable_records() {
         let tmp = TempDir::new().expect("tempdir");
         let dir = tmp.path();
-        write(dir, &phase_event("s1", "r1", "running", "2026-09-17T15:00:01Z"));
+        write(
+            dir,
+            &phase_event("s1", "r1", "running", "2026-09-17T15:00:01Z"),
+        );
         write(dir, &terminal_event("s1", "r1", "2026-09-17T15:00:02Z"));
         write(dir, &terminal_event("s1", "r1", "2026-09-17T15:00:03Z"));
 
         let posts = collect_runtime_event_outbox(dir);
 
-        assert_eq!(posts.len(), 3, "a repeated terminal record is still two records");
+        assert_eq!(
+            posts.len(),
+            3,
+            "a repeated terminal record is still two records"
+        );
         let order: Vec<&str> = posts
             .iter()
             .map(|post| post.event["occurred_at"].as_str().expect("occurred_at"))
@@ -2814,9 +2988,18 @@ mod runtime_status_collection_tests {
     fn ordinary_events_keep_their_own_chronology() {
         let tmp = TempDir::new().expect("tempdir");
         let dir = tmp.path();
-        write(dir, &phase_event("s1", "r1", "idle", "2026-09-17T15:00:03Z"));
-        write(dir, &phase_event("s1", "r1", "running", "2026-09-17T15:00:01Z"));
-        write(dir, &progress_event("s1", "r1", "turn-1", 1, "2026-09-17T15:00:02Z"));
+        write(
+            dir,
+            &phase_event("s1", "r1", "idle", "2026-09-17T15:00:03Z"),
+        );
+        write(
+            dir,
+            &phase_event("s1", "r1", "running", "2026-09-17T15:00:01Z"),
+        );
+        write(
+            dir,
+            &progress_event("s1", "r1", "turn-1", 1, "2026-09-17T15:00:02Z"),
+        );
 
         let posts = collect_runtime_event_outbox(dir);
 
@@ -2842,7 +3025,10 @@ mod runtime_status_collection_tests {
         let tmp = TempDir::new().expect("tempdir");
         let dir = tmp.path();
         write(dir, &terminal_event("s1", "r1", "2026-09-17T15:00:05Z"));
-        write(dir, &terminal_event("s2", "r2", "2026-09-17T11:00:04-04:00"));
+        write(
+            dir,
+            &terminal_event("s2", "r2", "2026-09-17T11:00:04-04:00"),
+        );
 
         let posts = collect_runtime_event_outbox(dir);
 
@@ -2860,7 +3046,13 @@ mod runtime_status_collection_tests {
         for index in 0..40 {
             write(
                 dir,
-                &progress_event(&format!("s{index}"), "r1", "turn-1", 1, "2026-09-17T15:00:00Z"),
+                &progress_event(
+                    &format!("s{index}"),
+                    "r1",
+                    "turn-1",
+                    1,
+                    "2026-09-17T15:00:00Z",
+                ),
             );
         }
 
@@ -2869,7 +3061,11 @@ mod runtime_status_collection_tests {
         assert_eq!(pass.posts.len(), 10, "inspection stops at the entry cap");
 
         let batched = collect_runtime_event_outbox_bounded(dir, 40, usize::MAX, 4);
-        assert_eq!(batched.posts.len(), 4, "one pass hands over one bounded batch");
+        assert_eq!(
+            batched.posts.len(),
+            4,
+            "one pass hands over one bounded batch"
+        );
         assert_eq!(ready_files(dir), 40, "nothing is dropped by a cap");
     }
 
@@ -2889,7 +3085,13 @@ mod runtime_status_collection_tests {
         for index in 0..50 {
             write_plain(
                 dir,
-                &progress_event("s1", "r1", &format!("turn-{index}"), 1, "2026-09-17T15:00:10Z"),
+                &progress_event(
+                    "s1",
+                    "r1",
+                    &format!("turn-{index}"),
+                    1,
+                    "2026-09-17T15:00:10Z",
+                ),
             );
         }
         write_plain(dir, &terminal_event("s9", "r9", "2026-09-17T15:59:59Z"));
@@ -2935,7 +3137,10 @@ mod runtime_status_collection_tests {
     fn a_vanished_entry_is_not_treated_as_oversized() {
         let tmp = TempDir::new().expect("tempdir");
         let dir = tmp.path();
-        write_plain(dir, &phase_event("s1", "r1", "thinking", "2026-09-17T15:00:01Z"));
+        write_plain(
+            dir,
+            &phase_event("s1", "r1", "thinking", "2026-09-17T15:00:01Z"),
+        );
         let ghost = dir.join("gone.json");
 
         handle_oversized_runtime_event(&ghost, usize::MAX);
@@ -2972,7 +3177,13 @@ mod runtime_status_collection_tests {
         for index in 0..20 {
             write_plain(
                 dir,
-                &progress_event("s1", "r1", &format!("turn-{index}"), 1, "2026-09-17T15:00:00Z"),
+                &progress_event(
+                    "s1",
+                    "r1",
+                    &format!("turn-{index}"),
+                    1,
+                    "2026-09-17T15:00:00Z",
+                ),
             );
         }
         write_plain(dir, &terminal_event("s9", "r9", "2026-09-17T15:59:59Z"));
@@ -3004,7 +3215,10 @@ mod runtime_status_collection_tests {
         let pass = collect_runtime_event_outbox_bounded(dir, 100, 20 * 1024, 256);
 
         assert!(pass.saturated, "the budget stops the pass");
-        assert!(pass.posts.len() < 5, "a pass does not hold every payload at once");
+        assert!(
+            pass.posts.len() < 5,
+            "a pass does not hold every payload at once"
+        );
         assert_eq!(ready_files(dir), 5, "nothing is dropped by a budget");
     }
 
@@ -3036,7 +3250,11 @@ mod runtime_status_collection_tests {
         let sweep = sweep_runtime_event_outbox(&dir, RUNTIME_EVENT_SWEEP_LIMIT);
 
         assert_eq!(sweep.inspected, 10_001);
-        assert_eq!(ready_files(&dir), 6, "five current statements plus the terminal record");
+        assert_eq!(
+            ready_files(&dir),
+            6,
+            "five current statements plus the terminal record"
+        );
         // The pass covered everything, so the next one finds nothing to do.
         assert!(!sweep_runtime_event_outbox(&dir, RUNTIME_EVENT_SWEEP_LIMIT).more);
         let posts = collect_runtime_event_outbox(&dir);
@@ -3064,13 +3282,21 @@ mod runtime_status_collection_tests {
         for tick in 0..30 {
             write_plain(
                 dir,
-                &phase_event("s1", "r1", "thinking", &format!("2026-09-17T15:00:{tick:02}Z")),
+                &phase_event(
+                    "s1",
+                    "r1",
+                    "thinking",
+                    &format!("2026-09-17T15:00:{tick:02}Z"),
+                ),
             );
         }
 
         let sweep = sweep_runtime_event_outbox(dir, RUNTIME_EVENT_SWEEP_LIMIT);
 
-        assert!(sweep.more, "a producer that keeps writing earns another pass");
+        assert!(
+            sweep.more,
+            "a producer that keeps writing earns another pass"
+        );
         assert_eq!(sweep.discarded, 29);
         assert_eq!(ready_files(dir), 1);
     }
@@ -3087,7 +3313,12 @@ mod runtime_status_collection_tests {
         for tick in 0..4_000 {
             write_plain(
                 dir,
-                &phase_event("s1", "r1", "thinking", &format!("2026-09-17T15:00:{:02}Z", tick % 60)),
+                &phase_event(
+                    "s1",
+                    "r1",
+                    "thinking",
+                    &format!("2026-09-17T15:00:{:02}Z", tick % 60),
+                ),
             );
         }
         write_plain(dir, &terminal_event("s2", "r2", "2026-09-17T15:59:59Z"));
@@ -3126,7 +3357,12 @@ mod runtime_status_collection_tests {
         for tick in 0..400 {
             write_plain(
                 &dir,
-                &phase_event("s1", "r1", "thinking", &format!("2026-09-17T15:00:{:02}Z", tick % 60)),
+                &phase_event(
+                    "s1",
+                    "r1",
+                    "thinking",
+                    &format!("2026-09-17T15:00:{:02}Z", tick % 60),
+                ),
             );
         }
         write_plain(&dir, &terminal_event("s2", "r2", "2026-09-17T15:59:59Z"));
@@ -3136,10 +3372,18 @@ mod runtime_status_collection_tests {
             for tick in 0..200 {
                 write(
                     &producer_dir,
-                    &phase_event("s3", "r3", "running", &format!("2026-09-17T16:00:{:02}Z", tick % 60)),
+                    &phase_event(
+                        "s3",
+                        "r3",
+                        "running",
+                        &format!("2026-09-17T16:00:{:02}Z", tick % 60),
+                    ),
                 );
             }
-            write(&producer_dir, &terminal_event("s3", "r3", "2026-09-17T16:59:59Z"));
+            write(
+                &producer_dir,
+                &terminal_event("s3", "r3", "2026-09-17T16:59:59Z"),
+            );
         });
         let sweep_dir = dir.clone();
         let sweeper = std::thread::spawn(move || {
@@ -3226,14 +3470,24 @@ mod runtime_status_collection_tests {
         let mut huge = phase_event("s1", "r1", "thinking", "2026-09-17T15:00:01Z");
         huge["payload"]["pad"] = json!("x".repeat(RUNTIME_EVENT_MAX_FILE_BYTES + 1));
         write_plain(dir, &huge);
-        write_plain(dir, &phase_event("s1", "r1", "thinking", "2026-09-17T15:00:02Z"));
-        write_plain(dir, &phase_event("s1", "r1", "thinking", "2026-09-17T15:00:03Z"));
+        write_plain(
+            dir,
+            &phase_event("s1", "r1", "thinking", "2026-09-17T15:00:02Z"),
+        );
+        write_plain(
+            dir,
+            &phase_event("s1", "r1", "thinking", "2026-09-17T15:00:03Z"),
+        );
 
         let sweep = sweep_runtime_event_outbox_with_workers(dir, 4);
 
         assert_eq!(sweep.inspected, 2, "the oversized file is never read");
         assert_eq!(sweep.discarded, 1);
-        assert_eq!(ready_files(dir), 2, "it is left where the collector will decide");
+        assert_eq!(
+            ready_files(dir),
+            2,
+            "it is left where the collector will decide"
+        );
     }
 
     /// A producer writing through a sweep keeps its event: the sweep only
@@ -3246,7 +3500,12 @@ mod runtime_status_collection_tests {
         for tick in 0..20 {
             write_plain(
                 dir,
-                &phase_event("s1", "r1", "thinking", &format!("2026-09-17T15:00:{tick:02}Z")),
+                &phase_event(
+                    "s1",
+                    "r1",
+                    "thinking",
+                    &format!("2026-09-17T15:00:{tick:02}Z"),
+                ),
             );
         }
         let temp = dir.join(".in-flight.tmp");

@@ -7195,7 +7195,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "phase_signal" | "progress_signal" | "terminal_signal" | "binding_signal" | "pause_request" | "pause_resolution";
+            kind: "phase_signal" | "progress_signal" | "terminal_signal" | "binding_signal" | "status_assertion" | "pause_request" | "pause_resolution";
             /** Phase */
             phase?: string | null;
             /** Tool Name */
