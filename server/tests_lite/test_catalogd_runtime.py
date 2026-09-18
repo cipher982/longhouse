@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
+from zerg.catalogd.models import FactHead
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.schema import read_catalog_meta
@@ -17,6 +20,8 @@ from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionLivePreview
+from zerg.models.live_store import LiveSessionRun
+from zerg.models.live_store import LiveSessionThread
 
 
 @pytest.fixture
@@ -46,6 +51,105 @@ def _event(*, session_id: str, runtime_key: str, dedupe_key: str, occurred_at: d
         "dedupe_key": dedupe_key,
         "payload": {},
     }
+
+
+@pytest.mark.asyncio
+async def test_runtime_apply_promotes_an_observed_delegation_registry(daemon_paths):
+    """A hook's in-flight registry becomes its own head, bound to its run.
+
+    The registry arrives on a phase signal that carries it. It cannot ride the
+    activity head: that head is rebuilt closed from every phase signal, so the
+    next parent PreToolUse would erase it. This pins the writer's half of that
+    contract — including that a signal without a registry does not clear one.
+    """
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    thread_id = str(uuid4())
+    run_id = str(uuid4())
+    with engine.begin() as connection:
+        connection.execute(
+            LiveSessionCatalog.__table__.insert().values(
+                session_id=session_id, provider="claude", environment="dev", started_at=now, user_state="active"
+            )
+        )
+        connection.execute(
+            LiveSessionThread.__table__.insert().values(
+                id=thread_id,
+                session_id=session_id,
+                provider="claude",
+                is_primary=1,
+                branch_kind="root",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        connection.execute(
+            LiveSessionRun.__table__.insert().values(
+                id=run_id,
+                thread_id=thread_id,
+                provider="claude",
+                host_id="cinder",
+                launch_origin="longhouse_spawned",
+                started_at=now,
+            )
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        with_registry = {
+            **_event(session_id=session_id, runtime_key="claude:delegation", dedupe_key="delegation-1", occurred_at=now),
+            "provider": "claude",
+            "source": "claude_hook",
+            "phase": "idle",
+            "tool_name": None,
+            "run_id": run_id,
+            "payload": {"delegation": {"count": 2, "kinds": {"subagent": 1, "shell": 1}}},
+        }
+        applied = await client.call("session.runtime.apply.v2", {"events": [with_registry]})
+        assert applied["delegation_facts"] == {"promoted": 1}
+
+        # A later observation without a registry must not erase the one that had
+        # it: the head keeps its own validity window, and the registry clears on
+        # the next observation that reports one, not on an unrelated signal.
+        without_registry = {
+            **_event(session_id=session_id, runtime_key="claude:delegation", dedupe_key="delegation-2", occurred_at=now),
+            "provider": "claude",
+            "source": "claude_hook",
+            "phase": "running",
+            "tool_name": "Bash",
+            "run_id": run_id,
+            "payload": {},
+        }
+        later = await client.call("session.runtime.apply.v2", {"events": [without_registry]})
+        assert later["delegation_facts"] == {"promoted": 0}
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with engine.connect() as connection:
+        heads = [
+            dict(row)
+            for row in connection.execute(select(FactHead.__table__).where(FactHead.__table__.c.family == "delegation")).mappings()
+        ]
+    engine.dispose()
+
+    assert len(heads) == 1, "a signal without a registry must not add or replace a delegation head"
+    value = json.loads(heads[0]["value_json"])
+    assert value["count"] == 2
+    assert value["kinds"] == {"subagent": 1, "shell": 1}
+    assert value["run_id"] == run_id
+    assert value["authority_class"] == "provider_runtime"
+    # Its own clock: the registry outlives the 600s idle window that carried it.
+    observed = datetime.fromisoformat(value["observed_at"])
+    valid_until = datetime.fromisoformat(value["valid_until"])
+    assert (valid_until - observed).total_seconds() > 600
 
 
 @pytest.mark.asyncio

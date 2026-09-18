@@ -919,6 +919,7 @@
     {
       "path": "server/tests_lite/test_catalogd_runtime.py",
       "providers": [
+        "claude",
         "codex",
         "pi"
       ]
