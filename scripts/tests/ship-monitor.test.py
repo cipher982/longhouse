@@ -24,7 +24,7 @@ def deploy_status(
     *,
     demo_health: str = "healthy",
     canary_health: str = "healthy",
-    canary_surface: str = "Canary kernel-canary",
+    canary_surface: str = ship_monitor.CANARY_SURFACE,
 ) -> str:
     return f"""
 
@@ -39,10 +39,7 @@ Local HEAD               ac77b06d72
 
 
 def test_parse_deploy_status_normalizes_named_canary_surface() -> None:
-    output = deploy_status("ac77b06d72", "ac77b06d72").replace(
-        "Canary               ",
-        "Canary kernel-canary    ",
-    )
+    output = deploy_status("ac77b06d72", "ac77b06d72", canary_surface="Canary named-test-ring")
 
     surfaces = ship_monitor.parse_deploy_status(output)
 
