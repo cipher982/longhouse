@@ -1157,7 +1157,6 @@ pub fn prune_stale_quarantines(db_path: &Path) -> Result<QuarantinePruneReport> 
     })
 }
 
-pub const VACUUM_FREELIST_THRESHOLD_BYTES: u64 = 50 * 1024 * 1024; // 50 MB
 
 /// How long a maintenance pass waits for a busy database before deferring.
 ///
@@ -1176,99 +1175,16 @@ pub const DAILY_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(24 * 60 * 6
 /// keeps one marker per database without a second naming rule.
 const DAILY_MAINTENANCE_FILE_NAME: &str = "daily-maintenance.json";
 
-/// Bytes sitting free *inside* allocated pages.
+/// How long until the daily maintenance pass is due again.
 ///
-/// `freelist_count` only sees whole pages returned to the file. The Cursor
-/// record drain empties `record_bytes` in place (`state/cursor_store_records.rs`,
-/// `SET record_bytes = X''`), which frees space inside pages rather than
-/// releasing them, so a table can hold hundreds of megabytes of interior free
-/// space while the freelist stays near the threshold — and the file never
-/// shrinks. dbstat is the only measure of it; a build without dbstat keeps the
-/// freelist-only rule rather than guessing.
-fn interior_unused_bytes(conn: &rusqlite::Connection) -> u64 {
-    conn.query_row("SELECT SUM(unused) FROM dbstat;", [], |row| {
-        row.get::<_, Option<i64>>(0)
-    })
-    .ok()
-    .flatten()
-    .unwrap_or(0)
-    .max(0) as u64
-}
-
-/// Bytes a VACUUM could return: file-level freelist plus interior free space.
-fn reclaimable_bytes(conn: &rusqlite::Connection, freelist_bytes: u64) -> u64 {
-    freelist_bytes.saturating_add(interior_unused_bytes(conn))
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct CompactionReport {
-    pub freelist_bytes_before: u64,
-    pub freelist_bytes_after: u64,
-    /// File size either side of the rebuild. The freelist delta understates the
-    /// reclaim whenever the space was interior, which is the common case here.
-    pub page_bytes_before: u64,
-    pub page_bytes_after: u64,
-    pub wal_checkpoint_busy: bool,
-}
-
-pub fn maybe_compact_database(db_path: &Path) -> Result<Option<CompactionReport>> {
-    maybe_compact_database_with_threshold(db_path, VACUUM_FREELIST_THRESHOLD_BYTES)
-}
-
-pub fn maybe_compact_database_with_threshold(
-    db_path: &Path,
-    threshold_bytes: u64,
-) -> Result<Option<CompactionReport>> {
-    let conn = match crate::state::db::open_client_connection(db_path, MAINTENANCE_BUSY_TIMEOUT) {
-        Ok(conn) => conn,
-        Err(err) => {
-            return Err(err).context("opening maintenance connection for vacuum");
-        }
-    };
-
-    let freelist_pages: i64 = conn
-        .query_row("PRAGMA freelist_count;", [], |row| row.get(0))
-        .context("querying freelist_count")?;
-    let page_size: i64 = conn
-        .query_row("PRAGMA page_size;", [], |row| row.get(0))
-        .context("querying page_size")?;
-    let page_count: i64 = conn
-        .query_row("PRAGMA page_count;", [], |row| row.get(0))
-        .context("querying page_count")?;
-
-    let freelist_bytes = (freelist_pages.max(0) as u64).saturating_mul(page_size.max(0) as u64);
-    let page_bytes_before = (page_count.max(0) as u64).saturating_mul(page_size.max(0) as u64);
-    if reclaimable_bytes(&conn, freelist_bytes) < threshold_bytes {
-        return Ok(None);
-    }
-    conn.execute("VACUUM;", []).context("executing VACUUM")?;
-
-    let wal_checkpoint_busy = conn
-        .query_row("PRAGMA wal_checkpoint(TRUNCATE);", [], |row| {
-            let busy: i32 = row.get(0)?;
-            Ok(busy != 0)
-        })
-        .unwrap_or(false);
-
-    let freelist_pages_after: i64 = conn
-        .query_row("PRAGMA freelist_count;", [], |row| row.get(0))
-        .unwrap_or(0);
-    let freelist_bytes_after =
-        (freelist_pages_after.max(0) as u64).saturating_mul(page_size.max(0) as u64);
-    let page_count_after: i64 = conn
-        .query_row("PRAGMA page_count;", [], |row| row.get(0))
-        .unwrap_or(0);
-    let page_bytes_after = (page_count_after.max(0) as u64).saturating_mul(page_size.max(0) as u64);
-
-    Ok(Some(CompactionReport {
-        freelist_bytes_before: freelist_bytes,
-        freelist_bytes_after,
-        page_bytes_before,
-        page_bytes_after,
-        wal_checkpoint_busy,
-    }))
-}
-
+/// Armed from the last *completed* pass rather than from process start. An
+/// interval timer that begins counting at startup is reset by every restart, and
+/// this daemon restarts several times a day (dogfood refresh, rebuilds,
+/// watchdog). Measured on `cinder` over eight days of daemon logs: not one
+/// `Daily ...` line, so the prunes below never ran either.
+///
+/// A missing or unreadable marker means due now. Nothing here may postpone
+/// housekeeping indefinitely, so garbage is read as "overdue".
 #[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
 struct DailyMaintenanceMarker {
     #[serde(default)]
@@ -1299,16 +1215,13 @@ fn record_daily_maintenance_completed(db_path: &Path, now: DateTime<Utc>) -> Res
 /// How long until the daily maintenance pass is due again.
 ///
 /// Armed from the last *completed* pass rather than from process start. An
-/// interval timer that begins counting at startup is reset by every restart,
-/// and this daemon restarts several times a day (dogfood refresh, rebuilds,
+/// interval timer that begins counting at startup is reset by every restart, and
+/// this daemon restarts several times a day (dogfood refresh, rebuilds,
 /// watchdog). Measured on `cinder` over eight days of daemon logs: not one
-/// `Daily ...` line, with `longhouse-shipper.db` at 831 MB, 626 MB of it
-/// interior free space inside `cursor_store_raw_record` — exactly what the
-/// interior threshold exists to reclaim. The file never shrank because the only
-/// path that reclaims it never ran.
+/// `Daily ...` line, so the prunes below never ran either.
 ///
-/// A missing or unreadable marker means due now. Nothing here may postpone the
-/// only compaction path indefinitely, so garbage is read as "overdue".
+/// A missing or unreadable marker means due now. Nothing here may postpone
+/// housekeeping indefinitely, so garbage is read as "overdue".
 pub fn daily_maintenance_delay(db_path: &Path, now: DateTime<Utc>) -> Duration {
     let marker = read_daily_maintenance_marker(&daily_maintenance_marker_path(db_path));
     let last = marker
@@ -1330,7 +1243,8 @@ pub fn daily_maintenance_delay(db_path: &Path, now: DateTime<Utc>) -> Duration {
     }
 }
 
-/// The parts of the daily pass that do not depend on compaction.
+/// The parts of the daily pass: housekeeping that has no bulk payload to
+/// reclaim any more.
 ///
 /// These used to run inline on the daemon's event loop — which is a `biased`
 /// select — as four write statements on a connection shared with shipping, in a
@@ -1379,39 +1293,12 @@ fn run_daily_prunes(conn: &Connection) {
     }
 }
 
-/// One compaction at a time, process-wide.
-///
-/// A daily pass is started by the daemon's timer, and the engine can be
-/// restarted mid-pass, so two passes can overlap. Two VACUUMs on one file is a
-/// self-inflicted outage — the 2026-09-17 pass held the write lock for 25
-/// minutes — but neither pass may skip its prunes because a compaction is in
-/// flight, which is why this guards the compaction alone rather than the pass.
-static COMPACTION_IN_FLIGHT: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-struct CompactionLease;
-
-impl CompactionLease {
-    fn acquire() -> Option<Self> {
-        COMPACTION_IN_FLIGHT
-            .compare_exchange(
-                false,
-                true,
-                std::sync::atomic::Ordering::AcqRel,
-                std::sync::atomic::Ordering::Acquire,
-            )
-            .ok()
-            .map(|_| CompactionLease)
-    }
-}
-
-impl Drop for CompactionLease {
-    fn drop(&mut self) {
-        COMPACTION_IN_FLIGHT.store(false, std::sync::atomic::Ordering::Release);
-    }
-}
-
 /// Run one daily maintenance pass and record that it completed.
+///
+/// There is no database compaction here any more. It existed to reclaim interior
+/// free space the Cursor drain left behind, and on 2026-09-17 that reclaim needed
+/// a 25-minute VACUUM whose schedule never fired. Frozen payloads are files now,
+/// so the drain empties nothing and the reclaim has nothing to reclaim.
 ///
 /// The marker is written only when every step finished. A pass deferred by a
 /// busy database therefore stays overdue, and the next daemon start retries it
@@ -1450,37 +1337,6 @@ pub fn run_daily_storage_maintenance(db_path: &Path) {
         }
     }
 
-    match CompactionLease::acquire() {
-        Some(_lease) => match maybe_compact_database(db_path) {
-            Ok(Some(report)) => {
-                // The freelist delta understates it when the space was interior.
-                let reclaimed = report
-                    .page_bytes_before
-                    .saturating_sub(report.page_bytes_after);
-                tracing::info!(
-                    reclaimed_bytes = reclaimed,
-                    page_bytes_before = report.page_bytes_before,
-                    page_bytes_after = report.page_bytes_after,
-                    wal_checkpoint_busy = report.wal_checkpoint_busy,
-                    "Daily maintenance: compacted shipper database"
-                );
-            }
-            Ok(None) => {}
-            Err(err) => {
-                deferred = true;
-                tracing::warn!(error = %err, "Daily maintenance: database compaction deferred");
-            }
-        },
-        None => {
-            // This pass did not perform the only operation that reclaims space,
-            // so it must not record a completed day: the marker would postpone
-            // the reclaim it just skipped.
-            deferred = true;
-            tracing::info!(
-                "Daily maintenance: a compaction is already in flight; prunes done, pass stays due"
-            );
-        }
-    }
 
     if deferred {
         return;
@@ -1813,14 +1669,12 @@ fn run_recovery_walk(source: &Path, destination: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// The compaction lease is process-global while the test harness runs tests
-    /// in parallel threads, so the tests that exercise a pass must not overlap:
-    /// one test holding the lease is exactly the condition another test is
-    /// trying to observe.
-    static COMPACTION_LEASE_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// A pass writes one marker file per database; the tests that exercise a
+    /// pass must not overlap, or one test's completion is another's state.
+    static DAILY_PASS_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    fn serialize_lease_test() -> std::sync::MutexGuard<'static, ()> {
-        COMPACTION_LEASE_TESTS
+    fn serialize_pass_test() -> std::sync::MutexGuard<'static, ()> {
+        DAILY_PASS_TESTS
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -2252,90 +2106,6 @@ mod tests {
     }
 
     #[test]
-    fn maybe_compact_database_reports_none_below_threshold() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("clean.db");
-        let conn = Connection::open(&db_path).unwrap();
-        conn.execute_batch("CREATE TABLE t (x TEXT); INSERT INTO t VALUES ('hello');")
-            .unwrap();
-        drop(conn);
-
-        let report = maybe_compact_database(&db_path).unwrap();
-        assert!(
-            report.is_none(),
-            "clean database with small freelist should not trigger vacuum"
-        );
-    }
-    #[test]
-    fn maybe_compact_database_vacuums_when_above_threshold() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("bloated.db");
-        let conn = Connection::open(&db_path).unwrap();
-        conn.execute_batch(
-            "PRAGMA journal_mode=WAL;
-             CREATE TABLE t (x TEXT);",
-        )
-        .unwrap();
-
-        for i in 0..500 {
-            conn.execute(
-                "INSERT INTO t VALUES (?1)",
-                [format!("row-{i}-padding-{}", "x".repeat(200))],
-            )
-            .unwrap();
-        }
-        conn.execute("DELETE FROM t WHERE rowid > 5", []).unwrap();
-        drop(conn);
-
-        let report = maybe_compact_database_with_threshold(&db_path, 1000).unwrap();
-        assert!(
-            report.is_some(),
-            "expected compaction to trigger above threshold"
-        );
-        let report = report.unwrap();
-        assert!(report.freelist_bytes_before > 0);
-        assert!(report.freelist_bytes_after <= report.freelist_bytes_before);
-    }
-
-    #[test]
-    fn compaction_triggers_on_space_trapped_inside_pages() {
-        // The Cursor record drain empties payloads in place, which frees space
-        // inside leaf pages instead of releasing whole pages: the freelist stays
-        // small while the file stays large, so a freelist-only threshold never
-        // compacts it and the file never shrinks.
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("interior.db");
-        let conn = Connection::open(&db_path).unwrap();
-        conn.execute_batch("CREATE TABLE t (b BLOB);").unwrap();
-        for _ in 0..600 {
-            conn.execute("INSERT INTO t VALUES (?1)", [vec![7_u8; 2_000]])
-                .unwrap();
-        }
-        conn.execute("UPDATE t SET b = X'';", []).unwrap();
-        drop(conn);
-
-        let conn = Connection::open(&db_path).unwrap();
-        let page_size: i64 = conn
-            .query_row("PRAGMA page_size;", [], |row| row.get(0))
-            .unwrap();
-        let freelist_pages: i64 = conn
-            .query_row("PRAGMA freelist_count;", [], |row| row.get(0))
-            .unwrap();
-        drop(conn);
-        let freelist_bytes = (freelist_pages.max(0) as u64) * (page_size.max(0) as u64);
-
-        let report = maybe_compact_database_with_threshold(&db_path, freelist_bytes + 1)
-            .unwrap()
-            .expect("interior free space must compact even when the freelist alone would not");
-        assert!(
-            report.page_bytes_after < report.page_bytes_before,
-            "the rebuild must shrink the file: {} -> {}",
-            report.page_bytes_before,
-            report.page_bytes_after
-        );
-    }
-
-    #[test]
     fn daily_maintenance_is_due_when_it_has_never_completed() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("longhouse-shipper.db");
@@ -2385,7 +2155,7 @@ mod tests {
 
     #[test]
     fn a_completed_pass_is_not_immediately_due_again() {
-        let _serial = serialize_lease_test();
+        let _serial = serialize_pass_test();
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("longhouse-shipper.db");
         Connection::open(&db_path).unwrap();
@@ -2402,11 +2172,11 @@ mod tests {
     }
 
     #[test]
-    fn a_pass_that_cannot_compact_stays_due() {
-        let _serial = serialize_lease_test();
+    fn a_pass_whose_prune_connection_fails_stays_due() {
+        let _serial = serialize_pass_test();
         let dir = tempfile::tempdir().unwrap();
-        // Not a database: every maintenance step that touches it fails, which
-        // is what a deferred pass looks like to the marker.
+        // Not a database: the prune connection cannot open, so the pass did not
+        // do its work and must stay due rather than recording a completed day.
         let db_path = dir.path().join("longhouse-shipper.db");
         std::fs::write(&db_path, b"not a database").unwrap();
 
@@ -2416,25 +2186,6 @@ mod tests {
             daily_maintenance_delay(&db_path, Utc::now()),
             Duration::ZERO,
             "a pass that could not finish must stay due for the next daemon start"
-        );
-    }
-
-    #[test]
-    fn a_pass_that_skipped_compaction_stays_due() {
-        // A pass that prunes while a compaction is already in flight did not do
-        // the work the marker records, so it must not buy another day.
-        let _serial = serialize_lease_test();
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("longhouse-shipper.db");
-        Connection::open(&db_path).unwrap();
-        let _held = CompactionLease::acquire().expect("serialized, so the lease is free");
-
-        run_daily_storage_maintenance(&db_path);
-
-        assert_eq!(
-            daily_maintenance_delay(&db_path, Utc::now()),
-            Duration::ZERO,
-            "a pass that skipped compaction must stay due"
         );
     }
 }
