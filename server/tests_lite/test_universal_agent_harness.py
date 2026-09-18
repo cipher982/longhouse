@@ -1510,11 +1510,15 @@ def test_orchestration_capability_matrix_emits_per_capability_evidence(tmp_path:
         )
     )
 
-    assert payload["verdict"] == "green"
     assert len(payload["results"]) == len(uah.SUPPORTED_PROVIDERS)
     for result in payload["results"]:
         assert result["scenario"] == "orchestration_capability_matrix"
-        assert result["status"] == "pass"
+        # Antigravity's contract marks abort and reattach unsupported, which is
+        # a red row; every other provider's orchestration gaps are unproven
+        # rather than contradicted, which is yellow. Either way the scenario
+        # reports what it found instead of a green it cannot justify.
+        expected_status = "unsupported_gap" if result["provider"] == "antigravity" else "blocked"
+        assert result["status"] == expected_status
         operation_evidence = result["data"]["operation_evidence"]
         assert "orchestration_observe_transcript" in operation_evidence
         assert "orchestration_background_task_status" in operation_evidence
@@ -1531,6 +1535,51 @@ def test_orchestration_capability_matrix_emits_per_capability_evidence(tmp_path:
         assert background_rows[0]["reason_code"] == expected_background_reason
         summary = result["data"]["summary"]
         assert summary["green"] + summary["yellow"] + summary["red"] == len(operation_evidence)
+
+
+def test_orchestration_matrix_status_follows_the_capability_rows(tmp_path: Path, monkeypatch) -> None:
+    """Negative control for the gate itself.
+
+    A check that cannot go green is as useless as one that cannot fail. This
+    drives the same scenario with synthetic tables to prove the status is
+    derived: all-proven passes, one unproven cell blocks, one contradicted cell
+    reports the gap.
+    """
+
+    def run_with(table):
+        monkeypatch.setattr(uah, "_provider_action_coverage_table", lambda provider: table)
+        return uah.run_harness(
+            uah.HarnessOptions(
+                providers=("claude",),
+                scenarios=("orchestration_capability_matrix",),
+                evidence_root=tmp_path / f"evidence-{len(table)}-{sorted(table)[0]}",
+                provider_bins=_fake_bins(tmp_path),
+            )
+        )
+
+    proven = run_with(
+        {
+            "observe_transcript": {"state": "supported", "reason_code": "contract_proven", "reason": ""},
+            "observe_child_sessions": {"state": "absent", "reason_code": "provider_surface_absent", "reason": ""},
+        }
+    )
+    assert proven["results"][0]["status"] == "pass"
+
+    unproven = run_with(
+        {
+            "observe_transcript": {"state": "supported", "reason_code": "contract_proven", "reason": ""},
+            "observe_child_sessions": {"state": "unknown", "reason_code": "required_proof_missing", "reason": ""},
+        }
+    )
+    assert unproven["results"][0]["status"] == "blocked"
+
+    contradicted = run_with(
+        {
+            "observe_transcript": {"state": "supported", "reason_code": "contract_proven", "reason": ""},
+            "abort": {"state": "unsupported", "reason_code": "contract_unsupported", "reason": ""},
+        }
+    )
+    assert contradicted["results"][0]["status"] == "unsupported_gap"
 
 
 def test_projection_scenarios_emit_comparable_artifacts_for_all_providers(tmp_path: Path) -> None:

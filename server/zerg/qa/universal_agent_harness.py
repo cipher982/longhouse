@@ -4603,8 +4603,18 @@ def orchestration_capability_matrix(package: EvidencePackage, provider: str) -> 
         "yellow": sum(1 for row in rows if row["verdict"] == "yellow"),
         "red": sum(1 for row in rows if row["verdict"] == "red"),
     }
+    # The scenario reports what it found. Returning PASS unconditionally meant
+    # this check could not fail, which is the one property a check must not
+    # have: a provider with every orchestration cell unproven looked identical
+    # to one with them all proven.
+    if any(row["verdict"] == "red" for row in rows):
+        status = STATUS_UNSUPPORTED_GAP
+    elif any(row["verdict"] == "yellow" for row in rows):
+        status = STATUS_BLOCKED
+    else:
+        status = STATUS_PASS
     payload = {
-        "status": STATUS_PASS,
+        "status": status,
         "scenario": "orchestration_capability_matrix",
         "provider": provider,
         "summary": summary,
