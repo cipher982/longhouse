@@ -56,6 +56,7 @@ runs:
         REQUIRED_JOBS: ${{ inputs.required_jobs }}
       with:
         github-token: ${{ inputs.github_token }}
+        retries: 3
         script: |
           const sha = (process.env.HEAD_SHA || '').trim();
           const branch = (process.env.HEAD_BRANCH || '').trim();
