@@ -438,6 +438,9 @@ fn collect_outbox_impl(
         let _ = std::fs::remove_file(path);
     }
 
+    // One process inventory for the whole drain, collected only if a payload
+    // actually needs a process lookup.
+    let mut drain_process_facts: Option<HashMap<u32, crate::process_identity::ProcessFact>> = None;
     for pending in by_session.into_values() {
         let PendingPresenceFile {
             path,
@@ -487,9 +490,13 @@ fn collect_outbox_impl(
                     signal.session_id
                 );
             }
-            if let Some(binding_signal) =
-                unmanaged_binding_signal_for_payload(&payload, &provider, &session_id, observed_at)
-            {
+            if let Some(binding_signal) = unmanaged_binding_signal_for_payload(
+                &payload,
+                &provider,
+                &session_id,
+                observed_at,
+                &mut drain_process_facts,
+            ) {
                 if let Err(err) = UnmanagedProcessBindingStore::new(conn).record(&binding_signal) {
                     warn!(
                         "persisting unmanaged process binding failed for session {}: {err}",
@@ -807,12 +814,16 @@ fn unmanaged_binding_signal_for_payload(
     provider: &str,
     session_id: &str,
     observed_at: DateTime<Utc>,
+    process_facts: &mut Option<HashMap<u32, crate::process_identity::ProcessFact>>,
 ) -> Option<UnmanagedProcessBindingSignal> {
     if payload.control_path.as_deref().map(str::trim) != Some("unmanaged") {
         return None;
     }
     let pid = payload.provider_pid?;
-    let process = crate::unmanaged_bindings::process_info_for_pid(pid, provider)?;
+    let facts = process_facts.get_or_insert_with(|| {
+        crate::process_identity::try_collect_process_facts_by_pid().unwrap_or_default()
+    });
+    let process = crate::unmanaged_bindings::process_info_from_facts(facts, pid, provider)?;
     let source_path = normalize_transcript_path(payload.transcript_path.as_deref());
 
     Some(UnmanagedProcessBindingSignal {
