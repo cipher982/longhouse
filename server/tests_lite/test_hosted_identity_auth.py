@@ -22,6 +22,14 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from zerg.auth import cp_jwks
+
+# This module's fixture pays the whole of `Base.metadata` DDL once instead of
+# once per test. On a loaded CI runner that single CREATE TABLE + index pass
+# exceeds the suite's 10s per-test cap and the timeout lands inside the fixture,
+# failing every test in the file -- which is what `_schema_template` exists to
+# avoid. Give the module the DDL's real budget; the assertions themselves stay
+# instant.
+pytestmark = pytest.mark.timeout(60)
 from zerg.auth.cp_jwks import CPTokenClaims
 from zerg.auth.hosted import TENANT_LOGIN_ATTEMPT_MAX_AGE
 from zerg.auth.hosted import TENANT_LOGIN_STATE_MAX_AGE
