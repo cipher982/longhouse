@@ -1610,6 +1610,31 @@ def test_delegation_projection_proves_the_chain_and_its_negative_controls(tmp_pa
     }
 
 
+def test_every_default_universal_scenario_has_a_harness_runner() -> None:
+    """A default scenario with no runner fails every release-proof run.
+
+    This replaces a test in scripts/tests/provider-release-proof.test.py that
+    asserted the literal string "opencode_orchestration_projection" appeared in
+    the wrapper source. That declaration had no harness runner, so every
+    default run died on unknown_scenario — and the test that was supposed to
+    protect it was itself never registered in that file's runner list, so it
+    never ran. Pinning a spelling is not the guard; resolving the declaration
+    is, and this one lives where the registry it checks can be imported.
+    """
+
+    import ast
+
+    wrapper = Path(__file__).resolve().parents[2] / "scripts" / "qa" / "provider-release-proof.py"
+    source = wrapper.read_text(encoding="utf-8")
+    start = source.index("DEFAULT_UNIVERSAL_SCENARIOS = (")
+    end = source.index(")", start)
+    defaults = [entry.value for entry in ast.parse(source[start : end + 1].split("=", 1)[1].strip(), mode="eval").body.elts]
+
+    assert defaults, "the wrapper must declare default universal scenarios"
+    missing = sorted(set(defaults) - set(uah.SCENARIO_RUNNERS))
+    assert not missing, f"default universal scenarios with no harness runner: {missing}"
+
+
 def test_projection_scenarios_emit_comparable_artifacts_for_all_providers(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(

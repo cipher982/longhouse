@@ -28,12 +28,6 @@ def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_default_universal_scenarios_include_opencode_orchestration_projection() -> None:
-    source = CANARY.read_text(encoding="utf-8")
-
-    assert '"opencode_orchestration_projection",' in source
-
-
 @contextlib.contextmanager
 def _fake_claude_machine_live_server(*, mode: str = "success"):
     requests: list[dict] = []

@@ -67,7 +67,6 @@ DEFAULT_UNIVERSAL_SCENARIOS = (
     "interaction_semantics",
     "session_projection",
     "timeline_projection",
-    "opencode_orchestration_projection",
     "run_prompt_once",
     "launch_managed_session",
     "send_receive",
