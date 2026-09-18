@@ -72,13 +72,48 @@ needs no environment beyond a machine device token
 ### The state plane is not the transcript
 
 The rows below the badge come from the transcript and are near-real-time. The
-badge comes from the `activity` fact family (`run:<run-id>`, source
-`claude_hook`, 10-minute freshness). `needs_user`/`idle` map to `quiescent`;
-only `blocked`/`stalled` render as attention. Claude emits no presence event for
-`AskUserQuestion` itself, so during a pending question the badge shows whatever
-the last hook event said, and for a minute after a turn ends it shows the
-`idle_prompt` notification. When the badge contradicts the rows, that is the
-expected shape, not a stuck UI: say "state-plane staleness", not "ingest lag".
+badge comes from a different axis, and since 2026-09-18 that axis is explicit:
+
+- **A wait is only ever a keyed interaction.** `needs_answer` and
+  `needs_approval` require a pending interaction row; a provider merely
+  *saying* it is blocked is not enough. `blocked` stopped being a presentation
+  rung, and `_ACTIVITY_STATE["blocked"]` maps to `quiescent`, because an
+  id-less observation was asserting that the user owed something — the 2026-09-18
+  incident, where a Claude session read "Blocked" beside a timeline that already
+  showed its question answered.
+- **Claude's waits are keyed by its own hooks.** `PreToolUse` on the pause tool
+  opens a question keyed by `tool_use_id`; `PermissionRequest` opens an approval
+  (it carries no `tool_use_id`, so it is keyed by tool name plus a digest of the
+  tool input); `PostToolUse`/`PostToolUseFailure` retire both. Those records
+  ride the durable runtime-events lane, and a terminal dialog is execution-owned,
+  so a lost hook is retired by the provider continuing or by its run ending.
+- **Freshness is still per-phase for activity.** A hook provider publishes on
+  transitions, so its last phase stays current for the contract window between
+  events. Do not read "the badge is quiet" as "the session stopped".
+
+When the badge contradicts the rows, say which axis you checked and what the
+interaction row says. It is no longer enough to call it staleness.
+
+### Verifying a live question end-to-end
+
+The one claim the unit tests cannot make is that the provider really raises the
+hook. To check it while a question is on screen:
+
+```bash
+python scripts/ops/session-realtime-trace.py --subdomain <subdomain> --session <session-id>
+```
+
+Read the `## served` section. While the dialog is up you want
+`pending_interaction` non-null with `kind: question` (or `permission`) and
+`presentation.primary.key` in `needs_answer` / `needs_approval`; after it is
+answered you want both null, and `blocked` nowhere at all. The trace also prints
+the hook's own activity receipts, which is where the opening record shows up
+first.
+
+A real Claude Helm session cannot be driven from macOS for this: the
+qualification sandbox relocates `HOME` and `claude` then prompts for Keychain
+(`managed-provider-cli`). Run it on a Linux canary, or look at a question raised
+in a session that already has the new hook installed.
 
 
 ## Read The Result
