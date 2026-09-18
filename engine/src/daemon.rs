@@ -142,6 +142,9 @@ const WAKE_GAP_THRESHOLD_SECS: u64 = 5;
 const MACHINE_PRESENCE_INTERVAL_SECS: u64 = 60;
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 60;
 const FLIGHT_SAMPLE_INTERVAL_SECS: u64 = 5;
+/// Status sends in flight. Sessions are independent; one that keeps failing
+/// must not hold up everyone else's current status.
+const STATUS_POST_CONCURRENCY: usize = 8;
 
 const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const OUTBOX_DRAIN_INTERVAL: Duration = Duration::from_millis(100);
@@ -329,6 +332,13 @@ struct MachinePresencePostResult {
 
 struct OutboxCollectResult {
     presence: outbox::OutboxLocalDrainResult,
+    elapsed_ms: u64,
+}
+
+/// One pass over the session status slots.
+struct StatusSlotResult {
+    slots: Vec<crate::status_slot::StatusSlot>,
+    recorded: Vec<(String, (String, u64))>,
     elapsed_ms: u64,
 }
 
@@ -823,7 +833,25 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         }
     }
 
-    // 3. Create HTTP client and settle the one transcript lane this engine has.
+    // 3. Reconcile the frozen payload store before anything ships: delete files
+    // no row references, and hold — never silently drop — a row whose payload is
+    // missing, because that intent cannot be sent and can be re-prepared.
+    match crate::state::pending_source_envelope::reconcile_frozen_payloads(&conn) {
+        Ok(report) if report.orphans_removed > 0 || report.missing_blocked > 0 => {
+            tracing::warn!(
+                orphans_removed = report.orphans_removed,
+                missing_blocked = report.missing_blocked,
+                "Frozen payload reconciliation found work to do"
+            );
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!(
+            error = %format!("{error:#}"),
+            "Frozen payload reconciliation failed; shipping continues"
+        ),
+    }
+
+    // 4. Create HTTP client and settle the one transcript lane this engine has.
     // Storage-v2 is not a preference here: it is the only shipping protocol the
     // Machine Agent still implements. A host that cannot accept it gets a
     // refusal, not a shipping loop that would drop the user's history in
@@ -990,6 +1018,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let startup_archive_replay_delay =
         archive_startup_replay_warmup_delay(startup_archive_mode, rand::random::<f64>());
     maybe_start_managed_observation_scan(
+        projection_db_path.clone(),
         &mut managed_observation_scan_tasks,
         "startup",
         true,
@@ -1128,6 +1157,16 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut outbox_collect_tasks: JoinSet<OutboxCollectResult> = JoinSet::new();
     let mut runtime_collect_tasks: JoinSet<RuntimeCollectResult> = JoinSet::new();
     let mut runtime_sweep_tasks: JoinSet<outbox::RuntimeOutboxSweep> = JoinSet::new();
+    let mut status_slot_tasks: JoinSet<StatusSlotResult> = JoinSet::new();
+    let mut status_post_tasks: JoinSet<Vec<(String, (String, u64))>> = JoinSet::new();
+    // What the Runtime Host has already accepted, per session. Nothing is
+    // queued: an unsent or failed slot is simply sent again, with whatever
+    // value it holds by then.
+    let mut status_sent: HashMap<String, (String, u64)> = HashMap::new();
+    // What the local phase ledger already holds. Recording an unchanged phase
+    // every 100ms bumps its revision, and the projection debounce watches that
+    // watermark: the daemon would schedule a rebuild forever.
+    let mut status_recorded: HashMap<String, (String, u64)> = HashMap::new();
     let mut outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut runtime_outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
@@ -1136,9 +1175,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         JoinSet::new();
     let mut unmanaged_binding_refresh_generation: Option<(u64, u64)> = None;
     let mut storage_maintenance_tasks: JoinSet<()> = JoinSet::new();
+    // The daily pass gets its own set: sharing one with the cursor-drain work
+    // meant a due pass could be skipped outright when a drain was in flight,
+    // and the timer would not come back for another day.
+    let mut daily_maintenance_tasks: JoinSet<()> = JoinSet::new();
 
     let outbox_dir = config::get_agent_outbox_dir()?;
     let runtime_events_outbox_dir = config::get_agent_runtime_events_outbox_dir()?;
+    let agent_dir_for_status = config::get_agent_dir()?;
     let status_path = config::get_agent_status_path()?;
     if let Some(parent) = status_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -1570,6 +1614,67 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
+            status_slot_result = status_slot_tasks.join_next(), if !status_slot_tasks.is_empty() => {
+                match status_slot_result {
+                    Some(Ok(result)) => {
+                        if result.elapsed_ms > 100 {
+                            tracing::warn!(
+                                elapsed_ms = result.elapsed_ms,
+                                slots = result.slots.len(),
+                                recorded = result.recorded.len(),
+                                "Status slot pass was slow"
+                            );
+                        }
+                        let live: HashSet<String> = result
+                            .slots
+                            .iter()
+                            .map(|slot| slot.session_id.clone())
+                            .collect();
+                        for (session_id, version) in result.recorded {
+                            status_recorded.insert(session_id, version);
+                        }
+                        // A session with no slot has no current status, so
+                        // neither map needs to remember it.
+                        status_sent.retain(|session_id, _| live.contains(session_id));
+                        status_recorded.retain(|session_id, _| live.contains(session_id));
+                        // A slot the host has already accepted is not resent.
+                        // Everything else is sent as it stands now, not as it
+                        // stood when it changed.
+                        let pending: Vec<crate::status_slot::StatusSlot> = result
+                            .slots
+                            .into_iter()
+                            .filter(|slot| {
+                                status_sent.get(&slot.session_id) != Some(&slot.version())
+                            })
+                            .collect();
+                        if !pending.is_empty() && status_post_tasks.is_empty() {
+                            let client = client.clone();
+                            status_post_tasks.spawn(async move {
+                                post_status_slots(&client, pending).await
+                            });
+                        }
+                    }
+                    Some(Err(err)) => {
+                        tracing::warn!("Status slot task failed: {}", err);
+                    }
+                    None => {}
+                }
+            }
+
+            status_post_result = status_post_tasks.join_next(), if !status_post_tasks.is_empty() => {
+                match status_post_result {
+                    Some(Ok(accepted)) => {
+                        for (session_id, version) in accepted {
+                            status_sent.insert(session_id, version);
+                        }
+                    }
+                    Some(Err(err)) => {
+                        tracing::warn!("Status slot POST task failed: {}", err);
+                    }
+                    None => {}
+                }
+            }
+
             runtime_collect_result = runtime_collect_tasks.join_next(), if !runtime_collect_tasks.is_empty() => {
                 match runtime_collect_result {
                     Some(Ok(result)) => {
@@ -1808,6 +1913,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
             _ = storage_maintenance_tasks.join_next(), if !storage_maintenance_tasks.is_empty() => {}
+            _ = daily_maintenance_tasks.join_next(), if !daily_maintenance_tasks.is_empty() => {}
 
 
             unmanaged_binding_refresh_result = unmanaged_binding_refresh_tasks.join_next(), if !unmanaged_binding_refresh_tasks.is_empty() => {
@@ -1984,6 +2090,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 {
                     if pending_wake_reconciliation
                         && maybe_start_managed_observation_scan(
+                            projection_db_path.clone(),
                             &mut managed_observation_scan_tasks,
                             "wake",
                             true,
@@ -1997,6 +2104,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         );
                     } else if pending_full_reconciliation
                         && maybe_start_managed_observation_scan(
+                            projection_db_path.clone(),
                             &mut managed_observation_scan_tasks,
                             "full_reconciliation",
                             true,
@@ -2010,6 +2118,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         );
                     } else if pending_periodic_observation
                         && maybe_start_managed_observation_scan(
+                            projection_db_path.clone(),
                             &mut managed_observation_scan_tasks,
                             "periodic",
                             last_resume_contracts.is_none(),
@@ -2106,6 +2215,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             );
                             if pending_wake_reconciliation {
                                 if maybe_start_managed_observation_scan(
+                                    projection_db_path.clone(),
                                     &mut managed_observation_scan_tasks,
                                     "wake",
                                     true,
@@ -2115,6 +2225,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 }
                             } else if pending_full_reconciliation
                                 && maybe_start_managed_observation_scan(
+                                    projection_db_path.clone(),
                                     &mut managed_observation_scan_tasks,
                                     "full_reconciliation",
                                     true,
@@ -2241,6 +2352,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         if pending_wake_reconciliation
                             && unmanaged_binding_refresh_tasks.is_empty()
                             && maybe_start_managed_observation_scan(
+                                projection_db_path.clone(),
                                 &mut managed_observation_scan_tasks,
                                 "wake",
                                 true,
@@ -2255,6 +2367,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         } else if pending_full_reconciliation
                             && unmanaged_binding_refresh_tasks.is_empty()
                             && maybe_start_managed_observation_scan(
+                                projection_db_path.clone(),
                                 &mut managed_observation_scan_tasks,
                                 "full_reconciliation",
                                 true,
@@ -2268,6 +2381,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             );
                         } else if pending_periodic_observation
                             && maybe_start_managed_observation_scan(
+                                projection_db_path.clone(),
                                 &mut managed_observation_scan_tasks,
                                 "periodic",
                                 last_resume_contracts.is_none(),
@@ -2589,6 +2703,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         // publish the new managed child as Shadow ownership.
                         projection_generation = projection_generation.saturating_add(1);
                         if maybe_start_managed_observation_scan(
+                            projection_db_path.clone(),
                             &mut managed_observation_scan_tasks,
                             "managed_state_discovery",
                             true,
@@ -2742,6 +2857,29 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                     });
                 }
+                if status_slot_tasks.is_empty() {
+                    let agent_dir = runtime_events_outbox_dir
+                        .parent()
+                        .map(Path::to_path_buf)
+                        .unwrap_or_else(|| runtime_events_outbox_dir.clone());
+                    let db_path = config.shipper_config.db_path.clone();
+                    let already_recorded = status_recorded.clone();
+                    status_slot_tasks.spawn_blocking(move || {
+                        let started = Instant::now();
+                        let dir = crate::status_slot::status_slot_dir(&agent_dir);
+                        let slots = crate::status_slot::read_all(&dir);
+                        // The phase ledger is local truth, and the daemon is
+                        // its single writer. Recording here is what lets a
+                        // provider callback stop writing a file per frame.
+                        let recorded =
+                            record_status_slot_phases(db_path.as_deref(), &slots, &already_recorded);
+                        StatusSlotResult {
+                            slots,
+                            recorded,
+                            elapsed_ms: started.elapsed().as_millis() as u64,
+                        }
+                    });
+                }
                 if runtime_collect_tasks.is_empty() && runtime_outbox_post_tasks.is_empty() {
                     let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
                     runtime_collect_tasks.spawn_blocking(move || {
@@ -2794,6 +2932,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 });
             }
             _ = prune_timer.tick() => {
+                // A launcher that crashed cannot retire its own slot.
+                let status_dir = crate::status_slot::status_slot_dir(&agent_dir_for_status);
+                let swept = crate::status_slot::sweep_abandoned(
+                    &status_dir,
+                    crate::status_slot::STATUS_SLOT_ABANDONED_AFTER,
+                );
+                if swept > 0 {
+                    tracing::info!(swept, "Removed status slots no producer is maintaining");
+                }
                 // Give dead-lettered ranges another chance before pruning
                 // anything. Most dead-lettering is a transient the engine
                 // outlived — a host outage, a payload shape since fixed — and
@@ -2818,16 +2965,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     Ok(_) => {}
                     Err(e) => tracing::warn!("Session binding prune error: {}", e),
                 }
-                let windows =
-                    crate::state::session_run_binding::SessionRunWindowStore::new(&conn);
-                match windows.prune(chrono::Utc::now()) {
-                    Ok(n) if n > 0 => tracing::info!("Daily prune: removed {} stale session_run_window entries", n),
-                    Ok(_) => {}
-                    Err(e) => tracing::warn!("Session run window prune error: {}", e),
-                }
-                if storage_maintenance_tasks.is_empty() {
+                if daily_maintenance_tasks.is_empty() {
                     let db_path = projection_db_path.clone();
-                    storage_maintenance_tasks.spawn_blocking(move || {
+                    daily_maintenance_tasks.spawn_blocking(move || {
                         crate::state::recover::run_daily_storage_maintenance(&db_path);
                     });
                 }
@@ -2839,6 +2979,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     shipping_progress.reset_after_sleep(Instant::now());
                     tracing::info!(wake_gap_ms = gap.as_millis() as u64, "Detected system wake gap");
                     if maybe_start_managed_observation_scan(
+                        projection_db_path.clone(),
                         &mut managed_observation_scan_tasks,
                         "wake",
                         true,
@@ -2877,6 +3018,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             _ = managed_full_reconciliation_timer.tick() => {
                 if maybe_start_managed_observation_scan(
+                    projection_db_path.clone(),
                     &mut managed_observation_scan_tasks,
                     "full_reconciliation",
                     true,
@@ -2897,6 +3039,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             _ = managed_observation_timer.tick() => {
                 if maybe_start_managed_observation_scan(
+                    projection_db_path.clone(),
                     &mut managed_observation_scan_tasks,
                     "periodic",
                     last_resume_contracts.is_none(),
@@ -2979,6 +3122,88 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 /// enough — the Codex bridge posts a phase per item start, completion, and
 /// thread-status change — that a busy turn could starve the rebuild
 /// indefinitely, which is the failure this whole change exists to remove.
+/// Record each slot's phase in the local ledger. The daemon is the ledger's
+/// single writer, which is why a provider callback no longer needs to hand it
+/// a file per frame.
+fn record_status_slot_phases(
+    db_path: Option<&Path>,
+    slots: &[crate::status_slot::StatusSlot],
+    already_recorded: &HashMap<String, (String, u64)>,
+) -> Vec<(String, (String, u64))> {
+    let pending: Vec<&crate::status_slot::StatusSlot> = slots
+        .iter()
+        .filter(|slot| already_recorded.get(&slot.session_id) != Some(&slot.version()))
+        .collect();
+    if pending.is_empty() {
+        return Vec::new();
+    }
+    let Ok(path) = crate::state::db::resolve_db_path(db_path) else {
+        return Vec::new();
+    };
+    let Ok(conn) = crate::state::db::open_connection(&path) else {
+        return Vec::new();
+    };
+    let store = crate::state::session_phase::SessionPhaseStore::new(&conn);
+    let mut recorded = Vec::new();
+    for slot in pending {
+        let Ok(observed_at) = chrono::DateTime::parse_from_rfc3339(&slot.observed_at) else {
+            continue;
+        };
+        let signal = crate::state::session_phase::SessionPhaseSignal {
+            session_id: slot.session_id.clone(),
+            provider: slot.provider.clone(),
+            phase: slot.phase.clone(),
+            tool_name: slot.tool_name.clone(),
+            source: slot.source.clone(),
+            observed_at: observed_at.with_timezone(&chrono::Utc),
+            // The slot already carries the run the launcher was started into, so
+            // the phase row keeps its own identity rather than being attributed
+            // by time later.
+            run_id: (!slot.run_id.trim().is_empty()).then(|| slot.run_id.clone()),
+        };
+        match store.record(&signal) {
+            Ok(_) => recorded.push((slot.session_id.clone(), slot.version())),
+            Err(error) => {
+                tracing::warn!(
+                    session_id = %slot.session_id,
+                    error = %error,
+                    "Recording a status slot phase failed"
+                );
+            }
+        }
+    }
+    recorded
+}
+
+/// Deliver current status and report which versions the host accepted.
+///
+/// Nothing is queued and nothing is deleted: the slot is the durable copy, so
+/// a session whose send fails is simply sent again next tick with whatever it
+/// says by then.
+#[allow(unused_imports)]
+async fn post_status_slots(
+    client: &crate::shipping::client::ShipperClient,
+    slots: Vec<crate::status_slot::StatusSlot>,
+) -> Vec<(String, (String, u64))> {
+    use futures_util::StreamExt;
+    // Sessions are independent, so one whose send keeps failing must not hold
+    // up everyone else's current status.
+    futures_util::stream::iter(slots.into_iter().map(|slot| async move {
+        let events: Vec<outbox::PendingRuntimeEventPost> =
+            crate::status_slot::runtime_events(&slot)
+                .into_iter()
+                .map(outbox::PendingRuntimeEventPost::from_event)
+                .collect();
+        let expected = events.len();
+        let (sent, _kept) = outbox::post_pending_runtime_event_files(client, events).await;
+        (sent == expected).then(|| (slot.session_id.clone(), slot.version()))
+    }))
+    .buffer_unordered(STATUS_POST_CONCURRENCY)
+    .filter_map(|accepted| async move { accepted })
+    .collect()
+    .await
+}
+
 fn arm_phase_projection(pending: &mut bool) -> bool {
     if *pending {
         return false;
@@ -3272,16 +3497,6 @@ fn build_local_status_projection_with_omp(
                 )
             }
         };
-    let run_windows = record_and_read_run_bindings_with_omp(
-        conn,
-        observations,
-        claude_observations,
-        opencode_observations,
-        cursor_observations,
-        pi_observations,
-        omp_observations,
-        now,
-    );
     payload.machine_evidence = Some(heartbeat::machine_evidence_from_observations_with_omp(
         machine_id,
         observations,
@@ -3293,7 +3508,6 @@ fn build_local_status_projection_with_omp(
         omp_observations,
         unmanaged_session_bindings,
         &phase_ledger,
-        &run_windows,
         managed_snapshot_complete,
         unmanaged_snapshot_complete,
         now,
@@ -3314,135 +3528,6 @@ fn build_local_status_projection_with_omp(
     heartbeat::apply_local_titles(conn, &mut payload.sessions);
     session_snapshot_state.annotate(&mut payload);
     heartbeat::build_status_file_projection(payload, &stats, phase_ledger, ledger_status)
-}
-
-fn record_and_read_run_bindings(
-    conn: &rusqlite::Connection,
-    codex_observations: &[managed_bridge_scan::CodexBridgeObservation],
-    claude_observations: &[managed_claude_scan::ClaudeChannelObservation],
-    opencode_observations: &[managed_opencode_scan::OpenCodeServerObservation],
-    cursor_observations: &[managed_cursor_helm_scan::CursorHelmObservation],
-    pi_observations: &[managed_pi_helm_scan::PiHelmObservation],
-    now: chrono::DateTime<chrono::Utc>,
-) -> crate::state::session_run_binding::RunWindowIndex {
-    record_and_read_run_bindings_with_omp(
-        conn,
-        codex_observations,
-        claude_observations,
-        opencode_observations,
-        cursor_observations,
-        pi_observations,
-        &[],
-        now,
-    )
-}
-
-fn record_and_read_run_bindings_with_omp(
-    conn: &rusqlite::Connection,
-    codex_observations: &[managed_bridge_scan::CodexBridgeObservation],
-    claude_observations: &[managed_claude_scan::ClaudeChannelObservation],
-    opencode_observations: &[managed_opencode_scan::OpenCodeServerObservation],
-    cursor_observations: &[managed_cursor_helm_scan::CursorHelmObservation],
-    pi_observations: &[managed_pi_helm_scan::PiHelmObservation],
-    omp_observations: &[managed_omp_helm_scan::OmpHelmObservation],
-    now: chrono::DateTime<chrono::Utc>,
-) -> crate::state::session_run_binding::RunWindowIndex {
-    use crate::state::session_run_binding::{
-        RunWindowIndex, SessionRunWindow, SessionRunWindowStore,
-    };
-
-    let store = SessionRunWindowStore::new(conn);
-    let parse_started = |raw: Option<&str>| -> Option<chrono::DateTime<chrono::Utc>> {
-        let raw = raw.map(str::trim).filter(|value| !value.is_empty())?;
-        chrono::DateTime::parse_from_rfc3339(raw)
-            .ok()
-            .map(|at| at.with_timezone(&chrono::Utc))
-    };
-    let observed: Vec<(&str, &str, Option<&str>, Option<&str>)> = codex_observations
-        .iter()
-        .map(|obs| {
-            (
-                "codex",
-                obs.session_id.as_str(),
-                obs.run_id.as_deref(),
-                obs.bridge_process_start_time.as_deref(),
-            )
-        })
-        .chain(claude_observations.iter().map(|obs| {
-            (
-                "claude",
-                obs.session_id.as_str(),
-                obs.run_id.as_deref(),
-                Some(obs.started_at.as_str()),
-            )
-        }))
-        .chain(opencode_observations.iter().map(|obs| {
-            (
-                "opencode",
-                obs.session_id.as_str(),
-                obs.run_id.as_deref(),
-                Some(obs.started_at.as_str()),
-            )
-        }))
-        .chain(cursor_observations.iter().map(|obs| {
-            (
-                "cursor",
-                obs.session_id.as_str(),
-                obs.run_id.as_deref(),
-                Some(obs.started_at.as_str()),
-            )
-        }))
-        .chain(pi_observations.iter().map(|obs| {
-            (
-                "pi",
-                obs.session_id.as_str(),
-                obs.run_id.as_deref(),
-                Some(obs.started_at.as_str()),
-            )
-        }))
-        .chain(omp_observations.iter().map(|obs| {
-            (
-                "omp",
-                obs.session_id.as_str(),
-                obs.run_id.as_deref(),
-                Some(obs.started_at.as_str()),
-            )
-        }))
-        .collect();
-    for (provider, session_id, run_id, started_at) in observed {
-        let Some(run_id) = run_id.map(str::trim).filter(|value| !value.is_empty()) else {
-            continue;
-        };
-        if session_id.trim().is_empty() {
-            continue;
-        }
-        // An observation with no parseable start cannot bound a window. Falling
-        // back to `now` would silently reintroduce the misbinding.
-        let Some(run_started_at) = parse_started(started_at) else {
-            continue;
-        };
-        let window = SessionRunWindow {
-            session_id: session_id.to_string(),
-            run_id: run_id.to_string(),
-            provider: provider.to_string(),
-            run_started_at,
-            observed_at: now,
-        };
-        if let Err(err) = store.record(&window) {
-            tracing::warn!(
-                error = %err,
-                session_id = %window.session_id,
-                "persisting session run window failed"
-            );
-        }
-    }
-    match store.index(now) {
-        Ok(index) => index,
-        Err(err) => {
-            tracing::warn!(error = %err, "reading session run windows failed");
-            RunWindowIndex::default()
-        }
-    }
 }
 
 fn history_runtime_work_active(
@@ -4079,6 +4164,7 @@ fn codex_contract_must_be_retained(
 }
 
 fn maybe_start_managed_observation_scan(
+    db_path: PathBuf,
     scan_tasks: &mut JoinSet<ManagedObservationScanResult>,
     reason: &'static str,
     full_reconciliation: bool,
@@ -4090,6 +4176,26 @@ fn maybe_start_managed_observation_scan(
 
     let previous = previous.clone();
     scan_tasks.spawn_blocking(move || {
+        // Claims are projected **before** any provider source is enumerated: a
+        // discovery pass that ran first would mint a Shadow session for a path a
+        // live managed session is about to own. This is the only place the
+        // ordering is guaranteed, so it happens here rather than after the scan.
+        match crate::managed_source_claim::project_claims(&db_path) {
+            Ok(report) if report.applied > 0 => tracing::info!(
+                applied = report.applied,
+                failed = report.failed,
+                "Projected managed source claims before discovery"
+            ),
+            Ok(report) if report.failed > 0 => tracing::warn!(
+                failed = report.failed,
+                "Some managed source claims could not be projected"
+            ),
+            Ok(_) => {}
+            Err(error) => tracing::warn!(
+                error = %format!("{error:#}"),
+                "Managed source claim projection failed; discovery runs without it"
+            ),
+        }
         let previous = if full_reconciliation {
             previous
         } else {
@@ -5627,6 +5733,112 @@ fn finish_path_task(mut result: PathTaskResult, started: Instant) -> PathTaskRes
 
 #[cfg(test)]
 mod tests {
+    /// The daemon is the phase ledger's single writer, which is what lets an
+    /// OMP callback stop handing it a file per frame. It records from the
+    /// session's status slot instead — but only what changed, because an
+    /// unchanged phase rewritten every 100ms bumps the ledger revision, and
+    /// the projection debounce watches that watermark: the daemon would
+    /// schedule a rebuild forever.
+    #[test]
+    fn status_slots_write_the_phase_ledger_only_when_they_change() {
+        use std::collections::HashMap;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db_path = temp.path().join("agent.db");
+        // The daemon bootstraps the schema once at startup; this stands in for
+        // that, because the recorder deliberately uses the hot-path opener.
+        crate::state::db::open_db(Some(&db_path)).expect("bootstrap ledger schema");
+        let slot = |seq: u64, phase: &str, observed_at: &str| crate::status_slot::StatusSlot {
+            schema: crate::status_slot::STATUS_SLOT_SCHEMA,
+            session_id: "session-1".into(),
+            provider: "omp".into(),
+            runtime_key: "omp:session-1".into(),
+            run_id: "run-1".into(),
+            source: "omp_helm_channel".into(),
+            phase: phase.into(),
+            tool_name: None,
+            observed_at: observed_at.into(),
+            payload: serde_json::json!({}),
+            preview: None,
+            producer_epoch: "epoch-1".into(),
+            seq,
+        };
+
+        let mut recorded: HashMap<String, (String, u64)> = HashMap::new();
+        let first = super::record_status_slot_phases(
+            Some(&db_path),
+            &[slot(1, "thinking", "2026-09-17T15:00:01Z")],
+            &recorded,
+        );
+        assert_eq!(first.len(), 1, "a new observation reaches the ledger");
+        for (session_id, version) in first {
+            recorded.insert(session_id, version);
+        }
+
+        // The same slot, seen again on the next tick.
+        let unchanged = super::record_status_slot_phases(
+            Some(&db_path),
+            &[slot(1, "thinking", "2026-09-17T15:00:01Z")],
+            &recorded,
+        );
+        assert!(unchanged.is_empty(), "an unchanged slot writes nothing");
+
+        let advanced = super::record_status_slot_phases(
+            Some(&db_path),
+            &[slot(2, "idle", "2026-09-17T15:00:02Z")],
+            &recorded,
+        );
+        assert_eq!(advanced.len(), 1, "a real transition is recorded");
+
+        let connection = crate::state::db::open_connection(&db_path).expect("open ledger");
+        let phase: String = connection
+            .query_row(
+                "SELECT phase FROM session_phase_state WHERE session_id = ?1",
+                rusqlite::params!["session-1"],
+                |row| row.get(0),
+            )
+            .expect("ledger row");
+        assert_eq!(phase, "idle");
+    }
+
+    /// A slot whose timestamp the ledger cannot parse is skipped, not fatal.
+    #[test]
+    fn an_unparseable_slot_timestamp_does_not_stop_the_others() {
+        use std::collections::HashMap;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let db_path = temp.path().join("agent.db");
+        crate::state::db::open_db(Some(&db_path)).expect("bootstrap ledger schema");
+        let mut broken = crate::status_slot::StatusSlot {
+            schema: crate::status_slot::STATUS_SLOT_SCHEMA,
+            session_id: "broken".into(),
+            provider: "omp".into(),
+            runtime_key: "omp:broken".into(),
+            run_id: "run-1".into(),
+            source: "omp_helm_channel".into(),
+            phase: "thinking".into(),
+            tool_name: None,
+            observed_at: "not-a-timestamp".into(),
+            payload: serde_json::json!({}),
+            preview: None,
+            producer_epoch: "epoch-1".into(),
+            seq: 1,
+        };
+        let mut healthy = broken.clone();
+        healthy.session_id = "healthy".into();
+        healthy.observed_at = "2026-09-17T15:00:01Z".into();
+        broken.observed_at = "not-a-timestamp".into();
+
+        let recorded = super::record_status_slot_phases(
+            Some(&db_path),
+            &[broken, healthy],
+            &HashMap::new(),
+        );
+
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].0, "healthy");
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn blocking_path_work_does_not_delay_live_dispatch() {
         tokio::task::LocalSet::new()
@@ -5736,6 +5948,7 @@ mod tests {
                 observed_at: chrono::DateTime::parse_from_rfc3339(observed_at)
                     .unwrap()
                     .with_timezone(&chrono::Utc),
+                run_id: None,
             }
         };
 
@@ -7293,6 +7506,9 @@ mod tests {
 
     #[test]
     fn test_storage_v2_pending_retry_resumes_without_process_restart() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         temp_env::with_vars(
             [
@@ -7425,6 +7641,9 @@ mod tests {
 
     #[test]
     fn test_paused_mode_does_not_queue_failed_shipment_retry_paths() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         temp_env::with_vars(
             [
@@ -7478,6 +7697,9 @@ mod tests {
 
     #[test]
     fn test_running_control_file_can_resume_paused_archive_replay_as_trickle() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         temp_env::with_vars(
             [
@@ -7812,6 +8034,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_paused_mode_skips_reconciliation_scan_task() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         temp_env::with_vars(
             [
@@ -7954,6 +8179,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn test_spawn_caffeinate_uses_correct_args() {
+        // Spawns by name and reads the process table: hold the shared agent-state
+        // lock so a concurrent test cannot empty PATH under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let pid = std::process::id();
         let mut child = spawn_caffeinate(pid).expect("caffeinate should spawn");
         let id = child.id().expect("child should have a PID");
@@ -7990,6 +8218,9 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn test_caffeinate_child_exits_when_dropped() {
+        // Spawns by name and reads the process table: hold the shared agent-state
+        // lock so a concurrent test cannot empty PATH under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let pid = std::process::id();
         let child = spawn_caffeinate(pid).expect("caffeinate should spawn");
         let caffeinate_pid = child.id().expect("child should have a PID");

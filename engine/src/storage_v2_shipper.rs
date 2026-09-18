@@ -75,6 +75,16 @@ pub(crate) enum CursorPreparationOutcome {
     Continue,
 }
 
+/// The variant's name, for assertions that must say what they got instead.
+fn outcome_name(outcome: &CursorPreparationOutcome) -> &'static str {
+    match outcome {
+        CursorPreparationOutcome::Envelope(_) => "Envelope",
+        CursorPreparationOutcome::Current => "Current",
+        CursorPreparationOutcome::WaitingOnClaim => "WaitingOnClaim",
+        CursorPreparationOutcome::Continue => "Continue",
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum CursorStorageV2ShipResult {
     Shipped(StorageV2ShipOutcome),
@@ -5260,7 +5270,7 @@ mod tests {
         "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
     const CURSOR_MESSAGE_C: &str =
         "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-    static CURSOR_BINDING_ENV_LOCK: Mutex<()> = Mutex::new(());
+
 
     #[test]
     fn preparation_errors_are_distinct_from_transport_failures() {
@@ -5363,9 +5373,7 @@ mod tests {
 
     #[test]
     fn fresh_cursor_source_waits_for_launch_reservation_before_materializing_shadow() {
-        let _guard = CURSOR_BINDING_ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = crate::console_adapter::agent_state_guard();
         let dir = tempfile::tempdir().unwrap();
         let state_root = dir
             .path()
@@ -5407,9 +5415,7 @@ mod tests {
 
     #[test]
     fn fresh_cursor_agent_transcript_waits_for_and_then_uses_managed_claim() {
-        let _guard = CURSOR_BINDING_ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = crate::console_adapter::agent_state_guard();
         let dir = tempfile::tempdir().unwrap();
         let longhouse_home = dir.path().join("longhouse");
         let reservation_dir = longhouse_home.join("managed-local/cursor-helm/launch-reservations");
@@ -5599,9 +5605,7 @@ mod tests {
 
     #[test]
     fn cursor_archives_keep_source_activity_across_replay_and_progress() {
-        let _guard = CURSOR_BINDING_ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = crate::console_adapter::agent_state_guard();
         let dir = tempfile::tempdir().unwrap();
         let cursor_home = dir.path().join("cursor");
         let store_path = cursor_home
@@ -5762,9 +5766,7 @@ mod tests {
 
     #[test]
     fn cursor_transcript_without_clock_still_archives_exact_raw_records() {
-        let _guard = CURSOR_BINDING_ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = crate::console_adapter::agent_state_guard();
         let dir = tempfile::tempdir().unwrap();
         let conversation = Uuid::new_v4().to_string();
         let path = dir
@@ -8056,7 +8058,7 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let _guard = runtime.block_on(crate::console_adapter::longhouse_home_test_guard());
+        let _guard = crate::console_adapter::longhouse_home_test_guard();
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("longhouse");
         let agent_dir = home.join("agent");
@@ -8618,7 +8620,10 @@ mod tests {
         .unwrap()
         {
             CursorPreparationOutcome::Envelope(prepared) => prepared,
-            _ => panic!("the initial exact page must prepare an envelope"),
+            other => panic!(
+                "the initial exact page must prepare an envelope, got {}",
+                outcome_name(&other)
+            ),
         };
         acknowledge_prepared(&mut conn, &first);
         assert!(matches!(
@@ -9073,7 +9078,7 @@ mod tests {
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
         let correct = prepare_next_envelope(&mut conn, &capabilities(), &path, "cursor", None)
             .unwrap()
-            .unwrap();
+            .expect("a fresh Cursor transcript must prepare an envelope");
         assert_eq!(correct.envelope.session_id, conversation_id);
         let stale_session_id = Uuid::new_v4().to_string();
         let pending = pending_source_envelope::load_for_epoch(&conn, correct.source_epoch)

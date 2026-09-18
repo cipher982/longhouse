@@ -1084,6 +1084,42 @@ export function buildSessionQuestionFixture(): SessionDetailFixture {
 }
 
 /**
+ * The same live session with a provider question open: the badge is the one
+ * surface that has to say *what* is being asked of the user, and it must read
+ * the server's copy rather than a client-fiction. Capture this frame to check
+ * the header and composer wording for a question ("Needs answer") as distinct
+ * from a permission ("Needs approval").
+ */
+export function buildSessionAttentionFixture(): SessionDetailFixture {
+  const fixture = buildSessionDetailStressFixture();
+  const openedAt = "2026-04-15T16:11:00Z";
+  fixture.session.session_state = makeSessionState({
+    activity: {
+      state: "quiescent",
+      raw_kind: "idle",
+      tool: null,
+      source: "claude_hook",
+      observed_at: openedAt,
+      valid_until: null,
+    },
+    pending_interaction: {
+      id: "interaction-1",
+      kind: "question",
+      opened_at: openedAt,
+      resolved_at: null,
+      provider_request_id: "toolu_01GwhuTaUTfCmuyuzQUiDAku",
+      can_respond: false,
+    },
+    presentation: {
+      primary: { key: "needs_answer", label: "Needs answer", tone: "blocked", observed_at: openedAt },
+      access: { key: "live_control", label: "Live control", tone: "live", observed_at: openedAt },
+      transcript: null,
+    },
+  });
+  return fixture;
+}
+
+/**
  * A live Helm session whose provider activity evidence expired while its
  * control lease stayed healthy: the shape behind "Last observed idle". Cursor
  * posts presence only on hook events, so every quiet session lands here ten

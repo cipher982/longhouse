@@ -887,7 +887,46 @@ def _valid_until(
             raise ValueError("control lease_ttl_ms must be positive")
         return observed_at + timedelta(milliseconds=ttl_ms)
     raw = value.get("valid_until") or head.get("valid_until")
-    return _wire_datetime(raw, "valid_until")
+    declared = _wire_datetime(raw, "valid_until")
+    if family != "activity":
+        return declared
+    return max(declared, _activity_lease_until(head, observed_at) or declared)
+
+
+# Activity used to expire purely on producer time: a `thinking` observation was
+# current for 90s from when it was *observed*, so transit delay ate the budget.
+# On 2026-09-17 a delivery backlog made every OMP session's activity arrive
+# already expired, and sessions that were alive and working left Live now.
+#
+# The lease is a floor, never a ceiling: it cannot shorten a window the
+# contract gives a phase, so a `blocked` session still waits out its day. It is
+# anchored to the head's receipt, which is what makes it replay-safe — a
+# re-delivered copy of an observation is a duplicate, never becomes the head,
+# and so cannot renew anything. An observation delivered long after it was made
+# gets no lease at all, so a drained backlog cannot make a finished session
+# look busy.
+ACTIVITY_OBSERVATION_LEASE = timedelta(seconds=45)
+MAX_OBSERVATION_DELAY = timedelta(seconds=60)
+
+
+def _activity_lease_until(head: Mapping[str, Any], observed_at: datetime) -> datetime | None:
+    # The lease can only ever extend a window, so a receipt it cannot read is
+    # not an error: it simply means no lease. Raising here would reject the
+    # whole head and serve the session as `unknown` — the exact failure this
+    # code exists to prevent. SQLite hands back naive datetimes, which is the
+    # ordinary case, not a malformed one.
+    raw = head.get("received_at")
+    if raw is None or raw == "":
+        return None
+    try:
+        received_at = raw if isinstance(raw, datetime) else datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if received_at.tzinfo is None:
+        received_at = received_at.replace(tzinfo=UTC)
+    if received_at - observed_at > MAX_OBSERVATION_DELAY:
+        return None
+    return received_at + ACTIVITY_OBSERVATION_LEASE
 
 
 def _head_value(

@@ -1394,35 +1394,26 @@ impl CodexExecRuntimeSink {
     }
 
     async fn post_phase(&self, phase: &str, tool_name: Option<String>) {
+        // One slot per session: the daemon records the local ledger from it
+        // and sends it. A tool start is a transition of its own because the
+        // tool name is part of the statement, so it publishes immediately.
         let observed_at = Utc::now();
-        // Each tool start is its own observation, so it needs its own dedupe
-        // identity; a run's plain phase transitions collapse by phase name.
-        let phase_identity = match tool_name.as_deref() {
-            Some(_) => format!("{phase}:{}", uuid::Uuid::new_v4()),
-            None => phase.to_string(),
-        };
-        self.persist_local_phase(phase, tool_name.clone(), observed_at);
-        self.post_events(vec![json!({
-            "runtime_key": format!("codex:{}", self.session_id),
-            "session_id": self.session_id,
-            "run_id": self.run_id,
-            "thread_id": self.thread_id,
-            "provider": "codex",
-            "device_id": self.machine_name,
-            "source": CODEX_EXEC_RUNTIME_SOURCE,
-            "kind": "phase_signal",
-            "phase": phase,
-            "tool_name": tool_name,
-            "occurred_at": observed_at.to_rfc3339(),
-            "dedupe_key": format!("codex-app-server:{}:{}:phase:{}", self.session_id, self.run_id, phase_identity),
-            "payload": {
-                "managed_transport": CODEX_EXEC_RUNTIME_SOURCE,
+        crate::status_slot::publish_console_phase(
+            "codex",
+            CODEX_EXEC_RUNTIME_SOURCE,
+            &self.session_id,
+            &self.run_id,
+            &observed_at.to_rfc3339(),
+            phase,
+            tool_name.as_deref(),
+            json!({
                 "execution_lifetime": "one_shot",
+                "thread_id": self.thread_id,
+                "device_id": self.machine_name,
                 "turn_id": self.turn_id,
                 "client_request_id": self.client_request_id,
-            }
-        })])
-        .await;
+            }),
+        );
     }
 
     async fn post_live_user_item(&self, text: &str) {
@@ -1774,29 +1765,21 @@ impl CodexExecRuntimeSink {
         let source_path = known_source_path
             .map(PathBuf::from)
             .or_else(|| codex_rollout_path(provider_thread_id));
-        if let Some(db_path) = self.local_db_path.as_deref() {
-            if let Some(source_path) = source_path.as_deref() {
-                match crate::state::db::open_client_connection(
-                    Path::new(db_path),
-                    Duration::from_millis(500),
-                ) {
-                    Ok(conn) => {
-                        let binding = crate::state::session_binding::SessionBinding::new(&conn);
-                        // Record the thread this binding was made for. Without
-                        // it the shipper cannot tell a fork Longhouse started
-                        // from one a managed parent left behind, and it must
-                        // assume the latter.
-                        if let Err(err) = binding.bind_for_thread(
-                            &source_path.to_string_lossy(),
-                            &self.session_id,
-                            "codex",
-                            Some(provider_thread_id),
-                        ) {
-                            eprintln!("[codex-exec] persist transcript binding failed: {err}");
-                        }
-                    }
-                    Err(err) => eprintln!("[codex-exec] open transcript binding DB failed: {err}"),
-                }
+        if let Some(source_path) = source_path.as_deref() {
+            // A local claim, not a database row: the daemon projects it into the
+            // binding discovery reads, and the claim records the thread this
+            // binding was made for. Without that thread the shipper cannot tell
+            // a fork Longhouse started from one a managed parent left behind,
+            // and it must assume the latter.
+            if let Err(error) = crate::managed_source_claim::confirm_identity(
+                &self.session_id,
+                "codex",
+                source_path,
+                provider_thread_id,
+                None,
+                None,
+            ) {
+                eprintln!("[codex-exec] persist transcript claim failed: {error:#}");
             }
         }
         if let Ok(registry) = crate::turn_claims::default_registry() {
@@ -1823,6 +1806,7 @@ impl CodexExecRuntimeSink {
             tool_name.as_deref(),
             CODEX_EXEC_RUNTIME_SOURCE,
             &observed_at.to_rfc3339(),
+            Some(self.run_id.as_str()),
         ) {
             eprintln!(
                 "[codex-exec] enqueue local phase failed for {}: {err}",
@@ -2699,6 +2683,10 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn bounded_app_server_turn_streams_binding_text_tool_and_terminal() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let fake_codex = temp.path().join("codex");
         fs::write(
@@ -3021,6 +3009,10 @@ for line in sys.stdin:
 
     #[test]
     fn codex_exec_process_gone_claim_is_reconciled_at_registry_and_outbox() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let registry = crate::turn_claims::TurnClaimRegistry::new(temp.path().join("claims"));
         let outbox = temp.path().join("outbox");
@@ -3119,6 +3111,10 @@ for line in sys.stdin:
 
     #[test]
     fn live_codex_exec_claim_is_left_active_without_re_adoption() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let registry = crate::turn_claims::TurnClaimRegistry::new(temp.path().join("claims"));
         let outbox = temp.path().join("outbox");
@@ -3154,6 +3150,10 @@ for line in sys.stdin:
 
     #[test]
     fn rebooted_codex_exec_claim_is_process_gone_even_if_pid_is_alive() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let claims_dir = temp.path().join("claims");
         let registry = crate::turn_claims::TurnClaimRegistry::new(claims_dir.clone());
@@ -3188,6 +3188,10 @@ for line in sys.stdin:
 
     #[test]
     fn recycled_codex_exec_pid_is_process_gone_when_start_time_changes() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let registry = crate::turn_claims::TurnClaimRegistry::new(temp.path().join("claims"));
         let outbox = temp.path().join("outbox");
@@ -3227,6 +3231,10 @@ for line in sys.stdin:
     /// never stopped.
     #[test]
     fn unreadable_process_inventory_never_terminalizes_a_claim() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let registry = crate::turn_claims::TurnClaimRegistry::new(temp.path().join("claims"));
         let outbox = temp.path().join("outbox");
@@ -3274,6 +3282,10 @@ for line in sys.stdin:
 
     #[test]
     fn codex_exec_claim_without_start_identity_is_left_ambiguous() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let registry = crate::turn_claims::TurnClaimRegistry::new(temp.path().join("claims"));
         let outbox = temp.path().join("outbox");

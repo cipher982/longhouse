@@ -311,6 +311,11 @@ def test_snapshot_covers_every_table_the_reducer_writes(tmp_path):
     assert BASE_TIME.year == 2026
 
 
+# Nine full reducer scenarios, each with its own database. ~1.3s unloaded, but
+# the suite-wide 10s cap is sized for unit tests and this one blows it on a
+# saturated CI runner -- the same reason the heavy tests elsewhere in
+# tests_lite carry their own marker.
+@pytest.mark.timeout(60)
 def test_randomized_suite_reaches_every_reduction_branch(tmp_path):
     """The randomized tests are only worth running if they reach the branches.
 

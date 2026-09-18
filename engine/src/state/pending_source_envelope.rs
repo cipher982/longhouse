@@ -5,6 +5,7 @@
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
+use std::path::Path;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
 use uuid::Uuid;
@@ -35,7 +36,8 @@ fn pending_outbox_has_capacity(current_bytes: u64, candidate_bytes: u64, byte_li
 
 fn retained_envelope_bytes(conn: &Connection) -> Result<u64> {
     let bytes: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(length(request_body_zstd) + length(media_objects_zstd)), 0)
+        "SELECT COALESCE(SUM(COALESCE(request_body_len, length(request_body_zstd))
+                                 + COALESCE(media_objects_len, length(media_objects_zstd))), 0)
          FROM pending_source_envelope",
         [],
         |row| row.get(0),
@@ -116,6 +118,10 @@ pub enum BlockKind {
     /// The host refused the envelope as structurally invalid. The stored body
     /// is what gets retried, so no retry can change the verdict.
     EnvelopeRejected,
+    /// The frozen payload this row names is not on disk. Nothing can be sent
+    /// until the intent is re-prepared from the source, so the row is held
+    /// visibly instead of shipping an empty envelope or vanishing.
+    PayloadMissing,
     /// A code from a Runtime Host this engine does not know about.
     Unrecognized(String),
 }
@@ -127,6 +133,7 @@ impl BlockKind {
             "source_epoch_conflict_unresolved" => Self::SourceEpochConflictUnresolved,
             "storage_target_changed" => Self::StorageTargetChanged,
             "envelope_rejected" => Self::EnvelopeRejected,
+            "payload_missing" => Self::PayloadMissing,
             other => Self::Unrecognized(other.to_string()),
         }
     }
@@ -135,6 +142,7 @@ impl BlockKind {
         match self {
             Self::SourceEpochConflict => "source_epoch_conflict",
             Self::SourceEpochConflictUnresolved => "source_epoch_conflict_unresolved",
+            Self::PayloadMissing => "payload_missing",
             Self::StorageTargetChanged => "storage_target_changed",
             Self::EnvelopeRejected => "envelope_rejected",
             Self::Unrecognized(value) => value,
@@ -163,6 +171,10 @@ pub fn block_kind_is_reconciling(block_kind: Option<&str>) -> bool {
         // Nothing local can rewrite a stored body the host already refused.
         // Clearing it is a person's decision, via `longhouse shipping discard`.
         BlockKind::EnvelopeRejected => false,
+        // The frozen bytes are gone but the source can produce them again, so a
+        // pass could re-prepare this row — deliberately not wired yet, because
+        // re-preparing deletes intent and needs its own proof.
+        BlockKind::PayloadMissing => false,
         // Fail closed. A code this engine does not recognise may well be
         // recoverable by a newer engine, but reporting "healing" for something
         // no code here can act on is exactly the false green the health
@@ -180,6 +192,14 @@ pub struct PendingSourceEnvelope {
     pub envelope_id: String,
     pub request_body_zstd: Vec<u8>,
     pub media_objects_zstd: Vec<u8>,
+    /// Where the media payload is sealed, when it is file-backed. `None` means
+    /// the bytes in `media_objects_zstd` are the stored copy (a row written
+    /// before payloads moved out of the database).
+    pub media_objects_path: Option<String>,
+    pub media_objects_sha256: Option<String>,
+    /// Same, for the frozen request body.
+    pub request_body_path: Option<String>,
+    pub request_body_sha256: Option<String>,
     pub raw_bytes: u64,
     pub event_count: usize,
     pub has_reply_evidence: bool,
@@ -222,6 +242,10 @@ impl PendingSourceEnvelope {
             envelope_id,
             request_body_zstd,
             media_objects_zstd,
+            media_objects_path: None,
+            media_objects_sha256: None,
+            request_body_path: None,
+            request_body_sha256: None,
             raw_bytes,
             event_count,
             has_reply_evidence,
@@ -240,11 +264,13 @@ pub fn load_for_path(
     conn: &Connection,
     source_path: &str,
 ) -> Result<Option<PendingSourceEnvelope>> {
-    conn.query_row(
+    let loaded = conn.query_row(
         "SELECT source_epoch, source_path, range_start, range_end, envelope_id,
                 request_body_zstd, media_objects_zstd, raw_bytes, event_count,
                 has_reply_evidence, has_more, created_at, attempt_count,
-                last_attempt_at, blocked_at, block_kind, block_detail
+                last_attempt_at, blocked_at, block_kind, block_detail,
+                media_objects_path, media_objects_sha256,
+                request_body_path, request_body_sha256
          FROM pending_source_envelope
          WHERE source_path = ?1
          ORDER BY (blocked_at IS NOT NULL), created_at, source_epoch
@@ -253,7 +279,8 @@ pub fn load_for_path(
         row_to_pending,
     )
     .optional()
-    .context("loading pending storage-v2 envelope by source path")
+    .context("loading pending storage-v2 envelope by source path")?;
+    loaded.map(|envelope| hydrate_media(conn, envelope)).transpose()
 }
 
 pub fn load_for_source(
@@ -261,7 +288,7 @@ pub fn load_for_source(
     provider: &str,
     opaque_source_id: &str,
 ) -> Result<Option<PendingSourceEnvelope>> {
-    conn.query_row(
+    let loaded = conn.query_row(
         "SELECT pending.source_epoch, pending.source_path, pending.range_start,
                 pending.range_end, pending.envelope_id,
                 pending.request_body_zstd, pending.media_objects_zstd,
@@ -269,7 +296,9 @@ pub fn load_for_source(
                 pending.has_reply_evidence, pending.has_more,
                 pending.created_at, pending.attempt_count,
                 pending.last_attempt_at, pending.blocked_at,
-                pending.block_kind, pending.block_detail
+                pending.block_kind, pending.block_detail,
+                pending.media_objects_path, pending.media_objects_sha256,
+                pending.request_body_path, pending.request_body_sha256
          FROM pending_source_envelope AS pending
          JOIN source_epoch_registry AS epoch
            ON epoch.source_epoch = pending.source_epoch
@@ -280,25 +309,29 @@ pub fn load_for_source(
         row_to_pending,
     )
     .optional()
-    .context("loading pending storage-v2 envelope by source identity")
+    .context("loading pending storage-v2 envelope by source identity")?;
+    loaded.map(|envelope| hydrate_media(conn, envelope)).transpose()
 }
 
 pub fn load_for_epoch(
     conn: &Connection,
     source_epoch: Uuid,
 ) -> Result<Option<PendingSourceEnvelope>> {
-    conn.query_row(
+    let loaded = conn.query_row(
         "SELECT source_epoch, source_path, range_start, range_end, envelope_id,
                 request_body_zstd, media_objects_zstd, raw_bytes, event_count,
                 has_reply_evidence, has_more, created_at, attempt_count,
-                last_attempt_at, blocked_at, block_kind, block_detail
+                last_attempt_at, blocked_at, block_kind, block_detail,
+                media_objects_path, media_objects_sha256,
+                request_body_path, request_body_sha256
          FROM pending_source_envelope
          WHERE source_epoch = ?1",
         [source_epoch.to_string()],
         row_to_pending,
     )
     .optional()
-    .context("loading pending storage-v2 envelope by source epoch")
+    .context("loading pending storage-v2 envelope by source epoch")?;
+    loaded.map(|envelope| hydrate_media(conn, envelope)).transpose()
 }
 
 /// List exact-retry work that must be rescheduled after a process restart.
@@ -368,7 +401,9 @@ fn persist_or_load_with_limit(
             "SELECT source_epoch, source_path, range_start, range_end, envelope_id,
                     request_body_zstd, media_objects_zstd, raw_bytes, event_count,
                     has_reply_evidence, has_more, created_at, attempt_count,
-                    last_attempt_at, blocked_at, block_kind, block_detail
+                    last_attempt_at, blocked_at, block_kind, block_detail,
+                    media_objects_path, media_objects_sha256,
+                    request_body_path, request_body_sha256
              FROM pending_source_envelope
              WHERE source_epoch = ?1",
             [candidate.source_epoch.to_string()],
@@ -376,8 +411,9 @@ fn persist_or_load_with_limit(
         )
         .optional()?;
     if let Some(existing) = existing {
+        let root = crate::state::payload_store::root_for_connection(&tx)?;
         tx.commit()?;
-        return Ok(existing);
+        return hydrate_media_from(&root, existing);
     }
     // Blocked rows retain the same compressed evidence as active rows. Exempting
     // them made the cap disappear precisely when repeated host refusals caused
@@ -389,13 +425,21 @@ fn persist_or_load_with_limit(
     if !pending_outbox_has_capacity(current_bytes, candidate_bytes, byte_limit) {
         bail!("storage-v2 pending outbox byte limit exceeded ({byte_limit} bytes)");
     }
+    // Seal both payloads outside the row: an orphan left by a failed insert is
+    // swept, while a row without its payload would be an unshippable intent.
+    let (request_blob, request_path, request_sha256, request_len) =
+        seal_for_row(&tx, &candidate.request_body_zstd)?;
+    let (media_blob, media_path, media_sha256, media_len) =
+        seal_for_row(&tx, &candidate.media_objects_zstd)?;
     tx.execute(
         "INSERT INTO pending_source_envelope (
             source_epoch, source_path, range_start, range_end, envelope_id,
             request_body_zstd, media_objects_zstd, raw_bytes, event_count,
             has_reply_evidence, has_more, created_at, attempt_count,
-            last_attempt_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, NULL)
+            last_attempt_at, media_objects_path, media_objects_sha256, media_objects_len,
+            request_body_path, request_body_sha256, request_body_len
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, NULL,
+                   ?13, ?14, ?15, ?16, ?17, ?18)
          ON CONFLICT(source_epoch) DO NOTHING",
         params![
             candidate.source_epoch.to_string(),
@@ -403,13 +447,19 @@ fn persist_or_load_with_limit(
             to_sql_u64(candidate.range_start)?,
             to_sql_u64(candidate.range_end)?,
             candidate.envelope_id,
-            candidate.request_body_zstd,
-            candidate.media_objects_zstd,
+            request_blob,
+            media_blob,
             to_sql_u64(candidate.raw_bytes)?,
             i64::try_from(candidate.event_count).context("event count exceeds SQLite INTEGER")?,
             candidate.has_reply_evidence,
             candidate.has_more,
             candidate.created_at,
+            media_path,
+            media_sha256,
+            media_len,
+            request_path,
+            request_sha256,
+            request_len,
         ],
     )?;
     let persisted = tx
@@ -417,15 +467,18 @@ fn persist_or_load_with_limit(
             "SELECT source_epoch, source_path, range_start, range_end, envelope_id,
                     request_body_zstd, media_objects_zstd, raw_bytes, event_count,
                     has_reply_evidence, has_more, created_at, attempt_count,
-                    last_attempt_at, blocked_at, block_kind, block_detail
+                    last_attempt_at, blocked_at, block_kind, block_detail,
+                    media_objects_path, media_objects_sha256,
+                    request_body_path, request_body_sha256
              FROM pending_source_envelope
              WHERE source_epoch = ?1",
             [candidate.source_epoch.to_string()],
             row_to_pending,
         )
         .context("reloading persisted storage-v2 envelope")?;
+    let root = crate::state::payload_store::root_for_connection(&tx)?;
     tx.commit()?;
-    Ok(persisted)
+    hydrate_media_from(&root, persisted)
 }
 
 pub fn mark_attempt(conn: &Connection, source_epoch: Uuid) -> Result<()> {
@@ -580,11 +633,13 @@ pub fn snapshot(conn: &Connection) -> Result<StorageV2OutboxSnapshot> {
         "SELECT
             COALESCE(SUM(CASE WHEN blocked_at IS NULL THEN 1 ELSE 0 END), 0),
             COALESCE(SUM(CASE WHEN blocked_at IS NULL
-                THEN length(request_body_zstd) + length(media_objects_zstd) ELSE 0 END), 0),
+                THEN COALESCE(request_body_len, length(request_body_zstd))
+                     + COALESCE(media_objects_len, length(media_objects_zstd)) ELSE 0 END), 0),
             MIN(CASE WHEN blocked_at IS NULL THEN created_at END),
             COALESCE(SUM(CASE WHEN blocked_at IS NOT NULL THEN 1 ELSE 0 END), 0),
             COALESCE(SUM(CASE WHEN blocked_at IS NOT NULL
-                THEN length(request_body_zstd) + length(media_objects_zstd) ELSE 0 END), 0),
+                THEN COALESCE(request_body_len, length(request_body_zstd))
+                     + COALESCE(media_objects_len, length(media_objects_zstd)) ELSE 0 END), 0),
             MIN(blocked_at)
          FROM pending_source_envelope",
         [],
@@ -717,20 +772,14 @@ pub fn replace_request_body_after_render_conflict(
     expected_request_body_zstd: &[u8],
     replacement_request_body_zstd: &[u8],
 ) -> Result<()> {
-    let changed = conn.execute(
-        "UPDATE pending_source_envelope
-         SET request_body_zstd = ?1,
-             blocked_at = NULL,
-             block_kind = NULL,
-             block_detail = NULL
-         WHERE source_epoch = ?2 AND envelope_id = ?3
-           AND request_body_zstd = ?4",
-        params![
-            replacement_request_body_zstd,
-            source_epoch.to_string(),
-            envelope_id,
-            expected_request_body_zstd,
-        ],
+    let changed = replace_frozen_request_body(
+        conn,
+        source_epoch,
+        envelope_id,
+        expected_request_body_zstd,
+        replacement_request_body_zstd,
+        "",
+        &[],
     )?;
     if changed != 1 {
         bail!("render-generation recovery no longer matches the pending envelope");
@@ -751,23 +800,16 @@ pub fn replace_request_body_after_lineage_repair(
     proof_json: &str,
 ) -> Result<()> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let changed = tx.execute(
-        "UPDATE pending_source_envelope
-         SET request_body_zstd = ?1,
-             blocked_at = NULL,
-             block_kind = NULL,
-             block_detail = NULL
-         WHERE source_epoch = ?2 AND envelope_id = ?3
-           AND request_body_zstd = ?4
-           AND blocked_at IS NOT NULL
+    let changed = replace_frozen_request_body(
+        &tx,
+        source_epoch,
+        envelope_id,
+        expected_request_body_zstd,
+        replacement_request_body_zstd,
+        "AND blocked_at IS NOT NULL
            AND block_kind = 'source_epoch_conflict_unresolved'
            AND block_detail LIKE '%source_epoch_not_found%'",
-        params![
-            replacement_request_body_zstd,
-            source_epoch.to_string(),
-            envelope_id,
-            expected_request_body_zstd,
-        ],
+        &[],
     )?;
     if changed != 1 {
         bail!("lineage recovery no longer matches the blocked pending envelope");
@@ -935,23 +977,22 @@ pub fn align_admitted_epoch_predecessor(
     if registry_changed != 1 {
         bail!("local epoch changed during host-admitted predecessor recovery");
     }
-    let pending_changed = tx.execute(
-        "UPDATE pending_source_envelope
-         SET request_body_zstd = ?1,
-             blocked_at = NULL,
-             block_kind = NULL,
-             block_detail = NULL,
-             wake_at = '1970-01-01T00:00:00.000000000Z'
-         WHERE source_epoch = ?2 AND envelope_id = ?3
-           AND request_body_zstd = ?4 AND range_start = ?5
+    let pending_changed = replace_frozen_request_body(
+        &tx,
+        source_epoch,
+        envelope_id,
+        expected_request_body_zstd,
+        replacement_request_body_zstd,
+        "AND range_start = ?9
            AND blocked_at IS NOT NULL AND block_kind = 'source_epoch_conflict'",
-        params![
-            replacement_request_body_zstd,
-            source_epoch.to_string(),
-            envelope_id,
-            expected_request_body_zstd,
-            to_sql_u64(host_accepted_through)?,
-        ],
+        &[&to_sql_u64(host_accepted_through)?],
+    )?;
+    // The wake time is the caller's separate concern, not part of the CAS.
+    tx.execute(
+        "UPDATE pending_source_envelope
+         SET wake_at = '1970-01-01T00:00:00.000000000Z'
+         WHERE source_epoch = ?1 AND envelope_id = ?2",
+        params![source_epoch.to_string(), envelope_id],
     )?;
     if pending_changed != 1 {
         bail!("blocked envelope changed during host-admitted predecessor recovery");
@@ -1026,23 +1067,22 @@ pub fn repair_cross_provider_session_binding(
     if registry_changed != 1 {
         bail!("source epoch no longer matches cross-provider binding recovery");
     }
-    let pending_changed = tx.execute(
-        "UPDATE pending_source_envelope
-         SET request_body_zstd = ?1,
-             blocked_at = NULL,
-             block_kind = NULL,
-             block_detail = NULL,
-             wake_at = '1970-01-01T00:00:00.000000000Z'
-         WHERE source_epoch = ?2 AND envelope_id = ?3
-           AND request_body_zstd = ?4 AND range_start = 0
+    let pending_changed = replace_frozen_request_body(
+        &tx,
+        source_epoch,
+        envelope_id,
+        expected_request_body_zstd,
+        replacement_request_body_zstd,
+        "AND range_start = 0
            AND blocked_at IS NOT NULL
            AND block_kind = 'source_epoch_conflict_unresolved'",
-        params![
-            replacement_request_body_zstd,
-            source_epoch.to_string(),
-            envelope_id,
-            expected_request_body_zstd,
-        ],
+        &[],
+    )?;
+    tx.execute(
+        "UPDATE pending_source_envelope
+         SET wake_at = '1970-01-01T00:00:00.000000000Z'
+         WHERE source_epoch = ?1 AND envelope_id = ?2",
+        params![source_epoch.to_string(), envelope_id],
     )?;
     if pending_changed != 1 {
         bail!("pending request changed during cross-provider binding recovery");
@@ -1257,27 +1297,25 @@ pub fn attach_host_authority_predecessor(
             bail!("local source epoch changed during host-authority recovery");
         }
     }
-    let pending_changed = tx.execute(
-        "UPDATE pending_source_envelope
-         SET request_body_zstd = ?1,
-             blocked_at = NULL,
-             block_kind = NULL,
-             block_detail = NULL,
-             wake_at = '1970-01-01T00:00:00.000000000Z'
-         WHERE source_epoch = ?2 AND envelope_id = ?3
-           AND request_body_zstd = ?4
-           AND blocked_at IS NOT NULL
+    let pending_changed = replace_frozen_request_body(
+        &tx,
+        source_epoch,
+        envelope_id,
+        expected_request_body_zstd,
+        replacement_request_body_zstd,
+        "AND blocked_at IS NOT NULL
            AND block_kind = 'source_epoch_conflict_unresolved'",
-        params![
-            replacement_request_body_zstd,
-            source_epoch.to_string(),
-            envelope_id,
-            expected_request_body_zstd,
-        ],
+        &[],
     )?;
     if pending_changed != 1 {
         bail!("blocked envelope changed during host-authority recovery");
     }
+    tx.execute(
+        "UPDATE pending_source_envelope
+         SET wake_at = '1970-01-01T00:00:00.000000000Z'
+         WHERE source_epoch = ?1 AND envelope_id = ?2",
+        params![source_epoch.to_string(), envelope_id],
+    )?;
     tx.execute(
         "INSERT INTO pending_source_envelope_supersession (
              source_epoch, envelope_id, old_request_body_zstd,
@@ -1453,23 +1491,21 @@ pub fn retarget_host_authority_predecessor(
     if registry_changed != 1 {
         bail!("local source epoch changed during host-authority retarget");
     }
-    let pending_changed = tx.execute(
-        "UPDATE pending_source_envelope
-         SET request_body_zstd = ?1,
-             blocked_at = NULL,
-             block_kind = NULL,
-             block_detail = NULL,
-             wake_at = '1970-01-01T00:00:00.000000000Z'
-         WHERE source_epoch = ?2 AND envelope_id = ?3
-           AND request_body_zstd = ?4
-           AND blocked_at IS NOT NULL
+    let pending_changed = replace_frozen_request_body(
+        &tx,
+        source_epoch,
+        envelope_id,
+        expected_request_body_zstd,
+        replacement_request_body_zstd,
+        "AND blocked_at IS NOT NULL
            AND block_kind = 'source_epoch_conflict_unresolved'",
-        params![
-            replacement_request_body_zstd,
-            source_epoch.to_string(),
-            envelope_id,
-            expected_request_body_zstd,
-        ],
+        &[],
+    )?;
+    tx.execute(
+        "UPDATE pending_source_envelope
+         SET wake_at = '1970-01-01T00:00:00.000000000Z'
+         WHERE source_epoch = ?1 AND envelope_id = ?2",
+        params![source_epoch.to_string(), envelope_id],
     )?;
     if pending_changed != 1 {
         bail!("blocked envelope changed during host-authority retarget");
@@ -1526,15 +1562,19 @@ pub fn retire_after_host_replacement(
     if advanced != 1 {
         bail!("host replacement proof no longer matches the source durable cursor");
     }
+    let guard = frozen_body_guard_sql("?3", "?4");
     let changed = tx.execute(
-        "DELETE FROM pending_source_envelope
-         WHERE source_epoch = ?1 AND envelope_id = ?2
-           AND request_body_zstd = ?3
-           AND blocked_at IS NOT NULL
-           AND block_kind = 'source_epoch_conflict'",
+        &format!(
+            "DELETE FROM pending_source_envelope
+             WHERE source_epoch = ?1 AND envelope_id = ?2
+               AND {guard}
+               AND blocked_at IS NOT NULL
+               AND block_kind = 'source_epoch_conflict'"
+        ),
         params![
             source_epoch.to_string(),
             envelope_id,
+            crate::state::payload_store::hash_bytes(expected_request_body_zstd),
             expected_request_body_zstd,
         ],
     )?;
@@ -1596,15 +1636,19 @@ pub fn retire_empty_source(
     if advanced != 1 {
         bail!("empty source retirement proof no longer matches the durable cursor");
     }
+    let guard = frozen_body_guard_sql("?3", "?4");
     let changed = tx.execute(
-        "DELETE FROM pending_source_envelope
-         WHERE source_epoch = ?1 AND envelope_id = ?2
-           AND request_body_zstd = ?3
-           AND blocked_at IS NOT NULL
-           AND block_kind = 'source_epoch_conflict_unresolved'",
+        &format!(
+            "DELETE FROM pending_source_envelope
+             WHERE source_epoch = ?1 AND envelope_id = ?2
+               AND {guard}
+               AND blocked_at IS NOT NULL
+               AND block_kind = 'source_epoch_conflict_unresolved'"
+        ),
         params![
             source_epoch.to_string(),
             envelope_id,
+            crate::state::payload_store::hash_bytes(expected_request_body_zstd),
             expected_request_body_zstd,
         ],
     )?;
@@ -1692,6 +1736,14 @@ pub fn acknowledge_and_delete(
     if changed != 1 {
         bail!("source epoch lane cursor changed before acknowledgement");
     }
+    let payloads: Option<(Option<String>, Option<String>)> = tx
+        .query_row(
+            "SELECT media_objects_path, request_body_path FROM pending_source_envelope
+             WHERE source_epoch = ?1 AND envelope_id = ?2",
+            params![source_epoch.to_string(), expected_envelope_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
     let deleted = tx.execute(
         "DELETE FROM pending_source_envelope
          WHERE source_epoch = ?1 AND envelope_id = ?2",
@@ -1701,6 +1753,14 @@ pub fn acknowledge_and_delete(
         bail!("pending storage-v2 envelope disappeared during acknowledgement");
     }
     tx.commit()?;
+    // Only now, with the row gone, may the payloads go: the reverse order could
+    // delete the only copy of a range the host has not acknowledged.
+    if let Some((media_path, request_path)) = payloads {
+        let root = crate::state::payload_store::root_for_connection(conn)?;
+        for relative_path in [media_path, request_path].into_iter().flatten() {
+            crate::state::payload_store::remove(&root, &relative_path)?;
+        }
+    }
     Ok(())
 }
 
@@ -1767,28 +1827,40 @@ pub fn reconcile_proven_prefix(
         bail!("pending envelope disappeared during reconciliation");
     }
     if let Some(replacement) = replacement {
+        let (request_blob, request_path, request_sha256, request_len) =
+            seal_for_row(&tx, &replacement.request_body_zstd)?;
+        let (media_blob, media_path, media_sha256, media_len) =
+            seal_for_row(&tx, &replacement.media_objects_zstd)?;
         tx.execute(
             "INSERT INTO pending_source_envelope (
                 source_epoch, source_path, range_start, range_end, envelope_id,
                 request_body_zstd, media_objects_zstd, raw_bytes, event_count,
                 has_reply_evidence, has_more, created_at, attempt_count,
-                last_attempt_at, blocked_at, block_kind, block_detail
+                last_attempt_at, blocked_at, block_kind, block_detail,
+                media_objects_path, media_objects_sha256, media_objects_len,
+                request_body_path, request_body_sha256, request_body_len
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                       0, NULL, NULL, NULL, NULL)",
+                       0, NULL, NULL, NULL, NULL, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 replacement.source_epoch.to_string(),
                 replacement.source_path,
                 to_sql_u64(replacement.range_start)?,
                 to_sql_u64(replacement.range_end)?,
                 replacement.envelope_id,
-                replacement.request_body_zstd,
-                replacement.media_objects_zstd,
+                request_blob,
+                media_blob,
                 to_sql_u64(replacement.raw_bytes)?,
                 i64::try_from(replacement.event_count)
                     .context("event count exceeds SQLite INTEGER")?,
                 replacement.has_reply_evidence,
                 replacement.has_more,
                 replacement.created_at,
+                media_path,
+                media_sha256,
+                media_len,
+                request_path,
+                request_sha256,
+                request_len,
             ],
         )?;
     }
@@ -1802,6 +1874,201 @@ pub fn count(conn: &Connection) -> Result<u64> {
         row.get(0)
     })?;
     u64::try_from(value).context("pending envelope count is negative")
+}
+
+/// Seal one payload for a row: bytes to a file, reference into the columns.
+///
+/// Returns the (empty) blob, the relative path, the content hash and the byte
+/// length. An empty payload stays an empty blob with no reference — there is
+/// nothing to freeze, and a zero-byte file per row would be worse than none.
+fn seal_for_row(
+    conn: &Connection,
+    bytes: &[u8],
+) -> Result<(Vec<u8>, Option<String>, Option<String>, i64)> {
+    if bytes.is_empty() {
+        return Ok((Vec::new(), None, None, 0));
+    }
+    let sealed = crate::state::payload_store::seal(
+        &crate::state::payload_store::root_for_connection(conn)?,
+        bytes,
+    )?;
+    Ok((
+        Vec::new(),
+        Some(sealed.relative_path),
+        Some(sealed.sha256),
+        i64::try_from(sealed.len).context("frozen payload exceeds SQLite INTEGER")?,
+    ))
+}
+
+/// Replace a frozen request body, guarded by the identity of the body it
+/// replaces.
+///
+/// The guard used to compare body bytes. The sealed hash is the same identity,
+/// it costs nothing, and it still holds for a row whose body lives in a file —
+/// whose blob column is empty, so a byte comparison would silently never match.
+/// `extra_predicate` is the caller's own condition; its parameters must start at
+/// `?9` because `?1`..`?8` are the new columns and the guard.
+fn replace_frozen_request_body(
+    conn: &Connection,
+    source_epoch: Uuid,
+    envelope_id: &str,
+    expected_body: &[u8],
+    replacement_body: &[u8],
+    extra_predicate: &str,
+    extra_params: &[&dyn rusqlite::ToSql],
+) -> Result<usize> {
+    let expected_sha256 = crate::state::payload_store::hash_bytes(expected_body);
+    let (blob, path, sha256, len) = seal_for_row(conn, replacement_body)?;
+    let epoch = source_epoch.to_string();
+    let sql = format!(
+        "UPDATE pending_source_envelope
+         SET request_body_zstd = ?1, request_body_path = ?2,
+             request_body_sha256 = ?3, request_body_len = ?4,
+             blocked_at = NULL, block_kind = NULL, block_detail = NULL
+         WHERE source_epoch = ?5 AND envelope_id = ?6
+           AND (request_body_sha256 = ?7
+                OR (request_body_sha256 IS NULL AND request_body_zstd = ?8))
+           {extra_predicate}"
+    );
+    let mut params: Vec<&dyn rusqlite::ToSql> = vec![
+        &blob,
+        &path,
+        &sha256,
+        &len,
+        &epoch,
+        &envelope_id,
+        &expected_sha256,
+        &expected_body,
+    ];
+    params.extend_from_slice(extra_params);
+    Ok(conn.execute(&sql, params.as_slice())?)
+}
+
+/// The SQL guard that a row still holds the body a caller expects.
+///
+/// Same rule as the replace guard: the sealed hash is the body's identity, and a
+/// file-backed row's blob column is empty, so a byte comparison would silently
+/// never match. The two placeholders are supplied by the caller because they
+/// differ between an UPDATE and a DELETE.
+fn frozen_body_guard_sql(sha_placeholder: &str, bytes_placeholder: &str) -> String {
+    format!(
+        "(request_body_sha256 = {sha_placeholder} \
+         OR (request_body_sha256 IS NULL AND request_body_zstd = {bytes_placeholder}))"
+    )
+}
+
+/// What one startup reconciliation found.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PayloadReconciliation {
+    /// Files no row references, removed.
+    pub orphans_removed: usize,
+    /// Rows whose frozen payload is gone, now blocked and visible.
+    pub missing_blocked: usize,
+}
+
+/// Reconcile the payload store against the rows that reference it.
+///
+/// Run at startup, before anything ships. The two shapes are not symmetrical: an
+/// orphaned file wastes space and is deleted, while a row without its bytes is
+/// *held* — blocked with a typed kind and counted in the outbox diagnostics —
+/// because it is an intent that cannot be sent and must not be silently dropped.
+/// Re-preparing it from the source is a separate decision with its own proof.
+pub fn reconcile_frozen_payloads(conn: &Connection) -> Result<PayloadReconciliation> {
+    let root = crate::state::payload_store::root_for_connection(conn)?;
+    let mut statement = conn.prepare(
+        "SELECT source_epoch, envelope_id, media_objects_path, request_body_path
+         FROM pending_source_envelope",
+    )?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+
+    let mut referenced = Vec::new();
+    let mut missing = Vec::new();
+    for (source_epoch, envelope_id, media_path, request_path) in rows {
+        for relative_path in [media_path, request_path].into_iter().flatten() {
+            if crate::state::payload_store::exists(&root, &relative_path) {
+                referenced.push(relative_path);
+            } else {
+                missing.push((source_epoch.clone(), envelope_id.clone(), relative_path));
+            }
+        }
+    }
+
+    // Cursor raw records own payloads too, and a live record's file must not be
+    // mistaken for an orphan: that would delete the only copy of evidence the
+    // host has not receipted.
+    referenced.extend(crate::state::cursor_store_records::referenced_payloads(conn)?);
+
+    let report = crate::state::payload_store::sweep(&root, &referenced)?;
+    let now = Utc::now().to_rfc3339();
+    let mut missing_blocked = 0;
+    for (source_epoch, envelope_id, relative_path) in missing {
+        let changed = conn.execute(
+            "UPDATE pending_source_envelope
+             SET blocked_at = COALESCE(blocked_at, ?1),
+                 block_kind = ?2,
+                 block_detail = ?3,
+                 wake_at = '1970-01-01T00:00:00.000000000Z'
+             WHERE source_epoch = ?4 AND envelope_id = ?5",
+            params![
+                now,
+                BlockKind::PayloadMissing.as_str(),
+                format!("frozen payload {relative_path} is missing"),
+                source_epoch,
+                envelope_id,
+            ],
+        )?;
+        missing_blocked += changed;
+    }
+    Ok(PayloadReconciliation {
+        orphans_removed: report.orphans_removed,
+        missing_blocked,
+    })
+}
+
+/// Load a file-backed media payload, leaving a legacy blob row untouched.
+///
+/// A row whose payload is missing is an error the caller must see: the only
+/// other explanation is a bug, because nothing deletes a payload before its row.
+fn hydrate_media(conn: &Connection, envelope: PendingSourceEnvelope) -> Result<PendingSourceEnvelope> {
+    let root = crate::state::payload_store::root_for_connection(conn)?;
+    hydrate_media_from(&root, envelope)
+}
+
+/// Same, with the payload root already resolved: a transaction that is about to
+/// be committed can no longer be borrowed for its path.
+fn hydrate_media_from(root: &Path, envelope: PendingSourceEnvelope) -> Result<PendingSourceEnvelope> {
+    let mut hydrated = envelope;
+    if let (Some(path), Some(sha256)) = (
+        hydrated.media_objects_path.clone(),
+        hydrated.media_objects_sha256.clone(),
+    ) {
+        hydrated.media_objects_zstd = crate::state::payload_store::read(root, &path, &sha256)?;
+    }
+    if let (Some(path), Some(sha256)) = (
+        hydrated.request_body_path.clone(),
+        hydrated.request_body_sha256.clone(),
+    ) {
+        hydrated.request_body_zstd = crate::state::payload_store::read(root, &path, &sha256)?;
+    }
+    // The reference is storage, not identity: a loaded envelope must compare
+    // equal to the candidate that produced it, and every consumer works from the
+    // bytes. Reads of the reference itself (the acknowledgement unlink and the
+    // sweep) go to the row, which is where it is authoritative.
+    hydrated.media_objects_path = None;
+    hydrated.media_objects_sha256 = None;
+    hydrated.request_body_path = None;
+    hydrated.request_body_sha256 = None;
+    Ok(hydrated)
 }
 
 fn row_to_pending(row: &rusqlite::Row<'_>) -> rusqlite::Result<PendingSourceEnvelope> {
@@ -1825,6 +2092,10 @@ fn row_to_pending(row: &rusqlite::Row<'_>) -> rusqlite::Result<PendingSourceEnve
         envelope_id: row.get(4)?,
         request_body_zstd: row.get(5)?,
         media_objects_zstd: row.get(6)?,
+        media_objects_path: row.get(17)?,
+        media_objects_sha256: row.get(18)?,
+        request_body_path: row.get(19)?,
+        request_body_sha256: row.get(20)?,
         raw_bytes: from_sql_u64(7, raw_bytes)?,
         event_count: usize::try_from(event_count).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
@@ -2390,6 +2661,224 @@ mod tests {
     }
 
     #[test]
+    fn frozen_payloads_live_in_the_payload_store_not_the_row() {
+        // The row keeps a reference; the bytes are a file. This is the shape
+        // that lets the database stay small enough to answer a launch-time
+        // write, and the ordering that keeps it safe: payloads go only after the
+        // row that named them is gone.
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+            let epoch = Uuid::new_v4();
+            register_epoch(&conn, epoch, "claude");
+            // The acknowledgement compare-and-swaps the durable lane cursor, so
+            // the lane has to exist, exactly as it does in production.
+            conn.execute(
+                "INSERT INTO source_epoch_lane_state (source_epoch, lane, last_position, updated_at)
+                 VALUES (?1, 'durable', 0, '2026-07-15T00:00:00Z')",
+                [epoch.to_string()],
+            )
+            .unwrap();
+            let candidate = candidate(epoch, "/tmp/media.jsonl");
+            let media = candidate.media_objects_zstd.clone();
+
+            let persisted = persist_or_load(&mut conn, &candidate).unwrap();
+            assert_eq!(
+                persisted.media_objects_zstd, media,
+                "the round trip must return the exact bytes"
+            );
+
+            let (media_blob, media_path, media_sha, media_len, request_blob, request_path, request_len): (
+                i64,
+                Option<String>,
+                Option<String>,
+                Option<i64>,
+                i64,
+                Option<String>,
+                Option<i64>,
+            ) = conn
+                .query_row(
+                    "SELECT length(media_objects_zstd), media_objects_path,
+                            media_objects_sha256, media_objects_len,
+                            length(request_body_zstd), request_body_path, request_body_len
+                     FROM pending_source_envelope WHERE source_epoch = ?1",
+                    [epoch.to_string()],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                            row.get(6)?,
+                        ))
+                    },
+                )
+                .unwrap();
+            assert_eq!(media_blob, 0, "the row must not keep a second media copy");
+            assert_eq!(request_blob, 0, "the row must not keep a second body copy");
+            assert_eq!(media_len, Some(media.len() as i64), "the cap counts media bytes");
+            assert_eq!(
+                request_len,
+                Some(persisted.request_body_zstd.len() as i64),
+                "the cap counts body bytes"
+            );
+            let media_path = media_path.expect("a file-backed row names its media payload");
+            let request_path = request_path.expect("a file-backed row names its body");
+            assert!(media_sha.is_some_and(|sha| sha.len() == 64));
+            let root = crate::state::payload_store::root_for_connection(&conn).unwrap();
+            assert!(root.join(&media_path).exists(), "the media payload must be on disk");
+            assert!(root.join(&request_path).exists(), "the body must be on disk");
+
+            super::acknowledge_and_delete(
+                &mut conn,
+                epoch,
+                &persisted.envelope_id,
+                persisted.range_start,
+                persisted.range_end,
+            )
+            .unwrap();
+
+            assert!(
+                !root.join(&media_path).exists(),
+                "an acknowledged media payload must be removed, and only after its row"
+            );
+            assert!(
+                !root.join(&request_path).exists(),
+                "an acknowledged request body must be removed, and only after its row"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rejected_envelope_leaves_no_payload_behind() {
+        // The capacity check runs before sealing, so a refused candidate costs a
+        // decision and nothing else. Sealing first would leave a file per
+        // rejection for the sweep to clean.
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let epoch = Uuid::new_v4();
+        register_epoch(&conn, epoch, "claude");
+        let root = crate::state::payload_store::root_for_connection(&conn).unwrap();
+
+        let refused = persist_or_load_with_limit(
+            &mut conn,
+            &candidate(epoch, "/tmp/too-big.jsonl"),
+            1,
+        );
+        assert!(refused.is_err(), "the candidate must be refused");
+        let leftovers = std::fs::read_dir(&root).map(|entries| entries.count()).unwrap_or(0);
+        assert_eq!(leftovers, 0, "a refused candidate must not seal anything");
+        assert_eq!(super::count(&conn).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_payload_left_after_acknowledgement_is_swept() {
+        // An unlink that never happened (a crash between commit and removal, or a
+        // failed remove) leaves a file no row references. That is exactly the
+        // orphan shape, and the next reconciliation deletes it.
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let epoch = Uuid::new_v4();
+        register_epoch(&conn, epoch, "claude");
+        conn.execute(
+            "INSERT INTO source_epoch_lane_state (source_epoch, lane, last_position, updated_at)
+             VALUES (?1, 'durable', 0, '2026-07-15T00:00:00Z')",
+            [epoch.to_string()],
+        )
+        .unwrap();
+        let persisted = persist_or_load(&mut conn, &candidate(epoch, "/tmp/sweep.jsonl")).unwrap();
+        let root = crate::state::payload_store::root_for_connection(&conn).unwrap();
+        let (media_path, request_path): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT media_objects_path, request_body_path FROM pending_source_envelope
+                 WHERE source_epoch = ?1",
+                [epoch.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let paths: Vec<String> = [media_path, request_path].into_iter().flatten().collect();
+        assert_eq!(paths.len(), 2);
+
+        // Acknowledgement removes the row and its payloads...
+        super::acknowledge_and_delete(
+            &mut conn,
+            epoch,
+            &persisted.envelope_id,
+            persisted.range_start,
+            persisted.range_end,
+        )
+        .unwrap();
+        assert_eq!(super::count(&conn).unwrap(), 0);
+
+        // ...but a removal that did not happen leaves an orphan, and nothing may
+        // ship from it.
+        for relative in &paths {
+            std::fs::create_dir_all(root.join(relative).parent().unwrap()).ok();
+            std::fs::write(root.join(relative), b"leftover").unwrap();
+        }
+        let report = super::reconcile_frozen_payloads(&conn).unwrap();
+        assert_eq!(report.orphans_removed, paths.len());
+        assert_eq!(report.missing_blocked, 0);
+        for relative in &paths {
+            assert!(!root.join(relative).exists());
+        }
+    }
+
+    #[test]
+    fn reconciliation_removes_orphans_and_holds_a_row_whose_payload_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let root = crate::state::payload_store::root_for_connection(&conn).unwrap();
+        let epoch = Uuid::new_v4();
+        register_epoch(&conn, epoch, "claude");
+        let persisted = persist_or_load(&mut conn, &candidate(epoch, "/tmp/lost.jsonl")).unwrap();
+
+        // An orphan left by a crash between sealing and committing the row.
+        std::fs::create_dir_all(root.join("ff")).unwrap();
+        std::fs::write(root.join("ff/orphan.zst"), b"nobody references me").unwrap();
+
+        let report = super::reconcile_frozen_payloads(&conn).unwrap();
+        assert_eq!(report.orphans_removed, 1, "an unreferenced payload is deleted");
+        assert_eq!(report.missing_blocked, 0, "every referenced payload is present");
+        assert!(!root.join("ff/orphan.zst").exists());
+
+        // Now the payload is lost. The row must be held, not shipped empty.
+        let (media_path, request_path): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT media_objects_path, request_body_path FROM pending_source_envelope
+                 WHERE source_epoch = ?1",
+                [epoch.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        for relative in [media_path, request_path].into_iter().flatten() {
+            std::fs::remove_file(root.join(&relative)).unwrap();
+        }
+
+        let report = super::reconcile_frozen_payloads(&conn).unwrap();
+        assert_eq!(report.missing_blocked, 2, "both payloads are gone");
+        let (kind, detail): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT block_kind, block_detail FROM pending_source_envelope
+                 WHERE source_epoch = ?1",
+                [epoch.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(kind.as_deref(), Some("payload_missing"));
+        assert!(detail.unwrap_or_default().contains("is missing"));
+        let state = snapshot(&conn).unwrap();
+        assert_eq!(
+            state.blocked_source_count, 1,
+            "the held intent must be visible in the outbox diagnostics"
+        );
+        assert_eq!(state.pending_count, 0);
+        assert_eq!(persisted.source_epoch, epoch);
+    }
+
+    #[test]
     fn quarantined_bytes_remain_inside_the_outbox_cap() {
         let dir = tempfile::tempdir().unwrap();
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
@@ -2710,6 +3199,10 @@ mod tests {
             envelope_id: "a".repeat(64),
             request_body_zstd: vec![1],
             media_objects_zstd: vec![2],
+            media_objects_path: None,
+            media_objects_sha256: None,
+            request_body_path: None,
+            request_body_sha256: None,
             raw_bytes: 1,
             event_count: 1,
             has_reply_evidence: true,

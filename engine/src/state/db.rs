@@ -100,6 +100,7 @@ pub fn open_client_connection(db_path: &Path, busy_timeout: Duration) -> Result<
              tool_name TEXT,
              source TEXT NOT NULL,
              observed_at TEXT NOT NULL,
+             run_id TEXT,
              revision INTEGER NOT NULL DEFAULT 0
          );
          CREATE TABLE IF NOT EXISTS session_binding (
@@ -190,15 +191,6 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             last_seen_at TEXT
         );
 
-        CREATE TABLE IF NOT EXISTS live_file_state (
-            path TEXT PRIMARY KEY,
-            provider TEXT NOT NULL,
-            offset INTEGER NOT NULL DEFAULT 0,
-            file_identity TEXT,
-            session_id TEXT,
-            updated_at TEXT NOT NULL
-        );
-
         CREATE TABLE IF NOT EXISTS session_phase_state (
             session_id TEXT PRIMARY KEY,
             provider TEXT NOT NULL,
@@ -206,36 +198,16 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             tool_name TEXT,
             source TEXT NOT NULL,
             observed_at TEXT NOT NULL,
+            run_id TEXT,
             revision INTEGER NOT NULL DEFAULT 0
         );
 
-        -- Runs a provider observation bound a session to, with the window each
-        -- run was valid for. Provider state files vanish the moment a launcher
-        -- exits, so without a durable binding the final `idle` of a session has
-        -- no run to attach to and the served activity head stays frozen on the
-        -- last live phase.
-        --
-        -- One row per (session, run), not per session. A session that resumes
-        -- gets a second run while the previous run's phase may still be inside
-        -- its freshness window; binding that phase to the newer run would ship
-        -- run A's activity stamped as run B, and the Runtime Host would accept
-        -- it because B is the durable latest run. Phases resolve against
-        -- `run_started_at` so each one attaches to the run that was live when
-        -- it was observed.
-        CREATE TABLE IF NOT EXISTS session_run_window (
-            session_id TEXT NOT NULL,
-            run_id TEXT NOT NULL,
-            provider TEXT NOT NULL,
-            run_started_at TEXT NOT NULL,
-            last_observed_at TEXT NOT NULL,
-            PRIMARY KEY (session_id, run_id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_session_run_window_session
-            ON session_run_window(session_id, run_started_at DESC);
-
-        -- Superseded by session_run_window. Held only the latest run per
-        -- session with no validity window, which is the misbinding above.
+        -- Both held a run binding derived from observation windows. Phase rows
+        -- now carry the run their producer observed them in, so the timestamp
+        -- join these existed for is gone; the tables are dropped rather than
+        -- migrated because they are presentation state that rebuilds.
         DROP TABLE IF EXISTS session_run_binding;
+        DROP TABLE IF EXISTS session_run_window;
 
         CREATE TABLE IF NOT EXISTS session_title_state (
             session_id TEXT PRIMARY KEY,
@@ -383,6 +355,18 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
     if !file_state_columns.contains("file_identity") {
         conn.execute_batch("ALTER TABLE file_state ADD COLUMN file_identity TEXT;")?;
     }
+
+    // Phase rows carry the run the producer observed them in, so the status
+    // projection attributes a phase by identity rather than by timestamp.
+    // Presentation state: a NULL run_id is a row that predates the column or a
+    // producer that could not name its run, and reads as unknown.
+    let phase_state_columns: std::collections::HashSet<String> = conn
+        .prepare("PRAGMA table_info(session_phase_state)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<_, _>>()?;
+    if !phase_state_columns.contains("run_id") {
+        conn.execute_batch("ALTER TABLE session_phase_state ADD COLUMN run_id TEXT;")?;
+    }
     if !file_state_columns.contains("acked_cursor_fingerprint") {
         conn.execute_batch("ALTER TABLE file_state ADD COLUMN acked_cursor_fingerprint TEXT;")?;
     }
@@ -418,13 +402,51 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
         conn.execute_batch("ALTER TABLE session_binding ADD COLUMN last_seen_at TEXT;")?;
     }
 
-    let live_file_state_columns: std::collections::HashSet<String> = conn
-        .prepare("PRAGMA table_info(live_file_state)")?
+    // Media objects move out of the database as files: the row keeps the
+    // reference, the payload store keeps the bytes. `media_objects_len` is what
+    // the outbox cap counts, so a file-backed row and a legacy blob row are
+    // measured the same way.
+    let pending_envelope_columns: std::collections::HashSet<String> = conn
+        .prepare("PRAGMA table_info(pending_source_envelope)")?
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<std::result::Result<_, _>>()?;
-    if !live_file_state_columns.contains("file_identity") {
-        conn.execute_batch("ALTER TABLE live_file_state ADD COLUMN file_identity TEXT;")?;
+    for (column, ddl) in [
+        ("media_objects_path", "TEXT"),
+        ("media_objects_sha256", "TEXT"),
+        ("media_objects_len", "INTEGER"),
+        ("request_body_path", "TEXT"),
+        ("request_body_sha256", "TEXT"),
+        ("request_body_len", "INTEGER"),
+    ] {
+        if !pending_envelope_columns.contains(column) {
+            conn.execute_batch(&format!(
+                "ALTER TABLE pending_source_envelope ADD COLUMN {column} {ddl};"
+            ))?;
+        }
     }
+
+    // Cursor raw records move to the payload store too. `record_bytes_len` is
+    // what the drain and the accounting read, so a file-backed row and a legacy
+    // blob row are measured the same way; existing rows are backfilled once from
+    // the bytes they still hold.
+    let raw_record_columns: std::collections::HashSet<String> = conn
+        .prepare("PRAGMA table_info(cursor_store_raw_record)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<_, _>>()?;
+    if !raw_record_columns.contains("record_bytes_len") {
+        conn.execute_batch(
+            "ALTER TABLE cursor_store_raw_record ADD COLUMN record_bytes_len INTEGER;
+             UPDATE cursor_store_raw_record SET record_bytes_len = length(record_bytes)
+             WHERE record_bytes_len IS NULL;",
+        )?;
+    }
+
+    // Deletion migration, not a rewrite: `live_file_state` had no reader or
+    // writer anywhere in the engine (only its own DDL), and its rows describe
+    // v1 per-file offsets that `source_epoch_lane_state` owns now. Dropping it
+    // here is what makes the removal real for databases created before
+    // 2026-09-17 instead of only for fresh ones.
+    conn.execute_batch("DROP TABLE IF EXISTS live_file_state;")?;
 
     let session_phase_columns: std::collections::HashSet<String> = conn
         .prepare("PRAGMA table_info(session_phase_state)")?
@@ -562,9 +584,6 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
          CREATE INDEX IF NOT EXISTS idx_session_phase_provider_observed
          ON session_phase_state(provider, observed_at DESC);
 
-         CREATE INDEX IF NOT EXISTS idx_live_file_state_updated
-         ON live_file_state(provider, updated_at DESC);
-
          CREATE INDEX IF NOT EXISTS idx_unmanaged_process_binding_observed
          ON unmanaged_process_binding_state(provider, observed_at DESC);
 
@@ -668,6 +687,36 @@ fn default_db_path() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn open_db_drops_the_dead_live_file_state_table() {
+        // The table had no reader anywhere in the engine. Fresh databases simply
+        // never create it; existing ones lose it here, so "deleted" means the
+        // storage is gone rather than only the code that wrote it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE live_file_state (
+                 path TEXT PRIMARY KEY,
+                 provider TEXT NOT NULL,
+                 offset INTEGER NOT NULL DEFAULT 0,
+                 updated_at TEXT NOT NULL
+             );
+             INSERT INTO live_file_state VALUES ('/tmp/a.jsonl', 'claude', 0, '2026-01-01T00:00:00Z');",
+        )
+        .unwrap();
+        drop(conn);
+
+        let conn = open_db(Some(&path)).unwrap();
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'live_file_state'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0, "the dead table must not survive a cold open");
+    }
 
     #[test]
     fn bundled_sqlite_excludes_the_wal_reset_corruption_window() {

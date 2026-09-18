@@ -104,17 +104,12 @@ pub async fn start_antigravity_print_turn(
     let stderr_path = run_dir.join("stderr.log");
     let stdout_file = private_output_file(&stdout_path)?;
     let stderr_file = private_output_file(&stderr_path)?;
-    // Fail before launching if durable ownership cannot be recorded. Discovery
-    // can also reconstruct this binding from the claim and structured stdout.
-    let db_path = config
-        .local_db_path
-        .as_deref()
-        .context("Antigravity Console requires a local source binding database")?;
-    crate::state::db::open_client_connection(db_path, Duration::from_millis(500))?;
+    // Ownership is recorded as a local claim, so the launch no longer needs the
+    // archive database to open first — a locked archive used to fail this turn
+    // before the provider ever started.
     if let Some(conversation_id) = normalized_optional(&config.conversation_id) {
         validate_uuid(&conversation_id, "conversation_id")?;
         persist_transcript_binding(
-            db_path,
             &conversation_transcript_path(
                 &antigravity_brain_root().context("HOME is unset")?,
                 &conversation_id,
@@ -853,13 +848,34 @@ fn is_antigravity_print_claim(claim: &crate::turn_claims::TurnClaim) -> bool {
 }
 
 fn persist_transcript_binding(
-    db_path: &Path,
     transcript: &Path,
     session_id: &str,
     provider_session_id: &str,
 ) -> Result<()> {
-    let conn = crate::state::db::open_client_connection(db_path, Duration::from_millis(500))?;
-    bind_source_owner(&conn, transcript, session_id, provider_session_id)
+    // A local claim, projected by the daemon before discovery runs.
+    crate::managed_source_claim::ensure_bindable(session_id, transcript, provider_session_id)?;
+    if transcript
+        .file_name()
+        .is_some_and(|name| name == "transcript_full.jsonl")
+    {
+        // Earlier bindings may name the shortened sibling. That durable owner
+        // still prevents another session from taking over; it does not
+        // authorize another source to be enrolled beside the full transcript.
+        crate::managed_source_claim::ensure_bindable(
+            session_id,
+            &transcript.with_file_name("transcript.jsonl"),
+            provider_session_id,
+        )?;
+    }
+    crate::managed_source_claim::confirm_identity(
+        session_id,
+        "antigravity",
+        transcript,
+        provider_session_id,
+        None,
+        None,
+    )?;
+    Ok(())
 }
 
 fn bind_source_owner(
@@ -1000,7 +1016,7 @@ impl AntigravityPrintSink {
             .local_db_path
             .as_deref()
             .context("Antigravity Console has no source binding database")?;
-        persist_transcript_binding(db_path, &transcript, &self.session_id, provider_session_id)?;
+        persist_transcript_binding(&transcript, &self.session_id, provider_session_id)?;
         crate::turn_claims::default_registry()?.mark_provider_binding(
             &self.run_id,
             provider_session_id,
@@ -1040,30 +1056,20 @@ impl AntigravityPrintSink {
     }
 
     async fn post_phase(&self, phase: &str, tool_name: Option<String>) {
+        // One slot per session: the daemon records the local ledger from
+        // it and sends it. Only records no later event can restate —
+        // binding, terminal — stay on the durable queue.
         let observed_at = Utc::now();
-        self.persist_local_phase(phase, tool_name.clone(), observed_at);
-        self.post_events(vec![json!({
-            "runtime_key": format!("antigravity:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "antigravity",
-            "device_id": self.machine_name,
-            "source": ANTIGRAVITY_PRINT_ADAPTER,
-            "kind": "phase_signal",
-            "phase": phase,
-            "tool_name": tool_name,
-            "occurred_at": observed_at.to_rfc3339(),
-            "dedupe_key": format!(
-                "antigravity-print:{}:{}:phase:{phase}",
-                self.session_id, self.run_id
-            ),
-            "payload": {
-                "managed_transport": ANTIGRAVITY_PRINT_ADAPTER,
-                "execution_lifetime": "one_shot"
-            }
-        })])
-        .await;
+        crate::status_slot::publish_console_phase(
+            "antigravity",
+            ANTIGRAVITY_PRINT_ADAPTER,
+            &self.session_id,
+            &self.run_id,
+            &observed_at.to_rfc3339(),
+            phase,
+            tool_name.as_deref(),
+            json!({"execution_lifetime": "one_shot", "thread_id": self.thread_id, "device_id": self.machine_name}),
+        );
     }
 
     async fn post_terminal(
@@ -1126,6 +1132,7 @@ impl AntigravityPrintSink {
             tool_name.as_deref(),
             ANTIGRAVITY_PRINT_ADAPTER,
             &observed_at.to_rfc3339(),
+            Some(self.run_id.as_str()),
         ) {
             eprintln!(
                 "[antigravity-print] enqueue local phase failed for {}: {err}",
@@ -1367,7 +1374,7 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let _guard = runtime.block_on(crate::console_adapter::longhouse_home_test_guard());
+        let _guard = crate::console_adapter::longhouse_home_test_guard();
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
         let longhouse_home = dir.path().join("longhouse");
@@ -1441,7 +1448,7 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let _guard = runtime.block_on(crate::console_adapter::longhouse_home_test_guard());
+        let _guard = crate::console_adapter::longhouse_home_test_guard();
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
         let longhouse_home = dir.path().join("longhouse");
@@ -1549,7 +1556,7 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let _guard = runtime.block_on(crate::console_adapter::longhouse_home_test_guard());
+        let _guard = crate::console_adapter::longhouse_home_test_guard();
         let dir = tempfile::Builder::new()
             .prefix("agy-")
             .tempdir_in("/tmp")
@@ -1643,6 +1650,10 @@ mod tests {
             let terminal = read_outbox_events(&legacy.runtime_events_outbox_dir).into_iter()
                 .find(|event| event["run_id"] == legacy.run_id && event["kind"] == "terminal_signal").unwrap();
             assert_eq!(terminal["payload"]["terminal_state"], "run_completed");
+            // The console writes a claim; discovery reads a binding. The daemon
+            // is what joins them, so the test projects the claims exactly as the
+            // observation scan does before asserting what discovery sees.
+            crate::managed_source_claim::project_claims(&db_path).expect("project claims");
             let conn = crate::state::db::open_db(Some(&db_path)).unwrap();
             assert_eq!(
                 crate::state::session_binding::SessionBinding::new(&conn)

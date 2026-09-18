@@ -1512,7 +1512,7 @@ export function SessionChat({
     : "Queue next waits for the next turn boundary. Enter does not queue while a turn is active.";
 
   // Composer header: ember + "Using <tool>" + a mono timer while a turn is
-  // active, ember + "Waiting for approval" when a provider question is
+  // active, ember + the server's attention copy when a provider question is
   // pending, or a cool dot + "Idle" + when the last turn ended. Shares its
   // tone read with the session header (sessionHeaderState.ts) so the two
   // never disagree about live/attention/cool, but keeps its own mono clock

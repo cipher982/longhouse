@@ -40,7 +40,13 @@ ERROR_CODES = frozenset(
         "conflict",
         "not_found",
         "forbidden",
+        # Both are live: the daemon answers writer-admission refusal with
+        # admission_closed and read-lane/writer-queue backpressure with
+        # resource_exhausted (server.py). 62c1ea303 replaced rather than added
+        # the first, which made every backpressure response fail the client's
+        # own parse as invalid_request -- backpressure stopped being retryable.
         "admission_closed",
+        "resource_exhausted",
         "dense_index_unavailable",
         "embedding_coverage_incomplete",
         "embedding_space_mismatch",

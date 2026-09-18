@@ -822,7 +822,7 @@
           "owner_action": "render reasoning as collapsed thinking records"
         }
       },
-      "adapter_digest": "dd958e4070b04782ebf1c1191a99c8e250839a88d99b0b30bd59230c16ef0f97"
+      "adapter_digest": "0e3e89c1ca60707b106d7afd3031b7b398d18503fe1c01e28dce335c88873da3"
     },
     {
       "provider": "claude",
@@ -1732,7 +1732,7 @@
           "owner_action": "render as collapsed thinking records with a thinking interaction kind"
         }
       },
-      "adapter_digest": "8f315f909a9dff2c64faca1522da53ffb48ec5898873bbf04ec8fb549f5397bb"
+      "adapter_digest": "95322dfd47a3d12a773bf850fc898076997cec0355d6e1a572074fa2fae85750"
     },
     {
       "provider": "opencode",
@@ -2448,7 +2448,7 @@
           "owner_action": "render reasoning parts as collapsed thinking records"
         }
       },
-      "adapter_digest": "afb0c88639baa766d65ccfbb0934658886aa436afcbbf7f218a389e82108f0c0"
+      "adapter_digest": "a7990b8b3678409acb6a69ec2f8ca812528134ff66a3c6f281d3f72d3f2e1214"
     },
     {
       "provider": "antigravity",
@@ -2872,7 +2872,7 @@
           "owner_action": "run the transcript census for antigravity and name the raw source"
         }
       },
-      "adapter_digest": "be5853241c22c8c12f0875dda4a962443959b4376484c9ebc636b267e20d8c23"
+      "adapter_digest": "ef8296c0162d22499a82629cefc7a1fa04630f29301de2360866b76594fbccaa"
     },
     {
       "provider": "cursor",
@@ -3591,7 +3591,7 @@
           "owner_action": "run the transcript census for cursor and name the raw source"
         }
       },
-      "adapter_digest": "23fe69c6a394b4caade79ff670b0c8b9e066400d5e68dfb68ce7dbb547690c5d"
+      "adapter_digest": "93cc2c344efc6cd0e6f79f4622e18583362aeeddaad48712f852d1c7e31065e9"
     },
     {
       "provider": "pi",
@@ -4184,7 +4184,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "772a5e742e3198021c4a83f2ddb44ded2167f6591538a5e1ad59a18cda111b51"
+      "adapter_digest": "09465abb9cd4476e7093cd6eea657fc53ecf328ffb245e503e77f0755e9f009a"
     },
     {
       "provider": "omp",
@@ -4776,7 +4776,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "6073dc90923acb1a82f8bec34f5e04ea01cea15c1dcbc591392b02ef73875f00"
+      "adapter_digest": "50e6836a4fda60474e89c74055c107cf74537a8327dfdc6d4776e5dd4ad559d2"
     }
   ]
 }

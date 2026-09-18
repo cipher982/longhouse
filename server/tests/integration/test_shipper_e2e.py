@@ -117,6 +117,79 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+def _capture_paths(capture_dir: Path, name: str) -> tuple[Path, Path]:
+    capture_dir.mkdir(parents=True, exist_ok=True)
+    return capture_dir / f"{name}.stdout.log", capture_dir / f"{name}.stderr.log"
+
+
+def _popen_captured(
+    argv: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    capture_dir: Path,
+    name: str,
+) -> subprocess.Popen:
+    """Start a long-lived process with its output in files, never in a pipe.
+
+    A pipe holds 64 KiB and nothing here reads one while the process runs: the
+    server fixture only reads on a readiness failure, and a daemon's pipe is
+    read after it is killed. The uvicorn tree (plus the catalogd and searchd
+    children that inherit the same descriptors) writes access, warning and
+    supervisor lines for the whole module, so once the buffer fills the server
+    blocks inside write() and stops answering every request while still holding
+    its port. That is indistinguishable from a hung host: capability
+    negotiation, reads and `ship` all time out against a process that is alive.
+    Files never apply backpressure, and they survive the process for diagnosis.
+    """
+
+    stdout_path, stderr_path = _capture_paths(capture_dir, name)
+    stdout_handle = stdout_path.open("wb")
+    stderr_handle = stderr_path.open("wb")
+    proc = subprocess.Popen(
+        argv,
+        cwd=cwd,
+        env=env,
+        stdout=stdout_handle,
+        stderr=stderr_handle,
+        # Lead a process group: these spawn children a leader-only signal never
+        # reaches.
+        start_new_session=True,
+    )
+    proc._longhouse_capture = (stdout_handle, stderr_handle, stdout_path, stderr_path)  # type: ignore[attr-defined]
+    return proc
+
+
+def _captured_output(proc: subprocess.Popen, *, tail: int | None = None) -> str:
+    capture = getattr(proc, "_longhouse_capture", None)
+    if capture is None:
+        return ""
+    stdout_handle, stderr_handle, stdout_path, stderr_path = capture
+    for handle in (stdout_handle, stderr_handle):
+        try:
+            handle.flush()
+        except (ValueError, OSError):
+            pass
+    text = ""
+    for path in (stdout_path, stderr_path):
+        try:
+            text += path.read_text(errors="replace")
+        except OSError:
+            pass
+    return text[-tail:] if tail is not None else text
+
+
+def _close_capture(proc: subprocess.Popen) -> None:
+    capture = getattr(proc, "_longhouse_capture", None)
+    if capture is None:
+        return
+    for handle in capture[:2]:
+        try:
+            handle.close()
+        except (ValueError, OSError):
+            pass
+
+
 def _wait_ready(url: str, proc: subprocess.Popen[str], timeout: float = 60.0) -> None:
     deadline = time.monotonic() + timeout
     last_observation = "no response"
@@ -132,22 +205,31 @@ def _wait_ready(url: str, proc: subprocess.Popen[str], timeout: float = 60.0) ->
                 break
         time.sleep(0.25)
 
-    # Reading a live server's stderr blocks until it exits, which used to spend
-    # the whole pytest timeout and hide this message. Stop the tree first.
+    # Stop the tree first so nothing is still appending while this is read.
     _terminate_group(proc)
-    stderr_tail = ""
-    if proc.stderr is not None:
-        try:
-            stderr_tail = proc.stderr.read().strip()[-4000:]
-        except Exception:
-            stderr_tail = ""
+    stderr_tail = _captured_output(proc, tail=4000).strip()
 
-    detail = f"\nServer stderr:\n{stderr_tail}" if stderr_tail else ""
+    detail = f"\nServer output:\n{stderr_tail}" if stderr_tail else ""
     raise TimeoutError(f"Server at {url} did not become ready within {timeout}s (last: {last_observation}).{detail}")
 
 
 def _server_url(server: str | dict[str, str]) -> str:
     return server["url"] if isinstance(server, dict) else server
+
+
+def _server_output_detail(server: str | dict[str, object], *, tail: int = 4000) -> str:
+    """Tail of the Runtime Host's own output, for failures that blame the host.
+
+    Every timeout in this module is a claim about the server, and until this
+    existed the server's logs were unreadable while it ran, so a wedged host and
+    a slow one looked identical in CI.
+    """
+
+    proc = server.get("proc") if isinstance(server, dict) else None
+    if proc is None:
+        return ""
+    text = _captured_output(proc, tail=tail).strip()
+    return f"\nRuntime Host output (tail):\n{text}" if text else ""
 
 
 def _server_token(server: str | dict[str, str]) -> str:
@@ -442,7 +524,14 @@ def _wait_for_session_events(
     session_id: str,
     *,
     min_events: int,
-    timeout: float = 8.0,
+    # The daemon's startup capability negotiation is 4 attempts, each a 5s
+    # request timeout plus a 5s backoff (engine/src/shipping/client.rs), so a
+    # host that is slow to answer the first probe legitimately delays the first
+    # shipped envelope by ~40s. An 8s wait asserted a readiness contract the
+    # engine never offered and failed the whole suite together whenever the
+    # runner was loaded enough to lose attempt 1. The loop still returns as
+    # soon as the events arrive, so a healthy run is unchanged.
+    timeout: float = 60.0,
 ) -> list[dict]:
     http = requests.Session()
     http.trust_env = False
@@ -477,10 +566,15 @@ def _wait_for_session_events(
             last_error = exc
         time.sleep(0.1)
 
-    raise AssertionError(f"Timed out waiting for {min_events} events for {session_id}; last_error={last_error!r}")
+    raise AssertionError(
+        f"Timed out waiting for {min_events} events for {session_id}; last_error={last_error!r}{_server_output_detail(server)}"
+    )
 
 
-def _wait_for_log_contains(log_dir: Path, needle: str, *, timeout: float = 8.0) -> str:
+def _wait_for_log_contains(log_dir: Path, needle: str, *, timeout: float = 60.0) -> str:
+    # Same startup-negotiation window as _wait_for_session_events above: the
+    # line being waited for is usually written after the daemon's first
+    # successful ship.
     deadline = time.monotonic() + timeout
     last_text = ""
     while time.monotonic() < deadline:
@@ -542,7 +636,7 @@ def _start_connect_daemon(
         "LONGHOUSE_HOME": str(longhouse_home),
         "LONGHOUSE_LOG_DIR": str(log_dir),
     }
-    proc = subprocess.Popen(
+    proc = _popen_captured(
         [
             str(ENGINE_BIN),
             "connect",
@@ -563,11 +657,8 @@ def _start_connect_daemon(
         ],
         cwd=REPO_ROOT,
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        # Lead a process group so teardown reaches spawned children too.
-        start_new_session=True,
+        capture_dir=tmp_path / "process-output",
+        name=f"daemon-{machine_name}",
     )
     return {
         "session_id": session_id,
@@ -646,14 +737,8 @@ def _terminate_group(proc: subprocess.Popen, grace: float = 5.0) -> None:
 
 def _terminate_process(proc: subprocess.Popen[str]) -> str:
     _terminate_group(proc)
-    output = ""
-    for pipe in (proc.stdout, proc.stderr):
-        if pipe is None:
-            continue
-        try:
-            output += pipe.read()
-        except Exception:
-            pass
+    output = _captured_output(proc)
+    _close_capture(proc)
     return output
 
 
@@ -689,7 +774,7 @@ def server(tmp_path_factory):
     # These requests exercise the real catalog, not the unit-test shortcut.
     env.pop("TESTING", None)
 
-    proc = subprocess.Popen(
+    proc = _popen_captured(
         [
             "uv",
             "run",
@@ -706,18 +791,21 @@ def server(tmp_path_factory):
         ],
         cwd=BACKEND_DIR,
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        # Lead a process group: `uv run uvicorn` spawns catalogd, searchd and
-        # multiprocessing workers that a leader-only signal never reaches.
-        start_new_session=True,
+        capture_dir=db_path.parent / "process-output",
+        name="runtime-host",
     )
 
     try:
         _wait_ready(base_url, proc)
-        yield {"url": base_url, "token": _mint_device_token(base_url), "db_path": str(db_path)}
+        yield {
+            "url": base_url,
+            "token": _mint_device_token(base_url),
+            "db_path": str(db_path),
+            "proc": proc,
+        }
     finally:
         _terminate_group(proc)
+        _close_capture(proc)
 
 
 # ---------------------------------------------------------------------------
@@ -745,7 +833,7 @@ def test_connect_daemon_ships_claude_transcript_from_filesystem_watch(server, tm
         "LONGHOUSE_HOME": str(longhouse_home),
         "LONGHOUSE_LOG_DIR": str(log_dir),
     }
-    proc = subprocess.Popen(
+    proc = _popen_captured(
         [
             str(ENGINE_BIN),
             "connect",
@@ -766,11 +854,8 @@ def test_connect_daemon_ships_claude_transcript_from_filesystem_watch(server, tm
         ],
         cwd=REPO_ROOT,
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        # Lead a process group so teardown reaches spawned children too.
-        start_new_session=True,
+        capture_dir=tmp_path / "process-output",
+        name="daemon-shipper-e2e",
     )
 
     try:
@@ -787,7 +872,9 @@ def test_connect_daemon_ships_claude_transcript_from_filesystem_watch(server, tm
         assert 'lane="live"' in _read_engine_logs(log_dir)
     except Exception:
         daemon_output = _terminate_process(proc)
-        raise AssertionError(f"daemon watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}") from None
+        raise AssertionError(
+            f"daemon watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}{_server_output_detail(server)}"
+        ) from None
     finally:
         if proc.poll() is None:
             _terminate_process(proc)
@@ -966,7 +1053,9 @@ def test_connect_daemon_ships_ask_user_answer_append_from_filesystem_watch(serve
         assert f"bytes_shipped={final_bytes - initial_bytes}" in logs
     except Exception:
         daemon_output = _terminate_process(proc)
-        raise AssertionError(f"daemon AskUserQuestion watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}") from None
+        raise AssertionError(
+            f"daemon AskUserQuestion watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}{_server_output_detail(server)}"
+        ) from None
     finally:
         if proc.poll() is None:
             _terminate_process(proc)
@@ -1022,7 +1111,9 @@ def test_connect_daemon_phase_signals_do_not_gate_filesystem_hot_lane(server, tm
             assert f"bytes_shipped={new_offset - offset}" in logs
     except Exception:
         daemon_output = _terminate_process(proc)
-        raise AssertionError(f"daemon phase matrix watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}") from None
+        raise AssertionError(
+            f"daemon phase matrix watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}{_server_output_detail(server)}"
+        ) from None
     finally:
         if proc.poll() is None:
             _terminate_process(proc)
@@ -1089,7 +1180,7 @@ def test_connect_daemon_waits_for_complete_ask_user_answer_line(server, tmp_path
     except Exception:
         daemon_output = _terminate_process(proc)
         raise AssertionError(
-            f"daemon partial AskUserQuestion watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}"
+            f"daemon partial AskUserQuestion watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}{_server_output_detail(server)}"
         ) from None
     finally:
         if proc.poll() is None:
@@ -1136,7 +1227,9 @@ def test_connect_daemon_ships_codex_transcript_from_filesystem_watch(server, tmp
         assert f"bytes_shipped={final_bytes}" in logs
     except Exception:
         daemon_output = _terminate_process(proc)
-        raise AssertionError(f"daemon Codex watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}") from None
+        raise AssertionError(
+            f"daemon Codex watcher integration failed\n{daemon_output}\n{_read_engine_logs(log_dir)}{_server_output_detail(server)}"
+        ) from None
     finally:
         if proc.poll() is None:
             _terminate_process(proc)

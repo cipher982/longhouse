@@ -42,6 +42,7 @@ use chrono::Utc;
 
 use crate::discovery;
 use crate::heartbeat::UnmanagedSessionBinding;
+use crate::process_identity::ProcessFact;
 #[cfg(test)]
 use crate::process_identity::parse_lstart;
 use crate::state::unmanaged_process_binding::UnmanagedProcessBindingStore;
@@ -224,18 +225,26 @@ fn collect_process_open_file_evidence(
     scanner: &dyn ProcessScanner,
     deadline: Instant,
 ) -> Result<Vec<ProcessOpenFileEvidence>, String> {
-    let mut evidence = Vec::with_capacity(processes.len());
-    for process in processes {
-        if Instant::now() >= deadline {
-            return Err(unmanaged_refresh_timeout());
-        }
-        let Some(provider) = is_provider_process(&process.command) else {
-            continue;
-        };
-        let open_files = scanner.list_open_files(process.pid)?;
-        if Instant::now() >= deadline {
-            return Err(unmanaged_refresh_timeout());
-        }
+    let candidates = processes
+        .into_iter()
+        .filter_map(|process| {
+            is_provider_process(&process.command).map(|provider| (process, provider))
+        })
+        .collect::<Vec<_>>();
+    if Instant::now() >= deadline {
+        return Err(unmanaged_refresh_timeout());
+    }
+    let pids = candidates
+        .iter()
+        .map(|(process, _)| process.pid)
+        .collect::<Vec<_>>();
+    let open_files = scanner.list_open_files(&pids)?;
+    if Instant::now() >= deadline {
+        return Err(unmanaged_refresh_timeout());
+    }
+    let mut evidence = Vec::with_capacity(candidates.len());
+    for (process, provider) in candidates {
+        let open_files = open_files.get(&process.pid).cloned().unwrap_or_default();
         evidence.push(ProcessOpenFileEvidence {
             process,
             provider,
@@ -283,36 +292,48 @@ pub struct ProcessInfo {
 }
 
 /// Injectable source of open-file truth. Process inventory is collected once
-/// by the daemon and passed in; tests substitute only the per-pid fd lookup.
+/// by the daemon and passed in; tests substitute only the fd lookup.
+///
+/// The lookup is batched because `lsof` is a subprocess: asking it once per
+/// process is the same answer bought N times, and the refresh runs against
+/// every unmanaged provider process on the machine.
 #[allow(dead_code)]
 pub trait ProcessScanner {
-    fn list_open_files(&self, pid: u32) -> Result<Vec<PathBuf>, String>;
+    /// Open files per PID. A PID that is absent from the map holds none (it can
+    /// exit between the process inventory and this probe); a PID that cannot be
+    /// probed at all is an error for the whole refresh.
+    fn list_open_files(&self, pids: &[u32]) -> Result<HashMap<u32, Vec<PathBuf>>, String>;
 }
 
 struct SystemScanner;
 
 impl ProcessScanner for SystemScanner {
-    fn list_open_files(&self, pid: u32) -> Result<Vec<PathBuf>, String> {
-        run_lsof(pid)
+    fn list_open_files(&self, pids: &[u32]) -> Result<HashMap<u32, Vec<PathBuf>>, String> {
+        run_lsof(pids)
     }
 }
 
-fn run_lsof(pid: u32) -> Result<Vec<PathBuf>, String> {
+fn run_lsof(pids: &[u32]) -> Result<HashMap<u32, Vec<PathBuf>>, String> {
+    let list = pids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
     let mut command = Command::new("lsof");
-    command.args(["-F", "n", "-p", &pid.to_string()]);
+    command.args(["-F", "pn", "-p", &list]);
     let output = crate::process_identity::output_with_timeout(command, LSOF_CALL_TIMEOUT)
-        .ok_or_else(|| format!("lsof output unavailable or timed out for unmanaged pid {pid}"))?;
+        .ok_or_else(|| format!("lsof output unavailable or timed out for unmanaged pids {list}"))?;
     if !output.status.success() {
         if lsof_reports_no_match(&output.status, &output.stderr) {
             // The process inventory is a point-in-time observation. A provider
-            // can exit between that snapshot and this per-pid lookup; that is
-            // no open-file match, not evidence that lsof itself is unreadable.
-            return Ok(Vec::new());
+            // can exit between that snapshot and this lookup; that is no
+            // open-file match, not evidence that lsof itself is unreadable.
+            return Ok(HashMap::new());
         }
         let detail = String::from_utf8_lossy(&output.stderr);
         let detail = detail.trim();
         return Err(format!(
-            "lsof for unmanaged pid {pid} exited with {}{}",
+            "lsof for unmanaged pids {list} exited with {}{}",
             output.status,
             if detail.is_empty() {
                 String::new()
@@ -346,9 +367,19 @@ fn lsof_reports_no_match(status: &std::process::ExitStatus, stderr: &[u8]) -> bo
 
 /// Parse `lsof -F n -p <pid>` output. `-F n` only prints `n<path>` records
 /// (and process `p<pid>` headers). We ignore headers and keep paths.
-fn parse_lsof(text: &str) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
+/// Parse `lsof -F pn` records into open files per PID. A `p<pid>` line opens a
+/// process record; each `n<path>` line after it belongs to that process.
+fn parse_lsof(text: &str) -> HashMap<u32, Vec<PathBuf>> {
+    let mut out: HashMap<u32, Vec<PathBuf>> = HashMap::new();
+    let mut current: Option<u32> = None;
     for line in text.lines() {
+        if let Some(pid) = line.strip_prefix('p') {
+            current = pid.trim().parse().ok();
+            if let Some(pid) = current {
+                out.entry(pid).or_default();
+            }
+            continue;
+        }
         let Some(stripped) = line.strip_prefix('n') else {
             continue;
         };
@@ -356,9 +387,12 @@ fn parse_lsof(text: &str) -> Vec<PathBuf> {
         if !stripped.starts_with('/') {
             continue;
         }
-        paths.push(PathBuf::from(stripped));
+        let Some(pid) = current else {
+            continue;
+        };
+        out.entry(pid).or_default().push(PathBuf::from(stripped));
     }
-    paths
+    out
 }
 
 pub(crate) fn is_provider_process(command: &str) -> Option<&'static str> {
@@ -397,8 +431,18 @@ pub(crate) fn is_provider_process(command: &str) -> Option<&'static str> {
     }
 }
 
-pub fn process_info_for_pid(pid: u32, provider: &str) -> Option<ProcessInfo> {
-    let fact = crate::process_identity::try_collect_process_fact(pid)?;
+/// The same lookup against an inventory the caller already collected. The
+/// per-pid probe it replaces spawned `ps` once per outbox payload, on a tick
+/// that runs every 100 ms.
+pub fn process_info_from_facts(
+    facts: &HashMap<u32, ProcessFact>,
+    pid: u32,
+    provider: &str,
+) -> Option<ProcessInfo> {
+    process_info_from_fact(facts.get(&pid)?.clone(), provider)
+}
+
+fn process_info_from_fact(fact: ProcessFact, provider: &str) -> Option<ProcessInfo> {
     let start_time = fact.start_time?;
     (is_provider_process(&fact.command) == Some(provider)).then_some(ProcessInfo {
         pid: fact.pid,
@@ -740,13 +784,17 @@ mod tests {
     }
 
     impl ProcessScanner for FakeScanner {
-        fn list_open_files(&self, pid: u32) -> Result<Vec<PathBuf>, String> {
-            Ok(self
-                .open_files
-                .borrow()
-                .get(&pid)
-                .cloned()
-                .unwrap_or_default())
+        fn list_open_files(&self, pids: &[u32]) -> Result<HashMap<u32, Vec<PathBuf>>, String> {
+            let open_files = self.open_files.borrow();
+            Ok(pids
+                .iter()
+                .filter_map(|pid| {
+                    open_files
+                        .get(pid)
+                        .cloned()
+                        .map(|paths| (*pid, paths))
+                })
+                .collect())
         }
     }
 
@@ -755,7 +803,7 @@ mod tests {
     }
 
     impl ProcessScanner for FailingLsofScanner {
-        fn list_open_files(&self, _pid: u32) -> Result<Vec<PathBuf>, String> {
+        fn list_open_files(&self, _pids: &[u32]) -> Result<HashMap<u32, Vec<PathBuf>>, String> {
             Err("fixture lsof failure".to_string())
         }
     }
@@ -777,10 +825,23 @@ mod tests {
     fn parses_lsof_output() {
         let input =
             "p1234\nn/Users/x/.codex/sessions/abc.jsonl\nnpipe:[something]\nn/Users/x/.zshrc\n";
-        let paths = parse_lsof(input);
+        let files = parse_lsof(input);
+        let paths = &files[&1234];
         assert_eq!(paths.len(), 2);
         assert!(paths[0].ends_with("abc.jsonl"));
         assert!(paths[1].ends_with(".zshrc"));
+    }
+
+    #[test]
+    fn parses_one_lsof_record_per_process() {
+        // One `lsof` answers for the whole pid list, so a file must stay with
+        // the process that holds it.
+        let input = "p1234\nn/Users/x/a.jsonl\np5678\nn/Users/x/b.jsonl\nn/Users/x/c.jsonl\n";
+        let files = parse_lsof(input);
+        assert_eq!(files[&1234].len(), 1);
+        assert!(files[&1234][0].ends_with("a.jsonl"));
+        assert_eq!(files[&5678].len(), 2);
+        assert!(files[&5678][1].ends_with("c.jsonl"));
     }
 
     #[cfg(unix)]

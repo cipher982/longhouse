@@ -414,6 +414,9 @@ mod tests {
 
     #[tokio::test]
     async fn terminate_kills_owned_provider_group_without_extension_channel() {
+        // Spawns by name and reads the process table: hold the shared agent-state
+        // lock so a concurrent test cannot empty PATH under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let root = tempfile::tempdir().unwrap();
         let session_id = "omp-terminate-without-channel";
         let mut child = Command::new("sleep")

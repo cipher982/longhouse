@@ -359,6 +359,10 @@ mod tests {
 
     #[tokio::test]
     async fn kills_group_that_ignores_sigterm() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         // The shell must both ignore TERM *and* outlive its children: a plain
         // `trap '' TERM; sleep 300` exits cleanly on TERM because `sleep` does
         // not ignore it and the shell simply reaps it. Restarting the sleep in
@@ -397,6 +401,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_live_child_with_no_group_is_stopped_and_reported_honestly() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         // Without a pgid there is no group to signal, but there is still a live
         // child. Reporting `Absent` here claimed nothing needed stopping while
         // having just killed it.
@@ -425,6 +433,10 @@ mod tests {
 
     #[tokio::test]
     async fn an_already_dead_child_reports_absent() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let mut child = Command::new("/bin/sh")
             .arg("-c")
             .arg("exit 0")

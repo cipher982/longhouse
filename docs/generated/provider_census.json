@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 280,
+  "file_count": 282,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -223,6 +223,14 @@
       ]
     },
     {
+      "path": "engine/src/managed_source_claim.rs",
+      "providers": [
+        "codex",
+        "omp",
+        "pi"
+      ]
+    },
+    {
       "path": "engine/src/omp_session.rs",
       "providers": [
         "omp",
@@ -358,6 +366,14 @@
       "providers": [
         "claude",
         "codex"
+      ]
+    },
+    {
+      "path": "engine/src/status_slot.rs",
+      "providers": [
+        "codex",
+        "omp",
+        "pi"
       ]
     },
     {

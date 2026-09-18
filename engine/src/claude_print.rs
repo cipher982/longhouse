@@ -680,24 +680,20 @@ impl ClaudePrintSink {
     }
 
     async fn post_phase(&self, phase: &str, tool_name: Option<String>) {
+        // One slot per session: the daemon records the local ledger from
+        // it and sends it. Only records no later event can restate —
+        // binding, terminal — stay on the durable queue.
         let observed_at = Utc::now();
-        self.persist_local_phase(phase, tool_name.clone(), observed_at);
-        self.post_events(vec![json!({
-            "runtime_key": format!("claude:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "claude",
-            "device_id": self.machine_name,
-            "source": CLAUDE_PRINT_ADAPTER,
-            "kind": "phase_signal",
-            "phase": phase,
-            "tool_name": tool_name,
-            "occurred_at": observed_at.to_rfc3339(),
-            "dedupe_key": format!("claude-print:{}:{}:phase:{phase}", self.session_id, self.run_id),
-            "payload": {"managed_transport": CLAUDE_PRINT_ADAPTER, "execution_lifetime": "one_shot"}
-        })])
-        .await;
+        crate::status_slot::publish_console_phase(
+            "claude",
+            CLAUDE_PRINT_ADAPTER,
+            &self.session_id,
+            &self.run_id,
+            &observed_at.to_rfc3339(),
+            phase,
+            tool_name.as_deref(),
+            json!({"execution_lifetime": "one_shot", "thread_id": self.thread_id, "device_id": self.machine_name}),
+        );
     }
 
     async fn post_stream_event(&self, seq: u64, event: Value) {
@@ -823,6 +819,7 @@ impl ClaudePrintSink {
             tool_name.as_deref(),
             CLAUDE_PRINT_ADAPTER,
             &observed_at.to_rfc3339(),
+            Some(self.run_id.as_str()),
         ) {
             eprintln!(
                 "[claude-print] enqueue local phase failed for {}: {err}",
@@ -1132,7 +1129,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires an authenticated stock claude and spends provider tokens"]
     async fn installed_claude_completes_and_resumes_through_production_console_adapter() {
-        let _home_guard = crate::console_adapter::longhouse_home_test_guard().await;
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
         let temp = tempfile::tempdir().unwrap();
         let previous_home = std::env::var_os("LONGHOUSE_HOME");
         unsafe {

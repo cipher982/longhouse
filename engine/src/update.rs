@@ -1461,6 +1461,10 @@ mod tests {
 
     #[test]
     fn a_crash_before_the_status_write_still_leaves_a_complete_pair() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         // Boundary 2: binaries swapped, status never written. The machine runs
         // a complete new pair; only the record of the owed restart is missing,
         // and the next check re-derives that from the installed version.
@@ -1573,6 +1577,9 @@ mod tests {
 
     #[test]
     fn a_second_update_operation_is_refused_while_one_holds_the_lock() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let _install = FakeInstall::new();
         let temp = tempfile::tempdir().unwrap();
         std::env::set_var("LONGHOUSE_HOME", temp.path());

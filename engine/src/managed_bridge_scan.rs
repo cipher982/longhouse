@@ -439,6 +439,9 @@ mod tests {
 
     #[test]
     fn default_state_dir_prefers_longhouse_home_over_home() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
         let longhouse_home = temp.path().join("isolated-longhouse");
@@ -459,6 +462,9 @@ mod tests {
 
     #[test]
     fn default_state_dir_maps_claude_config_dir_to_longhouse_sibling() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
         let claude_home = temp.path().join(".claude");

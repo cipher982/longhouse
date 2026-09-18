@@ -568,6 +568,9 @@ mod tests {
 
     #[test]
     fn omp_resume_scan_matches_launch_binary_identity_and_exact_source_policy() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let root = tempfile::tempdir().unwrap();
         let cwd = root.path().join("workspace");
         let binary = root.path().join("omp");

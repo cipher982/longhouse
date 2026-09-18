@@ -830,6 +830,71 @@ fn print_shipping_source_evidence(source: &Value) {
     println!();
 }
 
+/// Re-derive durability from the source files and the sealed payload files and
+/// compare it with what this machine and the host claim. Read-only.
+pub fn cmd_durability_audit(
+    receipts: Option<&Path>,
+    sample_bytes: Option<u64>,
+    limit: Option<usize>,
+    json: bool,
+) -> anyhow::Result<()> {
+    let db_path = config::get_agent_db_path()?;
+    if !db_path.exists() {
+        anyhow::bail!("no local shipper database at {}", db_path.display());
+    }
+    let receipts: std::collections::HashMap<String, u64> = match receipts {
+        Some(path) => {
+            let bytes = std::fs::read(path)
+                .with_context(|| format!("reading receipts {}", path.display()))?;
+            serde_json::from_slice(&bytes)
+                .with_context(|| format!("parsing receipts {}", path.display()))?
+        }
+        None => std::collections::HashMap::new(),
+    };
+    let report = crate::durability_audit::audit(&db_path, &receipts, sample_bytes, limit)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "durability audit: {} audited, {} clean, {} alarmed, {} unverifiable",
+            report.audited_epochs,
+            report.clean_epochs,
+            report.alarmed_epochs,
+            report.unverifiable_epochs
+        );
+        for epoch in &report.epochs {
+            let status = match epoch.status() {
+                crate::durability_audit::EpochStatus::Clean => "clean",
+                crate::durability_audit::EpochStatus::Unverifiable => "unverifiable",
+                crate::durability_audit::EpochStatus::Alarmed => "ALARMED",
+            };
+            if status == "clean" {
+                continue;
+            }
+            println!(
+                "  {status} {} {} cursor={} host={} source_len={} payload_files={}",
+                epoch.provider,
+                epoch.source_epoch,
+                epoch.lane_cursor,
+                epoch
+                    .host_accepted_through
+                    .map_or("unknown".to_string(), |value| value.to_string()),
+                epoch
+                    .source_len
+                    .map_or("unknown".to_string(), |value| value.to_string()),
+                epoch.payload_files,
+            );
+            for alarm in &epoch.alarms {
+                println!("      alarm {alarm}");
+            }
+        }
+    }
+    if !report.is_clean() {
+        anyhow::bail!("durability audit found {} alarm(s)", report.epochs.iter().map(|epoch| epoch.alarms.len()).sum::<usize>());
+    }
+    Ok(())
+}
+
 /// Drop a blocked source's retained envelope.
 ///
 /// No `retry` counterpart on purpose: re-posting an identical envelope the host
@@ -5385,6 +5450,9 @@ mod tests {
 
     #[test]
     fn shipping_discard_advances_durable_lane_cursor() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let dir = tempfile::tempdir().unwrap();
         let agent_dir = dir.path().join("agent");
         std::fs::create_dir_all(&agent_dir).unwrap();
@@ -6850,6 +6918,9 @@ mod tests {
 
     #[test]
     fn native_local_health_collects_malformed_status_file() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("agent").join("engine-status.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -7156,6 +7227,9 @@ mod tests {
 
     #[test]
     fn native_repair_plan_prefers_native_setup_when_machine_state_unreadable() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let dir = tempfile::tempdir().unwrap();
         let machine_path = dir.path().join("machine").join("state.json");
         std::fs::create_dir_all(machine_path.parent().unwrap()).unwrap();
@@ -7799,6 +7873,9 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
 
     #[test]
     fn native_repair_execution_rejects_default_service_without_longhouse_home() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let state = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         write_configured_machine_state(state.path());
@@ -7950,6 +8027,9 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
 
     #[test]
     fn native_service_repair_public_stable_home_dry_run_is_allowed() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let home = tempfile::tempdir().unwrap();
         let state = home.path().join(".longhouse");
         write_configured_machine_state(&state);
@@ -7985,6 +8065,9 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
 
     #[test]
     fn native_service_repair_public_rejects_scratch_state_root() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let state = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         write_configured_machine_state(state.path());
@@ -8015,6 +8098,9 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
 
     #[test]
     fn native_service_repair_public_rejects_scratch_longhouse_home_env() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let home = tempfile::tempdir().unwrap();
         let scratch = tempfile::tempdir().unwrap();
         let state = home.path().join(".longhouse");
@@ -8046,6 +8132,9 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
 
     #[test]
     fn native_service_repair_public_rejects_scratch_claude_config_dir_env() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let home = tempfile::tempdir().unwrap();
         let scratch = tempfile::tempdir().unwrap();
         let state = home.path().join(".longhouse");
@@ -8100,6 +8189,9 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
 
     #[test]
     fn native_service_repair_rejects_unreadable_machine_state_json() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let state = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let engine = write_fake_engine(home.path());
@@ -8172,6 +8264,9 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
 
     #[test]
     fn native_service_repair_rejects_unavailable_engine_executable() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let state = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let path_dir = tempfile::tempdir().unwrap();

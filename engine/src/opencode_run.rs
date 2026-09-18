@@ -774,6 +774,7 @@ impl OpenCodeRunSink {
             tool_name.as_deref(),
             OPENCODE_RUN_ADAPTER,
             &observed_at.to_rfc3339(),
+            Some(self.run_id.as_str()),
         ) {
             eprintln!(
                 "[opencode-run] enqueue local phase failed for {}: {err}",
@@ -1178,7 +1179,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires an authenticated stock opencode and spends provider tokens"]
     async fn installed_opencode_completes_and_resumes_through_production_console_adapter() {
-        let _home_guard = crate::console_adapter::longhouse_home_test_guard().await;
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
         let temp = tempfile::tempdir().unwrap();
         let previous_home = std::env::var_os("LONGHOUSE_HOME");
         unsafe {

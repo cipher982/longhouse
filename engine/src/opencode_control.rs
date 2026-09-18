@@ -971,6 +971,10 @@ mod tests {
 
     #[test]
     fn read_bridge_state_rejects_bad_or_incompatible_state_files() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let temp = TempDir::new().unwrap();
 
         let mut newer_schema = base_state_payload("http://127.0.0.1:12345", Some("/tmp/project"));

@@ -133,15 +133,19 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
         .local_db_path
         .clone()
         .or_else(|| crate::config::get_agent_db_path().ok());
-    if let Some(db_path) = local_db_path.as_deref() {
-        let conn = crate::state::db::open_client_connection(db_path, Duration::from_millis(500))?;
-        crate::omp_session::reserve_source_for_thread(
-            &conn,
-            &session_file,
-            &config.session_id,
-            expected_provider_thread_id.as_deref(),
-        )?;
-    }
+    // The Console path claims its source locally, exactly as Helm does: the
+    // daemon projects the claim into the binding discovery reads, so a busy or
+    // unreadable archive cannot fail a launch here either. `local_db_path` stays
+    // for the phase outbox, which is not on the identity path.
+    crate::managed_source_claim::reserve(
+        &config.session_id,
+        "omp",
+        &session_file,
+        &config.cwd,
+        None,
+        None,
+    )
+    .with_context(|| format!("claiming the OMP console source {}", session_file.display()))?;
 
     let launch_id = Uuid::new_v4().to_string();
     let run_dir = crate::config::get_agent_dir()?
@@ -1043,16 +1047,21 @@ impl OmpPrintSink {
             );
         }
         self.provider_thread_id = Some(header.native_id.clone());
-        if let Some(db_path) = self.local_db_path.as_deref() {
-            let conn =
-                crate::state::db::open_client_connection(db_path, Duration::from_millis(500))?;
-            crate::omp_session::bind_source_for_thread(
-                &conn,
-                &self.session_file,
-                &self.session_id,
-                &header.native_id,
-            )?;
-        }
+        crate::managed_source_claim::confirm_identity(
+            &self.session_id,
+            "omp",
+            &self.session_file,
+            &header.native_id,
+            None,
+            None,
+        )
+        .with_context(|| {
+            format!(
+                "binding the OMP console source {} to {}",
+                self.session_file.display(),
+                header.native_id
+            )
+        })?;
         crate::turn_claims::default_registry()?.mark_provider_binding(
             &self.run_id,
             &header.native_id,
@@ -1121,8 +1130,25 @@ impl OmpPrintSink {
         self.post_events(vec![json!({"runtime_key": format!("omp:{}", self.session_id), "session_id": self.session_id, "thread_id": self.thread_id, "run_id": self.run_id, "provider": "omp", "device_id": self.machine_name, "source": OMP_PRINT_ADAPTER, "kind": "binding_signal", "occurred_at": Utc::now().to_rfc3339(), "dedupe_key": format!("omp-print:{}:{}:binding", self.session_id, self.launch_id), "payload": {"provider_session_id": provider_thread_id, "source_path": self.session_file.to_string_lossy(), "managed_transport": OMP_PRINT_ADAPTER, "execution_lifetime": "one_shot"}})]).await;
     }
     async fn post_phase(&self, phase: &str, tool_name: Option<String>, activity_seq: u64) {
-        self.persist_local_phase(phase, tool_name.clone(), Utc::now());
-        self.post_events(vec![json!({"runtime_key": format!("omp:{}", self.session_id), "session_id": self.session_id, "thread_id": self.thread_id, "run_id": self.run_id, "provider": "omp", "device_id": self.machine_name, "source": OMP_PRINT_ADAPTER, "kind": "phase_signal", "phase": phase, "tool_name": tool_name, "occurred_at": Utc::now().to_rfc3339(), "dedupe_key": format!("omp-print:{}:{}:phase:{phase}:{activity_seq}", self.session_id, self.run_id), "payload": {"managed_transport": OMP_PRINT_ADAPTER, "execution_lifetime": "one_shot"}})]).await;
+        // One slot per session: the daemon records the local ledger from it and
+        // sends it. Only records no later event can restate — binding,
+        // terminal — stay on the durable queue.
+        let observed_at = Utc::now();
+        crate::status_slot::publish_console_phase(
+            "omp",
+            OMP_PRINT_ADAPTER,
+            &self.session_id,
+            &self.run_id,
+            &observed_at.to_rfc3339(),
+            phase,
+            tool_name.as_deref(),
+            json!({
+                "execution_lifetime": "one_shot",
+                "thread_id": self.thread_id,
+                "device_id": self.machine_name,
+                "activity_seq": activity_seq,
+            }),
+        );
     }
     async fn post_stream_event(&self, seq: u64, event: &Value, projection: &OmpStreamProjection) {
         self.post_events(vec![json!({
@@ -1189,6 +1215,7 @@ impl OmpPrintSink {
             tool_name.as_deref(),
             OMP_PRINT_ADAPTER,
             &observed_at.to_rfc3339(),
+            Some(self.run_id.as_str()),
         ) {
             eprintln!(
                 "[omp-print] enqueue local phase failed for {}: {err}",
@@ -1646,6 +1673,10 @@ for event in events:
 
     #[tokio::test]
     async fn recovered_cleanup_signals_matching_pid_after_process_group_change() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         use std::process::Command as StdCommand;
 
         let mut child = StdCommand::new("sleep").arg("30").spawn().unwrap();
@@ -1670,6 +1701,10 @@ for event in events:
 
     #[tokio::test]
     async fn recovered_cleanup_still_consumes_owned_pids_when_group_is_untrusted() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         use std::process::Command as StdCommand;
 
         let temp = tempfile::tempdir().unwrap();
@@ -1719,7 +1754,7 @@ for event in events:
     async fn live_cleanup_consumes_owned_pids_after_leader_identity_is_lost() {
         use std::process::Command as StdCommand;
 
-        let _home_guard = crate::console_adapter::longhouse_home_test_guard().await;
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
         let temp = tempfile::tempdir().unwrap();
         let longhouse_home = temp.path().join("longhouse");
         let previous_home = std::env::var_os("LONGHOUSE_HOME");
@@ -1775,7 +1810,7 @@ for event in events:
     async fn live_cleanup_reaps_owned_child_before_verifying_group_death() {
         use std::os::unix::process::CommandExt;
 
-        let _home_guard = crate::console_adapter::longhouse_home_test_guard().await;
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
         let temp = tempfile::tempdir().unwrap();
         let longhouse_home = temp.path().join("longhouse");
         let previous_home = std::env::var_os("LONGHOUSE_HOME");
@@ -1847,7 +1882,7 @@ for event in events:
 
     #[tokio::test]
     async fn fake_stock_omp_completes_and_continues_through_exact_native_file() {
-        let _home_guard = crate::console_adapter::longhouse_home_test_guard().await;
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
         let temp = tempfile::tempdir().unwrap();
         let previous_home = std::env::var_os("LONGHOUSE_HOME");
         unsafe {
@@ -1896,18 +1931,14 @@ for event in events:
         );
         let native_id = first_claim.provider_thread_id.clone().unwrap();
         assert_eq!(native_id, "01a08857-826d-72f6-b816-672b54116504");
-        let conn =
-            crate::state::db::open_client_connection(&local_db_path, Duration::from_millis(500))
-                .unwrap();
-        let binding = crate::state::session_binding::SessionBinding::new(&conn)
-            .get_with_thread_for_provider(
-                &crate::storage_v2_shipper::stable_source_path(Path::new(&first.session_file))
-                    .display()
-                    .to_string(),
-                "omp",
-            )
-            .unwrap();
-        assert_eq!(binding.map(|(session, _)| session), Some(first.session_id));
+        // The console turn owns a local claim, which is what discovery reads
+        // once the daemon projects it; the archive database is no longer written
+        // on this path.
+        let claim = crate::managed_source_claim::read_claim(&first.session_id)
+            .expect("read claim")
+            .expect("a console turn must claim its source");
+        assert_eq!(claim.state, crate::managed_source_claim::ClaimState::Bound);
+        assert_eq!(claim.native_session_id.as_deref(), Some(native_id.as_str()));
         assert!(first
             .argv
             .windows(2)

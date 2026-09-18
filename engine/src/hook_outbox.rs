@@ -36,6 +36,7 @@ pub(crate) fn enqueue_local_phase(
     tool_name: Option<&str>,
     source: &str,
     occurred_at: &str,
+    run_id: Option<&str>,
 ) -> std::io::Result<()> {
     let payload = serde_json::json!({
         "session_id": session_id,
@@ -45,6 +46,10 @@ pub(crate) fn enqueue_local_phase(
         "occurred_at": occurred_at,
         "local_only": true,
         "phase_source": source,
+        // The run the provider itself was launched into. Carrying it here is what
+        // lets the status projection attribute the phase by identity instead of
+        // guessing from a timestamp.
+        "run_id": run_id,
     });
     let agent_dir = db_path.parent().ok_or_else(|| {
         std::io::Error::new(

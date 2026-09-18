@@ -790,6 +790,9 @@ mod tests {
 
     #[test]
     fn omp_xdg_roots_include_existing_named_profiles_and_config_roots() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let home = tempfile::tempdir().unwrap();
         let cwd = home.path().join("workspace");
         let xdg_data = home.path().join("xdg-data");
@@ -836,6 +839,9 @@ mod tests {
 
     #[test]
     fn legacy_profile_roots_are_discovered_without_an_active_profile() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let home = tempfile::tempdir().unwrap();
         let cwd = home.path().join("workspace");
         let omp_config = home.path().join("omp-config");
@@ -949,6 +955,9 @@ mod tests {
 
     #[test]
     fn exact_resume_rejects_malformed_or_conflicting_history_after_header() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let dir = tempfile::tempdir().unwrap();
         let malformed = dir.path().join("malformed.jsonl");
         fs::write(
@@ -976,6 +985,9 @@ mod tests {
 
     #[test]
     fn omp_config_roots_ignore_pi_environment_aliases() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let home = tempfile::tempdir().unwrap();
         let cwd = home.path().join("workspace");
         let omp_config = home.path().join("omp-config");
@@ -1023,6 +1035,9 @@ mod tests {
 
     #[test]
     fn omp_fresh_launch_prefers_active_xdg_or_legacy_root_without_pi_aliases() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let home = tempfile::tempdir().unwrap();
         let cwd = home.path().join("workspace");
         let xdg_data = home.path().join("xdg-data");
@@ -1062,6 +1077,9 @@ mod tests {
 
     #[test]
     fn named_profile_uses_omp_config_root_and_empty_profile_uses_default() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let home = tempfile::tempdir().unwrap();
         let cwd = home.path().join("workspace");
         let xdg_data = home.path().join("xdg-data");
@@ -1100,6 +1118,9 @@ mod tests {
 
     #[test]
     fn session_dir_override_ignores_profile() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let home = tempfile::tempdir().unwrap();
         let cwd = home.path().join("workspace");
         fs::create_dir_all(&cwd).unwrap();
@@ -1116,6 +1137,9 @@ mod tests {
 
     #[test]
     fn empty_omp_profile_does_not_inherit_pi_profile() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let home = tempfile::tempdir().unwrap();
         let cwd = home.path().join("workspace");
         fs::create_dir_all(&cwd).unwrap();
@@ -1139,6 +1163,9 @@ mod tests {
 
     #[test]
     fn omp_launch_roots_ignore_all_pi_storage_aliases() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let home = tempfile::tempdir().unwrap();
         let cwd = home.path().join("workspace");
         fs::create_dir_all(&cwd).unwrap();
@@ -1173,6 +1200,9 @@ mod tests {
 
     #[test]
     fn omp_session_storage_rejects_pi_overlap_including_symlink_aliases() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let home = tempfile::tempdir().unwrap();
         let cwd = home.path().join("workspace");
         fs::create_dir_all(&cwd).unwrap();
@@ -1201,6 +1231,9 @@ mod tests {
 
     #[test]
     fn omp_discovery_keeps_overlapping_roots_for_shared_ambiguity_policy() {
+        // Mutates process-global environment: hold the shared agent-state
+        // lock so a concurrent test does not spawn under this one's PATH.
+        let _guard = crate::console_adapter::agent_state_guard();
         let home = tempfile::tempdir().unwrap();
         let cwd = home.path().join("workspace");
         fs::create_dir_all(&cwd).unwrap();

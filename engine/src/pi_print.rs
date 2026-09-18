@@ -115,12 +115,7 @@ pub async fn start_pi_print_turn(config: PiPrintRunConfig) -> Result<PiPrintRunS
     // file. This is the fence against watcher discovery winning the initial
     // write race and creating an unrelated Shadow session.
     if let Some(path) = exact_session_file.as_deref() {
-        persist_transcript_binding(
-            config.local_db_path.as_deref(),
-            path,
-            &config.session_id,
-            &provider_thread_id,
-        )?;
+        persist_transcript_binding(path, &config.session_id, &provider_thread_id)?;
     }
     crate::turn_claims::default_registry()?.mark_provider_binding(
         &config.run_id,
@@ -932,37 +927,21 @@ fn locate_exact_transcript(
 }
 
 fn persist_transcript_binding(
-    db_path: Option<&Path>,
     transcript: &Path,
     session_id: &str,
     provider_thread_id: &str,
 ) -> Result<()> {
-    let Some(db_path) = db_path else {
-        return Ok(());
-    };
-    let conn = crate::state::db::open_client_connection(db_path, Duration::from_millis(500))?;
-    let stable_path = crate::storage_v2_shipper::stable_source_path(transcript);
-    let binding = crate::state::session_binding::SessionBinding::new(&conn);
-    if let Some((existing_session, existing_provider_thread)) =
-        binding.get_with_thread_for_provider(&stable_path.to_string_lossy(), "pi")?
-    {
-        anyhow::ensure!(
-            existing_session == session_id,
-            "Pi native session file is already bound to another Longhouse session"
-        );
-        anyhow::ensure!(
-            existing_provider_thread
-                .as_deref()
-                .map(|value| value == provider_thread_id)
-                .unwrap_or(true),
-            "Pi native session file is bound to another provider identity"
-        );
-    }
-    binding.bind_for_thread(
-        &stable_path.to_string_lossy(),
+    // A local claim: the daemon projects it into the binding discovery reads,
+    // before it enumerates sources, so the watcher cannot win the initial write
+    // race and mint an unrelated Shadow session.
+    crate::managed_source_claim::ensure_bindable(session_id, transcript, provider_thread_id)?;
+    crate::managed_source_claim::confirm_identity(
         session_id,
         "pi",
-        Some(provider_thread_id),
+        transcript,
+        provider_thread_id,
+        None,
+        None,
     )?;
     Ok(())
 }
@@ -986,12 +965,7 @@ impl PiPrintSink {
             provider_session_id == self.provider_thread_id,
             "Pi native session header changed identity after launch"
         );
-        persist_transcript_binding(
-            self.local_db_path.as_deref(),
-            &transcript,
-            &self.session_id,
-            &self.provider_thread_id,
-        )?;
+        persist_transcript_binding(&transcript, &self.session_id, &self.provider_thread_id)?;
         crate::turn_claims::default_registry()?.mark_provider_binding(
             &self.run_id,
             &self.provider_thread_id,
@@ -1028,24 +1002,25 @@ impl PiPrintSink {
     }
 
     async fn post_phase(&self, phase: &str, tool_name: Option<String>, activity_seq: u64) {
+        // One slot per session: the daemon records the local ledger from
+        // it and sends it. Only records no later event can restate —
+        // binding, terminal — stay on the durable queue.
         let observed_at = Utc::now();
-        self.persist_local_phase(phase, tool_name.clone(), observed_at);
-        self.post_events(vec![json!({
-            "runtime_key": format!("pi:{}", self.session_id),
-            "session_id": self.session_id,
-            "thread_id": self.thread_id,
-            "run_id": self.run_id,
-            "provider": "pi",
-            "device_id": self.machine_name,
-            "source": PI_PRINT_ADAPTER,
-            "kind": "phase_signal",
-            "phase": phase,
-            "tool_name": tool_name,
-            "occurred_at": observed_at.to_rfc3339(),
-            "dedupe_key": format!("pi-print:{}:{}:phase:{phase}:{activity_seq}", self.session_id, self.run_id),
-            "payload": {"managed_transport": PI_PRINT_ADAPTER, "execution_lifetime": "one_shot"}
-        })])
-        .await;
+        crate::status_slot::publish_console_phase(
+            "pi",
+            PI_PRINT_ADAPTER,
+            &self.session_id,
+            &self.run_id,
+            &observed_at.to_rfc3339(),
+            phase,
+            tool_name.as_deref(),
+            json!({
+                "execution_lifetime": "one_shot",
+                "thread_id": self.thread_id,
+                "device_id": self.machine_name,
+                "activity_seq": activity_seq,
+            }),
+        );
     }
 
     async fn post_stream_event(&self, seq: u64, event: &Value, projection: &PiStreamProjection) {
@@ -1177,6 +1152,7 @@ impl PiPrintSink {
             tool_name.as_deref(),
             PI_PRINT_ADAPTER,
             &observed_at.to_rfc3339(),
+            Some(self.run_id.as_str()),
         ) {
             eprintln!(
                 "[pi-print] enqueue local phase failed for {}: {err}",
@@ -1552,7 +1528,7 @@ if "-p" in args:
         use tokio::io::AsyncReadExt;
         use tokio::net::UnixListener;
 
-        let _home_guard = crate::console_adapter::longhouse_home_test_guard().await;
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
         let temp = tempfile::tempdir().unwrap();
         let previous_home = std::env::var_os("LONGHOUSE_HOME");
         unsafe {
@@ -1647,7 +1623,7 @@ if "-p" in args:
 
     #[tokio::test]
     async fn fake_pi_interrupt_settles_cancelled() {
-        let _home_guard = crate::console_adapter::longhouse_home_test_guard().await;
+        let _home_guard = crate::console_adapter::longhouse_home_test_guard();
         let temp = tempfile::tempdir().unwrap();
         let previous_home = std::env::var_os("LONGHOUSE_HOME");
         unsafe {

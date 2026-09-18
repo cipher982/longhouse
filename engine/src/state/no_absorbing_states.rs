@@ -154,21 +154,67 @@ mod tests {
     /// drive the daemon loop directly; until that exists, this is the guard.
     #[test]
     fn every_recovery_producer_is_wired_into_the_daemon() {
+        // A recovery path that nothing schedules is indistinguishable from one
+        // that does not exist. The producer may live outside the daemon — the
+        // daily pass now runs the dead-range revive next to the compaction it
+        // prepares for — so the invariant is asserted in two parts: the
+        // producer exists where it is claimed to, and the daemon names the
+        // entry point that schedules it.
         let daemon = include_str!("../daemon.rs");
-        for (function, why) in [
+        let recover = include_str!("recover.rs");
+        for (producer, producer_source, scheduled_entry, why) in [
             (
                 "revive_dead_with_readable_sources",
+                recover,
+                "run_daily_storage_maintenance",
                 "dead spool ranges would never return to pending",
             ),
             (
+                "run_check_tick",
+                daemon,
                 "run_check_tick",
                 "the machine would never learn it is running a stale binary",
             ),
         ] {
             assert!(
-                daemon.contains(function),
-                "{function} is not called from daemon.rs, so {why}. A recovery path that \
+                producer_source.contains(producer),
+                "{producer} is not found in the source this test claims holds it"
+            );
+            assert!(
+                daemon.contains(scheduled_entry),
+                "daemon.rs does not schedule {scheduled_entry}, so {why}. A recovery path that \
                  nothing schedules is indistinguishable from one that does not exist."
+            );
+        }
+    }
+
+    #[test]
+    fn no_launcher_opens_the_archive_database() {
+        // A launcher that opens the shipper database puts a cold process with a
+        // fresh busy timeout in front of one WAL writer. On 2026-09-17 that made
+        // a required identity bind lose the lock and left sessions degraded for
+        // good. Launch authority is a local claim now; opening the database
+        // again from any of these files is how the incident comes back.
+        for (name, source) in [
+            ("omp_helm_launcher.rs", include_str!("../omp_helm_launcher.rs")),
+            ("omp_print.rs", include_str!("../omp_print.rs")),
+            ("codex_exec.rs", include_str!("../codex_exec.rs")),
+            ("pi_print.rs", include_str!("../pi_print.rs")),
+            ("pi_helm_launcher.rs", include_str!("../pi_helm_launcher.rs")),
+            ("antigravity_print.rs", include_str!("../antigravity_print.rs")),
+            ("cursor_helm_launcher.rs", include_str!("../cursor_helm_launcher.rs")),
+            ("cursor_print.rs", include_str!("../cursor_print.rs")),
+        ] {
+            // Only production code counts: a fixture may hold the database to
+            // prove that a locked archive no longer blocks a launch.
+            let production = source
+                .split("#[cfg(test)]")
+                .next()
+                .unwrap_or_default();
+            assert!(
+                !production.contains("open_client_connection"),
+                "{name} opens the archive database from a launcher path; launch authority is a \
+                 claim (managed_source_claim), not a row"
             );
         }
     }

@@ -69,7 +69,7 @@ jobs:
     name: "Validation"
     # Must exceed the sum of the step budgets below, or the job kills a healthy
     # run before any step reaches its own limit.
-    timeout-minutes: 35
+    timeout-minutes: 50
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -104,7 +104,13 @@ jobs:
         # make validate builds its isolated image and then runs every contract
         # check; on 2026-09-17 it reached its last check at 9m45s under normal
         # runner load, so 10 minutes failed healthy runs.
-        timeout-minutes: 20
+        #
+        # Runner pods are ephemeral, so the image build starts from a cold
+        # layer cache every time: bun install plus the cargo fetch took 16m
+        # alone in run 35289932123 (00:12:58 -> 00:29:00), leaving the checks
+        # no room inside 20. The step was building the whole time -- nothing
+        # hung -- so the budget has to cover a cold build plus the checks.
+        timeout-minutes: 30
         # One step, because two lists drift. This job used to enumerate a subset
         # of `make validate` by hand, and twelve of its members -- including
         # validate-session-state-contract, the drift check for the very

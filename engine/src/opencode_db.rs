@@ -1517,7 +1517,7 @@ mod tests {
     // So a panicking test leaves the environment clean, and the poison flag carries no
     // information -- it only converts one real failure into a wall of PoisonError noise
     // from every other test that shares the lock.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
 
     struct EnvGuard {
         key: &'static str,
@@ -1975,9 +1975,7 @@ mod tests {
 
     #[test]
     fn parse_opencode_session_reads_hatch_origin_sidecar_from_metadata_root() {
-        let _lock = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = crate::console_adapter::agent_state_guard();
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("opencode.db");
         create_fixture_db(&db_path);

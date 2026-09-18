@@ -521,6 +521,10 @@ mod tests {
 
     #[test]
     fn bounded_command_output_returns_successful_output() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let mut command = Command::new("sh");
         command.args(["-c", "printf '%262144s' ready; printf diagnostic >&2"]);
         let output = output_with_timeout(command, Duration::from_secs(1)).unwrap();
@@ -538,6 +542,10 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn bounded_command_output_works_in_a_background_process() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let mut command = Command::new("/usr/sbin/taskpolicy");
         command
             .arg("-b")
@@ -557,6 +565,10 @@ mod tests {
 
     #[test]
     fn bounded_command_output_terminates_a_stalled_process() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         // The claim is "gives up long before the child would finish", so the
         // gap between the two has to be big enough that a loaded shared CI
         // runner cannot close it. A 1s sleep against a 500ms bound left 500ms
@@ -576,6 +588,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn bounded_command_output_bounds_streams_after_leader_exit() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let mut command = Command::new("sh");
         command.args(["-c", "sleep 1 & exit 0"]);
         let started = Instant::now();
@@ -635,16 +651,25 @@ mod tests {
 
     #[test]
     fn targeted_process_identity_matches_full_inventory() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let pid = std::process::id();
         let targeted = try_collect_process_fact(pid).expect("targeted process identity");
         let inventory = try_collect_process_facts_by_pid().expect("full process inventory");
         let full = inventory.get(&pid).expect("current process in inventory");
 
+        // Identity, not instantaneous state: `stat` is the process's state at the
+        // moment `ps` looked, and the two probes are two moments. This process is
+        // the test runner, which is running while one probe reads it and can be
+        // sleeping while the other does, so comparing `stat` between them asserts
+        // a race rather than an identity.
         assert_eq!(targeted.pid, full.pid);
         assert_eq!(targeted.tty, full.tty);
-        assert_eq!(targeted.stat, full.stat);
         assert_eq!(targeted.lstart, full.lstart);
         assert_eq!(targeted.command, full.command);
+        assert!(!targeted.stat.trim().is_empty());
         assert!(targeted.start_time.is_some());
     }
 

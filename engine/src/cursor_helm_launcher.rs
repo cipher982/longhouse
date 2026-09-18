@@ -2098,6 +2098,10 @@ mod tests {
 
     #[test]
     fn mcp_config_scopes_coordination_authority_to_the_server() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let root = tempfile::tempdir().unwrap();
         let cursor_dir = root.path().join(".cursor");
         fs::create_dir(&cursor_dir).unwrap();
@@ -2127,6 +2131,10 @@ mod tests {
 
     #[test]
     fn concurrent_mcp_configs_do_not_remove_live_authority_or_leave_tokens() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let root = tempfile::tempdir().unwrap();
         let first = write_cursor_mcp_config(
             &root.path().join("state"),
@@ -2158,6 +2166,10 @@ mod tests {
 
     #[test]
     fn project_hooks_restore_original_configuration_after_last_owner() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let root = tempfile::tempdir().unwrap();
         let state_root = root.path().join("state");
         let hooks = root.path().join(".cursor/hooks.json");
@@ -2180,6 +2192,10 @@ mod tests {
 
     #[test]
     fn concurrent_project_hooks_keep_injection_until_last_owner() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let root = tempfile::tempdir().unwrap();
         let state_root = root.path().join("state");
         let hooks = root.path().join(".cursor/hooks.json");
@@ -2210,6 +2226,10 @@ mod tests {
 
     #[test]
     fn project_hooks_do_not_retain_longhouse_entries_after_lost_state() {
+        // Spawns a subprocess or reads the process table: hold the shared
+        // agent-state lock, so a concurrent test cannot empty PATH or move a
+        // global tree under it.
+        let _guard = crate::console_adapter::agent_state_guard();
         let root = tempfile::tempdir().unwrap();
         let state_root = root.path().join("state");
         let hooks = root.path().join(".cursor/hooks.json");
