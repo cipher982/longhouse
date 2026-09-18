@@ -113,9 +113,14 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   gate:
-    # Source qualification may wait 20m and publication 45m. Both upstream
-    # workflows run independently; allow their waits plus metadata resolution.
-    timeout-minutes: 75
+    # Source qualification and publication each get 45m of waiting, and they
+    # run independently, so this job must outlast their sum plus metadata
+    # resolution. It was 75m against a 20m source wait; on 2026-09-18 the
+    # core-E2E gate alone burned its 20m budget while `Core E2E tests` was
+    # still queued behind other runs and then ran 15m, so every `Deploy and
+    # Verify` from 14:20 onward failed and nothing deployed. A job timeout
+    # below the waits inside it is how the gate kills itself mid-wait.
+    timeout-minutes: 120
     name: "Resolve exact-SHA deploy metadata"
     runs-on: cube
     needs: changes
@@ -200,6 +205,11 @@ jobs:
         uses: ./.github/actions/wait-for-ci
         with:
           head_sha: ${{ steps.meta.outputs.runtime_image_tag }}
+          # The action's 20m default is shorter than a queued core-E2E run:
+          # on 2026-09-18 `Core E2E tests` took 15m of runtime but only
+          # started ~20m after the push, so the gate expired first and
+          # reported a timeout against a job that was still healthy.
+          timeout_seconds: "2700"
           github_token: ${{ github.token }}
           event: ""
           required_jobs: Core E2E tests
