@@ -616,7 +616,9 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 json.loads(fault_path.read_text()) if (fault_path := root / f"{session_id}.qa-fault.json").exists() else None
             )
             lifecycle["steer_active"] = steer_verdict
-            if fault is not None:
+            # A steer fault has produced everything its verdict needs; an abort
+            # fault has not fired yet, so that run continues through the abort.
+            if fault is not None and fault != "cursor_abort_noop":
                 report.update({"status": "negative_control_observed", "finished_at": _now()})
                 return report
             if not steer_verdict["passed"]:
@@ -654,6 +656,16 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
                 _hook_rows(root, session_id)[abort_hook_start:], generation_id=abort_generation, forbidden_marker=forbidden
             )
             abort_verdict["tui_alive_after_abort"] = session.process.poll() is None
+            if fault == "cursor_abort_noop":
+                # The fault has fired and the generation has already answered or
+                # been stopped; the recovery turn adds nothing the verdict reads,
+                # and waiting for it can only turn a clean verdict into a timeout.
+                abort_verdict["qa_fault_receipt"] = (
+                    json.loads(fault_path.read_text()) if (fault_path := root / f"{session_id}.qa-fault.json").exists() else None
+                )
+                lifecycle["abort_native"] = abort_verdict
+                report.update({"status": "negative_control_observed", "finished_at": _now()})
+                return report
             settled(args.timeout)
             send_live(f"Reply with exactly {recovery}")
             _wait_until(

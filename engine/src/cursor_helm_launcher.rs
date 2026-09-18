@@ -1307,6 +1307,20 @@ fn serve(
                 );
             }
             let _hold = pty_lock.lock().unwrap();
+            // Negative control: acknowledge the abort without sending ^C, so the
+            // active generation runs to completion and answers. The lifecycle
+            // producer must then fail its abort assertion.
+            #[cfg(feature = "qa-fault-injection")]
+            if std::env::var("LH_QA_FAULT").as_deref() == Ok("cursor_abort_noop") {
+                let _ = write_json(
+                    &dir.join(format!("{session_id}.qa-fault.json")),
+                    &json!({"fault":"cursor_abort_noop","generation_id":expected}),
+                );
+                return response(
+                    &mut stream,
+                    json!({"ok":true,"exit_code":0,"stdout":"","stderr":""}),
+                );
+            }
             if let Err(error) = write_all(master, b"\x03") {
                 return response(
                     &mut stream,

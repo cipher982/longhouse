@@ -7,11 +7,13 @@ launch, idle send, active-turn steer, abort, and terminate. The oracles live
 in :mod:`zerg.qa.cursor_helm_product_e2e` and judge Cursor's own hook
 records, not the keystrokes Longhouse sent.
 
-``--negative-control cursor_steer_queue_only`` runs the same scenario against
-a Machine Agent built with the ``qa-fault-injection`` feature, whose steer
-queues a follow-up instead of steering. The steer oracle must then fail with a
-typed code, a receipt must show the fault fired, and launch and send must still
-hold; anything else is inconclusive or a broken oracle.
+``--negative-control`` runs the same scenario against a Machine Agent built with
+the ``qa-fault-injection`` feature, with one control per corrupted step:
+``cursor_steer_queue_only`` queues the steer as a follow-up instead of steering,
+and ``cursor_abort_noop`` acknowledges the abort without sending ^C, so the
+generation runs on and answers. The assertion that owns that step must then
+fail, a receipt must show the fault fired, and launch and send must still hold;
+anything else is inconclusive or a broken oracle.
 """
 
 from __future__ import annotations
@@ -43,9 +45,15 @@ from zerg.qa.provider_release_identity import sha256_file
 from zerg.qa.resume_assurance import ProducerRegistration
 
 _DEFAULT_CURSOR_MODEL = "gpt-5.3-codex-low"
-NEGATIVE_CONTROLS = ("cursor_steer_queue_only",)
+NEGATIVE_CONTROLS = ("cursor_steer_queue_only", "cursor_abort_noop")
 # A steer that arrived as the next turn, or never changed the original one.
 _STEER_FAULT_FAILURE_CODES = frozenset({"steer_delivered_as_followup", "steer_did_not_change_course"})
+# Which lifecycle step each fault corrupts, and therefore which assertion has
+# to catch it. A fault that fires against one step proves nothing about another.
+_FAULT_TARGETS = {
+    "cursor_steer_queue_only": ("steer_active", "cursor_helm_steer_active"),
+    "cursor_abort_noop": ("abort_native", "cursor_helm_abort_native"),
+}
 
 ASSERTIONS = (
     "cursor_helm_launch_registration",
@@ -118,26 +126,45 @@ def lifecycle_assertions(report: dict[str, Any], *, cleanup_ok: bool) -> dict[st
 def negative_control_verdict(report: dict[str, Any], *, fault: str) -> dict[str, Any]:
     """Pass only when the injected fault fired and the target oracle caught it."""
 
+    step_name, target_assertion = _FAULT_TARGETS[fault]
     lifecycle = report.get("lifecycle") if isinstance(report.get("lifecycle"), dict) else {}
-    steer = lifecycle.get("steer_active") if isinstance(lifecycle.get("steer_active"), dict) else {}
-    receipt = steer.get("qa_fault_receipt")
+    step = lifecycle.get(step_name) if isinstance(lifecycle.get(step_name), dict) else {}
+    receipt = step.get("qa_fault_receipt")
     preconditions = lifecycle_assertions(report, cleanup_ok=True)
     fault_fired = isinstance(receipt, dict) and receipt.get("fault") == fault
     preconditions_held = preconditions["cursor_helm_launch_registration"] and preconditions["cursor_helm_send_idle"]
-    oracle_rejected = steer.get("passed") is False and steer.get("failure_code") in _STEER_FAULT_FAILURE_CODES
+    if fault == "cursor_abort_noop":
+        # An unsent ^C leaves the generation to finish on its own: it never
+        # stops as aborted, and it answers with the reply the oracle forbids.
+        # Requiring that shape keeps an unrelated abort failure inconclusive.
+        oracle_rejected = step.get("passed") is False and (
+            step.get("generation_stopped_aborted") is False or step.get("forbidden_response_produced") is True
+        )
+        target_detail = {
+            "generation_stopped_aborted": step.get("generation_stopped_aborted"),
+            "forbidden_response_produced": step.get("forbidden_response_produced"),
+        }
+    else:
+        oracle_rejected = step.get("passed") is False and step.get("failure_code") in _STEER_FAULT_FAILURE_CODES
+        target_detail = {"target_failure_code": step.get("failure_code")}
     if report.get("status") != "negative_control_observed" or not fault_fired or not preconditions_held:
         status = "inconclusive"
     elif oracle_rejected:
         status = "pass"
-    else:
+    elif step.get("passed") is True:
+        # The oracle accepted a run whose control was deliberately broken.
         status = "fail"
+    else:
+        # It rejected the run, but not in the shape this fault produces, so the
+        # run says nothing about whether the oracle catches this fault.
+        status = "inconclusive"
     return {
         "status": status,
         "fault": fault,
         "fault_fired": fault_fired,
         "preconditions_held": preconditions_held,
-        "target_assertion": "cursor_helm_steer_active",
-        "target_failure_code": steer.get("failure_code"),
+        "target_assertion": target_assertion,
+        **target_detail,
     }
 
 

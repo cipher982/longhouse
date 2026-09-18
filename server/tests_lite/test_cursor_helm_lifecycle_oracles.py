@@ -143,3 +143,74 @@ def test_steer_and_abort_assertions_require_a_passing_run() -> None:
     assert assertions["cursor_helm_launch_registration"] is True
     assert assertions["cursor_helm_steer_active"] is False
     assert assertions["cursor_helm_terminate_owned"] is False
+
+
+def _abort_report(*, status: str, abort: dict) -> dict:
+    return {
+        "status": status,
+        "lifecycle": {
+            "launch_registration": {"state_ready": True, "native_binding_claimed": True, "first_reply_archived": True},
+            "send_idle": {"remote_reply_archived": True},
+            "steer_active": {"passed": True, "failure_code": None},
+            "abort_native": abort,
+        },
+    }
+
+
+def test_abort_negative_control_judges_the_abort_step_not_the_steer() -> None:
+    receipt = {"fault": "cursor_abort_noop", "generation_id": "g1"}
+    # An unsent ^C: the generation is never aborted and answers the reply the
+    # oracle forbids. The abort assertion has to catch exactly that.
+    caught = _abort_report(
+        status="negative_control_observed",
+        abort={
+            "passed": False,
+            "generation_stopped_aborted": False,
+            "forbidden_response_produced": True,
+            "qa_fault_receipt": receipt,
+        },
+    )
+    missed = _abort_report(
+        status="negative_control_observed",
+        abort={
+            "passed": True,
+            "generation_stopped_aborted": True,
+            "forbidden_response_produced": False,
+            "qa_fault_receipt": receipt,
+        },
+    )
+    unfired = _abort_report(
+        status="negative_control_observed",
+        abort={"passed": False, "generation_stopped_aborted": False, "forbidden_response_produced": True, "qa_fault_receipt": None},
+    )
+    # The abort did stop the generation and no forbidden reply appeared, so this
+    # run failed for some other reason and proves nothing about the oracle.
+    unrelated = _abort_report(
+        status="negative_control_observed",
+        abort={
+            "passed": False,
+            "generation_stopped_aborted": True,
+            "forbidden_response_produced": False,
+            "following_turn_completed": False,
+            "qa_fault_receipt": receipt,
+        },
+    )
+
+    assert negative_control_verdict(caught, fault="cursor_abort_noop")["status"] == "pass"
+    assert negative_control_verdict(caught, fault="cursor_abort_noop")["target_assertion"] == "cursor_helm_abort_native"
+    assert negative_control_verdict(missed, fault="cursor_abort_noop")["status"] == "fail"
+    assert negative_control_verdict(unfired, fault="cursor_abort_noop")["status"] == "inconclusive"
+    assert negative_control_verdict(unrelated, fault="cursor_abort_noop")["status"] == "inconclusive"
+
+
+def test_abort_control_does_not_read_the_steer_receipt() -> None:
+    # A steer-shaped receipt on the steer step must not satisfy an abort control:
+    # the fault has to have fired against the step being judged.
+    report = _abort_report(
+        status="negative_control_observed",
+        abort={"passed": False, "generation_stopped_aborted": False, "forbidden_response_produced": True},
+    )
+    report["lifecycle"]["steer_active"]["qa_fault_receipt"] = {"fault": "cursor_abort_noop"}
+    verdict = negative_control_verdict(report, fault="cursor_abort_noop")
+    assert verdict["fault_fired"] is False
+    assert verdict["status"] == "inconclusive"
