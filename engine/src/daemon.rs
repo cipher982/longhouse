@@ -1193,6 +1193,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut status_recorded: HashMap<String, (String, u64)> = HashMap::new();
     let mut outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut runtime_outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
+    let mut runtime_outbox_consecutive_failures: u32 = 0;
+    let mut runtime_outbox_retry_after: Option<Instant> = None;
     let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
     let mut machine_presence_post_tasks: JoinSet<MachinePresencePostResult> = JoinSet::new();
     let mut unmanaged_binding_refresh_tasks: JoinSet<UnmanagedBindingRefreshResult> =
@@ -1751,7 +1753,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             );
                         }
                         if !result.posts.is_empty() {
-                            if runtime_outbox_post_tasks.is_empty() {
+                            let retry_due = runtime_outbox_retry_after
+                                .map(|retry_at| Instant::now() >= retry_at)
+                                .unwrap_or(true);
+                            if runtime_outbox_post_tasks.is_empty() && retry_due {
                                 let client = client.clone();
                                 let runtime_posts = result.posts;
                                 let post_count = runtime_posts.len();
@@ -1867,33 +1872,63 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 match runtime_outbox_post_result {
                     Some(Ok((sent, kept, join_elapsed_ms, task_elapsed_ms))) => {
                         let local_join_delay_ms = join_elapsed_ms.saturating_sub(task_elapsed_ms);
-                        if kept > 0 {
+                        // A mixed result proves the Runtime Host is accepting
+                        // work. Do not let one session's retained event throttle
+                        // every other session; back off only when this pass made
+                        // no progress at all.
+                        if kept > 0 && sent == 0 {
+                            runtime_outbox_consecutive_failures =
+                                runtime_outbox_consecutive_failures.saturating_add(1);
+                            let backoff_multiplier = 1u64
+                                << runtime_outbox_consecutive_failures.min(4);
+                            let delay = LIVE_LOCAL_RETRY_DELAY
+                                .saturating_mul(backoff_multiplier as u32)
+                                .min(Duration::from_secs(LOCAL_RETRY_DELAY_SECS));
+                            runtime_outbox_retry_after = Some(Instant::now() + delay);
                             tracing::warn!(
                                 sent,
                                 kept,
                                 task_elapsed_ms,
                                 join_elapsed_ms,
                                 local_join_delay_ms,
-                                "Outbox runtime-event POST kept files for retry"
+                                retry_delay_ms = delay.as_millis() as u64,
+                                "Outbox runtime-event POST kept all files for retry"
                             );
-                        } else if join_elapsed_ms > 1_000 {
-                            tracing::warn!(
-                                sent,
-                                task_elapsed_ms,
-                                join_elapsed_ms,
-                                local_join_delay_ms,
-                                "Outbox runtime-event POST was slow"
-                            );
-                        } else if sent > 0 {
-                            tracing::debug!(
-                                sent,
-                                task_elapsed_ms,
-                                join_elapsed_ms,
-                                "Outbox runtime-event POST sent files"
-                            );
+                        } else {
+                            runtime_outbox_consecutive_failures = 0;
+                            runtime_outbox_retry_after = None;
+                            if kept > 0 {
+                                tracing::warn!(
+                                    sent,
+                                    kept,
+                                    task_elapsed_ms,
+                                    join_elapsed_ms,
+                                    local_join_delay_ms,
+                                    "Outbox runtime-event POST kept some files while other files progressed"
+                                );
+                            } else if join_elapsed_ms > 1_000 {
+                                tracing::warn!(
+                                    sent,
+                                    task_elapsed_ms,
+                                    join_elapsed_ms,
+                                    local_join_delay_ms,
+                                    "Outbox runtime-event POST was slow"
+                                );
+                            } else if sent > 0 {
+                                tracing::debug!(
+                                    sent,
+                                    task_elapsed_ms,
+                                    join_elapsed_ms,
+                                    "Outbox runtime-event POST sent files"
+                                );
+                            }
                         }
                     }
                     Some(Err(err)) => {
+                        runtime_outbox_consecutive_failures =
+                            runtime_outbox_consecutive_failures.saturating_add(1);
+                        runtime_outbox_retry_after =
+                            Some(Instant::now() + LIVE_LOCAL_RETRY_DELAY);
                         tracing::warn!("Outbox runtime-event POST task failed: {}", err);
                     }
                     None => {}
@@ -2931,7 +2966,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                     });
                 }
-                if runtime_collect_tasks.is_empty() && runtime_outbox_post_tasks.is_empty() {
+                if runtime_collect_tasks.is_empty()
+                    && runtime_outbox_post_tasks.is_empty()
+                    && runtime_outbox_retry_after
+                        .map(|retry_at| Instant::now() >= retry_at)
+                        .unwrap_or(true)
+                {
                     let runtime_events_outbox_dir = runtime_events_outbox_dir.clone();
                     runtime_collect_tasks.spawn_blocking(move || {
                         let started = Instant::now();

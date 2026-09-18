@@ -14,6 +14,7 @@ from datetime import timedelta
 from datetime import timezone
 from typing import Any
 from typing import Literal
+from typing import get_args
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -56,6 +57,7 @@ RuntimeEventKind = Literal[
     "pause_request",
     "pause_resolution",
 ]
+KNOWN_RUNTIME_EVENT_KINDS: frozenset[str] = frozenset(get_args(RuntimeEventKind))
 RuntimeEventApplyOutcome = Literal[
     "applied",
     "ignored",
@@ -213,7 +215,7 @@ class RuntimeEventIngest(BaseModel):
     provider: str = Field(..., min_length=1, max_length=64)
     device_id: str | None = Field(None, max_length=255)
     source: str = Field(..., min_length=1, max_length=64)
-    kind: RuntimeEventKind
+    kind: str = Field(..., min_length=1, max_length=64)
     phase: str | None = Field(None, max_length=32)
     tool_name: str | None = Field(None, max_length=128)
     occurred_at: datetime
@@ -267,6 +269,7 @@ class RuntimeEventBatchResult(BaseModel):
     accepted: int
     duplicates: int
     updated_runtime_keys: list[str]
+    ignored: int = 0
 
 
 @dataclass(frozen=True)
@@ -638,6 +641,7 @@ def _is_omp_helm_stream_event(event: RuntimeEventIngest) -> bool:
 def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> RuntimeEventBatchResult:
     accepted = 0
     duplicates = 0
+    ignored = 0
     updated_runtime_keys: list[str] = []
 
     for event in events:
@@ -671,13 +675,15 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
             raise RuntimeError("accepted runtime observation was not readable after insert")
         outcome = reduce_runtime_signal_observation(db, observation_result.observation)
         _record_managed_codex_runtime_observation(event, outcome)
-        if outcome == "applied" and event.runtime_key not in updated_runtime_keys:
+        if outcome == "ignored":
+            ignored += 1
+        elif outcome == "applied" and event.runtime_key not in updated_runtime_keys:
             updated_runtime_keys.append(event.runtime_key)
-
     return RuntimeEventBatchResult(
         accepted=accepted,
         duplicates=duplicates,
         updated_runtime_keys=updated_runtime_keys,
+        ignored=ignored,
     )
 
 
@@ -695,7 +701,17 @@ def ingest_live_runtime_events(db: Session, events: list[RuntimeEventIngest]) ->
     from zerg.services.session_pause_requests import live_interaction_terminal_reason
 
     updated_runtime_keys: list[str] = []
+    ignored = 0
     for event in events:
+        if event.kind not in KNOWN_RUNTIME_EVENT_KINDS:
+            logger.debug(
+                "Ignored unrecognized runtime observation kind=%s provider=%s session=%s",
+                event.kind,
+                event.provider,
+                event.session_id,
+            )
+            ignored += 1
+            continue
         overlay_stream = _is_pi_print_stream_event(event) or _is_omp_print_stream_event(event)
         preview_candidate = live_preview_candidate_from_runtime_event(
             event,
@@ -726,6 +742,8 @@ def ingest_live_runtime_events(db: Session, events: list[RuntimeEventIngest]) ->
                 reason = live_interaction_terminal_reason(db, interaction) if interaction is not None else None
                 if reason is not None:
                     expire_live_interaction(db, interaction, occurred_at=normalize_utc(event.occurred_at), reason=reason)
+        if outcome == "ignored":
+            ignored += 1
         _record_managed_codex_runtime_observation(event, f"live_{outcome}")
         if outcome in {"applied", "stored_live_overlay"} and event.runtime_key not in updated_runtime_keys:
             updated_runtime_keys.append(event.runtime_key)
@@ -733,12 +751,16 @@ def ingest_live_runtime_events(db: Session, events: list[RuntimeEventIngest]) ->
     # Runtime signals are liveness evidence for the active-session candidate
     # index; without this, unmanaged/Shadow sessions that never hold a managed
     # lease vanish from the active list when the Live Store is configured.
-    touch_live_sessions_from_runtime_events(db, events)
+    touch_live_sessions_from_runtime_events(
+        db,
+        [e for e in events if e.kind in KNOWN_RUNTIME_EVENT_KINDS],
+    )
 
     return RuntimeEventBatchResult(
         accepted=len(events),
         duplicates=0,
         updated_runtime_keys=updated_runtime_keys,
+        ignored=ignored,
     )
 
 
@@ -747,16 +769,8 @@ def runtime_event_from_observation(observation) -> RuntimeEventIngest | None:
         return None
     payload = _observation_payload(observation)
     kind = str(payload.get("kind") or "").strip()
-    valid_kinds = {
-        "phase_signal",
-        "progress_signal",
-        "terminal_signal",
-        "binding_signal",
-        "pause_request",
-        "pause_resolution",
-    }
-    if kind not in valid_kinds:
-        raise ValueError(f"runtime_signal observation {observation.observation_id} has invalid kind {kind!r}")
+    if not kind:
+        return None
     return RuntimeEventIngest(
         runtime_key=observation.runtime_key
         or runtime_key_for_session(
@@ -769,7 +783,7 @@ def runtime_event_from_observation(observation) -> RuntimeEventIngest | None:
         provider=observation.provider,
         device_id=observation.device_id,
         source=observation.source,
-        kind=kind,  # type: ignore[arg-type]
+        kind=kind,
         phase=_optional_payload_str(payload.get("phase")),
         tool_name=_optional_payload_str(payload.get("tool_name")),
         occurred_at=normalize_utc(observation.observed_at) or datetime.now(timezone.utc),
@@ -781,7 +795,7 @@ def runtime_event_from_observation(observation) -> RuntimeEventIngest | None:
 
 def reduce_runtime_signal_observation(db: Session, observation) -> RuntimeEventApplyOutcome:
     event = runtime_event_from_observation(observation)
-    if event is None:
+    if event is None or event.kind not in KNOWN_RUNTIME_EVENT_KINDS:
         return "ignored"
     if event.kind == "binding_signal":
         # Binding aliases are an idempotent graph side effect, not a
@@ -1089,6 +1103,14 @@ def _apply_runtime_event(
     state_model: type[SessionRuntimeState] | type[LiveRuntimeState] = SessionRuntimeState,
     archive_side_effects: bool = True,
 ) -> RuntimeEventApplyOutcome:
+    if event.kind not in KNOWN_RUNTIME_EVENT_KINDS:
+        logger.warning(
+            "Ignored unrecognized runtime observation kind=%s provider=%s session=%s",
+            event.kind,
+            event.provider,
+            event.session_id,
+        )
+        return "ignored"
     if event.kind in {"pause_request", "pause_resolution"}:
         if not archive_side_effects:
             from zerg.services.session_pause_requests import apply_live_interaction_event

@@ -278,7 +278,11 @@ def abort_stopped_turn(
     forbidden = said_forbidden and tool_completed
     ended_at = _timestamp(rows[end])
     stop_latency = None if ended_at is None else round(ended_at - interrupted_at, 3)
-    early = stop_latency is not None and stop_latency < tool_seconds / 2
+    # A turn that ended BEFORE the interrupt was sent proves nothing about the
+    # interrupt: negative latency satisfied `< tool_seconds / 2` and certified a
+    # model that simply finished first. That is its own failure, not an abort.
+    ended_before_interrupt = stop_latency is not None and stop_latency < 0
+    early = stop_latency is not None and 0 <= stop_latency < tool_seconds / 2
     # A killed tool alone is not a stop: the model can read the failure and
     # carry on with more tools. Nothing may execute after the interrupt.
     # Any tool the model STARTS after the interrupt is continued work, whether
@@ -286,12 +290,26 @@ def abort_stopped_turn(
     # up was never stopped. The killed tool's own error result arrives after
     # the interrupt by construction, so it is not counted -- only a new
     # tool_use, or a tool that succeeded after the interrupt.
-    tools_after = sum(
-        1
-        for row in turn
-        if (stamp := _timestamp(row)) is not None and stamp > interrupted_at and (_successful_tool_result(row) or _started_tool(row))
-    )
+    # A tool row without a timestamp must not silently drop out of this count.
+    # Claude omits timestamps on many rows, so position alone cannot say which
+    # side of the interrupt one sits on -- but once a TIMESTAMPED row in this
+    # turn is already past the interrupt, every later row is too. Counting those
+    # closes the hole where an untimestamped tool started after the interrupt
+    # vanished from the count and certified the abort.
+    tools_after = 0
+    passed_interrupt = False
+    for row in turn:
+        stamp = _timestamp(row)
+        if stamp is not None and stamp > interrupted_at:
+            passed_interrupt = True
+        if not (_successful_tool_result(row) or _started_tool(row)):
+            continue
+        after = stamp > interrupted_at if stamp is not None else passed_interrupt
+        if after:
+            tools_after += 1
     failure = None if (not forbidden and early and tools_after == 0) else "abort_did_not_stop_turn"
+    if ended_before_interrupt:
+        failure = "abort_turn_ended_before_interrupt"
     following_completed = None
     if recovery_marker is not None:
         later = rows[end + 1 :]

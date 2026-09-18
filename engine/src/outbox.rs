@@ -1150,7 +1150,7 @@ pub(crate) async fn post_pending_runtime_event_files_with_outcome(
 
     let outcomes = stream::iter(sessions.into_iter().map(|events| async move {
         let mut outcome = RuntimeEventPostOutcome::default();
-        for chunk in events.chunks(RUNTIME_EVENT_BATCH_LIMIT) {
+        for (chunk_index, chunk) in events.chunks(RUNTIME_EVENT_BATCH_LIMIT).enumerate() {
             let chunk_outcome = post_one_runtime_event_request(client, chunk.to_vec()).await;
             outcome.sent += chunk_outcome.sent;
             outcome.kept += chunk_outcome.kept;
@@ -1160,7 +1160,8 @@ pub(crate) async fn post_pending_runtime_event_files_with_outcome(
             if chunk_outcome.kept > 0 {
                 // Everything after this in the same session stays queued: it
                 // must not arrive before the events it follows.
-                let remaining: usize = events.len() - (outcome.sent + outcome.kept);
+                let processed_chunks = (chunk_index + 1) * RUNTIME_EVENT_BATCH_LIMIT;
+                let remaining = events.len().saturating_sub(processed_chunks);
                 outcome.kept += remaining;
                 break;
             }
@@ -1255,7 +1256,7 @@ async fn isolate_permanent_runtime_event_rejection(
     chunk: &[PendingRuntimeEventPost],
 ) -> RuntimeEventPostOutcome {
     let mut outcome = RuntimeEventPostOutcome::default();
-    for post in chunk {
+    for (index, post) in chunk.iter().enumerate() {
         let body = match serde_json::to_vec(&serde_json::json!({
             "events": [post.event.clone()],
         })) {
@@ -1330,9 +1331,12 @@ async fn isolate_permanent_runtime_event_rejection(
                 tracing::warn!(
                     path = %post_path_display(post),
                     error = %error,
-                    "Runtime event rejection isolation hit a transient failure"
+                    "Runtime event rejection isolation hit a transient failure; halting isolation"
                 );
                 outcome.kept += 1;
+                let remaining = chunk.len().saturating_sub(index + 1);
+                outcome.kept += remaining;
+                break;
             }
         }
     }
@@ -1876,18 +1880,27 @@ mod tests {
                 let body_end = header_end.saturating_add(content_len).min(request.len());
                 let body = serde_json::from_slice::<Value>(&request[header_end..body_end])
                     .unwrap_or_else(|_| serde_json::json!({}));
-                let rejects = body
-                    .get("events")
-                    .and_then(Value::as_array)
-                    .is_some_and(|events| {
-                        events.iter().any(|event| {
-                            event
-                                .get("tool_name")
-                                .and_then(Value::as_str)
-                                .is_some_and(|tool_name| tool_name.chars().count() > 128)
-                        })
-                    });
-                let status = if rejects { 422 } else { 204 };
+                let events = body.get("events").and_then(Value::as_array);
+                let rejects = events.is_some_and(|events| {
+                    events.iter().any(|event| {
+                        event
+                            .get("tool_name")
+                            .and_then(Value::as_str)
+                            .is_some_and(|tool_name| tool_name.chars().count() > 128)
+                    })
+                });
+                let transient = events.is_some_and(|events| {
+                    events.iter().any(|event| {
+                        event.get("tool_name").and_then(Value::as_str) == Some("transient")
+                    })
+                });
+                let status = if rejects {
+                    422
+                } else if transient {
+                    503
+                } else {
+                    204
+                };
                 requests_clone.lock().unwrap().push((status, body));
                 let response_body = if rejects {
                     r#"{"detail":[{"loc":["body","events",0,"tool_name"],"msg":"String should have at most 128 characters","type":"string_too_long"}]}"#
@@ -2061,6 +2074,71 @@ mod tests {
             }),
             "the server must observe the actual validation rejection"
         );
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn transient_during_rejection_isolation_keeps_later_events() {
+        use crate::config::ShipperConfig;
+        use crate::pipeline::compressor::CompressionAlgo;
+        use crate::shipping::client::ShipperClient;
+
+        let (addr, requests, server) = spawn_runtime_validation_server().await;
+        let dir = tempfile::tempdir().unwrap();
+        let session_id = "sess-rejection";
+        let (poison, mut poison_event) = write_runtime_event_with_tool_name(
+            dir.path(),
+            "rte.a-poison.json",
+            session_id,
+            Some(&"x".repeat(129)),
+        );
+        let (transient, mut transient_event) = write_runtime_event_with_tool_name(
+            dir.path(),
+            "rte.b-transient.json",
+            session_id,
+            Some("transient"),
+        );
+        let (later, mut later_event) = write_runtime_event_with_tool_name(
+            dir.path(),
+            "rte.c-later.json",
+            session_id,
+            Some("later"),
+        );
+        poison_event["occurred_at"] = json!("2026-05-20T21:06:20Z");
+        poison_event["dedupe_key"] = json!("rejection-poison");
+        transient_event["occurred_at"] = json!("2026-05-20T21:06:21Z");
+        transient_event["dedupe_key"] = json!("rejection-transient");
+        later_event["occurred_at"] = json!("2026-05-20T21:06:22Z");
+        later_event["dedupe_key"] = json!("rejection-later");
+        fs::write(&poison, serde_json::to_vec(&poison_event).unwrap()).unwrap();
+        fs::write(&transient, serde_json::to_vec(&transient_event).unwrap()).unwrap();
+        fs::write(&later, serde_json::to_vec(&later_event).unwrap()).unwrap();
+
+        let url = format!("http://{addr}");
+        let cfg = ShipperConfig::default().with_overrides(Some(&url), None, None, None, None, None);
+        let client = ShipperClient::with_compression(&cfg, CompressionAlgo::Gzip).unwrap();
+
+        let (sent, kept) = drain_runtime_event_outbox(dir.path(), &client).await;
+        server.abort();
+        let requests = requests.lock().unwrap().clone();
+
+        assert_eq!(sent, 0);
+        assert_eq!(kept, 2);
+        assert!(!poison.exists());
+        assert!(transient.exists());
+        assert!(later.exists());
+        assert!(requests.iter().any(|(status, body)| {
+            *status == 503
+                && body
+                    .get("events")
+                    .and_then(Value::as_array)
+                    .is_some_and(|events| events == std::slice::from_ref(&transient_event))
+        }));
+        assert!(!requests.iter().any(|(status, body)| {
+            *status == 204
+                && body
+                    .get("events")
+                    .and_then(Value::as_array)
+                    .is_some_and(|events| events.contains(&later_event))
+        }));
     }
 
     #[test]
