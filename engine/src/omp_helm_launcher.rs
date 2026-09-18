@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, IsTerminal, Read, Write};
+use std::net::Shutdown;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -127,10 +128,12 @@ struct OmpHelmStateFile {
     updated_at: String,
 }
 
-#[derive(Debug, Clone)]
 struct SharedState {
     state: OmpHelmStateFile,
     extension_sender: Option<mpsc::Sender<Value>>,
+    /// The current extension transport. Replacing the sender alone leaves an
+    /// old reader/socket stranded when a provider worker reconnects.
+    extension_socket: Option<std::os::unix::net::UnixStream>,
     extension_connection_id: Option<String>,
     pending: HashMap<String, mpsc::Sender<Value>>,
     /// Request id of an in-flight terminate. Native OMP `ctx.shutdown()` exits
@@ -178,6 +181,7 @@ impl OmpHelmServer {
                 state,
                 extension_sender: None,
                 extension_connection_id: None,
+                extension_socket: None,
                 pending: HashMap::new(),
                 pending_terminate: None,
                 live_assistant_text: String::new(),
@@ -268,10 +272,19 @@ impl OmpHelmServer {
             return;
         }
         let connection_id = Uuid::new_v4().to_string();
+        let socket = match reader.get_ref().try_clone() {
+            Ok(socket) => socket,
+            Err(error) => {
+                eprintln!("[omp-helm] cannot retain extension transport: {error}");
+                return;
+            }
+        };
         let (sender, receiver) = mpsc::channel::<Value>();
-        {
+        let previous_socket = {
             let mut state = self.shared.lock().expect("OMP state mutex poisoned");
             fail_pending_locked(&mut state, "OMP extension connection replaced");
+            let previous_socket = state.extension_socket.take();
+            state.extension_socket = Some(socket);
             state.extension_sender = Some(sender);
             state.extension_connection_id = Some(connection_id.clone());
             // A new channel is a new authority: a window armed against the old
@@ -282,16 +295,16 @@ impl OmpHelmServer {
             state.state.ready = false;
             state.state.status = "starting".into();
             state.state.updated_at = Utc::now().to_rfc3339();
+            previous_socket
+        };
+        // Replacing the authority must also close the old transport. Otherwise
+        // its reader remains blocked after the writer fails, and every worker
+        // restart leaves another socket/thread behind.
+        if let Some(previous_socket) = previous_socket {
+            let _ = previous_socket.shutdown(Shutdown::Both);
         }
         let writer_connection = connection_id.clone();
-        let writer_thread = thread::spawn(move || {
-            for frame in receiver {
-                if writer.write_all(format!("{}\n", frame).as_bytes()).is_err() {
-                    break;
-                }
-                let _ = writer.flush();
-            }
-        });
+        let writer_thread = thread::spawn(move || write_extension_frames(writer, receiver));
         self.send_extension_frame(
             &connection_id,
             json!({
@@ -464,40 +477,33 @@ impl OmpHelmServer {
     }
 
     fn disconnect_extension(&self, connection_id: &str) {
-        let mut state = self.shared.lock().expect("OMP state mutex poisoned");
-        if state.extension_connection_id.as_deref() != Some(connection_id) {
-            return;
+        let socket = {
+            let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+            if state.extension_connection_id.as_deref() != Some(connection_id) {
+                return;
+            }
+            settle_pending_terminate_locked(&mut state);
+            fail_pending_locked(&mut state, "OMP extension channel disconnected");
+            state.extension_sender = None;
+            state.extension_connection_id = None;
+            state.identity_retry_after = None;
+            state.state.ready = false;
+            if state.state.status != "stopped" {
+                state.state.status = "degraded".into();
+            }
+            state.state.updated_at = Utc::now().to_rfc3339();
+            state.extension_socket.take()
+        };
+        if let Some(socket) = socket {
+            let _ = socket.shutdown(Shutdown::Both);
         }
-        settle_pending_terminate_locked(&mut state);
-        fail_pending_locked(&mut state, "OMP extension channel disconnected");
-        state.extension_sender = None;
-        state.extension_connection_id = None;
-        state.identity_retry_after = None;
-        state.state.ready = false;
-        if state.state.status != "stopped" {
-            state.state.status = "degraded".into();
-        }
-        state.state.updated_at = Utc::now().to_rfc3339();
-        drop(state);
         let _ = self.persist_state();
     }
 
     fn send_extension_frame(&self, connection_id: &str, frame: Value) {
-        let sender = self
-            .shared
-            .lock()
-            .expect("OMP state mutex poisoned")
-            .extension_connection_id
-            .as_deref()
-            == Some(connection_id);
-        if sender {
-            if let Some(channel) = self
-                .shared
-                .lock()
-                .expect("OMP state mutex poisoned")
-                .extension_sender
-                .clone()
-            {
+        let state = self.shared.lock().expect("OMP state mutex poisoned");
+        if state.extension_connection_id.as_deref() == Some(connection_id) {
+            if let Some(channel) = &state.extension_sender {
                 let _ = channel.send(frame);
             }
         }
@@ -1283,7 +1289,9 @@ impl OmpHelmServer {
             state.pending.insert(request_id.clone(), sender);
             let mut command = frame;
             command["request_id"] = json!(request_id);
-            if kind == "steer" && fault == Some(crate::qa_fault::HelmExtensionFault::SteerAsFollowUp) {
+            if kind == "steer"
+                && fault == Some(crate::qa_fault::HelmExtensionFault::SteerAsFollowUp)
+            {
                 crate::qa_fault::record_fired_named(
                     "omp_steer_as_follow_up",
                     &state.state.session_id,
@@ -1361,12 +1369,17 @@ impl OmpHelmServer {
 
     fn shutdown(&self) {
         self.stop.store(true, Ordering::Release);
-        let mut state = self.shared.lock().expect("OMP state mutex poisoned");
-        settle_pending_terminate_locked(&mut state);
-        fail_pending_locked(&mut state, "OMP Helm server is shutting down");
-        state.extension_sender = None;
-        state.extension_connection_id = None;
-        drop(state);
+        let socket = {
+            let mut state = self.shared.lock().expect("OMP state mutex poisoned");
+            settle_pending_terminate_locked(&mut state);
+            fail_pending_locked(&mut state, "OMP Helm server is shutting down");
+            state.extension_sender = None;
+            state.extension_connection_id = None;
+            state.extension_socket.take()
+        };
+        if let Some(socket) = socket {
+            let _ = socket.shutdown(Shutdown::Both);
+        }
         let _ = std::os::unix::net::UnixStream::connect(&self.socket_path);
         let _ = fs::remove_file(&self.socket_path);
         let _ = fs::remove_dir(&self.socket_dir);
@@ -1582,6 +1595,23 @@ fn read_frame(reader: &mut BufReader<std::os::unix::net::UnixStream>) -> Result<
         bytes.push(one[0]);
         if bytes.len() > MAX_FRAME_BYTES {
             anyhow::bail!("OMP Helm frame exceeds limit");
+        }
+    }
+}
+
+fn write_extension_frames(
+    mut writer: std::os::unix::net::UnixStream,
+    receiver: mpsc::Receiver<Value>,
+) {
+    for frame in receiver {
+        let result = writer
+            .write_all(format!("{}\n", frame).as_bytes())
+            .and_then(|_| writer.flush());
+        if result.is_err() {
+            // `writer` is a clone of the reader's socket. `break` alone only
+            // drops this clone and leaves the reader blocked indefinitely.
+            let _ = writer.shutdown(Shutdown::Both);
+            break;
         }
     }
 }
@@ -1974,15 +2004,12 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     // enumerates sources, so the path cannot be minted as a Shadow session in
     // the launch gap — and, unlike the hidden database write this replaced, a
     // busy archive cannot fail the claim.
-    if let Err(error) = crate::managed_source_claim::reserve(
-        &session_id,
-        "omp",
-        &session_file,
-        &cwd,
-        None,
-        None,
-    ) {
-        eprintln!("Longhouse: OMP source claim could not be written; continuing unclaimed: {error:#}");
+    if let Err(error) =
+        crate::managed_source_claim::reserve(&session_id, "omp", &session_file, &cwd, None, None)
+    {
+        eprintln!(
+            "Longhouse: OMP source claim could not be written; continuing unclaimed: {error:#}"
+        );
     }
     let (url, token, machine_name) = registration_credentials(&config)?;
     let resume_attempt_id = resume_state.as_ref().map(|_| Uuid::new_v4().to_string());
@@ -2344,6 +2371,7 @@ fn ensure_private_owned_dir(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::BufRead;
 
     fn state() -> OmpHelmStateFile {
         OmpHelmStateFile {
@@ -2388,6 +2416,44 @@ mod tests {
             updated_at: "now".into(),
         }
     }
+
+    #[test]
+    fn replacing_extension_connection_closes_superseded_transport() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket_dir = temp.path().join("socket");
+        let socket_path = socket_dir.join("channel.sock");
+        let state_path = temp.path().join("state.json");
+        let server =
+            OmpHelmServer::start(state(), socket_path.clone(), socket_dir, state_path).unwrap();
+        let hello = serde_json::to_string(&json!({
+            "kind": "extension_hello",
+            "auth_token": "token",
+            "session_id": "session"
+        }))
+        .unwrap()
+            + "\n";
+
+        let mut first = std::os::unix::net::UnixStream::connect(&socket_path).unwrap();
+        first.write_all(hello.as_bytes()).unwrap();
+        let mut first_reader = BufReader::new(first.try_clone().unwrap());
+        let mut first_ready = String::new();
+        first_reader.read_line(&mut first_ready).unwrap();
+        assert!(first_ready.contains("\"extension_ready\""));
+
+        let mut second = std::os::unix::net::UnixStream::connect(&socket_path).unwrap();
+        second.write_all(hello.as_bytes()).unwrap();
+        let mut second_reader = BufReader::new(second.try_clone().unwrap());
+        let mut second_ready = String::new();
+        second_reader.read_line(&mut second_ready).unwrap();
+        assert!(second_ready.contains("\"extension_ready\""));
+
+        first
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut byte = [0_u8; 1];
+        assert_eq!(first.read(&mut byte).unwrap(), 0);
+        server.shutdown();
+    }
     #[test]
     fn socket_path_uses_short_unix_temp_root() {
         let (socket, directory) = socket_path("12345678-1234-1234-1234-123456789012").unwrap();
@@ -2416,6 +2482,7 @@ mod tests {
         let mut shared = SharedState {
             state: state(),
             extension_sender: None,
+            extension_socket: None,
             extension_connection_id: None,
             pending: HashMap::from([
                 ("terminate-1".to_string(), terminate_tx),
@@ -2448,6 +2515,7 @@ mod tests {
         let shared = SharedState {
             state: state(),
             extension_sender: Some(mpsc::channel().0),
+            extension_socket: None,
             extension_connection_id: Some("connection".into()),
             pending: HashMap::new(),
             pending_terminate: None,
@@ -2540,7 +2608,9 @@ mod tests {
         ));
         // A committed identity is never re-reconciled by this rule: ordinary
         // drift is `extension_identity_matches`'s job.
-        assert!(!should_reconcile_uncommitted_identity("native", &frame, None, now));
+        assert!(!should_reconcile_uncommitted_identity(
+            "native", &frame, None, now
+        ));
         // A frame that carries no identity cannot bind one.
         assert!(!should_reconcile_uncommitted_identity(
             "",
@@ -2604,7 +2674,10 @@ mod tests {
             let current = server.current_state();
             assert_eq!(current.native_session_id, "native-b");
             assert_eq!(current.session_file, source.display().to_string());
-            assert!(current.ready, "a late bind must make the session ready again");
+            assert!(
+                current.ready,
+                "a late bind must make the session ready again"
+            );
             assert_eq!(current.status, "ready");
             assert_eq!(
                 current.terminal_reason, None,
@@ -2675,7 +2748,10 @@ mod tests {
                 bound.native_session_id, "native-b",
                 "a locked archive must not delay the identity bind"
             );
-            assert!(bound.ready, "the session must serve while the archive is locked");
+            assert!(
+                bound.ready,
+                "the session must serve while the archive is locked"
+            );
             assert_eq!(bound.status, "ready");
             assert_eq!(bound.terminal_reason, None);
 
@@ -2772,8 +2848,7 @@ mod tests {
                 let mut shared = server.shared.lock().unwrap();
                 shared.extension_sender = Some(sender);
                 shared.extension_connection_id = Some("connection".into());
-                shared.identity_retry_after =
-                    Some(Instant::now() + Duration::from_secs(60));
+                shared.identity_retry_after = Some(Instant::now() + Duration::from_secs(60));
             }
             server.handle_extension_frame(
                 "connection",
@@ -3413,12 +3488,14 @@ mod tests {
             assert_eq!(completed.live_text, "the whole answer");
 
             server.status.clear_preview();
-            server.status.publish(crate::status_slot::StatusUpdate::phase(
-                &current.session_id,
-                &current.run_id,
-                &current.updated_at,
-                "running",
-            ));
+            server
+                .status
+                .publish(crate::status_slot::StatusUpdate::phase(
+                    &current.session_id,
+                    &current.run_id,
+                    &current.updated_at,
+                    "running",
+                ));
             assert!(
                 slot().expect("slot").preview.is_none(),
                 "a new turn does not inherit the last turn's text"
@@ -3919,6 +3996,7 @@ mod tests {
             state: state(),
             extension_sender: None,
             extension_connection_id: None,
+            extension_socket: None,
             pending: HashMap::from([(String::from("request"), sender)]),
             pending_terminate: None,
             live_assistant_text: String::new(),

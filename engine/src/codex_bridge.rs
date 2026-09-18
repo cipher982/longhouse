@@ -450,6 +450,9 @@ struct BridgeRuntimeSink {
     api_url: String,
     api_token: String,
     session_id: String,
+    /// Existing launch identity. A bridge turn stays on this run for its
+    /// lifetime; phase and pause publications must not mint per-update owners.
+    run_id: Option<String>,
     machine_name: Option<String>,
     thread_id: Option<String>,
     local_db_path: Option<PathBuf>,
@@ -1911,18 +1914,23 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         api_url: config.api_url.clone(),
         api_token: config.api_token.clone(),
         session_id: config.session_id.clone(),
+        run_id: initial_state.run_id.clone(),
         machine_name: config.machine_name.clone(),
         thread_id: initial_thread_id.clone(),
         local_db_path: None,
         runtime_tx: None,
         live_runtime_tx: None,
     };
+    // Phase and pause records share this ordered worker. They are semantic
+    // transitions, not replaceable snapshots: separating the phase lane can
+    // make pause_request_still_pending arrive after its corresponding phase.
     let _runtime_worker = spawn_runtime_event_worker(runtime_worker_sink, runtime_rx);
     let live_runtime_worker_sink = BridgeRuntimeSink {
         http: runtime_http.clone(),
         api_url: config.api_url.clone(),
         api_token: config.api_token.clone(),
         session_id: config.session_id.clone(),
+        run_id: initial_state.run_id.clone(),
         machine_name: config.machine_name.clone(),
         thread_id: initial_thread_id.clone(),
         local_db_path: None,
@@ -1971,6 +1979,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             api_url: config.api_url.clone(),
             api_token: config.api_token.clone(),
             session_id: config.session_id.clone(),
+            run_id: initial_state.run_id.clone(),
             machine_name: config.machine_name.clone(),
             thread_id: initial_thread_id,
             local_db_path: resolve_bridge_agent_db_path(config.longhouse_home.as_deref()).ok(),
@@ -6347,6 +6356,7 @@ impl BridgeRuntimeSink {
         self.post_runtime_events_background(vec![json!({
             "runtime_key": format!("codex:{}", self.session_id),
             "session_id": self.session_id,
+            "run_id": self.run_id,
             "provider": "codex",
             "device_id": self.machine_name,
             "source": BRIDGE_RUNTIME_SOURCE,
@@ -6363,7 +6373,6 @@ impl BridgeRuntimeSink {
             }
         })]);
     }
-
     fn persist_local_phase(
         &self,
         phase: &str,
@@ -6381,7 +6390,7 @@ impl BridgeRuntimeSink {
             tool_name.as_deref(),
             BRIDGE_RUNTIME_SOURCE,
             &observed_at.to_rfc3339(),
-            None,
+            self.run_id.as_deref(),
         ) {
             eprintln!(
                 "[codex-bridge] enqueue local phase failed for {}: {err}",
@@ -6394,6 +6403,7 @@ impl BridgeRuntimeSink {
         self.post_runtime_events_background(vec![json!({
             "runtime_key": format!("codex:{}", self.session_id),
             "session_id": self.session_id,
+            "run_id": self.run_id,
             "provider": "codex",
             "device_id": self.machine_name,
             "source": BRIDGE_RUNTIME_SOURCE,
@@ -6414,6 +6424,7 @@ impl BridgeRuntimeSink {
         self.post_runtime_events_background(vec![json!({
             "runtime_key": format!("codex:{}", self.session_id),
             "session_id": self.session_id,
+            "run_id": self.run_id,
             "provider": "codex",
             "device_id": self.machine_name,
             "source": BRIDGE_RUNTIME_SOURCE,
@@ -6453,6 +6464,7 @@ impl BridgeRuntimeSink {
         self.post_runtime_events_background(vec![json!({
             "runtime_key": format!("codex:{}", self.session_id),
             "session_id": self.session_id,
+            "run_id": self.run_id,
             "provider": "codex",
             "device_id": self.machine_name,
             "source": BRIDGE_RUNTIME_SOURCE,
@@ -6560,6 +6572,7 @@ impl BridgeRuntimeSink {
         json!({
             "runtime_key": format!("codex:{}", self.session_id),
             "session_id": self.session_id,
+            "run_id": self.run_id,
             "provider": "codex",
             "device_id": self.machine_name,
             "source": "codex_bridge_live",
@@ -7275,7 +7288,7 @@ mod tests {
             state: BridgeStateFile {
                 schema_version: BRIDGE_STATE_SCHEMA_VERSION,
                 session_id: "session-123".to_string(),
-                run_id: None,
+                run_id: Some("run-123".to_string()),
                 connection_id: None,
                 lease_generation: None,
                 cwd: temp.path().display().to_string(),
@@ -7310,6 +7323,7 @@ mod tests {
                 api_url: "http://127.0.0.1:9".to_string(),
                 api_token: "token".to_string(),
                 session_id: "session-123".to_string(),
+                run_id: Some("run-123".to_string()),
                 machine_name: Some("test-box".to_string()),
                 thread_id: None,
                 local_db_path: Some(resolve_bridge_agent_db_path(Some(temp.path())).unwrap()),
@@ -8102,6 +8116,7 @@ mod tests {
             api_url: "http://127.0.0.1:9".to_string(),
             api_token: "token".to_string(),
             session_id: "session-123".to_string(),
+            run_id: Some("run-123".to_string()),
             machine_name: Some("test-box".to_string()),
             thread_id: None,
             local_db_path: Some(db_path.clone()),
@@ -8120,19 +8135,20 @@ mod tests {
         );
 
         let conn = crate::state::db::open_db(Some(&db_path)).unwrap();
-        let row: (String, Option<String>, String) = conn
+        let row: (String, Option<String>, String, Option<String>) = conn
             .query_row(
-                "SELECT phase, tool_name, source
+                "SELECT phase, tool_name, source, run_id
                  FROM session_phase_state
                  WHERE session_id = 'session-123'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .unwrap();
 
         assert_eq!(row.0, "running");
         assert_eq!(row.1, Some("shell".to_string()));
         assert_eq!(row.2, BRIDGE_RUNTIME_SOURCE);
+        assert_eq!(row.3, Some("run-123".to_string()));
 
         assert!(conn.prepare("SELECT 1 FROM managed_session_state").is_err());
     }
@@ -8212,6 +8228,7 @@ mod tests {
             api_url: "http://127.0.0.1:9".to_string(),
             api_token: "token".to_string(),
             session_id: "session-123".to_string(),
+            run_id: Some("run-123".to_string()),
             machine_name: Some("test-box".to_string()),
             thread_id: None,
             local_db_path: Some(db_path.clone()),
@@ -8276,6 +8293,7 @@ mod tests {
                     api_url: "http://127.0.0.1:9".to_string(),
                     api_token: "token".to_string(),
                     session_id: "session-lock-test".to_string(),
+                    run_id: Some("run-123".to_string()),
                     machine_name: Some("test-box".to_string()),
                     thread_id: None,
                     local_db_path: Some(db_path.clone()),
@@ -8529,6 +8547,7 @@ mod tests {
             api_url: "http://127.0.0.1:9".to_string(),
             api_token: "token".to_string(),
             session_id: "session-123".to_string(),
+            run_id: Some("run-123".to_string()),
             machine_name: Some("test-box".to_string()),
             thread_id: Some("thread-abc".to_string()),
             local_db_path: None,
@@ -8554,6 +8573,7 @@ mod tests {
             event["dedupe_key"],
             "bridge:live:session-123:thread-abc:turn-1:item-1:2"
         );
+        assert_eq!(event["run_id"], "run-123");
         assert_eq!(event["source"], "codex_bridge_live");
         assert_eq!(event["payload"]["seq"], 2);
         assert_eq!(event["payload"]["item_id"], "item-1");
@@ -8572,6 +8592,7 @@ mod tests {
             api_url: "http://127.0.0.1:9".to_string(),
             api_token: "token".to_string(),
             session_id: "session-123".to_string(),
+            run_id: Some("run-123".to_string()),
             machine_name: Some("test-box".to_string()),
             thread_id: Some("thread-abc".to_string()),
             local_db_path: None,
@@ -8610,6 +8631,7 @@ mod tests {
             api_url: "http://127.0.0.1:9".to_string(),
             api_token: "token".to_string(),
             session_id: "session-123".to_string(),
+            run_id: Some("run-123".to_string()),
             machine_name: Some("test-box".to_string()),
             thread_id: Some("thread-abc".to_string()),
             local_db_path: None,
@@ -8677,6 +8699,7 @@ mod tests {
             api_url: "http://127.0.0.1:9".to_string(),
             api_token: "token".to_string(),
             session_id: "session-123".to_string(),
+            run_id: Some("run-123".to_string()),
             machine_name: Some("test-box".to_string()),
             thread_id: Some("thread-abc".to_string()),
             local_db_path: None,
@@ -11602,13 +11625,34 @@ mod tests {
         );
         assert!(context.pending_pause_requests.lock().await.is_empty());
 
-        let phase_event = recv_runtime_event_kind(&mut runtime_rx, "phase_signal").await;
+        // A phase and its pause edge are semantic transitions on one ordered
+        // bridge stream; receiving by kind would hide a reordering regression.
+        let events = tokio::time::timeout(Duration::from_secs(2), async {
+            let mut events = Vec::new();
+            while events.len() < 2 {
+                events.extend(
+                    runtime_rx
+                        .recv()
+                        .await
+                        .expect("runtime event channel closed"),
+                );
+            }
+            events
+        })
+        .await
+        .expect("timed out waiting for runtime transitions");
+        let phase_event = &events[0];
+        assert_eq!(phase_event["kind"], "phase_signal");
+        assert_eq!(phase_event["run_id"], "run-123");
         assert_eq!(phase_event["phase"], "needs_user");
         assert_eq!(phase_event["payload"]["pause_request_still_pending"], false);
 
-        let pause_event = recv_runtime_event_kind(&mut runtime_rx, "pause_request").await;
+        let pause_event = &events[1];
+        assert_eq!(pause_event["kind"], "pause_request");
+        assert_eq!(pause_event["run_id"], "run-123");
         assert_eq!(pause_event["provider"], "codex");
         assert_eq!(pause_event["payload"]["provider_request_id"], "srv-1");
+
         assert_eq!(
             pause_event["payload"]["request_key"],
             "codex:codex:session-123:srv-1"
@@ -11862,6 +11906,7 @@ mod tests {
         assert_eq!(turn_start_payload["method"], "turn/start");
 
         let pause_event = recv_runtime_event_kind(&mut runtime_rx, "pause_request").await;
+        assert_eq!(pause_event["run_id"], "run-123");
         let request_key = pause_event["payload"]["request_key"]
             .as_str()
             .unwrap()
@@ -11878,6 +11923,7 @@ mod tests {
             })))
             .unwrap();
         let phase_event = recv_runtime_event_kind(&mut runtime_rx, "phase_signal").await;
+        assert_eq!(phase_event["run_id"], "run-123");
         assert_eq!(phase_event["phase"], "thinking");
         assert_eq!(phase_event["payload"]["pause_request_still_pending"], true);
 
@@ -11905,6 +11951,7 @@ mod tests {
         );
 
         let pause_resolution = recv_runtime_event_kind(&mut runtime_rx, "pause_resolution").await;
+        assert_eq!(pause_resolution["run_id"], "run-123");
         assert_eq!(pause_resolution["payload"]["status"], "resolved");
         assert_eq!(pause_resolution["payload"]["provider_request_id"], "srv-1");
 
@@ -12367,8 +12414,10 @@ mod tests {
         assert_eq!(response_payload["result"]["content"], Value::Null);
 
         let phase_event = recv_runtime_event_kind(&mut runtime_rx, "phase_signal").await;
+        assert_eq!(phase_event["run_id"], "run-123");
         assert_eq!(phase_event["phase"], "needs_user");
         let pause_event = recv_runtime_event_kind(&mut runtime_rx, "pause_request").await;
+        assert_eq!(pause_event["run_id"], "run-123");
         assert_eq!(pause_event["payload"]["provider_request_id"], "42");
         assert_eq!(pause_event["payload"]["can_respond"], false);
         assert_eq!(
