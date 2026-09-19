@@ -201,6 +201,17 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
     """
     client = LonghouseAPIClient(api_url, api_token)
 
+    def _coordination_headers() -> dict[str, str]:
+        token = str(os.environ.get("LONGHOUSE_COORDINATION_TOKEN") or "").strip()
+        session_id = str(get_managed_session_id() or "").strip()
+        if not token or not session_id:
+            return {}
+        return {"X-Agents-Token": token, _CURRENT_SESSION_HEADER: session_id}
+
+    def _optional_coordination_headers() -> dict[str, str]:
+        headers = _coordination_headers()
+        return {"headers": headers} if headers else {}
+
     # A streamable HTTP MCP server enters its FastMCP lifespan once per client
     # session, not once per process. Keep this process-owned pool alive instead
     # of closing it when the first HTTP client disconnects.
@@ -264,7 +275,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         path = "/api/agents/sessions/semantic" if semantic else "/api/agents/sessions"
 
         try:
-            resp = await client.get(path, params=params)
+            resp = await client.get(path, params=params, **_optional_coordination_headers())
             if resp.status_code != 200:
                 if semantic:
                     return _format_api_error(
@@ -321,7 +332,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
 
         try:
             # Fetch session metadata
-            meta_resp = await client.get(f"/api/agents/sessions/{session_id}")
+            meta_resp = await client.get(f"/api/agents/sessions/{session_id}", **_optional_coordination_headers())
             if meta_resp.status_code != 200:
                 return json.dumps({"error": f"Session not found: {meta_resp.status_code}"})
 
@@ -332,6 +343,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             events_resp = await client.get(
                 f"/api/agents/sessions/{session_id}/events",
                 params=params,
+                **_optional_coordination_headers(),
             )
             if events_resp.status_code != 200:
                 return json.dumps({"error": f"Events fetch failed: {events_resp.status_code}"})
@@ -404,7 +416,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             params["provider"] = provider
 
         try:
-            resp = await client.get("/api/agents/recall", params=params)
+            resp = await client.get("/api/agents/recall", params=params, **_optional_coordination_headers())
             if resp.status_code != 200:
                 retry = None
                 if resp.status_code == 503 and mode == "semantic":
@@ -441,7 +453,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             "max_content_bytes": max(200, min(max_content_bytes, 4_000)),
         }
         try:
-            resp = await client.get("/api/agents/recall/context", params=params)
+            resp = await client.get("/api/agents/recall/context", params=params, **_optional_coordination_headers())
             if resp.status_code != 200:
                 return _format_api_error(resp)
             return _render_recall_context(resp.json())
@@ -489,6 +501,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             resp = await client.get(
                 f"/api/agents/sessions/{session_id}/tail",
                 params=params,
+                **_optional_coordination_headers(),
             )
             if resp.status_code != 200:
                 return _format_api_error(resp)
@@ -515,7 +528,10 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
 
         if resolved_repo is None and current_session_id and _UUID_RE.match(current_session_id):
             try:
-                current_resp = await client.get(f"/api/agents/sessions/{current_session_id}")
+                current_resp = await client.get(
+                    f"/api/agents/sessions/{current_session_id}",
+                    **_optional_coordination_headers(),
+                )
                 if current_resp.status_code == 200:
                     current_data = json.loads(current_resp.text)
                     git_repo = str(current_data.get("git_repo", "") or "").strip()
@@ -537,7 +553,8 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         try:
             resp = await client.get(
                 "/api/agents/sessions/wall",
-                params={"repo": resolved_repo, "days": 7},
+                params={"repo": resolved_repo, "days": 7, "include_automation": True},
+                **_optional_coordination_headers(),
             )
             if resp.status_code != 200:
                 return _format_api_error(resp)

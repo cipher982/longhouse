@@ -12,7 +12,7 @@ __all__ = ["SessionListingError", "SessionListParams", "SessionListResult", "val
 def validate_managed_hook_scope(auth: object, params: SessionListParams) -> None:
     """Restrict managed-session hook tokens to their bounded project lookup."""
     auth = caller_principal(auth)
-    if not isinstance(auth, ManagedSessionToken):
+    if not isinstance(auth, ManagedSessionToken) or auth.scope != "hook":
         return
 
     token_project = str(auth.project or "").strip()

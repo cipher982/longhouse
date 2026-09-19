@@ -130,12 +130,11 @@ def _fetch_wall_payload(
     days: int,
     limit: int,
 ) -> dict:
-    params: dict[str, object] = {"days": days, "limit": limit}
+    params: dict[str, object] = {"days": days, "limit": limit, "include_automation": True}
     if repo:
         params["repo"] = repo
     if project:
         params["project"] = project
-
     try:
         with httpx.Client(timeout=15) as client:
             response = client.get(
@@ -210,10 +209,12 @@ def peers(
     """List peer sessions working around the same repo."""
     config_dir = Path(claude_dir) if claude_dir else None
     base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
+    coordination_token = str(os.environ.get("LONGHOUSE_COORDINATION_TOKEN") or "").strip()
+    peer_token = coordination_token or resolved_token
     resolved_repo, current_session_id = _resolve_repo_context(
         explicit_repo=repo,
         base_url=base_url,
-        token=resolved_token,
+        token=peer_token,
     )
     if not resolved_repo:
         message = "".join(
@@ -224,10 +225,9 @@ def peers(
         )
         typer.secho(message, fg=typer.colors.RED)
         raise typer.Exit(code=1)
-
     payload = _fetch_wall_payload(
         base_url=base_url,
-        token=resolved_token,
+        token=peer_token,
         repo=resolved_repo,
         days=days,
         limit=limit,

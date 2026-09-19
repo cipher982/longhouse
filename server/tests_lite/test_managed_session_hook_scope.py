@@ -15,6 +15,7 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
 from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
+from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_COORDINATION
 from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_HOOK
 from zerg.auth.managed_session_tokens import issue_managed_session_token
 from zerg.database import get_db
@@ -180,6 +181,26 @@ def test_agents_sessions_allows_bounded_project_lookup_for_managed_session_hook_
     assert payload["total"] == 1
     assert payload["sessions"][0]["id"] == str(hiring.session_id)
     assert payload["sessions"][0]["project"] == "hiring"
+
+
+def test_agents_sessions_allows_coordination_scope_to_search_without_hook_bounds(live_catalog, live_catalog_client):
+    owner_id = live_catalog.create_user("managed-local-coordination@test.local")
+    session = live_catalog.commit_session(owner_id=owner_id, project="hiring")
+    token = issue_managed_session_token(
+        owner_id=owner_id,
+        session_id=str(session.session_id),
+        project="hiring",
+        device_id="cinder",
+        scope=MANAGED_SESSION_SCOPE_COORDINATION,
+    )
+
+    response = live_catalog_client.get(
+        "/agents/sessions",
+        params={"query": "hiring", "days_back": 90, "limit": 20, "include_automation": True},
+        headers={"X-Agents-Token": token},
+    )
+
+    assert response.status_code == 200, response.text
 
 
 def test_agents_sessions_rejects_broader_filters_for_managed_session_hook_token(tmp_path):

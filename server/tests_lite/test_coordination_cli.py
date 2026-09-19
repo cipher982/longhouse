@@ -91,7 +91,7 @@ def test_peers_lists_other_live_sessions(monkeypatch):
         "method": "GET",
         "url": "https://longhouse.test/api/agents/sessions/wall",
         "headers": {"X-Agents-Token": "zdt_device"},
-        "params": {"repo": "/tmp/longhouse", "days": 7, "limit": 50},
+        "params": {"repo": "/tmp/longhouse", "days": 7, "limit": 50, "include_automation": True},
     }
 
 

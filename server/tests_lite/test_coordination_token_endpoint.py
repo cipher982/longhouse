@@ -58,7 +58,7 @@ def test_malformed_connections_are_not_eligible() -> None:
     assert _session_is_managed_for_coordination(SimpleNamespace(catalog_facts={})) is False
 
 
-@pytest.mark.parametrize("provider", ["claude", "codex", "opencode", "cursor"])
+@pytest.mark.parametrize("provider", ["claude", "codex", "omp", "opencode", "cursor"])
 def test_coordination_providers_reach_the_provenance_check(provider: str) -> None:
     """Every launcher that hard-bails without a token must be able to get one.
 
