@@ -2214,7 +2214,21 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     });
     let extension = write_extension_file(&state_root.join("extensions").join(&session_id))?;
     let mut command = Command::new(&binary);
-    command.arg("-e").arg(&extension);
+    // `--session-dir`/`--resume` bind OMP to the session file this launch
+    // reserved, and `current_dir` puts it in the caller's workspace. Dropping
+    // them (d35d0995f, while rewriting this spawn for coordination tokens)
+    // made OMP open its OWN workspace-scoped session instead: it then reported
+    // a source the launcher had never reserved, identity binding waited for a
+    // header at a path OMP had not materialized, and every OMP Helm session
+    // stayed `degraded` with `waiting for OMP native session header`.
+    command
+        .arg("--session-dir")
+        .arg(&session_dir)
+        .arg("--resume")
+        .arg(&session_file)
+        .arg("-e")
+        .arg(&extension)
+        .current_dir(&cwd);
     if let Some(profile) = profile.as_deref() {
         command.env("OMP_PROFILE", profile);
         command.arg("--profile").arg(profile);
@@ -2411,6 +2425,41 @@ fn ensure_private_owned_dir(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use std::io::BufRead;
+
+    /// OMP must be launched against the session file this launch reserved.
+    ///
+    /// Dropping `--session-dir`/`--resume`/`current_dir` from the spawn made
+    /// OMP open its own workspace-scoped session, report a source the
+    /// launcher never reserved, and leave every OMP Helm session `degraded`
+    /// with `waiting for OMP native session header` (2026-09-19). The spawn
+    /// sits inside a launch that needs a real provider, so guard the argv at
+    /// the source: this file must bind the reserved session, not accept
+    /// whatever session OMP decides to open.
+    #[test]
+    fn the_provider_is_launched_against_the_reserved_session() {
+        let source = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/omp_helm_launcher.rs"
+        ))
+        .expect("launcher source");
+        let spawn = source
+            .split_once("let mut command = Command::new(&binary);")
+            .expect("OMP provider spawn")
+            .1;
+        let spawn = &spawn[..spawn.find("ManagedIdentity::new").expect("identity application")];
+        // Judge the code, not the comment that explains it.
+        let spawn: String = spawn
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for required in ["--session-dir", "--resume", "current_dir"] {
+            assert!(
+                spawn.contains(required),
+                "OMP spawn must pass {required}: without it OMP opens its own session and identity binding never completes"
+            );
+        }
+    }
 
     fn state() -> OmpHelmStateFile {
         OmpHelmStateFile {
