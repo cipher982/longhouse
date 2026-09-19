@@ -1078,11 +1078,25 @@ def get_session(
     )
 
 
+class SessionChildReferenceResponse(UTCBaseModel):
+    """One source-authored child relationship, resolved or historical."""
+
+    session_id: str | None = None
+    provider_session_id: str
+    parent_tool_call_id: str | None = None
+    metadata: dict[str, object] = {}
+    kind: str
+    source_epoch: str
+    source_position: int
+    at: str
+
+
 class SessionSubagentResponse(UTCBaseModel):
-    """One worker transcript a session's tool call spawned."""
+    """One worker or fork transcript a session's tool call spawned."""
 
     session_id: str
     provider: str
+    provider_session_id: str | None = None
     parent_tool_call_id: str | None = None
     run_id: str | None = None
     started_at: str | None = None
@@ -1094,13 +1108,15 @@ class SessionSubagentResponse(UTCBaseModel):
     title: str | None = None
     first_user_message_preview: str | None = None
     last_visible_text_preview: str | None = None
+    metadata: dict[str, object] = {}
 
 
 class SessionSubagentsResponse(UTCBaseModel):
-    """Children of one session, ordered by start time."""
+    """Children and bounded source references of one session."""
 
     session_id: str
     children: list[SessionSubagentResponse]
+    child_references: list[SessionChildReferenceResponse] = []
 
 
 @router.get("/sessions/{session_id}/subagents", response_model=SessionSubagentsResponse)
