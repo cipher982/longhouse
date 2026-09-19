@@ -822,7 +822,7 @@
           "owner_action": "render reasoning as collapsed thinking records"
         }
       },
-      "adapter_digest": "a3edbb90e66e896661069edd3b6517f708d05ddd901a99507ca98ad8f74743aa"
+      "adapter_digest": "ea2373d397f54e09ca43fca01f792a46cbe0b8af085056471eab8fd90c473aac"
     },
     {
       "provider": "claude",
@@ -2448,7 +2448,7 @@
           "owner_action": "render reasoning parts as collapsed thinking records"
         }
       },
-      "adapter_digest": "08f2de75bce04bcf661b57514f39a3bed50b6dab929f7a7cefa1063111778e89"
+      "adapter_digest": "b02c3bd8c1f43b9313632bbf50087fc2b929c4b23a8615f60de13b2b7a4f68cd"
     },
     {
       "provider": "antigravity",
@@ -4776,7 +4776,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "6a2d29a05370b4e5093f9d3e76308bdddbd750287553ba901e530537daf78e81"
+      "adapter_digest": "bd73f6a117ab9a3006e9e3964056515614b34592a49cef6a0aceaafafac35241"
     }
   ]
 }

@@ -10,14 +10,14 @@ from zerg.services.directed_input_envelope import render_directed_input_envelope
 
 
 def test_v1_coordination_tool_support_is_explicit():
-    for provider in ("claude", "codex", "opencode", "cursor"):
+    for provider in ("claude", "codex", "omp", "opencode", "cursor"):
         assert provider_supports_coordination_tools(provider) is True
     for provider in ("antigravity", "gemini"):
         assert provider_supports_coordination_tools(provider) is False
 
 
 def test_v1_live_delivery_support_is_explicit():
-    for provider in ("claude", "codex", "opencode", "cursor"):
+    for provider in ("claude", "codex", "omp", "opencode", "cursor"):
         assert provider_supports_live_directed_input(provider) is True
     for provider in ("antigravity", "gemini"):
         assert provider_supports_live_directed_input(provider) is False

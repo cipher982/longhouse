@@ -9,6 +9,7 @@ import threading
 import time
 from collections import deque
 from datetime import datetime
+from uuid import UUID
 
 from fastapi import Depends
 from fastapi import HTTPException
@@ -93,6 +94,29 @@ def _managed_session_token_allowed(request: Request, token: ManagedSessionToken)
     if token.scope == "hook":
         return (method, path) in _MANAGED_LOCAL_HOOK_ALLOWED_ROUTES
     if token.scope == "coordination":
+        if method == "GET":
+            if path in {
+                "/agents/recall",
+                "/agents/recall/context",
+                "/agents/sessions",
+                "/agents/sessions/semantic",
+                "/agents/sessions/wall",
+            }:
+                return True
+            session_path = path.removeprefix("/agents/sessions/")
+            parts = session_path.split("/")
+            if len(parts) == 1:
+                try:
+                    UUID(parts[0])
+                except ValueError:
+                    return False
+                return True
+            if len(parts) == 2 and parts[1] in {"events", "tail"}:
+                try:
+                    UUID(parts[0])
+                except ValueError:
+                    return False
+                return True
         if (method, path) in {
             ("GET", "/agents/directed-inputs"),
             ("POST", "/agents/directed-inputs"),

@@ -708,6 +708,7 @@ def test_this_device_launch_uses_token_device_id_not_machine_name(client, device
         ("opencode", "opencode_server_bridge"),
         ("antigravity", "antigravity_hook_inbox"),
         ("cursor", "cursor_helm"),
+        ("omp", "omp_helm_channel"),
     ],
 )
 def test_this_device_launch_response_contract_matrix(client, device_headers, provider, expected_transport):
@@ -724,7 +725,7 @@ def test_this_device_launch_response_contract_matrix(client, device_headers, pro
     assert payload["provider"] == provider
     # Cursor Helm refuses to launch without one, so this list is load-bearing
     # rather than descriptive.
-    if provider in {"claude", "codex", "opencode", "cursor"}:
+    if provider in {"claude", "codex", "opencode", "cursor", "omp"}:
         assert payload["coordination_token"]
     else:
         assert payload["coordination_token"] is None
@@ -748,6 +749,9 @@ def test_this_device_launch_response_contract_matrix(client, device_headers, pro
     elif provider == "cursor":
         assert payload["provider_session_id"] is None
         assert "longhouse cursor --resume-session" in payload["attach_command"]
+    elif provider == "omp":
+        assert payload["provider_session_id"] is None
+        assert "longhouse omp --resume-session" in payload["attach_command"]
         assert payload["session_id"] in payload["attach_command"]
 
 

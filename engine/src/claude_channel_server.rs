@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use base64::Engine as _;
@@ -18,6 +18,28 @@ use uuid::Uuid;
 
 const CLAUDE_CHANNEL_CAPABILITY: &str = "claude/channel";
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+const COORDINATION_MAX_429_RETRIES: usize = 3;
+const COORDINATION_MAX_429_DELAY_SECONDS: u64 = 5;
+const COORDINATION_RETRY_BUDGET: Duration = Duration::from_secs(15);
+
+fn coordination_retry_after(response: &reqwest::Response) -> Duration {
+    let max_delay = Duration::from_secs(COORDINATION_MAX_429_DELAY_SECONDS);
+    let Some(raw) = response
+        .headers()
+        .get("Retry-After")
+        .and_then(|value| value.to_str().ok())
+    else {
+        return Duration::from_secs(1);
+    };
+    if let Ok(seconds) = raw.parse::<u64>() {
+        return Duration::from_secs(seconds).min(max_delay);
+    }
+    DateTime::parse_from_rfc2822(raw)
+        .ok()
+        .and_then(|date| (date.with_timezone(&Utc) - Utc::now()).to_std().ok())
+        .unwrap_or_else(|| Duration::from_secs(1))
+        .min(max_delay)
+}
 /// What the model is told about `<channel source="longhouse-channel">` input.
 ///
 /// Claude Code 2.1.274 wraps every channel message in "IMPORTANT: This is NOT
@@ -453,6 +475,7 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
         Ok(config) => config,
         Err(error) => return tool_result(id, json!({"error": error.to_string()})),
     };
+    let base = config.api_url.trim_end_matches('/');
     // A provider turn must not stay active forever because a coordination
     // read stopped responding. Every tool result is useful even when it is a
     // typed timeout, and the model can then finish or report the failure.
@@ -463,9 +486,9 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
         Ok(client) => client,
         Err(error) => return tool_result(id, json!({"error": error.to_string()})),
     };
-    let base = config.api_url.trim_end_matches('/');
+    let coordination_authority = coordination_token();
     let request_token = if matches!(name, "send" | "inbox" | "reply") {
-        match coordination_token() {
+        match coordination_authority {
             Some(token) => token,
             None => {
                 return tool_result(
@@ -485,9 +508,13 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
                 .map(str::to_owned);
             if repo.is_none() {
                 if let Some(current) = session_id.as_deref() {
-                    repo =
-                        resolve_session_repo(&client, base, config.api_token.as_deref(), current)
-                            .await;
+                    repo = resolve_session_repo(
+                        &client,
+                        base,
+                        (!request_token.is_empty()).then_some(request_token.as_str()),
+                        current,
+                    )
+                    .await;
                 }
             }
             if repo.is_none() {
@@ -501,11 +528,13 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
             };
             client
                 .get(format!("{base}/api/agents/sessions/wall"))
-                .query(&[("repo", repo.as_str()), ("days", "7")])
+                .query(&[
+                    ("repo", repo.as_str()),
+                    ("days", "7"),
+                    ("include_automation", "true"),
+                ])
         }
         "search_sessions" => {
-            // The archive route is owner-scoped by the device token, the same authority
-            // peers and tail already carry. Coordination authority is not involved.
             let mut request = client.get(format!("{base}/api/agents/sessions"));
             // No query (or a blank one) is a listing call: the archive returns
             // recent sessions ordered by last activity instead of searching.
@@ -669,10 +698,35 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
         }
         _ => return rpc_error(id, -32601, &format!("unknown coordination tool: {name}")),
     };
-    if !request_token.is_empty() {
-        request = request.header("X-Agents-Token", request_token);
+    request = request.header("X-Agents-Token", request_token);
+    let retry_safe = !matches!(name, "send" | "reply")
+        || arguments
+            .get("client_request_id")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty());
+    let deadline = Instant::now() + COORDINATION_RETRY_BUDGET;
+    let response = async {
+        for attempt in 0..=COORDINATION_MAX_429_RETRIES {
+            let request = request
+                .try_clone()
+                .context("failed to clone coordination request for retry")?;
+            let response = request.send().await?;
+            if response.status().as_u16() != 429
+                || !retry_safe
+                || attempt == COORDINATION_MAX_429_RETRIES
+            {
+                return Ok::<_, anyhow::Error>(response);
+            }
+            let delay = coordination_retry_after(&response);
+            if Instant::now() + delay > deadline {
+                return Ok(response);
+            }
+            tokio::time::sleep(delay).await;
+        }
+        unreachable!("coordination retry loop always returns a response")
     }
-    match request.send().await {
+    .await;
+    match response {
         Ok(response) => {
             let status = response.status().as_u16();
             match response.text().await {

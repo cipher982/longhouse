@@ -61,14 +61,34 @@ def test_managed_session_token_requires_explicit_valid_scope():
     assert validate_managed_session_token(expired) is None
 
 
-def test_coordination_scope_can_only_reach_directed_input_routes(monkeypatch):
+def test_coordination_scope_can_reach_coordination_reads_and_writes(monkeypatch):
     session_id = str(uuid4())
     token = _token(session_id=session_id, scope=MANAGED_SESSION_SCOPE_COORDINATION)
     monkeypatch.setattr("zerg.dependencies.agents_auth.get_settings", _settings)
 
-    resolved = verify_agents_token(_request("POST", "/api/agents/directed-inputs", token))
-    assert isinstance(resolved, ManagedSessionToken)
-    assert resolved.scope == MANAGED_SESSION_SCOPE_COORDINATION
+    for method, path in (
+        ("GET", "/api/agents/sessions"),
+        ("GET", "/api/agents/sessions/wall"),
+        ("GET", "/api/agents/recall"),
+        ("GET", "/api/agents/recall/context"),
+        ("GET", f"/api/agents/sessions/{uuid4()}"),
+        ("GET", f"/api/agents/sessions/{uuid4()}/events"),
+        ("GET", f"/api/agents/sessions/{uuid4()}/tail"),
+        ("POST", "/api/agents/directed-inputs"),
+    ):
+        resolved = verify_agents_token(_request(method, path, token))
+        assert isinstance(resolved, ManagedSessionToken)
+        assert resolved.scope == MANAGED_SESSION_SCOPE_COORDINATION
+
+    for path in (
+        "/api/agents/sessions/archive-manifest",
+        "/api/agents/sessions/startup-context",
+        f"/api/agents/sessions/{uuid4()}/tail/extra",
+        "/api/agents/sessions/not-a-uuid",
+    ):
+        with pytest.raises(HTTPException) as denied:
+            verify_agents_token(_request("GET", path, token))
+        assert denied.value.status_code == 403
 
     with pytest.raises(HTTPException) as denied:
         verify_agents_token(_request("POST", "/api/agents/permission-requests", token))

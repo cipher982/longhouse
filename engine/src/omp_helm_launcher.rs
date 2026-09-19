@@ -2092,6 +2092,13 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     if let Some(response) = response.as_ref() {
         response.validate_transport("OMP", OMP_HELM_TRANSPORT)?;
     }
+    let coordination_token = response
+        .as_ref()
+        .and_then(|value| value.coordination_token())
+        .map(str::to_owned);
+    if response.is_some() && coordination_token.is_none() {
+        eprintln!("Longhouse: OMP coordination authority unavailable; starting without coordination tools");
+    }
     let mut transaction = response.as_ref().map(|response| {
         ManagedLaunchTransaction::new(&runtime, &url, &token, &session_id, &response.run_id)
     });
@@ -2201,33 +2208,33 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
     if let Some(model) = model.as_deref() {
         command.arg("--model").arg(model);
     }
+    let current_state = server.current_state();
+    let channel_path = server.socket_path.to_string_lossy().into_owned();
+    let initial_prompt = config.prompt.as_deref().unwrap_or("");
+    let initial_prompt_delivered = if current_state.initial_prompt_delivered {
+        "1"
+    } else {
+        "0"
+    };
+    let mut owned_env = vec![
+        ("LONGHOUSE_OMP_HELM_URL", url.as_str()),
+        ("LONGHOUSE_OMP_HELM_CHANNEL_PATH", channel_path.as_str()),
+        (
+            "LONGHOUSE_OMP_HELM_CHANNEL_TOKEN",
+            current_state.channel_token.as_str(),
+        ),
+        ("LONGHOUSE_OMP_HELM_INITIAL_PROMPT", initial_prompt),
+        (
+            "LONGHOUSE_OMP_HELM_INITIAL_PROMPT_DELIVERED",
+            initial_prompt_delivered,
+        ),
+    ];
+    if let Some(token) = coordination_token.as_deref() {
+        owned_env.push(("LONGHOUSE_COORDINATION_TOKEN", token));
+    }
     ManagedIdentity::new(ManagedProvider::Omp, &session_id)
-        .with_run_id(&server.current_state().run_id)
-        .apply(
-            &mut command,
-            &[
-                (
-                    "LONGHOUSE_OMP_HELM_CHANNEL_PATH",
-                    server.socket_path.to_string_lossy().as_ref(),
-                ),
-                (
-                    "LONGHOUSE_OMP_HELM_CHANNEL_TOKEN",
-                    server.current_state().channel_token.as_str(),
-                ),
-                (
-                    "LONGHOUSE_OMP_HELM_INITIAL_PROMPT",
-                    config.prompt.as_deref().unwrap_or(""),
-                ),
-                (
-                    "LONGHOUSE_OMP_HELM_INITIAL_PROMPT_DELIVERED",
-                    if server.current_state().initial_prompt_delivered {
-                        "1"
-                    } else {
-                        "0"
-                    },
-                ),
-            ],
-        );
+        .with_run_id(&current_state.run_id)
+        .apply(&mut command, &owned_env);
     let server_for_spawn = server.clone();
     let exit = match run_provider(&mut command, &server, &runtime, |pid| {
         let mut state = server_for_spawn
@@ -4252,8 +4259,15 @@ mod tests {
         assert!(EXTENSION_ASSET.contains("assistantMessageEvent"));
         assert!(EXTENSION_ASSET.contains("message_end"));
         assert!(EXTENSION_ASSET.contains("isTerminal"));
-        assert!(EXTENSION_ASSET.contains("MALFORMED_BOOLEAN_MARKER"));
-        assert!(EXTENSION_ASSET.contains("value !== null && value !== undefined"));
+        assert!(EXTENSION_ASSET.contains("pi.registerTool"));
+        assert!(EXTENSION_ASSET.contains("\"peers\""));
+        assert!(EXTENSION_ASSET.contains("\"search_sessions\""));
+        assert!(EXTENSION_ASSET.contains("\"tail\""));
+        assert!(EXTENSION_ASSET.contains("\"send\""));
+        assert!(EXTENSION_ASSET.contains("\"inbox\""));
+        assert!(EXTENSION_ASSET.contains("\"reply\""));
+        assert!(EXTENSION_ASSET.contains("LONGHOUSE_COORDINATION_TOKEN"));
+        assert!(!EXTENSION_ASSET.contains("LONGHOUSE_OMP_HELM_TOKEN"));
     }
 
     #[test]

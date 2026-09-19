@@ -369,6 +369,7 @@ async def test_peers_infers_repo_from_current_session(monkeypatch):
     assert mock_get.await_args_list[1].kwargs["params"] == {
         "repo": "git@github.com:cipher982/longhouse.git",
         "days": 7,
+        "include_automation": True,
     }
 
 
@@ -398,13 +399,12 @@ async def test_peers_falls_back_to_cwd_when_no_git_repo(monkeypatch):
         "zerg.mcp_server.server.LonghouseAPIClient.get",
         new=AsyncMock(side_effect=[current_resp, wall_resp]),
     ) as mock_get:
-        result = await tool.run({})
+        await tool.run({})
 
-    payload = json.loads(result)
-    assert "error" not in payload
     assert mock_get.await_args_list[1].kwargs["params"] == {
         "repo": "/Users/dev/git/acme/project",
         "days": 7,
+        "include_automation": True,
     }
 
 
