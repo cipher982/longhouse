@@ -83,7 +83,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="pi.helm_lifecycle.v1",
     producer_revision=3,
     scenario_id=SCENARIO_ID,
-    scenario_revision=5,
+    scenario_revision=6,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -1855,6 +1855,15 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
             )
             observations["terminate_owner_wait"] = termination_wait
             recorded_owners_dead = True
+        except RuntimeError as exc:
+            # Owners still alive at the deadline. Under a terminate control
+            # that is the expected observation and must be recorded as a typed
+            # failure below; letting it propagate aborted the run before
+            # terminate_verdict existed, so the control read `inconclusive`
+            # with no failure code and scored the edge `fail` (2026-09-19).
+            if negative_control != "terminate":
+                raise
+            observations["terminate_owner_wait"] = {"status": "owners_alive_at_deadline", "detail": str(exc)[:500]}
         finally:
             # The recorded owners must be judged BEFORE this close: the facade
             # close terminates them itself, so `launch.alive()` afterwards is

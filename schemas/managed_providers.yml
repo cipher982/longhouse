@@ -2359,7 +2359,7 @@ providers:
         id: pi_helm_launch_registration
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
-        minimum_scenario_revision: 5
+        minimum_scenario_revision: 6
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
       - <<: *pi_helm_lifecycle_assertion
@@ -2421,7 +2421,7 @@ providers:
       - id: pi_helm_launch_registration
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
-        minimum_scenario_revision: 5
+        minimum_scenario_revision: 6
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -2437,7 +2437,7 @@ providers:
       - id: pi_helm_cold_resume_exact_file
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
-        minimum_scenario_revision: 5
+        minimum_scenario_revision: 6
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -2447,7 +2447,7 @@ providers:
       - id: pi_helm_send_idle
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
-        minimum_scenario_revision: 5
+        minimum_scenario_revision: 6
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -2457,7 +2457,7 @@ providers:
       - id: pi_helm_abort_native
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
-        minimum_scenario_revision: 5
+        minimum_scenario_revision: 6
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -2467,7 +2467,7 @@ providers:
       - id: pi_helm_steer_active
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
-        minimum_scenario_revision: 5
+        minimum_scenario_revision: 6
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -2483,7 +2483,7 @@ providers:
       - id: pi_helm_terminate_owned
         scenario_id: pi_helm_lifecycle
         oracle_source: server/zerg/qa/pi_helm_lifecycle.py
-        minimum_scenario_revision: 5
+        minimum_scenario_revision: 6
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
