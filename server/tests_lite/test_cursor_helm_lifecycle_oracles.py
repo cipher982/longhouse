@@ -268,3 +268,29 @@ def test_a_failed_run_keeps_the_steps_it_already_proved(tmp_path) -> None:
 def test_an_unreadable_report_still_yields_a_typed_failure(tmp_path) -> None:
     report = failed_run_report(tmp_path, RuntimeError("boom"))
     assert report == {"status": "failed", "error": "RuntimeError: boom"}
+
+
+def test_a_persisted_pass_cannot_survive_the_failure(tmp_path) -> None:
+    """The recovered status is the harness's, never the file's.
+
+    The merge puts the failure last for exactly this reason: a report claiming
+    it passed, while the run in fact raised, must not carry that claim into the
+    result and unlock the steer/abort/terminate oracles.
+    """
+    (tmp_path / "product-e2e.json").write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "run_lifecycle_after_teardown": "ended",
+                "lifecycle": {"steer_active": {"passed": True}, "terminate_owned": {"passed": True}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = failed_run_report(tmp_path, RuntimeError("timed out"))
+
+    assert report["status"] == "failed"
+    assertions = lifecycle_assertions(report, cleanup_ok=True)
+    assert assertions["cursor_helm_steer_active"] is False
+    assert assertions["cursor_helm_terminate_owned"] is False
