@@ -1155,9 +1155,14 @@ async def list_session_subagents(
             status_code=503,
             detail={"code": "catalog_unavailable", "message": "The live catalog is unavailable."},
         ) from exc
+    if result.get("found") is not True:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
     return SessionSubagentsResponse(
         session_id=str(session_id),
         children=[SessionSubagentResponse(**child) for child in result.get("children") or []],
+        child_references=[
+            SessionChildReferenceResponse(**reference) for reference in result.get("child_references") or []
+        ],
     )
 
 

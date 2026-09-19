@@ -7,6 +7,7 @@ from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
+from uuid import UUID
 from uuid import uuid4
 
 import pytest
@@ -14,6 +15,7 @@ from sqlalchemy import event
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
+from fastapi import HTTPException
 
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
@@ -22,6 +24,7 @@ from zerg.catalogd.fact_reducer import canonical_evidence_hash
 from zerg.catalogd.fact_reducer import reduce_fact_batch
 from zerg.catalogd.models import FactHead
 from zerg.catalogd.models import SessionTombstone as LiveSessionTombstone
+from zerg.catalogd.models import SessionProviderFact
 from zerg.catalogd.models import StorageSession
 from zerg.catalogd.protocol import HEADER_BYTES
 from zerg.catalogd.protocol import MAX_PAYLOAD_BYTES
@@ -32,6 +35,7 @@ from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
 from zerg.catalogd.store import CatalogStore
+from zerg.routers import agents_sessions
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveDeviceToken
 from zerg.models.live_store import LiveHeartbeatStamp
@@ -95,6 +99,124 @@ async def test_session_reads_exclude_tombstoned_legacy_catalog_facts(daemon_path
 
     assert read["found"] is False
     assert batch["facts"] == []
+
+
+@pytest.mark.asyncio
+async def test_session_subagents_serves_references_and_distinguishes_empty_from_missing(daemon_paths, monkeypatch):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    parent_id = str(uuid4())
+    empty_id = str(uuid4())
+    child_reference = {
+        "provider_session_id": "native-child-1",
+        "parent_tool_call_id": "call-1",
+        "metadata": {"source": "native"},
+    }
+    with engine.begin() as connection:
+        connection.execute(
+            StorageSession.__table__.insert(),
+            [
+                {
+                    "session_id": parent_id,
+                    "tenant_id": "default",
+                    "owner_id": "42",
+                    "provider": "codex",
+                    "environment": "prod",
+                    "machine_id": "cinder",
+                    "started_at": now,
+                    "last_activity_at": now,
+                    "raw_state": "durable",
+                    "render_state": "ready",
+                    "media_state": "complete",
+                    "commit_seq": 1,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+                {
+                    "session_id": empty_id,
+                    "tenant_id": "default",
+                    "owner_id": "42",
+                    "provider": "codex",
+                    "environment": "prod",
+                    "machine_id": "cinder",
+                    "started_at": now,
+                    "last_activity_at": now,
+                    "raw_state": "durable",
+                    "render_state": "ready",
+                    "media_state": "complete",
+                    "commit_seq": 1,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            ],
+        )
+        connection.execute(
+            SessionProviderFact.__table__.insert().values(
+                session_id=parent_id,
+                kind="delegation.spawn",
+                at=now,
+                source_epoch="epoch-1",
+                source_position=7,
+                payload_json=json.dumps({"children": [child_reference]}),
+                commit_seq=1,
+                created_at=now,
+            )
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    monkeypatch.setattr(agents_sessions, "get_catalogd_client", lambda: client)
+    try:
+        observed = await client.call("session.subagents.list.v2", {"session_id": parent_id, "owner_id": "42"})
+        assert observed["found"] is True
+        assert observed["children"] == []
+        assert observed["child_references"][0]["session_id"] is None
+        assert observed["child_references"][0]["provider_session_id"] == "native-child-1"
+
+        served = await agents_sessions.list_session_subagents(
+            session_id=UUID(parent_id),
+            _auth=None,
+            _single=None,
+            owner_id=42,
+        )
+        assert served.model_dump()["child_references"] == [
+            {
+                **child_reference,
+                "session_id": None,
+                "kind": "delegation.spawn",
+                "source_epoch": "epoch-1",
+                "source_position": 7,
+                "at": now.isoformat(),
+            }
+        ]
+
+        empty = await agents_sessions.list_session_subagents(
+            session_id=UUID(empty_id),
+            _auth=None,
+            _single=None,
+            owner_id=42,
+        )
+        assert empty.model_dump()["children"] == []
+        assert empty.model_dump()["child_references"] == []
+
+        missing_id = str(uuid4())
+        missing = await client.call("session.subagents.list.v2", {"session_id": missing_id, "owner_id": "42"})
+        assert missing == {"found": False, "session_id": missing_id, "children": [], "child_references": []}
+        with pytest.raises(HTTPException) as raised:
+            await agents_sessions.list_session_subagents(
+                session_id=UUID(missing_id),
+                _auth=None,
+                _single=None,
+                owner_id=42,
+            )
+        assert raised.value.status_code == 404
+    finally:
+        await client.close()
+        await daemon.close()
 
 
 def _seed_session(

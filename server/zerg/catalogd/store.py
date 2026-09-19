@@ -7312,7 +7312,7 @@ class CatalogStore:
                 .first()
             )
             if parent is None:
-                return {"session_id": session_id, "children": [], "child_references": []}
+                return {"found": False, "session_id": session_id, "children": [], "child_references": []}
             child_limit = max(1, min(int(limit), 500))
             rows = (
                 connection.execute(
@@ -7412,7 +7412,7 @@ class CatalogStore:
             }
             for row in rows
         ]
-        return {"session_id": session_id, "children": children, "child_references": references}
+        return {"found": True, "session_id": session_id, "children": children, "child_references": references}
 
     def resolve_session_alias(self, *, provider_session_id: str, owner_id: int) -> dict[str, Any]:
         """Resolve a provider-native session id alias to its Longhouse session id.
