@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -92,7 +93,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="omp.helm_lifecycle.v1",
     producer_revision=9,
     scenario_id=SCENARIO_ID,
-    scenario_revision=9,
+    scenario_revision=10,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -2421,8 +2422,20 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         observation["replacement_evidence"] = replacement_evidence
 
         terminate = _run_engine(args.engine, "terminate", current_session_id, env)
-        stopped = _wait_stopped(longhouse_home, current_session_id)
-        first.process.wait(timeout=15)
+        try:
+            stopped = _wait_stopped(longhouse_home, current_session_id)
+        except RuntimeError as exc:
+            # Under the terminate control the session never reaches a stopped
+            # state -- that IS the observation the control exists to make.
+            # Letting it raise aborted the run before terminate_verdict was
+            # built, so the control recorded no_negative_control_result and
+            # OMP Interrupt could not be certified (2026-09-19). Outside a
+            # terminate control this is still a hard failure.
+            if negative_control != "terminate":
+                raise
+            stopped = {"terminal_reason": None, "status": "owners_alive_at_deadline", "detail": str(exc)[:500]}
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            first.process.wait(timeout=15)
         terminated_run_id = str(current_state.get("run_id") or "")
         _record_retirement_claim_terminal(
             str(args.api_url),
