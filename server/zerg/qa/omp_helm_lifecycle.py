@@ -270,6 +270,26 @@ def omp_helm_lifecycle_assertions(observation: Mapping[str, object]) -> dict[str
     }
 
 
+def _terminate_control_made_its_observation(
+    negative_control: str | None,
+    observation: Mapping[str, Any],
+    exc: BaseException,
+) -> bool:
+    """Whether a post-terminate failure is the control's evidence, not an abort.
+
+    The terminate control injects a no-op terminate, so the owners stay alive by
+    design and every later step runs against a session that was never going to
+    stop. Once the typed verdict is recorded the control has made its whole
+    observation, and aborting past it left the factory with no result.json to
+    judge. Anything else -- a different control, a failure before the verdict,
+    or an interrupt -- still aborts.
+    """
+    if negative_control != "terminate" or not isinstance(exc, Exception):
+        return False
+    verdict = observation.get("terminate_verdict")
+    return isinstance(verdict, Mapping) and verdict.get("code") == "terminate_left_owners_alive"
+
+
 def _read_state(path: Path) -> dict[str, Any] | None:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -2434,7 +2454,14 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             if negative_control != "terminate":
                 raise
             stopped = {"terminal_reason": None, "status": "owners_alive_at_deadline", "detail": str(exc)[:500]}
-        with contextlib.suppress(subprocess.TimeoutExpired):
+        if negative_control == "terminate":
+            # The fault keeps this launcher alive on purpose, so the wait times
+            # out by design. Outside the control a launcher that outlives an
+            # accepted terminate is exactly the failure we want, so it stays
+            # fatal there.
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                first.process.wait(timeout=15)
+        else:
             first.process.wait(timeout=15)
         terminated_run_id = str(current_state.get("run_id") or "")
         _record_retirement_claim_terminal(
@@ -2763,7 +2790,17 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
             lifecycle.write_json(root / "partial-observation.json", partial_observation)
         except Exception:
             pass
-        raise
+        if not _terminate_control_made_its_observation(negative_control, observation, exc):
+            raise
+        # The control already recorded the observation it exists to make: an
+        # accepted terminate that left the owners alive. Every later step
+        # (cold resume, the final stop) runs against a session the fault kept
+        # alive and cannot succeed, so re-raising here left the factory with no
+        # result.json at all and the control recorded no_negative_control_result
+        # rather than judging the edge (2026-09-19). Keep the failure as
+        # evidence and fall through to the result so negative_control_verdict
+        # can rule on it.
+        observation["post_terminate_control_failure"] = f"{type(exc).__name__}: {exc}"
 
     finally:
         termination_dispatch: dict[str, Any] = {"status": "pass", "dispatched": False, "skipped": True}
