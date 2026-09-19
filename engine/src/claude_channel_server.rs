@@ -19,11 +19,9 @@ use uuid::Uuid;
 const CLAUDE_CHANNEL_CAPABILITY: &str = "claude/channel";
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 const COORDINATION_MAX_429_RETRIES: usize = 3;
-const COORDINATION_MAX_429_DELAY_SECONDS: u64 = 5;
 const COORDINATION_RETRY_BUDGET: Duration = Duration::from_secs(15);
 
 fn coordination_retry_after(response: &reqwest::Response) -> Duration {
-    let max_delay = Duration::from_secs(COORDINATION_MAX_429_DELAY_SECONDS);
     let Some(raw) = response
         .headers()
         .get("Retry-After")
@@ -32,13 +30,13 @@ fn coordination_retry_after(response: &reqwest::Response) -> Duration {
         return Duration::from_secs(1);
     };
     if let Ok(seconds) = raw.parse::<u64>() {
-        return Duration::from_secs(seconds).min(max_delay);
+        return Duration::from_secs(seconds).min(COORDINATION_RETRY_BUDGET);
     }
     DateTime::parse_from_rfc2822(raw)
         .ok()
         .and_then(|date| (date.with_timezone(&Utc) - Utc::now()).to_std().ok())
         .unwrap_or_else(|| Duration::from_secs(1))
-        .min(max_delay)
+        .min(COORDINATION_RETRY_BUDGET)
 }
 /// What the model is told about `<channel source="longhouse-channel">` input.
 ///
@@ -486,20 +484,9 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
         Ok(client) => client,
         Err(error) => return tool_result(id, json!({"error": error.to_string()})),
     };
-    let coordination_authority = coordination_token();
-    let request_token = if matches!(name, "send" | "inbox" | "reply") {
-        match coordination_authority {
-            Some(token) => token,
-            None => {
-                return tool_result(
-                    id,
-                    json!({"error":"coordination authority is unavailable for this managed session"}),
-                )
-            }
-        }
-    } else {
-        config.api_token.clone().unwrap_or_default()
-    };
+    let request_token = coordination_token()
+        .or_else(|| config.api_token.clone())
+        .unwrap_or_default();
     let mut request = match name {
         "peers" => {
             let mut repo = arguments
@@ -616,8 +603,13 @@ async fn call_coordination_tool(id: Value, params: Option<&Value>, state: &Bridg
                 )])
         }
         "tail" => {
-            let Some(session_id) = arguments.get("session_id").and_then(Value::as_str) else {
-                return tool_result(id, json!({"error":"tail requires session_id"}));
+            let Some(session_id) = arguments
+                .get("session_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| Uuid::parse_str(value).is_ok())
+            else {
+                return tool_result(id, json!({"error":"tail requires a valid session_id UUID"}));
             };
             // The API rejects limit > 100. Clamp rather than forwarding a 422 that the
             // advertised schema already tells the caller to avoid.

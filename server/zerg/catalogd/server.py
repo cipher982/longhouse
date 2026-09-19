@@ -2667,10 +2667,13 @@ class CatalogDaemon:
     async def _list_session_subagents(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if set(request.params) - {"session_id", "owner_id", "limit"} or not {"session_id", "owner_id"} <= set(request.params):
             return self._error(request, "invalid_request", "session.subagents.list.v2 requires session_id and owner_id")
-        session_id = request.params["session_id"]
+        try:
+            session_id = str(_canonical_uuid(request.params["session_id"], "session_id"))
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
         owner_id = request.params["owner_id"]
-        if not isinstance(session_id, str) or not isinstance(owner_id, str):
-            return self._error(request, "invalid_request", "session_id and owner_id must be strings")
+        if not isinstance(owner_id, str) or not owner_id.strip() or len(owner_id.encode("utf-8")) > 64:
+            return self._error(request, "invalid_request", "owner_id must be a non-empty bounded string")
         limit = request.params.get("limit", 200)
         if type(limit) is not int or not 1 <= limit <= 500:
             return self._error(request, "invalid_request", "limit must be between 1 and 500")
@@ -4486,8 +4489,102 @@ def _validate_storage_identity_fields(params: dict) -> None:
         raise ValueError("range_kind must be byte_offset or record_ordinal")
 
 
-PROVIDER_FACT_KINDS = frozenset({"turn.duration", "session.recap", "session.title", "turn.usage", "turn.api_error", "context.compaction"})
+PROVIDER_FACT_KINDS = frozenset(
+    {
+        "turn.duration",
+        "session.recap",
+        "session.title",
+        "turn.usage",
+        "turn.api_error",
+        "context.compaction",
+        "delegation.metadata",
+        "delegation.spawn",
+        "delegation.activity",
+    }
+)
 _PROVIDER_FACT_PAYLOAD_MAX_BYTES = 8_192
+_DELEGATION_METADATA_MAX_CHARS = 8_192
+_DELEGATION_CHILD_LIMIT = 256
+
+
+def _validate_delegation_metadata(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError("delegation metadata must be an object")
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("delegation metadata must contain JSON values") from exc
+    if len(encoded) > _DELEGATION_METADATA_MAX_CHARS:
+        raise ValueError("delegation metadata exceeds 8192 characters")
+    return value
+
+
+def _validate_native_id(value: object, field: str) -> str:
+    return _canonical_storage_text(value, field=field, maximum_bytes=255)
+
+
+def _validate_delegation_payload(kind: str, payload: object) -> dict[str, object]:
+    if kind == "delegation.metadata":
+        if not isinstance(payload, dict) or set(payload) not in (
+            {"provider_session_id", "metadata"},
+            {"provider_session_id", "parent_provider_session_id", "metadata"},
+        ):
+            raise ValueError("delegation.metadata payload has invalid fields")
+        parsed: dict[str, object] = {
+            "provider_session_id": _validate_native_id(payload["provider_session_id"], "provider_session_id"),
+            "metadata": _validate_delegation_metadata(payload["metadata"]),
+        }
+        if "parent_provider_session_id" in payload:
+            parsed["parent_provider_session_id"] = _validate_native_id(
+                payload["parent_provider_session_id"],
+                "parent_provider_session_id",
+            )
+        return parsed
+    if kind == "delegation.spawn":
+        if not isinstance(payload, dict) or set(payload) != {"children"}:
+            raise ValueError("delegation.spawn payload has invalid fields")
+        children = payload["children"]
+        if not isinstance(children, list) or len(children) > _DELEGATION_CHILD_LIMIT:
+            raise ValueError("delegation.spawn children must contain at most 256 items")
+        parsed_children: list[dict[str, object]] = []
+        for child in children:
+            if not isinstance(child, dict) or set(child) not in (
+                {"provider_session_id", "metadata"},
+                {"provider_session_id", "parent_tool_call_id", "metadata"},
+            ):
+                raise ValueError("delegation.spawn child has invalid fields")
+            parsed_child: dict[str, object] = {
+                "provider_session_id": _validate_native_id(child["provider_session_id"], "provider_session_id"),
+                "metadata": _validate_delegation_metadata(child["metadata"]),
+            }
+            if "parent_tool_call_id" in child:
+                parsed_child["parent_tool_call_id"] = _canonical_storage_text(
+                    child["parent_tool_call_id"],
+                    field="parent_tool_call_id",
+                    maximum_bytes=255,
+                )
+            parsed_children.append(parsed_child)
+        return {"children": parsed_children}
+    if kind == "delegation.activity":
+        optional = {"event_id", "occurred_at_ms"}
+        if not isinstance(payload, dict) or set(payload) - {"provider_session_id", "kind", "metadata"} - optional:
+            raise ValueError("delegation.activity payload has invalid fields")
+        if set(payload) < {"provider_session_id", "kind", "metadata"}:
+            raise ValueError("delegation.activity payload is missing fields")
+        parsed = {
+            "provider_session_id": _validate_native_id(payload["provider_session_id"], "provider_session_id"),
+            "kind": _canonical_storage_text(payload["kind"], field="kind", maximum_bytes=255),
+            "metadata": _validate_delegation_metadata(payload["metadata"]),
+        }
+        if "event_id" in payload:
+            parsed["event_id"] = _canonical_storage_text(payload["event_id"], field="event_id", maximum_bytes=255)
+        if "occurred_at_ms" in payload:
+            occurred_at_ms = payload["occurred_at_ms"]
+            if type(occurred_at_ms) is not int or not -(1 << 63) <= occurred_at_ms < 1 << 63:
+                raise ValueError("delegation.activity occurred_at_ms must be a signed 64-bit integer")
+            parsed["occurred_at_ms"] = occurred_at_ms
+        return parsed
+    return payload if isinstance(payload, dict) else {}
 
 
 def _validate_provider_fact(item: object, *, range_start: int | None, range_end: int | None) -> dict[str, object]:
@@ -4495,7 +4592,7 @@ def _validate_provider_fact(item: object, *, range_start: int | None, range_end:
     if not isinstance(item, dict) or set(item) != {"kind", "at", "source_position", "payload"}:
         raise ValueError("each provider fact needs kind, at, source_position and payload")
     kind = item["kind"]
-    if kind not in PROVIDER_FACT_KINDS:
+    if not isinstance(kind, str) or kind not in PROVIDER_FACT_KINDS:
         raise ValueError(f"provider fact kind {kind!r} is not catalogued")
     position = item["source_position"]
     if type(position) is not int or not 0 <= position < 1 << 64:
@@ -4503,8 +4600,16 @@ def _validate_provider_fact(item: object, *, range_start: int | None, range_end:
     if range_start is not None and range_end is not None and not range_start <= position < range_end:
         raise ValueError("provider fact source_position is outside the envelope")
     payload = item["payload"]
-    if not isinstance(payload, dict) or len(json.dumps(payload, separators=(",", ":"))) > _PROVIDER_FACT_PAYLOAD_MAX_BYTES:
+    if not isinstance(payload, dict):
         raise ValueError("provider fact payload must be a small JSON object")
+    try:
+        payload_size = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("provider fact payload must be a small JSON object") from exc
+    if payload_size > _PROVIDER_FACT_PAYLOAD_MAX_BYTES:
+        raise ValueError("provider fact payload must be a small JSON object")
+    if kind.startswith("delegation."):
+        payload = _validate_delegation_payload(kind, payload)
     if kind == "turn.duration" and type(payload.get("duration_ms")) is not int:
         raise ValueError("turn.duration facts need an integer duration_ms")
     if kind == "session.recap" and not (isinstance(payload.get("text"), str) and payload["text"].strip()):
@@ -4513,14 +4618,12 @@ def _validate_provider_fact(item: object, *, range_start: int | None, range_end:
         raise ValueError("session.title facts need a non-empty title")
     if kind == "turn.usage" and type(payload.get("output_tokens")) is not int:
         raise ValueError("turn.usage facts need integer output_tokens")
-    # Claude reports token counts across a compaction; Codex reports the items
-    # it replaced. Either is a compaction the transcript can show.
     if kind == "context.compaction" and not any(
         type(payload.get(key)) is int for key in ("pre_tokens", "post_tokens", "replacement_items")
     ):
         raise ValueError("context.compaction facts need pre_tokens, post_tokens or replacement_items")
     return {
-        "kind": str(kind),
+        "kind": kind,
         "at": _parse_datetime(item["at"], "provider fact at"),
         "source_position": position,
         "payload": payload,

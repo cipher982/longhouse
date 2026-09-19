@@ -399,8 +399,10 @@ async def test_peers_falls_back_to_cwd_when_no_git_repo(monkeypatch):
         "zerg.mcp_server.server.LonghouseAPIClient.get",
         new=AsyncMock(side_effect=[current_resp, wall_resp]),
     ) as mock_get:
-        await tool.run({})
+        result = await tool.run({})
 
+    payload = json.loads(result)
+    assert "error" not in payload
     assert mock_get.await_args_list[1].kwargs["params"] == {
         "repo": "/Users/dev/git/acme/project",
         "days": 7,

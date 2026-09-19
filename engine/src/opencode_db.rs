@@ -94,6 +94,7 @@ struct OpenCodeSessionClassificationSidecar {
 struct OpenCodeTaskChildEvidence {
     agent: Option<String>,
     tool_call_id: Option<String>,
+    metadata: Value,
 }
 
 pub fn is_opencode_database_path(path: &Path) -> bool {
@@ -437,6 +438,34 @@ fn managed_longhouse_session_id_for_opencode_from_roots(
     }
     None
 }
+const MAX_PROVIDER_FACT_PAYLOAD_CHARS: usize = 8_192;
+
+fn push_opencode_fact(
+    facts: &mut Vec<crate::pipeline::parser::ParsedProviderFact>,
+    kind: &str,
+    at: DateTime<Utc>,
+    source_offset: u64,
+    payload: Value,
+) {
+    if facts
+        .iter()
+        .any(|fact| fact.source_offset == source_offset && fact.kind == kind)
+    {
+        return;
+    }
+    let Ok(encoded) = serde_json::to_string(&payload) else {
+        return;
+    };
+    if encoded.chars().count() > MAX_PROVIDER_FACT_PAYLOAD_CHARS {
+        return;
+    }
+    facts.push(crate::pipeline::parser::ParsedProviderFact {
+        kind: kind.to_string(),
+        at,
+        source_offset,
+        payload,
+    });
+}
 
 pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Result<ParseResult> {
     let conn = open_readonly(db_path)?;
@@ -448,6 +477,7 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
         .iter()
         .map(|message| (message.id.as_str(), message))
         .collect();
+    let mut provider_facts = Vec::new();
 
     let longhouse_session_id = longhouse_session_id_for_opencode(provider_session_id);
     let mut events = Vec::new();
@@ -511,6 +541,33 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
             source_offset,
             &mut events,
         )?;
+        if let Some(spawn) = opencode_task_spawn_evidence(&part_data) {
+            let parent_claim = spawn
+                .metadata
+                .get("parentSessionId")
+                .or_else(|| spawn.metadata.get("parent_session_id"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            if !parent_claim.is_some_and(|value| value != provider_session_id) {
+                let mut child = serde_json::Map::new();
+                child.insert(
+                    "provider_session_id".to_string(),
+                    Value::from(spawn.child_provider_session_id),
+                );
+                if let Some(call_id) = spawn.tool_call_id {
+                    child.insert("parent_tool_call_id".to_string(), Value::from(call_id));
+                }
+                child.insert("metadata".to_string(), spawn.metadata);
+                push_opencode_fact(
+                    &mut provider_facts,
+                    "delegation.spawn",
+                    timestamp_from_ms(part.time_created.max(message.time_created)),
+                    source_offset,
+                    json!({ "children": [Value::Object(child)] }),
+                );
+            }
+        }
     }
 
     events.sort_by(|left, right| {
@@ -533,12 +590,29 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
         .map(str::to_string);
     let lineage_kind = opencode_lineage_kind(&session, task_child.is_some());
     let classification = opencode_session_classification_sidecar(provider_session_id);
+    if let (Some(parent_provider_session_id), Some(evidence)) =
+        (session.parent_id.as_deref(), task_child.as_ref())
+    {
+        if parent_provider_session_id != provider_session_id {
+            push_opencode_fact(
+                &mut provider_facts,
+                "delegation.metadata",
+                timestamp_from_ms(session.time_created),
+                0,
+                json!({
+                    "provider_session_id": provider_session_id,
+                    "parent_provider_session_id": parent_provider_session_id,
+                    "metadata": evidence.metadata.clone(),
+                }),
+            );
+        }
+    }
 
     Ok(ParseResult {
         events,
         source_lines,
+        provider_facts,
         media_objects,
-        provider_facts: Vec::new(),
         last_good_offset: session_version.max(last_source_offset.saturating_add(1)),
         metadata: SessionMetadata {
             session_id: longhouse_session_id,
@@ -1265,6 +1339,75 @@ fn raw_value_from_json(value: &Value) -> Option<Box<RawValue>> {
     RawValue::from_string(serde_json::to_string(value).ok()?).ok()
 }
 
+#[derive(Debug, Clone)]
+struct OpenCodeTaskSpawnEvidence {
+    child_provider_session_id: String,
+    tool_call_id: Option<String>,
+    metadata: Value,
+}
+
+fn opencode_task_output_child_id(output: &str) -> Option<&str> {
+    let start = output.find("<task id=\"")? + "<task id=\"".len();
+    let rest = &output[start..];
+    let end = rest.find('"')?;
+    let id = rest[..end].trim();
+    (!id.is_empty()).then_some(id)
+}
+
+fn opencode_task_spawn_evidence(part_data: &Value) -> Option<OpenCodeTaskSpawnEvidence> {
+    if part_data.get("type").and_then(Value::as_str) != Some("tool")
+        || part_data.get("tool").and_then(Value::as_str) != Some("task")
+    {
+        return None;
+    }
+    let state = part_data.get("state").unwrap_or(&Value::Null);
+    let metadata_value = state
+        .get("metadata")
+        .or_else(|| part_data.get("metadata"))
+        .unwrap_or(&Value::Null);
+    let input = state.get("input").unwrap_or(&Value::Null);
+    let child_provider_session_id = string_field(
+        metadata_value,
+        &["sessionId", "sessionID", "session_id"],
+    )
+    .or_else(|| {
+        state
+            .get("output")
+            .and_then(Value::as_str)
+            .and_then(opencode_task_output_child_id)
+    })?
+    .to_string();
+    let tool_call_id = part_data
+        .get("callID")
+        .and_then(Value::as_str)
+        .or_else(|| part_data.get("callId").and_then(Value::as_str))
+        .map(str::to_string);
+    let mut metadata = metadata_value
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    // The agent selector is native input when OpenCode does not repeat it in
+    // state.metadata. Preserve the provider spelling rather than normalizing it.
+    if !metadata.contains_key("agent") {
+        for key in ["subagent_type", "subagentType", "agent"] {
+            if let Some(value) = input.get(key) {
+                metadata.insert(key.to_string(), value.clone());
+                break;
+            }
+        }
+    }
+    if let Some(call_id) = tool_call_id.as_deref() {
+        metadata
+            .entry("callID".to_string())
+            .or_insert_with(|| Value::from(call_id.to_string()));
+    }
+    Some(OpenCodeTaskSpawnEvidence {
+        child_provider_session_id,
+        tool_call_id,
+        metadata: Value::Object(metadata),
+    })
+}
+
 fn opencode_task_child_evidence(
     conn: &Connection,
     parent_provider_session_id: &str,
@@ -1274,35 +1417,40 @@ fn opencode_task_child_evidence(
     for part in parts {
         let part_data: Value = serde_json::from_str(&part.data)
             .with_context(|| format!("parsing OpenCode parent task part {}", part.id))?;
-        if part_data.get("type").and_then(Value::as_str) != Some("tool") {
+        let Some(evidence) = opencode_task_spawn_evidence(&part_data) else {
             continue;
-        }
-        if part_data.get("tool").and_then(Value::as_str) != Some("task") {
-            continue;
-        }
+        };
         let state = part_data.get("state").unwrap_or(&Value::Null);
-        let metadata = state
-            .get("metadata")
-            .or_else(|| part_data.get("metadata"))
-            .unwrap_or(&Value::Null);
-        let metadata_child_id = string_field(metadata, &["sessionId", "sessionID", "session_id"]);
-        let output_child_id = state
-            .get("output")
+        let metadata_parent = evidence
+            .metadata
+            .get("parentSessionId")
+            .or_else(|| evidence.metadata.get("parent_session_id"))
             .and_then(Value::as_str)
-            .filter(|output| output.contains(&format!("<task id=\"{child_provider_session_id}\"")));
-        if metadata_child_id != Some(child_provider_session_id) && output_child_id.is_none() {
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if metadata_parent.is_some_and(|value| value != parent_provider_session_id) {
             continue;
         }
-        let input = state.get("input").unwrap_or(&Value::Null);
-        return Ok(Some(OpenCodeTaskChildEvidence {
-            agent: string_field(metadata, &["agent", "subagent_type", "subagentType"])
-                .or_else(|| string_field(input, &["subagent_type", "subagentType", "agent"]))
-                .map(str::to_string),
-            tool_call_id: part_data
-                .get("callID")
+        let child_matches = evidence.child_provider_session_id == child_provider_session_id
+            || state
+                .get("output")
                 .and_then(Value::as_str)
-                .or_else(|| part_data.get("callId").and_then(Value::as_str))
-                .map(str::to_string),
+                .and_then(opencode_task_output_child_id)
+                == Some(child_provider_session_id);
+        if !child_matches {
+            continue;
+        }
+        let agent = string_field(&evidence.metadata, &["agent", "subagent_type", "subagentType"])
+            .or_else(|| {
+                state
+                    .get("input")
+                    .and_then(|input| string_field(input, &["subagent_type", "subagentType", "agent"]))
+            })
+            .map(str::to_string);
+        return Ok(Some(OpenCodeTaskChildEvidence {
+            agent,
+            tool_call_id: evidence.tool_call_id,
+            metadata: evidence.metadata,
         }));
     }
     Ok(None)
@@ -2424,6 +2572,33 @@ mod tests {
         assert_eq!(
             result.metadata.subagent_tool_use_id.as_deref(),
             Some("call_task")
+        );
+        let parent_result = parse_opencode_session(&db_path, "ses_parent").unwrap();
+        let spawn_fact = parent_result
+            .provider_facts
+            .iter()
+            .find(|fact| fact.kind == "delegation.spawn")
+            .expect("parent task evidence emits a spawn fact");
+        assert_eq!(
+            spawn_fact
+                .payload
+                .get("children")
+                .and_then(Value::as_array)
+                .and_then(|children| children.first())
+                .and_then(|child| child.get("provider_session_id"))
+                .and_then(Value::as_str),
+            Some("ses_test")
+        );
+        assert_eq!(
+            spawn_fact
+                .payload
+                .get("children")
+                .and_then(Value::as_array)
+                .and_then(|children| children.first())
+                .and_then(|child| child.get("metadata"))
+                .and_then(|metadata| metadata.get("background"))
+                .and_then(Value::as_bool),
+            Some(true)
         );
     }
 

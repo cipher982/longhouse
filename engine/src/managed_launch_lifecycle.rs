@@ -1179,7 +1179,9 @@ mod tests {
 
         let agent_dir = tempfile::tempdir().unwrap();
         let notices = DeferredNotices::default();
-        let retry = spawn_managed_registration_retry(
+        let recovered = Arc::new(AtomicBool::new(false));
+        let recovered_for_hook = Arc::clone(&recovered);
+        let retry = spawn_managed_registration_retry_with_hook(
             &url,
             "device-token",
             "Codex",
@@ -1187,6 +1189,9 @@ mod tests {
             "session-late",
             notices,
             agent_dir.path().to_path_buf(),
+            Some(Arc::new(move |_| {
+                recovered_for_hook.store(true, Ordering::Release);
+            })),
         );
         // The provider is already running; recovery only confirms once it is.
         retry.provider_alive.store(true, Ordering::Release);
@@ -1208,6 +1213,10 @@ mod tests {
         assert!(
             !receipt.exists(),
             "recovery abandoned a host that was working and answered inside its own budget"
+        );
+        assert!(
+            recovered.load(Ordering::Acquire),
+            "recovery hook must receive the Runtime Host response before confirmation"
         );
 
         let mut confirmed = false;
@@ -1564,6 +1573,28 @@ pub fn spawn_managed_registration_retry(
     notices: DeferredNotices,
     agent_dir: PathBuf,
 ) -> ManagedRegistrationRetry {
+    spawn_managed_registration_retry_with_hook(
+        url,
+        token,
+        provider,
+        payload,
+        session_id,
+        notices,
+        agent_dir,
+        None,
+    )
+}
+
+pub fn spawn_managed_registration_retry_with_hook(
+    url: &str,
+    token: &str,
+    provider: &str,
+    payload: serde_json::Value,
+    session_id: &str,
+    notices: DeferredNotices,
+    agent_dir: PathBuf,
+    on_recovered: Option<Arc<dyn Fn(&ManagedLaunchResponse) + Send + Sync>>,
+) -> ManagedRegistrationRetry {
     let url = url.to_string();
     let token = token.to_string();
     let provider = provider.to_string();
@@ -1575,8 +1606,9 @@ pub fn spawn_managed_registration_retry(
     let cancel_for_thread = Arc::clone(&cancel);
     let state_for_thread = Arc::clone(&state);
     let retry_agent_dir = agent_dir.clone();
-    let retry_session_id = session_id.clone();
     let retry_provider = provider.clone();
+    let retry_session_id = session_id.clone();
+    let on_recovered_for_thread = on_recovered;
     // Publish the degraded state before the provider takes over the terminal.
     // Local health runs in a different process, so it can only see this launch
     // as degraded through a durable receipt; process liveness is not proof that
@@ -1669,6 +1701,9 @@ pub fn spawn_managed_registration_retry(
                             Some("Runtime Host returned a different provider identity".to_string()),
                         );
                     } else {
+                        if let Some(on_recovered) = on_recovered_for_thread.as_ref() {
+                            on_recovered(&response);
+                        }
                         let mut transaction = ManagedLaunchTransaction::new(
                             &runtime,
                             &url,

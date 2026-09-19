@@ -13,7 +13,6 @@ const MAX_METADATA_STRING_LENGTH = 256;
 const MAX_LIVE_TEXT_DELTA_LENGTH = 4096;
 const CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id";
 const COORDINATION_MAX_429_RETRIES = 3;
-const COORDINATION_MAX_429_DELAY_MS = 5_000;
 const COORDINATION_OPERATION_TIMEOUT_MS = 15_000;
 const COORDINATION_DEFAULT_RETRY_MS = 1_000;
 
@@ -69,7 +68,7 @@ export default function (pi: any) {
   const runtimeUrl = (process.env.LONGHOUSE_OMP_HELM_URL ?? "")
     .trim()
     .replace(/\/+$/, "");
-  const coordinationToken = (
+  let coordinationToken = (
     process.env.LONGHOUSE_COORDINATION_TOKEN ?? ""
   ).trim();
 
@@ -156,7 +155,7 @@ export default function (pi: any) {
               if (Number.isFinite(seconds))
                 return Math.max(
                   0,
-                  Math.min(seconds * 1000, COORDINATION_MAX_429_DELAY_MS),
+                  Math.min(seconds * 1000, COORDINATION_OPERATION_TIMEOUT_MS),
                 );
               const timestamp = Date.parse(retryAfter);
               return Number.isFinite(timestamp)
@@ -164,7 +163,7 @@ export default function (pi: any) {
                     0,
                     Math.min(
                       timestamp - Date.now(),
-                      COORDINATION_MAX_429_DELAY_MS,
+                      COORDINATION_OPERATION_TIMEOUT_MS,
                     ),
                   )
                 : COORDINATION_DEFAULT_RETRY_MS;
@@ -222,7 +221,7 @@ export default function (pi: any) {
     parameters: Record<string, unknown>,
     execute: (params: ToolParams, signal?: AbortSignal) => Promise<unknown>,
   ) => {
-    if (!coordinationToken || typeof pi.registerTool !== "function") return;
+    if (typeof pi.registerTool !== "function") return;
     pi.registerTool({
       name,
       label: `Longhouse ${name}`,
@@ -269,7 +268,9 @@ export default function (pi: any) {
         });
         if (current.ok && current.value && typeof current.value === "object") {
           const data = current.value as Record<string, unknown>;
-          repo = String(data.git_repo ?? data.cwd ?? "").trim();
+          const gitRepo = String(data.git_repo ?? "").trim();
+          const cwd = String(data.cwd ?? "").trim();
+          repo = gitRepo || cwd;
         }
       }
       if (!repo)
@@ -686,6 +687,11 @@ export default function (pi: any) {
       ready = Boolean(connectionId && leaseGeneration);
       const waiters = generationWaiters.splice(0);
       for (const done of waiters) done();
+      return;
+    }
+    if (frame.kind === "coordination_authority") {
+      coordinationToken =
+        typeof frame.token === "string" ? frame.token.trim() : "";
       return;
     }
     if (frame.kind === "initial_prompt_grant") {

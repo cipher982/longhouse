@@ -25,6 +25,7 @@
       "adapter_sources": [
         "server/zerg/mcp_server/server.py",
         "server/zerg/services/shipper/hooks.py",
+        "engine/src/claude_channel_server.rs",
         "engine/src/codex_bridge.rs",
         "engine/src/codex_bridge_ownership.rs",
         "engine/src/codex_exec.rs",
@@ -822,7 +823,7 @@
           "owner_action": "render reasoning as collapsed thinking records"
         }
       },
-      "adapter_digest": "ea2373d397f54e09ca43fca01f792a46cbe0b8af085056471eab8fd90c473aac"
+      "adapter_digest": "22d2d4b10fa032aa2acfc5e10c0ee06f82b5b81adf3ce957ddd9348038165d1d"
     },
     {
       "provider": "claude",
@@ -847,6 +848,7 @@
       "control_plane": "claude_channel_bridge",
       "control_plane_aliases": [],
       "adapter_sources": [
+        "engine/src/claude_channel_server.rs",
         "server/zerg/services/shipper/hooks.py",
         "engine/src/claude_print.rs"
       ],
@@ -1732,7 +1734,7 @@
           "owner_action": "render as collapsed thinking records with a thinking interaction kind"
         }
       },
-      "adapter_digest": "95322dfd47a3d12a773bf850fc898076997cec0355d6e1a572074fa2fae85750"
+      "adapter_digest": "a8063b549812f9fe64d2fe64de185d3adba6c158f1babed57d1ffcf0ced24e78"
     },
     {
       "provider": "opencode",
@@ -2872,7 +2874,7 @@
           "owner_action": "run the transcript census for antigravity and name the raw source"
         }
       },
-      "adapter_digest": "4f2db4d3681a856db34ba61bc95c8cc0977070d96e3284957864890e8f1d824c"
+      "adapter_digest": "cb6b0950566f789c697c17d12d841db25c5079ad640c14cac392e262d5d3f441"
     },
     {
       "provider": "cursor",
@@ -3591,7 +3593,7 @@
           "owner_action": "run the transcript census for cursor and name the raw source"
         }
       },
-      "adapter_digest": "68f56b8adbc530ba3d7dfde9e043120c021883d7223c1e9c3af25465a64abc5e"
+      "adapter_digest": "fae0be59b6b4957c77e06cd23e6e9937d95546a1269b538b207d89485b277a29"
     },
     {
       "provider": "pi",
@@ -4776,7 +4778,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "13a2bf50049ce757d55be5cbd04aa9cd44b737cd0d20c2a8db331fd7fb0a350d"
+      "adapter_digest": "165dd099bcf025a1a5e36b3ab8c58383682e275ca1b433046f3c323558184007"
     }
   ]
 }
