@@ -83,7 +83,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="pi.helm_lifecycle.v1",
     producer_revision=3,
     scenario_id=SCENARIO_ID,
-    scenario_revision=4,
+    scenario_revision=5,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("pi",),
     platforms=("linux", "darwin"),
@@ -1846,6 +1846,7 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         terminate_state = dict(current_state)
         terminate = _run_engine(args.engine, "terminate", session_id, env)
         observations["terminate_owned"] = False
+        recorded_owners_dead = False
         try:
             termination_wait = _wait_recorded_execution_owners_dead(
                 home,
@@ -1853,15 +1854,26 @@ def run_pi_helm_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
                 terminate_state,
             )
             observations["terminate_owner_wait"] = termination_wait
+            recorded_owners_dead = True
         finally:
+            # The recorded owners must be judged BEFORE this close: the facade
+            # close terminates them itself, so `launch.alive()` afterwards is
+            # false whether terminate worked or did nothing. Reading it there
+            # made this assertion unfalsifiable -- the qa-fault no-op terminate
+            # still "passed" (negative control pi_helm_terminate_owned: fail,
+            # 2026-09-19). Judge the recorded launcher/provider pids instead.
+            recorded_owners_dead = recorded_owners_dead and all(
+                _pid_dead(terminate_state.get(f"{label}_pid")) for label in ("launcher", "provider")
+            )
+            observations["terminate_recorded_owners_dead"] = recorded_owners_dead
             # The facade is only a terminal wrapper. The recorded launcher and
             # provider owners must be dead before this close can precede resume.
             launch.close()
-        observations["terminate_owned"] = terminate["accepted"] and not launch.alive()
+        observations["terminate_owned"] = terminate["accepted"] and recorded_owners_dead
         observations["terminate_verdict"] = {
             "passed": observations["terminate_owned"],
             "accepted": terminate["accepted"],
-            "owners_alive_after_terminate": launch.alive(),
+            "owners_alive_after_terminate": not recorded_owners_dead,
             "code": (
                 None
                 if observations["terminate_owned"]
