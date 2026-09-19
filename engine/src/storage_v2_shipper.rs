@@ -37,7 +37,9 @@ use crate::state::file_identity::{
 };
 use crate::state::file_state::FileState;
 use crate::state::pending_source_envelope::{self, PendingSourceEnvelope};
-use crate::state::source_epoch::{self, SourceChangeHint, SourceEpochResolution, SourceLane};
+use crate::state::source_epoch::{
+    self, EpochStartReason, SourceChangeHint, SourceEpochResolution, SourceLane,
+};
 use crate::storage_v2_contract::{self, EnvelopeIdentity, RangeKind};
 
 pub(crate) const PARSER_REVISION: &str = "engine-parser-v2";
@@ -616,7 +618,12 @@ fn prepare_next_envelope_with_limit(
         )?;
     }
     let render_generation = render_generation_id(session_uuid);
-    let session = session_facts(&parse_result.metadata, &render_records, &resolution)?;
+    let session = session_facts(
+        provider,
+        &parse_result.metadata,
+        &render_records,
+        &resolution,
+    )?;
     let media_objects = parse_result
         .media_objects
         .iter()
@@ -2785,7 +2792,12 @@ pub(crate) fn prepare_next_opencode_envelope(
             }
             let event_count = render_records.len();
             let render_generation = render_generation_id(session_uuid);
-            let session = session_facts(&parse_result.metadata, &render_records, &resolution)?;
+            let session = session_facts(
+                "opencode",
+                &parse_result.metadata,
+                &render_records,
+                &resolution,
+            )?;
             let media_objects = opencode_media_objects_for_range(
                 &parse_result,
                 snapshot.part_record_start,
@@ -4902,6 +4914,7 @@ fn insert_conversation_reset_boundary(
 }
 
 fn session_facts(
+    provider: &str,
     metadata: &SessionMetadata,
     records: &[StorageV2RenderRecord],
     resolution: &SourceEpochResolution,
@@ -4920,13 +4933,42 @@ fn session_facts(
         .max()
         .or(metadata.ended_at)
         .unwrap_or(started_at);
-    Ok(StorageV2SessionFacts {
-        provider_session_id: routes_as_provider_head(metadata).then(|| {
+    // Codex and OMP publish an explicit native child identity that the host
+    // must alias before it can resolve a later child-of-child edge. Keep that
+    // identity on the wire even when the transcript is not the provider head.
+    // Claude's sidechain suppression is intentionally unchanged: its native
+    // child identity is not established by this path.
+    let preserve_native_identity = provider.eq_ignore_ascii_case("codex")
+        || provider.eq_ignore_ascii_case("omp");
+    let provider_session_id = if preserve_native_identity {
+        metadata
+            .provider_session_id
+            .clone()
+            .or_else(|| (!metadata.session_id.is_empty()).then(|| metadata.session_id.clone()))
+    } else {
+        routes_as_provider_head(metadata).then(|| {
             metadata
                 .provider_session_id
                 .clone()
                 .unwrap_or_else(|| metadata.session_id.clone())
-        }),
+        })
+    };
+    let parent_provider_session_id = if provider.eq_ignore_ascii_case("omp") {
+        // OMP's `parentSession` is an explicit native parent pointer even
+        // though OMP does not mark the child as a hidden sidechain.
+        metadata.parent_provider_session_id.clone()
+    } else {
+        (metadata.is_sidechain || metadata.is_plain_fork())
+            .then(|| {
+                metadata
+                    .parent_provider_session_id
+                    .clone()
+                    .or_else(|| metadata.forked_from_session_id.clone())
+            })
+            .flatten()
+    };
+    Ok(StorageV2SessionFacts {
+        provider_session_id,
         environment: metadata
             .environment
             .clone()
@@ -4949,14 +4991,7 @@ fn session_facts(
         // is the parent as the provider names it; mapping that to a Longhouse
         // session is the host's job, because a session id here may have come
         // from a managed binding override rather than from the transcript.
-        parent_provider_session_id: (metadata.is_sidechain || metadata.is_plain_fork())
-            .then(|| {
-                metadata
-                    .parent_provider_session_id
-                    .clone()
-                    .or_else(|| metadata.forked_from_session_id.clone())
-            })
-            .flatten(),
+        parent_provider_session_id,
         parent_tool_call_id: metadata
             .is_sidechain
             .then(|| metadata.subagent_tool_use_id.clone())
@@ -10604,6 +10639,90 @@ mod tests {
         // No complete line yet: no signal, rather than a wrong one.
         std::fs::write(&path, "{\"type\":\"sess").unwrap();
         assert_eq!(pi_lineage_source_revision(&path).unwrap(), None);
+    }
+
+    fn identity_resolution() -> SourceEpochResolution {
+        SourceEpochResolution {
+            source_epoch: Uuid::nil(),
+            predecessor_epoch: None,
+            created: true,
+            start_reason: EpochStartReason::Initial,
+            opened_at: "2026-09-18T00:00:00Z".to_string(),
+            bound_session_id: None,
+        }
+    }
+
+    #[test]
+    fn codex_subagent_keeps_native_child_identity_and_parent_edge() {
+        let metadata = SessionMetadata {
+            session_id: "codex-child".to_string(),
+            forked_from_session_id: Some("codex-parent".to_string()),
+            is_sidechain: true,
+            subagent_depth: Some(2),
+            subagent_name: Some("reviewer".to_string()),
+            ..Default::default()
+        };
+
+        let facts = session_facts("codex", &metadata, &[], &identity_resolution()).unwrap();
+
+        // The host needs the child's own provider id to resolve a nested
+        // worker later; the parent edge remains provider-native and unresolved.
+        assert_eq!(facts.provider_session_id.as_deref(), Some("codex-child"));
+        assert_eq!(
+            facts.parent_provider_session_id.as_deref(),
+            Some("codex-parent")
+        );
+        assert!(facts.is_subagent);
+    }
+
+    #[test]
+    fn omp_parent_session_keeps_native_child_identity_without_hidden_sidechain() {
+        let metadata = SessionMetadata {
+            session_id: "managed-omp-child".to_string(),
+            provider_session_id: Some("omp-child".to_string()),
+            parent_provider_session_id: Some("omp-parent".to_string()),
+            ..Default::default()
+        };
+
+        let facts = session_facts("omp", &metadata, &[], &identity_resolution()).unwrap();
+
+        // `parentSession` is an explicit OMP relation, not a reason to infer
+        // hidden/subagent status. Both native identities still cross the wire.
+        assert_eq!(facts.provider_session_id.as_deref(), Some("omp-child"));
+        assert_eq!(
+            facts.parent_provider_session_id.as_deref(),
+            Some("omp-parent")
+        );
+        assert!(!facts.is_subagent);
+        assert!(!facts.hidden_from_default_timeline);
+    }
+
+    #[test]
+    fn omp_recorded_parent_session_reaches_storage_facts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("native.jsonl");
+        fs::write(
+            &path,
+            include_str!("../tests/fixtures/golden/omp/native.jsonl"),
+        )
+        .unwrap();
+
+        let parsed = parser::parse_session_file_with_provider(&path, 0, Some("omp")).unwrap();
+        assert_eq!(
+            parsed.metadata.provider_session_id.as_deref(),
+            Some("omp-native-18-1-14")
+        );
+        assert_eq!(
+            parsed.metadata.parent_provider_session_id.as_deref(),
+            Some("omp-parent-opaque")
+        );
+        let facts =
+            session_facts("omp", &parsed.metadata, &[], &identity_resolution()).unwrap();
+        assert_eq!(facts.provider_session_id.as_deref(), Some("omp-native-18-1-14"));
+        assert_eq!(
+            facts.parent_provider_session_id.as_deref(),
+            Some("omp-parent-opaque")
+        );
     }
 
     #[test]
