@@ -1366,26 +1366,21 @@ fn opencode_task_spawn_evidence(part_data: &Value) -> Option<OpenCodeTaskSpawnEv
         .or_else(|| part_data.get("metadata"))
         .unwrap_or(&Value::Null);
     let input = state.get("input").unwrap_or(&Value::Null);
-    let child_provider_session_id = string_field(
-        metadata_value,
-        &["sessionId", "sessionID", "session_id"],
-    )
-    .or_else(|| {
-        state
-            .get("output")
-            .and_then(Value::as_str)
-            .and_then(opencode_task_output_child_id)
-    })?
-    .to_string();
+    let child_provider_session_id =
+        string_field(metadata_value, &["sessionId", "sessionID", "session_id"])
+            .or_else(|| {
+                state
+                    .get("output")
+                    .and_then(Value::as_str)
+                    .and_then(opencode_task_output_child_id)
+            })?
+            .to_string();
     let tool_call_id = part_data
         .get("callID")
         .and_then(Value::as_str)
         .or_else(|| part_data.get("callId").and_then(Value::as_str))
         .map(str::to_string);
-    let mut metadata = metadata_value
-        .as_object()
-        .cloned()
-        .unwrap_or_default();
+    let mut metadata = metadata_value.as_object().cloned().unwrap_or_default();
     // The agent selector is native input when OpenCode does not repeat it in
     // state.metadata. Preserve the provider spelling rather than normalizing it.
     if !metadata.contains_key("agent") {
@@ -1440,13 +1435,16 @@ fn opencode_task_child_evidence(
         if !child_matches {
             continue;
         }
-        let agent = string_field(&evidence.metadata, &["agent", "subagent_type", "subagentType"])
-            .or_else(|| {
-                state
-                    .get("input")
-                    .and_then(|input| string_field(input, &["subagent_type", "subagentType", "agent"]))
-            })
-            .map(str::to_string);
+        let agent = string_field(
+            &evidence.metadata,
+            &["agent", "subagent_type", "subagentType"],
+        )
+        .or_else(|| {
+            state
+                .get("input")
+                .and_then(|input| string_field(input, &["subagent_type", "subagentType", "agent"]))
+        })
+        .map(str::to_string);
         return Ok(Some(OpenCodeTaskChildEvidence {
             agent,
             tool_call_id: evidence.tool_call_id,
@@ -1665,7 +1663,6 @@ mod tests {
     // So a panicking test leaves the environment clean, and the poison flag carries no
     // information -- it only converts one real failure into a wall of PoisonError noise
     // from every other test that shares the lock.
-
 
     struct EnvGuard {
         key: &'static str,

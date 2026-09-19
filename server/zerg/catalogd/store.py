@@ -701,7 +701,7 @@ def _machine_operation_dto(operation: LiveMachineControlOperation) -> dict[str, 
 def _provider_fact_dto(row: Any) -> dict[str, Any]:
     return {
         "kind": row["kind"],
-        "at": (row["at"].isoformat() if isinstance(row["at"], datetime) else str(row["at"])),
+        "at": (_encode_datetime(row["at"]) if isinstance(row["at"], datetime) else str(row["at"])),
         "source_epoch": row["source_epoch"],
         "source_position": int(row["source_position"]),
         "payload": row["payload_json"],

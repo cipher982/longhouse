@@ -4676,8 +4676,9 @@ fn opencode_provider_facts_for_range(
                 .get(&fact.source_offset)
                 .context("OpenCode provider fact is not covered by a raw part record")?
         };
-            .iter()
-            .any(|existing: &StorageV2ProviderFact| {
+        if ordinal < range_start
+            || ordinal >= range_end
+            || facts.iter().any(|existing: &StorageV2ProviderFact| {
                 existing.kind == fact.kind && existing.source_position == ordinal
             })
         {
@@ -10291,6 +10292,45 @@ mod tests {
             "#,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn opencode_delegation_facts_stay_inside_their_raw_record_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("opencode.db");
+        create_opencode_db(&db_path);
+        let mut parsed = crate::opencode_db::parse_opencode_session(&db_path, "session-1").unwrap();
+        let at = chrono::Utc::now();
+        parsed.provider_facts = vec![
+            crate::pipeline::parser::ParsedProviderFact {
+                kind: "delegation.metadata".to_string(),
+                at,
+                source_offset: 0,
+                payload: serde_json::json!({"parent_provider_session_id": "parent-1"}),
+            },
+            crate::pipeline::parser::ParsedProviderFact {
+                kind: "delegation.spawn".to_string(),
+                at,
+                source_offset: parsed.source_lines[0].source_offset,
+                payload: serde_json::json!({"children": [{"provider_session_id": "child-1"}]}),
+            },
+        ];
+        let prefix = opencode_provider_facts_for_range(&parsed, 2, 0, 2).unwrap();
+        let suffix = opencode_provider_facts_for_range(&parsed, 2, 2, 3).unwrap();
+        assert_eq!(
+            prefix
+                .iter()
+                .map(|fact| (fact.kind.as_str(), fact.source_position))
+                .collect::<Vec<_>>(),
+            vec![("delegation.metadata", 0)]
+        );
+        assert_eq!(
+            suffix
+                .iter()
+                .map(|fact| (fact.kind.as_str(), fact.source_position))
+                .collect::<Vec<_>>(),
+            vec![("delegation.spawn", 2)]
+        );
     }
 
     #[test]

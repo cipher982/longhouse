@@ -4173,11 +4173,12 @@ fn antigravity_spawn_children(text: &str, source: &str) -> Vec<Value> {
             .filter(|id| !id.is_empty());
         let has_child_locator =
             object.get("logAbsoluteUri").is_some() || object.get("workspaceUris").is_some();
-        if let Some(conversation_id) = conversation_id.filter(|_| has_child_locator)
-            && !children.iter().any(|child| {
-                child.get("provider_session_id").and_then(Value::as_str) == Some(conversation_id)
-            })
-        {
+        if let Some(conversation_id) = conversation_id.filter(|id| {
+            has_child_locator
+                && !children.iter().any(|child| {
+                    child.get("provider_session_id").and_then(Value::as_str) == Some(*id)
+                })
+        }) {
             let mut metadata = object.clone();
             metadata.insert(
                 "raw_prose".to_string(),
@@ -4203,8 +4204,8 @@ fn antigravity_spawn_children(text: &str, source: &str) -> Vec<Value> {
     let mut cursor = 0usize;
     while let Some(relative) = text[cursor..].find('{') {
         let start = cursor + relative;
-        let mut stream = serde_json::Deserializer::from_str(&text[start..]);
-        let Ok(value) = Value::deserialize(&mut stream) else {
+        let mut stream = serde_json::Deserializer::from_str(&text[start..]).into_iter::<Value>();
+        let Some(Ok(value)) = stream.next() else {
             cursor = start.saturating_add(1);
             continue;
         };
@@ -4278,9 +4279,11 @@ fn extract_antigravity_events(
                 parent_uuid: None,
                 session_id: session_id.to_string(),
                 timestamp,
+                role: Role::Assistant,
                 tool_input_json: call.args.clone(),
                 content_text: None,
                 tool_name: Some(tool_name.clone()),
+                tool_output_text: None,
                 tool_call_id: Some(call_id),
                 source_offset: line_offset,
                 raw_type: "antigravity_tool_call".to_string(),
@@ -4886,7 +4889,10 @@ fn extract_codex_delegation_metadata(
     );
 }
 
-fn codex_activity_timestamp(obj: &RawLine, payload: &serde_json::Map<String, Value>) -> Option<DateTime<Utc>> {
+fn codex_activity_timestamp(
+    obj: &RawLine,
+    payload: &serde_json::Map<String, Value>,
+) -> Option<DateTime<Utc>> {
     obj.timestamp
         .as_deref()
         .and_then(parse_timestamp)
@@ -4924,7 +4930,13 @@ fn extract_codex_delegation_activity(
         return;
     };
     let mut metadata = payload.clone();
-    for key in ["type", "agent_thread_id", "kind", "event_id", "occurred_at_ms"] {
+    for key in [
+        "type",
+        "agent_thread_id",
+        "kind",
+        "event_id",
+        "occurred_at_ms",
+    ] {
         metadata.remove(key);
     }
     let mut fact = serde_json::Map::new();
@@ -4941,10 +4953,7 @@ fn extract_codex_delegation_activity(
         fact.insert("event_id".to_string(), Value::from(event_id.to_string()));
     }
     if let Some(occurred_at_ms) = payload.get("occurred_at_ms").and_then(Value::as_i64) {
-        fact.insert(
-            "occurred_at_ms".to_string(),
-            Value::from(occurred_at_ms),
-        );
+        fact.insert("occurred_at_ms".to_string(), Value::from(occurred_at_ms));
     }
     fact.insert("metadata".to_string(), Value::Object(metadata));
     push_bounded_provider_fact(
@@ -8950,9 +8959,7 @@ mod tests {
             .and_then(|children| children.first())
             .expect("child observation");
         assert_eq!(
-            child
-                .get("provider_session_id")
-                .and_then(Value::as_str),
+            child.get("provider_session_id").and_then(Value::as_str),
             Some("77777777-7777-4777-8777-777777777777")
         );
         assert_eq!(

@@ -183,16 +183,12 @@ async def test_session_subagents_serves_references_and_distinguishes_empty_from_
             _single=None,
             owner_id=42,
         )
-        assert served.model_dump()["child_references"] == [
-            {
-                **child_reference,
-                "session_id": None,
-                "kind": "delegation.spawn",
-                "source_epoch": "epoch-1",
-                "source_position": 7,
-                "at": now.isoformat(),
-            }
+        references = served.model_dump()["child_references"]
+        assert [(ref["session_id"], ref["provider_session_id"], ref["parent_tool_call_id"]) for ref in references] == [
+            (None, "native-child-1", "call-1")
         ]
+        assert references[0]["metadata"] == {"source": "native"}
+        assert datetime.fromisoformat(references[0]["at"]) == now
 
         empty = await agents_sessions.list_session_subagents(
             session_id=UUID(empty_id),

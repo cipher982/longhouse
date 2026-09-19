@@ -7696,6 +7696,33 @@ export interface components {
              */
             attach_images: boolean;
         };
+        /**
+         * SessionChildReferenceResponse
+         * @description One source-authored child relationship, resolved or historical.
+         */
+        SessionChildReferenceResponse: {
+            /** Session Id */
+            session_id?: string | null;
+            /** Provider Session Id */
+            provider_session_id: string;
+            /** Parent Tool Call Id */
+            parent_tool_call_id?: string | null;
+            /**
+             * Metadata
+             * @default {}
+             */
+            metadata: {
+                [key: string]: unknown;
+            };
+            /** Kind */
+            kind: string;
+            /** Source Epoch */
+            source_epoch: string;
+            /** Source Position */
+            source_position: number;
+            /** At */
+            at: string;
+        };
         /** SessionControlActions */
         SessionControlActions: {
             start_turn?: components["schemas"]["SessionActionAvailability"];
@@ -9218,13 +9245,15 @@ export interface components {
         };
         /**
          * SessionSubagentResponse
-         * @description One worker transcript a session's tool call spawned.
+         * @description One worker or fork transcript a session's tool call spawned.
          */
         SessionSubagentResponse: {
             /** Session Id */
             session_id: string;
             /** Provider */
             provider: string;
+            /** Provider Session Id */
+            provider_session_id?: string | null;
             /** Parent Tool Call Id */
             parent_tool_call_id?: string | null;
             /** Run Id */
@@ -9256,16 +9285,28 @@ export interface components {
             first_user_message_preview?: string | null;
             /** Last Visible Text Preview */
             last_visible_text_preview?: string | null;
+            /**
+             * Metadata
+             * @default {}
+             */
+            metadata: {
+                [key: string]: unknown;
+            };
         };
         /**
          * SessionSubagentsResponse
-         * @description Children of one session, ordered by start time.
+         * @description Children and bounded source references of one session.
          */
         SessionSubagentsResponse: {
             /** Session Id */
             session_id: string;
             /** Children */
             children: components["schemas"]["SessionSubagentResponse"][];
+            /**
+             * Child References
+             * @default []
+             */
+            child_references: components["schemas"]["SessionChildReferenceResponse"][];
         };
         /**
          * SessionSummaryResponse
