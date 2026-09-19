@@ -15,7 +15,8 @@ def test_demo_database_sessions_show_on_default_timeline(tmp_path, monkeypatch):
 
     engine = create_catalog_engine(paths["live"])
     try:
-        page = CatalogStore(engine).list_session_timeline(
+        store = CatalogStore(engine)
+        page = store.list_session_timeline(
             project=None,
             provider=None,
             environment=None,
@@ -29,10 +30,13 @@ def test_demo_database_sessions_show_on_default_timeline(tmp_path, monkeypatch):
             owner_id=1,
             include_state_heads=True,
         )
+        title_health = store.read_storage_title_dependency_health()
     finally:
         engine.dispose()
 
     assert page["total"] > 0
+    assert title_health["status"] == "healthy"
+    assert title_health["pending_sessions"] == 0
 
 
 def test_demo_mode_serve_builds_corpus_only_where_no_database_exists(tmp_path, monkeypatch):

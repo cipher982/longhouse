@@ -338,6 +338,13 @@ def _seed_live_catalog(live_path: Path, legacy_factory: sessionmaker, *, anchor:
 
     with engine.begin() as connection:
         storage_rows = {str(row["session_id"]): row for row in connection.execute(select(StorageSession.__table__)).mappings()}
+        for provider_id, (title, _summary) in DEMO_PRESENTATION.items():
+            session_id = str(legacy_by_provider_id[provider_id].id)
+            connection.execute(
+                update(StorageSession.__table__)
+                .where(StorageSession.__table__.c.session_id == session_id)
+                .values(summary_title=title, anchor_title=title)
+            )
         for provider_id, (legacy_session, config) in managed_by_id.items():
             session_id = str(legacy_session.id)
             storage = storage_rows[session_id]
