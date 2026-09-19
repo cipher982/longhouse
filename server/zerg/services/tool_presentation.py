@@ -480,6 +480,17 @@ def project_tool_presentation(
             "children": [],
         }
     )
+    if str(provider or "").lower() == "cursor" and tool_name == "Task" and isinstance(tool_input_json, dict):
+        agent_type = tool_input_json.get("subagent_type")
+        if isinstance(agent_type, str) and agent_type.strip():
+            base.update(
+                {
+                    "label": "Delegate",
+                    "icon": "A",
+                    "color": "tertiary",
+                    "rule_id": "cursor:task:delegation",
+                }
+            )
     is_codex = str(provider or "").lower() == "codex"
     if is_codex and tool_name.lower() == "write_stdin" and isinstance(tool_input_json, dict):
         if tool_input_json.get("chars") in {None, ""}:

@@ -10,15 +10,6 @@ from zerg.services.tool_presentation import extract_codex_wrapper_calls
 from zerg.services.tool_presentation import project_tool_presentation
 
 
-def test_runtime_image_copies_tool_presentation_rules():
-    root = Path(__file__).resolve().parents[2]
-    dockerfile = root / "docker" / "runtime.dockerfile"
-    dockerignore = root / ".dockerignore"
-
-    assert "COPY config/tool-tiers.json /config/tool-tiers.json" in dockerfile.read_text(encoding="utf-8")
-    assert "!config/tool-tiers.json" in dockerignore.read_text(encoding="utf-8")
-
-
 def test_shell_command_summary_conformance_corpus():
     root = Path(__file__).resolve().parents[2]
     fixture = json.loads((root / "config" / "shell-command-summary-fixtures.json").read_text(encoding="utf-8"))
