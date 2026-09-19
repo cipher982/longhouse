@@ -25,6 +25,7 @@
       "adapter_sources": [
         "server/zerg/mcp_server/server.py",
         "server/zerg/services/shipper/hooks.py",
+        "engine/src/claude_channel_server.rs",
         "engine/src/codex_bridge.rs",
         "engine/src/codex_bridge_ownership.rs",
         "engine/src/codex_exec.rs",
@@ -822,7 +823,7 @@
           "owner_action": "render reasoning as collapsed thinking records"
         }
       },
-      "adapter_digest": "ea2373d397f54e09ca43fca01f792a46cbe0b8af085056471eab8fd90c473aac"
+      "adapter_digest": "22d2d4b10fa032aa2acfc5e10c0ee06f82b5b81adf3ce957ddd9348038165d1d"
     },
     {
       "provider": "claude",
@@ -847,6 +848,7 @@
       "control_plane": "claude_channel_bridge",
       "control_plane_aliases": [],
       "adapter_sources": [
+        "engine/src/claude_channel_server.rs",
         "server/zerg/services/shipper/hooks.py",
         "engine/src/claude_print.rs"
       ],
@@ -1732,7 +1734,7 @@
           "owner_action": "render as collapsed thinking records with a thinking interaction kind"
         }
       },
-      "adapter_digest": "95322dfd47a3d12a773bf850fc898076997cec0355d6e1a572074fa2fae85750"
+      "adapter_digest": "a8063b549812f9fe64d2fe64de185d3adba6c158f1babed57d1ffcf0ced24e78"
     },
     {
       "provider": "opencode",
@@ -4776,7 +4778,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "21bf5bb282d7fcca1debe48c3daae76128260884326431474654de354cfadf32"
+      "adapter_digest": "d30982ff3f018a2f37cda54568add853d0ded3f653d0087eaeb4a7194e41efaf"
     }
   ]
 }

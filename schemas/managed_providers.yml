@@ -29,6 +29,7 @@ providers:
   # It is part of Codex's control surface, but only Claude claimed this file,
   # so a change to Codex's own hook left the Codex digest untouched.
   - server/zerg/services/shipper/hooks.py
+  - engine/src/claude_channel_server.rs
   - engine/src/codex_bridge.rs
   - engine/src/codex_bridge_ownership.rs
   - engine/src/codex_exec.rs
@@ -589,6 +590,7 @@ providers:
   control_plane: claude_channel_bridge
   control_plane_aliases: []
   adapter_sources:
+  - engine/src/claude_channel_server.rs
   - server/zerg/services/shipper/hooks.py
   - engine/src/claude_print.rs
   wire_families: [claude_jsonl, claude_hooks, claude_channel]

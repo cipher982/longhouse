@@ -8,7 +8,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, IsTerminal, Read, Write};
 use std::net::Shutdown;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -25,8 +25,9 @@ use uuid::Uuid;
 use crate::managed_identity::ManagedIdentity;
 use crate::managed_identity_contract::ManagedProvider;
 use crate::managed_launch_lifecycle::{
-    register_managed_launch_with_timeout, spawn_managed_registration_retry, DeferredNotices,
-    ManagedLaunchTransaction, FOREGROUND_REGISTRATION_TIMEOUT,
+    register_managed_launch_with_timeout, spawn_managed_registration_retry_with_hook,
+    DeferredNotices, ManagedLaunchResponse, ManagedLaunchTransaction,
+    FOREGROUND_REGISTRATION_TIMEOUT,
 };
 use crate::managed_launch_payload::{
     ManagedLaunchProvenance, ManagedLaunchRegistration, PermissionMode,
@@ -163,8 +164,8 @@ struct OmpHelmServer {
     stop: Arc<AtomicBool>,
     terminate_requested: Arc<AtomicBool>,
     status: Arc<crate::status_slot::StatusPublisher>,
+    coordination_token: Arc<Mutex<Option<String>>>,
 }
-
 impl OmpHelmServer {
     fn start(
         state: OmpHelmStateFile,
@@ -201,6 +202,7 @@ impl OmpHelmServer {
                 "omp",
                 OMP_HELM_TRANSPORT,
             )),
+            coordination_token: Arc::new(Mutex::new(None)),
         };
         server.persist_state()?;
         let acceptor = server.clone();
@@ -314,6 +316,7 @@ impl OmpHelmServer {
                 "lease_generation": self.current_state().lease_generation,
             }),
         );
+        self.publish_coordination_token(&writer_connection);
         loop {
             let Ok(Some(frame)) = read_frame(&mut reader) else {
                 break;
@@ -506,6 +509,38 @@ impl OmpHelmServer {
             if let Some(channel) = &state.extension_sender {
                 let _ = channel.send(frame);
             }
+        }
+    }
+
+    fn set_coordination_token(&self, token: &str) {
+        let connection_id = {
+            let mut authority = self
+                .coordination_token
+                .lock()
+                .expect("OMP coordination token mutex poisoned");
+            *authority = Some(token.to_owned());
+            self.shared
+                .lock()
+                .expect("OMP state mutex poisoned")
+                .extension_connection_id
+                .clone()
+        };
+        if let Some(connection_id) = connection_id {
+            self.publish_coordination_token(&connection_id);
+        }
+    }
+
+    fn publish_coordination_token(&self, connection_id: &str) {
+        let token = self
+            .coordination_token
+            .lock()
+            .expect("OMP coordination token mutex poisoned")
+            .clone();
+        if let Some(token) = token {
+            self.send_extension_frame(
+                connection_id,
+                json!({"kind": "coordination_authority", "token": token}),
+            );
         }
     }
 
@@ -2103,17 +2138,6 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         ManagedLaunchTransaction::new(&runtime, &url, &token, &session_id, &response.run_id)
     });
     let deferred = DeferredNotices::default();
-    let degraded = response.is_none().then(|| {
-        spawn_managed_registration_retry(
-            &url,
-            &token,
-            "OMP",
-            registration.clone(),
-            &session_id,
-            deferred.clone(),
-            crate::config::get_agent_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        )
-    });
     let (socket, socket_dir) = socket_path(&session_id)?;
     let now = Utc::now().to_rfc3339();
     let state = OmpHelmStateFile {
@@ -2171,36 +2195,26 @@ pub fn launch(config: LaunchConfig) -> Result<i32> {
         socket_dir,
         state_root.join(format!("{session_id}.json")),
     )?;
+    let degraded = response.is_none().then(|| {
+        let recovered_server = server.clone();
+        spawn_managed_registration_retry_with_hook(
+            &url,
+            &token,
+            "OMP",
+            registration.clone(),
+            &session_id,
+            deferred.clone(),
+            crate::config::get_agent_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            Some(Arc::new(move |response: &ManagedLaunchResponse| {
+                if let Some(token) = response.coordination_token() {
+                    recovered_server.set_coordination_token(token);
+                }
+            })),
+        )
+    });
     let extension = write_extension_file(&state_root.join("extensions").join(&session_id))?;
     let mut command = Command::new(&binary);
-    command
-        .arg("--session-dir")
-        .arg(&session_dir)
-        .arg("--resume")
-        .arg(&session_file)
-        .arg("-e")
-        .arg(&extension)
-        .current_dir(&cwd)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .env("LONGHOUSE_OMP_HELM_CHANNEL_PATH", &server.socket_path)
-        .env(
-            "LONGHOUSE_OMP_HELM_CHANNEL_TOKEN",
-            &server.current_state().channel_token,
-        )
-        .env(
-            "LONGHOUSE_OMP_HELM_INITIAL_PROMPT",
-            config.prompt.as_deref().unwrap_or(""),
-        )
-        .env(
-            "LONGHOUSE_OMP_HELM_INITIAL_PROMPT_DELIVERED",
-            if server.current_state().initial_prompt_delivered {
-                "1"
-            } else {
-                "0"
-            },
-        );
+    command.arg("-e").arg(&extension);
     if let Some(profile) = profile.as_deref() {
         command.env("OMP_PROFILE", profile);
         command.arg("--profile").arg(profile);
@@ -2459,6 +2473,7 @@ mod tests {
             + "\n";
 
         let mut first = std::os::unix::net::UnixStream::connect(&socket_path).unwrap();
+        first.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
         first.write_all(hello.as_bytes()).unwrap();
         let mut first_reader = BufReader::new(first.try_clone().unwrap());
         let mut first_ready = String::new();
@@ -2472,11 +2487,12 @@ mod tests {
         second_reader.read_line(&mut second_ready).unwrap();
         assert!(second_ready.contains("\"extension_ready\""));
 
-        first
-            .set_read_timeout(Some(Duration::from_secs(1)))
-            .unwrap();
         let mut byte = [0_u8; 1];
-        assert_eq!(first.read(&mut byte).unwrap(), 0);
+        match first.read(&mut byte) {
+            Ok(0) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {}
+            other => panic!("superseded transport remained readable: {other:?}"),
+        }
         server.shutdown();
     }
     #[test]
