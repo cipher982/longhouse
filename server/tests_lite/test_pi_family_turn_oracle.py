@@ -134,8 +134,10 @@ def test_terminate_control_passes_when_the_oracle_catches_surviving_owners() -> 
     verdict = _control(
         "terminate",
         assertions={
-            "pi_helm_launch_registration": True,
             "pi_helm_send_idle": True,
+            "pi_helm_follow_up_native": True,
+            "pi_helm_steer_active": True,
+            "pi_helm_abort_native": True,
             "pi_helm_terminate_owned": False,
         },
         observation={"terminate_verdict": {"code": "terminate_left_owners_alive"}},
@@ -186,4 +188,54 @@ def test_a_control_whose_fault_never_fired_is_inconclusive_not_a_pass() -> None:
         observation={"terminate_verdict": {"code": "terminate_left_owners_alive"}},
         fired=False,
     )
+    assert verdict["status"] == "inconclusive", verdict
+
+
+def test_terminate_control_does_not_require_evidence_the_fault_prevents() -> None:
+    """OMP's launch_registration cannot be a terminate precondition.
+
+    It is not a launch check: it ANDs settlement and a four-phase control
+    identity that needs the cold_resume and final receipts. A no-op terminate
+    keeps the session alive, so OMP can never reach that phase, and requiring
+    it made the control inconclusive by construction -- fault fired, target
+    rejected with the expected typed code, and still no pass (2026-09-19).
+
+    The healthy prefix is proven by the pre-terminate steps instead, which
+    already require channel binding and native evidence.
+    """
+    verdict = _control(
+        "terminate",
+        provider="omp",
+        assertions={
+            # False only because the fault stops the run before settlement.
+            "omp_helm_launch_registration": False,
+            "omp_helm_send_idle": True,
+            "omp_helm_follow_up_native": True,
+            "omp_helm_steer_active": True,
+            "omp_helm_abort_native": True,
+            "omp_helm_terminate_owned": False,
+        },
+        observation={"terminate_verdict": {"code": "terminate_left_owners_alive"}},
+    )
+    assert verdict["preconditions_held"] is True, verdict
+    assert verdict["status"] == "pass", verdict
+
+
+def test_terminate_control_still_needs_a_healthy_prefix() -> None:
+    # A run whose steer was already broken cannot attribute a terminate failure
+    # to the fault, so it stays inconclusive rather than certifying the chip.
+    verdict = _control(
+        "terminate",
+        provider="omp",
+        assertions={
+            "omp_helm_launch_registration": True,
+            "omp_helm_send_idle": True,
+            "omp_helm_follow_up_native": True,
+            "omp_helm_steer_active": False,
+            "omp_helm_abort_native": True,
+            "omp_helm_terminate_owned": False,
+        },
+        observation={"terminate_verdict": {"code": "terminate_left_owners_alive"}},
+    )
+    assert verdict["preconditions_held"] is False, verdict
     assert verdict["status"] == "inconclusive", verdict

@@ -243,6 +243,15 @@ NEGATIVE_CONTROLS = {
 # require that precondition to hold; `send` drops itself from the list.
 _CONTROL_PRECONDITION_SUFFIXES = {
     "send": ("helm_launch_registration",),
+    # A precondition must also be SATISFIABLE under the fault, or the control is
+    # inconclusive by construction -- the same defect as requiring a control's
+    # own target. OMP's helm_launch_registration is not a launch check: it ANDs
+    # settlement and a four-phase control identity that needs the cold_resume
+    # and final receipts, and a no-op terminate keeps the session alive so that
+    # phase can never run. The healthy prefix is proven instead by the
+    # pre-terminate steps, which already require channel binding and native
+    # evidence and are common to both Pi and OMP (2026-09-19).
+    "terminate": ("helm_send_idle", "helm_follow_up_native", "helm_steer_active", "helm_abort_native"),
 }
 _DEFAULT_PRECONDITION_SUFFIXES = ("helm_launch_registration", "helm_send_idle")
 
