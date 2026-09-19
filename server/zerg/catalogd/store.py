@@ -307,6 +307,8 @@ _MACHINE_HEALTH_RAW_FIELDS = frozenset(
 # cap leaves deterministic headroom below the 8 MiB frame even when all 100
 # rows contain escape-heavy content that doubles during outer JSON encoding.
 _MACHINE_HEALTH_RAW_MAX_BYTES = 32 * 1024
+_MACHINE_HEALTH_QUERY_FIELDS = _MACHINE_HEALTH_HEARTBEAT_FIELDS | frozenset({"raw_json"})
+
 
 # Storage-v2 per-row title retry budget. Shared provider failures (auth,
 # timeout, rate limit, or service outage) belong to the
@@ -7518,20 +7520,30 @@ class CatalogStore:
         observed_at = datetime.now(UTC)
         token = LiveDeviceToken.__table__
         heartbeat = LiveHeartbeatStamp.__table__
-        enrolled_devices = select(token.c.device_id).where(
+        # Resolve latest ids per authorized device rather than grouping the
+        # entire heartbeat history.  The device index can narrow each
+        # correlated max(id) lookup before the final bounded projection.
+        authorized_devices = select(token.c.device_id).where(
             token.c.owner_id == owner_id,
             token.c.revoked_at.is_(None),
         )
         if device_id is not None:
-            enrolled_devices = enrolled_devices.where(token.c.device_id == device_id)
-        latest_ids = select(func.max(heartbeat.c.id)).where(heartbeat.c.device_id.in_(enrolled_devices))
+            authorized_devices = authorized_devices.where(token.c.device_id == device_id)
+        authorized_devices = authorized_devices.distinct().subquery("authorized_machine_devices")
+        latest_heartbeat = heartbeat.alias("latest_machine_heartbeat")
+        latest_heartbeat_id = (
+            select(func.max(latest_heartbeat.c.id))
+            .where(latest_heartbeat.c.device_id == authorized_devices.c.device_id)
+            .correlate(authorized_devices)
+        )
         if recent_after is not None:
-            latest_ids = latest_ids.where(heartbeat.c.received_at >= recent_after)
-        latest_ids = latest_ids.group_by(heartbeat.c.device_id)
+            latest_heartbeat_id = latest_heartbeat_id.where(latest_heartbeat.c.received_at >= recent_after)
+        latest_heartbeat_id = latest_heartbeat_id.scalar_subquery()
         with _read_snapshot(self.engine) as connection:
             rows = connection.execute(
-                select(heartbeat)
-                .where(heartbeat.c.id.in_(latest_ids))
+                select(*(heartbeat.c[field] for field in _MACHINE_HEALTH_QUERY_FIELDS))
+                .select_from(heartbeat.join(authorized_devices, heartbeat.c.device_id == authorized_devices.c.device_id))
+                .where(heartbeat.c.id == latest_heartbeat_id)
                 .order_by(heartbeat.c.received_at.desc(), heartbeat.c.device_id.asc())
                 .limit(min(limit, MACHINE_HEALTH_LIMIT))
             ).mappings()

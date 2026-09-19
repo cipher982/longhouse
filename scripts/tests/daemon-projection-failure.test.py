@@ -1,8 +1,8 @@
-"""Exercise inventory and projection-build failure/recovery in a real daemon.
+"""Exercise transport, inventory and projection failure/recovery in a real daemon.
 
-Only the capability handshake is a loopback fixture. No provider or hosted session
-is created; HOME, process inventory failure, projection-build failure, phase ledger,
-and logs are disposable.
+The Runtime Host is a loopback fixture. No provider or hosted session is created;
+HOME, heartbeat rejection, process inventory failure, projection-build failure,
+phase ledger, and logs are disposable.
 """
 
 import argparse
@@ -54,6 +54,22 @@ class RuntimeFixture(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        status = (
+            self.server.heartbeat_status
+            if self.path == "/api/agents/heartbeat"
+            else 200
+        )
+        body = json.dumps(
+            {"detail": "heartbeat fixture rejection"} if status != 200 else {}
+        ).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
 
 def interrupted(signum, _frame):
     raise InterruptedError(f"interrupted by signal {signum}")
@@ -80,7 +96,7 @@ def exercise(engine):
         ps.write_text(
             '#!/bin/sh\nif [ "$1" = "-axo" ] && [ -f "$PROJECTION_TEST_FAILURE" ] && '
             '[ "$(/bin/cat "$PROJECTION_TEST_FAILURE")" = "fail" ]; then\n'
-            '  exit 1\n'
+            "  exit 1\n"
             'fi\nexec /bin/ps "$@"\n'
         )
         ps.chmod(0o700)
@@ -111,6 +127,7 @@ def exercise(engine):
         db = longhouse / "shipper.db"
         status_path = longhouse / "agent" / "engine-status.json"
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), RuntimeFixture)
+        server.heartbeat_status = 503
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         child = None
@@ -141,11 +158,16 @@ def exercise(engine):
                     start_new_session=True,
                 )
             receipt["daemon_pid"] = child.pid
-            print(json.dumps({"owned_pid": child.pid, "owned_root": str(root)}), flush=True)
+            print(
+                json.dumps({"owned_pid": child.pid, "owned_root": str(root)}),
+                flush=True,
+            )
 
             def daemon_logs():
                 paths = [log_path, *sorted((root / "logs").glob("*"))]
-                return "\n".join(path.read_text(errors="replace") for path in paths if path.is_file())
+                return "\n".join(
+                    path.read_text(errors="replace") for path in paths if path.is_file()
+                )
 
             def observe():
                 assert child.poll() is None, f"daemon exited: {daemon_logs()}"
@@ -171,8 +193,7 @@ def exercise(engine):
                     check=False,
                 )
                 assert result.returncode == 0, (
-                    f"native local-health failed ({result.returncode}): "
-                    f"{result.stderr}"
+                    f"native local-health failed ({result.returncode}): {result.stderr}"
                 )
                 try:
                     return json.loads(result.stdout)
@@ -196,14 +217,16 @@ def exercise(engine):
                     "transport_reason": health["transport"]["status_reason"],
                 }
 
-            def wait_for(predicate, timeout=20):
+            def wait_for(predicate, timeout=20, field="local_projection"):
                 deadline = time.monotonic() + timeout
                 while time.monotonic() < deadline:
                     status = observe()
-                    if predicate(status.get("local_projection", {})):
+                    if predicate(status.get(field, {})):
                         return status
                     time.sleep(0.05)
-                raise AssertionError(f"daemon did not converge: {status}; logs: {daemon_logs()}")
+                raise AssertionError(
+                    f"daemon did not converge: {status}; logs: {daemon_logs()}"
+                )
 
             startup_deadline = time.monotonic() + 60
             while 'reason="startup"' not in daemon_logs():
@@ -217,7 +240,45 @@ def exercise(engine):
             fail_inventory.write_text("ok\n")
 
             healthy = wait_for(
-                lambda projection: projection.get("reconciliation", {}).get("state") == "idle"
+                lambda projection: projection.get("reconciliation", {}).get("state")
+                == "idle"
+            )
+            heartbeat_failed = wait_for(
+                lambda transport: transport.get("state") == "degraded",
+                field="heartbeat_transport",
+            )
+            failed_health = native_health()
+            assert_fresh_native_health(failed_health)
+            assert "heartbeat_post_failed" in failed_health["reasons"], failed_health
+            assert failed_health["heartbeat_transport"]["state"] == "degraded", (
+                failed_health
+            )
+            assert failed_health["transport"]["status"] == "healthy", (
+                "heartbeat rejection must not invent an archive shipping failure"
+            )
+            server.heartbeat_status = 200
+            heartbeat_recovered = wait_for(
+                lambda transport: transport.get("state") == "healthy",
+                timeout=90,
+                field="heartbeat_transport",
+            )
+            assert heartbeat_recovered["daemon_pid"] == child.pid
+            recovered_health = native_health()
+            assert "heartbeat_post_failed" not in recovered_health["reasons"], (
+                recovered_health
+            )
+            transport = heartbeat_recovered["heartbeat_transport"]
+            assert transport.get("last_success_at"), transport
+            assert not transport.get("last_error"), transport
+            receipt["heartbeat_transport"] = {
+                "rejected": heartbeat_failed["heartbeat_transport"],
+                "recovered": transport,
+                "native_reason_cleared": True,
+                "same_daemon_pid": True,
+            }
+            healthy = wait_for(
+                lambda projection: projection.get("reconciliation", {}).get("state")
+                == "idle"
             )
             healthy_projection = healthy["local_projection"]
             healthy_health = native_health()
@@ -245,7 +306,10 @@ def exercise(engine):
             with sqlite3.connect(db, timeout=5) as connection:
                 connection.execute(
                     "INSERT INTO session_phase_state (session_id, provider, phase, source, observed_at, revision) VALUES (?, 'omp', 'idle', 'test', ?, 1)",
-                    (str(uuid4()), datetime.datetime.now(datetime.timezone.utc).isoformat()),
+                    (
+                        str(uuid4()),
+                        datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    ),
                 )
             deadline = time.monotonic() + 3
             while time.monotonic() < deadline:
@@ -264,11 +328,14 @@ def exercise(engine):
                     "failure lost its cause"
                 )
                 time.sleep(0.05)
-            assert projection["engine_pulse_at"] != failed["local_projection"]["engine_pulse_at"], (
-                "failure stopped engine pulses"
-            )
+            assert (
+                projection["engine_pulse_at"]
+                != failed["local_projection"]["engine_pulse_at"]
+            ), "failure stopped engine pulses"
             inventory_failure_health = native_health()
-            inventory_failure_receipt = assert_fresh_native_health(inventory_failure_health)
+            inventory_failure_receipt = assert_fresh_native_health(
+                inventory_failure_health
+            )
             assert "engine_reconciliation_failed" in inventory_failure_health["reasons"]
             receipt["inventory_failure_native_health"] = inventory_failure_receipt
             fail_inventory.write_text("ok\n")
@@ -323,10 +390,12 @@ def exercise(engine):
                 assert failed_projection["generated_at"] == projection_frozen, (
                     "projection-build failure advanced generated_at"
                 )
-                assert failed_projection["last_reconciled_at"] == projection_completed_at, (
-                    "projection-build failure advanced completion receipt"
-                )
-                assert failed_reconciliation.get("failure_reason") == "projection_build", (
+                assert (
+                    failed_projection["last_reconciled_at"] == projection_completed_at
+                ), "projection-build failure advanced completion receipt"
+                assert (
+                    failed_reconciliation.get("failure_reason") == "projection_build"
+                ), (
                     f"unexpected projection-build reconciliation: {failed_reconciliation}"
                 )
                 assert (
@@ -337,7 +406,10 @@ def exercise(engine):
                 projection_failure_receipt = assert_fresh_native_health(
                     projection_failure_health
                 )
-                assert "engine_reconciliation_failed" in projection_failure_health["reasons"], (
+                assert (
+                    "engine_reconciliation_failed"
+                    in projection_failure_health["reasons"]
+                ), (
                     f"native health missed projection-build failure: {projection_failure_health}"
                 )
                 receipt["projection_build_failure"] = {
@@ -372,17 +444,21 @@ def exercise(engine):
                 )
                 recovery_health = native_health()
                 recovery_receipt = assert_fresh_native_health(recovery_health)
-                assert "engine_reconciliation_failed" not in recovery_health["reasons"], (
-                    f"native health retained projection-build failure: {recovery_health}"
-                )
+                assert (
+                    "engine_reconciliation_failed" not in recovery_health["reasons"]
+                ), f"native health retained projection-build failure: {recovery_health}"
                 assert (
                     recovery_health["engine_status"]["payload"]["local_projection"][
                         "reconciliation"
                     ]["state"]
                     == "idle"
-                ), f"native health did not observe projection recovery: {recovery_health}"
+                ), (
+                    f"native health did not observe projection recovery: {recovery_health}"
+                )
                 receipt["projection_build_recovery"] = {
-                    "generated_at": projection_recovered["local_projection"]["generated_at"],
+                    "generated_at": projection_recovered["local_projection"][
+                        "generated_at"
+                    ],
                     "last_reconciled_at": projection_recovered["local_projection"][
                         "last_reconciled_at"
                     ],
@@ -422,7 +498,15 @@ def exercise(engine):
                 thread.join(timeout=5)
                 assert not thread.is_alive()
                 receipt["fixture_server_stopped"] = True
-                print(json.dumps({"daemon_reaped": receipt.get("daemon_reaped"), "fixture_server_stopped": True}), flush=True)
+                print(
+                    json.dumps(
+                        {
+                            "daemon_reaped": receipt.get("daemon_reaped"),
+                            "fixture_server_stopped": True,
+                        }
+                    ),
+                    flush=True,
+                )
     assert not root.exists()
     receipt["scratch_removed"] = True
     print(json.dumps(receipt, indent=2))

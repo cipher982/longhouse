@@ -96,6 +96,7 @@ struct NativeLocalHealth {
     reasons: Vec<String>,
     engine_status: NativeEngineStatus,
     transport: NativeTransportStatus,
+    heartbeat_transport: NativeHeartbeatTransportStatus,
     spool: NativeSpoolStatus,
     managed_sessions: NativeManagedSessionsStatus,
     managed_launch_recovery: NativeManagedLaunchRecoveryStatus,
@@ -132,6 +133,19 @@ struct NativeTransportStatus {
     status: String,
     status_reason: String,
     status_summary: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NativeHeartbeatTransportStatus {
+    state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_attempt_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_success_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_failure_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -176,6 +190,7 @@ struct NativeDesktopHealth {
     suggested_action_ids: Vec<String>,
     engine_status: NativeDesktopEngineStatus,
     transport: NativeTransportStatus,
+    heartbeat_transport: NativeHeartbeatTransportStatus,
     spool: NativeSpoolStatus,
     /// Absent when session evidence could not be read at all. An empty array
     /// here is a positive claim that the engine reported no sessions.
@@ -890,7 +905,14 @@ pub fn cmd_durability_audit(
         }
     }
     if !report.is_clean() {
-        anyhow::bail!("durability audit found {} alarm(s)", report.epochs.iter().map(|epoch| epoch.alarms.len()).sum::<usize>());
+        anyhow::bail!(
+            "durability audit found {} alarm(s)",
+            report
+                .epochs
+                .iter()
+                .map(|epoch| epoch.alarms.len())
+                .sum::<usize>()
+        );
     }
     Ok(())
 }
@@ -1559,6 +1581,7 @@ fn native_health_from_parts(
             || value.get("dead_bytes").and_then(Value::as_u64).unwrap_or(0) > 0
     });
     let mut transport = native_transport_status(object);
+    let heartbeat_transport = native_heartbeat_transport_status(object);
     let managed_session_count = object
         .and_then(|value| value.get("managed_sessions"))
         .and_then(Value::as_array)
@@ -1585,6 +1608,9 @@ fn native_health_from_parts(
         .map(str::to_string);
 
     let mut reasons = Vec::new();
+    if heartbeat_transport.state == "degraded" {
+        reasons.push("heartbeat_post_failed".to_string());
+    }
     if let Some(refusal) = startup_refusal.as_deref() {
         reasons.push(format!("startup_refused: {refusal}"));
     }
@@ -1826,6 +1852,7 @@ fn native_health_from_parts(
                 .cloned(),
         },
         transport,
+        heartbeat_transport,
         spool: NativeSpoolStatus {
             pending_count,
             dead_count,
@@ -1905,6 +1932,7 @@ fn native_desktop_health_from_parts(
         severity,
         headline: health.headline,
         reasons: health.reasons,
+        heartbeat_transport: health.heartbeat_transport,
         suggested_actions,
         suggested_action_ids,
         engine_status: NativeDesktopEngineStatus {
@@ -1952,6 +1980,7 @@ fn native_desktop_engine_payload(payload: Option<&Value>) -> Option<Value> {
         "is_offline",
         "local_projection",
         "shipping_progress",
+        "heartbeat_transport",
         "startup_refused",
         "startup_refusal_kind",
         "startup_refusal",
@@ -2138,6 +2167,7 @@ fn native_desktop_suggested_action_ids(reasons: &[String]) -> Vec<String> {
             | "storage_v2_sources_proof_unknown" => "inspect_storage_source",
             "storage_v2_outbox_unreadable" => "inspect_storage_outbox",
             "reported_offline"
+            | "heartbeat_post_failed"
             | "heartbeat_stale"
             | "engine_offline"
             | "transport_unavailable"
@@ -4746,6 +4776,38 @@ fn truncate_output(output: &[u8]) -> String {
     }
 }
 
+fn native_heartbeat_transport_status(
+    object: Option<&serde_json::Map<String, Value>>,
+) -> NativeHeartbeatTransportStatus {
+    let raw = object
+        .and_then(|value| value.get("heartbeat_transport"))
+        .and_then(Value::as_object);
+    let optional_string = |key: &str| {
+        raw.and_then(|value| value.get(key))
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+    };
+    let state = match raw
+        .and_then(|value| value.get("state"))
+        .and_then(Value::as_str)
+    {
+        Some("healthy") | Some("degraded") | Some("unknown") => raw
+            .and_then(|value| value.get("state"))
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string(),
+        _ => "unknown".to_string(),
+    };
+    NativeHeartbeatTransportStatus {
+        state,
+        last_attempt_at: optional_string("last_attempt_at"),
+        last_success_at: optional_string("last_success_at"),
+        last_failure_at: optional_string("last_failure_at"),
+        last_error: optional_string("last_error"),
+    }
+}
+
 fn native_transport_status(
     object: Option<&serde_json::Map<String, Value>>,
 ) -> NativeTransportStatus {
@@ -5319,6 +5381,69 @@ mod tests {
         assert!(value["managed_summary"]
             .get("orphan_bridge_count")
             .is_none());
+    }
+
+    #[test]
+    fn native_health_surfaces_heartbeat_post_failure_and_recovery() {
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut payload = json!({
+            "spool_pending_count": 0,
+            "spool_dead_count": 0,
+            "ship_attempts_10m": 1,
+            "shipping_progress": {
+                "pending_work": false,
+                "stalled": false,
+                "seconds_without_progress": 0,
+                "observed_at": now.clone()
+            },
+            "local_projection": {
+                "engine_pulse_at": now.clone(),
+                "generated_at": now.clone(),
+                "last_reconciled_at": now,
+                "reconciliation": {"state": "idle"}
+            },
+            "heartbeat_transport": {
+                "state": "degraded",
+                "last_attempt_at": "2026-09-18T12:00:00Z",
+                "last_failure_at": "2026-09-18T12:00:01Z",
+                "last_error": "POST returned 503: rejected"
+            }
+        });
+        let failure = native_health_from_parts(
+            Path::new("/tmp/engine-status.json"),
+            true,
+            Some(0),
+            Some(payload.clone()),
+            None,
+        );
+        assert_eq!(failure.heartbeat_transport.state, "degraded");
+        assert!(failure
+            .reasons
+            .iter()
+            .any(|reason| reason == "heartbeat_post_failed"));
+        assert_eq!(failure.health_state, "degraded");
+        assert_eq!(
+            failure.heartbeat_transport.last_error.as_deref(),
+            Some("POST returned 503: rejected")
+        );
+
+        payload["heartbeat_transport"] = json!({
+            "state": "healthy",
+            "last_attempt_at": "2026-09-18T12:00:02Z",
+            "last_success_at": "2026-09-18T12:00:02Z"
+        });
+        let recovery = native_health_from_parts(
+            Path::new("/tmp/engine-status.json"),
+            true,
+            Some(0),
+            Some(payload),
+            None,
+        );
+        assert_eq!(recovery.heartbeat_transport.state, "healthy");
+        assert!(!recovery
+            .reasons
+            .iter()
+            .any(|reason| reason == "heartbeat_post_failed"));
     }
 
     #[test]

@@ -1148,6 +1148,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut last_runtime_truth_signature: Option<String> = None;
     let mut session_snapshot_state = SessionSnapshotState::default();
     let mut last_status_projection: Option<heartbeat::StatusFileProjection> = None;
+    let mut heartbeat_transport = heartbeat::HeartbeatTransportStatus::default();
     let mut managed_reconciliation =
         heartbeat::ProjectionReconciliation::running("startup", chrono::Utc::now().to_rfc3339());
     let mut wake_gap_detector = WakeGapDetector::new();
@@ -1950,27 +1951,72 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                         match result.result {
                             Ok(()) => {
+                                let recovered = heartbeat_transport
+                                    .record_success(chrono::Utc::now().to_rfc3339());
                                 tracing::debug!(
                                     reason = result.reason,
                                     task_elapsed_ms = result.task_elapsed_ms,
                                     join_elapsed_ms = result.join_elapsed_ms,
                                     "Runtime truth snapshot sent after local process/control change"
                                 );
+                                if recovered {
+                                    tracing::info!("Heartbeat POST recovered");
+                                }
                                 last_runtime_truth_signature = Some(result.signature);
                             }
                             Err(err) => {
                                 last_runtime_truth_signature = None;
-                                tracing::debug!(
-                                    reason = result.reason,
-                                    "Runtime truth snapshot send failed: {}",
-                                    err
+                                let error = heartbeat::bounded_heartbeat_error(&err);
+                                let transitioned = heartbeat_transport.record_failure(
+                                    chrono::Utc::now().to_rfc3339(),
+                                    &error,
                                 );
+                                if transitioned {
+                                    tracing::warn!(
+                                        reason = result.reason,
+                                        error = %error,
+                                        "Heartbeat POST failed"
+                                    );
+                                } else {
+                                    tracing::debug!(
+                                        reason = result.reason,
+                                        error = %error,
+                                        "Heartbeat POST remains degraded"
+                                    );
+                                }
                             }
                         }
+                        publish_heartbeat_transport_status(
+                            &heartbeat_transport,
+                            &mut last_status_projection,
+                            serde_json::to_value(control_channel_status.snapshot()).ok(),
+                            &managed_reconciliation,
+                            &mut shipping_progress,
+                            offline.is_offline,
+                            &status_path,
+                        );
                     }
                     Some(Err(err)) => {
                         last_runtime_truth_signature = None;
-                        tracing::warn!("Heartbeat POST task failed: {}", err);
+                        let error = heartbeat::bounded_heartbeat_error(&err.to_string());
+                        let transitioned = heartbeat_transport.record_failure(
+                            chrono::Utc::now().to_rfc3339(),
+                            &error,
+                        );
+                        if transitioned {
+                            tracing::warn!(error = %error, "Heartbeat POST task failed");
+                        } else {
+                            tracing::debug!(error = %error, "Heartbeat POST task remains degraded");
+                        }
+                        publish_heartbeat_transport_status(
+                            &heartbeat_transport,
+                            &mut last_status_projection,
+                            serde_json::to_value(control_channel_status.snapshot()).ok(),
+                            &managed_reconciliation,
+                            &mut shipping_progress,
+                            offline.is_offline,
+                            &status_path,
+                        );
                     }
                     None => {}
                 }
@@ -2155,6 +2201,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 &mut shipping_progress,
                                 offline.is_offline,
                                 &status_path,
+                                &heartbeat_transport,
                             );
                             tracing::warn!("Unmanaged binding refresh task failed: {}", err);
                         } else {
@@ -2287,6 +2334,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 &mut shipping_progress,
                                 offline.is_offline,
                                 &status_path,
+                                &heartbeat_transport,
                             );
                             if pending_wake_reconciliation {
                                 if maybe_start_managed_observation_scan(
@@ -2471,6 +2519,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &mut shipping_progress,
                             offline.is_offline,
                             &status_path,
+                            &heartbeat_transport,
                         );
                     }
                     None => {}
@@ -2558,6 +2607,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     ),
                                 Instant::now(),
                             );
+                            projection.set_heartbeat_transport(heartbeat_transport.clone());
                             heartbeat::write_status_file(
                                 &mut projection,
                                 serde_json::to_value(control_channel_status.snapshot()).ok(),
@@ -2576,6 +2626,18 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 )
                             {
                                 if heartbeat_post_tasks.is_empty() {
+                                    heartbeat_transport.record_attempt(
+                                        chrono::Utc::now().to_rfc3339(),
+                                    );
+                                    publish_heartbeat_transport_status(
+                                        &heartbeat_transport,
+                                        &mut last_status_projection,
+                                        serde_json::to_value(control_channel_status.snapshot()).ok(),
+                                        &managed_reconciliation,
+                                        &mut shipping_progress,
+                                        offline.is_offline,
+                                        &status_path,
+                                    );
                                     spawn_heartbeat_post(
                                         &mut heartbeat_post_tasks,
                                         client.clone(),
@@ -3068,6 +3130,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     }
                 }
                 if let Some(projection) = last_status_projection.as_mut() {
+                    projection.set_heartbeat_transport(heartbeat_transport.clone());
                     heartbeat::write_status_file(
                         projection,
                         serde_json::to_value(control_channel_status.snapshot()).ok(),
@@ -3082,6 +3145,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         &mut shipping_progress,
                         offline.is_offline,
                         &status_path,
+                        &heartbeat_transport,
                     );
                 }
             }
@@ -3137,6 +3201,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // Periodic server heartbeat
             _ = heartbeat_timer.tick() => {
                 if let Some(projection) = last_status_projection.as_mut() {
+                    projection.set_heartbeat_transport(heartbeat_transport.clone());
                     heartbeat::write_status_file(
                         projection,
                         serde_json::to_value(control_channel_status.snapshot()).ok(),
@@ -3147,6 +3212,18 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     );
                     if !offline.is_offline {
                         if heartbeat_post_tasks.is_empty() {
+                            heartbeat_transport.record_attempt(
+                                chrono::Utc::now().to_rfc3339(),
+                            );
+                            projection.set_heartbeat_transport(heartbeat_transport.clone());
+                            heartbeat::write_status_file(
+                                projection,
+                                serde_json::to_value(control_channel_status.snapshot()).ok(),
+                                &managed_reconciliation,
+                                &mut shipping_progress,
+                                offline.is_offline,
+                                &status_path,
+                            );
                             let payload = projection.payload.clone();
                             let signature = runtime_truth_signature(&payload);
                             spawn_heartbeat_post(
@@ -4762,6 +4839,36 @@ fn spawn_transcript_wake_listener(
     _tx: mpsc::UnboundedSender<TranscriptWakeSignal>,
 ) -> Result<Option<tokio::task::JoinHandle<()>>> {
     Ok(None)
+}
+
+fn publish_heartbeat_transport_status(
+    heartbeat_transport: &heartbeat::HeartbeatTransportStatus,
+    last_status_projection: &mut Option<heartbeat::StatusFileProjection>,
+    control_channel: Option<serde_json::Value>,
+    managed_reconciliation: &heartbeat::ProjectionReconciliation,
+    shipping_progress: &mut heartbeat::ShippingProgressObservation,
+    is_offline: bool,
+    status_path: &Path,
+) {
+    if let Some(projection) = last_status_projection.as_mut() {
+        projection.set_heartbeat_transport(heartbeat_transport.clone());
+        heartbeat::write_status_file(
+            projection,
+            control_channel,
+            managed_reconciliation,
+            shipping_progress,
+            is_offline,
+            status_path,
+        );
+    } else {
+        heartbeat::refresh_existing_status_pulse(
+            managed_reconciliation,
+            shipping_progress,
+            is_offline,
+            status_path,
+            heartbeat_transport,
+        );
+    }
 }
 
 fn spawn_heartbeat_post(

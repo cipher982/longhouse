@@ -164,6 +164,72 @@ pub struct HeartbeatPayload {
     pub update: Option<crate::update::UpdateStatus>,
 }
 
+/// Local-only diagnostics for the daemon's heartbeat POST. This is deliberately
+/// outside `HeartbeatPayload`: Runtime Host heartbeats must not gain a field
+/// whose only consumer is the machine that sent it.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct HeartbeatTransportStatus {
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_attempt_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_success_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_failure_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+const MAX_HEARTBEAT_ERROR_CHARS: usize = 256;
+
+impl Default for HeartbeatTransportStatus {
+    fn default() -> Self {
+        Self {
+            state: "unknown".to_string(),
+            last_attempt_at: None,
+            last_success_at: None,
+            last_failure_at: None,
+            last_error: None,
+        }
+    }
+}
+
+impl HeartbeatTransportStatus {
+    pub fn record_attempt(&mut self, at: String) {
+        self.last_attempt_at = Some(at);
+    }
+
+    /// Returns true when this failure transitions the state into degraded.
+    pub fn record_failure(&mut self, at: String, error: &str) -> bool {
+        let transitioned = self.state != "degraded";
+        self.state = "degraded".to_string();
+        self.last_failure_at = Some(at);
+        self.last_error = Some(bounded_heartbeat_error(error));
+        transitioned
+    }
+
+    /// Returns true when this success recovers a prior degraded state.
+    pub fn record_success(&mut self, at: String) -> bool {
+        let recovered = self.state == "degraded";
+        self.state = "healthy".to_string();
+        self.last_success_at = Some(at);
+        // A recovered POST has no active error; retain the failure timestamp
+        // as history so operators can see that the daemon did recover.
+        self.last_error = None;
+        recovered
+    }
+}
+
+pub fn bounded_heartbeat_error(error: &str) -> String {
+    let mut chars = error.chars();
+    let bounded: String = chars.by_ref().take(MAX_HEARTBEAT_ERROR_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{bounded}...")
+    } else {
+        bounded
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ShippingProgress {
     pub pending_work: bool,
@@ -3771,6 +3837,10 @@ impl ProjectionReconciliation {
 #[derive(Debug, Clone)]
 pub struct StatusFileProjection {
     pub payload: HeartbeatPayload,
+    /// Local-only heartbeat POST diagnostics. Kept on the projection so every
+    /// status-file write carries the latest daemon-local transport state,
+    /// including when an older projection build completes after the POST.
+    pub heartbeat_transport: HeartbeatTransportStatus,
     recent_dead_letters: Vec<StatusDeadLetter>,
     phase_ledger: Vec<PhaseLedgerRow>,
     phase_ledger_status: PhaseLedgerStatus,
@@ -3794,6 +3864,7 @@ pub fn build_status_file_projection(
     let generated_at = chrono::Utc::now().to_rfc3339();
     StatusFileProjection {
         payload,
+        heartbeat_transport: HeartbeatTransportStatus::default(),
         recent_dead_letters,
         phase_ledger,
         phase_ledger_status,
@@ -3806,6 +3877,10 @@ pub fn build_status_file_projection(
 }
 
 impl StatusFileProjection {
+    pub fn set_heartbeat_transport(&mut self, value: HeartbeatTransportStatus) {
+        self.heartbeat_transport = value;
+    }
+
     pub fn set_last_reconciled_at(&mut self, value: Option<String>) {
         if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
             self.last_reconciled_at = value;
@@ -3853,6 +3928,7 @@ pub fn write_status_file(
     struct StatusFile<'a> {
         #[serde(flatten)]
         payload: &'a HeartbeatPayload,
+        heartbeat_transport: &'a HeartbeatTransportStatus,
         local_projection: LocalProjectionFile<'a>,
         /// Build identity compiled into the currently-running engine binary.
         /// Compare this against the on-disk engine binary via `binary_mtime`
@@ -3911,6 +3987,7 @@ pub fn write_status_file(
     let (binary_path, binary_mtime) = inspect_current_exe();
     let status = StatusFile {
         payload: &projection.payload,
+        heartbeat_transport: &projection.heartbeat_transport,
         local_projection: LocalProjectionFile {
             version: projection.payload.sessions_sequence,
             generated_at: &projection.generated_at,
@@ -3945,13 +4022,15 @@ pub fn write_status_file(
 
 /// Keep a prior coherent projection visibly alive while startup or wake
 /// reconciliation is still rebuilding its evidence. This intentionally
-/// changes only pulse/process metadata and reconciliation state; evidence and
-/// `generated_at` remain the last accepted snapshot.
+/// changes only pulse/process metadata, heartbeat transport diagnostics, and
+/// reconciliation state; evidence and `generated_at` remain the last accepted
+/// snapshot.
 pub fn refresh_existing_status_pulse(
     reconciliation: &ProjectionReconciliation,
     progress_observation: &mut ShippingProgressObservation,
     is_offline: bool,
     status_path: &std::path::Path,
+    heartbeat_transport: &HeartbeatTransportStatus,
 ) {
     let Ok(bytes) = std::fs::read(status_path) else {
         return;
@@ -3959,6 +4038,8 @@ pub fn refresh_existing_status_pulse(
     let Ok(mut status) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
         return;
     };
+    status["heartbeat_transport"] =
+        serde_json::to_value(heartbeat_transport).unwrap_or(serde_json::Value::Null);
     let now = chrono::Utc::now().to_rfc3339();
     let monotonic_now = Instant::now();
     let pending_work = progress_observation.has_pending_work();
@@ -4070,6 +4151,44 @@ mod tests {
     use super::*;
     use crate::state::db::open_db;
     use std::path::PathBuf;
+
+    #[test]
+    fn heartbeat_transport_tracks_failure_and_recovery_without_losing_history() {
+        let mut status = HeartbeatTransportStatus::default();
+        assert_eq!(status.state, "unknown");
+        assert!(status.last_attempt_at.is_none());
+
+        status.record_attempt("2026-09-18T12:00:00Z".to_string());
+        assert_eq!(status.state, "unknown");
+        assert_eq!(
+            status.last_attempt_at.as_deref(),
+            Some("2026-09-18T12:00:00Z")
+        );
+
+        let huge_error = "response body ".repeat(1_000);
+        assert!(status.record_failure("2026-09-18T12:00:01Z".to_string(), &huge_error,));
+        assert_eq!(status.state, "degraded");
+        assert_eq!(
+            status.last_failure_at.as_deref(),
+            Some("2026-09-18T12:00:01Z")
+        );
+        assert!(status
+            .last_error
+            .as_ref()
+            .is_some_and(|error| error.len() <= 259));
+
+        assert!(status.record_success("2026-09-18T12:00:02Z".to_string()));
+        assert_eq!(status.state, "healthy");
+        assert_eq!(
+            status.last_success_at.as_deref(),
+            Some("2026-09-18T12:00:02Z")
+        );
+        assert!(status.last_error.is_none());
+        assert_eq!(
+            status.last_failure_at.as_deref(),
+            Some("2026-09-18T12:00:01Z")
+        );
+    }
 
     #[test]
     fn test_heartbeat_payload_fields() {
@@ -4248,6 +4367,7 @@ mod tests {
             &mut observation,
             false,
             &path,
+            &HeartbeatTransportStatus::default(),
         );
         let status: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -4279,6 +4399,7 @@ mod tests {
             &mut observation,
             false,
             &path,
+            &HeartbeatTransportStatus::default(),
         );
         let status: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -5703,6 +5824,7 @@ mod tests {
         let json = std::fs::read_to_string(&status_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["spool_dead_count"], 3);
+        assert_eq!(parsed["heartbeat_transport"]["state"], "unknown");
         assert_eq!(parsed["recent_dead_letters"][0]["provider"], "codex");
         assert_eq!(
             parsed["recent_dead_letters"][0]["file_path"],
@@ -5760,6 +5882,7 @@ mod tests {
             &mut progress_observation,
             false,
             &status_path,
+            &HeartbeatTransportStatus::default(),
         );
         let pulsed: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&status_path).unwrap()).unwrap();
@@ -6824,7 +6947,7 @@ mod tests {
             source: "codex_bridge".to_string(),
             observed_at: "2026-05-08T12:00:00Z".to_string(),
             valid_until: "2026-05-08T12:10:00Z".to_string(),
-                run_id: None,
+            run_id: None,
         };
 
         let evidence = machine_evidence_from_observations(
@@ -7097,7 +7220,7 @@ mod tests {
                 &[],
                 &[],
                 &[],
-                    true,
+                true,
                 true,
                 now,
                 Some(&[]),
