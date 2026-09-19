@@ -4162,7 +4162,7 @@ fn antigravity_is_invoke_subagent(name: &str) -> bool {
 /// Parse only objects that carry the provider's own child identity; never use
 /// the log URI as a path to read another transcript.
 fn antigravity_spawn_children(text: &str, source: &str) -> Vec<Value> {
-    fn collect(value: &Value, text: &str, source: &str, children: &mut Vec<Value>) {
+    fn collect(value: &Value, source: &str, children: &mut Vec<Value>) {
         let Some(object) = value.as_object() else {
             return;
         };
@@ -4180,10 +4180,8 @@ fn antigravity_spawn_children(text: &str, source: &str) -> Vec<Value> {
                 })
         }) {
             let mut metadata = object.clone();
-            metadata.insert(
-                "raw_prose".to_string(),
-                Value::from(bounded_text(text, 6_000)),
-            );
+            // Prose stays in the raw source and rendered result, not copied
+            // once per child where it could crowd native identities out.
             if !source.trim().is_empty() {
                 metadata.insert("source".to_string(), Value::from(source.to_string()));
             }
@@ -4193,7 +4191,7 @@ fn antigravity_spawn_children(text: &str, source: &str) -> Vec<Value> {
             }));
         }
         for nested in object.values() {
-            collect(nested, text, source, children);
+            collect(nested, source, children);
             if children.len() >= 64 {
                 break;
             }
@@ -4211,7 +4209,7 @@ fn antigravity_spawn_children(text: &str, source: &str) -> Vec<Value> {
         };
         let consumed = stream.byte_offset();
         cursor = start.saturating_add(consumed.max(1));
-        collect(&value, text, source, &mut children);
+        collect(&value, source, &mut children);
         if children.len() >= 64 {
             break;
         }
@@ -8930,6 +8928,19 @@ mod tests {
     fn test_antigravity_invoke_subagent_emits_child_fact_without_following_log_uri() {
         let dir = tempfile::tempdir().unwrap();
         let conversation_id = "66666666-6666-4666-8666-666666666666";
+        let first_child = json!({
+            "conversationId": "77777777-7777-4777-8777-777777777777",
+            "logAbsoluteUri": "file:///private/child.log",
+            "workspaceUris": ["file:///private/workspace"]
+        });
+        let second_child = json!({
+            "conversationId": "88888888-8888-4888-8888-888888888888",
+            "logAbsoluteUri": "file:///private/second-child.log"
+        });
+        let output = format!(
+            "Child launched: {} {first_child} {second_child}",
+            "native evidence ".repeat(500)
+        );
         let lines = [
             serde_json::json!({
                 "step_index": 10, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
@@ -8940,7 +8951,7 @@ mod tests {
             serde_json::json!({
                 "step_index": 11, "source": "MODEL", "type": "INVOKE_SUBAGENT", "status": "DONE",
                 "created_at": "2026-05-21T22:27:43Z",
-                "content": "Child launched: {\"child\":{\"conversationId\":\"77777777-7777-4777-8777-777777777777\",\"logAbsoluteUri\":\"file:///private/child.log\",\"workspaceUris\":[\"file:///private/workspace\"]}}"
+                "content": output
             })
             .to_string(),
         ];
@@ -8970,13 +8981,21 @@ mod tests {
             Some("file:///private/child.log")
         );
         assert_eq!(
-            child
-                .get("metadata")
-                .and_then(|metadata| metadata.get("raw_prose"))
-                .and_then(Value::as_str)
-                .map(|text| text.starts_with("Child launched:")),
-            Some(true)
+            fact.payload["children"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|child| child["provider_session_id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec![
+                "77777777-7777-4777-8777-777777777777",
+                "88888888-8888-4888-8888-888888888888"
+            ]
         );
+        assert!(result
+            .events
+            .iter()
+            .any(|event| event.tool_output_text.as_deref() == Some(output.as_str())));
     }
 
     #[test]

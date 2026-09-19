@@ -129,7 +129,7 @@ test: ## Backend unit tests (tests_lite/, ~7.5min)
 
 test-backend-single: ## Focused backend test file/node (TEST=tests_lite/test_file.py)
 	@test -n "$(TEST)" || (echo "TEST is required" >&2; exit 2)
-	@cd server && LONGHOUSE_TEST_TARGET="$(TEST)" ./run_backend_tests_lite.sh
+	@cd server && LONGHOUSE_TEST_TARGET="$(TEST)" ./run_backend_tests_lite.sh $(ARGS)
 
 test-isolation: ## Exercise the real credential/filesystem/network isolation boundary
 	@python3 scripts/qa/test-isolation-smoke.py
@@ -395,6 +395,8 @@ test-engine-single: ## Exact Rust engine unit tests (TEST="module::tests::name .
 	@test -n "$(TEST)" || (echo "TEST is required" >&2; exit 2)
 	@python3 scripts/build/generate_build_identity.py
 	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine -- $(TEST) --exact --nocapture --test-threads=1
+
+test-engine-focused: test-engine-single test-engine-projection-failure ## Focused native checks sharing one isolated build (TEST required)
 
 test-codex-console-warm-canary: ## Real stock-Codex Console warm-path canary
 	@python3 scripts/build/generate_build_identity.py

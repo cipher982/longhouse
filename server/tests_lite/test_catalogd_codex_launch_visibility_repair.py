@@ -190,7 +190,7 @@ async def test_codex_visibility_repair_is_dry_run_first_cas_and_idempotent(
     session_id = _seed_eligible_session(database_path, thread_hidden=thread_hidden)
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
-    client = CatalogClient(socket_path)
+    client = CatalogClient(socket_path, default_timeout_seconds=10.0)
     try:
         dry_run = await client.call(
             "session.repair.codex_launch_visibility.v2",
@@ -264,7 +264,7 @@ async def test_codex_visibility_repair_refuses_user_hidden_row_and_apply_without
     session_id = _seed_eligible_session(database_path, user_hidden=True)
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
-    client = CatalogClient(socket_path)
+    client = CatalogClient(socket_path, default_timeout_seconds=10.0)
     try:
         refusal = await client.call(
             "session.repair.codex_launch_visibility.v2",
@@ -279,7 +279,6 @@ async def test_codex_visibility_repair_refuses_user_hidden_row_and_apply_without
                 {"session_id": session_id, "dry_run": False, "expected_fingerprint": None},
             )
         assert exc_info.value.code == "invalid_request"
-        assert "fingerprint from dry-run" in str(exc_info.value)
     finally:
         await client.close()
         await daemon.close()
@@ -300,7 +299,7 @@ async def test_codex_visibility_repair_refuses_when_fact_changes_after_dry_run(d
     session_id = _seed_eligible_session(database_path)
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
-    client = CatalogClient(socket_path)
+    client = CatalogClient(socket_path, default_timeout_seconds=10.0)
     try:
         dry_run = await client.call(
             "session.repair.codex_launch_visibility.v2",

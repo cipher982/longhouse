@@ -383,6 +383,7 @@ async def test_embedding_projector_rejects_search_revision_behind_claim(monkeypa
         }
     )
     monkeypatch.setattr("zerg.models_config.get_embedding_space_config", lambda: SimpleNamespace(model="test", dims=2))
+    _local_embedder(monkeypatch, lambda texts: np.array([[1, 0] for _ in texts], dtype=np.float32))
 
     assert await EmbeddingsV2Projector(catalog=catalog, search=search).run_once() == 1
     failed = next(params for method, params in catalog.calls if method == "projector.state.fail.v2")
