@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import io
 import json
 import urllib.error
@@ -51,6 +52,7 @@ from zerg.qa.omp_helm_lifecycle import _wait_native_marker
 from zerg.qa.omp_helm_lifecycle import _wait_runtime_control_identity
 from zerg.qa.omp_helm_lifecycle import _wait_served_run_retirement
 from zerg.qa.omp_helm_lifecycle import omp_helm_lifecycle_assertions
+from zerg.qa.omp_helm_lifecycle import run_omp_helm
 from zerg.qa.provider_console_lifecycle import _omp_continuation_prompt
 from zerg.qa.provider_qualification import _PROFILES
 
@@ -145,6 +147,23 @@ def test_terminate_control_keeps_its_observation_instead_of_aborting() -> None:
 
     # The handler catches BaseException; an interrupt still aborts.
     assert _terminate_control_made_its_observation("terminate", _OWNERS_ALIVE, KeyboardInterrupt()) is False
+
+
+def test_terminate_verdict_is_recorded_before_the_retirement_proof() -> None:
+    """The typed verdict must exist before anything that a no-op terminate breaks.
+
+    _terminate_control_made_its_observation only lets the run reach a result
+    once terminate_verdict is typed. The retirement proof used to run first,
+    and under the control it always raises -- the run stays `running` by
+    design, so the claim never reaches retired. The guard then saw no verdict,
+    re-raised, and the factory recorded no_negative_control_result: the exact
+    hole that kept OMP Interrupt uncertified (2026-09-19).
+    """
+    source = inspect.getsource(run_omp_helm)
+    verdict_at = source.index('observation["terminate_verdict"]')
+    retirement_at = source.index("_record_retirement_claim_terminal(")
+
+    assert verdict_at < retirement_at, "retirement proof must not precede the typed terminate verdict"
 
 
 def test_omp_stock_version_line_is_prefixed_for_both_release_profiles() -> None:

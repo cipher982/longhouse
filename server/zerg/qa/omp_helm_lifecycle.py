@@ -2464,13 +2464,6 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
         else:
             first.process.wait(timeout=15)
         terminated_run_id = str(current_state.get("run_id") or "")
-        _record_retirement_claim_terminal(
-            str(args.api_url),
-            str(args.agents_token),
-            retirement_claims,
-            session_id=current_session_id,
-            run_id=terminated_run_id,
-        )
         controls["terminate"] = {
             "action_label": "terminate",
             "state": dict(replaced_state),
@@ -2493,6 +2486,20 @@ def run_omp_helm(args: argparse.Namespace) -> dict[str, object]:
                 else "terminate_not_accepted"
             ),
         }
+        # Retirement is the cleanup proof, not the terminate assertion, so it
+        # is recorded after the verdict. Running it first meant the no-op
+        # terminate raised here -- the run stays `running` by design, so the
+        # claim never reaches retired -- while
+        # _terminate_control_made_its_observation still saw no typed verdict
+        # and re-raised, and the factory recorded no_negative_control_result
+        # (2026-09-19). Judge the edge, then prove retirement.
+        _record_retirement_claim_terminal(
+            str(args.api_url),
+            str(args.agents_token),
+            retirement_claims,
+            session_id=current_session_id,
+            run_id=terminated_run_id,
+        )
 
         resume_marker = f"OMP_HELM_RESUME_{os.urandom(8).hex()}"
         resume_offset = _read_source_size(current_session_file)
