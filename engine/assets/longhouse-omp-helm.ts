@@ -13,7 +13,6 @@ const MAX_METADATA_STRING_LENGTH = 256;
 const MAX_LIVE_TEXT_DELTA_LENGTH = 4096;
 const CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id";
 const COORDINATION_MAX_429_RETRIES = 3;
-const COORDINATION_MAX_429_DELAY_MS = 5_000;
 const COORDINATION_OPERATION_TIMEOUT_MS = 15_000;
 const COORDINATION_DEFAULT_RETRY_MS = 1_000;
 
@@ -156,7 +155,7 @@ export default function (pi: any) {
               if (Number.isFinite(seconds))
                 return Math.max(
                   0,
-                  Math.min(seconds * 1000, COORDINATION_MAX_429_DELAY_MS),
+                  Math.min(seconds * 1000, COORDINATION_OPERATION_TIMEOUT_MS),
                 );
               const timestamp = Date.parse(retryAfter);
               return Number.isFinite(timestamp)
@@ -164,7 +163,7 @@ export default function (pi: any) {
                     0,
                     Math.min(
                       timestamp - Date.now(),
-                      COORDINATION_MAX_429_DELAY_MS,
+                      COORDINATION_OPERATION_TIMEOUT_MS,
                     ),
                   )
                 : COORDINATION_DEFAULT_RETRY_MS;

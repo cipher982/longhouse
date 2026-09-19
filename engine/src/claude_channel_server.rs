@@ -19,11 +19,9 @@ use uuid::Uuid;
 const CLAUDE_CHANNEL_CAPABILITY: &str = "claude/channel";
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 const COORDINATION_MAX_429_RETRIES: usize = 3;
-const COORDINATION_MAX_429_DELAY_SECONDS: u64 = 5;
 const COORDINATION_RETRY_BUDGET: Duration = Duration::from_secs(15);
 
 fn coordination_retry_after(response: &reqwest::Response) -> Duration {
-    let max_delay = Duration::from_secs(COORDINATION_MAX_429_DELAY_SECONDS);
     let Some(raw) = response
         .headers()
         .get("Retry-After")
@@ -32,13 +30,13 @@ fn coordination_retry_after(response: &reqwest::Response) -> Duration {
         return Duration::from_secs(1);
     };
     if let Ok(seconds) = raw.parse::<u64>() {
-        return Duration::from_secs(seconds).min(max_delay);
+        return Duration::from_secs(seconds).min(COORDINATION_RETRY_BUDGET);
     }
     DateTime::parse_from_rfc2822(raw)
         .ok()
         .and_then(|date| (date.with_timezone(&Utc) - Utc::now()).to_std().ok())
         .unwrap_or_else(|| Duration::from_secs(1))
-        .min(max_delay)
+        .min(COORDINATION_RETRY_BUDGET)
 }
 /// What the model is told about `<channel source="longhouse-channel">` input.
 ///
