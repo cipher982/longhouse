@@ -26,7 +26,7 @@ use serde_json::value::RawValue;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::codex_source::parse_codex_subagent_source_str;
+use crate::codex_source::{parse_codex_subagent_source, parse_codex_subagent_source_str};
 use crate::console_prompt::strip_console_run_once_prompt;
 use crate::media_redaction::{
     provider_blob_root, redact_source_line_with_media, InlineImageRedaction,
@@ -422,11 +422,14 @@ enum NativeFlavor {
 struct CodexPayloadParentage {
     forked_from_session_id: Option<String>,
     is_sidechain: bool,
-    /// Nesting depth and the provider's own name for the worker. Both were
-    /// parsed and dropped before; without them a subagent of a subagent is
-    /// indistinguishable from a direct child.
+    /// Native spawn metadata stays separate. The session metadata projection
+    /// intentionally has only one display-name slot, while the provider fact
+    /// carries every field Codex supplied.
     subagent_depth: Option<u32>,
     subagent_name: Option<String>,
+    agent_nickname: Option<String>,
+    agent_role: Option<String>,
+    agent_path: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1004,25 +1007,28 @@ fn seed_antigravity_pending(path: &Path, offset: u64) -> AntigravityPending {
     let Some(tool_calls) = obj.tool_calls.as_ref() else {
         return AntigravityPending::default();
     };
-    let mut call_ids: VecDeque<String> = VecDeque::new();
+    let mut calls: VecDeque<PendingAntigravityCall> = VecDeque::new();
     for (idx, call) in tool_calls.iter().enumerate() {
-        let has_name = call
+        let Some(name) = call
             .name
-            .as_ref()
-            .map(|name| !name.trim().is_empty())
-            .unwrap_or(false);
-        if !has_name {
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        else {
             continue;
-        }
+        };
         if let Some(step) = obj.step_index {
-            call_ids.push_back(format!("antigravity-{step}-{idx}"));
+            calls.push_back(PendingAntigravityCall {
+                id: format!("antigravity-{step}-{idx}"),
+                name: name.to_string(),
+            });
         }
     }
-    if call_ids.is_empty() {
+    if calls.is_empty() {
         return AntigravityPending::default();
     }
     AntigravityPending {
-        call_ids,
+        calls,
         next_result_step: obj.step_index.map(|step| step + 1),
     }
 }
@@ -1173,11 +1179,15 @@ fn codex_payload_parentage(payload: &CodexPayload) -> CodexPayloadParentage {
         return CodexPayloadParentage {
             forked_from_session_id: source
                 .parent_thread_id
+                .clone()
                 .filter(|candidate| Uuid::parse_str(candidate).is_ok())
                 .or(forked_from_session_id),
             is_sidechain: true,
             subagent_depth: source.depth,
-            subagent_name: source.agent_nickname.or(source.agent_role),
+            subagent_name: source.agent_nickname.clone().or(source.agent_role.clone()),
+            agent_nickname: source.agent_nickname,
+            agent_role: source.agent_role,
+            agent_path: source.agent_path,
         };
     }
 
@@ -1190,6 +1200,9 @@ fn codex_payload_parentage(payload: &CodexPayload) -> CodexPayloadParentage {
         is_sidechain: false,
         subagent_depth: None,
         subagent_name: None,
+        agent_nickname: None,
+        agent_role: None,
+        agent_path: None,
     }
 }
 
@@ -1787,6 +1800,7 @@ fn parse_mmap(
             line_offset,
             &redacted_line,
             &mut events,
+            &mut provider_facts,
             &mut antigravity_pending,
             &mut codex_pending,
             cursor_order_anchor,
@@ -1934,6 +1948,7 @@ fn parse_buffered(
             line_offset,
             &redacted_line,
             &mut events,
+            &mut provider_facts,
             &mut antigravity_pending,
             &mut codex_pending,
             cursor_order_anchor,
@@ -2195,10 +2210,43 @@ fn collect_metadata(
 
 fn normalize_git_branch(branch: &str) -> Option<String> {
     let trimmed = branch.trim();
+
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("HEAD") {
         return None;
     }
     Some(trimmed.to_string())
+}
+const MAX_PROVIDER_FACT_PAYLOAD_CHARS: usize = 8_192;
+
+/// Add one source fact without allowing a replay or a provider record that
+/// repeats a discriminator to mint duplicate `(source_position, kind)` rows.
+/// Provider facts are evidence, so oversized optional prose is omitted by the
+/// caller rather than silently changing native identifiers.
+fn push_bounded_provider_fact(
+    facts: &mut Vec<ParsedProviderFact>,
+    kind: &str,
+    at: DateTime<Utc>,
+    source_offset: u64,
+    payload: Value,
+) {
+    if facts
+        .iter()
+        .any(|fact| fact.source_offset == source_offset && fact.kind == kind)
+    {
+        return;
+    }
+    let Ok(encoded) = serde_json::to_string(&payload) else {
+        return;
+    };
+    if encoded.chars().count() > MAX_PROVIDER_FACT_PAYLOAD_CHARS {
+        return;
+    }
+    facts.push(ParsedProviderFact {
+        kind: kind.to_string(),
+        at,
+        source_offset,
+        payload,
+    });
 }
 
 /// Provider text bounded by characters, never splitting a UTF-8 scalar.
@@ -2364,8 +2412,13 @@ fn extract_provider_facts(
         return;
     }
 
+    if obj.r#type.as_deref() == Some("session_meta") {
+        extract_codex_delegation_metadata(obj, trimmed, line_offset, facts);
+        return;
+    }
+
     // Codex rollout lines carry their discriminator under `payload.type`;
-    // these three top-level types are Codex's alone.
+    // these top-level types are Codex's alone.
     if matches!(
         obj.r#type.as_deref(),
         Some("event_msg") | Some("turn_context") | Some("compacted")
@@ -3481,6 +3534,7 @@ fn extract_events(
     line_offset: u64,
     raw_line: &str,
     events: &mut Vec<ParsedEvent>,
+    facts: &mut Vec<ParsedProviderFact>,
     antigravity_pending: &mut AntigravityPending,
     codex_pending: &mut CodexPending,
     cursor_order_anchor: Option<DateTime<Utc>>,
@@ -3502,6 +3556,7 @@ fn extract_events(
             line_offset,
             raw_line,
             events,
+            facts,
             antigravity_pending,
         );
         return;
@@ -4082,22 +4137,93 @@ fn antigravity_tool_name_from_type(event_type: &str) -> String {
 /// call ids forward and let each result inherit one. Pairing is by adjacency (the
 /// alias `list_dir` -> `LIST_DIRECTORY` makes tool-name matching unreliable), so any
 /// interleaving record clears the queue to stay fail-closed.
+#[derive(Debug)]
+struct PendingAntigravityCall {
+    id: String,
+    name: String,
+}
+
 #[derive(Default)]
 struct AntigravityPending {
-    /// Call ids emitted by the most recent planner, in order, not yet consumed.
-    call_ids: VecDeque<String>,
-    /// The step_index the next result is expected at. A planner at step N is
-    /// followed by its result(s) at N+1, N+2, ... (one per call, in order). Advances
-    /// on each consumed result so a multi-call planner pairs consecutive results.
+    /// Calls emitted by the most recent planner, in order, not yet consumed.
+    calls: VecDeque<PendingAntigravityCall>,
+
+    /// The step_index the next result is expected at.
     next_result_step: Option<u64>,
 }
 
+fn antigravity_is_invoke_subagent(name: &str) -> bool {
+    name.eq_ignore_ascii_case("invoke_subagent")
+        || name.eq_ignore_ascii_case("invoke-subagent")
+        || name.eq_ignore_ascii_case("INVOKE_SUBAGENT")
+}
+
+/// The INVOKE_SUBAGENT result is prose followed by one or more JSON objects.
+/// Parse only objects that carry the provider's own child identity; never use
+/// the log URI as a path to read another transcript.
+fn antigravity_spawn_children(text: &str, source: &str) -> Vec<Value> {
+    fn collect(value: &Value, text: &str, source: &str, children: &mut Vec<Value>) {
+        let Some(object) = value.as_object() else {
+            return;
+        };
+        let conversation_id = object
+            .get("conversationId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty());
+        let has_child_locator =
+            object.get("logAbsoluteUri").is_some() || object.get("workspaceUris").is_some();
+        if let Some(conversation_id) = conversation_id.filter(|_| has_child_locator)
+            && !children.iter().any(|child| {
+                child.get("provider_session_id").and_then(Value::as_str) == Some(conversation_id)
+            })
+        {
+            let mut metadata = object.clone();
+            metadata.insert(
+                "raw_prose".to_string(),
+                Value::from(bounded_text(text, 6_000)),
+            );
+            if !source.trim().is_empty() {
+                metadata.insert("source".to_string(), Value::from(source.to_string()));
+            }
+            children.push(json!({
+                "provider_session_id": conversation_id,
+                "metadata": metadata,
+            }));
+        }
+        for nested in object.values() {
+            collect(nested, text, source, children);
+            if children.len() >= 64 {
+                break;
+            }
+        }
+    }
+
+    let mut children = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(relative) = text[cursor..].find('{') {
+        let start = cursor + relative;
+        let mut stream = serde_json::Deserializer::from_str(&text[start..]);
+        let Ok(value) = Value::deserialize(&mut stream) else {
+            cursor = start.saturating_add(1);
+            continue;
+        };
+        let consumed = stream.byte_offset();
+        cursor = start.saturating_add(consumed.max(1));
+        collect(&value, text, source, &mut children);
+        if children.len() >= 64 {
+            break;
+        }
+    }
+    children
+}
 fn extract_antigravity_events(
     obj: &RawLine,
     session_id: &str,
     line_offset: u64,
     raw_line: &str,
     events: &mut Vec<ParsedEvent>,
+    facts: &mut Vec<ParsedProviderFact>,
     pending: &mut AntigravityPending,
 ) {
     let event_type = obj.r#type.as_deref().unwrap_or("");
@@ -4134,28 +4260,28 @@ fn extract_antigravity_events(
     let mut emitted_calls_this_record = false;
     if let Some(tool_calls) = obj.tool_calls.as_ref() {
         // A new planner supersedes any prior unconsumed call.
-        let mut fresh: VecDeque<String> = VecDeque::new();
+        let mut fresh: VecDeque<PendingAntigravityCall> = VecDeque::new();
         for (idx, call) in tool_calls.iter().enumerate() {
             let Some(tool_name) = call.name.as_ref().filter(|name| !name.trim().is_empty()) else {
                 continue;
             };
-            let call_id = obj
-                .step_index
-                .map(|step| format!("antigravity-{step}-{idx}"));
-            if let Some(ref id) = call_id {
-                fresh.push_back(id.clone());
-            }
+            let Some(step) = obj.step_index else {
+                continue;
+            };
+            let call_id = format!("antigravity-{step}-{idx}");
+            fresh.push_back(PendingAntigravityCall {
+                id: call_id.clone(),
+                name: tool_name.to_string(),
+            });
             events.push(ParsedEvent {
                 uuid: antigravity_uuid(obj, line_offset, &format!("tool-{idx}")),
                 parent_uuid: None,
                 session_id: session_id.to_string(),
                 timestamp,
-                role: Role::Assistant,
+                tool_input_json: call.args.clone(),
                 content_text: None,
                 tool_name: Some(tool_name.clone()),
-                tool_input_json: call.args.clone(),
-                tool_output_text: None,
-                tool_call_id: call_id,
+                tool_call_id: Some(call_id),
                 source_offset: line_offset,
                 raw_type: "antigravity_tool_call".to_string(),
                 raw_line: if emitted_raw_line {
@@ -4168,7 +4294,7 @@ fn extract_antigravity_events(
         }
         emitted_calls_this_record = true;
         *pending = AntigravityPending {
-            call_ids: fresh,
+            calls: fresh,
             next_result_step: obj.step_index.map(|step| step + 1),
         };
     }
@@ -4179,7 +4305,7 @@ fn extract_antigravity_events(
     // does not end in `_RESPONSE` (the planner is the `_RESPONSE` record carrying the
     // calls). Anything else interleaving a pending call fails closed.
     let is_tool_result = source == "MODEL" && !event_type.ends_with("_RESPONSE");
-    let result_tool_call_id: Option<String> = if emitted_calls_this_record {
+    let result_call: Option<PendingAntigravityCall> = if emitted_calls_this_record {
         // Queue was just populated by this planner record — keep it; emit no id here.
         None
     } else if is_tool_result {
@@ -4190,12 +4316,12 @@ fn extract_antigravity_events(
             _ => false,
         };
         if adjacent {
-            let id = pending.call_ids.pop_front();
-            if id.is_some() {
+            let call = pending.calls.pop_front();
+            if call.is_some() {
                 // Next call in this planner pairs to the following result step.
                 pending.next_result_step = obj.step_index.map(|step| step + 1);
             }
-            id
+            call
         } else {
             // Result at an unexpected step — interleaving/mismatch; fail closed.
             *pending = AntigravityPending::default();
@@ -4207,11 +4333,34 @@ fn extract_antigravity_events(
         *pending = AntigravityPending::default();
         None
     };
+    let result_tool_call_id = result_call.as_ref().map(|call| call.id.clone());
 
     if let Some(content) = obj.content.as_ref().and_then(Value::as_str) {
         let text = content.trim();
         if text.is_empty() {
             return;
+        }
+        if result_call
+            .as_ref()
+            .is_some_and(|call| antigravity_is_invoke_subagent(&call.name))
+        {
+            let children = antigravity_spawn_children(text, source);
+            if !children.is_empty() {
+                if let Some(at) = obj
+                    .created_at
+                    .as_deref()
+                    .or(obj.timestamp.as_deref())
+                    .and_then(parse_timestamp)
+                {
+                    push_bounded_provider_fact(
+                        facts,
+                        "delegation.spawn",
+                        at,
+                        line_offset,
+                        json!({ "children": children }),
+                    );
+                }
+            }
         }
         let is_assistant = source == "MODEL" && event_type.ends_with("_RESPONSE");
         let role = if is_assistant {
@@ -4664,6 +4813,148 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
             .windows(needle.len())
             .any(|window| window == needle)
 }
+fn extract_codex_delegation_metadata(
+    obj: &RawLine,
+    trimmed: &[u8],
+    line_offset: u64,
+    facts: &mut Vec<ParsedProviderFact>,
+) {
+    let Ok(value) = serde_json::from_slice::<Value>(trimmed) else {
+        return;
+    };
+    let Some(payload) = value.get("payload").and_then(Value::as_object) else {
+        return;
+    };
+    let Some(provider_session_id) = payload
+        .get("id")
+        .or_else(|| payload.get("session_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    else {
+        return;
+    };
+    let Some(source_value) = payload.get("source") else {
+        return;
+    };
+    let Some(source) = parse_codex_subagent_source(source_value) else {
+        return;
+    };
+    let Some(at) = obj.timestamp.as_deref().and_then(parse_timestamp) else {
+        return;
+    };
+
+    let mut metadata = serde_json::Map::new();
+    if let Some(depth) = source.depth {
+        metadata.insert("depth".to_string(), Value::from(depth));
+    }
+    if let Some(nickname) = source.agent_nickname.as_deref() {
+        metadata.insert(
+            "agent_nickname".to_string(),
+            Value::from(nickname.to_string()),
+        );
+    }
+    if let Some(role) = source.agent_role.as_deref() {
+        metadata.insert("agent_role".to_string(), Value::from(role.to_string()));
+    }
+    if let Some(path) = source.agent_path.as_deref() {
+        metadata.insert("agent_path".to_string(), Value::from(path.to_string()));
+    }
+    // Keep the provider's source object as evidence as well as the convenient
+    // fields above. It is the authority for distinguishing a worker from a
+    // plain fork, and no parent edge is inferred when it is absent.
+    metadata.insert("source".to_string(), source_value.clone());
+
+    let mut fact = serde_json::Map::new();
+    fact.insert(
+        "provider_session_id".to_string(),
+        Value::from(provider_session_id.to_string()),
+    );
+    if let Some(parent_provider_session_id) = source.parent_thread_id {
+        fact.insert(
+            "parent_provider_session_id".to_string(),
+            Value::from(parent_provider_session_id),
+        );
+    }
+    fact.insert("metadata".to_string(), Value::Object(metadata));
+    push_bounded_provider_fact(
+        facts,
+        "delegation.metadata",
+        at,
+        line_offset,
+        Value::Object(fact),
+    );
+}
+
+fn codex_activity_timestamp(obj: &RawLine, payload: &serde_json::Map<String, Value>) -> Option<DateTime<Utc>> {
+    obj.timestamp
+        .as_deref()
+        .and_then(parse_timestamp)
+        .or_else(|| {
+            payload
+                .get("occurred_at_ms")
+                .and_then(Value::as_i64)
+                .and_then(DateTime::<Utc>::from_timestamp_millis)
+        })
+}
+
+fn extract_codex_delegation_activity(
+    obj: &RawLine,
+    payload: &serde_json::Map<String, Value>,
+    line_offset: u64,
+    facts: &mut Vec<ParsedProviderFact>,
+) {
+    let Some(provider_session_id) = payload
+        .get("agent_thread_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    else {
+        return;
+    };
+    let Some(kind) = payload
+        .get("kind")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|kind| !kind.is_empty())
+    else {
+        return;
+    };
+    let Some(at) = codex_activity_timestamp(obj, payload) else {
+        return;
+    };
+    let mut metadata = payload.clone();
+    for key in ["type", "agent_thread_id", "kind", "event_id", "occurred_at_ms"] {
+        metadata.remove(key);
+    }
+    let mut fact = serde_json::Map::new();
+    fact.insert(
+        "provider_session_id".to_string(),
+        Value::from(provider_session_id.to_string()),
+    );
+    fact.insert("kind".to_string(), Value::from(kind));
+    if let Some(event_id) = payload
+        .get("event_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+    {
+        fact.insert("event_id".to_string(), Value::from(event_id.to_string()));
+    }
+    if let Some(occurred_at_ms) = payload.get("occurred_at_ms").and_then(Value::as_i64) {
+        fact.insert(
+            "occurred_at_ms".to_string(),
+            Value::from(occurred_at_ms),
+        );
+    }
+    fact.insert("metadata".to_string(), Value::Object(metadata));
+    push_bounded_provider_fact(
+        facts,
+        "delegation.activity",
+        at,
+        line_offset,
+        Value::Object(fact),
+    );
+}
 
 /// Codex provider facts. Only the handful of line shapes that carry a signal
 /// are parsed as a JSON tree; `response_item` rows, the transcript hot path,
@@ -4687,7 +4978,8 @@ fn extract_codex_provider_facts(
             | ("compacted", _)
             | (
                 "event_msg",
-                "task_started"
+                "sub_agent_activity"
+                    | "task_started"
                     | "token_count"
                     | "task_complete"
                     | "turn_aborted"
@@ -4718,6 +5010,10 @@ fn extract_codex_provider_facts(
             return;
         }
         _ => {}
+    }
+    if line_type == "event_msg" && payload_type == "sub_agent_activity" {
+        extract_codex_delegation_activity(obj, payload, line_offset, facts);
+        return;
     }
     let Some(at) = obj.timestamp.as_deref().and_then(parse_timestamp) else {
         return;
@@ -7451,6 +7747,34 @@ mod tests {
         assert_eq!(result.metadata.subagent_depth, Some(1));
         assert_eq!(result.metadata.subagent_name.as_deref(), Some("Ptolemy"));
         assert_eq!(result.events[0].session_id, child_id);
+        let metadata_fact = result
+            .provider_facts
+            .iter()
+            .find(|fact| fact.kind == "delegation.metadata")
+            .expect("Codex spawn metadata is retained as a provider fact");
+        assert_eq!(
+            metadata_fact
+                .payload
+                .get("parent_provider_session_id")
+                .and_then(Value::as_str),
+            Some(parent_id)
+        );
+        assert_eq!(
+            metadata_fact
+                .payload
+                .get("metadata")
+                .and_then(|metadata| metadata.get("agent_nickname"))
+                .and_then(Value::as_str),
+            Some("Ptolemy")
+        );
+        assert_eq!(
+            metadata_fact
+                .payload
+                .get("metadata")
+                .and_then(|metadata| metadata.get("agent_role"))
+                .and_then(Value::as_str),
+            Some("default")
+        );
     }
 
     #[test]
@@ -8590,6 +8914,61 @@ mod tests {
         assert_eq!(
             tool_results[1].tool_call_id.as_deref(),
             Some("antigravity-0-1")
+        );
+    }
+
+    #[test]
+    fn test_antigravity_invoke_subagent_emits_child_fact_without_following_log_uri() {
+        let dir = tempfile::tempdir().unwrap();
+        let conversation_id = "66666666-6666-4666-8666-666666666666";
+        let lines = [
+            serde_json::json!({
+                "step_index": 10, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                "created_at": "2026-05-21T22:27:42Z",
+                "tool_calls": [{"name": "INVOKE_SUBAGENT", "args": {"prompt": "inspect"}}]
+            })
+            .to_string(),
+            serde_json::json!({
+                "step_index": 11, "source": "MODEL", "type": "INVOKE_SUBAGENT", "status": "DONE",
+                "created_at": "2026-05-21T22:27:43Z",
+                "content": "Child launched: {\"child\":{\"conversationId\":\"77777777-7777-4777-8777-777777777777\",\"logAbsoluteUri\":\"file:///private/child.log\",\"workspaceUris\":[\"file:///private/workspace\"]}}"
+            })
+            .to_string(),
+        ];
+        let path = write_antigravity_transcript(dir.path(), conversation_id, &lines);
+
+        let result = parse_session_file(&path, 0).unwrap();
+        let fact = result
+            .provider_facts
+            .iter()
+            .find(|fact| fact.kind == "delegation.spawn")
+            .expect("INVOKE_SUBAGENT result emits a spawn fact");
+        let child = fact
+            .payload
+            .get("children")
+            .and_then(Value::as_array)
+            .and_then(|children| children.first())
+            .expect("child observation");
+        assert_eq!(
+            child
+                .get("provider_session_id")
+                .and_then(Value::as_str),
+            Some("77777777-7777-4777-8777-777777777777")
+        );
+        assert_eq!(
+            child
+                .get("metadata")
+                .and_then(|metadata| metadata.get("logAbsoluteUri"))
+                .and_then(Value::as_str),
+            Some("file:///private/child.log")
+        );
+        assert_eq!(
+            child
+                .get("metadata")
+                .and_then(|metadata| metadata.get("raw_prose"))
+                .and_then(Value::as_str)
+                .map(|text| text.starts_with("Child launched:")),
+            Some(true)
         );
     }
 

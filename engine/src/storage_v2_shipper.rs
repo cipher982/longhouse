@@ -2833,7 +2833,12 @@ pub(crate) fn prepare_next_opencode_envelope(
                             data_b64: BASE64_STANDARD.encode(bytes),
                         })
                         .collect(),
-                    facts: Vec::new(),
+                    facts: opencode_provider_facts_for_range(
+                        &parse_result,
+                        snapshot.part_record_start,
+                        range_start,
+                        range_end,
+                    )?,
                     expected_envelope_id,
                 },
                 source_epoch: resolution.source_epoch,
@@ -4646,6 +4651,46 @@ fn storage_v2_media_refs(media_objects: &[ParsedMediaObject]) -> Vec<StorageV2Me
             availability: "available".to_string(),
         })
         .collect()
+}
+
+fn opencode_provider_facts_for_range(
+    parse_result: &ParseResult,
+    part_record_start: u64,
+    range_start: u64,
+    range_end: u64,
+) -> Result<Vec<StorageV2ProviderFact>> {
+    let source_ordinals: HashMap<u64, u64> = parse_result
+        .source_lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| (line.source_offset, part_record_start + index as u64))
+        .collect();
+    let mut facts = Vec::new();
+    for fact in &parse_result.provider_facts {
+        let ordinal = if fact.kind == "delegation.metadata" && fact.source_offset == 0 {
+            // Session metadata facts are anchored to the synthetic session
+            // record; part facts with offset zero still use the source map.
+            0
+        } else {
+            *source_ordinals
+                .get(&fact.source_offset)
+                .context("OpenCode provider fact is not covered by a raw part record")?
+        };
+            .iter()
+            .any(|existing: &StorageV2ProviderFact| {
+                existing.kind == fact.kind && existing.source_position == ordinal
+            })
+        {
+            continue;
+        }
+        facts.push(StorageV2ProviderFact {
+            kind: fact.kind.clone(),
+            at: fact.at.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+            source_position: ordinal,
+            payload: fact.payload.clone(),
+        });
+    }
+    Ok(facts)
 }
 
 fn opencode_media_objects_for_range(
