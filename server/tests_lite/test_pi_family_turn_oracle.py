@@ -137,7 +137,6 @@ def test_terminate_control_passes_when_the_oracle_catches_surviving_owners() -> 
             "pi_helm_send_idle": True,
             "pi_helm_follow_up_native": True,
             "pi_helm_steer_active": True,
-            "pi_helm_abort_native": True,
             "pi_helm_terminate_owned": False,
         },
         observation={"terminate_verdict": {"code": "terminate_left_owners_alive"}},
@@ -239,3 +238,28 @@ def test_terminate_control_still_needs_a_healthy_prefix() -> None:
     )
     assert verdict["preconditions_held"] is False, verdict
     assert verdict["status"] == "inconclusive", verdict
+
+
+def test_terminate_preconditions_exclude_anything_gated_on_cleanup() -> None:
+    """Pi's abort_native ANDs cleanup_ok, which a no-op terminate prevents.
+
+    Requiring it cost Pi its Interrupt chip on 2026-09-19: fault fired, target
+    rejected with the expected typed code, and inconclusive anyway because the
+    run could not clean up while the fault kept the owners alive. Same defect
+    as OMP's launch_registration, which ANDs settlement.
+    """
+    verdict = _control(
+        "terminate",
+        assertions={
+            "pi_helm_send_idle": True,
+            "pi_helm_follow_up_native": True,
+            "pi_helm_steer_active": True,
+            # False only because the fault keeps the owners alive.
+            "pi_helm_abort_native": False,
+            "pi_helm_launch_registration": True,
+            "pi_helm_terminate_owned": False,
+        },
+        observation={"terminate_verdict": {"code": "terminate_left_owners_alive"}},
+    )
+    assert verdict["preconditions_held"] is True, verdict
+    assert verdict["status"] == "pass", verdict
