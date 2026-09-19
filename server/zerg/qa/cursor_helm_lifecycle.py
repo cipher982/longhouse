@@ -102,6 +102,33 @@ REGISTRATION = ProducerRegistration(
 )
 
 
+def failed_run_report(artifact_root: Path, exc: BaseException) -> dict[str, Any]:
+    """The failed e2e run's own report, so its proven steps survive the failure.
+
+    run_product_e2e mutates its report in place and always writes it in its own
+    finally, so a run that dies at, say, the steer still leaves the launch and
+    send evidence on disk. Substituting a bare status/error dict discarded it:
+    `lifecycle` went missing, so every assertion -- including
+    launch_registration and send_idle, which had already passed -- read false,
+    and `cursor_pid` went missing, so session_stopped could never be proven and
+    the cell died as "lacks required cleanup" before any oracle ran. That is why
+    all five cursor_helm cells read never_proven while the evidence for two of
+    them sat in product-e2e.json (2026-09-19).
+
+    The status stays `failed`: this recovers evidence, it never upgrades a
+    verdict. Each assertion is still judged only by its own oracle.
+    """
+
+    failure = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+    try:
+        persisted = json.loads((artifact_root / "product-e2e.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return failure
+    if not isinstance(persisted, dict):
+        return failure
+    return {**persisted, **failure}
+
+
 def lifecycle_assertions(report: dict[str, Any], *, cleanup_ok: bool) -> dict[str, bool]:
     lifecycle = report.get("lifecycle") if isinstance(report.get("lifecycle"), dict) else {}
     passed = report.get("status") == "passed"
@@ -220,7 +247,18 @@ def run_lifecycle(args: argparse.Namespace) -> dict[str, Any]:
         try:
             report = cursor_helm_product_e2e.run_product_e2e(e2e_args)
         except Exception as exc:  # noqa: BLE001 - the report carries partial observations
-            report = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+            # run_product_e2e mutates its report in place and always writes it
+            # in its own finally, so the failed run's proven steps survive on
+            # disk. Replacing it with a bare status/error dict discarded them:
+            # lifecycle went missing, so every assertion -- including
+            # launch_registration and send_idle, which had already passed --
+            # read false, and cursor_pid went missing, so session_stopped could
+            # never be proven and the cell died as "lacks required cleanup"
+            # before any oracle ran. That is why all five cursor_helm cells were
+            # never_proven while the evidence for two of them sat in
+            # product-e2e.json (2026-09-19). Read it back; the bare dict is only
+            # the fallback when even that is unavailable.
+            report = failed_run_report(e2e_args.artifact_root, exc)
         finally:
             if isinstance(report, dict):
                 write_json(root / "product-e2e-report.json", report)

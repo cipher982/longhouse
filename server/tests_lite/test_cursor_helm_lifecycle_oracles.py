@@ -6,6 +6,9 @@ Enter only queues, so the original generation finishes and the steer text is
 answered by the next generation.
 """
 
+import json
+
+from zerg.qa.cursor_helm_lifecycle import failed_run_report
 from zerg.qa.cursor_helm_lifecycle import lifecycle_assertions
 from zerg.qa.cursor_helm_lifecycle import negative_control_verdict
 from zerg.qa.cursor_helm_product_e2e import abort_stopped_generation
@@ -214,3 +217,54 @@ def test_abort_control_does_not_read_the_steer_receipt() -> None:
     verdict = negative_control_verdict(report, fault="cursor_abort_noop")
     assert verdict["fault_fired"] is False
     assert verdict["status"] == "inconclusive"
+
+
+def test_a_failed_run_keeps_the_steps_it_already_proved(tmp_path) -> None:
+    """A late failure must not erase evidence the run already produced.
+
+    Shape taken from the real 2026-09-19 factory run that timed out at the
+    steer: launch_registration and send_idle had passed and cursor_pid was
+    known, but the harness replaced the report with a bare status/error dict.
+    lifecycle vanished, so all five assertions read false, and cursor_pid
+    vanished, so session_stopped could not be proven and every cursor_helm cell
+    failed as "lacks required cleanup" instead of being judged.
+    """
+    (tmp_path / "product-e2e.json").write_text(
+        json.dumps(
+            {
+                "status": "failed",
+                "session_id": "b212cd01-b66b-4532-9ad9-c32de5ae9806",
+                "cursor_pid": 105,
+                "lifecycle": {
+                    "launch_registration": {
+                        "first_reply_archived": True,
+                        "native_binding_claimed": True,
+                        "state_ready": True,
+                    },
+                    "send_idle": {"remote_reply_archived": True},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = failed_run_report(tmp_path, RuntimeError("timed out waiting for steered Cursor generation completing"))
+
+    assert report["cursor_pid"] == 105
+    assert report["session_id"] == "b212cd01-b66b-4532-9ad9-c32de5ae9806"
+    # Recovering evidence never upgrades the verdict.
+    assert report["status"] == "failed"
+    assert "timed out waiting for steered" in report["error"]
+
+    assertions = lifecycle_assertions(report, cleanup_ok=False)
+    assert assertions["cursor_helm_launch_registration"] is True
+    assert assertions["cursor_helm_send_idle"] is True
+    # The steps that never ran stay false; only their own oracles can pass them.
+    assert assertions["cursor_helm_steer_active"] is False
+    assert assertions["cursor_helm_abort_native"] is False
+    assert assertions["cursor_helm_terminate_owned"] is False
+
+
+def test_an_unreadable_report_still_yields_a_typed_failure(tmp_path) -> None:
+    report = failed_run_report(tmp_path, RuntimeError("boom"))
+    assert report == {"status": "failed", "error": "RuntimeError: boom"}
