@@ -122,7 +122,9 @@ jobs:
     # below the waits inside it is how the gate kills itself mid-wait.
     timeout-minutes: 120
     name: "Resolve exact-SHA deploy metadata"
-    runs-on: cube
+    # Waiting on cube CI and image jobs must not consume their runner pool.
+    # cube-deploy is downstream of those prerequisites, never required by them.
+    runs-on: cube-deploy
     needs: changes
     if: ${{ needs.changes.outputs.deploy_verify == 'true' }}
     outputs:
@@ -672,7 +674,7 @@ jobs:
           )"
   hosted_live_qa:
     name: "Dispatch hosted live QA (async)"
-    needs: [gate, fast_smoke, deploy_demo]
+    needs: [gate, reprovision_canary, fast_smoke, deploy_demo]
     if: github.repository == 'cipher982/longhouse'
     runs-on: cube-deploy
     permissions:
