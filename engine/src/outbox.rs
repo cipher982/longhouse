@@ -98,6 +98,10 @@ struct PresenceOutboxPayload {
     control_path: Option<String>,
     #[serde(default)]
     provider_pid: Option<u32>,
+    /// Captured by the producer while the hook still observed its provider
+    /// process. A drain-time PID lookup alone is unsafe after PID reuse.
+    #[serde(default)]
+    provider_process_start_time: Option<String>,
     #[serde(default)]
     occurred_at: Option<String>,
     /// Provider adapters use this for local-health-only phase evidence. It is
@@ -1503,16 +1507,31 @@ fn unmanaged_binding_signal_for_payload(
         return None;
     }
     let pid = payload.provider_pid?;
+    let expected_start = payload
+        .provider_process_start_time
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
     let facts = process_facts.get_or_insert_with(|| {
         crate::process_identity::try_collect_process_facts_by_pid().unwrap_or_default()
     });
     let process = crate::unmanaged_bindings::process_info_from_facts(facts, pid, provider)?;
-    let source_path = normalize_transcript_path(payload.transcript_path.as_deref());
+    // The PID is meaningful only together with the identity captured by the
+    // producer. A delayed hook must not bind its old session to a reused PID.
+    if process.start_time_key != expected_start {
+        return None;
+    }
+    let source_path = normalize_transcript_path(payload.transcript_path.as_deref())
+        .map(|path| crate::discovery::canonical_transcript_hint(provider, &path).into_owned())?;
+    let metadata = std::fs::metadata(&source_path).ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
 
     Some(UnmanagedProcessBindingSignal {
         provider: provider.to_string(),
         provider_session_id: session_id.to_string(),
-        source_path,
+        source_path: Some(source_path),
         pid,
         process_start_time: process.start_time,
         process_start_time_key: process.start_time_key,
@@ -1566,6 +1585,44 @@ mod tests {
 
     fn make_outbox() -> TempDir {
         tempfile::tempdir().expect("tempdir")
+    }
+
+    #[test]
+    fn delayed_unmanaged_hook_cannot_bind_a_reused_pid() {
+        let source = tempfile::NamedTempFile::new().unwrap();
+        let payload: PresenceOutboxPayload = serde_json::from_value(json!({
+            "session_id": "native-old",
+            "state": "idle",
+            "provider": "claude",
+            "control_path": "unmanaged",
+            "provider_pid": 42,
+            "provider_process_start_time": "old-birth",
+            "transcript_path": source.path().to_string_lossy(),
+        }))
+        .unwrap();
+        let mut facts = Some(HashMap::from([(
+            42,
+            crate::process_identity::ProcessFact {
+                pid: 42,
+                tty: "??".to_string(),
+                stat: "S".to_string(),
+                lstart: "new-birth".to_string(),
+                command: "claude".to_string(),
+                start_time: crate::process_identity::parse_rfc3339("2026-05-05T12:00:00Z"),
+            },
+        )]));
+
+        assert!(
+            unmanaged_binding_signal_for_payload(
+                &payload,
+                "claude",
+                "native-old",
+                Utc::now(),
+                &mut facts,
+            )
+            .is_none(),
+            "drain-time PID identity must not authorize an old hook"
+        );
     }
 
     #[test]

@@ -128,8 +128,9 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
         provider_session_id.as_deref(),
     );
     if managed_session_id.is_none() {
-        if let Some(provider_pid) = unmanaged_provider_pid() {
+        if let Some((provider_pid, provider_process_start_time)) = unmanaged_provider_identity() {
             payload["provider_pid"] = json!(provider_pid);
+            payload["provider_process_start_time"] = json!(provider_process_start_time);
         }
     }
     // Only when the event actually says something about activity. A
@@ -211,6 +212,23 @@ fn unmanaged_provider_pid() -> Option<u32> {
         pid = parent;
     }
     None
+}
+
+/// Capture the provider's raw birth identity while the hook producer still
+/// observes the process. If that probe is unavailable, omit the binding claim;
+/// a later drain must not invent an identity for a reused PID.
+fn unmanaged_provider_identity() -> Option<(u32, String)> {
+    let pid = unmanaged_provider_pid()?;
+    let crate::process_identity::ProcessFactLookup::Present(fact) =
+        crate::process_identity::inspect_process_fact(pid)
+    else {
+        return None;
+    };
+    if crate::unmanaged_bindings::is_provider_process(&fact.command) != Some("claude") {
+        return None;
+    }
+    let start_time = fact.lstart.trim();
+    (!start_time.is_empty()).then(|| (pid, start_time.to_string()))
 }
 
 fn parse_process_row(row: &str) -> Option<(&str, u32)> {
@@ -519,10 +537,7 @@ fn interaction_runtime_event(session_id: &str, edge: &InteractionEdge) -> Value 
         InteractionEdge::OpenPermission { request_key, .. } => {
             format!("claude-hook:open-permission:{session_id}:{request_key}")
         }
-        _ => format!(
-            "claude-hook:{kind}:{session_id}:{}",
-            uuid::Uuid::new_v4()
-        ),
+        _ => format!("claude-hook:{kind}:{session_id}:{}", uuid::Uuid::new_v4()),
     };
     json!({
         "runtime_key": runtime_key,
@@ -662,7 +677,6 @@ mod tests {
     // information -- it only converts one real failure into a wall of PoisonError noise
     // from every other test that shares the lock.
 
-
     fn with_provider<T>(value: Option<&str>, body: impl FnOnce() -> T) -> T {
         let _guard = crate::console_adapter::agent_state_guard();
         let previous = std::env::var_os("LONGHOUSE_MANAGED_PROVIDER");
@@ -714,11 +728,8 @@ mod tests {
             Some("running")
         );
         assert_eq!(
-            observation_for_event(
-                "Notification",
-                &json!({"notification_type":"idle_prompt"})
-            )
-            .status,
+            observation_for_event("Notification", &json!({"notification_type":"idle_prompt"}))
+                .status,
             Some("idle")
         );
         assert_eq!(
@@ -745,7 +756,10 @@ mod tests {
                 ..
             }) => {
                 assert_eq!(tool_name, "Bash");
-                assert!(request_key.starts_with("claude-hook:permission:Bash:"), "{request_key}");
+                assert!(
+                    request_key.starts_with("claude-hook:permission:Bash:"),
+                    "{request_key}"
+                );
             }
             other => panic!("expected an approval edge, got {other:?}"),
         }
@@ -823,7 +837,11 @@ mod tests {
         }
     }
 
-    fn parsed_event(role: Role, tool_name: Option<&str>, tool_call_id: Option<&str>) -> ParsedEvent {
+    fn parsed_event(
+        role: Role,
+        tool_name: Option<&str>,
+        tool_call_id: Option<&str>,
+    ) -> ParsedEvent {
         ParsedEvent {
             uuid: format!("uuid-{}", tool_call_id.unwrap_or("none")),
             parent_uuid: None,
@@ -844,21 +862,30 @@ mod tests {
     #[test]
     fn a_shipped_question_result_closes_the_wait_its_call_opened() {
         let session = "session-transcript";
-        let call = parsed_event(Role::Assistant, Some(PAUSE_TOOL_NAME), Some("toolu_01shipped"));
+        let call = parsed_event(
+            Role::Assistant,
+            Some(PAUSE_TOOL_NAME),
+            Some("toolu_01shipped"),
+        );
         let result = parsed_event(Role::Tool, None, Some("toolu_01shipped"));
 
         // An ordinary tool end proves nothing about a question: the result does
         // not say which tool it belongs to, so only a call this watched can
         // close a wait.
-        assert!(
-            transcript_resolutions_for_events(session, &[parsed_event(Role::Tool, None, Some("toolu_01other"))])
-                .is_empty()
-        );
+        assert!(transcript_resolutions_for_events(
+            session,
+            &[parsed_event(Role::Tool, None, Some("toolu_01other"))]
+        )
+        .is_empty());
 
-        let resolutions = transcript_resolutions_for_events(session, &[call.clone(), result.clone()]);
+        let resolutions =
+            transcript_resolutions_for_events(session, &[call.clone(), result.clone()]);
         assert_eq!(resolutions.len(), 1);
         assert_eq!(resolutions[0]["kind"], "pause_resolution");
-        assert_eq!(resolutions[0]["payload"]["provider_request_id"], "toolu_01shipped");
+        assert_eq!(
+            resolutions[0]["payload"]["provider_request_id"],
+            "toolu_01shipped"
+        );
         assert_eq!(resolutions[0]["source"], TRANSCRIPT_SOURCE);
         assert_eq!(resolutions[0]["runtime_key"], "claude:session-transcript");
         // Deterministic rather than a nonce: the watcher re-reads ranges, so a

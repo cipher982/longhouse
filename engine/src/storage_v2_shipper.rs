@@ -37,9 +37,7 @@ use crate::state::file_identity::{
 };
 use crate::state::file_state::FileState;
 use crate::state::pending_source_envelope::{self, PendingSourceEnvelope};
-use crate::state::source_epoch::{
-    self, EpochStartReason, SourceChangeHint, SourceEpochResolution, SourceLane,
-};
+use crate::state::source_epoch::{self, SourceChangeHint, SourceEpochResolution, SourceLane};
 use crate::storage_v2_contract::{self, EnvelopeIdentity, RangeKind};
 
 pub(crate) const PARSER_REVISION: &str = "engine-parser-v2";
@@ -410,17 +408,16 @@ fn prepare_next_envelope_with_limit(
     }
     let session_id_override = durable_session_id.as_deref();
     let legacy_offset = validated_legacy_offset(conn, &path_text, &canonical_path)?;
-    let source_revision = if provider.eq_ignore_ascii_case("omp")
-        || provider.eq_ignore_ascii_case("pi")
-    {
-        pi_lineage_source_revision(path)?
-    } else if provider.eq_ignore_ascii_case("antigravity")
-        || is_cursor_agent_transcript_path(provider, path)
-    {
-        Some(hash_file(path)?)
-    } else {
-        None
-    };
+    let source_revision =
+        if provider.eq_ignore_ascii_case("omp") || provider.eq_ignore_ascii_case("pi") {
+            pi_lineage_source_revision(path)?
+        } else if provider.eq_ignore_ascii_case("antigravity")
+            || is_cursor_agent_transcript_path(provider, path)
+        {
+            Some(hash_file(path)?)
+        } else {
+            None
+        };
     let resolution = source_epoch::observe_file(
         conn,
         provider,
@@ -4938,8 +4935,8 @@ fn session_facts(
     // identity on the wire even when the transcript is not the provider head.
     // Claude's sidechain suppression is intentionally unchanged: its native
     // child identity is not established by this path.
-    let preserve_native_identity = provider.eq_ignore_ascii_case("codex")
-        || provider.eq_ignore_ascii_case("omp");
+    let preserve_native_identity =
+        provider.eq_ignore_ascii_case("codex") || provider.eq_ignore_ascii_case("omp");
     let provider_session_id = if preserve_native_identity {
         metadata
             .provider_session_id
@@ -5084,7 +5081,8 @@ pub(crate) fn durable_lane_position(
     canonical_path: &str,
 ) -> Result<Option<u64>> {
     let opaque = opaque_source_id(canonical_path);
-    let Some(epoch) = crate::state::source_epoch::active_source_epoch(conn, provider, &opaque)? else {
+    let Some(epoch) = crate::state::source_epoch::active_source_epoch(conn, provider, &opaque)?
+    else {
         return Ok(None);
     };
     Ok(Some(crate::state::source_epoch::lane_position(
@@ -5108,8 +5106,8 @@ pub(crate) fn opaque_source_id(path: &str) -> String {
 /// collision within the same stamp vanishingly unlikely; hashing the file
 /// instead would cost a full read on every envelope.
 fn source_stamp(path: &Path) -> Result<(u64, i128)> {
-    let metadata = std::fs::metadata(path)
-        .with_context(|| format!("stamping source: {}", path.display()))?;
+    let metadata =
+        std::fs::metadata(path).with_context(|| format!("stamping source: {}", path.display()))?;
     let modified = metadata
         .modified()
         .ok()
@@ -5255,7 +5253,6 @@ mod tests {
         assert_eq!(after.envelope.session.project.as_deref(), Some("proj"));
     }
 
-
     #[test]
     fn omp_partial_header_is_fenced_before_shadow_source_epoch_creation() {
         let dir = tempfile::tempdir().unwrap();
@@ -5332,7 +5329,6 @@ mod tests {
         "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
     const CURSOR_MESSAGE_C: &str =
         "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-
 
     #[test]
     fn preparation_errors_are_distinct_from_transport_failures() {
@@ -10585,7 +10581,10 @@ mod tests {
         std::fs::write(&path, vec![b'x'; 4096]).unwrap();
 
         assert_eq!(live_lag_bytes(&conn, "omp", &path), 0);
-        assert_eq!(live_lag_bytes(&conn, "omp", &dir.path().join("missing.jsonl")), 0);
+        assert_eq!(
+            live_lag_bytes(&conn, "omp", &dir.path().join("missing.jsonl")),
+            0
+        );
     }
 
     #[test]
@@ -10641,60 +10640,38 @@ mod tests {
         assert_eq!(pi_lineage_source_revision(&path).unwrap(), None);
     }
 
-    fn identity_resolution() -> SourceEpochResolution {
-        SourceEpochResolution {
-            source_epoch: Uuid::nil(),
-            predecessor_epoch: None,
-            created: true,
-            start_reason: EpochStartReason::Initial,
-            opened_at: "2026-09-18T00:00:00Z".to_string(),
-            bound_session_id: None,
-        }
-    }
-
     #[test]
     fn codex_subagent_keeps_native_child_identity_and_parent_edge() {
-        let metadata = SessionMetadata {
-            session_id: "codex-child".to_string(),
-            forked_from_session_id: Some("codex-parent".to_string()),
-            is_sidechain: true,
-            subagent_depth: Some(2),
-            subagent_name: Some("reviewer".to_string()),
-            ..Default::default()
-        };
-
-        let facts = session_facts("codex", &metadata, &[], &identity_resolution()).unwrap();
-
-        // The host needs the child's own provider id to resolve a nested
-        // worker later; the parent edge remains provider-native and unresolved.
-        assert_eq!(facts.provider_session_id.as_deref(), Some("codex-child"));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout-child.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                r#"{"type":"session_meta","timestamp":"2026-02-15T10:00:00Z","payload":{"id":"dddddddd-1111-2222-3333-444455556666","source":{"subagent":{"thread_spawn":{"parent_thread_id":"cccccccc-1111-2222-3333-444455556666","depth":2}}},"cwd":"/tmp/test"}}"#,
+                "\n",
+                r#"{"type":"response_item","timestamp":"2026-02-15T10:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"inspect the child"}]}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "codex", None)
+            .unwrap()
+            .unwrap();
         assert_eq!(
-            facts.parent_provider_session_id.as_deref(),
-            Some("codex-parent")
+            prepared.envelope.session.provider_session_id.as_deref(),
+            Some("dddddddd-1111-2222-3333-444455556666")
         );
-        assert!(facts.is_subagent);
-    }
-
-    #[test]
-    fn omp_parent_session_keeps_native_child_identity_without_hidden_sidechain() {
-        let metadata = SessionMetadata {
-            session_id: "managed-omp-child".to_string(),
-            provider_session_id: Some("omp-child".to_string()),
-            parent_provider_session_id: Some("omp-parent".to_string()),
-            ..Default::default()
-        };
-
-        let facts = session_facts("omp", &metadata, &[], &identity_resolution()).unwrap();
-
-        // `parentSession` is an explicit OMP relation, not a reason to infer
-        // hidden/subagent status. Both native identities still cross the wire.
-        assert_eq!(facts.provider_session_id.as_deref(), Some("omp-child"));
         assert_eq!(
-            facts.parent_provider_session_id.as_deref(),
-            Some("omp-parent")
+            prepared
+                .envelope
+                .session
+                .parent_provider_session_id
+                .as_deref(),
+            Some("cccccccc-1111-2222-3333-444455556666")
         );
-        assert!(!facts.is_subagent);
-        assert!(!facts.hidden_from_default_timeline);
+        assert!(prepared.envelope.session.is_subagent);
+        assert!(prepared.envelope.session.hidden_from_default_timeline);
     }
 
     #[test]
@@ -10706,23 +10683,27 @@ mod tests {
             include_str!("../tests/fixtures/golden/omp/native.jsonl"),
         )
         .unwrap();
-
-        let parsed = parser::parse_session_file_with_provider(&path, 0, Some("omp")).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let managed_id = "019d2869-1111-7222-8333-aaaaaaaaaaaa";
+        let prepared =
+            prepare_next_envelope(&mut conn, &capabilities(), &path, "omp", Some(managed_id))
+                .unwrap()
+                .unwrap();
+        assert_eq!(prepared.envelope.session_id, managed_id);
         assert_eq!(
-            parsed.metadata.provider_session_id.as_deref(),
+            prepared.envelope.session.provider_session_id.as_deref(),
             Some("omp-native-18-1-14")
         );
         assert_eq!(
-            parsed.metadata.parent_provider_session_id.as_deref(),
+            prepared
+                .envelope
+                .session
+                .parent_provider_session_id
+                .as_deref(),
             Some("omp-parent-opaque")
         );
-        let facts =
-            session_facts("omp", &parsed.metadata, &[], &identity_resolution()).unwrap();
-        assert_eq!(facts.provider_session_id.as_deref(), Some("omp-native-18-1-14"));
-        assert_eq!(
-            facts.parent_provider_session_id.as_deref(),
-            Some("omp-parent-opaque")
-        );
+        assert!(!prepared.envelope.session.is_subagent);
+        assert!(!prepared.envelope.session.hidden_from_default_timeline);
     }
 
     #[test]
@@ -10732,10 +10713,18 @@ mod tests {
         std::fs::write(&path, b"{\"type\":\"session\"}\n").unwrap();
 
         let first = source_stamp(&path).unwrap();
-        assert_eq!(source_stamp(&path).unwrap(), first, "an untouched file keeps its stamp");
+        assert_eq!(
+            source_stamp(&path).unwrap(),
+            first,
+            "an untouched file keeps its stamp"
+        );
 
         std::fs::write(&path, b"{\"type\":\"session\"}\n{\"type\":\"message\"}\n").unwrap();
-        assert_ne!(source_stamp(&path).unwrap(), first, "an append moves the stamp");
+        assert_ne!(
+            source_stamp(&path).unwrap(),
+            first,
+            "an append moves the stamp"
+        );
 
         // Same length, different bytes: the post-read re-check is what catches
         // a provider rewriting the file between the raw read and the parse.

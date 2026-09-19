@@ -42,9 +42,9 @@ use chrono::Utc;
 
 use crate::discovery;
 use crate::heartbeat::UnmanagedSessionBinding;
-use crate::process_identity::ProcessFact;
 #[cfg(test)]
 use crate::process_identity::parse_lstart;
+use crate::process_identity::ProcessFact;
 use crate::state::unmanaged_process_binding::UnmanagedProcessBindingStore;
 
 /// Cap the number of bindings emitted per heartbeat. Provider roots with
@@ -107,6 +107,7 @@ fn collect_unmanaged_session_bindings_from_processes(
         return Err(unmanaged_refresh_timeout());
     }
     let mut out = Vec::new();
+    let mut ambiguous_binding_keys = HashSet::new();
     let mut hook_resolved_pids = HashSet::new();
 
     for row in hook_rows {
@@ -120,28 +121,32 @@ fn collect_unmanaged_session_bindings_from_processes(
             continue;
         }
 
-        let (source_inode, source_device, source_offset, source_mtime) = row
-            .source_path
-            .as_ref()
-            .and_then(|path| std::fs::metadata(path).ok())
-            .map(|meta| {
-                (
-                    inode_of(&meta),
-                    device_of(&meta),
-                    Some(meta.len()),
-                    meta.modified().ok().map(DateTime::<Utc>::from),
-                )
-            })
-            .unwrap_or((None, None, None, None));
+        // A hook row without a readable, regular source is only an activity
+        // observation. It is not exact-source evidence and must not authorize
+        // a binding while the archive is unavailable.
+        let Some(stored_path) = row.source_path.as_ref() else {
+            continue;
+        };
+        let source_path =
+            discovery::canonical_transcript_hint(&row.provider, stored_path).into_owned();
+        let Ok(meta) = std::fs::metadata(&source_path) else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let (source_inode, source_device, source_offset, source_mtime) = (
+            inode_of(&meta),
+            device_of(&meta),
+            Some(meta.len()),
+            meta.modified().ok().map(DateTime::<Utc>::from),
+        );
 
         let binding = UnmanagedSessionBinding {
             machine_id: machine_id.to_string(),
             provider: row.provider,
             provider_session_id: row.provider_session_id,
-            source_path: row
-                .source_path
-                .as_ref()
-                .and_then(|path| path.to_str().map(str::to_string)),
+            source_path: source_path.to_str().map(str::to_string),
             source_inode,
             source_device,
             pid: Some(process.pid),
@@ -152,7 +157,7 @@ fn collect_unmanaged_session_bindings_from_processes(
             observed_at: now.to_rfc3339(),
         };
 
-        upsert_newer_binding(&mut out, binding);
+        admit_binding(&mut out, &mut ambiguous_binding_keys, binding);
         hook_resolved_pids.insert(process.pid);
     }
 
@@ -196,7 +201,7 @@ fn collect_unmanaged_session_bindings_from_processes(
         deadline,
     )?;
     for binding in fd_bindings {
-        upsert_newer_binding(&mut out, binding);
+        admit_binding(&mut out, &mut ambiguous_binding_keys, binding);
     }
     Ok(out)
 }
@@ -452,26 +457,47 @@ fn process_info_from_fact(fact: ProcessFact, provider: &str) -> Option<ProcessIn
     })
 }
 
-fn upsert_newer_binding(
+fn admit_binding(
     bindings: &mut Vec<UnmanagedSessionBinding>,
+    ambiguous_keys: &mut HashSet<(String, String)>,
     next: UnmanagedSessionBinding,
 ) {
-    let Some(existing) = bindings.iter_mut().find(|binding| {
+    let key = (next.provider.clone(), next.provider_session_id.clone());
+    if ambiguous_keys.contains(&key) {
+        return;
+    }
+    let Some(existing_index) = bindings.iter().position(|binding| {
         binding.provider == next.provider && binding.provider_session_id == next.provider_session_id
     }) else {
         bindings.push(next);
         return;
     };
-
-    let existing_observed = DateTime::parse_from_rfc3339(&existing.observed_at)
-        .ok()
-        .map(|value| value.with_timezone(&Utc));
-    let next_observed = DateTime::parse_from_rfc3339(&next.observed_at)
-        .ok()
-        .map(|value| value.with_timezone(&Utc));
-    if next_observed >= existing_observed {
-        *existing = next;
+    let existing = &bindings[existing_index];
+    if same_binding_identity(existing, &next) {
+        if next.observed_at >= existing.observed_at {
+            bindings[existing_index] = next;
+        }
+    } else {
+        // Two distinct process/source identities for one native session are
+        // ambiguous. Retaining the newest one would make the join arbitrary.
+        bindings.remove(existing_index);
+        ambiguous_keys.insert(key);
     }
+}
+
+fn same_binding_identity(
+    existing: &UnmanagedSessionBinding,
+    next: &UnmanagedSessionBinding,
+) -> bool {
+    existing.pid == next.pid
+        && existing.process_start_time == next.process_start_time
+        && existing
+            .source_path
+            .as_deref()
+            .zip(next.source_path.as_deref())
+            .is_some_and(|(left, right)| {
+                canonicalize(Path::new(left)) == canonicalize(Path::new(right))
+            })
 }
 
 fn provider_from_argv0_basename(basename: &str) -> Option<&'static str> {
@@ -493,12 +519,24 @@ fn provider_from_argv0_basename(basename: &str) -> Option<&'static str> {
 }
 
 fn provider_session_id_from_path(path: &Path, provider: &str) -> Option<String> {
-    let stem = path.file_stem()?.to_str()?.to_string();
-    if provider == "antigravity" && stem == "transcript" {
-        if let Some(id) = antigravity_conversation_id_from_path(path) {
-            return Some(id);
-        }
+    let canonical_path = discovery::canonical_transcript_hint(provider, path);
+    let path = canonical_path.as_ref();
+    if provider == "pi" {
+        return crate::pi_session::read_session_header_id(path).ok();
     }
+    if provider == "omp" {
+        return crate::omp_session::read_session_header(path)
+            .ok()
+            .map(|header| header.native_id);
+    }
+    if provider == "antigravity" {
+        return path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| *name == "transcript_full.jsonl")
+            .and_then(|_| antigravity_conversation_id_from_path(path));
+    }
+    let stem = path.file_stem()?.to_str()?.to_string();
     // Claude/Gemini name transcripts after the session UUID. Codex
     // rollout files are named `rollout-YYYY-MM-DDTHH-MM-SS-<uuid>.jsonl`;
     // the runtime session stores only `<uuid>` as provider_session_id.
@@ -664,18 +702,38 @@ fn collect_from_transcripts_with_open_files(
         return Ok(Vec::new());
     }
 
-    // Pre-index transcripts by canonicalized path for fast fd lookup.
-    let mut transcript_index: HashMap<PathBuf, (PathBuf, &'static str)> = HashMap::new();
-    let mut transcript_by_session: HashMap<(String, String), PathBuf> = HashMap::new();
+    // Pre-index transcripts by canonicalized path for fast fd lookup. Keep
+    // every candidate: a duplicate is ambiguity, not a reason to pick one.
+    let mut transcript_index: HashMap<PathBuf, Vec<(PathBuf, &'static str)>> = HashMap::new();
+    let mut transcript_by_session: HashMap<(String, String), Vec<PathBuf>> = HashMap::new();
     for (path, provider) in transcripts {
-        transcript_index.insert(canonicalize(path), (path.clone(), *provider));
-        if let Some(session_id) = provider_session_id_from_path(path, provider) {
-            transcript_by_session.insert((provider.to_string(), session_id), path.clone());
+        let source_path = discovery::canonical_transcript_hint(provider, path).into_owned();
+        transcript_index
+            .entry(canonicalize(&source_path))
+            .or_default()
+            .push((source_path.clone(), *provider));
+        if let Some(session_id) = provider_session_id_from_path(&source_path, provider) {
+            transcript_by_session
+                .entry((provider.to_string(), session_id))
+                .or_default()
+                .push(source_path);
         }
     }
+    let ambiguous_source_paths = transcript_index
+        .iter()
+        .filter(|(_, candidates)| candidates.len() != 1)
+        .map(|(path, _)| path.clone())
+        .collect::<HashSet<_>>();
+    let ambiguous_sessions = transcript_by_session
+        .iter()
+        .filter(|(_, candidates)| candidates.len() != 1)
+        .map(|(key, _)| key.clone())
+        .collect::<HashSet<_>>();
 
-    // If two processes claim the same transcript, prefer the newer one.
-    let mut best_by_transcript: HashMap<PathBuf, (ProcessInfo, &'static str)> = HashMap::new();
+    // If two processes claim the same transcript, the process/source join is
+    // unknown. Never select the newer process as a proxy for identity.
+    let mut processes_by_transcript: HashMap<PathBuf, Vec<(ProcessInfo, &'static str)>> =
+        HashMap::new();
 
     for item in evidence {
         if Instant::now() >= deadline {
@@ -683,59 +741,78 @@ fn collect_from_transcripts_with_open_files(
         }
         for open_path in &item.open_files {
             let canon = canonicalize(open_path);
-            let matched_transcript = transcript_index
-                .get(&canon)
-                .filter(|(_orig, file_provider)| *file_provider == item.provider)
-                .map(|(orig, _file_provider)| orig.clone())
-                .or_else(|| {
-                    if item.provider != "claude" {
+            let matched_transcript = match transcript_index.get(&canon) {
+                Some(candidates)
+                    if !ambiguous_source_paths.contains(&canon)
+                        && candidates.len() == 1
+                        && candidates[0].1 == item.provider =>
+                {
+                    Some(candidates[0].0.clone())
+                }
+                _ if item.provider == "claude" => (|| {
+                    let session_id = claude_task_session_id_from_path(open_path)?;
+                    let key = (item.provider.to_string(), session_id);
+                    let candidates = transcript_by_session.get(&key)?;
+                    if candidates.len() != 1 {
                         return None;
                     }
-                    let session_id = claude_task_session_id_from_path(open_path)?;
-                    transcript_by_session
-                        .get(&(item.provider.to_string(), session_id))
-                        .cloned()
-                });
+                    let path = candidates[0].clone();
+                    (!ambiguous_source_paths.contains(&canonicalize(&path))).then_some(path)
+                })(),
+                _ => None,
+            };
             let Some(display_path) = matched_transcript else {
                 continue;
             };
             let display_canon = canonicalize(&display_path);
-            match best_by_transcript.get(&display_canon) {
-                Some((existing, _)) if existing.start_time >= item.process.start_time => continue,
-                _ => {
-                    best_by_transcript.insert(display_canon, (item.process.clone(), item.provider));
-                }
+            let candidates = processes_by_transcript.entry(display_canon).or_default();
+            if !candidates.iter().any(|(existing, provider)| {
+                *provider == item.provider
+                    && existing.pid == item.process.pid
+                    && existing.start_time == item.process.start_time
+            }) {
+                candidates.push((item.process.clone(), item.provider));
             }
         }
     }
 
     let mut bindings: Vec<UnmanagedSessionBinding> = Vec::new();
-    for (canon_path, (proc, provider)) in best_by_transcript {
+    for (canon_path, candidates) in processes_by_transcript {
         if Instant::now() >= deadline {
             return Err(unmanaged_refresh_timeout());
         }
-        let Some((display_path, _)) = transcript_index.get(&canon_path) else {
+        if candidates.len() != 1 {
+            continue;
+        }
+        let Some((display_path, provider)) = transcript_index
+            .get(&canon_path)
+            .and_then(|candidates| candidates.first())
+        else {
             continue;
         };
         let Some(session_id) = provider_session_id_from_path(display_path, provider) else {
             continue;
         };
-
-        let (inode, dev, size, mtime) = match std::fs::metadata(display_path) {
-            Ok(meta) => {
-                let mtime = meta.modified().ok().map(DateTime::<Utc>::from);
-                (inode_of(&meta), device_of(&meta), Some(meta.len()), mtime)
-            }
-            Err(_) => (None, None, None, None),
+        if ambiguous_sessions.contains(&(provider.to_string(), session_id.clone())) {
+            continue;
+        }
+        let Ok(meta) = std::fs::metadata(display_path) else {
+            continue;
         };
+        if !meta.is_file() {
+            continue;
+        }
+        let (proc, _) = &candidates[0];
+        let size = Some(meta.len());
+        let mtime = meta.modified().ok().map(DateTime::<Utc>::from);
 
         bindings.push(UnmanagedSessionBinding {
             machine_id: machine_id.to_string(),
             provider: provider.to_string(),
             provider_session_id: session_id,
             source_path: display_path.to_str().map(str::to_string),
-            source_inode: inode,
-            source_device: dev,
+            source_inode: inode_of(&meta),
+            source_device: device_of(&meta),
             pid: Some(proc.pid),
             process_start_time: Some(proc.start_time.to_rfc3339()),
             cwd: None, // populated in a follow-up; costs another per-pid call.
@@ -788,12 +865,7 @@ mod tests {
             let open_files = self.open_files.borrow();
             Ok(pids
                 .iter()
-                .filter_map(|pid| {
-                    open_files
-                        .get(pid)
-                        .cloned()
-                        .map(|paths| (*pid, paths))
-                })
+                .filter_map(|pid| open_files.get(pid).cloned().map(|paths| (*pid, paths)))
                 .collect())
         }
     }
@@ -1025,12 +1097,44 @@ mod tests {
     #[test]
     fn antigravity_transcript_path_uses_brain_conversation_id() {
         let path = Path::new(
-            "/Users/x/.gemini/antigravity/brain/53116f30-f150-458c-b36e-2e30f576dc74/.system_generated/logs/transcript.jsonl",
+            "/Users/x/.gemini/antigravity/brain/53116f30-f150-458c-b36e-2e30f576dc74/.system_generated/logs/transcript_full.jsonl",
         );
 
         assert_eq!(
             provider_session_id_from_path(path, "antigravity").as_deref(),
             Some("53116f30-f150-458c-b36e-2e30f576dc74"),
+        );
+    }
+
+    #[test]
+    fn pi_native_identity_comes_from_session_header() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("arbitrary-name.jsonl");
+        std::fs::write(
+            &path,
+            "{\"type\":\"session\",\"id\":\"53116f30-f150-458c-b36e-2e30f576dc74\"}\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            provider_session_id_from_path(&path, "pi").as_deref(),
+            Some("53116f30-f150-458c-b36e-2e30f576dc74"),
+        );
+    }
+
+    #[test]
+    fn omp_native_identity_comes_from_session_header() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("2026-04-27T12-00-00-opaque.jsonl");
+        std::fs::write(
+            &path,
+            "{\"type\":\"session\",\"id\":\"opaque-native-id\",\"cwd\":\"/tmp\",\"provider\":\"omp\"}\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            provider_session_id_from_path(&path, "omp").as_deref(),
+            Some("opaque-native-id"),
         );
     }
 
@@ -1219,7 +1323,7 @@ mod tests {
     }
 
     #[test]
-    fn scanner_prefers_newer_process_on_collision() {
+    fn scanner_rejects_process_collision_instead_of_picking_newest() {
         let now = t("2026-04-27T12:00:00Z");
         let tmp = tempfile::tempdir().unwrap();
         let transcript = tmp.path().join("abc.jsonl");
@@ -1233,7 +1337,7 @@ mod tests {
         open_files.insert(2000u32, vec![transcript.clone()]);
 
         let scanner = FakeScanner {
-            processes: vec![older.clone(), newer.clone()],
+            processes: vec![older, newer],
             open_files: RefCell::new(open_files),
         };
 
@@ -1245,8 +1349,62 @@ mod tests {
             now,
         )
         .unwrap();
-        assert_eq!(bindings.len(), 1);
-        assert_eq!(bindings[0].pid, Some(newer.pid));
+        assert!(
+            bindings.is_empty(),
+            "ambiguous process/source joins are non-authoritative"
+        );
+    }
+
+    #[test]
+    fn scanner_rejects_unavailable_source_metadata() {
+        let now = t("2026-04-27T12:00:00Z");
+        let tmp = tempfile::tempdir().unwrap();
+        let transcript = tmp.path().join("missing.jsonl");
+        let process = proc_info(1234, "2026-04-27T10:00:00Z", "/usr/local/bin/codex");
+        let scanner = FakeScanner {
+            processes: vec![process.clone()],
+            open_files: RefCell::new(HashMap::from([(process.pid, vec![transcript.clone()])])),
+        };
+
+        let bindings = collect_from_transcripts(
+            "mac",
+            &[(transcript, "codex")],
+            &scanner.processes,
+            &scanner,
+            now,
+        )
+        .unwrap();
+        assert!(bindings.is_empty());
+    }
+
+    #[test]
+    fn scanner_rejects_multiple_sources_for_one_native_session() {
+        let now = t("2026-04-27T12:00:00Z");
+        let tmp = tempfile::tempdir().unwrap();
+        let first = tmp.path().join("one").join("same.jsonl");
+        let second = tmp.path().join("two").join("same.jsonl");
+        std::fs::create_dir_all(first.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(second.parent().unwrap()).unwrap();
+        std::fs::write(&first, "{}\n").unwrap();
+        std::fs::write(&second, "{}\n").unwrap();
+        let process = proc_info(1234, "2026-04-27T10:00:00Z", "/usr/local/bin/codex");
+        let scanner = FakeScanner {
+            processes: vec![process.clone()],
+            open_files: RefCell::new(HashMap::from([(
+                process.pid,
+                vec![first.clone(), second.clone()],
+            )])),
+        };
+
+        let bindings = collect_from_transcripts(
+            "mac",
+            &[(first, "codex"), (second, "codex")],
+            &scanner.processes,
+            &scanner,
+            now,
+        )
+        .unwrap();
+        assert!(bindings.is_empty());
     }
 
     #[test]
