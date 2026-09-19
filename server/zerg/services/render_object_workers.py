@@ -62,7 +62,7 @@ class RenderObjectWorkerPool:
         *,
         live_workers: int = 1,
         repair_workers: int = 1,
-        user_read_workers: int = 2,
+        user_read_workers: int = 1,
         queue_multiplier: int = 2,
     ) -> None:
         if live_workers < 1 or repair_workers < 1 or user_read_workers < 1 or queue_multiplier < 1:
@@ -381,7 +381,7 @@ def get_render_object_worker_pool() -> RenderObjectWorkerPool:
             storage_v2_root(),
             live_workers=_env_positive_int("LONGHOUSE_STORAGE_RENDER_LIVE_WORKERS", 1),
             repair_workers=_env_positive_int("LONGHOUSE_STORAGE_RENDER_REPAIR_WORKERS", 1),
-            user_read_workers=_env_positive_int("LONGHOUSE_STORAGE_RENDER_READ_WORKERS", 2),
+            user_read_workers=_env_positive_int("LONGHOUSE_STORAGE_RENDER_READ_WORKERS", 1),
             queue_multiplier=_env_positive_int("LONGHOUSE_STORAGE_RENDER_QUEUE_MULTIPLIER", 2),
         )
     return _pool

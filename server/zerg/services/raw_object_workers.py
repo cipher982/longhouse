@@ -250,7 +250,7 @@ class RawObjectWorkerPool:
         self,
         root: Path,
         *,
-        live_workers: int = 2,
+        live_workers: int = 1,
         repair_workers: int = 1,
         user_read_workers: int = 1,
         queue_multiplier: int = 2,
@@ -782,7 +782,7 @@ def get_raw_object_worker_pool() -> RawObjectWorkerPool:
     if _pool is None or _pool._closed:
         _pool = RawObjectWorkerPool(
             storage_v2_root(),
-            live_workers=_env_positive_int("LONGHOUSE_STORAGE_RAW_LIVE_WORKERS", 2),
+            live_workers=_env_positive_int("LONGHOUSE_STORAGE_RAW_LIVE_WORKERS", 1),
             repair_workers=_env_positive_int("LONGHOUSE_STORAGE_RAW_REPAIR_WORKERS", 1),
             user_read_workers=_env_positive_int("LONGHOUSE_STORAGE_RAW_READ_WORKERS", 1),
             queue_multiplier=_env_positive_int("LONGHOUSE_STORAGE_RAW_QUEUE_MULTIPLIER", 2),
