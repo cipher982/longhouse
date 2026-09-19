@@ -1,7 +1,8 @@
-"""Exercise failed observation, cached phase rebuild, and recovery in a real daemon.
+"""Exercise inventory and projection-build failure/recovery in a real daemon.
 
 Only the capability handshake is a loopback fixture. No provider or hosted session
-is created; HOME, process inventory failure, phase ledger, and logs are disposable.
+is created; HOME, process inventory failure, projection-build failure, phase ledger,
+and logs are disposable.
 """
 
 import argparse
@@ -56,6 +57,11 @@ class RuntimeFixture(http.server.BaseHTTPRequestHandler):
 
 def interrupted(signum, _frame):
     raise InterruptedError(f"interrupted by signal {signum}")
+
+
+def utc_age_seconds(value):
+    observed_at = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return (datetime.datetime.now(datetime.timezone.utc) - observed_at).total_seconds()
 
 
 def exercise(engine):
@@ -148,6 +154,48 @@ def exercise(engine):
                 except FileNotFoundError:
                     return {}
 
+            def native_health():
+                result = subprocess.run(
+                    [
+                        str(engine),
+                        "device",
+                        "local-health",
+                        "--json",
+                        "--state-root",
+                        str(longhouse),
+                    ],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                assert result.returncode == 0, (
+                    f"native local-health failed ({result.returncode}): "
+                    f"{result.stderr}"
+                )
+                try:
+                    return json.loads(result.stdout)
+                except json.JSONDecodeError as error:
+                    raise AssertionError(
+                        f"native local-health returned invalid JSON: {result.stdout!r}"
+                    ) from error
+
+            def assert_fresh_native_health(health):
+                engine_status = health["engine_status"]
+                assert engine_status["fresh"] is True, health
+                payload = engine_status["payload"]
+                pulse_at = payload["local_projection"]["engine_pulse_at"]
+                assert 0 <= utc_age_seconds(pulse_at) < 30, health
+                return {
+                    "health_state": health["health_state"],
+                    "reasons": health["reasons"],
+                    "reconciliation": payload["local_projection"]["reconciliation"],
+                    "pulse_age_seconds": utc_age_seconds(pulse_at),
+                    "transport_status": health["transport"]["status"],
+                    "transport_reason": health["transport"]["status_reason"],
+                }
+
             def wait_for(predicate, timeout=20):
                 deadline = time.monotonic() + timeout
                 while time.monotonic() < deadline:
@@ -168,8 +216,13 @@ def exercise(engine):
             assert not startup_projection.get("last_reconciled_at")
             fail_inventory.write_text("ok\n")
 
-            healthy = wait_for(lambda projection: projection.get("reconciliation", {}).get("state") == "idle")
-            completed_at = healthy["local_projection"]["last_reconciled_at"]
+            healthy = wait_for(
+                lambda projection: projection.get("reconciliation", {}).get("state") == "idle"
+            )
+            healthy_projection = healthy["local_projection"]
+            healthy_health = native_health()
+            assert_fresh_native_health(healthy_health)
+            completed_at = healthy_projection["last_reconciled_at"]
             assert completed_at, "idle requires a completed full discovery receipt"
             receipt["build"] = healthy.get("build")
             fail_inventory.write_text("fail\n")
@@ -184,7 +237,8 @@ def exercise(engine):
                 )
                 or (
                     projection.get("reconciliation", {}).get("state") == "reconciling"
-                    and projection.get("reconciliation", {}).get("failure_reason") == "process_inventory"
+                    and projection.get("reconciliation", {}).get("failure_reason")
+                    == "process_inventory"
                 )
             )
             frozen = failed["local_projection"]["generated_at"]
@@ -197,12 +251,26 @@ def exercise(engine):
             while time.monotonic() < deadline:
                 status = observe()
                 projection = status["local_projection"]
-                assert projection["generated_at"] == frozen, f"cached phase rebuild re-aged failed observation: {projection}"
-                assert projection["reconciliation"]["state"] != "idle", f"cached phase rebuild erased observation failure: {projection}"
-                assert projection["last_reconciled_at"] == completed_at, "failure advanced completion receipt"
-                assert projection["reconciliation"].get("failure_reason"), "failure lost its cause"
+                assert projection["generated_at"] == frozen, (
+                    f"cached phase rebuild re-aged failed observation: {projection}"
+                )
+                assert projection["reconciliation"]["state"] != "idle", (
+                    f"cached phase rebuild erased observation failure: {projection}"
+                )
+                assert projection["last_reconciled_at"] == completed_at, (
+                    "failure advanced completion receipt"
+                )
+                assert projection["reconciliation"].get("failure_reason"), (
+                    "failure lost its cause"
+                )
                 time.sleep(0.05)
-            assert projection["engine_pulse_at"] != failed["local_projection"]["engine_pulse_at"], "failure stopped engine pulses"
+            assert projection["engine_pulse_at"] != failed["local_projection"]["engine_pulse_at"], (
+                "failure stopped engine pulses"
+            )
+            inventory_failure_health = native_health()
+            inventory_failure_receipt = assert_fresh_native_health(inventory_failure_health)
+            assert "engine_reconciliation_failed" in inventory_failure_health["reasons"]
+            receipt["inventory_failure_native_health"] = inventory_failure_receipt
             fail_inventory.write_text("ok\n")
             recovered = wait_for(
                 lambda projection: projection.get("generated_at") != frozen
@@ -213,6 +281,115 @@ def exercise(engine):
             assert recovered["daemon_pid"] == child.pid, "recovery replaced the daemon"
             receipt["failure_preserved_during_phase_rebuild"] = True
             receipt["recovered_without_restart"] = True
+
+            # Keep a writer fd open before making the database unreadable. The
+            # daemon's already-open shipper connection and this fixture writer
+            # remain usable, while the projection task's fresh open_connection
+            # must fail through the production error path.
+            projection_before_failure = recovered["local_projection"]
+            projection_frozen = projection_before_failure["generated_at"]
+            projection_completed_at = projection_before_failure["last_reconciled_at"]
+            projection_db_mode = db.stat().st_mode & 0o777
+            phase_connection = sqlite3.connect(db, timeout=5)
+            phase_connection.execute("PRAGMA busy_timeout=5000")
+            try:
+                next_revision = phase_connection.execute(
+                    "SELECT COALESCE(MAX(revision), 0) + 1 FROM session_phase_state"
+                ).fetchone()[0]
+                os.chmod(db, 0)
+                phase_connection.execute(
+                    "INSERT INTO session_phase_state (session_id, provider, phase, source, observed_at, revision) VALUES (?, 'omp', 'idle', 'projection-build-fixture', ?, ?)",
+                    (
+                        str(uuid4()),
+                        datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        next_revision,
+                    ),
+                )
+                phase_connection.commit()
+                projection_failed = wait_for(
+                    lambda projection: (
+                        projection.get("reconciliation", {}).get("state") == "failed"
+                        and projection.get("reconciliation", {}).get("reason")
+                        == "projection_build"
+                    )
+                    or projection.get("reconciliation", {}).get("failure_reason")
+                    == "projection_build",
+                    timeout=20,
+                )
+                failed_projection = projection_failed["local_projection"]
+                failed_reconciliation = failed_projection["reconciliation"]
+                assert failed_projection["generated_at"] == projection_frozen, (
+                    "projection-build failure advanced generated_at"
+                )
+                assert failed_projection["last_reconciled_at"] == projection_completed_at, (
+                    "projection-build failure advanced completion receipt"
+                )
+                assert failed_reconciliation.get("failure_reason") == "projection_build", (
+                    f"unexpected projection-build reconciliation: {failed_reconciliation}"
+                )
+                assert (
+                    failed_projection["engine_pulse_at"]
+                    != projection_before_failure["engine_pulse_at"]
+                ), "projection-build failure stopped engine pulses"
+                projection_failure_health = native_health()
+                projection_failure_receipt = assert_fresh_native_health(
+                    projection_failure_health
+                )
+                assert "engine_reconciliation_failed" in projection_failure_health["reasons"], (
+                    f"native health missed projection-build failure: {projection_failure_health}"
+                )
+                receipt["projection_build_failure"] = {
+                    "generated_at_frozen": projection_frozen,
+                    "last_reconciled_at": projection_completed_at,
+                    "reconciliation": failed_reconciliation,
+                    "native_health": projection_failure_receipt,
+                }
+
+                os.chmod(db, projection_db_mode)
+                phase_connection.execute(
+                    "INSERT INTO session_phase_state (session_id, provider, phase, source, observed_at, revision) VALUES (?, 'omp', 'idle', 'projection-build-recovery', ?, ?)",
+                    (
+                        str(uuid4()),
+                        datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        next_revision + 1,
+                    ),
+                )
+                phase_connection.commit()
+                projection_recovered = wait_for(
+                    lambda projection: (
+                        projection.get("generated_at") != projection_frozen
+                        and projection.get("reconciliation", {}).get("state") == "idle"
+                        and projection.get("last_reconciled_at", "")
+                        > projection_completed_at
+                    ),
+                    timeout=90,
+                )
+                assert projection_recovered["daemon_pid"] == child.pid, (
+                    "projection recovery replaced the daemon"
+                )
+                recovery_health = native_health()
+                recovery_receipt = assert_fresh_native_health(recovery_health)
+                assert "engine_reconciliation_failed" not in recovery_health["reasons"], (
+                    f"native health retained projection-build failure: {recovery_health}"
+                )
+                assert (
+                    recovery_health["engine_status"]["payload"]["local_projection"][
+                        "reconciliation"
+                    ]["state"]
+                    == "idle"
+                ), f"native health did not observe projection recovery: {recovery_health}"
+                receipt["projection_build_recovery"] = {
+                    "generated_at": projection_recovered["local_projection"]["generated_at"],
+                    "last_reconciled_at": projection_recovered["local_projection"][
+                        "last_reconciled_at"
+                    ],
+                    "native_health": recovery_receipt,
+                }
+            finally:
+                try:
+                    os.chmod(db, projection_db_mode)
+                finally:
+                    phase_connection.close()
         finally:
             try:
                 if child is not None:
