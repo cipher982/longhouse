@@ -1153,7 +1153,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut wake_gap_detector = WakeGapDetector::new();
     let mut pending_wake_reconciliation = false;
     let mut pending_full_reconciliation = false;
-    let mut pending_periodic_observation = false;
     let mut projection_build_pending = false;
     let mut projection_generation = 0_u64;
     let mut managed_observation_generation = 0_u64;
@@ -2202,16 +2201,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             "full_reconciliation",
                             chrono::Utc::now().to_rfc3339(),
                         );
-                    } else if pending_periodic_observation
-                        && maybe_start_managed_observation_scan(
-                            projection_db_path.clone(),
-                            &mut managed_observation_scan_tasks,
-                            "periodic",
-                            last_resume_contracts.is_none(),
-                            &last_managed_observations,
-                        )
-                    {
-                        pending_periodic_observation = false;
                     }
                 }
             }
@@ -2465,16 +2454,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 "full_reconciliation",
                                 chrono::Utc::now().to_rfc3339(),
                             );
-                        } else if pending_periodic_observation
-                            && maybe_start_managed_observation_scan(
-                                projection_db_path.clone(),
-                                &mut managed_observation_scan_tasks,
-                                "periodic",
-                                last_resume_contracts.is_none(),
-                                &last_managed_observations,
-                            )
-                        {
-                            pending_periodic_observation = false;
                         }
                     }
                     Some(Err(err)) => {
@@ -3129,17 +3108,17 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             }
 
             _ = managed_observation_timer.tick() => {
-                if maybe_start_managed_observation_scan(
+                // Coalesce a periodic tick while a scan is already running.
+                // Replaying it immediately after a full observation can replace
+                // the paired snapshot before its recovery projection publishes.
+                // Wake and explicit full-discovery requests retain their queues.
+                maybe_start_managed_observation_scan(
                     projection_db_path.clone(),
                     &mut managed_observation_scan_tasks,
                     "periodic",
                     last_resume_contracts.is_none(),
                     &last_managed_observations,
-                ) {
-                    pending_periodic_observation = false;
-                } else {
-                    pending_periodic_observation = true;
-                }
+                );
             }
 
             _ = machine_presence_timer.tick() => {
