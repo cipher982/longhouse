@@ -1160,9 +1160,7 @@ async def list_session_subagents(
     return SessionSubagentsResponse(
         session_id=str(session_id),
         children=[SessionSubagentResponse(**child) for child in result.get("children") or []],
-        child_references=[
-            SessionChildReferenceResponse(**reference) for reference in result.get("child_references") or []
-        ],
+        child_references=[SessionChildReferenceResponse(**reference) for reference in result.get("child_references") or []],
     )
 
 
