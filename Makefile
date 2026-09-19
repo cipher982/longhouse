@@ -391,10 +391,10 @@ test-engine-projection-failure: ## Isolated real-daemon failed-observation recov
 	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine
 	uv run --no-project python scripts/tests/daemon-projection-failure.test.py --engine "$$( $(CARGO_ARTIFACT) --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine )"
 
-test-engine-single: ## One exact Rust engine unit test (TEST=module::tests::name)
+test-engine-single: ## Exact Rust engine unit tests (TEST="module::tests::name ...")
 	@test -n "$(TEST)" || (echo "TEST is required" >&2; exit 2)
 	@python3 scripts/build/generate_build_identity.py
-	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine $(TEST) -- --exact --nocapture
+	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine -- $(TEST) --exact --nocapture --test-threads=1
 
 test-codex-console-warm-canary: ## Real stock-Codex Console warm-path canary
 	@python3 scripts/build/generate_build_identity.py
