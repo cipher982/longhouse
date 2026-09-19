@@ -282,21 +282,23 @@ def exercise(engine):
             receipt["failure_preserved_during_phase_rebuild"] = True
             receipt["recovered_without_restart"] = True
 
-            # Keep a writer fd open before making the database unreadable. The
+            # Keep a writer fd open before hiding only the main database path.
+            # A directory at the pathname is unavailable even to uid 0; the
             # daemon's already-open shipper connection and this fixture writer
-            # remain usable, while the projection task's fresh open_connection
-            # must fail through the production error path.
+            # remain usable, while fresh projection opens fail. WAL/data sidecars
+            # stay in place and the original main path is restored below.
             projection_before_failure = recovered["local_projection"]
             projection_frozen = projection_before_failure["generated_at"]
             projection_completed_at = projection_before_failure["last_reconciled_at"]
-            projection_db_mode = db.stat().st_mode & 0o777
+            projection_db_backup = db.with_name(f"{db.name}.projection-original")
             phase_connection = sqlite3.connect(db, timeout=5)
             phase_connection.execute("PRAGMA busy_timeout=5000")
             try:
                 next_revision = phase_connection.execute(
                     "SELECT COALESCE(MAX(revision), 0) + 1 FROM session_phase_state"
                 ).fetchone()[0]
-                os.chmod(db, 0)
+                db.rename(projection_db_backup)
+                db.mkdir()
                 phase_connection.execute(
                     "INSERT INTO session_phase_state (session_id, provider, phase, source, observed_at, revision) VALUES (?, 'omp', 'idle', 'projection-build-fixture', ?, ?)",
                     (
@@ -345,7 +347,8 @@ def exercise(engine):
                     "native_health": projection_failure_receipt,
                 }
 
-                os.chmod(db, projection_db_mode)
+                db.rmdir()
+                projection_db_backup.rename(db)
                 phase_connection.execute(
                     "INSERT INTO session_phase_state (session_id, provider, phase, source, observed_at, revision) VALUES (?, 'omp', 'idle', 'projection-build-recovery', ?, ?)",
                     (
@@ -387,9 +390,14 @@ def exercise(engine):
                 }
             finally:
                 try:
-                    os.chmod(db, projection_db_mode)
+                    if db.is_dir():
+                        db.rmdir()
                 finally:
-                    phase_connection.close()
+                    try:
+                        if projection_db_backup.exists():
+                            projection_db_backup.rename(db)
+                    finally:
+                        phase_connection.close()
         finally:
             try:
                 if child is not None:
