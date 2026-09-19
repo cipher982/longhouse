@@ -42,7 +42,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: phone-shot phone-deploy phone-logs sim-deploy sim-shot sim-logs simlab-run ios-ui-shot ios-previews
 .PHONY: validate-playwright-install
 .PHONY: test-engine-single test-engine-omp-helm build-health build-clean
-.PHONY: test-engine-projection-failure
+.PHONY: test-engine-projection-failure test-engine-focused
 .PHONY: provider-interaction-probe
 .PHONY: test-cursor-console-product-e2e cursor-observed-install-qualification
 .PHONY: ios-project ios-project-check
