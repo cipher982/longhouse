@@ -1190,7 +1190,7 @@ fn serve(
             if let Err(error) = write_all(master, text) {
                 return response(
                     &mut stream,
-                    json!({"ok":false,"error":{"code":"session_not_attached","message":error.to_string()}}),
+                    json!({"ok":false,"error":{"code":"command_indeterminate","message":error.to_string()}}),
                 );
             }
             thread::sleep(std::time::Duration::from_millis(
@@ -1202,7 +1202,7 @@ fn serve(
             if let Err(error) = write_all(master, b"\x1b") {
                 return response(
                     &mut stream,
-                    json!({"ok":false,"error":{"code":"session_not_attached","message":error.to_string()}}),
+                    json!({"ok":false,"error":{"code":"command_indeterminate","message":error.to_string()}}),
                 );
             }
             thread::sleep(std::time::Duration::from_millis(
@@ -1214,7 +1214,7 @@ fn serve(
             if let Err(error) = write_all(master, b"\r") {
                 return response(
                     &mut stream,
-                    json!({"ok":false,"error":{"code":"session_not_attached","message":error.to_string()}}),
+                    json!({"ok":false,"error":{"code":"command_indeterminate","message":error.to_string()}}),
                 );
             }
             response(
@@ -1261,7 +1261,11 @@ fn serve(
             let text = request["text"].as_str().unwrap().as_bytes();
             let mut writes = vec![
                 (text, "LH_CURSOR_HELM_TEXT_SETTLE_MS", 300),
-                (b"\r".as_slice(), "LH_CURSOR_HELM_STEER_QUEUE_SETTLE_MS", 500),
+                (
+                    b"\r".as_slice(),
+                    "LH_CURSOR_HELM_STEER_QUEUE_SETTLE_MS",
+                    500,
+                ),
                 (b"\r".as_slice(), "", 0),
             ];
             // Negative control: queue the text as a follow-up without steering.
@@ -1278,7 +1282,7 @@ fn serve(
                 if let Err(error) = write_all(master, bytes) {
                     return response(
                         &mut stream,
-                        json!({"ok":false,"error":{"code":"session_not_attached","message":error.to_string()}}),
+                        json!({"ok":false,"error":{"code":"command_indeterminate","message":error.to_string()}}),
                     );
                 }
                 if !settle_env.is_empty() {
@@ -1324,7 +1328,7 @@ fn serve(
             if let Err(error) = write_all(master, b"\x03") {
                 return response(
                     &mut stream,
-                    json!({"ok":false,"error":{"code":"session_not_attached","message":error.to_string()}}),
+                    json!({"ok":false,"error":{"code":"command_indeterminate","message":error.to_string()}}),
                 );
             }
             response(
@@ -2468,6 +2472,43 @@ mod tests {
         let mut relayed = Vec::new();
         reader.read_to_end(&mut relayed).unwrap();
         assert_eq!(relayed, b"hello\x1b\r");
+    }
+
+    #[test]
+    fn partial_prompt_write_is_indeterminate_not_retryable() {
+        let root = tempfile::tempdir().unwrap();
+        let mut pipe = [0; 2];
+        assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+        let mut reader = unsafe { fs::File::from_raw_fd(pipe[0]) };
+        let writer = unsafe { fs::File::from_raw_fd(pipe[1]) };
+        assert_eq!(
+            unsafe { libc::fcntl(pipe[1], libc::F_SETFL, libc::O_NONBLOCK) },
+            0
+        );
+        let filler = [b'a'; 1024];
+        while unsafe { libc::write(pipe[1], filler.as_ptr().cast(), filler.len()) } > 0 {}
+        assert_eq!(
+            std::io::Error::last_os_error().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        let mut drain = [0; 4096];
+        reader.read_exact(&mut drain).unwrap();
+        write_json(
+            &root.path().join("session-id.phase.json"),
+            &json!({"session_id":"session-id","conversation_id":"conversation-id","launch_id":"launch-id","phase":"idle"}),
+        ).unwrap();
+        let text = "x".repeat(8192);
+        let (reply, _, _) =
+            serve_request(root.path(), pipe[1], -1, json!({"kind":"send","text":text}));
+        drop(writer);
+        let mut received = Vec::new();
+        reader.read_to_end(&mut received).unwrap();
+        let injected = received.iter().filter(|&&byte| byte == b'x').count();
+        assert!(
+            (1..text.len()).contains(&injected),
+            "the pipe must contain a partial prompt"
+        );
+        assert_eq!(reply["error"]["code"], "command_indeterminate");
     }
 
     #[test]

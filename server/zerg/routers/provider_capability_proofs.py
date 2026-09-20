@@ -785,20 +785,26 @@ async def publish_provider_negative_controls(
     return {"accepted": len(snapshot["controls"]), "epoch_digest": snapshot["epoch_digest"]}
 
 
-def _negative_controls_by_requirement() -> dict[tuple[str, str], list[str]] | None:
-    """(provider, assertion) -> declared control verdicts; None when never published."""
+def _negative_controls_by_requirement() -> tuple[dict[tuple[str, str], list[str]] | None, str | None]:
+    """((provider, assertion) -> declared control verdicts, snapshot epoch).
+
+    Both are None when no snapshot has ever been published. The epoch travels
+    with the verdicts because a control only speaks for the epoch it judged:
+    joining it to a proof accepted under a different epoch would certify a chip
+    with evidence about other code.
+    """
 
     path = _negative_control_path()
     if not path.is_file():
-        return None
+        return None, None
     try:
         snapshot = _validated_negative_control_snapshot(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, ValueError, json.JSONDecodeError):
-        return None
+        return None, None
     out: dict[tuple[str, str], list[str]] = {}
     for control in snapshot["controls"]:
         out.setdefault((control["provider"], control["target_assertion"]), []).append(control["verdict"])
-    return out
+    return out, snapshot["epoch_digest"]
 
 
 CHIP_CERTIFICATION_VERSION = "provider-chip-certification-v1"
@@ -820,7 +826,7 @@ def build_chip_certification_payload(*, now: datetime | None = None) -> dict[str
     """
 
     edges = load_chip_edge_assertions()
-    controls = _negative_controls_by_requirement()
+    controls, controls_epoch = _negative_controls_by_requirement()
     all_records, integrity_reasons = _published_records()
     flat = tuple(assertion for chips in edges.values() for chip in chips.values() if chip for assertion in chip)
     projected = project_capabilities(flat, all_records, now=now, integrity_reasons=integrity_reasons)
@@ -851,7 +857,19 @@ def build_chip_certification_payload(*, now: datetime | None = None) -> dict[str
                         "provider_version": p.provider_version,
                         "accepted_epoch_id": p.accepted_epoch_id,
                         "max_age_seconds": assertion.max_age_seconds,
-                        "negative_controls": None if controls is None else controls.get((provider, p.assertion_id), []),
+                        # A control judged one accepted epoch. Joining it to a
+                        # proof accepted under a different one would certify
+                        # this chip with evidence about other code, so a proof
+                        # outside the snapshot's epoch has no controls at all.
+                        "negative_controls": (
+                            None
+                            if controls is None
+                            else (
+                                controls.get((provider, p.assertion_id), [])
+                                if controls_epoch == p.accepted_epoch_digest
+                                else ["epoch_mismatch"]
+                            )
+                        ),
                     }
                 )
             state = rollup_state(row["proof_status"] for row in rows)

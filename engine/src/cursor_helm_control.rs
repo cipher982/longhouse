@@ -104,8 +104,9 @@ fn active_generation_id(
 
 /// Engine-side typed error. `session_not_attached` means the launcher state is
 /// missing, the launcher pid is dead, or the control socket is gone — the
-/// session is not currently remotely steerable. `command_failed` wraps every
-/// other failure (connect/IO/protocol/launcher-reported error).
+/// session is not currently remotely steerable. Once transmission starts, lost
+/// acknowledgements and partial writes are `command_indeterminate`, never retryable
+/// attachment failures. Explicit launcher rejections remain `command_failed`.
 #[derive(Debug)]
 pub struct CursorHelmControlError {
     code: String,
@@ -123,6 +124,12 @@ impl CursorHelmControlError {
         Self {
             code: "session_not_attached".to_string(),
             message: message.into(),
+        }
+    }
+    fn indeterminate(message: impl std::fmt::Display) -> Self {
+        Self {
+            code: "command_indeterminate".to_string(),
+            message: message.to_string(),
         }
     }
     fn failed(message: impl std::fmt::Display) -> Self {
@@ -259,7 +266,7 @@ async fn dispatch_command(
 
     use tokio::io::AsyncWriteExt;
     stream.write_all(&request_bytes).await.map_err(|e| {
-        CursorHelmControlError::failed(format!("cursor helm socket write failed: {e}"))
+        CursorHelmControlError::indeterminate(format!("cursor helm socket write failed: {e}"))
     })?;
     stream.shutdown().await.ok();
 
@@ -272,13 +279,13 @@ async fn dispatch_command(
     let reply_bytes = tokio::time::timeout(COMMAND_TIMEOUT, reply_fut)
         .await
         .map_err(|_| {
-            CursorHelmControlError::failed(format!(
+            CursorHelmControlError::indeterminate(format!(
                 "cursor helm {} timed out after {}s",
                 kind.as_str(),
                 COMMAND_TIMEOUT.as_secs()
             ))
         })?
-        .map_err(CursorHelmControlError::failed)?;
+        .map_err(CursorHelmControlError::indeterminate)?;
 
     parse_reply(&reply_bytes)
 }
@@ -287,7 +294,7 @@ fn parse_reply(
     bytes: &[u8],
 ) -> std::result::Result<CursorHelmCommandSummary, CursorHelmControlError> {
     let reply: Value =
-        serde_json::from_slice(bytes).map_err(|e| CursorHelmControlError::failed(e.to_string()))?;
+        serde_json::from_slice(bytes).map_err(CursorHelmControlError::indeterminate)?;
     if reply.get("ok").and_then(Value::as_bool) == Some(true) {
         let exit_code = reply.get("exit_code").and_then(Value::as_i64).unwrap_or(0);
         let stdout = reply
@@ -306,6 +313,11 @@ fn parse_reply(
             stderr,
         });
     }
+    if reply.get("ok").and_then(Value::as_bool) != Some(false) {
+        return Err(CursorHelmControlError::indeterminate(
+            "launcher acknowledgement has no outcome",
+        ));
+    }
     let error = reply.get("error");
     let code = error
         .and_then(|e| e.get("code"))
@@ -319,6 +331,8 @@ fn parse_reply(
     // capability projection can degrade the session cleanly.
     let err = if code == "session_not_attached" {
         CursorHelmControlError::not_attached(message)
+    } else if code == "command_indeterminate" {
+        CursorHelmControlError::indeterminate(message)
     } else {
         CursorHelmControlError::failed(message)
     };
@@ -417,19 +431,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn send_text_roundtrips_ok_response() {
-        let root = tmp_state_root();
-        let session_id = "send-ok-session";
-        let socket = root.join("send-ok.sock");
-        write_state(&root, session_id, &socket, None);
-        let _server = echo_server(
-            &socket,
-            json!({"ok": true, "exit_code": 0, "stdout": "", "stderr": ""}),
-        )
-        .await;
-
-        let summary = send_text(session_id, "hello", Some(&root)).await.unwrap();
-        assert_eq!(summary.exit_code, 0);
+    async fn accepted_request_with_lost_reply_is_indeterminate() {
+        let root = tempfile::tempdir().unwrap();
+        let session_id = "lost-reply";
+        let socket = root.path().join("control.sock");
+        write_state(root.path(), session_id, &socket, None);
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut connection, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            connection.read_to_end(&mut request).await.unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&request).unwrap()["text"],
+                "hello"
+            );
+            // The launcher took the request, then died before acknowledging it.
+        });
+        let error = send_text(session_id, "hello", Some(root.path()))
+            .await
+            .unwrap_err();
+        server.await.unwrap();
+        assert_eq!(error.code(), "command_indeterminate");
     }
 
     #[tokio::test]
@@ -486,7 +508,9 @@ mod tests {
             conn.write_all(b"{\"ok\":true}\n").await.unwrap();
         });
 
-        steer(session_id, "change course", Some(&root)).await.unwrap();
+        steer(session_id, "change course", Some(&root))
+            .await
+            .unwrap();
         server.await.unwrap();
     }
 
@@ -590,17 +614,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn parse_reply_ok_extracts_fields() {
-        let bytes = br#"{"ok":true,"exit_code":0,"stdout":"hi","stderr":""}"#;
-        let s = parse_reply(bytes).unwrap();
-        assert_eq!(s.exit_code, 0);
-        assert_eq!(s.stdout, "hi");
-    }
-
-    #[tokio::test]
-    async fn parse_reply_missing_ok_is_failed() {
+    async fn parse_reply_missing_outcome_is_indeterminate() {
         let bytes = br#"{"exit_code":0}"#;
         let err = parse_reply(bytes).unwrap_err();
-        assert_eq!(err.code(), "command_failed");
+        assert_eq!(err.code(), "command_indeterminate");
     }
 }

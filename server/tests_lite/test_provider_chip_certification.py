@@ -63,7 +63,7 @@ def _proof(assertion, *, outcome=AssertionOutcome.PASS, at: datetime, sha: str =
     )
 
 
-def _write_controls(tmp_path: Path, controls: list[dict] | None) -> None:
+def _write_controls(tmp_path: Path, controls: list[dict] | None, epoch_digest: str | None = None) -> None:
     if controls is None:
         return
     path = tmp_path / "negative-controls.json"
@@ -73,7 +73,7 @@ def _write_controls(tmp_path: Path, controls: list[dict] | None) -> None:
             {
                 "schema_version": 1,
                 "artifact_kind": "provider_negative_control_snapshot",
-                "epoch_digest": "sha256:" + "e" * 64,
+                "epoch_digest": epoch_digest or _record().accepted_epoch_digest,
                 "published_at": "2026-09-16T11:00:00Z",
                 "controls": controls,
             }
@@ -82,13 +82,13 @@ def _write_controls(tmp_path: Path, controls: list[dict] | None) -> None:
     )
 
 
-def _payload(monkeypatch, tmp_path: Path, proofs, controls: list[dict] | None = None) -> dict:
+def _payload(monkeypatch, tmp_path: Path, proofs, controls: list[dict] | None = None, *, control_epoch: str | None = None) -> dict:
     store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
     monkeypatch.setattr(routes, "_proof_store", lambda: store)
     monkeypatch.setattr(routes, "_legacy_proof_store", lambda: ProviderCapabilityProofStore(tmp_path / "legacy"))
     for proof in proofs:
         _write_trusted(store, proof)
-    _write_controls(tmp_path, [] if controls is None else controls)
+    _write_controls(tmp_path, [] if controls is None else controls, control_epoch)
     return routes.build_chip_certification_payload(now=NOW)
 
 
@@ -156,6 +156,15 @@ def test_a_passing_chip_certifies_only_when_its_declared_negative_controls_passe
         assert chip["state"] == "unverified" and chip["blocked_by"] == "negative_control", verdict
 
 
+def test_passing_controls_from_another_epoch_cannot_certify_current_proofs(monkeypatch, tmp_path: Path) -> None:
+    edge = _edge("pi", "steerMidTurn")
+    proofs = [_proof(assertion, at=NOW - timedelta(hours=1)) for assertion in edge]
+    payload = _payload(monkeypatch, tmp_path, proofs, [_steer_control("pass")], control_epoch="sha256:" + "f" * 64)
+    chip = _chip(payload, "pi", "steerMidTurn")
+    assert chip["state"] == "unverified"
+    assert chip["blocked_by"] == "negative_control"
+
+
 def test_no_published_negative_control_snapshot_certifies_nothing(monkeypatch, tmp_path: Path) -> None:
     edge = _edge("pi", "resume")
     store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
@@ -170,6 +179,10 @@ def test_no_published_negative_control_snapshot_certifies_nothing(monkeypatch, t
 def test_factory_publishes_the_negative_control_snapshot_with_its_token(monkeypatch, tmp_path: Path) -> None:
     store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
     monkeypatch.setattr(routes, "_proof_store", lambda: store)
+    monkeypatch.setattr(routes, "_legacy_proof_store", lambda: ProviderCapabilityProofStore(tmp_path / "legacy"))
+    for assertion in _edge("pi", "steerMidTurn"):
+        _write_trusted(store, _proof(assertion, at=NOW - timedelta(hours=1)))
+    assert _chip(routes.build_chip_certification_payload(now=NOW), "pi", "steerMidTurn")["state"] == "unverified"
     monkeypatch.setattr(routes, "get_settings", lambda: SimpleNamespace(provider_capability_factory_token="fixture-factory-token"))
     monkeypatch.setattr(routes, "_certification_cache", None)
     api_app.dependency_overrides.clear()
@@ -177,7 +190,7 @@ def test_factory_publishes_the_negative_control_snapshot_with_its_token(monkeypa
     snapshot = {
         "schema_version": 1,
         "artifact_kind": "provider_negative_control_snapshot",
-        "epoch_digest": "sha256:" + "e" * 64,
+        "epoch_digest": _record().accepted_epoch_digest,
         "published_at": "2026-09-16T11:00:00Z",
         "controls": [_steer_control("pass")],
     }
@@ -193,4 +206,4 @@ def test_factory_publishes_the_negative_control_snapshot_with_its_token(monkeypa
     )
     response = client.post(url, json=snapshot, headers={"X-Provider-Capability-Factory-Token": "fixture-factory-token"})
     assert response.status_code == 201, response.text
-    assert routes._negative_controls_by_requirement() == {("pi", "pi_helm_steer_active"): ["pass"]}
+    assert _chip(routes.build_chip_certification_payload(now=NOW), "pi", "steerMidTurn")["state"] == "certified"
