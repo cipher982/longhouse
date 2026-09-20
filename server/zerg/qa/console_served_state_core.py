@@ -177,7 +177,21 @@ class Client:
         raise ApiError(0, f"{method} {path} exhausted retries: {last_detail[:600]}")
 
     def served_workspace(self, session_id: str) -> dict:
-        return self.request("GET", f"/api/timeline/sessions/{session_id}/workspace", browser=True)
+        # The workspace route intentionally serves the Console's tail window;
+        # pair it with the supported projection route's explicit start window
+        # so exact-once cannot miss an earlier semantic event hidden by raw
+        # provider/runtime records.
+        workspace = self.request(
+            "GET",
+            f"/api/timeline/sessions/{session_id}/workspace",
+            browser=True,
+        )
+        workspace["projection"] = self.request(
+            "GET",
+            f"/api/timeline/sessions/{session_id}/projection?anchor=start&limit=1000",
+            browser=True,
+        )
+        return workspace
 
 
 def settlement_state(workspace: dict, run_id: str) -> tuple[bool, dict]:
@@ -280,7 +294,9 @@ def assistant_marker_evidence(workspace: dict, session_id: str, marker: str) -> 
     )
     counts = [event_text(event).count(marker) for event in matches]
     event_ids = [event.get("id") for event in matches]
-    # A partial page cannot exclude a duplicate that was not served in it.
+    # The proof asks for an explicit start-anchored complete window. Runtime/provider
+    # records may count toward total without becoming visible items, so a default
+    # tail page cannot certify that earlier visible events were served.
     complete_page = projection.get("has_more") is False and projection.get("page_offset") == 0
     exact = len(matches) == 1 and counts == [1] and bool(event_ids[0]) and complete_page
     return {
