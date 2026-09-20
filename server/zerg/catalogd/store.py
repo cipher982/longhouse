@@ -9008,6 +9008,7 @@ class CatalogStore:
                 session_key=session_key,
                 owner_id=effective_owner_id,
                 machine_id=machine_id,
+                commit_seq=commit_seq,
                 commit_time=commit_time,
             )
             timer.mark("project_render")
@@ -15153,6 +15154,7 @@ def _bind_orphan_subagents_to_parent(
     session_key: str,
     owner_id: str | None,
     machine_id: str,
+    commit_seq: int,
     commit_time,
 ) -> int:
     """Adopt earlier children only after a unique scoped parent resolution."""
@@ -15199,7 +15201,7 @@ def _bind_orphan_subagents_to_parent(
                 session_table.c.session_id == str(child_session_id),
                 session_table.c.subagent_parent_session_id.is_(None),
             )
-            .values(subagent_parent_session_id=session_key, updated_at=commit_time)
+            .values(subagent_parent_session_id=session_key, commit_seq=commit_seq, updated_at=commit_time)
         ).rowcount or 0)
     return bound
 
