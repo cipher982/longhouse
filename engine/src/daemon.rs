@@ -1042,6 +1042,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         true,
         &last_managed_observations,
     );
+    let mut managed_full_reconciliation_not_before =
+        Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
     if let Some(delay) = startup_archive_replay_delay {
         tracing::info!(
             mode = startup_archive_mode.as_str(),
@@ -2244,11 +2246,18 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         )
                     {
                         pending_wake_reconciliation = false;
+                        managed_full_reconciliation_not_before =
+                            Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
                         managed_reconciliation.start(
                             "wake",
                             chrono::Utc::now().to_rfc3339(),
                         );
-                    } else if pending_full_reconciliation
+                    } else if managed_full_reconciliation_ready(
+                        pending_full_reconciliation,
+                        managed_observation_scan_tasks.is_empty(),
+                        Instant::now(),
+                        managed_full_reconciliation_not_before,
+                    )
                         && maybe_start_managed_observation_scan(
                             projection_db_path.clone(),
                             &mut managed_observation_scan_tasks,
@@ -2258,6 +2267,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         )
                     {
                         pending_full_reconciliation = false;
+                        managed_full_reconciliation_not_before =
+                            Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
                         managed_reconciliation.start(
                             "full_reconciliation",
                             chrono::Utc::now().to_rfc3339(),
@@ -2360,7 +2371,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 ) {
                                     pending_wake_reconciliation = false;
                                 }
-                            } else if pending_full_reconciliation
+                            } else if managed_full_reconciliation_ready(
+                                pending_full_reconciliation,
+                                managed_observation_scan_tasks.is_empty(),
+                                Instant::now(),
+                                managed_full_reconciliation_not_before,
+                            )
                                 && maybe_start_managed_observation_scan(
                                     projection_db_path.clone(),
                                     &mut managed_observation_scan_tasks,
@@ -2370,10 +2386,21 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 )
                             {
                                 pending_full_reconciliation = false;
+                                managed_full_reconciliation_not_before =
+                                    Instant::now()
+                                        + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
                             }
                             continue;
                         }
                         managed_observation_valid = true;
+                        if result.full_reconciliation {
+                            // Start-time gating does not prevent a long scan
+                            // from immediately retriggering on events observed
+                            // during its own walk. Hold the next full pass for
+                            // one observation interval after completion.
+                            managed_full_reconciliation_not_before =
+                                Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+                        }
                         if let Some(continuation) = &result.continuation {
                             last_resume_contracts = Some(continuation.clone());
                         }
@@ -2497,12 +2524,19 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             )
                         {
                             pending_wake_reconciliation = false;
+                            managed_full_reconciliation_not_before =
+                                Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
                             managed_reconciliation.start(
                                 "wake",
                                 chrono::Utc::now().to_rfc3339(),
                             );
-                        } else if pending_full_reconciliation
-                            && unmanaged_binding_refresh_tasks.is_empty()
+                        } else if managed_full_reconciliation_ready(
+                            pending_full_reconciliation,
+                            unmanaged_binding_refresh_tasks.is_empty()
+                                && managed_observation_scan_tasks.is_empty(),
+                            Instant::now(),
+                            managed_full_reconciliation_not_before,
+                        )
                             && maybe_start_managed_observation_scan(
                                 projection_db_path.clone(),
                                 &mut managed_observation_scan_tasks,
@@ -2512,6 +2546,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             )
                         {
                             pending_full_reconciliation = false;
+                            managed_full_reconciliation_not_before =
+                                Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
                             managed_reconciliation.start(
                                 "full_reconciliation",
                                 chrono::Utc::now().to_rfc3339(),
@@ -2840,23 +2876,16 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         &managed_state_changes,
                     );
                     if requires_discovery {
-                        // Invalidate any older managed/unmanaged pair before it can
-                        // publish the new managed child as Shadow ownership.
+                        // A watcher burst can contain many transient paths while
+                        // a provider is writing one session. Queue one bounded
+                        // full walk; the 5s observation tick starts it after the
+                        // burst instead of starting one walk per event batch.
                         projection_generation = projection_generation.saturating_add(1);
-                        if maybe_start_managed_observation_scan(
-                            projection_db_path.clone(),
-                            &mut managed_observation_scan_tasks,
-                            "managed_state_discovery",
-                            true,
-                            &last_managed_observations,
-                        ) {
-                            managed_reconciliation.start(
-                                "managed_state_discovery",
-                                chrono::Utc::now().to_rfc3339(),
-                            );
-                        } else {
-                            pending_full_reconciliation = true;
-                        }
+                        pending_full_reconciliation = true;
+                        tracing::debug!(
+                            event_count = managed_state_changes.len(),
+                            "Queued managed state discovery for coalesced observation"
+                        );
                     } else {
                         tracing::debug!(
                             event_count = managed_state_changes.len(),
@@ -3131,6 +3160,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         true,
                         &last_managed_observations,
                     ) {
+                        managed_full_reconciliation_not_before =
+                            Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
                         managed_reconciliation.start(
                             "wake",
                             chrono::Utc::now().to_rfc3339(),
@@ -3165,13 +3196,21 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             }
 
             _ = managed_full_reconciliation_timer.tick() => {
-                if maybe_start_managed_observation_scan(
+                if managed_full_reconciliation_ready(
+                    !pending_wake_reconciliation,
+                    managed_observation_scan_tasks.is_empty(),
+                    Instant::now(),
+                    managed_full_reconciliation_not_before,
+                )
+                    && maybe_start_managed_observation_scan(
                     projection_db_path.clone(),
                     &mut managed_observation_scan_tasks,
                     "full_reconciliation",
                     true,
                     &last_managed_observations,
                 ) {
+                    managed_full_reconciliation_not_before =
+                        Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
                     managed_reconciliation.start(
                         "full_reconciliation",
                         chrono::Utc::now().to_rfc3339(),
@@ -3186,17 +3225,39 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             }
 
             _ = managed_observation_timer.tick() => {
-                // Coalesce a periodic tick while a scan is already running.
-                // Replaying it immediately after a full observation can replace
-                // the paired snapshot before its recovery projection publishes.
-                // Wake and explicit full-discovery requests retain their queues.
-                maybe_start_managed_observation_scan(
-                    projection_db_path.clone(),
-                    &mut managed_observation_scan_tasks,
-                    "periodic",
-                    last_resume_contracts.is_none(),
-                    &last_managed_observations,
-                );
+                // Coalesce a periodic tick and watcher burst while a full scan
+                // is running. A queued full request wins on the next tick, but
+                // the cooldown prevents a completion/event feedback loop.
+                if managed_full_reconciliation_ready(
+                    pending_full_reconciliation,
+                    managed_observation_scan_tasks.is_empty(),
+                    Instant::now(),
+                    managed_full_reconciliation_not_before,
+                )
+                    && maybe_start_managed_observation_scan(
+                        projection_db_path.clone(),
+                        &mut managed_observation_scan_tasks,
+                        "full_reconciliation",
+                        true,
+                        &last_managed_observations,
+                    )
+                {
+                    pending_full_reconciliation = false;
+                    managed_full_reconciliation_not_before =
+                        Instant::now() + Duration::from_secs(MANAGED_OBSERVATION_INTERVAL_SECS);
+                    managed_reconciliation.start(
+                        "full_reconciliation",
+                        chrono::Utc::now().to_rfc3339(),
+                    );
+                } else if !pending_full_reconciliation && !pending_wake_reconciliation {
+                    maybe_start_managed_observation_scan(
+                        projection_db_path.clone(),
+                        &mut managed_observation_scan_tasks,
+                        "periodic",
+                        last_resume_contracts.is_none(),
+                        &last_managed_observations,
+                    );
+                }
             }
 
             _ = machine_presence_timer.tick() => {
@@ -4248,6 +4309,15 @@ fn managed_state_changes_require_full_reconciliation(
     paths
         .iter()
         .any(|path| !observations.contains_state_file(path))
+}
+
+fn managed_full_reconciliation_ready(
+    pending: bool,
+    scan_idle: bool,
+    now: Instant,
+    not_before: Instant,
+) -> bool {
+    pending && scan_idle && now >= not_before
 }
 
 fn maybe_start_unmanaged_binding_refresh(
@@ -6383,6 +6453,24 @@ mod tests {
         assert!(managed_state_changes_require_full_reconciliation(
             &snapshot,
             &[PathBuf::from("/tmp/new-managed-session.json")],
+        ));
+    }
+
+    #[test]
+    fn full_reconciliation_cooldown_coalesces_inflight_burst() {
+        let now = Instant::now();
+        let not_before = now + std::time::Duration::from_secs(5);
+        assert!(!managed_full_reconciliation_ready(
+            true, true, now, not_before,
+        ));
+        assert!(!managed_full_reconciliation_ready(
+            true, false, not_before, not_before,
+        ));
+        assert!(managed_full_reconciliation_ready(
+            true, true, not_before, not_before,
+        ));
+        assert!(!managed_full_reconciliation_ready(
+            false, true, not_before, not_before,
         ));
     }
 

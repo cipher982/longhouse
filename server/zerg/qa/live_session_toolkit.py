@@ -192,6 +192,7 @@ def qualification_secrets(environment: dict[str, str], agents_token: str) -> tup
         "CLAUDE_CODE_OAUTH_TOKEN",
         "CODEX_API_KEY",
         "CURSOR_API_KEY",
+        "GEMINI_API_KEY",
         "OPENAI_API_KEY",
         "OPENROUTER_API_KEY",
         "PI_OPENROUTER_API_KEY",

@@ -24,11 +24,7 @@ fn records_root(conn: &Connection) -> Result<std::path::PathBuf> {
 
 /// Seal one record and return the columns its row keeps: an empty blob (the
 /// bytes are a file now), the byte length, and the file's path.
-fn seal_record(
-    conn: &Connection,
-    hash: &str,
-    bytes: &[u8],
-) -> Result<(Vec<u8>, i64, String)> {
+fn seal_record(conn: &Connection, hash: &str, bytes: &[u8]) -> Result<(Vec<u8>, i64, String)> {
     let root = records_root(conn)?;
     let sealed = crate::state::payload_store::seal_record(&root, bytes)?;
     anyhow::ensure!(
@@ -47,12 +43,7 @@ fn seal_record(
 ///
 /// A drained row (`record_bytes_len` zero) has no bytes by design: the host has
 /// receipted them. Anything else must produce the exact bytes or an error.
-fn record_bytes_for(
-    conn: &Connection,
-    hash: &str,
-    blob: &[u8],
-    len: i64,
-) -> Result<Vec<u8>> {
+fn record_bytes_for(conn: &Connection, hash: &str, blob: &[u8], len: i64) -> Result<Vec<u8>> {
     if !blob.is_empty() {
         return Ok(blob.to_vec());
     }
@@ -75,7 +66,10 @@ pub struct CursorRawRecord {
 
 /// Add unseen raw records to an epoch's durable local spool. A byte-identical
 /// record is stored once per epoch; source positions are monotonically
-/// assigned and never reused.
+/// assigned and never reused. If the sealed file disappeared after the row
+/// committed, the same source record repairs that row in place: the row and
+/// its position remain the durable identity, while the exact source bytes are
+/// sealed again before shipping can continue.
 pub fn append_unseen_cursor_records(
     conn: &mut Connection,
     source_epoch: Uuid,
@@ -90,8 +84,48 @@ pub fn append_unseen_cursor_records(
     let mut next = next;
     for bytes in records {
         let hash = hex_hash(bytes);
-        // Seal before the row exists: an orphan from a rolled-back savepoint is
-        // swept, while a row without its bytes could never be shipped.
+        // Deduplication is normally the hot path: do not stat or reseal an
+        // unchanged payload. A live row with an empty inline blob is the one
+        // repair case; only there do we inspect the hash-addressed file.
+        let existing: Option<(i64, Vec<u8>)> = transaction
+            .query_row(
+                "SELECT record_bytes_len, record_bytes
+                 FROM cursor_store_raw_record
+                 WHERE source_epoch = ?1 AND record_hash = ?2",
+                params![epoch, hash],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((existing_len, existing_blob)) = existing {
+            if existing_len > 0 && existing_blob.is_empty() {
+                let root = records_root(&transaction)?;
+                let relative = crate::state::payload_store::relative_path_for(&hash, "rec");
+                if crate::state::payload_store::exists(&root, &relative) {
+                    continue;
+                }
+                // The row, position and hash remain authoritative. Re-seal
+                // only this exact source record, then leave the file-backed
+                // representation explicit rather than fabricating bytes.
+                let (_blob, len, _path) = seal_record(&transaction, &hash, bytes)?;
+                let repaired = transaction.execute(
+                    "UPDATE cursor_store_raw_record
+                     SET record_bytes = ?1, record_bytes_len = ?2
+                     WHERE source_epoch = ?3 AND record_hash = ?4
+                       AND record_bytes_len > 0 AND length(record_bytes) = 0",
+                    params![Vec::<u8>::new(), len, epoch, hash],
+                )?;
+                anyhow::ensure!(
+                    repaired == 1,
+                    "Cursor raw record changed while repairing missing payload"
+                );
+            }
+            // A committed row is never deleted merely because its file
+            // vanished, and a drained row must never be resurrected.
+            continue;
+        }
+
+        // Seal before the new row exists: an orphan from a rolled-back
+        // savepoint is swept, while a committed row can never lack bytes.
         let (blob, len, _path) = seal_record(&transaction, &hash, bytes)?;
         let inserted = transaction.execute(
             "INSERT INTO cursor_store_raw_record (
@@ -101,11 +135,12 @@ pub fn append_unseen_cursor_records(
              ON CONFLICT(source_epoch, record_hash) DO NOTHING",
             params![epoch, hash, next, blob, len, Utc::now().to_rfc3339()],
         )?;
-        if inserted == 1 {
-            next = next
-                .checked_add(1)
-                .context("Cursor source position overflow")?;
+        if inserted == 0 {
+            continue;
         }
+        next = next
+            .checked_add(1)
+            .context("Cursor source position overflow")?;
     }
     transaction.commit()?;
     Ok(next)
@@ -117,9 +152,8 @@ pub fn append_unseen_cursor_records(
 /// record's file as an orphan and delete the only copy of evidence that has not
 /// been receipted yet.
 pub fn referenced_payloads(conn: &Connection) -> Result<Vec<String>> {
-    let mut statement = conn.prepare(
-        "SELECT record_hash FROM cursor_store_raw_record WHERE record_bytes_len > 0",
-    )?;
+    let mut statement =
+        conn.prepare("SELECT record_hash FROM cursor_store_raw_record WHERE record_bytes_len > 0")?;
     let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
     let mut referenced = Vec::new();
     for hash in rows {
@@ -381,17 +415,65 @@ pub fn cursor_record_exists(
     source_epoch: Uuid,
     record_hash: &str,
 ) -> Result<bool> {
-    let found: Option<i64> = conn
+    let found: Option<(i64, Vec<u8>)> = conn
         .query_row(
-            "SELECT 1 FROM cursor_store_raw_record WHERE source_epoch = ?1 AND record_hash = ?2",
+            "SELECT record_bytes_len, record_bytes
+             FROM cursor_store_raw_record
+             WHERE source_epoch = ?1 AND record_hash = ?2",
             params![source_epoch.to_string(), record_hash],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    Ok(found.is_some())
+    let Some((record_bytes_len, record_bytes)) = found else {
+        return Ok(false);
+    };
+    // A drained row intentionally has no payload and must remain deduplicated;
+    // only a live file-backed row whose payload disappeared needs re-reading
+    // from Cursor.
+    if record_bytes_len <= 0 || !record_bytes.is_empty() {
+        return Ok(true);
+    }
+    let root = records_root(conn)?;
+    Ok(crate::state::payload_store::exists(
+        &root,
+        &crate::state::payload_store::relative_path_for(record_hash, "rec"),
+    ))
+}
+
+fn has_missing_file_payload(conn: &Connection, source_epoch: Uuid) -> Result<bool> {
+    let mut statement = conn.prepare(
+        "SELECT raw.record_hash, length(raw.record_bytes)
+         FROM cursor_store_raw_record AS raw
+         LEFT JOIN source_epoch_lane_state AS lane
+           ON lane.source_epoch = raw.source_epoch AND lane.lane = 'durable'
+         WHERE raw.source_epoch = ?1 AND raw.record_bytes_len > 0
+           AND raw.source_position >= COALESCE(lane.last_position, 0)",
+    )?;
+    let rows = statement.query_map([source_epoch.to_string()], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    let root = records_root(conn)?;
+    for row in rows {
+        let (hash, blob_len) = row?;
+        if blob_len == 0
+            && !crate::state::payload_store::exists(
+                &root,
+                &crate::state::payload_store::relative_path_for(&hash, "rec"),
+            )
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 pub fn capture_cursor(conn: &Connection, source_epoch: Uuid) -> Result<Option<String>> {
+    // Rewind the source scan when a prior capture committed a row but its
+    // sealed payload vanished. The source bytes, not the row or cursor, are
+    // the repair authority; deduplication then preserves every prior position.
+    if has_missing_file_payload(conn, source_epoch)? {
+        return Ok(None);
+    }
     let value: Option<Option<String>> = conn
         .query_row(
             "SELECT last_blob_id FROM cursor_store_capture_cursor WHERE source_epoch = ?1",
@@ -402,7 +484,6 @@ pub fn capture_cursor(conn: &Connection, source_epoch: Uuid) -> Result<Option<St
         .context("reading Cursor blob capture cursor")?;
     Ok(value.flatten())
 }
-
 pub fn store_capture_cursor(
     conn: &Connection,
     source_epoch: Uuid,
@@ -727,6 +808,48 @@ mod tests {
     }
 
     #[test]
+    fn missing_payload_rewinds_capture_and_repairs_without_new_position() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let mut conn = open_db(Some(temp.path())).unwrap();
+        let epoch = Uuid::new_v4();
+        seed_epoch(&conn, epoch);
+        let records = vec![b"before".to_vec(), b"missing".to_vec(), b"after".to_vec()];
+        append_unseen_cursor_records(&mut conn, epoch, &records).unwrap();
+        store_capture_cursor(&conn, epoch, Some("cursor-at-head")).unwrap();
+
+        let hash = cursor_record_hash(&records[1]);
+        let root = records_root(&conn).unwrap();
+        let relative = crate::state::payload_store::relative_path_for(&hash, "rec");
+        crate::state::payload_store::remove(&root, &relative).unwrap();
+        assert!(!crate::state::payload_store::exists(&root, &relative));
+
+        // A restart must not trust the high-water mark past a row whose
+        // evidence disappeared. The source walk will revisit that record.
+        assert_eq!(capture_cursor(&conn, epoch).unwrap(), None);
+        assert!(!cursor_record_exists(&conn, epoch, &hash).unwrap());
+
+        // Re-reading the exact source record reseals the same hash row. No
+        // source position or cursor identity is dropped, and no empty payload
+        // can satisfy the shipper.
+        let next = append_unseen_cursor_records(&mut conn, epoch, &[records[1].clone()]).unwrap();
+        assert_eq!(next, 3);
+        assert_eq!(
+            capture_cursor(&conn, epoch).unwrap().as_deref(),
+            Some("cursor-at-head")
+        );
+        assert_eq!(
+            cursor_records_from(&conn, epoch, 0, 10, 1024)
+                .unwrap()
+                .len(),
+            3
+        );
+        assert_eq!(
+            cursor_records_from(&conn, epoch, 1, 1, 1024).unwrap()[0].bytes,
+            records[1]
+        );
+    }
+
+    #[test]
     fn failed_receipt_retries_the_same_bounded_record_range() {
         let temp = tempfile::NamedTempFile::new().unwrap();
         let mut conn = open_db(Some(temp.path())).unwrap();
@@ -830,10 +953,17 @@ mod tests {
         let referenced = referenced_payloads(&conn).unwrap();
         assert_eq!(referenced.len(), 1, "a live record references its payload");
         let root = crate::state::payload_store::root_for_connection(&conn).unwrap();
-        assert!(root.join(&referenced[0]).exists(), "and the payload is on disk");
+        assert!(
+            root.join(&referenced[0]).exists(),
+            "and the payload is on disk"
+        );
 
-        let report = crate::state::pending_source_envelope::reconcile_frozen_payloads(&conn).unwrap();
-        assert_eq!(report.orphans_removed, 0, "a live payload must not be swept");
+        let report =
+            crate::state::pending_source_envelope::reconcile_frozen_payloads(&conn).unwrap();
+        assert_eq!(
+            report.orphans_removed, 0,
+            "a live payload must not be swept"
+        );
         assert_eq!(report.missing_blocked, 0);
         assert!(root.join(&referenced[0]).exists());
 
@@ -841,7 +971,8 @@ mod tests {
         set_durable_cursor(&conn, epoch, 1);
         drain_receipted_cursor_records(&conn).unwrap();
         assert!(referenced_payloads(&conn).unwrap().is_empty());
-        let report = crate::state::pending_source_envelope::reconcile_frozen_payloads(&conn).unwrap();
+        let report =
+            crate::state::pending_source_envelope::reconcile_frozen_payloads(&conn).unwrap();
         assert_eq!(report.orphans_removed, 0, "the drain removed it already");
         assert!(!root.join(&referenced[0]).exists());
     }

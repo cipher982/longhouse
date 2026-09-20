@@ -247,18 +247,17 @@ class RuntimeEventIngest(BaseModel):
 
 
 # Matches RUNTIME_EVENT_BATCH_LIMIT in the machine agent (engine/src/outbox.rs),
-# and bounds both this HTTP model and catalogd's session.runtime.apply.v2. At 128
-# a live session's backlog drained in dozens of serial round trips, so a terminal
-# signal queued behind it retired the run minutes after the session had ended.
+# and bound catalogd's session.runtime.apply.v2 frame. The previous 128-event
+# apply cap forced a live session backlog through dozens of serial round trips,
+# so a terminal signal queued behind it retired the run minutes after session end.
 # The body stays far inside the wire cap: 1024 observations is under a megabyte
 # against a 48 MB limit.
 RUNTIME_EVENT_BATCH_LIMIT = 1024
 
-# Largest runtime batch one catalogd apply accepts. The HTTP route splits a
-# machine agent batch into applies of at most this size, in order, so each hold
-# of the single catalog writer stays short and every apply stays inside the fact
-# reducer's MAX_REDUCER_FACTS bound (one fact per observation) and the frame cap.
-CATALOG_RUNTIME_APPLY_LIMIT = 128
+# Largest runtime batch one catalogd apply accepts. The reducer keeps its bounded
+# fact folds inside the single writer transaction, so the wire batch can match
+# the machine-agent frame limit without serial status chunks.
+CATALOG_RUNTIME_APPLY_LIMIT = RUNTIME_EVENT_BATCH_LIMIT
 
 
 class RuntimeEventBatchIngest(BaseModel):
@@ -295,7 +294,7 @@ class SessionRuntimeView:
     freshness_expires_at: datetime | None = None
 
 
-def _confidence_for_state(state: SessionRuntimeState, *, now: datetime) -> str:
+def _confidence_for_state(state: SessionRuntimeState | LiveRuntimeState, *, now: datetime) -> str:
     freshness_expires_at = normalize_utc(state.freshness_expires_at)
     if freshness_expires_at is not None and freshness_expires_at > now:
         return "live"
@@ -357,7 +356,7 @@ def _signal_tier_for_state(*, phase_source: str, confidence: str | None) -> str:
 
 def build_runtime_view(
     *,
-    state: SessionRuntimeState,
+    state: SessionRuntimeState | LiveRuntimeState,
     session: AgentSession,
     now: datetime,
 ) -> SessionRuntimeView:
@@ -510,14 +509,13 @@ def resolve_runtime_overlay(
     session: AgentSession,
     *,
     last_activity_at: datetime | None,
-    runtime_state_map: Mapping[str, SessionRuntimeState],
+    runtime_state_map: Mapping[str, SessionRuntimeState | LiveRuntimeState],
     now: datetime,
 ) -> SessionRuntimeView:
-    """Runtime overlay sourced exclusively from SessionRuntimeState.
+    """Resolve the canonical runtime overlay, with archive fallback disabled in live mode.
 
-    Every `/api/agents/presence` call emits a RuntimeEventIngest which the
-    reducer materializes into SessionRuntimeState — that row is the single
-    source of truth for phase, tool, and confidence.
+    Presence events materialize in LiveRuntimeState when the live catalog is
+    configured; SessionRuntimeState remains only for the no-live-store path.
     """
     session_key = str(session.id)
     runtime_state = runtime_state_map.get(session_key)
@@ -1017,7 +1015,7 @@ def _apply_run_terminal_event(
     return changed
 
 
-def _state_snapshot(state: SessionRuntimeState | None) -> tuple[Any, ...] | None:
+def _state_snapshot(state: SessionRuntimeState | LiveRuntimeState | None) -> tuple[Any, ...] | None:
     if state is None:
         return None
     return (

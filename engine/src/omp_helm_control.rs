@@ -311,6 +311,7 @@ pub async fn dispatch(
     text: Option<&str>,
     state_root: Option<&Path>,
     expected_grant: Option<&Value>,
+    request_id: Option<&str>,
 ) -> std::result::Result<OmpHelmCommandSummary, OmpHelmControlError> {
     let state = match load_state(session_id, state_root) {
         Ok(state) => state,
@@ -342,6 +343,9 @@ pub async fn dispatch(
         "connection_id": state.connection_id,
         "lease_generation": state.lease_generation,
     });
+    if let Some(request_id) = request_id.filter(|value| !value.trim().is_empty()) {
+        request["request_id"] = json!(request_id);
+    }
     if let Some(text) = text {
         request["text"] = json!(text);
     }
@@ -464,6 +468,7 @@ mod tests {
                 "connection_id": connection_id,
                 "lease_generation": lease_generation,
             })),
+            None,
         )
         .await;
         let summary = result.unwrap();

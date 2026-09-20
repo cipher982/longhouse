@@ -511,10 +511,10 @@ async def test_catalog_runtime_draining_replay_keeps_operation_id_and_dispatches
     release_provider = asyncio.Event()
     commands: list[dict[str, object]] = []
 
+    import zerg.routers.session_chat as chat_router
     import zerg.services.managed_control_dispatcher as dispatcher
     import zerg.services.runtime_admission as admission_module
     import zerg.services.session_chat_impl as chat_impl
-    import zerg.routers.session_chat as chat_router
 
     ambiguous = {"value": False}
 
@@ -736,7 +736,8 @@ async def test_pi_auto_and_queue_inputs_use_one_immediate_native_send_path(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_catalog_terminal_wake_dispatches_next_live_receipt(tmp_path, monkeypatch):
+@pytest.mark.parametrize("indeterminate", [False, True])
+async def test_catalog_terminal_wake_dispatches_next_live_receipt(tmp_path, monkeypatch, indeterminate):
     from zerg.catalogd.schema import initialize_catalog_schema
     from zerg.catalogd.store import CatalogStore
 
@@ -786,7 +787,19 @@ async def test_catalog_terminal_wake_dispatches_next_live_receipt(tmp_path, monk
     import zerg.services.managed_control_dispatcher as dispatcher
     import zerg.services.session_chat_impl as chat_impl
 
+    dispatch_count = 0
+
     async def fake_dispatch(**_kwargs):
+        nonlocal dispatch_count
+        dispatch_count += 1
+        if indeterminate:
+            return ManagedControlDispatchResult(
+                ok=False,
+                transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
+                error="provider acknowledgement lost",
+                failure_kind="transport",
+                failure_reason="indeterminate",
+            )
         return ManagedControlDispatchResult(
             ok=True,
             transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
@@ -797,11 +810,14 @@ async def test_catalog_terminal_wake_dispatches_next_live_receipt(tmp_path, monk
     monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: _CatalogClient())
     monkeypatch.setattr(chat_impl, "_schedule_catalog_lock_release", lambda **_kwargs: None)
 
-    assert await wake_next_live_catalog_input(session_id) is True
+    assert await wake_next_live_catalog_input(session_id) is (not indeterminate)
     with factory() as db:
         receipt = db.query(LiveSessionInputReceipt).one()
-        assert receipt.status == "delivered"
+        assert receipt.status == ("delivering" if indeterminate else "delivered")
         assert receipt.delivery_request_id
+    if indeterminate:
+        assert await wake_next_live_catalog_input(session_id) is False
+        assert dispatch_count == 1, "a lost ACK must not cause a second provider delivery"
 
 
 @pytest.mark.asyncio

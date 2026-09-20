@@ -28,10 +28,10 @@ mod cursor_launch_binding;
 mod cursor_print;
 mod cursor_store;
 mod cursor_visibility;
-mod durability_audit;
 mod daemon;
 mod device;
 mod discovery;
+mod durability_audit;
 mod error_tracker;
 mod fault_injection;
 mod flight;
@@ -53,8 +53,8 @@ mod managed_phase_contract;
 mod managed_pi_helm_scan;
 mod managed_process_janitor;
 mod managed_resume_scan;
-mod managed_source_claim;
 mod managed_scan;
+mod managed_source_claim;
 mod managed_terminal;
 mod media_redaction;
 mod media_upload;
@@ -77,6 +77,7 @@ mod pipeline;
 mod process_group;
 mod process_identity;
 mod provider_readiness;
+mod qa_fault;
 mod raw_records;
 mod report_bundle;
 mod scheduler;
@@ -91,7 +92,6 @@ mod turn_claims;
 mod unmanaged_bindings;
 mod update;
 mod warp_cli_agent;
-mod qa_fault;
 mod watcher;
 
 use std::path::PathBuf;
@@ -2431,6 +2431,7 @@ fn main() -> anyhow::Result<()> {
                             Some(&text),
                             state_root.as_deref(),
                             None,
+                            None,
                         ))
                         .map_err(|error| anyhow::anyhow!(error))?;
                     println!(
@@ -2452,6 +2453,7 @@ fn main() -> anyhow::Result<()> {
                             Some(&text),
                             state_root.as_deref(),
                             None,
+                            None,
                         ))
                         .map_err(|error| anyhow::anyhow!(error))?;
                     println!(
@@ -2471,6 +2473,7 @@ fn main() -> anyhow::Result<()> {
                             omp_helm_control::CommandKind::Abort,
                             None,
                             state_root.as_deref(),
+                            None,
                             None,
                         ))
                         .map_err(|error| anyhow::anyhow!(error))?;
@@ -2493,6 +2496,7 @@ fn main() -> anyhow::Result<()> {
                             omp_helm_control::CommandKind::Terminate,
                             None,
                             state_root.as_deref(),
+                            None,
                             None,
                         ))
                         .map_err(|error| anyhow::anyhow!(error))?;

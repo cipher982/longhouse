@@ -237,6 +237,8 @@ struct RawLine {
     timestamp: Option<String>,
     uuid: Option<String>,
     id: Option<String>,
+    #[serde(rename = "parentSession")]
+    parent_session: Option<String>,
     #[serde(rename = "parentUuid")]
     parent_uuid: Option<String>,
     #[serde(rename = "parentId")]
@@ -3511,8 +3513,50 @@ fn extract_omp_provider_facts(
         }
         return;
     }
+    if obj.r#type.as_deref() == Some("session") {
+        let provider_session_id = obj
+            .id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let parent_provider_session_id = obj
+            .parent_session
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let (Some(provider_session_id), Some(parent_provider_session_id)) =
+            (provider_session_id, parent_provider_session_id)
+        {
+            // `parentSession` is an authoritative native edge, but it says
+            // nothing about whether delegated work is currently active. Keep
+            // it as metadata evidence only; do not mint an activity/count.
+            if provider_session_id != parent_provider_session_id {
+                push_bounded_provider_fact(
+                    facts,
+                    "delegation.metadata",
+                    pi_timestamp(obj),
+                    line_offset,
+                    json!({
+                        "provider_session_id": provider_session_id,
+                        "parent_provider_session_id": parent_provider_session_id,
+                        "metadata": {
+                            "source": "session_header/parentSession",
+                            "parentSession": parent_provider_session_id,
+                        },
+                    }),
+                );
+            }
+        }
+        return;
+    }
     extract_pi_provider_facts(obj, line_offset, facts);
     for fact in &mut facts[start..] {
+        if matches!(
+            fact.kind.as_str(),
+            "delegation.metadata" | "delegation.spawn" | "delegation.activity"
+        ) {
+            continue;
+        }
         if let Value::Object(payload) = &mut fact.payload {
             payload.insert("provider".to_string(), Value::String("omp".to_string()));
             if fact.kind == "turn.usage" {
@@ -6040,6 +6084,51 @@ mod tests {
             .iter()
             .any(|event| event.raw_type == "omp_model_change"));
         assert_eq!(result.source_lines.len(), 11);
+        let lineage = result
+            .provider_facts
+            .iter()
+            .find(|fact| fact.kind == "delegation.metadata")
+            .expect("OMP parentSession emits a delegation metadata observation");
+        assert_eq!(lineage.payload["provider_session_id"], "omp-native-18-1-14");
+        assert_eq!(
+            lineage.payload["parent_provider_session_id"],
+            "omp-parent-opaque"
+        );
+        assert_eq!(
+            lineage.payload["metadata"]["source"],
+            "session_header/parentSession"
+        );
+        assert_eq!(
+            lineage.payload["metadata"]["parentSession"],
+            "omp-parent-opaque"
+        );
+        assert!(!result
+            .provider_facts
+            .iter()
+            .any(|fact| fact.kind == "delegation.activity"));
+    }
+
+    #[test]
+    fn omp_session_without_parent_has_no_delegation_observation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("root.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                r#"{"type":"session","version":3,"id":"omp-root-18-1-14","timestamp":"2026-09-09T00:00:00.000Z","cwd":"/tmp/omp","parentSession":""}"#,
+                "\n",
+                r#"{"type":"message","id":"omp-root-user-01","parentId":null,"timestamp":"2026-09-09T00:00:01.000Z","message":{"role":"user","content":[{"type":"text","text":"root only"}]}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        let result = parse_session_file_with_provider(&path, 0, Some("omp")).unwrap();
+        assert_eq!(result.metadata.parent_provider_session_id, None);
+        assert!(!result
+            .provider_facts
+            .iter()
+            .any(|fact| fact.kind.starts_with("delegation.")));
     }
 
     #[test]

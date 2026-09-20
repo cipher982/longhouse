@@ -16,10 +16,12 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+import zerg.database as database_module
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
+from zerg.models.live_store import LiveRuntimeState
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_ANSWER_PAUSE
@@ -266,8 +268,12 @@ def _fetch_managed_local_hook_observations_since(
     return hook_observations
 
 
-def _load_managed_local_runtime_state(*, db_bind, session_id: UUID) -> SessionRuntimeState | None:
+def _load_managed_local_runtime_state(*, db_bind, session_id: UUID) -> SessionRuntimeState | LiveRuntimeState | None:
     with Session(bind=db_bind) as poll_db:
+        if database_module.live_store_configured():
+            from zerg.services.session_runtime import load_runtime_state_map
+
+            return load_runtime_state_map(poll_db, [session_id]).get(str(session_id))
         return (
             poll_db.query(SessionRuntimeState)
             .filter(SessionRuntimeState.session_id == session_id)
@@ -305,7 +311,7 @@ async def await_managed_local_hook_phase_update(
 
     The `/api/agents/presence` endpoint records hook runtime signals as
     SessionObservation facts, so this polls the raw observation cursor and
-    verifies the canonical SessionRuntimeState reducer output before returning.
+    verifies the canonical live runtime reducer output before returning.
     """
 
     loop = asyncio.get_running_loop()

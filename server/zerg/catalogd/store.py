@@ -44,6 +44,7 @@ from sqlalchemy.orm import Session
 from zerg.catalogd.fact_reducer import MAX_HEADS_PER_FAMILY
 from zerg.catalogd.fact_reducer import MAX_REDUCER_FACTS
 from zerg.catalogd.fact_reducer import ReducerFact
+from zerg.catalogd.fact_reducer import ReducerResult
 from zerg.catalogd.fact_reducer import read_bounded_session_fact_heads
 from zerg.catalogd.fact_reducer import read_bounded_sessions_fact_heads
 from zerg.catalogd.fact_reducer import read_session_fact_heads
@@ -2778,7 +2779,7 @@ class CatalogStore:
         return result
 
     def apply_session_runtime(self, *, events: list[Any]) -> dict[str, Any]:
-        """Atomically reduce one bounded runtime batch."""
+        """Atomically reduce one ordered runtime batch with bounded fact folds."""
 
         from zerg.services.session_runtime import ingest_live_runtime_events
 
@@ -2896,11 +2897,22 @@ class CatalogStore:
                 events=events,
                 updated_runtime_keys=updated_runtime_keys,
             )
-            reduced = reduce_fact_batch_setwise(
-                connection,
-                [*activity_facts, *delegation_facts],
-                received_at=observed_at,
-                commit_seq_override=commit_seq,
+            all_facts = [*activity_facts, *delegation_facts]
+            reduced_parts = [
+                reduce_fact_batch_setwise(
+                    connection,
+                    all_facts[start : start + MAX_REDUCER_FACTS],
+                    received_at=observed_at,
+                    commit_seq_override=commit_seq,
+                )
+                for start in range(0, len(all_facts), MAX_REDUCER_FACTS)
+            ]
+            reduced = ReducerResult(
+                commit_seq=commit_seq,
+                changed_heads=sum(part.changed_heads for part in reduced_parts),
+                duplicates=sum(part.duplicates for part in reduced_parts),
+                stale=sum(part.stale for part in reduced_parts),
+                conflicts=sum(part.conflicts for part in reduced_parts),
             )
             return {
                 **result.model_dump(mode="json"),
@@ -15077,7 +15089,7 @@ def _runtime_activity_facts(
 ) -> list[ReducerFact]:
     """Promote accepted runtime phase events into the served fact reducer.
 
-    Runtime events already update the compatibility ``LiveRuntimeState`` row.
+    Runtime events already update the authoritative ``LiveRuntimeState`` row.
     The served session contract intentionally ignores that row, so failing to
     reduce the same accepted event left short Console turns with zero canonical
     activity heads.  Bind every promoted event to its exact durable run before

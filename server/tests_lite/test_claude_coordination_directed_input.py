@@ -69,7 +69,7 @@ def test_registration_covers_both_schema_declared_cells() -> None:
     assert m.REGISTRATION.assertion_cells == ((m._ASSERTION_SEND, None), (m._ASSERTION_RECEIVE, None))
     assert m.REGISTRATION.evidence_classes == ("live_token",)
     assert m.REGISTRATION.producer_revision == 4
-    assert m.REGISTRATION.scenario_revision == 3
+    assert m.REGISTRATION.scenario_revision == 4
     assert "cleanup_receipt" in m.REGISTRATION.required_artifacts
     assert m.REGISTRATION.required_cleanup == ("claude_helm_processes_exited",)
     assert len(m._CELL_BY_VARIANT) == 2
@@ -222,6 +222,25 @@ def test_run_fails_the_receive_cell_when_the_receiver_never_sees_it(tmp_path: Pa
     assert result["status"] == "fail"
     assert result["assertions"][m._ASSERTION_RECEIVE] is False
     assert result["observation"]["input_visible"] is False
+
+
+def test_run_rejects_a_terminal_failed_provider_receipt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    variant = execution_variant_key(provider="claude", assertion_id=m._ASSERTION_SEND, scenario_id=m._SCENARIO_ID, variant=None)
+    args = _args(tmp_path, variant)
+    created = {
+        "id": 12,
+        "source_session_id": "sender-session",
+        "target_session_id": "receiver-session",
+        "input_receipt": {"id": "receipt-failed", "status": "failed"},
+    }
+    inbox_record = {**created, "source_session_id": "sender-session"}
+    _install_session_and_api_fakes(monkeypatch, created=created, receipt_record=created, inbox_record=inbox_record)
+
+    result = m.run_directed_input_scenario(args)
+
+    assert result["status"] == "fail"
+    assert result["assertions"][m._ASSERTION_SEND] is False
+    assert result["observation"]["input_receipt_status"] == "failed"
 
 
 def test_run_records_a_typed_failure_with_the_requested_assertion_scored_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

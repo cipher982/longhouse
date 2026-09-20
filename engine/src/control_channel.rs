@@ -1120,6 +1120,7 @@ async fn execute_command(
     }
 
     let session_id = required_string(frame, "session_id")?;
+    let durable_command_id = frame.get("command_id").and_then(Value::as_str);
 
     match command_type.as_str() {
         COMMAND_TURN_START => execute_turn_start(frame, &payload, &session_id, config).await,
@@ -1375,6 +1376,7 @@ async fn execute_command(
                             .get("longhouse_control_grant")
                             .unwrap_or(&Value::Null),
                     ),
+                    durable_command_id,
                 )
                 .await
                 .map_err(|error| CommandError {
@@ -1494,6 +1496,7 @@ async fn execute_command(
                             .get("longhouse_control_grant")
                             .unwrap_or(&Value::Null),
                     ),
+                    durable_command_id,
                 )
                 .await
                 .map_err(|error| CommandError {
@@ -1602,6 +1605,7 @@ async fn execute_command(
                             .get("longhouse_control_grant")
                             .unwrap_or(&Value::Null),
                     ),
+                    durable_command_id,
                 )
                 .await
                 .map_err(|error| CommandError {
@@ -1700,6 +1704,7 @@ async fn execute_command(
                             .get("longhouse_control_grant")
                             .unwrap_or(&Value::Null),
                     ),
+                    durable_command_id,
                 )
                 .await
                 .map_err(|error| CommandError {
@@ -2051,10 +2056,11 @@ async fn execute_turn_start(
             .and_then(Value::as_str)
             .ok_or_else(|| report_stage_failed("report_id must be a string".to_string()))?
             .to_string();
-        let api_token = config
-            .api_token
-            .as_deref()
-            .ok_or_else(|| report_stage_failed("cannot fetch a bug report without the Machine Agent token".to_string()))?;
+        let api_token = config.api_token.as_deref().ok_or_else(|| {
+            report_stage_failed(
+                "cannot fetch a bug report without the Machine Agent token".to_string(),
+            )
+        })?;
         let report_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(25))
             .build()
@@ -3418,7 +3424,6 @@ mod tests {
     // So a panicking test leaves the environment clean, and the poison flag carries no
     // information -- it only converts one real failure into a wall of PoisonError noise
     // from every other test that shares the lock.
-
 
     fn command_cache() -> CompletedCommandCache {
         CompletedCommandCache::new(16, Duration::from_secs(60))
@@ -5642,10 +5647,7 @@ printf '%s\n' '{{"event":"result","result":{{"conversation_id":"{native_id}","st
                 let claim = crate::managed_source_claim::read_claim(&session_id)
                     .unwrap()
                     .expect("recovery confirms the source claim");
-                assert_eq!(
-                    claim.native_session_id.as_deref(),
-                    Some(native_id.as_str())
-                );
+                assert_eq!(claim.native_session_id.as_deref(), Some(native_id.as_str()));
                 crate::managed_source_claim::project_claims(&db_path).unwrap();
                 let conn = crate::state::db::open_db(Some(&db_path)).unwrap();
                 assert_eq!(

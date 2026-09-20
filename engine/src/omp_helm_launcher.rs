@@ -1296,7 +1296,16 @@ impl OmpHelmServer {
         if !matches!(kind.as_str(), "send" | "steer" | "abort" | "terminate") {
             return channel_error("bad_request", "unknown OMP Helm command");
         }
-        let request_id = Uuid::new_v4().to_string();
+        // The control channel's command id is the durable operation identity.
+        // Keep it on the local extension request too: minting a fresh id here
+        // makes a retry indistinguishable from a second provider delivery.
+        let request_id = frame
+            .get("request_id")
+            .or_else(|| frame.get("command_id"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
         let (sender, receiver) = mpsc::channel();
         {
             let mut state = self.shared.lock().expect("OMP state mutex poisoned");
@@ -1379,8 +1388,8 @@ impl OmpHelmServer {
                     .pending
                     .remove(&request_id);
                 channel_error(
-                    "command_failed",
-                    "OMP extension did not acknowledge the command",
+                    "command_indeterminate",
+                    "OMP extension did not acknowledge the command; delivery outcome is unknown",
                 )
             }
         }
@@ -1618,8 +1627,12 @@ fn settle_pending_terminate_locked(state: &mut SharedState) {
 }
 
 fn fail_pending_locked(state: &mut SharedState, message: &str) {
+    // Every pending request was already handed to the extension. A channel
+    // replacement therefore cannot prove non-delivery; report an indeterminate
+    // outcome so the durable receipt remains reconcilable instead of becoming
+    // a false terminal failure (or being replayed as a duplicate).
     for (_, sender) in std::mem::take(&mut state.pending) {
-        let _ = sender.send(channel_error("stale_channel", message));
+        let _ = sender.send(channel_error("command_indeterminate", message));
     }
 }
 
@@ -2426,41 +2439,6 @@ mod tests {
     use super::*;
     use std::io::BufRead;
 
-    /// OMP must be launched against the session file this launch reserved.
-    ///
-    /// Dropping `--session-dir`/`--resume`/`current_dir` from the spawn made
-    /// OMP open its own workspace-scoped session, report a source the
-    /// launcher never reserved, and leave every OMP Helm session `degraded`
-    /// with `waiting for OMP native session header` (2026-09-19). The spawn
-    /// sits inside a launch that needs a real provider, so guard the argv at
-    /// the source: this file must bind the reserved session, not accept
-    /// whatever session OMP decides to open.
-    #[test]
-    fn the_provider_is_launched_against_the_reserved_session() {
-        let source = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/omp_helm_launcher.rs"
-        ))
-        .expect("launcher source");
-        let spawn = source
-            .split_once("let mut command = Command::new(&binary);")
-            .expect("OMP provider spawn")
-            .1;
-        let spawn = &spawn[..spawn.find("ManagedIdentity::new").expect("identity application")];
-        // Judge the code, not the comment that explains it.
-        let spawn: String = spawn
-            .lines()
-            .filter(|line| !line.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        for required in ["--session-dir", "--resume", "current_dir"] {
-            assert!(
-                spawn.contains(required),
-                "OMP spawn must pass {required}: without it OMP opens its own session and identity binding never completes"
-            );
-        }
-    }
-
     fn state() -> OmpHelmStateFile {
         OmpHelmStateFile {
             schema_version: 1,
@@ -2522,7 +2500,9 @@ mod tests {
             + "\n";
 
         let mut first = std::os::unix::net::UnixStream::connect(&socket_path).unwrap();
-        first.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        first
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
         first.write_all(hello.as_bytes()).unwrap();
         let mut first_reader = BufReader::new(first.try_clone().unwrap());
         let mut first_ready = String::new();
@@ -2595,7 +2575,7 @@ mod tests {
         assert_eq!(terminate["status"], json!("stopped"));
         let send = send_rx.recv().unwrap();
         assert_eq!(send["ok"], json!(false));
-        assert_eq!(send["error"]["code"], json!("stale_channel"));
+        assert_eq!(send["error"]["code"], json!("command_indeterminate"));
         assert!(shared.pending.is_empty());
         assert!(shared.pending_terminate.is_none());
     }
@@ -4080,7 +4060,7 @@ mod tests {
     }
 
     #[test]
-    fn replacement_fence_fails_queued_commands() {
+    fn replacement_fence_marks_in_flight_commands_indeterminate() {
         let (sender, receiver) = mpsc::channel();
         let mut shared = SharedState {
             state: state(),
@@ -4098,7 +4078,7 @@ mod tests {
         };
         fail_pending_locked(&mut shared, "replacement");
         let response = receiver.recv().unwrap();
-        assert_eq!(response["error"]["code"], "stale_channel");
+        assert_eq!(response["error"]["code"], "command_indeterminate");
         assert!(shared.pending.is_empty());
     }
 

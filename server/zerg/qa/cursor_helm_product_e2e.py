@@ -109,6 +109,10 @@ def steer_landed_in_generation(
     in_generation = [row for row in rows if row.get("generation_id") == generation_id]
     responses = [str(row.get("text") or "") for row in in_generation if row.get("event") == "afterAgentResponse"]
     stopped = any(row.get("event") == "stop" for row in in_generation)
+    # Cursor's afterAgentResponse is the semantic commit receipt. Some native
+    # steers do not emit a separate stop hook, so waiting for stop alone turns
+    # a completed intended generation into a false timeout.
+    completed = bool(responses) or stopped
     later_step_ran = any(
         row.get("event") == "beforeShellExecution" and later_step_command in str(row.get("command") or "") for row in in_generation
     )
@@ -120,7 +124,7 @@ def steer_landed_in_generation(
         and steered_marker in str(row.get("text") or "")
         for row in rows
     )
-    if not stopped:
+    if not completed:
         failure = "steer_target_generation_never_completed"
     elif steered_here and not later_step_ran and not finished_original:
         failure = None
@@ -139,6 +143,16 @@ def steer_landed_in_generation(
         "later_step_ran_in_target_generation": later_step_ran,
         "original_task_finished": finished_original,
     }
+
+
+def _generation_completed(rows: list[dict[str, Any]], generation_id: str) -> bool:
+    """Return true once the target generation has a terminal receipt.
+
+    Cursor commits a turn with afterAgentResponse; a separate stop hook is
+    optional and may be dropped for a native steer. Keep the generation bind
+    strict while accepting either terminal receipt.
+    """
+    return any(row.get("generation_id") == generation_id and row.get("event") in {"afterAgentResponse", "stop"} for row in rows)
 
 
 def abort_stopped_generation(
@@ -592,10 +606,7 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             if steer_response.is_error:
                 raise RuntimeError(f"Runtime Host steer failed HTTP {steer_response.status_code}: {steer_response.text[:1000]}")
             _wait_until(
-                lambda: any(
-                    row.get("event") == "stop" and row.get("generation_id") == steer_generation
-                    for row in _hook_rows(root, session_id)[steer_hook_start:]
-                ),
+                lambda: _generation_completed(_hook_rows(root, session_id)[steer_hook_start:], steer_generation),
                 timeout=args.timeout,
                 description="steered Cursor generation completing",
             )
@@ -642,7 +653,13 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             )
             abort_generation = str(shell.get("generation_id") or "")
             time.sleep(0.5)
-            interrupt_live()
+            try:
+                interrupt_live()
+            except RuntimeError as error:
+                error_text = str(error)
+                failure_code = "abort_generation_rejected" if "generation" in error_text.lower() else "abort_unreached"
+                lifecycle["abort_native"] = {"passed": False, "failure_code": failure_code, "interrupt_error": error_text}
+                raise
             _wait_until(
                 lambda: any(
                     row.get("event") == "stop" and row.get("generation_id") == abort_generation
@@ -657,12 +674,22 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
             )
             abort_verdict["tui_alive_after_abort"] = session.process.poll() is None
             if fault == "cursor_abort_noop":
-                # The fault has fired and the generation has already answered or
-                # been stopped; the recovery turn adds nothing the verdict reads,
-                # and waiting for it can only turn a clean verdict into a timeout.
+                # A dispatched no-op must leave a receipt for the generation
+                # under test. Missing or mismatched evidence distinguishes a
+                # genuinely unfired fault from an abort that was never aimed
+                # at this generation; neither is a negative-control pass.
                 abort_verdict["qa_fault_receipt"] = (
                     json.loads(fault_path.read_text()) if (fault_path := root / f"{session_id}.qa-fault.json").exists() else None
                 )
+                receipt = abort_verdict["qa_fault_receipt"]
+                if receipt is None:
+                    abort_verdict.update({"passed": False, "failure_code": "abort_fault_not_fired"})
+                    lifecycle["abort_native"] = abort_verdict
+                    raise RuntimeError(f"Cursor abort negative control fault receipt missing: {abort_verdict}")
+                if str(receipt.get("generation_id") or "") != abort_generation:
+                    abort_verdict.update({"passed": False, "failure_code": "abort_generation_changed"})
+                    lifecycle["abort_native"] = abort_verdict
+                    raise RuntimeError(f"Cursor abort negative control targeted another generation: {abort_verdict}")
                 lifecycle["abort_native"] = abort_verdict
                 report.update({"status": "negative_control_observed", "finished_at": _now()})
                 return report

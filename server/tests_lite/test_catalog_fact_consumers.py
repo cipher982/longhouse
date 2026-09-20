@@ -26,6 +26,8 @@ def test_hot_fact_consumers_use_catalog_batch_without_sqlite(monkeypatch):
             "provider": "codex",
             "phase": "quiescent",
             "phase_source": "hook",
+            "last_asserted_at": now.isoformat(),
+            "terminal_state": "run_completed",
             "timeline_anchor_at": now.isoformat(),
             "runtime_version": 4,
             "updated_at": now.isoformat(),
@@ -80,6 +82,8 @@ def test_hot_fact_consumers_use_catalog_batch_without_sqlite(monkeypatch):
     previews = load_active_provisional_preview_map(None, [UUID(session_id)])
 
     assert runtime[session_id].phase == "quiescent"
+    assert runtime[session_id].last_asserted_at == now
+    assert runtime[session_id].terminal_state == "run_completed"
     assert controls[UUID(session_id)].control_state == "online"
     assert readiness[UUID(session_id)].launch_state == "live"
     assert previews[session_id].text == "Streaming output"

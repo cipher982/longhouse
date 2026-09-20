@@ -11,6 +11,7 @@ from zerg.qa.cursor_helm_product_e2e import _assistant_texts
 from zerg.qa.cursor_helm_product_e2e import _can_send_canonical
 from zerg.qa.cursor_helm_product_e2e import _can_send_live
 from zerg.qa.cursor_helm_product_e2e import _canonical_state_from_diagnostics
+from zerg.qa.cursor_helm_product_e2e import _generation_completed
 from zerg.qa.cursor_helm_product_e2e import _hook_rows
 from zerg.qa.cursor_helm_product_e2e import _pending_pause
 from zerg.qa.cursor_helm_product_e2e import _response_observed_at
@@ -156,3 +157,14 @@ def test_product_e2e_helpers_parse_managed_state_hooks_and_visible_events(tmp_pa
         )
         is False
     )
+
+
+def test_cursor_generation_completion_accepts_response_receipt_only_for_target() -> None:
+    rows = [
+        {"event": "afterAgentResponse", "generation_id": "target", "text": "steered"},
+        {"event": "stop", "generation_id": "other", "status": "completed"},
+    ]
+
+    assert _generation_completed(rows, "target") is True
+    assert _generation_completed(rows, "other") is True
+    assert _generation_completed(rows, "missing") is False

@@ -561,10 +561,8 @@ async def _register_fake_machine_control(
 
 def test_session_input_api_schema_exposes_typed_lifecycle_contract():
     from zerg.routers.session_chat import QueuedInputSummary
-    from zerg.routers.session_chat import SessionInputRequest
     from zerg.routers.session_chat import SessionInputResponse
 
-    request_schema = SessionInputRequest.model_json_schema()
     response_schema = SessionInputResponse.model_json_schema()
     queued_schema = QueuedInputSummary.model_json_schema()
 
@@ -845,6 +843,34 @@ def test_omp_auto_input_uses_native_follow_up_path_without_longhouse_lock(live_c
         support="omp.send",
         expect_longhouse_lock=False,
     )
+
+
+def test_omp_disconnected_input_stays_queued_for_recovery(live_catalog, live_catalog_client):  # noqa: F811
+    owner_id = live_catalog.create_user("live-omp-disconnected@test.local")
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email="live-omp-disconnected@test.local")}
+    session_id = _seed_live_catalog_session(
+        live_catalog,
+        owner_id=owner_id,
+        provider="omp",
+        device_id="omp-disconnected-machine",
+    )
+    request_id = "omp-disconnected-queued-1"
+
+    response = live_catalog_client.post(
+        f"/sessions/{session_id}/input",
+        json={"text": "deliver after reconnect", "intent": "queue", "client_request_id": request_id},
+        cookies=cookies,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["outcome"] == "queued"
+    receipt = _live_catalog_receipt(
+        live_catalog,
+        owner_id=owner_id,
+        session_id=session_id,
+        client_request_id=request_id,
+    )
+    assert receipt["status"] == INPUT_STATUS_QUEUED
 
 
 def test_codex_auto_input_routes_through_machine_control(live_catalog, live_catalog_client):  # noqa: F811

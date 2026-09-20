@@ -1772,6 +1772,7 @@ async def _finish_catalog_input_receipt(
     receipt_id: str,
     delivery_request_id: str,
     error: str | None = None,
+    status_value: str | None = None,
 ) -> None:
     from zerg.services.catalogd_supervisor import get_catalogd_client
 
@@ -1784,7 +1785,7 @@ async def _finish_catalog_input_receipt(
             {
                 "receipt_id": receipt_id,
                 "delivery_request_id": delivery_request_id,
-                "status": "delivered" if error is None else "failed",
+                "status": status_value or ("delivered" if error is None else "failed"),
                 "error": str(error)[:500] if error else None,
             },
             timeout_seconds=1.0,
@@ -1995,6 +1996,30 @@ async def _create_catalog_session_input_response(
                 raise HTTPException(
                     status_code=502,
                     detail={"error_code": "delivery_unknown", "message": error},
+                )
+            # A precondition refusal means the provider channel was not reached;
+            # the durable receipt remains owned by the recovery loop. Do not
+            # turn a disconnected OMP into a terminal failed receipt.
+            if result.failure_reason in {
+                "control_unavailable",
+                "connection_unavailable",
+                "control_head_missing",
+                "lease_expired",
+                "identity_unbound",
+            }:
+                await _finish_catalog_input_receipt(
+                    receipt_id=receipt_id,
+                    delivery_request_id=delivery_request_id,
+                    error=error,
+                    status_value="queued",
+                )
+                return SessionInputResponse(
+                    outcome="queued",
+                    input_id=None,
+                    live_input_id=receipt_id,
+                    client_request_id=client_request_id,
+                    intent=body.intent,
+                    queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
                 )
             await _finish_catalog_input_receipt(
                 receipt_id=receipt_id,

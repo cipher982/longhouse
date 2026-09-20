@@ -32,8 +32,8 @@ from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.services import catalogd_supervisor
 from zerg.services.live_session_dispatch import supports_live_text_dispatch_metadata
-from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.machine_control_channel import MachineControlCommandResponse
+from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_ANSWER_PAUSE
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_INTERRUPT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
@@ -1033,6 +1033,41 @@ def test_dispatch_managed_control_command_sends_antigravity_to_the_engine(live_c
             assert result.data["transport"] == "antigravity_hook_inbox"
         finally:
             await _clear_machine_registry()
+
+    asyncio.run(_run())
+
+
+def test_engine_session_not_attached_is_retryable_control_unavailable(live_catalog):  # noqa: F811
+    session_id, _lease = _seed_lease_for_new_session()
+
+    async def _run():
+        websocket = await _connect_fake_engine(owner_id=42, supports=["codex.send"])
+        completer = asyncio.create_task(
+            _complete_first_machine_command(
+                websocket,
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "session_not_attached",
+                        "message": "OMP extension channel is disconnected",
+                    },
+                },
+            )
+        )
+        result = await dispatch_managed_control_command(
+            db=object(),
+            owner_id=42,
+            session=_session(id=session_id, source_runner_id=None),
+            timeout_secs=1,
+            command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+            payload={"text": "continue"},
+            request_id="req-omp-detached",
+        )
+        await completer
+
+        assert result.ok is False
+        assert result.failure_kind == dispatcher_module.DISPATCH_FAILURE_PRECONDITION
+        assert result.failure_reason == "control_unavailable"
 
     asyncio.run(_run())
 

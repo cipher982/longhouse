@@ -360,6 +360,8 @@ pub fn read_session_header(path: &Path) -> Result<OmpSessionHeader> {
             parent_session: value
                 .get("parentSession")
                 .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
                 .map(str::to_string),
         });
     }
@@ -776,7 +778,6 @@ fn record_owner(
     }
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1249,5 +1250,4 @@ mod tests {
 
         assert!(roots.iter().any(|root| root == &pi_sessions));
     }
-
 }

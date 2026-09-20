@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -377,3 +378,61 @@ async def test_pi_print_stream_stays_live_overlay_and_replays_without_rows(daemo
             == 1
         )
     engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_runtime_apply_full_frame_preserves_ordered_terminal_outcome(daemon_paths):
+    """A frame larger than the retired 128-event loop keeps the terminal event last."""
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    runtime_key = "codex:full-frame"
+    engine.dispose()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        events = [
+            _event(
+                session_id=session_id,
+                runtime_key=runtime_key,
+                dedupe_key=f"phase-{index}",
+                occurred_at=now + timedelta(seconds=index),
+            )
+            for index in range(128)
+        ]
+        events.append(
+            {
+                **_event(
+                    session_id=session_id,
+                    runtime_key=runtime_key,
+                    dedupe_key="terminal-129",
+                    occurred_at=now + timedelta(seconds=128),
+                ),
+                "kind": "terminal_signal",
+                "phase": None,
+                "tool_name": None,
+                "payload": {"terminal_state": "run_completed", "terminal_source": "full-frame-test"},
+            }
+        )
+        applied = await client.call("session.runtime.apply.v2", {"events": events})
+        assert applied["accepted"] == 129
+        assert applied["updated_runtime_keys"] == [runtime_key]
+        assert applied["commit_seq"] == "1"
+
+        read_engine = create_catalog_engine(database_path)
+        with read_engine.connect() as connection:
+            state = (
+                connection.execute(LiveRuntimeState.__table__.select().where(LiveRuntimeState.runtime_key == runtime_key)).mappings().one()
+            )
+        assert state["phase"] == "finished"
+        assert state["terminal_state"] == "run_completed"
+        assert state["runtime_version"] == 129
+        assert read_catalog_meta(read_engine).commit_seq == 1
+        read_engine.dispose()
+    finally:
+        await client.close()
+        await daemon.close()
+        engine.dispose()

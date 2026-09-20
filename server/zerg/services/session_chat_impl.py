@@ -859,12 +859,17 @@ def _runtime_terminal_result_after(*, db_bind, session_id: UUID, after: datetime
     Session = sessionmaker(bind=db_bind, expire_on_commit=False)
     db = Session()
     try:
-        state = (
-            db.query(SessionRuntimeState)
-            .filter(SessionRuntimeState.session_id == session_id)
-            .order_by(SessionRuntimeState.updated_at.desc())
-            .first()
-        )
+        if database_module.live_store_configured():
+            from zerg.services.session_runtime import load_runtime_state_map
+
+            state = load_runtime_state_map(db, [session_id]).get(str(session_id))
+        else:
+            state = (
+                db.query(SessionRuntimeState)
+                .filter(SessionRuntimeState.session_id == session_id)
+                .order_by(SessionRuntimeState.updated_at.desc())
+                .first()
+            )
         if state is None:
             return None
         phase = str(getattr(state, "phase", "") or "").strip()

@@ -76,7 +76,7 @@ REGISTRATION = ProducerRegistration(
     producer_id="claude.coordination_directed_input.v1",
     producer_revision=4,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=3,
+    scenario_revision=4,
     assertion_cells=(
         (_ASSERTION_SEND, None),
         (_ASSERTION_RECEIVE, None),
@@ -219,20 +219,28 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
         # each attempt would deliver duplicate peer messages.
         client_request_id = str(uuid.uuid4())
         create_attempts: list[dict[str, Any]] = []
+        create_errors: list[str] = []
 
         def create_with_receipt() -> dict[str, Any] | None:
-            response = api_json(
-                args.api_url,
-                sender_token,
-                "directed-inputs",
-                method="POST",
-                json_body={
-                    "target_session_id": receiver_session_id,
-                    "text": marker,
-                    "client_request_id": client_request_id,
-                },
-                extra_headers={_SESSION_HEADER: sender_session_id},
-            )
+            try:
+                response = api_json(
+                    args.api_url,
+                    sender_token,
+                    "directed-inputs",
+                    method="POST",
+                    json_body={
+                        "target_session_id": receiver_session_id,
+                        "text": marker,
+                        "client_request_id": client_request_id,
+                    },
+                    extra_headers={_SESSION_HEADER: sender_session_id},
+                )
+            except RuntimeHostHTTPError as exc:
+                # A delayed HTTP answer is not evidence that the durable create
+                # failed. Keep observing the outbound row by its stable caller
+                # id; retrying POST with a new id could duplicate delivery.
+                create_errors.append(str(exc))
+                return None
             create_attempts.append(response)
             return response if response.get("input_receipt") is not None else None
 
@@ -243,14 +251,29 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
                 description="directed input receipt link",
             )
         except ScenarioError:
-            if not create_attempts:
-                create_with_receipt()
-            created = create_attempts[-1]
+            created = (
+                create_attempts[-1]
+                if create_attempts
+                else {
+                    "client_request_id": client_request_id,
+                    "create_errors": create_errors,
+                }
+            )
         write_json(root / "directed-input-create-receipt.json", created)
 
         directed_input_id = created.get("id")
 
+        def _matches(item: dict[str, Any]) -> bool:
+            return item.get("id") == directed_input_id or (directed_input_id is None and item.get("client_request_id") == client_request_id)
+
+        def _receipt_is_nonterminal(item: dict[str, Any] | None) -> bool:
+            receipt = (item or {}).get("input_receipt")
+            if not isinstance(receipt, dict):
+                return False
+            return receipt.get("status") not in {"failed", "cancelled"}
+
         def receiver_sees_it() -> dict[str, Any] | None:
+            nonlocal directed_input_id
             payload = api_json(
                 args.api_url,
                 receiver_token,
@@ -258,16 +281,17 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
                 extra_headers={_SESSION_HEADER: receiver_session_id},
             )
             for item in payload.get("directed_inputs", []):
-                if item.get("id") == directed_input_id:
+                if isinstance(item, dict) and _matches(item):
+                    directed_input_id = item.get("id")
                     return item
             return None
 
         # provider_input_receipt_linked can race live delivery; re-list the
-        # sender's own outbound inputs (there is no single-item GET route --
-        # only POST /directed-inputs and GET /directed-inputs exist) until the
-        # same created record shows a linked receipt, so a delivery that lands
-        # a moment after creation still counts.
+        # sender's own outbound inputs by the stable caller id. The create POST
+        # may have timed out after persistence, so an HTTP response is not the
+        # observer's source of truth.
         def receipt_linked() -> dict[str, Any] | None:
+            nonlocal directed_input_id
             payload = api_json(
                 args.api_url,
                 sender_token,
@@ -275,11 +299,12 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
                 extra_headers={_SESSION_HEADER: sender_session_id},
             )
             for item in payload.get("directed_inputs", []):
-                if item.get("id") == directed_input_id and item.get("input_receipt") is not None:
+                if isinstance(item, dict) and _matches(item) and item.get("input_receipt") is not None:
+                    directed_input_id = item.get("id")
                     return item
             return None
 
-        receipt_record = created if created.get("input_receipt") is not None else None
+        receipt_record = created if _receipt_is_nonterminal(created) else None
         if receipt_record is None:
             try:
                 receipt_record = wait_until(
@@ -320,13 +345,16 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
             diagnostics={"sessions": close_receipts},
         )
 
+        input_receipt = (receipt_record or {}).get("input_receipt")
         observation = {
             "sender_session_id": sender_session_id,
             "receiver_session_id": receiver_session_id,
             "directed_input_id": directed_input_id,
+            "client_request_id": client_request_id,
             "marker": marker,
             "input_persisted": directed_input_id is not None,
-            "input_receipt_linked": bool((receipt_record or {}).get("input_receipt") or created.get("input_receipt") is not None),
+            "input_receipt_linked": _receipt_is_nonterminal(receipt_record),
+            "input_receipt_status": input_receipt.get("status") if isinstance(input_receipt, dict) else None,
             "input_visible": inbox_record is not None,
             "source_session_id": (inbox_record or {}).get("source_session_id"),
         }

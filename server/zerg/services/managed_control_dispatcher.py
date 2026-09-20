@@ -530,6 +530,18 @@ async def _dispatch_engine_channel(
     )
     if not finish.durable:
         return _indeterminate_after_engine_reply(finish.error)
+    if code == "session_not_attached":
+        # The engine reached the launcher's authenticated socket, but the OMP
+        # extension channel was disconnected before the provider saw the
+        # command. Keep the user receipt retryable; this is not a provider
+        # rejection and must not become a terminal failed input.
+        return ManagedControlDispatchResult(
+            ok=False,
+            transport=MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL,
+            error=error,
+            failure_kind=DISPATCH_FAILURE_PRECONDITION,
+            failure_reason="control_unavailable",
+        )
     if code == "turn_ended":
         return ManagedControlDispatchResult(
             ok=True,

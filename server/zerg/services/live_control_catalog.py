@@ -577,6 +577,11 @@ async def wake_next_live_catalog_input(session_id: UUID | str) -> bool:
         )
         data = dict(result.data or {})
         if not result.ok or int(data.get("exit_code", 1)) != 0:
+            if result.failure_reason == "indeterminate":
+                # The provider may have consumed this input. Preserve the
+                # delivering receipt: neither failure nor replay is justified.
+                await session_lock_manager.release(lock_scope_id, request_id)
+                return False
             delivery_error = str(result.error or data.get("stderr") or "queued send failed")[:500]
             # A transport that was never reachable did not reject the input; it
             # never saw it. Returning the receipt to the queue makes an offline or

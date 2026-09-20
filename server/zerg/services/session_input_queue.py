@@ -103,12 +103,17 @@ def _is_transient_managed_control_unavailable(error_code: str | None, error_mess
 
 
 def _latest_runtime_phase(db: Session, session_id: UUID) -> str | None:
-    runtime_state = (
-        db.query(SessionRuntimeState)
-        .filter(SessionRuntimeState.session_id == session_id)
-        .order_by(SessionRuntimeState.updated_at.desc(), SessionRuntimeState.runtime_version.desc())
-        .first()
-    )
+    if database_module.live_store_configured():
+        from zerg.services.session_runtime import load_runtime_state_map
+
+        runtime_state = load_runtime_state_map(db, [session_id]).get(str(session_id))
+    else:
+        runtime_state = (
+            db.query(SessionRuntimeState)
+            .filter(SessionRuntimeState.session_id == session_id)
+            .order_by(SessionRuntimeState.updated_at.desc(), SessionRuntimeState.runtime_version.desc())
+            .first()
+        )
     if runtime_state is None:
         return None
     return str(getattr(runtime_state, "phase", "") or "").strip() or None

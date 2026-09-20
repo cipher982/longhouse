@@ -25,7 +25,6 @@ from zerg.dependencies.request_db import no_request_db
 from zerg.metrics import event_age_at_ingest_seconds
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.session_live_previews import preview_payload_from_runtime_event
-from zerg.services.session_runtime import CATALOG_RUNTIME_APPLY_LIMIT
 from zerg.services.session_runtime import RuntimeEventBatchIngest
 from zerg.services.session_runtime import RuntimeEventBatchResult
 from zerg.services.session_runtime import _is_bridge_transcript_event
@@ -112,52 +111,30 @@ async def ingest_runtime_observation_batch(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={"code": "catalog_unavailable", "message": "Catalog mutation is temporarily unavailable."},
             )
-        # A machine agent batch may be larger than one catalogd apply. Apply it
-        # in order, in bounded chunks: each keeps its writer hold short and stays
-        # inside the reducer's fact bound. Observations are idempotent by dedupe
-        # key, so a batch retried after a partial failure replays safely.
-        raw_result: dict = {
-            "accepted": 0,
-            "duplicates": 0,
-            "ignored": 0,
-            "updated_runtime_keys": [],
-            "commit_seq": None,
-        }
-        for start in range(0, len(events), CATALOG_RUNTIME_APPLY_LIMIT):
-            chunk = events[start : start + CATALOG_RUNTIME_APPLY_LIMIT]
-            try:
-                chunk_result = await catalogd.call(
-                    "session.runtime.apply.v2",
-                    {"events": [event.model_dump(mode="json") for event in chunk]},
-                    timeout_seconds=_HOT_RUNTIME_QUEUE_TIMEOUT_SECONDS,
-                )
-            except CatalogUnavailable as exc:
+        try:
+            raw_result = await catalogd.call(
+                "session.runtime.apply.v2",
+                {"events": [event.model_dump(mode="json") for event in events]},
+                timeout_seconds=_HOT_RUNTIME_QUEUE_TIMEOUT_SECONDS,
+            )
+        except CatalogUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "catalog_unavailable", "message": "Catalog mutation is temporarily unavailable."},
+            ) from exc
+        except CatalogRemoteError as exc:
+            if getattr(exc, "code", None) == "invalid_request":
                 raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail={"code": "catalog_unavailable", "message": "Catalog mutation is temporarily unavailable."},
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={"code": "invalid_runtime_batch", "message": str(exc)},
                 ) from exc
-            except CatalogRemoteError as exc:
-                if getattr(exc, "code", None) == "invalid_request":
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail={"code": "invalid_runtime_batch", "message": str(exc)},
-                    ) from exc
-                raise HTTPException(
-                    status_code=(status.HTTP_503_SERVICE_UNAVAILABLE if exc.retryable else status.HTTP_500_INTERNAL_SERVER_ERROR),
-                    detail={
-                        "code": "catalog_unavailable" if exc.retryable else "catalog_operation_failed",
-                        "message": (
-                            "Catalog mutation is temporarily unavailable." if exc.retryable else "Catalog runtime mutation failed."
-                        ),
-                    },
-                ) from exc
-            raw_result["accepted"] += int(chunk_result.get("accepted") or 0)
-            raw_result["duplicates"] += int(chunk_result.get("duplicates") or 0)
-            raw_result["ignored"] += int(chunk_result.get("ignored") or 0)
-            for key in chunk_result.get("updated_runtime_keys") or ():
-                if key not in raw_result["updated_runtime_keys"]:
-                    raw_result["updated_runtime_keys"].append(key)
-            raw_result["commit_seq"] = chunk_result.get("commit_seq")
+            raise HTTPException(
+                status_code=(status.HTTP_503_SERVICE_UNAVAILABLE if exc.retryable else status.HTTP_500_INTERNAL_SERVER_ERROR),
+                detail={
+                    "code": "catalog_unavailable" if exc.retryable else "catalog_operation_failed",
+                    "message": ("Catalog mutation is temporarily unavailable." if exc.retryable else "Catalog runtime mutation failed."),
+                },
+            ) from exc
         catalog_owner_id = getattr(_token, "owner_id", None)
         if catalog_owner_id is not None:
             from zerg.services.console_turns import dispatch_catalog_claimed_turn
