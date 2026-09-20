@@ -15082,32 +15082,69 @@ def _resolve_session_id_by_source_path(
     owner_id: str | None,
     machine_id: str,
 ) -> str | None:
-    """Resolve a path through raw source identity inside the authenticated scope.
+    """Resolve a path through raw identity or an existing scoped binding.
 
     Storage-v2 persists ``path-sha256`` in the raw envelope and does not send
-    a source-path alias.  Bind only when exactly one durable session in the
-    owner/machine/provider scope owns that identity; ambiguity stays unknown.
+    a source-path alias. A live binding signal may nevertheless have written
+    one before ingest, so accept either representation but bind only when the
+    union has exactly one durable session; ambiguity stays unknown.
     """
 
-    if owner_id is None:
+    if owner_id is None or not source_path or not os.path.isabs(source_path):
         return None
+    path_values = (source_path, os.path.normpath(source_path))
     opaque_ids = _opaque_source_ids_for_path(source_path)
     if not opaque_ids:
         return None
-    raw_table = LiveRawObject.__table__
+    session_ids: set[str] = set()
+    alias_table = LiveSessionThreadAlias.__table__
+    thread_table = LiveSessionThread.__table__
     storage_table = StorageSession.__table__
-    rows = connection.execute(
-        select(raw_table.c.session_id)
-        .select_from(raw_table.join(storage_table, storage_table.c.session_id == raw_table.c.session_id))
-        .where(raw_table.c.provider == provider)
-        .where(raw_table.c.opaque_source_id.in_(opaque_ids))
-        .where(storage_table.c.owner_id == str(owner_id))
-        .where(storage_table.c.machine_id == machine_id)
-        .where(storage_table.c.provider == provider)
-        .distinct()
-    ).all()
-    return str(rows[0][0]) if len(rows) == 1 else None
-
+    live_table = LiveSession.__table__
+    session_key = thread_table.c.session_id
+    scope = or_(
+        select(storage_table.c.session_id)
+        .where(
+            storage_table.c.session_id == session_key,
+            storage_table.c.owner_id == str(owner_id),
+            storage_table.c.machine_id == machine_id,
+        )
+        .exists(),
+        select(live_table.c.session_id)
+        .where(
+            live_table.c.session_id == session_key,
+            live_table.c.owner_id == str(owner_id),
+            live_table.c.machine_id == machine_id,
+        )
+        .exists(),
+    )
+    session_ids.update(
+        str(row[0])
+        for row in connection.execute(
+            select(thread_table.c.session_id)
+            .select_from(alias_table.join(thread_table, thread_table.c.id == alias_table.c.thread_id))
+            .where(alias_table.c.provider == provider)
+            .where(alias_table.c.alias_kind == "source_path")
+            .where(alias_table.c.alias_value.in_(path_values))
+            .where(scope)
+            .distinct()
+        ).all()
+    )
+    raw_table = LiveRawObject.__table__
+    session_ids.update(
+        str(row[0])
+        for row in connection.execute(
+            select(raw_table.c.session_id)
+            .select_from(raw_table.join(storage_table, storage_table.c.session_id == raw_table.c.session_id))
+            .where(raw_table.c.provider == provider)
+            .where(raw_table.c.opaque_source_id.in_(opaque_ids))
+            .where(storage_table.c.owner_id == str(owner_id))
+            .where(storage_table.c.machine_id == machine_id)
+            .where(storage_table.c.provider == provider)
+            .distinct()
+        ).all()
+    )
+    return next(iter(session_ids)) if len(session_ids) == 1 else None
 
 def _bind_orphan_subagents_to_parent(
     connection,
