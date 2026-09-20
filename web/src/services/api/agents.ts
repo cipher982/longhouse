@@ -757,6 +757,49 @@ function parseStreamEventData<T>(event: MessageEvent): T | null {
   }
 }
 
+function connectEventStream(
+  url: string,
+  configure: (eventSource: EventSource) => void,
+): () => void {
+  let eventSource: EventSource | null = null;
+  let retryTimer: number | null = null;
+  let retryDelay = 1_000;
+  let disposed = false;
+
+  const connect = () => {
+    if (disposed) return;
+    const source = new EventSource(url, { withCredentials: true });
+    eventSource = source;
+    configure(source);
+    source.addEventListener("open", () => {
+      retryDelay = 1_000;
+    });
+    source.addEventListener("error", () => {
+      // EventSource retries network drops, but an HTTP error during a deploy
+      // closes it permanently. Recreate only that terminal transport state.
+      if (
+        disposed ||
+        source.readyState !== EventSource.CLOSED ||
+        retryTimer !== null
+      )
+        return;
+      source.close();
+      retryTimer = window.setTimeout(() => {
+        retryTimer = null;
+        connect();
+      }, retryDelay);
+      retryDelay = Math.min(retryDelay * 2, 30_000);
+    });
+  };
+
+  connect();
+  return () => {
+    disposed = true;
+    if (retryTimer !== null) window.clearTimeout(retryTimer);
+    eventSource?.close();
+  };
+}
+
 export function connectTimelineSessionsStream(
   filters: AgentSessionFilters = {},
   handlers: TimelineSessionStreamHandlers = {},
@@ -775,51 +818,48 @@ export function connectTimelineSessionsStream(
   const url = buildUrl(
     `${TIMELINE_SESSIONS_PREFIX}/stream${queryString ? `?${queryString}` : ""}`,
   );
-  const eventSource = new EventSource(url, { withCredentials: true });
-
-  eventSource.addEventListener("connected", (event: MessageEvent) => {
-    const data = parseStreamEventData<TimelineSessionStreamConnected>(event) ?? {};
-    dispatchTimelineStreamEvent("connected", {
-      stream_epoch: data.stream_epoch,
+  return connectEventStream(url, (eventSource) => {
+    eventSource.addEventListener("connected", (event: MessageEvent) => {
+      const data =
+        parseStreamEventData<TimelineSessionStreamConnected>(event) ?? {};
+      dispatchTimelineStreamEvent("connected", {
+        stream_epoch: data.stream_epoch,
+      });
+      handlers.onConnected?.(data);
     });
-    handlers.onConnected?.(data);
+
+    eventSource.addEventListener("heartbeat", (event: MessageEvent) => {
+      const data = parseStreamEventData<{ timestamp: string }>(event);
+      dispatchTimelineStreamEvent("heartbeat", { timestamp: data?.timestamp });
+      if (data?.timestamp) {
+        handlers.onHeartbeat?.(data.timestamp);
+      }
+    });
+
+    eventSource.addEventListener("session_upsert", (event: MessageEvent) => {
+      const data = parseStreamEventData<TimelineSessionUpsertEvent>(event);
+      if (data?.session) {
+        dispatchTimelineStreamEvent("session_upsert", {
+          session_id: data.session.head?.id ?? data.session.thread_id,
+        });
+        handlers.onSessionUpsert?.(data);
+      }
+    });
+
+    eventSource.addEventListener("session_remove", (event: MessageEvent) => {
+      const data = parseStreamEventData<TimelineSessionRemoveEvent>(event);
+      if (data?.thread_id) {
+        dispatchTimelineStreamEvent("session_remove", {
+          thread_id: data.thread_id,
+        });
+        handlers.onSessionRemove?.(data);
+      }
+    });
+
+    eventSource.onerror = (error) => {
+      handlers.onError?.(error);
+    };
   });
-
-  eventSource.addEventListener("heartbeat", (event: MessageEvent) => {
-    const data = parseStreamEventData<{ timestamp: string }>(event);
-    dispatchTimelineStreamEvent("heartbeat", { timestamp: data?.timestamp });
-    if (data?.timestamp) {
-      handlers.onHeartbeat?.(data.timestamp);
-    }
-  });
-
-  eventSource.addEventListener("session_upsert", (event: MessageEvent) => {
-    const data = parseStreamEventData<TimelineSessionUpsertEvent>(event);
-    if (data?.session) {
-      dispatchTimelineStreamEvent("session_upsert", {
-        session_id: data.session.head?.id ?? data.session.thread_id,
-      });
-      handlers.onSessionUpsert?.(data);
-    }
-  });
-
-  eventSource.addEventListener("session_remove", (event: MessageEvent) => {
-    const data = parseStreamEventData<TimelineSessionRemoveEvent>(event);
-    if (data?.thread_id) {
-      dispatchTimelineStreamEvent("session_remove", {
-        thread_id: data.thread_id,
-      });
-      handlers.onSessionRemove?.(data);
-    }
-  });
-
-  eventSource.onerror = (error) => {
-    handlers.onError?.(error);
-  };
-
-  return () => {
-    eventSource.close();
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -894,66 +934,63 @@ export function connectSessionWorkspaceStream(
   const url = buildUrl(
     `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/workspace/stream${queryString ? `?${queryString}` : ""}`,
   );
-  const eventSource = new EventSource(url, { withCredentials: true });
-
-  eventSource.addEventListener("connected", (event: MessageEvent) => {
-    const data = parseStreamEventData<SessionWorkspaceStreamConnected>(event);
-    dispatchTimelineStreamEvent("workspace_connected", {
-      session_id: data?.session_id ?? sessionId,
-      server_now_ms: data?.server_now_ms,
-      client_received_at_ms: Date.now(),
-    });
-    handlers.onConnected?.(data ?? { session_id: sessionId });
-  });
-
-  eventSource.addEventListener("workspace_changed", (event: MessageEvent) => {
-    const data = parseStreamEventData<SessionWorkspaceStreamChange>(event);
-    if (data) {
-      dispatchTimelineStreamEvent("workspace_changed", {
-        session_id: data.session_id,
-        change_kind: data.change_kind ?? null,
-        latest_event_id: data.latest_event_id,
-        latest_event_emitted_at_ms: data.latest_event_emitted_at_ms ?? null,
-        server_fanout_at_ms: data.server_fanout_at_ms ?? null,
-        server_now_ms: data.server_now_ms,
-        catalog_commit_seq: data.catalog_commit_seq ?? null,
-        pubsub_seq: data.pubsub_seq,
+  return connectEventStream(url, (eventSource) => {
+    eventSource.addEventListener("connected", (event: MessageEvent) => {
+      const data = parseStreamEventData<SessionWorkspaceStreamConnected>(event);
+      dispatchTimelineStreamEvent("workspace_connected", {
+        session_id: data?.session_id ?? sessionId,
+        server_now_ms: data?.server_now_ms,
         client_received_at_ms: Date.now(),
-        has_transcript_preview: Object.prototype.hasOwnProperty.call(
-          data,
-          "transcript_preview",
-        ),
-        transcript_preview_event_id: data.transcript_preview?.event_id ?? null,
-        transcript_preview_origin:
-          data.transcript_preview?.event_origin ?? null,
-        transcript_preview_text_length:
-          data.transcript_preview?.text?.length ?? null,
       });
-      handlers.onWorkspaceChanged?.(data);
-    }
+      handlers.onConnected?.(data ?? { session_id: sessionId });
+    });
+
+    eventSource.addEventListener("workspace_changed", (event: MessageEvent) => {
+      const data = parseStreamEventData<SessionWorkspaceStreamChange>(event);
+      if (data) {
+        dispatchTimelineStreamEvent("workspace_changed", {
+          session_id: data.session_id,
+          change_kind: data.change_kind ?? null,
+          latest_event_id: data.latest_event_id,
+          latest_event_emitted_at_ms: data.latest_event_emitted_at_ms ?? null,
+          server_fanout_at_ms: data.server_fanout_at_ms ?? null,
+          server_now_ms: data.server_now_ms,
+          catalog_commit_seq: data.catalog_commit_seq ?? null,
+          pubsub_seq: data.pubsub_seq,
+          client_received_at_ms: Date.now(),
+          has_transcript_preview: Object.prototype.hasOwnProperty.call(
+            data,
+            "transcript_preview",
+          ),
+          transcript_preview_event_id:
+            data.transcript_preview?.event_id ?? null,
+          transcript_preview_origin:
+            data.transcript_preview?.event_origin ?? null,
+          transcript_preview_text_length:
+            data.transcript_preview?.text?.length ?? null,
+        });
+        handlers.onWorkspaceChanged?.(data);
+      }
+    });
+
+    eventSource.addEventListener("replay_gap", (event: MessageEvent) => {
+      const data = parseStreamEventData<SessionWorkspaceStreamReplayGap>(event);
+      if (data) {
+        handlers.onReplayGap?.(data);
+      }
+    });
+
+    eventSource.addEventListener("heartbeat", (event: MessageEvent) => {
+      const data = parseStreamEventData<{ timestamp: string }>(event);
+      if (data?.timestamp) {
+        handlers.onHeartbeat?.(data.timestamp);
+      }
+    });
+
+    eventSource.onerror = (error) => {
+      handlers.onError?.(error);
+    };
   });
-
-  eventSource.addEventListener("replay_gap", (event: MessageEvent) => {
-    const data = parseStreamEventData<SessionWorkspaceStreamReplayGap>(event);
-    if (data) {
-      handlers.onReplayGap?.(data);
-    }
-  });
-
-  eventSource.addEventListener("heartbeat", (event: MessageEvent) => {
-    const data = parseStreamEventData<{ timestamp: string }>(event);
-    if (data?.timestamp) {
-      handlers.onHeartbeat?.(data.timestamp);
-    }
-  });
-
-  eventSource.onerror = (error) => {
-    handlers.onError?.(error);
-  };
-
-  return () => {
-    eventSource.close();
-  };
 }
 
 /**
