@@ -4336,6 +4336,33 @@ async def test_omp_absolute_parent_session_commits_in_both_arrival_orders(daemon
                 provider="omp",
             ),
         )
+        unrelated_id = uuid4()
+        unrelated_path = "/isolated/home/.local/share/omp/sessions/unrelated-parent.jsonl"
+        unrelated = _raw_params(
+            epoch=uuid4(),
+            session_id=unrelated_id,
+            start=0,
+            end=10,
+            records=(b"unrelated-worker",),
+            sealed_at=now,
+            provider="omp",
+            opaque_source_id="path-sha256:unrelated-child",
+            provider_session_id="omp-unrelated-child",
+            subagent={
+                "is_subagent": True,
+                "parent_provider_session_id": unrelated_path,
+            },
+        )
+        unrelated.update(
+            render_state="ready",
+            render_manifest=_render_manifest(
+                uuid4(),
+                source_epoch=UUID(unrelated["source_epoch"]),
+                seed=b"omp-unrelated-render",
+                opaque_source_id="path-sha256:unrelated-child",
+                provider="omp",
+            ),
+        )
         parent_epoch = uuid4()
         parent = _raw_params(
             epoch=parent_epoch,
@@ -4358,7 +4385,7 @@ async def test_omp_absolute_parent_session_commits_in_both_arrival_orders(daemon
                 provider="omp",
             ),
         )
-        ordered = (child, parent) if child_first else (parent, child)
+        ordered = (child, unrelated, parent) if child_first else (parent, child, unrelated)
         for raw in ordered:
             await client.call("storage.raw_object.commit.v2", raw)
     finally:
@@ -4372,6 +4399,9 @@ async def test_omp_absolute_parent_session_commits_in_both_arrival_orders(daemon
         # The raw provider pointer is evidence, not a canonicalized alias.
         assert child_row.subagent_parent_provider_session_id == parent_path
         assert child_row.hidden_from_default_timeline == 1
+        unrelated_row = db.get(StorageSession, str(unrelated_id))
+        assert unrelated_row.subagent_parent_session_id is None
+        assert unrelated_row.subagent_parent_provider_session_id == unrelated_path
         assert child_row.is_subagent == 1
         assert db.get(StorageSession, str(parent_id)).hidden_from_default_timeline == 0
     engine.dispose()

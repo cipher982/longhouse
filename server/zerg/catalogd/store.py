@@ -1048,6 +1048,7 @@ def _apply_delegation_lineage(
     bound = 0
     current_facts = session_facts or {}
     parent_native_id = _delegation_parent_id(provider_facts=provider_facts, session_facts=current_facts)
+    parent_source_id = _normalized_parent_source_id(parent_native_id or "")
     if parent_native_id and parent_native_id not in native_ids:
         # Resolve native ids and OMP absolute parentSession paths through the
         # same scoped source identity used by commit_raw_object. Never replace
@@ -1074,11 +1075,13 @@ def _apply_delegation_lineage(
             .first()
         )
         current_parent_native = str((current or {}).get("subagent_parent_provider_session_id") or "").strip() or None
+        current_parent_source = str((current or {}).get("subagent_parent_source_id") or "").strip() or None
         current_parent_session = str((current or {}).get("subagent_parent_session_id") or "").strip() or None
         if (
             parent_session_id is not None
             and parent_session_id != session_id
             and current_parent_native in (None, parent_native_id)
+            and current_parent_source in (None, parent_source_id)
             and current_parent_session in (None, parent_session_id)
         ):
             values: dict[str, Any] = {
@@ -1087,6 +1090,8 @@ def _apply_delegation_lineage(
                 "updated_at": commit_time,
                 "commit_seq": commit_seq,
             }
+            if parent_source_id is not None:
+                values["subagent_parent_source_id"] = parent_source_id
             bound += int(
                 connection.execute(
                     update(StorageSession.__table__).where(StorageSession.__table__.c.session_id == session_id).values(**values)
@@ -8682,6 +8687,7 @@ class CatalogStore:
             # `is_subagent` say only whether this row is a worker.
             source_native_ids = _delegation_native_ids(provider_facts=provider_facts, session_facts=session_facts)
             parent_provider_id = _delegation_parent_id(provider_facts=provider_facts, session_facts=session_facts)
+            parent_source_id = _normalized_parent_source_id(parent_provider_id or "")
             if parent_provider_id and parent_provider_id not in source_native_ids:
                 # OMP's parentSession is an absolute JSONL path, while other
                 # providers generally send a native session id. Try the native
@@ -8721,6 +8727,8 @@ class CatalogStore:
                     and not existing_parent_session_id
                 ):
                     session_values["subagent_parent_provider_session_id"] = parent_provider_id
+                    if parent_source_id is not None:
+                        session_values["subagent_parent_source_id"] = parent_source_id
                     if resolved_parent is not None:
                         session_values["subagent_parent_session_id"] = resolved_parent
             if bool(session_facts.get("is_subagent")):
@@ -9006,6 +9014,8 @@ class CatalogStore:
                 connection,
                 provider=provider,
                 session_key=session_key,
+                alias_values=alias_values,
+                parent_source_id=opaque_source_id,
                 owner_id=effective_owner_id,
                 machine_id=machine_id,
                 commit_seq=commit_seq,
@@ -15030,6 +15040,40 @@ def _opaque_source_ids_for_path(source_path: str) -> tuple[str, ...]:
     return tuple(identities)
 
 
+def _normalized_parent_source_id(source_path: str) -> str | None:
+    """Return the indexed identity used for an absolute parent path."""
+
+    identities = _opaque_source_ids_for_path(source_path)
+    return identities[-1] if identities else None
+
+
+def _resolve_session_id_by_source_id(
+    connection,
+    *,
+    provider: str,
+    opaque_source_id: str,
+    owner_id: str | None,
+    machine_id: str,
+) -> str | None:
+    """Resolve one raw source identity in the owner/machine/provider scope."""
+
+    if owner_id is None or not opaque_source_id:
+        return None
+    raw_table = LiveRawObject.__table__
+    storage_table = StorageSession.__table__
+    rows = connection.execute(
+        select(raw_table.c.session_id)
+        .select_from(raw_table.join(storage_table, storage_table.c.session_id == raw_table.c.session_id))
+        .where(raw_table.c.provider == provider)
+        .where(raw_table.c.opaque_source_id == opaque_source_id)
+        .where(storage_table.c.owner_id == str(owner_id))
+        .where(storage_table.c.machine_id == machine_id)
+        .where(storage_table.c.provider == provider)
+        .distinct()
+    ).all()
+    return str(rows[0][0]) if len(rows) == 1 else None
+
+
 def _resolve_session_id_by_provider_session_id(
     connection,
     *,
@@ -15131,20 +15175,16 @@ def _resolve_session_id_by_source_path(
             .distinct()
         ).all()
     )
-    raw_table = LiveRawObject.__table__
-    session_ids.update(
-        str(row[0])
-        for row in connection.execute(
-            select(raw_table.c.session_id)
-            .select_from(raw_table.join(storage_table, storage_table.c.session_id == raw_table.c.session_id))
-            .where(raw_table.c.provider == provider)
-            .where(raw_table.c.opaque_source_id.in_(opaque_ids))
-            .where(storage_table.c.owner_id == str(owner_id))
-            .where(storage_table.c.machine_id == machine_id)
-            .where(storage_table.c.provider == provider)
-            .distinct()
-        ).all()
-    )
+    for opaque_source_id in opaque_ids:
+        resolved = _resolve_session_id_by_source_id(
+            connection,
+            provider=provider,
+            opaque_source_id=opaque_source_id,
+            owner_id=owner_id,
+            machine_id=machine_id,
+        )
+        if resolved is not None:
+            session_ids.add(resolved)
     return next(iter(session_ids)) if len(session_ids) == 1 else None
 
 def _bind_orphan_subagents_to_parent(
@@ -15152,57 +15192,85 @@ def _bind_orphan_subagents_to_parent(
     *,
     provider: str,
     session_key: str,
+    alias_values: list[str],
+    parent_source_id: str | None,
     owner_id: str | None,
     machine_id: str,
     commit_seq: int,
     commit_time,
 ) -> int:
-    """Adopt earlier children only after a unique scoped parent resolution."""
+    """Adopt indexed same-scope children after a unique parent resolution."""
 
     if owner_id is None:
         return 0
+    source_parent = (
+        _resolve_session_id_by_source_id(
+            connection,
+            provider=provider,
+            opaque_source_id=parent_source_id,
+            owner_id=owner_id,
+            machine_id=machine_id,
+        )
+        if parent_source_id is not None
+        else None
+    )
+    source_match = source_parent == session_key
+    if not source_match and not alias_values:
+        return 0
     session_table = StorageSession.__table__
+    predicates = []
+    if source_match:
+        predicates.append(session_table.c.subagent_parent_source_id == parent_source_id)
+    if alias_values:
+        predicates.append(
+            and_(
+                session_table.c.subagent_parent_source_id.is_(None),
+                session_table.c.subagent_parent_provider_session_id.in_(alias_values),
+            )
+        )
+    if not predicates:
+        return 0
     orphan_rows = connection.execute(
-        select(session_table.c.session_id, session_table.c.subagent_parent_provider_session_id)
+        select(
+            session_table.c.session_id,
+            session_table.c.subagent_parent_provider_session_id,
+            session_table.c.subagent_parent_source_id,
+        )
         .where(
             session_table.c.provider == provider,
             session_table.c.owner_id == str(owner_id),
             session_table.c.machine_id == machine_id,
             session_table.c.subagent_parent_session_id.is_(None),
-            session_table.c.subagent_parent_provider_session_id.is_not(None),
             session_table.c.session_id != session_key,
+            or_(*predicates),
         )
     ).all()
     bound = 0
-    for child_session_id, parent_pointer in orphan_rows:
-        parent_pointer = str(parent_pointer or '').strip()
-        if not parent_pointer:
-            continue
-        resolved_parent = _resolve_session_id_by_provider_session_id(
-            connection,
-            provider=provider,
-            provider_session_id=parent_pointer,
-            owner_id=owner_id,
-            machine_id=machine_id,
-        )
-        if resolved_parent is None:
-            resolved_parent = _resolve_session_id_by_source_path(
+    for child_session_id, parent_pointer, child_source_id in orphan_rows:
+        if source_match and child_source_id == parent_source_id:
+            should_bind = True
+        else:
+            parent_pointer = str(parent_pointer or "").strip()
+            should_bind = bool(parent_pointer) and _resolve_session_id_by_provider_session_id(
                 connection,
                 provider=provider,
-                source_path=parent_pointer,
+                provider_session_id=parent_pointer,
                 owner_id=owner_id,
                 machine_id=machine_id,
-            )
-        if resolved_parent != session_key:
+            ) == session_key
+        if not should_bind:
             continue
-        bound += int(connection.execute(
-            update(session_table)
-            .where(
-                session_table.c.session_id == str(child_session_id),
-                session_table.c.subagent_parent_session_id.is_(None),
-            )
-            .values(subagent_parent_session_id=session_key, commit_seq=commit_seq, updated_at=commit_time)
-        ).rowcount or 0)
+        bound += int(
+            connection.execute(
+                update(session_table)
+                .where(
+                    session_table.c.session_id == str(child_session_id),
+                    session_table.c.subagent_parent_session_id.is_(None),
+                )
+                .values(subagent_parent_session_id=session_key, commit_seq=commit_seq, updated_at=commit_time)
+            ).rowcount
+            or 0
+        )
     return bound
 
 def _current_commit_seq(connection) -> int:
