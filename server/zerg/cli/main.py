@@ -119,26 +119,35 @@ def config_show() -> None:
         typer.echo(f"  {key}: {value} {source_indicator}")
 
 
-def _resolve_db_engine(database_url: str | None):
+_NO_DEFAULT_ENGINE_MESSAGE = (
+    "No default database is configured in this process. Live-catalog Runtime Hosts "
+    "deliberately defer the engine, so pass --database-url explicitly."
+)
+
+
+def _require_default_engine():
     from zerg.database import default_engine
+
+    if default_engine is None:
+        typer.secho(_NO_DEFAULT_ENGINE_MESSAGE, fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2)
+    return default_engine
+
+
+def _resolve_db_engine(database_url: str | None):
     from zerg.database import make_engine
 
     if database_url:
         engine = make_engine(database_url)
         return engine, database_url
-    if default_engine is None:
-        raise typer.Exit(code=2)
-    return default_engine, str(default_engine.url)
+    engine = _require_default_engine()
+    return engine, str(engine.url)
 
 
 def _resolve_db_url(database_url: str | None) -> str:
-    from zerg.database import default_engine
-
     if database_url:
         return database_url
-    if default_engine is None:
-        raise typer.Exit(code=2)
-    return str(default_engine.url)
+    return str(_require_default_engine().url)
 
 
 @db_app.command(name="doctor")

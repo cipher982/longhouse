@@ -205,6 +205,157 @@ def _format_api_error(response: httpx.Response) -> str:
     return response.text[:300]
 
 
+@app.command(name="list")
+def list_sessions(
+    project: str | None = typer.Option(
+        None,
+        "--project",
+        "-p",
+        help="Filter by project name.",
+    ),
+    provider: str | None = typer.Option(
+        None,
+        "--provider",
+        help="Filter by provider (omp, claude, codex, opencode, cursor).",
+    ),
+    device: str | None = typer.Option(
+        None,
+        "--device",
+        help="Filter by machine/device id.",
+    ),
+    days_back: int = typer.Option(
+        14,
+        "--days-back",
+        "-d",
+        help="How many days back to look.",
+    ),
+    query: str | None = typer.Option(
+        None,
+        "--query",
+        "-q",
+        help="Text query over session content.",
+    ),
+    limit: int = typer.Option(
+        20,
+        "--limit",
+        "-n",
+        help="Max sessions to return.",
+    ),
+    offset: int = typer.Option(
+        0,
+        "--offset",
+        help="Offset into the result list.",
+    ),
+    include_automation: bool = typer.Option(
+        False,
+        "--include-automation",
+        help="Include automation-launched sessions, which are hidden by default.",
+    ),
+    include_test: bool = typer.Option(
+        False,
+        "--include-test",
+        help="Include test and proof sessions.",
+    ),
+    output_json: bool = typer.Option(
+        False,
+        "--json",
+        "-j",
+        help="Output raw JSON response.",
+    ),
+    url: str | None = typer.Option(
+        None,
+        "--url",
+        "-u",
+        help="Longhouse API URL (uses stored URL if not specified).",
+    ),
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        "-t",
+        help="Device token (uses stored token if not specified).",
+    ),
+    claude_dir: str | None = typer.Option(
+        None,
+        "--claude-dir",
+        help="Claude config directory (default: ~/.claude).",
+    ),
+) -> None:
+    """List recent sessions, newest activity first.
+
+    This is the entry point when you do not already know a session id: it
+    answers "what ran lately on this machine, or in this project" without
+    requiring a text query. Rows carry machine-readable activity and launch
+    provenance; they deliberately do not assert whether a session has ended,
+    because the machine surface carries no closure fact.
+    """
+    config_dir = Path(claude_dir) if claude_dir else None
+    base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
+
+    params: dict[str, object] = {
+        "days_back": days_back,
+        "limit": limit,
+        "offset": offset,
+        "include_automation": include_automation,
+        "include_test": include_test,
+    }
+    if project:
+        params["project"] = project
+    if provider:
+        params["provider"] = provider
+    if device:
+        params["device_id"] = device
+    if query:
+        params["query"] = query
+
+    try:
+        with httpx.Client(timeout=15) as client:
+            response = client.get(
+                f"{base_url.rstrip('/')}/api/agents/sessions",
+                headers={"X-Agents-Token": resolved_token},
+                params=params,
+            )
+    except httpx.ConnectError:
+        typer.secho(f"Could not connect to {base_url}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    except httpx.TimeoutException:
+        typer.secho(f"Request timed out connecting to {base_url}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    if response.status_code == 401:
+        typer.secho("Authentication failed. Run 'longhouse auth' to re-authenticate.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    if response.status_code != 200:
+        typer.secho(f"API error: {response.status_code} {response.text[:200]}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    payload = response.json()
+    if output_json:
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    sessions = [row for row in payload.get("sessions", []) if isinstance(row, dict)]
+    if not sessions:
+        typer.echo("No sessions found.")
+        return
+
+    typer.echo(f"Sessions: {len(sessions)} of {payload.get('total', len(sessions))}")
+    typer.echo("")
+    for row in sessions:
+        typer.secho(str(row.get("id") or "-"), fg=typer.colors.CYAN, bold=True)
+        typer.echo(
+            "  {provider}  {project}  {device}  last activity {last}".format(
+                provider=row.get("provider") or "-",
+                project=row.get("project") or "-",
+                device=row.get("device_id") or "-",
+                last=row.get("last_activity_at") or "-",
+            )
+        )
+        title = str(row.get("title") or "").strip()
+        if title:
+            typer.echo(f"  {title}")
+        typer.echo("")
+
+
 @app.command()
 def get(
     session_id: str = typer.Argument(..., help="Session UUID."),
@@ -265,14 +416,17 @@ def get(
         return
 
     typer.secho(str(payload.get("id") or session_id), fg=typer.colors.CYAN, bold=True)
-    # The machine surface serves an archival projection, so there is no derived
-    # runtime status here. Whether the session has ended is the fact this view
-    # was using it for anyway.
+    # The machine surface serves an archival projection: it carries no closure
+    # fact, and its `ended_at` mirrors last event time rather than a process
+    # exit. Reporting "ended" from that field claimed something this view cannot
+    # observe -- a session whose process is still attached, and one that died
+    # without committing a terminal, both read as "ended". Report the fact that
+    # is actually present.
     typer.echo(
-        "  provider: {provider}  project: {project}  state: {state}".format(
+        "  provider: {provider}  project: {project}  last activity: {last}".format(
             provider=payload.get("provider") or "-",
             project=payload.get("project") or "-",
-            state="ended" if payload.get("ended_at") else "open",
+            last=payload.get("last_activity_at") or "-",
         )
     )
     typer.echo(
