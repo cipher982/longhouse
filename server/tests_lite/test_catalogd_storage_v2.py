@@ -25,7 +25,6 @@ from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
 from zerg.catalogd.store import SEMANTIC_PROJECTOR_ID
 from zerg.catalogd.store import CatalogStore
-from zerg.catalogd.store import _apply_delegation_lineage
 from zerg.catalogd.store import storage_projectors_for_provider
 from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
 from zerg.models.live_store import LiveHeartbeatStamp
@@ -4295,15 +4294,17 @@ async def test_late_parent_adopts_its_orphan_subagents(daemon_paths):
     engine.dispose()
 
 
+@pytest.mark.parametrize("child_first", [True, False])
 @pytest.mark.asyncio
-async def test_omp_absolute_parent_session_resolves_and_hides_child(daemon_paths):
-    """Resolve OMP's absolute parentSession path without inventing activity."""
+async def test_omp_absolute_parent_session_commits_in_both_arrival_orders(daemon_paths, child_first):
+    """The real commit API resolves OMP parentSession in either arrival order."""
 
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     child_id = uuid4()
     parent_id = uuid4()
     parent_path = "/isolated/home/.local/share/omp/sessions/parent-native.jsonl"
+    parent_source_id = f"path-sha256:{hashlib.sha256(parent_path.encode()).hexdigest()}"
 
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
@@ -4318,7 +4319,7 @@ async def test_omp_absolute_parent_session_resolves_and_hides_child(daemon_paths
             records=(b"worker",),
             sealed_at=now,
             provider="omp",
-            opaque_source_id="child-native.jsonl",
+            opaque_source_id="path-sha256:child-native",
             provider_session_id="omp-child-native",
             subagent={
                 "is_subagent": True,
@@ -4328,11 +4329,13 @@ async def test_omp_absolute_parent_session_resolves_and_hides_child(daemon_paths
         child.update(
             render_state="ready",
             render_manifest=_render_manifest(
-                uuid4(), source_epoch=child_epoch, seed=b"omp-child-render", opaque_source_id="child-native.jsonl", provider="omp"
+                uuid4(),
+                source_epoch=child_epoch,
+                seed=b"omp-child-render",
+                opaque_source_id="path-sha256:child-native",
+                provider="omp",
             ),
         )
-        await client.call("storage.raw_object.commit.v2", child)
-
         parent_epoch = uuid4()
         parent = _raw_params(
             epoch=parent_epoch,
@@ -4342,83 +4345,114 @@ async def test_omp_absolute_parent_session_resolves_and_hides_child(daemon_paths
             records=(b"parent",),
             sealed_at=now,
             provider="omp",
-            opaque_source_id="parent-native.jsonl",
+            opaque_source_id=parent_source_id,
             provider_session_id="omp-parent-native",
         )
         parent.update(
             render_state="ready",
             render_manifest=_render_manifest(
-                uuid4(), source_epoch=parent_epoch, seed=b"omp-parent-render", opaque_source_id="parent-native.jsonl", provider="omp"
+                uuid4(),
+                source_epoch=parent_epoch,
+                seed=b"omp-parent-render",
+                opaque_source_id=parent_source_id,
+                provider="omp",
             ),
         )
-        await client.call("storage.raw_object.commit.v2", parent)
+        ordered = (child, parent) if child_first else (parent, child)
+        for raw in ordered:
+            await client.call("storage.raw_object.commit.v2", raw)
     finally:
         await client.close()
         await daemon.close()
 
     engine = create_catalog_engine(database_path)
-    commit_time = now + timedelta(seconds=1)
-    with Session(engine) as db:
-        parent_thread = LiveSessionThread(
-            id=str(uuid4()),
-            session_id=str(parent_id),
-            provider="omp",
-            branch_kind="root",
-            is_primary=1,
-            created_at=now,
-            updated_at=now,
-        )
-        db.add(parent_thread)
-        db.add_all(
-            [
-                LiveSessionThreadAlias(
-                    thread_id=parent_thread.id,
-                    provider="omp",
-                    alias_kind="source_path",
-                    alias_value=parent_path,
-                    first_seen_at=now,
-                    last_seen_at=now,
-                ),
-                LiveSessionThreadAlias(
-                    thread_id=parent_thread.id,
-                    provider="omp",
-                    alias_kind="provider_session_id",
-                    alias_value="omp-parent-native",
-                    first_seen_at=now,
-                    last_seen_at=now,
-                ),
-            ]
-        )
-        db.commit()
-
-    with engine.begin() as connection:
-        bound = _apply_delegation_lineage(
-            connection,
-            session_id=str(child_id),
-            provider="omp",
-            owner_id="42",
-            machine_id="cinder",
-            native_ids=["omp-child-native"],
-            provider_facts=(
-                {
-                    "kind": "delegation.metadata",
-                    "payload": {
-                        "provider_session_id": "omp-child-native",
-                        "parent_provider_session_id": parent_path,
-                        "metadata": {"source": "session_header/parentSession", "parentSession": parent_path},
-                    },
-                },
-            ),
-            session_facts={"provider_session_id": "omp-child-native", "parent_provider_session_id": parent_path},
-            commit_seq=999,
-            commit_time=commit_time,
-        )
-        assert bound == 1
-
     with Session(engine) as db:
         child_row = db.get(StorageSession, str(child_id))
         assert child_row.subagent_parent_session_id == str(parent_id)
-        assert child_row.subagent_parent_provider_session_id == "omp-parent-native"
+        # The raw provider pointer is evidence, not a canonicalized alias.
+        assert child_row.subagent_parent_provider_session_id == parent_path
         assert child_row.hidden_from_default_timeline == 1
         assert child_row.is_subagent == 1
+        assert db.get(StorageSession, str(parent_id)).hidden_from_default_timeline == 0
+    engine.dispose()
+
+
+@pytest.mark.parametrize("scope_case", ["ambiguous", "machine", "provider", "owner"])
+@pytest.mark.asyncio
+async def test_omp_parent_path_refuses_ambiguous_or_cross_scope_links(daemon_paths, scope_case):
+    """Path identity must not bind across owners, machines, providers, or ambiguity."""
+
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    child_id = uuid4()
+    parent_path = "/isolated/home/.local/share/omp/sessions/reused-parent.jsonl"
+    parent_source_id = f"path-sha256:{hashlib.sha256(parent_path.encode()).hexdigest()}"
+    parent_specs = [(uuid4(), "cinder", "omp", "42")]
+    if scope_case == "ambiguous":
+        parent_specs.append((uuid4(), "cinder", "omp", "42"))
+    elif scope_case == "machine":
+        parent_specs[0] = (parent_specs[0][0], "other-machine", "omp", "42")
+    elif scope_case == "provider":
+        parent_specs[0] = (parent_specs[0][0], "cinder", "codex", "42")
+    else:
+        parent_specs[0] = (parent_specs[0][0], "cinder", "omp", "other-owner")
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        for parent_id, machine_id, provider, owner_id in parent_specs:
+            parent = _raw_params(
+                epoch=uuid4(),
+                session_id=parent_id,
+                start=0,
+                end=10,
+                records=(b"parent",),
+                sealed_at=now,
+                provider=provider,
+                machine_id=machine_id,
+                opaque_source_id=parent_source_id,
+                provider_session_id=f"{provider}-parent-{parent_id}",
+            )
+            parent["owner_id"] = owner_id
+            parent["render_manifest"] = _render_manifest(
+                uuid4(),
+                source_epoch=UUID(parent["source_epoch"]),
+                seed=f"{provider}-{machine_id}-{owner_id}".encode(),
+                opaque_source_id=parent_source_id,
+                provider=provider,
+            )
+            parent["render_state"] = "ready"
+            await client.call("storage.raw_object.commit.v2", parent)
+        child = _raw_params(
+            epoch=uuid4(),
+            session_id=child_id,
+            start=0,
+            end=10,
+            records=(b"worker",),
+            sealed_at=now,
+            provider="omp",
+            opaque_source_id="path-sha256:isolated-child",
+            provider_session_id="omp-child-native",
+            subagent={"is_subagent": True, "parent_provider_session_id": parent_path},
+        )
+        child["render_state"] = "ready"
+        child["render_manifest"] = _render_manifest(
+            uuid4(),
+            source_epoch=UUID(child["source_epoch"]),
+            seed=b"isolated-child",
+            opaque_source_id="path-sha256:isolated-child",
+            provider="omp",
+        )
+        await client.call("storage.raw_object.commit.v2", child)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with Session(engine) as db:
+        child_row = db.get(StorageSession, str(child_id))
+        assert child_row.subagent_parent_session_id is None
+        assert child_row.subagent_parent_provider_session_id == parent_path
+        assert child_row.hidden_from_default_timeline == 1
     engine.dispose()

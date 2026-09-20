@@ -1049,6 +1049,10 @@ def _apply_delegation_lineage(
     current_facts = session_facts or {}
     parent_native_id = _delegation_parent_id(provider_facts=provider_facts, session_facts=current_facts)
     if parent_native_id and parent_native_id not in native_ids:
+        # Resolve native ids and OMP absolute parentSession paths through the
+        # same scoped source identity used by commit_raw_object. Never replace
+        # the raw pointer with an alias: later envelopes and audit evidence
+        # must retain exactly what the provider supplied.
         parent_session_id = _resolve_session_id_by_provider_session_id(
             connection,
             provider=provider,
@@ -1056,12 +1060,7 @@ def _apply_delegation_lineage(
             owner_id=owner_id,
             machine_id=machine_id,
         )
-        resolved_parent_native_id = parent_native_id
         if parent_session_id is None:
-            # OMP's native parentSession is an absolute transcript path, not
-            # an opaque provider id. Resolve it through the source-path alias,
-            # then persist the parent's canonical native id while retaining
-            # the raw path in the provider fact.
             parent_session_id = _resolve_session_id_by_source_path(
                 connection,
                 provider=provider,
@@ -1069,13 +1068,6 @@ def _apply_delegation_lineage(
                 owner_id=owner_id,
                 machine_id=machine_id,
             )
-            if parent_session_id is not None:
-                parent_aliases = _provider_alias_values_for_session(
-                    connection,
-                    session_id=parent_session_id,
-                    provider=provider,
-                )
-                resolved_parent_native_id = parent_aliases[0] if parent_aliases else None
         current = (
             connection.execute(select(StorageSession.__table__).where(StorageSession.__table__.c.session_id == session_id))
             .mappings()
@@ -1085,13 +1077,12 @@ def _apply_delegation_lineage(
         current_parent_session = str((current or {}).get("subagent_parent_session_id") or "").strip() or None
         if (
             parent_session_id is not None
-            and resolved_parent_native_id is not None
             and parent_session_id != session_id
-            and current_parent_native in (None, parent_native_id, resolved_parent_native_id)
+            and current_parent_native in (None, parent_native_id)
             and current_parent_session in (None, parent_session_id)
         ):
             values: dict[str, Any] = {
-                "subagent_parent_provider_session_id": resolved_parent_native_id,
+                "subagent_parent_provider_session_id": parent_native_id,
                 "subagent_parent_session_id": parent_session_id,
                 "updated_at": commit_time,
                 "commit_seq": commit_seq,
@@ -8679,10 +8670,11 @@ class CatalogStore:
             # and the existing policy hides the row on its own — one authority,
             # not a second visibility fact.
             #
-            # The parent id is provider identity. Resolving it to a Longhouse
-            # session is this side's job, through the alias table, and it can
-            # legitimately fail: a child routinely ships before its parent. Keep
-            # the provider id either way so a later arrival can bind it.
+            # The parent pointer is provider evidence. Resolving it to a
+            # Longhouse session is this side's job, through native aliases or
+            # the source identity hash, and it can legitimately fail: a child
+            # routinely ships before its parent. Keep the raw pointer either
+            # way so a later arrival can bind it.
             # A parent pointer and a hidden worker are two different facts, and
             # gating the first on the second meant a plain fork -- which the
             # shipper now sends with a parent and `is_subagent` false -- lost its
@@ -8691,6 +8683,9 @@ class CatalogStore:
             source_native_ids = _delegation_native_ids(provider_facts=provider_facts, session_facts=session_facts)
             parent_provider_id = _delegation_parent_id(provider_facts=provider_facts, session_facts=session_facts)
             if parent_provider_id and parent_provider_id not in source_native_ids:
+                # OMP's parentSession is an absolute JSONL path, while other
+                # providers generally send a native session id. Try the native
+                # alias first, then the engine's durable path-sha256 identity.
                 resolved_parent = _resolve_session_id_by_provider_session_id(
                     connection,
                     provider=provider,
@@ -8698,16 +8693,36 @@ class CatalogStore:
                     owner_id=effective_owner_id,
                     machine_id=machine_id,
                 )
-                # A source cannot parent itself. Conflicting durable lineage
-                # remains untouched; the provider fact is still retained below.
-                if resolved_parent == session_key or (
-                    existing_session is not None
-                    and existing_session.get("subagent_parent_provider_session_id") not in (None, parent_provider_id)
+                if resolved_parent is None:
+                    resolved_parent = _resolve_session_id_by_source_path(
+                        connection,
+                        provider=provider,
+                        source_path=parent_provider_id,
+                        owner_id=effective_owner_id,
+                        machine_id=machine_id,
+                    )
+                existing_parent_provider_id = (
+                    str(existing_session.get("subagent_parent_provider_session_id") or "").strip()
+                    if existing_session is not None
+                    else ""
+                )
+                existing_parent_session_id = (
+                    str(existing_session.get("subagent_parent_session_id") or "").strip()
+                    if existing_session is not None
+                    else ""
+                )
+                # Preserve the raw provider pointer exactly as received. A
+                # source cannot parent itself, and conflicting durable lineage
+                # is never overwritten; provider facts retain the evidence.
+                if (
+                    parent_provider_id != session_key
+                    and resolved_parent != session_key
+                    and not existing_parent_provider_id
+                    and not existing_parent_session_id
                 ):
-                    parent_provider_id = None
-                else:
                     session_values["subagent_parent_provider_session_id"] = parent_provider_id
-                    session_values["subagent_parent_session_id"] = resolved_parent
+                    if resolved_parent is not None:
+                        session_values["subagent_parent_session_id"] = resolved_parent
             if bool(session_facts.get("is_subagent")):
                 session_values.setdefault("subagent_parent_provider_session_id", None)
                 session_values.setdefault("subagent_parent_session_id", None)
@@ -8985,13 +9000,12 @@ class CatalogStore:
                         update(storage_session).where(storage_session.c.session_id == session_key).values(**projection_values)
                     )
             # This session may be the parent a previously-shipped worker named
-            # but could not resolve. Its aliases are only now known, so adopt
-            # those orphans in the same commit.
+            # but could not resolve. Its raw source identity is only now known,
+            # so adopt those orphans in the same commit.
             _bind_orphan_subagents_to_parent(
                 connection,
                 provider=provider,
                 session_key=session_key,
-                alias_values=alias_values,
                 owner_id=effective_owner_id,
                 machine_id=machine_id,
                 commit_time=commit_time,
@@ -14995,6 +15009,26 @@ def _source_epoch_conflict(connection, *, reason: str, **evidence: Any) -> dict[
     }
 
 
+def _opaque_source_ids_for_path(source_path: str) -> tuple[str, ...]:
+    """Return storage identities for an absolute provider transcript path.
+
+    The engine ships only its stable ``path-sha256`` identity.  The raw
+    ``parentSession`` value remains the evidence on the child, so resolve it
+    by applying the same hash rather than inventing an alias storage-v2 never
+    sends.
+    """
+
+    if not source_path or not os.path.isabs(source_path):
+        return ()
+    candidates = (source_path, os.path.normpath(source_path))
+    identities: list[str] = []
+    for candidate in candidates:
+        identity = f"path-sha256:{hashlib.sha256(candidate.encode()).hexdigest()}"
+        if identity not in identities:
+            identities.append(identity)
+    return tuple(identities)
+
+
 def _resolve_session_id_by_provider_session_id(
     connection,
     *,
@@ -15003,7 +15037,7 @@ def _resolve_session_id_by_provider_session_id(
     owner_id: str | None,
     machine_id: str,
 ) -> str | None:
-    """Resolve one native id inside the authenticated owner/machine scope."""
+    """Resolve one native id only inside an unambiguous owner/machine scope."""
 
     if owner_id is None or not provider_session_id:
         return None
@@ -15028,16 +15062,16 @@ def _resolve_session_id_by_provider_session_id(
         )
         .exists(),
     )
-    return connection.execute(
+    rows = connection.execute(
         select(thread_table.c.session_id)
         .select_from(alias_table.join(thread_table, thread_table.c.id == alias_table.c.thread_id))
         .where(alias_table.c.provider == provider)
         .where(alias_table.c.alias_kind == "provider_session_id")
         .where(alias_table.c.alias_value == provider_session_id)
         .where(scope)
-        .order_by(alias_table.c.id.asc())
-        .limit(1)
-    ).scalar_one_or_none()
+        .distinct()
+    ).all()
+    return str(rows[0][0]) if len(rows) == 1 else None
 
 
 def _resolve_session_id_by_source_path(
@@ -15048,41 +15082,31 @@ def _resolve_session_id_by_source_path(
     owner_id: str | None,
     machine_id: str,
 ) -> str | None:
-    """Resolve a native transcript path inside the authenticated scope."""
+    """Resolve a path through raw source identity inside the authenticated scope.
 
-    if owner_id is None or not source_path:
+    Storage-v2 persists ``path-sha256`` in the raw envelope and does not send
+    a source-path alias.  Bind only when exactly one durable session in the
+    owner/machine/provider scope owns that identity; ambiguity stays unknown.
+    """
+
+    if owner_id is None:
         return None
-    alias_table = LiveSessionThreadAlias.__table__
-    thread_table = LiveSessionThread.__table__
+    opaque_ids = _opaque_source_ids_for_path(source_path)
+    if not opaque_ids:
+        return None
+    raw_table = LiveRawObject.__table__
     storage_table = StorageSession.__table__
-    live_table = LiveSession.__table__
-    session_key = thread_table.c.session_id
-    scope = or_(
-        select(storage_table.c.session_id)
-        .where(
-            storage_table.c.session_id == session_key,
-            storage_table.c.owner_id == str(owner_id),
-            storage_table.c.machine_id == machine_id,
-        )
-        .exists(),
-        select(live_table.c.session_id)
-        .where(
-            live_table.c.session_id == session_key,
-            live_table.c.owner_id == str(owner_id),
-            live_table.c.machine_id == machine_id,
-        )
-        .exists(),
-    )
-    return connection.execute(
-        select(thread_table.c.session_id)
-        .select_from(alias_table.join(thread_table, thread_table.c.id == alias_table.c.thread_id))
-        .where(alias_table.c.provider == provider)
-        .where(alias_table.c.alias_kind == "source_path")
-        .where(alias_table.c.alias_value == source_path)
-        .where(scope)
-        .order_by(alias_table.c.id.asc())
-        .limit(1)
-    ).scalar_one_or_none()
+    rows = connection.execute(
+        select(raw_table.c.session_id)
+        .select_from(raw_table.join(storage_table, storage_table.c.session_id == raw_table.c.session_id))
+        .where(raw_table.c.provider == provider)
+        .where(raw_table.c.opaque_source_id.in_(opaque_ids))
+        .where(storage_table.c.owner_id == str(owner_id))
+        .where(storage_table.c.machine_id == machine_id)
+        .where(storage_table.c.provider == provider)
+        .distinct()
+    ).all()
+    return str(rows[0][0]) if len(rows) == 1 else None
 
 
 def _bind_orphan_subagents_to_parent(
@@ -15090,43 +15114,57 @@ def _bind_orphan_subagents_to_parent(
     *,
     provider: str,
     session_key: str,
-    alias_values: list[str],
     owner_id: str | None,
     machine_id: str,
     commit_time,
 ) -> int:
-    """Attach same-owner/machine children that shipped before this parent."""
+    """Adopt earlier children only after a unique scoped parent resolution."""
 
-    if not alias_values or owner_id is None:
+    if owner_id is None:
         return 0
     session_table = StorageSession.__table__
-    has_orphan = connection.execute(
-        select(session_table.c.session_id)
+    orphan_rows = connection.execute(
+        select(session_table.c.session_id, session_table.c.subagent_parent_provider_session_id)
         .where(
             session_table.c.provider == provider,
             session_table.c.owner_id == str(owner_id),
             session_table.c.machine_id == machine_id,
             session_table.c.subagent_parent_session_id.is_(None),
-            session_table.c.subagent_parent_provider_session_id.in_(alias_values),
+            session_table.c.subagent_parent_provider_session_id.is_not(None),
             session_table.c.session_id != session_key,
         )
-        .limit(1)
-    ).first()
-    if has_orphan is None:
-        return 0
-    return connection.execute(
-        update(session_table)
-        .where(
-            session_table.c.provider == provider,
-            session_table.c.owner_id == str(owner_id),
-            session_table.c.machine_id == machine_id,
-            session_table.c.subagent_parent_session_id.is_(None),
-            session_table.c.subagent_parent_provider_session_id.in_(alias_values),
-            session_table.c.session_id != session_key,
+    ).all()
+    bound = 0
+    for child_session_id, parent_pointer in orphan_rows:
+        parent_pointer = str(parent_pointer or '').strip()
+        if not parent_pointer:
+            continue
+        resolved_parent = _resolve_session_id_by_provider_session_id(
+            connection,
+            provider=provider,
+            provider_session_id=parent_pointer,
+            owner_id=owner_id,
+            machine_id=machine_id,
         )
-        .values(subagent_parent_session_id=session_key, updated_at=commit_time)
-    ).rowcount
-
+        if resolved_parent is None:
+            resolved_parent = _resolve_session_id_by_source_path(
+                connection,
+                provider=provider,
+                source_path=parent_pointer,
+                owner_id=owner_id,
+                machine_id=machine_id,
+            )
+        if resolved_parent != session_key:
+            continue
+        bound += int(connection.execute(
+            update(session_table)
+            .where(
+                session_table.c.session_id == str(child_session_id),
+                session_table.c.subagent_parent_session_id.is_(None),
+            )
+            .values(subagent_parent_session_id=session_key, updated_at=commit_time)
+        ).rowcount or 0)
+    return bound
 
 def _current_commit_seq(connection) -> int:
     value = connection.execute(select(catalog_meta.c.commit_seq).where(catalog_meta.c.singleton == 1)).scalar_one()
