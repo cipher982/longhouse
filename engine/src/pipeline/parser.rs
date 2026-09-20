@@ -880,6 +880,12 @@ pub fn parse_session_file_bounded(
             && native_flavor == Some(NativeFlavor::Omp)
         {
             result.metadata.parent_provider_session_id = scanned.parent_session.clone();
+            if result.metadata.parent_provider_session_id.is_some() {
+                // Native OMP `parentSession` is the provider's authoritative
+                // child marker. Preserve the raw value for host-side path
+                // resolution and keep the child off the root timeline.
+                result.metadata.is_sidechain = true;
+            }
         }
         if native_flavor != Some(NativeFlavor::Omp) && Uuid::parse_str(&scanned.session_id).is_ok()
         {
@@ -6106,6 +6112,32 @@ mod tests {
             .provider_facts
             .iter()
             .any(|fact| fact.kind == "delegation.activity"));
+    }
+
+    #[test]
+    fn omp_absolute_parent_session_is_a_hidden_child_edge() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("child.jsonl");
+        let parent_path = dir.path().join("parent.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{"type":"session","version":3,"id":"omp-child-absolute","timestamp":"2026-09-09T00:00:00.000Z","cwd":"/tmp/omp","parentSession":"{}"}}"#,
+                parent_path.display()
+            ) + "\n{\"type\":\"message\",\"id\":\"omp-child-user-01\",\"parentId\":null,\"timestamp\":\"2026-09-09T00:00:01.000Z\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"child\"}]}}}\n",
+        )
+        .unwrap();
+
+        let result = parse_session_file_with_provider(&path, 0, Some("omp")).unwrap();
+        assert_eq!(result.metadata.parent_provider_session_id.as_deref(), Some(parent_path.to_str().unwrap()));
+        assert!(result.metadata.is_sidechain);
+        let lineage = result
+            .provider_facts
+            .iter()
+            .find(|fact| fact.kind == "delegation.metadata")
+            .unwrap();
+        assert_eq!(lineage.payload["metadata"]["parentSession"], parent_path.to_str().unwrap());
+        assert!(!result.provider_facts.iter().any(|fact| fact.kind == "delegation.activity"));
     }
 
     #[test]

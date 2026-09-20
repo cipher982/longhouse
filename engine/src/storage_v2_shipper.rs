@@ -4996,20 +4996,14 @@ fn session_facts(
                 .unwrap_or_else(|| metadata.session_id.clone())
         })
     };
-    let parent_provider_session_id = if provider.eq_ignore_ascii_case("omp") {
-        // OMP's `parentSession` is an explicit native parent pointer even
-        // though OMP does not mark the child as a hidden sidechain.
-        metadata.parent_provider_session_id.clone()
-    } else {
-        (metadata.is_sidechain || metadata.is_plain_fork())
-            .then(|| {
-                metadata
-                    .parent_provider_session_id
-                    .clone()
-                    .or_else(|| metadata.forked_from_session_id.clone())
-            })
-            .flatten()
-    };
+    let parent_provider_session_id = (metadata.is_sidechain || metadata.is_plain_fork())
+        .then(|| {
+            metadata
+                .parent_provider_session_id
+                .clone()
+                .or_else(|| metadata.forked_from_session_id.clone())
+        })
+        .flatten();
     Ok(StorageV2SessionFacts {
         provider_session_id,
         environment: metadata
@@ -10787,8 +10781,8 @@ mod tests {
                 .as_deref(),
             Some("omp-parent-opaque")
         );
-        assert!(!prepared.envelope.session.is_subagent);
-        assert!(!prepared.envelope.session.hidden_from_default_timeline);
+        assert!(prepared.envelope.session.is_subagent);
+        assert!(prepared.envelope.session.hidden_from_default_timeline);
     }
 
     #[test]

@@ -1056,6 +1056,26 @@ def _apply_delegation_lineage(
             owner_id=owner_id,
             machine_id=machine_id,
         )
+        resolved_parent_native_id = parent_native_id
+        if parent_session_id is None:
+            # OMP's native parentSession is an absolute transcript path, not
+            # an opaque provider id. Resolve it through the source-path alias,
+            # then persist the parent's canonical native id while retaining
+            # the raw path in the provider fact.
+            parent_session_id = _resolve_session_id_by_source_path(
+                connection,
+                provider=provider,
+                source_path=parent_native_id,
+                owner_id=owner_id,
+                machine_id=machine_id,
+            )
+            if parent_session_id is not None:
+                parent_aliases = _provider_alias_values_for_session(
+                    connection,
+                    session_id=parent_session_id,
+                    provider=provider,
+                )
+                resolved_parent_native_id = parent_aliases[0] if parent_aliases else None
         current = (
             connection.execute(select(StorageSession.__table__).where(StorageSession.__table__.c.session_id == session_id))
             .mappings()
@@ -1064,16 +1084,14 @@ def _apply_delegation_lineage(
         current_parent_native = str((current or {}).get("subagent_parent_provider_session_id") or "").strip() or None
         current_parent_session = str((current or {}).get("subagent_parent_session_id") or "").strip() or None
         if (
-            parent_session_id != session_id
-            and current_parent_native in (None, parent_native_id)
-            and current_parent_session
-            in (
-                None,
-                parent_session_id,
-            )
+            parent_session_id is not None
+            and resolved_parent_native_id is not None
+            and parent_session_id != session_id
+            and current_parent_native in (None, parent_native_id, resolved_parent_native_id)
+            and current_parent_session in (None, parent_session_id)
         ):
             values: dict[str, Any] = {
-                "subagent_parent_provider_session_id": parent_native_id,
+                "subagent_parent_provider_session_id": resolved_parent_native_id,
                 "subagent_parent_session_id": parent_session_id,
                 "updated_at": commit_time,
                 "commit_seq": commit_seq,
@@ -15016,6 +15034,51 @@ def _resolve_session_id_by_provider_session_id(
         .where(alias_table.c.provider == provider)
         .where(alias_table.c.alias_kind == "provider_session_id")
         .where(alias_table.c.alias_value == provider_session_id)
+        .where(scope)
+        .order_by(alias_table.c.id.asc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _resolve_session_id_by_source_path(
+    connection,
+    *,
+    provider: str,
+    source_path: str,
+    owner_id: str | None,
+    machine_id: str,
+) -> str | None:
+    """Resolve a native transcript path inside the authenticated scope."""
+
+    if owner_id is None or not source_path:
+        return None
+    alias_table = LiveSessionThreadAlias.__table__
+    thread_table = LiveSessionThread.__table__
+    storage_table = StorageSession.__table__
+    live_table = LiveSession.__table__
+    session_key = thread_table.c.session_id
+    scope = or_(
+        select(storage_table.c.session_id)
+        .where(
+            storage_table.c.session_id == session_key,
+            storage_table.c.owner_id == str(owner_id),
+            storage_table.c.machine_id == machine_id,
+        )
+        .exists(),
+        select(live_table.c.session_id)
+        .where(
+            live_table.c.session_id == session_key,
+            live_table.c.owner_id == str(owner_id),
+            live_table.c.machine_id == machine_id,
+        )
+        .exists(),
+    )
+    return connection.execute(
+        select(thread_table.c.session_id)
+        .select_from(alias_table.join(thread_table, thread_table.c.id == alias_table.c.thread_id))
+        .where(alias_table.c.provider == provider)
+        .where(alias_table.c.alias_kind == "source_path")
+        .where(alias_table.c.alias_value == source_path)
         .where(scope)
         .order_by(alias_table.c.id.asc())
         .limit(1)
