@@ -636,17 +636,36 @@ def _is_omp_helm_stream_event(event: RuntimeEventIngest) -> bool:
     )
 
 
+def _local_runtime_reducer_available(db: Session) -> bool:
+    """Return whether this session is bound to a co-located hot runtime store.
+
+    Archive-only engines intentionally do not carry ``live_runtime_state``.
+    Runtime observations are still archived there, but reduction belongs to
+    the hot catalog lane. Isolated tests may bind both bases to one engine,
+    so schema presence is the reliable boundary rather than configuration.
+    """
+    from sqlalchemy import inspect
+
+    from zerg.database import live_store_configured
+    from zerg.models.live_store import LiveRuntimeState
+
+    if live_store_configured():
+        return False
+    bind = db.get_bind()
+    return bind is not None and inspect(bind).has_table(LiveRuntimeState.__tablename__)
+
+
 def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> RuntimeEventBatchResult:
-    """Archive observations and reduce canonical rows in standalone stores.
+    """Archive observations and reduce a co-located hot runtime projection.
 
     Catalogd owns the hot projection whenever the split Live Store is active;
-    this archive-facing entry point therefore never becomes a second writer in
-    that topology. Isolated harnesses use the same LiveRuntimeState reducer on
-    their one local engine.
+    archive-only engines record observations without querying or writing the
+    hot runtime table. Isolated harnesses that intentionally create both
+    schemas may use the local reducer.
     """
     from zerg.database import live_store_configured
 
-    reduce_local_runtime = not live_store_configured()
+    reduce_local_runtime = _local_runtime_reducer_available(db)
     accepted = 0
     duplicates = 0
     ignored = 0
@@ -681,10 +700,16 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
 
         if observation_result.observation is None:
             raise RuntimeError("accepted runtime observation was not readable after insert")
-        if not reduce_local_runtime:
+        if reduce_local_runtime:
+            outcome = reduce_runtime_signal_observation(db, observation_result.observation)
+        elif live_store_configured():
+            # The catalogd hot lane owns reduction when configured. This
+            # archive-facing call only keeps the durable observation.
             outcome = "stored_live_overlay"
         else:
-            outcome = reduce_runtime_signal_observation(db, observation_result.observation)
+            # A cold-only engine has no hot projection to update. Keep the
+            # observation durable without claiming liveness was reduced.
+            outcome = "stored_observation"
         _record_managed_codex_runtime_observation(event, outcome)
         if outcome == "ignored":
             ignored += 1

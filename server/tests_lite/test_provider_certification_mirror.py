@@ -82,7 +82,7 @@ def test_mirrored_v4_proofs_certify_a_chip_without_exposing_evidence(monkeypatch
         controls = {
             "schema_version": 1,
             "artifact_kind": "provider_negative_control_snapshot",
-            "epoch_digest": "sha256:" + "e" * 64,
+            "epoch_digest": bundles[0][0].accepted_epoch_digest,
             "published_at": "2026-09-17T00:55:00Z",
             "controls": [
                 {"provider": "pi", "target_assertion": a.assertion_id, "fault": f"fault-{a.assertion_id}", "verdict": "pass"} for a in edge

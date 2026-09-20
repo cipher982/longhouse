@@ -55,7 +55,6 @@ def test_child_tables_gained_thread_id(tmp_path):
         "events": ["thread_id"],
         "source_lines": ["thread_id"],
         "session_observations": ["thread_id"],
-        "session_runtime_state": ["thread_id", "run_id"],
         "session_turns": ["thread_id", "run_id"],
         "session_inputs": ["thread_id"],
         "sessions": ["primary_thread_id"],

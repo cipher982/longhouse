@@ -971,16 +971,24 @@ def run_product_e2e(args: argparse.Namespace) -> dict[str, Any]:
         report.update({"status": "failed", "finished_at": _now(), "error": str(exc)})
         raise
     finally:
-        if session_id and engine:
-            try:
-                _engine_command(engine, session_id, "stop")
-            except Exception:
-                pass
-        if session is not None:
-            session.close()
-        allow_path.unlink(missing_ok=True)
-        deny_path.unlink(missing_ok=True)
-        (artifact_root / "product-e2e.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+        try:
+            if session_id:
+                hook_log = root / "hook-events" / f"{session_id}.ndjson"
+                if hook_log.is_file():
+                    # Capture before our own stop can add a terminal hook. Failure
+                    # receipts must retain the same raw generation evidence as passes.
+                    shutil.copyfile(hook_log, artifact_root / "hook-events.ndjson")
+        finally:
+            if session_id and engine:
+                try:
+                    _engine_command(engine, session_id, "stop")
+                except Exception:
+                    pass
+            if session is not None:
+                session.close()
+            allow_path.unlink(missing_ok=True)
+            deny_path.unlink(missing_ok=True)
+            (artifact_root / "product-e2e.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

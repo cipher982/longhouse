@@ -69,12 +69,12 @@ def test_apply_runtime_event_ignores_unrecognized_kind(db_session):
     sid = str(uuid4())
     ev_unknown = _make_event(kind="unknown_experimental_metric", session_id=sid)
 
-    outcome = _apply_runtime_event(db_session, ev_unknown, state_model=LiveRuntimeState)
+    outcome = _apply_runtime_event(db_session, ev_unknown)
     assert outcome == "ignored"
 
-    # State row was NOT created or mutated
-    state = db_session.get(LiveRuntimeState, ev_unknown.runtime_key)
-    assert state is None
+    # Unknown observations cannot create or mutate canonical hot runtime state.
+    assert db_session.get(LiveRuntimeState, ev_unknown.runtime_key) is None
+    assert db_session.get(LiveSession, sid) is None
 
 
 def test_ingest_live_runtime_events_counts_ignored_without_mutating_liveness(db_session):

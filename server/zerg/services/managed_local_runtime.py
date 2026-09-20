@@ -118,7 +118,7 @@ async def persist_managed_local_phase_signal(
     dedupe_key: str,
     occurred_at: datetime | None = None,
 ) -> None:
-    if not _is_managed_local_session(session):
+    if not _is_managed_local_session(db, session):
         return
 
     ws = get_write_serializer()

@@ -7,7 +7,7 @@
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -78,12 +78,17 @@ pub fn append_unseen_cursor_records(
     let epoch = source_epoch.to_string();
     // A Cursor capture may already hold a wider preparation savepoint so root
     // ordering, epoch selection, raw records, and pending-envelope persistence
-    // commit atomically. Nested savepoints work in both contexts.
+    // commit atomically. Nested savepoints work in both contexts. The first
+    // metadata write below acquires SQLite's writer before seal_record can
+    // publish a file, so a locked startup sweep cannot observe an uncommitted
+    // payload as an orphan.
     let transaction = conn.savepoint()?;
     let next = next_position(&transaction, &epoch)?;
     let mut next = next;
     for bytes in records {
         let hash = hex_hash(bytes);
+        let record_bytes_len =
+            i64::try_from(bytes.len()).context("Cursor record exceeds SQLite INTEGER")?;
         // Deduplication is normally the hot path: do not stat or reseal an
         // unchanged payload. A live row with an empty inline blob is the one
         // repair case; only there do we inspect the hash-addressed file.
@@ -103,20 +108,24 @@ pub fn append_unseen_cursor_records(
                 if crate::state::payload_store::exists(&root, &relative) {
                     continue;
                 }
-                // The row, position and hash remain authoritative. Re-seal
-                // only this exact source record, then leave the file-backed
-                // representation explicit rather than fabricating bytes.
-                let (_blob, len, _path) = seal_record(&transaction, &hash, bytes)?;
-                let repaired = transaction.execute(
+                // Record the repaired metadata before publishing its
+                // replacement. This write owns SQLite's writer for the entire
+                // seal sequence, and a rollback restores the old row state.
+                let prepared = transaction.execute(
                     "UPDATE cursor_store_raw_record
-                     SET record_bytes = ?1, record_bytes_len = ?2
-                     WHERE source_epoch = ?3 AND record_hash = ?4
+                     SET record_bytes = X'', record_bytes_len = ?1
+                     WHERE source_epoch = ?2 AND record_hash = ?3
                        AND record_bytes_len > 0 AND length(record_bytes) = 0",
-                    params![Vec::<u8>::new(), len, epoch, hash],
+                    params![record_bytes_len, epoch, hash],
                 )?;
                 anyhow::ensure!(
-                    repaired == 1,
-                    "Cursor raw record changed while repairing missing payload"
+                    prepared == 1,
+                    "Cursor raw record changed while preparing missing payload repair"
+                );
+                let (_blob, sealed_len, _path) = seal_record(&transaction, &hash, bytes)?;
+                anyhow::ensure!(
+                    sealed_len == record_bytes_len,
+                    "Cursor raw record length changed while sealing missing payload repair"
                 );
             }
             // A committed row is never deleted merely because its file
@@ -124,20 +133,26 @@ pub fn append_unseen_cursor_records(
             continue;
         }
 
-        // Seal before the new row exists: an orphan from a rolled-back
-        // savepoint is swept, while a committed row can never lack bytes.
-        let (blob, len, _path) = seal_record(&transaction, &hash, bytes)?;
+        // Insert the row's final metadata before sealing. The INSERT acquires
+        // the writer before seal_record publishes bytes; commit occurs only
+        // after the file is sealed. If sealing fails, savepoint rollback
+        // removes the row and leaves only sweepable files.
         let inserted = transaction.execute(
             "INSERT INTO cursor_store_raw_record (
                  source_epoch, record_hash, source_position, record_bytes,
                  record_bytes_len, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ) VALUES (?1, ?2, ?3, X'', ?4, ?5)
              ON CONFLICT(source_epoch, record_hash) DO NOTHING",
-            params![epoch, hash, next, blob, len, Utc::now().to_rfc3339()],
+            params![epoch, hash, next, record_bytes_len, Utc::now().to_rfc3339()],
         )?;
         if inserted == 0 {
             continue;
         }
+        let (_blob, sealed_len, _path) = seal_record(&transaction, &hash, bytes)?;
+        anyhow::ensure!(
+            sealed_len == record_bytes_len,
+            "Cursor raw record length changed while sealing payload"
+        );
         next = next
             .checked_add(1)
             .context("Cursor source position overflow")?;
@@ -248,9 +263,10 @@ pub fn oldest_undrained_epoch(
 /// the first row is allowed through when it alone exceeds the byte bound. The
 /// statement is fully finalized before the mutation transaction starts, so a
 /// slow metadata scan never holds SQLite's writer. The mutation phase repeats
-/// the receipt predicate for each indexed row and enforces the byte bound again
-/// while allowing concurrent append, pending-envelope, and acknowledgement
-/// changes between the two phases to fence the cleanup safely.
+/// the receipt predicate for each indexed row and enforces the byte bound again.
+/// After row retirement commits, a separate bounded writer phase checks each
+/// deduplicated hash for live cross-epoch references and unlinks only while
+/// that lock remains held.
 pub fn drain_receipted_cursor_records(conn: &Connection) -> Result<u64> {
     let max_records = i64::try_from(CURSOR_DRAIN_BATCH_RECORDS)
         .context("Cursor drain record limit exceeds SQLite INTEGER")?;
@@ -321,7 +337,10 @@ pub fn drain_receipted_cursor_records(conn: &Connection) -> Result<u64> {
         return Ok(0);
     }
 
-    let transaction = conn.unchecked_transaction()?;
+    // Acquire SQLite's writer before mutating any rows. The immediate
+    // transaction fences append, acknowledgement, and pending-envelope writes
+    // while each candidate repeats its receipt predicate below.
+    let transaction = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let mut drained_records = 0_u64;
     let mut drained_bytes = 0_u64;
     let mut drained_hashes: Vec<String> = Vec::new();
@@ -384,15 +403,33 @@ pub fn drain_receipted_cursor_records(conn: &Connection) -> Result<u64> {
     drop(update);
     transaction.commit()?;
 
-    // Only now, with the rows cleared, may the bytes go: the reverse order would
-    // leave a row that claims to hold a receipted payload it cannot produce.
-    // A legacy row has no file, and removal tolerates that.
-    let root = records_root(conn)?;
-    for hash in drained_hashes {
-        crate::state::payload_store::remove(
-            &root,
-            &crate::state::payload_store::relative_path_for(&hash, "rec"),
-        )?;
+    // Row retirement is durable before touching a file. Reacquire the writer
+    // for a fresh cross-epoch reference check: the same content-addressed file
+    // may still be owed by another epoch. Hold that lock through unlink so a
+    // concurrent append or locked payload sweep cannot publish a new reference
+    // between the check and reclamation.
+    if !drained_hashes.is_empty() {
+        drained_hashes.sort_unstable();
+        drained_hashes.dedup();
+        let cleanup = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+        let root = records_root(&cleanup)?;
+        for hash in drained_hashes {
+            let live: bool = cleanup.query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM cursor_store_raw_record
+                     WHERE record_hash = ?1 AND record_bytes_len > 0
+                 )",
+                [&hash],
+                |row| row.get(0),
+            )?;
+            if !live {
+                crate::state::payload_store::remove(
+                    &root,
+                    &crate::state::payload_store::relative_path_for(&hash, "rec"),
+                )?;
+            }
+        }
+        cleanup.commit()?;
     }
     Ok(drained_records)
 }
@@ -936,6 +973,43 @@ mod tests {
             cursor_records_from(&conn, blocked, 1, 4, 64 * 1024).expect("read retained tail");
         assert_eq!(retained.len(), 1);
         assert_eq!(retained[0].bytes, b"held");
+    }
+
+    #[test]
+    fn shared_record_payload_survives_one_epoch_drain_until_last_reference() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let mut conn = open_db(Some(temp.path())).unwrap();
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        seed_epoch(&conn, first);
+        seed_epoch(&conn, second);
+        let bytes = b"identical-cross-epoch-record".to_vec();
+        append_unseen_cursor_records(&mut conn, first, &[bytes.clone()]).unwrap();
+        append_unseen_cursor_records(&mut conn, second, &[bytes.clone()]).unwrap();
+
+        // Only the first epoch is currently fully receipted. Both rows point
+        // at the same content-addressed file, so draining it must not unlink
+        // bytes still owed by the second epoch.
+        set_durable_cursor(&conn, first, 1);
+        set_durable_cursor(&conn, second, 0);
+        let root = records_root(&conn).unwrap();
+        let relative =
+            crate::state::payload_store::relative_path_for(&cursor_record_hash(&bytes), "rec");
+        assert_eq!(drain_receipted_cursor_records(&conn).unwrap(), 1);
+        assert_eq!(
+            cursor_records_from(&conn, second, 0, 1, 1024).unwrap(),
+            vec![CursorRawRecord {
+                source_position: 0,
+                bytes: bytes.clone(),
+            }]
+        );
+        assert!(root.join(&relative).exists());
+
+        // Once the second epoch is receipted, the next bounded drain may
+        // reclaim the now-unreferenced file.
+        set_durable_cursor(&conn, second, 1);
+        assert_eq!(drain_receipted_cursor_records(&conn).unwrap(), 1);
+        assert!(!root.join(&relative).exists());
     }
 
     #[test]
