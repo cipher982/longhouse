@@ -4471,7 +4471,6 @@ async def test_native_parent_id_from_spawn_fact_commits_in_both_arrival_orders(d
         sealed_at=now,
         provider="opencode",
         opaque_source_id="path-sha256:opencode-child",
-        provider_session_id=child_native_id,
         subagent={"is_subagent": True, "parent_provider_session_id": parent_native_id},
     )
     child.update(
@@ -4502,6 +4501,10 @@ async def test_native_parent_id_from_spawn_fact_commits_in_both_arrival_orders(d
         assert child_row.subagent_parent_provider_session_id == parent_native_id
         assert child_row.subagent_parent_tool_call_id == "call_parent_opencode"
         assert child_row.hidden_from_default_timeline == 1
+        served = CatalogStore(engine).list_session_subagents(session_id=str(parent_id), owner_id="42")
+        assert served["children"][0]["session_id"] == str(child_id)
+        assert served["children"][0]["parent_tool_call_id"] == "call_parent_opencode"
+        assert served["child_references"][0]["session_id"] == str(child_id)
     engine.dispose()
 
 
