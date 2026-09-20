@@ -84,6 +84,7 @@ def _raw_params(
     provider: str = "codex",
     provider_session_id: str | None = None,
     subagent: dict | None = None,
+    provider_facts: tuple[dict, ...] = (),
 ) -> dict:
     record_hashes = tuple(hashlib.sha256(record).digest() for record in records)
     identity = EnvelopeIdentity(
@@ -127,6 +128,7 @@ def _raw_params(
         "media_refs": [],
         "projectors": ["render-v2"],
         "render_manifest": None,
+        "provider_facts": list(provider_facts),
         "session_facts": {
             "environment": "local",
             "project": "longhouse",
@@ -4231,6 +4233,8 @@ async def test_late_parent_adopts_its_orphan_subagents(daemon_paths):
     now = datetime.now(UTC).replace(microsecond=0)
     child_id = uuid4()
     parent_id = uuid4()
+    parent_path = "/isolated/home/.local/share/omp/sessions/late-parent.jsonl"
+    parent_source_id = f"path-sha256:{hashlib.sha256(parent_path.encode()).hexdigest()}"
 
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
@@ -4244,11 +4248,11 @@ async def test_late_parent_adopts_its_orphan_subagents(daemon_paths):
             end=10,
             records=(b"worker",),
             sealed_at=now,
-            provider="claude",
-            opaque_source_id="agent-child.jsonl",
+            provider="omp",
+            opaque_source_id="path-sha256:late-child",
             subagent={
                 "is_subagent": True,
-                "parent_provider_session_id": "claude-parent-late",
+                "parent_provider_session_id": parent_path,
                 "parent_tool_call_id": "toolu_late",
                 "workflow_run_id": None,
             },
@@ -4256,7 +4260,7 @@ async def test_late_parent_adopts_its_orphan_subagents(daemon_paths):
         child.update(
             render_state="ready",
             render_manifest=_render_manifest(
-                uuid4(), source_epoch=child_epoch, seed=b"child-render", opaque_source_id="agent-child.jsonl", provider="claude"
+                uuid4(), source_epoch=child_epoch, seed=b"child-render", opaque_source_id="path-sha256:late-child", provider="omp"
             ),
         )
         await client.call("storage.raw_object.commit.v2", child)
@@ -4269,14 +4273,14 @@ async def test_late_parent_adopts_its_orphan_subagents(daemon_paths):
             end=10,
             records=(b"parent",),
             sealed_at=now,
-            provider="claude",
-            opaque_source_id="parent.jsonl",
-            provider_session_id="claude-parent-late",
+            provider="omp",
+            opaque_source_id=parent_source_id,
+            provider_session_id="omp-parent-late",
         )
         parent.update(
             render_state="ready",
             render_manifest=_render_manifest(
-                uuid4(), source_epoch=parent_epoch, seed=b"parent-render", opaque_source_id="parent.jsonl", provider="claude"
+                uuid4(), source_epoch=parent_epoch, seed=b"parent-render", opaque_source_id=parent_source_id, provider="omp"
             ),
         )
         await client.call("storage.raw_object.commit.v2", parent)
@@ -4407,6 +4411,100 @@ async def test_omp_absolute_parent_session_commits_in_both_arrival_orders(daemon
     engine.dispose()
 
 
+@pytest.mark.parametrize("child_first", [True, False])
+@pytest.mark.asyncio
+async def test_native_parent_id_from_spawn_fact_commits_in_both_arrival_orders(daemon_paths, child_first):
+    """A parent native id in spawn metadata links the real commit path late."""
+
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    child_id = uuid4()
+    parent_id = uuid4()
+    parent_native_id = "ses_parent_opencode_native"
+    child_native_id = "ses_child_opencode_native"
+    parent_epoch = uuid4()
+    child_epoch = uuid4()
+    spawn_fact = {
+        "kind": "delegation.spawn",
+        "at": now.isoformat(),
+        "source_position": 6,
+        "payload": {
+            "children": [
+                {
+                    "provider_session_id": child_native_id,
+                    "parent_tool_call_id": "call_parent_opencode",
+                    "metadata": {
+                        "parentSessionId": parent_native_id,
+                        "sessionId": child_native_id,
+                    },
+                }
+            ]
+        },
+    }
+    parent = _raw_params(
+        epoch=parent_epoch,
+        session_id=parent_id,
+        start=0,
+        end=10,
+        records=(b"opencode-parent",),
+        sealed_at=now,
+        provider="opencode",
+        opaque_source_id="path-sha256:opencode-parent",
+        provider_facts=(spawn_fact,),
+    )
+    parent.update(
+        render_state="ready",
+        render_manifest=_render_manifest(
+            uuid4(),
+            source_epoch=parent_epoch,
+            seed=b"opencode-parent-render",
+            opaque_source_id="path-sha256:opencode-parent",
+            provider="opencode",
+        ),
+    )
+    child = _raw_params(
+        epoch=child_epoch,
+        session_id=child_id,
+        start=0,
+        end=10,
+        records=(b"opencode-child",),
+        sealed_at=now,
+        provider="opencode",
+        opaque_source_id="path-sha256:opencode-child",
+        provider_session_id=child_native_id,
+        subagent={"is_subagent": True, "parent_provider_session_id": parent_native_id},
+    )
+    child.update(
+        render_state="ready",
+        render_manifest=_render_manifest(
+            uuid4(),
+            source_epoch=child_epoch,
+            seed=b"opencode-child-render",
+            opaque_source_id="path-sha256:opencode-child",
+            provider="opencode",
+        ),
+    )
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        for raw in ((child, parent) if child_first else (parent, child)):
+            await client.call("storage.raw_object.commit.v2", raw)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with Session(engine) as db:
+        child_row = db.get(StorageSession, str(child_id))
+        assert child_row.subagent_parent_session_id == str(parent_id)
+        assert child_row.subagent_parent_provider_session_id == parent_native_id
+        assert child_row.subagent_parent_tool_call_id == "call_parent_opencode"
+        assert child_row.hidden_from_default_timeline == 1
+    engine.dispose()
+
+
 @pytest.mark.parametrize("scope_case", ["ambiguous", "machine", "provider", "owner"])
 @pytest.mark.asyncio
 async def test_omp_parent_path_refuses_ambiguous_or_cross_scope_links(daemon_paths, scope_case):
@@ -4415,41 +4513,46 @@ async def test_omp_parent_path_refuses_ambiguous_or_cross_scope_links(daemon_pat
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     child_id = uuid4()
-    parent_path = "/isolated/home/.local/share/omp/sessions/reused-parent.jsonl"
-    parent_source_id = f"path-sha256:{hashlib.sha256(parent_path.encode()).hexdigest()}"
-    parent_specs = [(uuid4(), "cinder", "omp", "42")]
+    parent_path = "/isolated/home/.local/share/omp/sessions/../sessions/reused-parent.jsonl"
+    normalized_path = "/isolated/home/.local/share/omp/sessions/reused-parent.jsonl"
+    parent_source_id = f"path-sha256:{hashlib.sha256(normalized_path.encode()).hexdigest()}"
+    alternate_source_id = f"path-sha256:{hashlib.sha256(parent_path.encode()).hexdigest()}"
+    parent_specs = [(uuid4(), "cinder", "omp", "42", parent_source_id)]
     if scope_case == "ambiguous":
-        parent_specs.append((uuid4(), "cinder", "omp", "42"))
+        # Distinct source identities for the same raw path and its normalized
+        # spelling are both legitimate durable instances; the child must refuse
+        # the resulting two-owner candidates rather than pick one.
+        parent_specs.append((uuid4(), "cinder", "omp", "42", alternate_source_id))
     elif scope_case == "machine":
-        parent_specs[0] = (parent_specs[0][0], "other-machine", "omp", "42")
+        parent_specs[0] = (parent_specs[0][0], "other-machine", "omp", "42", parent_source_id)
     elif scope_case == "provider":
-        parent_specs[0] = (parent_specs[0][0], "cinder", "codex", "42")
+        parent_specs[0] = (parent_specs[0][0], "cinder", "codex", "42", parent_source_id)
     else:
-        parent_specs[0] = (parent_specs[0][0], "cinder", "omp", "other-owner")
+        parent_specs[0] = (parent_specs[0][0], "cinder", "omp", "other-owner", parent_source_id)
 
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
     client = CatalogClient(socket_path)
     try:
-        for parent_id, machine_id, provider, owner_id in parent_specs:
+        for parent_id, machine_id, provider, owner_id, source_id in parent_specs:
             parent = _raw_params(
                 epoch=uuid4(),
                 session_id=parent_id,
                 start=0,
                 end=10,
-                records=(b"parent",),
+                records=(f"parent-{source_id}".encode(),),
                 sealed_at=now,
                 provider=provider,
                 machine_id=machine_id,
-                opaque_source_id=parent_source_id,
+                opaque_source_id=source_id,
                 provider_session_id=f"{provider}-parent-{parent_id}",
             )
             parent["owner_id"] = owner_id
             parent["render_manifest"] = _render_manifest(
                 uuid4(),
                 source_epoch=UUID(parent["source_epoch"]),
-                seed=f"{provider}-{machine_id}-{owner_id}".encode(),
-                opaque_source_id=parent_source_id,
+                seed=f"{provider}-{machine_id}-{owner_id}-{source_id}".encode(),
+                opaque_source_id=source_id,
                 provider=provider,
             )
             parent["render_state"] = "ready"

@@ -920,6 +920,15 @@ def _delegation_native_ids(*, provider_facts: tuple[dict[str, Any], ...], sessio
     for value in (
         session_facts.get("provider_session_id"),
         *[payload.get("provider_session_id") for payload in _delegation_metadata_facts(provider_facts)],
+        # OpenCode records the parent's native session id only in each child
+        # metadata entry of the parent's delegation.spawn fact. Preserve that
+        # source evidence as a provider alias so a child envelope that arrived
+        # first can be adopted when this parent is committed later.
+        *[
+            child.get("metadata", {}).get("parentSessionId")
+            for child in _spawn_child_payloads(provider_facts)
+            if isinstance(child.get("metadata"), Mapping)
+        ],
     ):
         native_id = str(value or "").strip()
         if native_id and native_id not in ids:
@@ -995,32 +1004,53 @@ def _bind_spawn_child(
     child_native_id = str(child.get("provider_session_id") or "").strip()
     if not child_native_id or child_native_id in parent_native_ids or parent_owner_id is None:
         return 0
-    child_session_id = _resolve_session_id_by_provider_session_id(
+    storage = StorageSession.__table__
+    child_session_ids: set[str] = set()
+    resolved_child = _resolve_session_id_by_provider_session_id(
         connection,
         provider=parent_provider,
         provider_session_id=child_native_id,
         owner_id=parent_owner_id,
         machine_id=parent_machine_id,
     )
-    if child_session_id is None or child_session_id == parent_session_id:
-        return 0
-    storage = StorageSession.__table__
-    child_row = connection.execute(select(storage).where(storage.c.session_id == child_session_id)).mappings().first()
-    if child_row is None:
+    if resolved_child is not None:
+        child_session_ids.add(resolved_child)
+    # Storage-v2 child rows may have no live thread/native alias. Their raw
+    # envelope still preserves the exact parent native pointer, so use that
+    # indexed lineage column as the late-arrival key in this scope.
+    if parent_native_ids:
+        child_session_ids.update(
+            str(row[0])
+            for row in connection.execute(
+                select(storage.c.session_id).where(
+                    storage.c.provider == parent_provider,
+                    storage.c.owner_id == str(parent_owner_id),
+                    storage.c.machine_id == parent_machine_id,
+                    storage.c.subagent_parent_provider_session_id.in_(parent_native_ids),
+                )
+            ).all()
+        )
+    child_session_ids.discard(parent_session_id)
+    if not child_session_ids:
         return 0
     parent_native_id = parent_native_ids[0] if parent_native_ids else None
-    existing_parent_native = str(child_row["subagent_parent_provider_session_id"] or "").strip() or None
-    existing_parent_session = str(child_row["subagent_parent_session_id"] or "").strip() or None
-    if existing_parent_native not in (None, parent_native_id) or existing_parent_session not in (None, parent_session_id):
-        return 0
-    values: dict[str, Any] = {"subagent_parent_session_id": parent_session_id, "updated_at": commit_time, "commit_seq": commit_seq}
-    if parent_native_id is not None:
-        values["subagent_parent_provider_session_id"] = parent_native_id
     parent_tool_call_id = str(child.get("parent_tool_call_id") or "").strip() or None
-    if parent_tool_call_id is not None and child_row["subagent_parent_tool_call_id"] is None:
-        values["subagent_parent_tool_call_id"] = parent_tool_call_id
-    changed = connection.execute(update(storage).where(storage.c.session_id == child_session_id).values(**values)).rowcount
-    return int(changed or 0)
+    bound = 0
+    for child_session_id in child_session_ids:
+        child_row = connection.execute(select(storage).where(storage.c.session_id == child_session_id)).mappings().first()
+        if child_row is None:
+            continue
+        existing_parent_native = str(child_row["subagent_parent_provider_session_id"] or "").strip() or None
+        existing_parent_session = str(child_row["subagent_parent_session_id"] or "").strip() or None
+        if existing_parent_native not in (None, parent_native_id) or existing_parent_session not in (None, parent_session_id):
+            continue
+        values: dict[str, Any] = {"subagent_parent_session_id": parent_session_id, "updated_at": commit_time, "commit_seq": commit_seq}
+        if parent_native_id is not None:
+            values["subagent_parent_provider_session_id"] = parent_native_id
+        if parent_tool_call_id is not None and child_row["subagent_parent_tool_call_id"] is None:
+            values["subagent_parent_tool_call_id"] = parent_tool_call_id
+        bound += int(connection.execute(update(storage).where(storage.c.session_id == child_session_id).values(**values)).rowcount or 0)
+    return bound
 
 
 def _apply_delegation_lineage(
@@ -1144,17 +1174,44 @@ def _apply_delegation_lineage(
             continue
         for child in payload["children"]:
             if isinstance(child, Mapping) and str(child.get("provider_session_id") or "").strip() in native_ids:
+                child_metadata = child.get("metadata") if isinstance(child.get("metadata"), Mapping) else {}
+                parent_pointer = str(child_metadata.get("parentSessionId") or "").strip()
+                if parent_pointer and _resolve_session_id_by_provider_session_id(
+                    connection,
+                    provider=provider,
+                    provider_session_id=parent_pointer,
+                    owner_id=owner_id,
+                    machine_id=machine_id,
+                ) != str(row["session_id"]):
+                    # Multiple scoped spawn facts for one native parent pointer
+                    # are ambiguous; leave the child unresolved rather than
+                    # selecting whichever fact happens to be newest.
+                    continue
+                parent_native_ids = _provider_alias_values_for_session(
+                    connection,
+                    session_id=str(row["session_id"]),
+                    provider=provider,
+                )
+                parent_native_ids.extend(
+                    value
+                    for value in _delegation_native_ids(
+                        provider_facts=(
+                            {
+                                "kind": "delegation.spawn",
+                                "payload": payload,
+                            },
+                        ),
+                        session_facts={},
+                    )
+                    if value not in parent_native_ids
+                )
                 bound += _bind_spawn_child(
                     connection,
                     parent_session_id=str(row["session_id"]),
                     parent_provider=provider,
                     parent_owner_id=owner_id,
                     parent_machine_id=machine_id,
-                    parent_native_ids=_provider_alias_values_for_session(
-                        connection,
-                        session_id=str(row["session_id"]),
-                        provider=provider,
-                    ),
+                    parent_native_ids=parent_native_ids,
                     child=child,
                     commit_seq=commit_seq,
                     commit_time=commit_time,
@@ -8708,14 +8765,10 @@ class CatalogStore:
                         machine_id=machine_id,
                     )
                 existing_parent_provider_id = (
-                    str(existing_session.get("subagent_parent_provider_session_id") or "").strip()
-                    if existing_session is not None
-                    else ""
+                    str(existing_session.get("subagent_parent_provider_session_id") or "").strip() if existing_session is not None else ""
                 )
                 existing_parent_session_id = (
-                    str(existing_session.get("subagent_parent_session_id") or "").strip()
-                    if existing_session is not None
-                    else ""
+                    str(existing_session.get("subagent_parent_session_id") or "").strip() if existing_session is not None else ""
                 )
                 # Preserve the raw provider pointer exactly as received. A
                 # source cannot parent itself, and conflicting durable lineage
@@ -15116,7 +15169,26 @@ def _resolve_session_id_by_provider_session_id(
         .where(scope)
         .distinct()
     ).all()
-    return str(rows[0][0]) if len(rows) == 1 else None
+    session_ids = {str(row[0]) for row in rows}
+    # Storage-v2 sessions do not necessarily have a live thread (and therefore
+    # cannot have a LiveSessionThreadAlias). OpenCode preserves the parent's
+    # native id in the parent's delegation.spawn fact metadata instead. Resolve
+    # that durable source evidence in the same owner/machine/provider scope.
+    fact_table = SessionProviderFact.__table__
+    fact_rows = connection.execute(
+        select(fact_table.c.session_id)
+        .select_from(fact_table.join(storage_table, storage_table.c.session_id == fact_table.c.session_id))
+        .where(
+            fact_table.c.kind == "delegation.spawn",
+            fact_table.c.payload_json.contains(f'"parentSessionId":"{provider_session_id}"', autoescape=True),
+            storage_table.c.owner_id == str(owner_id),
+            storage_table.c.machine_id == machine_id,
+            storage_table.c.provider == provider,
+        )
+        .distinct()
+    ).all()
+    session_ids.update(str(row[0]) for row in fact_rows)
+    return next(iter(session_ids)) if len(session_ids) == 1 else None
 
 
 def _resolve_session_id_by_source_path(
@@ -15187,6 +15259,7 @@ def _resolve_session_id_by_source_path(
             session_ids.add(resolved)
     return next(iter(session_ids)) if len(session_ids) == 1 else None
 
+
 def _bind_orphan_subagents_to_parent(
     connection,
     *,
@@ -15235,8 +15308,7 @@ def _bind_orphan_subagents_to_parent(
             session_table.c.session_id,
             session_table.c.subagent_parent_provider_session_id,
             session_table.c.subagent_parent_source_id,
-        )
-        .where(
+        ).where(
             session_table.c.provider == provider,
             session_table.c.owner_id == str(owner_id),
             session_table.c.machine_id == machine_id,
@@ -15251,13 +15323,17 @@ def _bind_orphan_subagents_to_parent(
             should_bind = True
         else:
             parent_pointer = str(parent_pointer or "").strip()
-            should_bind = bool(parent_pointer) and _resolve_session_id_by_provider_session_id(
-                connection,
-                provider=provider,
-                provider_session_id=parent_pointer,
-                owner_id=owner_id,
-                machine_id=machine_id,
-            ) == session_key
+            should_bind = (
+                bool(parent_pointer)
+                and _resolve_session_id_by_provider_session_id(
+                    connection,
+                    provider=provider,
+                    provider_session_id=parent_pointer,
+                    owner_id=owner_id,
+                    machine_id=machine_id,
+                )
+                == session_key
+            )
         if not should_bind:
             continue
         bound += int(
@@ -15272,6 +15348,7 @@ def _bind_orphan_subagents_to_parent(
             or 0
         )
     return bound
+
 
 def _current_commit_seq(connection) -> int:
     value = connection.execute(select(catalog_meta.c.commit_seq).where(catalog_meta.c.singleton == 1)).scalar_one()
