@@ -10,11 +10,12 @@ Receives real-time state signals from Claude Code hooks:
   - Notification/elicitation_dialog → state=needs_user
   - Notification/permission_prompt  → state=blocked
 
-Stage 4: `/api/agents/presence` is now a pure RuntimeEventIngest emitter.
+Canonical runtime: `/api/agents/presence` emits RuntimeEventIngest events.
 Each POST normalizes the payload into a phase_signal and feeds it through
-`ingest_runtime_events`, which materializes SessionRuntimeState via the
-reducer. The legacy SessionPresence TTL cache is gone — SessionRuntimeState
-is the single server-side runtime source of truth. The endpoint still
+`ingest_runtime_events`. In the deployed split store, catalogd is the sole
+writer of LiveRuntimeState; isolated tests and local harnesses use the same
+reducer against their own canonical LiveRuntimeState table. There is no
+archive compatibility-row or presence-cache fallback. The endpoint still
 handles auto-resume of snoozed sessions and queued-message delivery.
 
 Auto-resume: only thinking/running signal genuine resumption of work and
@@ -188,10 +189,9 @@ async def upsert_presence(
     runtime_events = [runtime_event]
     provider_session_id = str(payload.provider_session_id or "").strip()
     if provider_session_id and provider_session_id != payload.session_id and runtime_event.session_id is not None:
-        # Both storage lanes already consume binding_signal alias upserts:
-        # catalogd in apply_session_runtime (live), the legacy reducer in
-        # reduce_runtime_signal_observation (archive). The stable dedupe key
-        # makes repeated managed presence posts free after the first bind.
+        # The canonical reducer consumes binding_signal alias upserts. The
+        # stable dedupe key makes repeated managed presence posts free after
+        # the first bind.
         runtime_events.append(
             RuntimeEventIngest(
                 runtime_key=runtime_key,

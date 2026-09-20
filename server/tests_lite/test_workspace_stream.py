@@ -20,17 +20,19 @@ os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-1234")
 
 import zerg.dependencies.auth as _auth_deps  # noqa: F401 — triggers settings init
 import zerg.routers.timeline as timeline_mod
-from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
-from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog as live_catalog
+from tests_lite.live_catalog_harness import live_catalog_client as live_catalog_client
 from zerg.database import Base
+from zerg.database import initialize_live_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionLivePreview
 from zerg.models.agents import SessionObservation
-from zerg.models.agents import SessionRuntimeState
 from zerg.services.session_pause_requests import upsert_pause_request
+from zerg.services.session_runtime import RuntimeEventIngest
+from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_workspace_revision import load_session_workspace_revision
 
 
@@ -42,6 +44,7 @@ def _make_db(tmp_path, name="workspace_stream.db"):
     db_path = tmp_path / name
     engine = make_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(bind=engine)
+    initialize_live_database(engine)
     return make_sessionmaker(engine)
 
 
@@ -398,19 +401,21 @@ def test_workspace_stream_detects_presence_change(tmp_path):
             self._checks += 1
             if self._checks == 2:
                 with sf() as db:
-                    state = SessionRuntimeState(
-                        runtime_key=f"claude:{session_id}",
-                        session_id=session_id,
-                        provider="claude",
-                        phase="thinking",
-                        phase_source="semantic",
-                        phase_started_at=now,
-                        last_runtime_signal_at=now,
-                        last_live_at=now,
-                        timeline_anchor_at=now,
-                        runtime_version=1,
+                    ingest_runtime_events(
+                        db,
+                        [
+                            RuntimeEventIngest(
+                                runtime_key=f"claude:{session_id}",
+                                session_id=session_id,
+                                provider="claude",
+                                source="test_runtime",
+                                kind="phase_signal",
+                                phase="thinking",
+                                occurred_at=now,
+                                dedupe_key=f"workspace-stream:{session_id}:thinking",
+                            )
+                        ],
                     )
-                    db.merge(state)
                     db.commit()
             return self._checks > 3
 
@@ -489,8 +494,8 @@ def test_workspace_stream_emits_pubsub_seq_and_id(tmp_path):
 @patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
 def test_workspace_stream_emits_replay_gap_for_unavailable_cursor(tmp_path):
     """Old process-local pubsub cursors must be explicit, not silently ignored."""
-    from zerg.services.session_pubsub import reset_pubsub_for_test
     from zerg.services.session_pubsub import get_pubsub
+    from zerg.services.session_pubsub import reset_pubsub_for_test
 
     reset_pubsub_for_test()
     sf = _make_db(tmp_path, name="workspace_stream_replay_gap.db")

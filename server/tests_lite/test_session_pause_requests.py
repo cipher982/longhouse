@@ -11,14 +11,18 @@ os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.database import Base
+from zerg.database import initialize_live_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPauseRequest
-from zerg.models.agents import SessionRuntimeState
+from zerg.models.live_store import LiveInteractionRequest
+from zerg.models.live_store import LiveRuntimeState
+from zerg.services.session_pause_requests import PAUSE_KIND_PERMISSION_PROMPT
 from zerg.services.session_pause_requests import PAUSE_KIND_PLAN_APPROVAL
 from zerg.services.session_pause_requests import PAUSE_KIND_STRUCTURED_QUESTION
 from zerg.services.session_pause_requests import load_active_pause_request_map
+from zerg.services.session_pause_requests import pending_interaction_from_live_runtime
 from zerg.services.session_pause_requests import serialize_pause_request_projection
 from zerg.services.session_pause_requests import upsert_pause_request
 from zerg.services.session_runtime import RuntimeEventIngest
@@ -29,6 +33,7 @@ from zerg.utils.time import normalize_utc
 def _make_db(tmp_path, name="session_pause_requests.db"):
     db_path = tmp_path / name
     engine = make_engine(f"sqlite:///{db_path}")
+    initialize_live_database(engine)
     Base.metadata.create_all(bind=engine)
     return make_sessionmaker(engine)
 
@@ -138,8 +143,8 @@ def test_runtime_plan_approval_event_projects_user_facing_approval_question(tmp_
         )
         db.commit()
 
-        row = db.query(SessionPauseRequest).filter(SessionPauseRequest.runtime_key == runtime_key).one()
-        projection = serialize_pause_request_projection(row)
+        row = db.query(LiveInteractionRequest).filter(LiveInteractionRequest.runtime_key == runtime_key).one()
+        projection = dict(row.projection_json or {})
 
         assert row.kind == PAUSE_KIND_PLAN_APPROVAL
         assert projection is not None
@@ -210,11 +215,11 @@ def test_runtime_pause_events_create_and_resolve_without_mutating_phase(tmp_path
         )
         db.commit()
 
-        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        state = db.query(LiveRuntimeState).filter(LiveRuntimeState.runtime_key == runtime_key).one()
         assert state.phase == "needs_user"
-        pause = db.query(SessionPauseRequest).filter(SessionPauseRequest.runtime_key == runtime_key).one()
+        pause = db.query(LiveInteractionRequest).filter(LiveInteractionRequest.runtime_key == runtime_key).one()
         assert pause.status == "pending"
-        assert pause.title == "Choose approach"
+        assert pause.projection_json["title"] == "Choose approach"
 
         ingest_runtime_events(
             db,
@@ -237,9 +242,29 @@ def test_runtime_pause_events_create_and_resolve_without_mutating_phase(tmp_path
         )
         db.commit()
 
+        # A phase signal does not resolve a held interaction; only an explicit
+        # canonical pause_resolution event can close it.
+        assert pause.status == "pending"
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge",
+                    kind="pause_resolution",
+                    occurred_at=now + timedelta(seconds=11),
+                    dedupe_key="pause-resolution",
+                    payload={"request_key": pause.request_key, "status": "resolved", "response_text": "A"},
+                )
+            ],
+        )
+        db.commit()
         db.refresh(pause)
         assert pause.status == "resolved"
-        assert normalize_utc(pause.resolved_at) == now + timedelta(seconds=10)
+        assert normalize_utc(pause.resolved_at) == now + timedelta(seconds=11)
     finally:
         db.close()
 
@@ -290,12 +315,12 @@ def test_claude_hook_pause_event_creates_detection_only_request(tmp_path):
         )
         db.commit()
 
-        pause = db.query(SessionPauseRequest).filter(SessionPauseRequest.runtime_key == runtime_key).one()
+        pause = db.query(LiveInteractionRequest).filter(LiveInteractionRequest.runtime_key == runtime_key).one()
         assert pause.provider == "claude"
         assert pause.status == "pending"
         assert pause.provider_request_id == "elicitation_dialog"
-        assert pause.tool_name == "AskUserQuestion"
-        projection = serialize_pause_request_projection(pause)
+        projection = dict(pause.projection_json or {})
+        assert projection["tool_name"] == "AskUserQuestion"
         assert projection is not None
         assert projection["can_respond"] is False
         assert projection["questions"] == [
@@ -311,7 +336,7 @@ def test_claude_hook_pause_event_creates_detection_only_request(tmp_path):
         db.close()
 
 
-def test_pause_event_for_unknown_session_is_ignored_without_poisoning_batch(tmp_path):
+def test_pause_event_for_unmaterialized_session_keeps_canonical_batch_truth(tmp_path):
     factory = _make_db(tmp_path, "pause_unknown_session.db")
     now = datetime(2026, 6, 7, 12, 0, tzinfo=timezone.utc)
     db = factory()
@@ -344,7 +369,7 @@ def test_pause_event_for_unknown_session_is_ignored_without_poisoning_batch(tmp_
         db.commit()
 
         assert result.accepted == 1
-        assert db.query(SessionPauseRequest).count() == 0
+        assert db.query(LiveInteractionRequest).count() == 1
     finally:
         db.close()
 
@@ -381,9 +406,9 @@ def test_pause_request_can_keep_multiple_pending_when_provider_allows_it(tmp_pat
         db.commit()
 
         rows = (
-            db.query(SessionPauseRequest)
-            .filter(SessionPauseRequest.runtime_key == runtime_key)
-            .order_by(SessionPauseRequest.provider_request_id)
+            db.query(LiveInteractionRequest)
+            .filter(LiveInteractionRequest.runtime_key == runtime_key)
+            .order_by(LiveInteractionRequest.provider_request_id)
         )
         assert [(row.provider_request_id, row.status) for row in rows] == [
             ("question-1", "pending"),
@@ -400,15 +425,25 @@ def test_phase_signal_can_preserve_pending_pause_request(tmp_path):
     try:
         session = _seed_session(db, started_at=now - timedelta(minutes=5))
         runtime_key = f"codex:{session.id}"
-        pause, _changed = upsert_pause_request(
+        ingest_runtime_events(
             db,
-            session_id=session.id,
-            runtime_key=runtime_key,
-            provider="codex",
-            request_key=f"codex:{session.id}:question-1",
-            provider_request_id="question-1",
-            title="Choose approach",
-            occurred_at=now,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge",
+                    kind="pause_request",
+                    occurred_at=now,
+                    dedupe_key="pause-question-preserve",
+                    payload={
+                        "provider_request_id": "question-1",
+                        "title": "Choose approach",
+                        "single_active": True,
+                    },
+                )
+            ],
         )
 
         ingest_runtime_events(
@@ -432,7 +467,7 @@ def test_phase_signal_can_preserve_pending_pause_request(tmp_path):
         )
         db.commit()
 
-        db.refresh(pause)
+        pause = db.query(LiveInteractionRequest).filter(LiveInteractionRequest.runtime_key == runtime_key).one()
         assert pause.status == "pending"
         assert pause.resolved_at is None
     finally:
@@ -469,7 +504,7 @@ def test_claude_hook_blocked_signal_does_not_create_question_payload(tmp_path):
 
         assert load_active_pause_request_map(db, [session.id]) == {}
 
-        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        state = db.query(LiveRuntimeState).filter(LiveRuntimeState.runtime_key == runtime_key).one()
         assert state.phase == "blocked"
         assert state.active_tool == "AskUserQuestion"
     finally:
@@ -571,11 +606,12 @@ def test_transcript_pause_request_is_the_only_user_facing_claude_question(tmp_pa
         )
         db.commit()
 
-        rows = db.query(SessionPauseRequest).filter(SessionPauseRequest.runtime_key == runtime_key).all()
-        assert len(rows) == 1
-        active = load_active_pause_request_map(db, [session.id])[session.id]
-        assert active.title == "Success metric"
-        assert active.provider_request_id == "toolu_1"
+        runtime = db.query(LiveRuntimeState).filter(LiveRuntimeState.runtime_key == runtime_key).one()
+        projection = pending_interaction_from_live_runtime(runtime)
+        assert projection is not None
+        assert projection["kind"] == PAUSE_KIND_STRUCTURED_QUESTION
+        assert projection["title"] == "Success metric"
+        assert projection["can_respond"] is False
     finally:
         db.close()
 
@@ -641,15 +677,31 @@ def test_terminal_signal_expires_pending_pause_requests(tmp_path):
     try:
         session = _seed_session(db, started_at=now - timedelta(minutes=5))
         runtime_key = f"codex:{session.id}"
-        row, _changed = upsert_pause_request(
+        ingest_runtime_events(
             db,
-            session_id=session.id,
-            runtime_key=runtime_key,
-            provider="codex",
-            request_key=f"codex:{session.id}:question-1",
-            provider_request_id="question-1",
-            title="Choose approach",
-            occurred_at=now,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge",
+                    kind="pause_request",
+                    occurred_at=now,
+                    dedupe_key="pause-1",
+                    payload={
+                        "request_key": f"codex:{session.id}:question-1",
+                        "provider_request_id": "question-1",
+                        "kind": PAUSE_KIND_PERMISSION_PROMPT,
+                        "can_respond": True,
+                        "provider_ref": {
+                            "source": "codex_bridge",
+                            "reply_transport": "managed_push",
+                        },
+                        "title": "Choose approach",
+                    },
+                )
+            ],
         )
 
         ingest_runtime_events(
@@ -670,8 +722,10 @@ def test_terminal_signal_expires_pending_pause_requests(tmp_path):
         )
         db.commit()
 
-        db.refresh(row)
+        row = db.query(LiveInteractionRequest).filter(LiveInteractionRequest.runtime_key == runtime_key).one()
         assert row.status == "expired"
-        assert load_active_pause_request_map(db, [session.id]) == {}
+        state = db.query(LiveRuntimeState).filter(LiveRuntimeState.runtime_key == runtime_key).one()
+        assert pending_interaction_from_live_runtime(state) is None
+        assert state.terminal_state == "process_gone"
     finally:
         db.close()

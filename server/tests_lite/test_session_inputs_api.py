@@ -26,10 +26,11 @@ import pytest
 from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 from tests_lite.agents_fixture import SessionFixtureStore
 from tests_lite.live_catalog_harness import LiveCatalog
-from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
-from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog as live_catalog
+from tests_lite.live_catalog_harness import live_catalog_client as live_catalog_client
 from zerg.database import get_db
 from zerg.database import initialize_database
+from zerg.database import initialize_live_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
@@ -56,6 +57,8 @@ from zerg.services.session_inputs import INPUT_STATUS_FAILED
 from zerg.services.session_inputs import INPUT_STATUS_QUEUED
 from zerg.services.session_inputs import create_session_input
 from zerg.services.session_locks import session_lock_manager
+from zerg.services.session_runtime import RuntimeEventIngest
+from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
 
@@ -86,6 +89,7 @@ def _make_db(tmp_path):
     db_path = tmp_path / "test_session_inputs.db"
     engine = make_engine(f"sqlite:///{db_path}")
     initialize_database(engine)
+    initialize_live_database(engine)
     return make_sessionmaker(engine)
 
 
@@ -360,31 +364,26 @@ def test_live_failed_input_summary_preserves_typed_error():
 
 
 def _seed_live_runtime_state(db, session, *, phase: str = "idle") -> None:
-    from zerg.models.agents import SessionRuntimeState
-
     now = datetime.now(timezone.utc)
     freshness_ms = phase_freshness_ms(phase) or int(timedelta(minutes=5).total_seconds() * 1000)
     key = runtime_key_for_session(str(session.provider or "claude"), str(session.id))
-    state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == key).first()
-    if state is None:
-        state = SessionRuntimeState(
-            runtime_key=key,
-            session_id=session.id,
-            provider=str(session.provider or "claude"),
-            device_id=session.device_id,
-        )
-        db.add(state)
-    state.phase = phase
-    state.phase_source = "semantic"
-    state.phase_started_at = now
-    state.last_runtime_signal_at = now
-    state.last_progress_at = now
-    state.last_live_at = now
-    state.timeline_anchor_at = now
-    state.freshness_expires_at = now + timedelta(milliseconds=freshness_ms)
-    state.terminal_state = None
-    state.terminal_at = None
-    state.runtime_version = int(getattr(state, "runtime_version", 0) or 0) + 1
+    ingest_runtime_events(
+        db,
+        [
+            RuntimeEventIngest(
+                runtime_key=key,
+                session_id=session.id,
+                provider=str(session.provider or "claude"),
+                device_id=session.device_id,
+                source="test_runtime",
+                kind="phase_signal",
+                phase=phase,
+                occurred_at=now,
+                freshness_ms=freshness_ms,
+                dedupe_key=f"queue-test:{session.id}:{phase}:{now.isoformat()}",
+            )
+        ],
+    )
     db.commit()
 
 

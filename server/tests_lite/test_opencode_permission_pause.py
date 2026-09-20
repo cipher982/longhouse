@@ -18,17 +18,17 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-opencode-perm")
 os.environ.setdefault("INTERNAL_API_SECRET", Fernet.generate_key().decode())
 
-from tests_lite.live_catalog_harness import live_catalog  # noqa: E402, F401
-from tests_lite.live_catalog_harness import live_catalog_client  # noqa: E402, F401
+from tests_lite.live_catalog_harness import live_catalog as live_catalog
+from tests_lite.live_catalog_harness import live_catalog_client as live_catalog_client
 from zerg.database import Base  # noqa: E402
+from zerg.database import initialize_live_database  # noqa: E402
 from zerg.database import make_engine  # noqa: E402
 from zerg.database import make_sessionmaker  # noqa: E402
 from zerg.models.agents import AgentSession  # noqa: E402
+from zerg.models.live_store import LiveRuntimeState  # noqa: E402
 from zerg.routers import session_chat  # noqa: E402
 from zerg.services.managed_local_control import ManagedLocalSendResult  # noqa: E402
-from zerg.services.session_pause_requests import is_pull_reply_transport  # noqa: E402
-from zerg.services.session_pause_requests import is_user_facing_pause_request  # noqa: E402
-from zerg.services.session_pause_requests import load_active_pause_request_for_session  # noqa: E402
+from zerg.services.session_pause_requests import pending_interaction_from_live_runtime  # noqa: E402
 from zerg.services.session_runtime import RuntimeEventIngest  # noqa: E402
 from zerg.services.session_runtime import ingest_runtime_events  # noqa: E402
 
@@ -37,6 +37,7 @@ OPENCODE_DEVICE_ID = "cinder"
 
 def _make_db(tmp_path):
     engine = make_engine(f"sqlite:///{tmp_path / 'opencode_perm.db'}")
+    initialize_live_database(engine)
     Base.metadata.create_all(bind=engine)
     return make_sessionmaker(engine)
 
@@ -93,15 +94,12 @@ def test_opencode_permission_asked_becomes_answerable_push_pause_request(tmp_pat
         )
         db.commit()
 
-        row = load_active_pause_request_for_session(db, session.id)
-        assert row is not None
-        assert row.kind == "permission_prompt"
-        assert row.can_respond is True
-        assert row.provider_request_id == "perm-abc"
-        assert is_user_facing_pause_request(row) is True
-        # OpenCode answers PUSH over the bridge — must NOT resolve in place.
-        assert is_pull_reply_transport(row) is False
-        assert (row.provider_ref_json or {}).get("reply_transport") == "managed_push"
+        runtime = db.query(LiveRuntimeState).filter(LiveRuntimeState.runtime_key == runtime_key).one()
+        projection = pending_interaction_from_live_runtime(runtime)
+        assert projection is not None
+        assert projection["kind"] == "permission_prompt"
+        assert projection["can_respond"] is True
+        assert projection["title"] == "Permission: bash"
 
 
 # --- Answering one, on the route a browser actually calls ------------------

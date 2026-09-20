@@ -776,59 +776,12 @@ class SessionTurn(AgentsBase):
     )
 
 
-class SessionRuntimeState(AgentsBase):
-    """Reducer-owned runtime projection for a session/runtime key."""
-
-    __tablename__ = "session_runtime_state"
-
-    runtime_key = Column(String(255), primary_key=True)
-    session_id = Column(GUID(), nullable=True, index=True)
-    # Session identity kernel — kept nullable for now: legacy ingest paths
-    # create runtime-state rows before the kernel thread/run is materialized.
-    thread_id = Column(GUID(), nullable=True, index=True)
-    run_id = Column(GUID(), nullable=True, index=True)
-    provider = Column(String(64), nullable=False)
-    device_id = Column(String(255), nullable=True)
-    phase = Column(String(32), nullable=False)
-    phase_source = Column(String(32), nullable=False)
-    active_tool = Column(String(128), nullable=True)
-    phase_started_at = Column(DateTime(timezone=True), nullable=True)
-    execution_started_at = Column(DateTime(timezone=True), nullable=True)
-    last_runtime_signal_at = Column(DateTime(timezone=True), nullable=True)
-    last_progress_at = Column(DateTime(timezone=True), nullable=True)
-    last_live_at = Column(DateTime(timezone=True), nullable=True)
-    # Mirrors the live model: the two runtime-state shapes stay in sync, and the
-    # archive copy is where a served state can be explained after the fact.
-    last_asserted_at = Column(DateTime(timezone=True), nullable=True)
-    timeline_anchor_at = Column(DateTime(timezone=True), nullable=False, index=True)
-    freshness_expires_at = Column(DateTime(timezone=True), nullable=True)
-    terminal_state = Column(String(32), nullable=True)
-    terminal_reason = Column(String(64), nullable=True)
-    terminal_source = Column(String(64), nullable=True)
-    terminal_at = Column(DateTime(timezone=True), nullable=True)
-    pending_interaction_id = Column(String(255), nullable=True)
-    pending_interaction_kind = Column(String(32), nullable=True)
-    pending_interaction_opened_at = Column(DateTime(timezone=True), nullable=True)
-    pending_interaction_updated_at = Column(DateTime(timezone=True), nullable=True)
-    pending_interaction_projection_json = Column(JSON(), nullable=True)
-    pending_interaction_can_respond = Column(Integer, nullable=False, server_default=text("0"))
-    runtime_version = Column(Integer, nullable=False, server_default=text("0"))
-    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
-
-    __table_args__ = (
-        Index("ix_runtime_state_session_updated_version", "session_id", "updated_at", "runtime_version"),
-        Index("ix_runtime_state_anchor", "timeline_anchor_at"),
-        Index("ix_runtime_state_updated", "updated_at"),
-        Index("ix_runtime_state_device_provider", "device_id", "provider"),
-    )
-
-
 class SessionPauseRequest(AgentsBase):
     """Durable provider question waiting for a user answer.
 
-    Phase truth stays in ``SessionRuntimeState``. This row only stores the
-    actionable structured-question request that can make ``needs_user`` require
-    attention.
+    Live runtime truth stays in catalogd's ``LiveRuntimeState`` projection. This
+    row only stores the actionable structured-question request that can make
+    ``needs_user`` require attention.
     """
 
     __tablename__ = "session_pause_requests"

@@ -21,9 +21,10 @@ from uuid import UUID
 from uuid import uuid4
 
 from tests_lite.live_catalog_harness import LiveCatalog
-from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
-from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog as live_catalog
+from tests_lite.live_catalog_harness import live_catalog_client as live_catalog_client
 from zerg.database import Base
+from zerg.database import initialize_live_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.services.session_kernel_projection import resolve_session_id_by_provider_session_id
@@ -33,12 +34,12 @@ PROVIDER = "codex"
 PROMPT = "run the migration and tell me if anything breaks"
 
 
-def _headers(live_catalog: LiveCatalog, owner_id: int) -> dict[str, str]:
+def _headers(live_catalog: LiveCatalog, owner_id: int) -> dict[str, str]:  # noqa: F811
     return {"X-Agents-Token": live_catalog.create_device_token(owner_id=owner_id, device_id=DEVICE_ID)}
 
 
 def _helm_session(
-    live_catalog: LiveCatalog,
+    live_catalog: LiveCatalog,  # noqa: F811
     client,
     *,
     owner_id: int,
@@ -88,7 +89,7 @@ def _helm_session(
     return session_id
 
 
-def test_tail_resolves_provider_native_id(live_catalog, live_catalog_client):
+def test_tail_resolves_provider_native_id(live_catalog, live_catalog_client):  # noqa: F811
     owner_id = live_catalog.create_user("owner@native-id.test")
     headers = _headers(live_catalog, owner_id)
     native_id = str(uuid4())
@@ -117,7 +118,7 @@ def test_tail_resolves_provider_native_id(live_catalog, live_catalog_client):
     assert direct_payload["events"] == payload["events"]
 
 
-def test_get_session_resolves_native_id_and_carries_it_in_the_body(live_catalog, live_catalog_client):
+def test_get_session_resolves_native_id_and_carries_it_in_the_body(live_catalog, live_catalog_client):  # noqa: F811
     owner_id = live_catalog.create_user("owner@native-id.test")
     headers = _headers(live_catalog, owner_id)
     native_id = str(uuid4())
@@ -132,7 +133,7 @@ def test_get_session_resolves_native_id_and_carries_it_in_the_body(live_catalog,
     assert resp.headers.get("X-Provider-Session-ID") == native_id
 
 
-def test_export_resolves_provider_native_id(live_catalog, live_catalog_client):
+def test_export_resolves_provider_native_id(live_catalog, live_catalog_client):  # noqa: F811
     """Export answers on the native id with the session's own transcript.
 
     The live export resolves the alias and streams raw records; it sets no
@@ -151,7 +152,7 @@ def test_export_resolves_provider_native_id(live_catalog, live_catalog_client):
     assert resp.text.strip() == PROMPT
 
 
-def test_unknown_id_still_404s(live_catalog, live_catalog_client):
+def test_unknown_id_still_404s(live_catalog, live_catalog_client):  # noqa: F811
     owner_id = live_catalog.create_user("owner@native-id.test")
     headers = _headers(live_catalog, owner_id)
     _helm_session(live_catalog, live_catalog_client, owner_id=owner_id, headers=headers, native_id=str(uuid4()))
@@ -162,7 +163,7 @@ def test_unknown_id_still_404s(live_catalog, live_catalog_client):
     assert live_catalog_client.get(f"/agents/sessions/{stranger}", headers=headers).status_code == 404
 
 
-def test_primary_key_wins_over_a_colliding_alias(live_catalog, live_catalog_client):
+def test_primary_key_wins_over_a_colliding_alias(live_catalog, live_catalog_client):  # noqa: F811
     """A Longhouse id that appears as another session's alias must never reroute."""
     owner_id = live_catalog.create_user("owner@native-id.test")
     headers = _headers(live_catalog, owner_id)
@@ -188,6 +189,7 @@ def test_resolver_handles_blank_and_missing_values(tmp_path):
 
     engine = make_engine(f"sqlite:///{tmp_path / 'native_id_resolver.db'}")
     Base.metadata.create_all(bind=engine)
+    initialize_live_database(engine)
     factory = make_sessionmaker(engine)
     try:
         with factory() as db:

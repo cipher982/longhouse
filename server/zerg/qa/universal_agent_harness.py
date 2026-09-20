@@ -2871,15 +2871,29 @@ class UniversalProviderAdapter:
         from zerg.database import make_engine
         from zerg.database import make_sessionmaker
         from zerg.models.agents import AgentSession
-        from zerg.models.agents import SessionPauseRequest
-        from zerg.models.agents import SessionRuntimeState
+        from zerg.models.live_store import LiveInteractionRequest
+        from zerg.models.live_store import LiveRuntimeState
         from zerg.services.session_pause_requests import PAUSE_KIND_STRUCTURED_QUESTION
-        from zerg.services.session_pause_requests import list_pause_requests_for_session
-        from zerg.services.session_pause_requests import load_active_pause_request_for_session
-        from zerg.services.session_pause_requests import resolve_pause_request
-        from zerg.services.session_pause_requests import serialize_pause_request_projection
         from zerg.services.session_runtime import RuntimeEventIngest
         from zerg.services.session_runtime import ingest_runtime_events
+
+        def project_live_interaction(row: LiveInteractionRequest | None, *, can_respond: bool | None = None) -> dict[str, Any] | None:
+            if row is None:
+                return None
+            projection = dict(row.projection_json or {})
+            projection.update(
+                {
+                    "id": row.id,
+                    "request_key": row.request_key,
+                    "provider_request_id": row.provider_request_id,
+                    "status": row.status,
+                    "can_respond": bool(row.can_respond) if can_respond is None else can_respond,
+                    "response_payload": row.response_payload_json,
+                    "response_text": row.response_text,
+                    "resolved_at": row.resolved_at,
+                }
+            )
+            return projection
 
         scenario = "answer_pause_request" if answer else "pause_request_detect"
         can_respond = _provider_answer_pause_supported(self.config.provider)
@@ -2975,12 +2989,22 @@ class UniversalProviderAdapter:
             )
             db.commit()
 
-            state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one_or_none()
-            active = load_active_pause_request_for_session(db, session.id)
-            pending_projection = _json_safe(serialize_pause_request_projection(active, can_respond=can_respond))
+            state = db.query(LiveRuntimeState).filter(LiveRuntimeState.runtime_key == runtime_key).one_or_none()
+            active = (
+                db.query(LiveInteractionRequest)
+                .filter(LiveInteractionRequest.session_id == str(session.id), LiveInteractionRequest.status == "pending")
+                .order_by(LiveInteractionRequest.occurred_at.desc(), LiveInteractionRequest.created_at.desc())
+                .first()
+            )
+            pending_projection = _json_safe(project_live_interaction(active, can_respond=can_respond))
             pending_rows = [
-                _json_safe(serialize_pause_request_projection(row, can_respond=row.can_respond))
-                for row in list_pause_requests_for_session(db, session.id)
+                _json_safe(project_live_interaction(row))
+                for row in (
+                    db.query(LiveInteractionRequest)
+                    .filter(LiveInteractionRequest.session_id == str(session.id))
+                    .order_by(LiveInteractionRequest.created_at.asc())
+                    .all()
+                )
             ]
             can_respond_matches_provider_contract = bool((pending_projection or {}).get("can_respond")) == can_respond
             pending_assertions = {
@@ -3086,34 +3110,47 @@ class UniversalProviderAdapter:
                         },
                         "assertions": dispatch_assertions,
                     }
-                resolved = resolve_pause_request(
+                ingest_runtime_events(
                     db,
-                    pause_request_id=active.id,
-                    status="resolved",
-                    occurred_at=now + timedelta(seconds=5),
-                    response_payload={
-                        "answers": {
-                            "approach": "Small adapter path",
-                        }
-                    },
-                    response_text="Use the small adapter path.",
+                    [
+                        RuntimeEventIngest(
+                            runtime_key=runtime_key,
+                            session_id=session.id,
+                            provider=self.config.provider,
+                            device_id="universal-harness",
+                            source="universal_harness",
+                            kind="pause_resolution",
+                            occurred_at=now + timedelta(seconds=5),
+                            dedupe_key=f"{scenario}:pause-resolution",
+                            payload={
+                                "request_key": active.request_key,
+                                "provider_request_id": active.provider_request_id,
+                                "status": "resolved",
+                                "response_payload": {"answers": {"approach": "Small adapter path"}},
+                                "response_text": "Use the small adapter path.",
+                            },
+                        )
+                    ],
                 )
                 db.commit()
-                if resolved is not None:
-                    db.refresh(resolved)
-                active_after = load_active_pause_request_for_session(db, session.id)
-                active_after_response = _json_safe(serialize_pause_request_projection(active_after))
+                resolved = db.query(LiveInteractionRequest).filter(LiveInteractionRequest.request_key == active.request_key).one_or_none()
+                active_after = (
+                    db.query(LiveInteractionRequest)
+                    .filter(
+                        LiveInteractionRequest.session_id == str(session.id),
+                        LiveInteractionRequest.status == "pending",
+                    )
+                    .first()
+                )
+                active_after_response = _json_safe(project_live_interaction(active_after))
                 rows_after = (
-                    db.query(SessionPauseRequest)
-                    .filter(SessionPauseRequest.session_id == session.id)
-                    .order_by(SessionPauseRequest.created_at.asc())
+                    db.query(LiveInteractionRequest)
+                    .filter(LiveInteractionRequest.session_id == str(session.id))
+                    .order_by(LiveInteractionRequest.created_at.asc())
                     .all()
                 )
-                all_rows_after_response = []
-                for row in rows_after:
-                    projection = serialize_pause_request_projection(row, can_respond=row.can_respond)
-                    all_rows_after_response.append(_json_safe(projection))
-                resolved_projection = _json_safe(serialize_pause_request_projection(resolved, can_respond=can_respond))
+                all_rows_after_response = [_json_safe(project_live_interaction(row)) for row in rows_after]
+                resolved_projection = _json_safe(project_live_interaction(resolved, can_respond=can_respond))
                 response_assertions = {
                     "pause_request_resolved": resolved is not None and resolved.status == "resolved",
                     "active_pause_request_cleared": active_after is None,
@@ -3328,10 +3365,11 @@ class UniversalProviderAdapter:
         os.environ.setdefault("DATABASE_URL", f"sqlite:///{package.path('longhouse', 'settings-bootstrap.sqlite')}")
 
         from zerg.database import initialize_database
+        from zerg.database import initialize_live_database
         from zerg.database import make_engine
         from zerg.database import make_sessionmaker
         from zerg.models.agents import AgentSession
-        from zerg.models.agents import SessionRuntimeState
+        from zerg.models.live_store import LiveRuntimeState
         from zerg.services.session_runtime import RuntimeEventIngest
         from zerg.services.session_runtime import ingest_runtime_events
 
@@ -3340,6 +3378,7 @@ class UniversalProviderAdapter:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         engine = make_engine(f"sqlite:///{db_path}")
         initialize_database(engine)
+        initialize_live_database(engine)
         session_factory = make_sessionmaker(engine)
 
         with session_factory() as db:
@@ -3403,7 +3442,7 @@ class UniversalProviderAdapter:
             ]
             result = ingest_runtime_events(db, events)
             db.commit()
-            state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one_or_none()
+            state = db.query(LiveRuntimeState).filter(LiveRuntimeState.runtime_key == runtime_key).one_or_none()
             state_projection = None
             if state is not None:
                 state_projection = {

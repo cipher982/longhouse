@@ -11,16 +11,15 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from datetime import timezone
 from typing import Mapping
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-import zerg.database as database_module
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
-from zerg.models.agents import SessionRuntimeState
 from zerg.models.live_store import LiveRuntimeState
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
@@ -268,18 +267,11 @@ def _fetch_managed_local_hook_observations_since(
     return hook_observations
 
 
-def _load_managed_local_runtime_state(*, db_bind, session_id: UUID) -> SessionRuntimeState | LiveRuntimeState | None:
+def _load_managed_local_runtime_state(*, db_bind, session_id: UUID) -> LiveRuntimeState | None:
     with Session(bind=db_bind) as poll_db:
-        if database_module.live_store_configured():
-            from zerg.services.session_runtime import load_runtime_state_map
+        from zerg.services.session_runtime import load_runtime_state_map
 
-            return load_runtime_state_map(poll_db, [session_id]).get(str(session_id))
-        return (
-            poll_db.query(SessionRuntimeState)
-            .filter(SessionRuntimeState.session_id == session_id)
-            .order_by(SessionRuntimeState.updated_at.desc(), SessionRuntimeState.runtime_version.desc())
-            .first()
-        )
+        return load_runtime_state_map(poll_db, [session_id]).get(str(session_id))
 
 
 def _hook_observation_matches_canonical_state(
@@ -290,6 +282,9 @@ def _hook_observation_matches_canonical_state(
 ) -> bool:
     state = _load_managed_local_runtime_state(db_bind=db_bind, session_id=session_id)
     if state is None:
+        return False
+    freshness_expires_at = normalize_utc(getattr(state, "freshness_expires_at", None))
+    if freshness_expires_at is not None and freshness_expires_at <= datetime.now(timezone.utc):
         return False
     if str(getattr(state, "phase", "") or "").strip() != str(getattr(observation, "phase", "") or "").strip():
         return False

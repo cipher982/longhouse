@@ -13,26 +13,28 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
-from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
-from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog as live_catalog
+from tests_lite.live_catalog_harness import live_catalog_client as live_catalog_client
 from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_COORDINATION
 from zerg.auth.managed_session_tokens import MANAGED_SESSION_SCOPE_HOOK
 from zerg.auth.managed_session_tokens import issue_managed_session_token
 from zerg.database import get_db
 from zerg.database import initialize_database
+from zerg.database import initialize_live_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.main import api_app
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionRuntimeState
 from zerg.models.user import User
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
+from zerg.services.session_runtime import load_runtime_state_map
 
 
 def _make_db(tmp_path):
     db_path = tmp_path / "test_managed_session_hook_scope.db"
     engine = make_engine(f"sqlite:///{db_path}")
     initialize_database(engine)
+    initialize_live_database(engine)
     return make_sessionmaker(engine)
 
 
@@ -117,7 +119,8 @@ def test_presence_accepts_matching_managed_session_hook_token(tmp_path):
                 )
 
             assert response.status_code == 204, response.text
-            runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one()
+            runtime_state = load_runtime_state_map(db, [session.id]).get(str(session.id))
+            assert runtime_state is not None
             assert runtime_state.phase == "thinking"
             assert runtime_state.device_id == "cinder"
         finally:
@@ -157,7 +160,7 @@ def test_presence_rejects_mismatched_managed_session_hook_token(tmp_path):
             api_app.dependency_overrides.clear()
 
 
-def test_agents_sessions_allows_bounded_project_lookup_for_managed_session_hook_token(live_catalog, live_catalog_client):
+def test_agents_sessions_allows_bounded_project_lookup_for_managed_session_hook_token(live_catalog, live_catalog_client):  # noqa: F811
     """The bounded lookup a session-start hook makes, against the real catalog."""
     owner_id = live_catalog.create_user("managed-local-hooks@test.local")
     hiring = live_catalog.commit_session(owner_id=owner_id, project="hiring")
@@ -183,7 +186,7 @@ def test_agents_sessions_allows_bounded_project_lookup_for_managed_session_hook_
     assert payload["sessions"][0]["project"] == "hiring"
 
 
-def test_agents_sessions_allows_coordination_scope_to_search_without_hook_bounds(live_catalog, live_catalog_client):
+def test_agents_sessions_allows_coordination_scope_to_search_without_hook_bounds(live_catalog, live_catalog_client):  # noqa: F811
     owner_id = live_catalog.create_user("managed-local-coordination@test.local")
     session = live_catalog.commit_session(owner_id=owner_id, project="hiring")
     token = issue_managed_session_token(

@@ -38,10 +38,11 @@ os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
 from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 from tests_lite.agents_fixture import SessionFixtureStore
 from tests_lite.live_catalog_harness import LiveCatalog
-from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
-from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog as live_catalog
+from tests_lite.live_catalog_harness import live_catalog_client as live_catalog_client
 from zerg.database import get_db
 from zerg.database import initialize_database
+from zerg.database import initialize_live_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
@@ -49,7 +50,6 @@ from zerg.models.agents import MediaObject
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionInputAttachment
 from zerg.models.agents import SessionMediaRef
-from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
@@ -66,6 +66,8 @@ from zerg.services.session_inputs import INPUT_STATUS_FAILED
 from zerg.services.session_inputs import create_session_input
 from zerg.services.session_inputs import requeue_stuck_delivering
 from zerg.services.session_locks import session_lock_manager
+from zerg.services.session_runtime import RuntimeEventIngest
+from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
 
@@ -388,6 +390,7 @@ def _make_db(tmp_path):
     db_path = tmp_path / "test_session_inputs_attachments.db"
     engine = make_engine(f"sqlite:///{db_path}")
     initialize_database(engine)
+    initialize_live_database(engine)
     return make_sessionmaker(engine)
 
 
@@ -414,26 +417,23 @@ def _seed_live_runtime_state(db, session, *, phase: str = "running") -> None:
     now = datetime.now(timezone.utc)
     freshness_ms = phase_freshness_ms(phase) or int(timedelta(minutes=5).total_seconds() * 1000)
     key = runtime_key_for_session(str(session.provider or "codex"), str(session.id))
-    state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == key).first()
-    if state is None:
-        state = SessionRuntimeState(
-            runtime_key=key,
-            session_id=session.id,
-            provider=str(session.provider or "codex"),
-            device_id=session.device_id,
-        )
-        db.add(state)
-    state.phase = phase
-    state.phase_source = "semantic"
-    state.phase_started_at = now
-    state.last_runtime_signal_at = now
-    state.last_progress_at = now
-    state.last_live_at = now
-    state.timeline_anchor_at = now
-    state.freshness_expires_at = now + timedelta(milliseconds=freshness_ms)
-    state.terminal_state = None
-    state.terminal_at = None
-    state.runtime_version = int(getattr(state, "runtime_version", 0) or 0) + 1
+    ingest_runtime_events(
+        db,
+        [
+            RuntimeEventIngest(
+                runtime_key=key,
+                session_id=session.id,
+                provider=str(session.provider or "codex"),
+                device_id=session.device_id,
+                source="test_runtime",
+                kind="phase_signal",
+                phase=phase,
+                occurred_at=now,
+                freshness_ms=freshness_ms,
+                dedupe_key=f"attachment-test:{session.id}:{phase}:{now.isoformat()}",
+            )
+        ],
+    )
     db.commit()
 
 
@@ -766,7 +766,7 @@ def _set_blob_root(monkeypatch, tmp_path):
     monkeypatch.setenv("LONGHOUSE_MEDIA_BLOB_ROOT", str(tmp_path / "media"))
 
 
-def test_multipart_upload_succeeds_on_codex(live_catalog, live_catalog_client, monkeypatch, tmp_path):
+def test_multipart_upload_succeeds_on_codex(live_catalog, live_catalog_client, monkeypatch, tmp_path):  # noqa: F811
     _set_blob_root(monkeypatch, tmp_path)
     email = "attach-codex@test.local"
     owner_id = live_catalog.create_user(email)
@@ -830,7 +830,7 @@ def test_multipart_upload_succeeds_on_codex(live_catalog, live_catalog_client, m
         asyncio.run(_clear_machine_control_registry())
 
 
-def test_multipart_accepts_attachment_only_input(live_catalog, live_catalog_client, monkeypatch, tmp_path):
+def test_multipart_accepts_attachment_only_input(live_catalog, live_catalog_client, monkeypatch, tmp_path):  # noqa: F811
     _set_blob_root(monkeypatch, tmp_path)
     email = "attach-only@test.local"
     owner_id = live_catalog.create_user(email)
@@ -867,7 +867,7 @@ def test_multipart_accepts_attachment_only_input(live_catalog, live_catalog_clie
         asyncio.run(_clear_machine_control_registry())
 
 
-def test_multipart_rejects_non_codex_transport(live_catalog, live_catalog_client, monkeypatch, tmp_path):
+def test_multipart_rejects_non_codex_transport(live_catalog, live_catalog_client, monkeypatch, tmp_path):  # noqa: F811
     _set_blob_root(monkeypatch, tmp_path)
     email = "attach-claude@test.local"
     owner_id = live_catalog.create_user(email)
@@ -968,7 +968,7 @@ def test_multipart_rejects_oversize(monkeypatch, tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
-def _upload_one_attachment(live_catalog, live_catalog_client, *, owner_id, email, session_id, websocket):
+def _upload_one_attachment(live_catalog, live_catalog_client, *, owner_id, email, session_id, websocket):  # noqa: F811
     cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
     resp = live_catalog_client.post(
         f"/sessions/{session_id}/inputs-multipart",
@@ -981,7 +981,7 @@ def _upload_one_attachment(live_catalog, live_catalog_client, *, owner_id, email
     return resp.json()["live_input_id"], ref
 
 
-def test_machine_blob_fetch_streams_bytes(live_catalog, live_catalog_client, monkeypatch, tmp_path):
+def test_machine_blob_fetch_streams_bytes(live_catalog, live_catalog_client, monkeypatch, tmp_path):  # noqa: F811
     _set_blob_root(monkeypatch, tmp_path)
     email = "attach-fetch@test.local"
     owner_id = live_catalog.create_user(email)
@@ -1012,7 +1012,7 @@ def test_machine_blob_fetch_streams_bytes(live_catalog, live_catalog_client, mon
         asyncio.run(_clear_machine_control_registry())
 
 
-def test_machine_blob_fetch_404_on_session_mismatch(live_catalog, live_catalog_client, monkeypatch, tmp_path):
+def test_machine_blob_fetch_404_on_session_mismatch(live_catalog, live_catalog_client, monkeypatch, tmp_path):  # noqa: F811
     _set_blob_root(monkeypatch, tmp_path)
     email = "attach-mismatch@test.local"
     owner_id = live_catalog.create_user(email)

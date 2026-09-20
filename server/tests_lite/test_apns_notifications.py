@@ -16,6 +16,7 @@ os.environ.setdefault("TESTING", "1")
 
 from zerg.database import Base
 from zerg.database import get_db
+from zerg.database import initialize_live_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
@@ -47,6 +48,7 @@ from zerg.services.session_state_contract import assemble_session_state_facts
 def _make_db(tmp_path, name: str = "test_apns.db"):
     engine = make_engine(f"sqlite:///{tmp_path}/{name}")
     Base.metadata.create_all(bind=engine)
+    initialize_live_database(engine)
     return engine, make_sessionmaker(engine)
 
 

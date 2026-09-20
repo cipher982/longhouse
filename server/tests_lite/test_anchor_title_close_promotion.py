@@ -9,9 +9,9 @@ from uuid import uuid4
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import Base
-from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionRuntimeState
+from zerg.database import initialize_live_database
 from zerg.database import make_engine
+from zerg.models.agents import AgentSession
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import runtime_key_for_session
@@ -19,6 +19,7 @@ from zerg.services.session_runtime import runtime_key_for_session
 
 def _make_db(tmp_path, name: str):
     engine = make_engine(f"sqlite:///{tmp_path / name}")
+    initialize_live_database(engine)
     engine = engine.execution_options(schema_translate_map={"agents": None})
     Base.metadata.create_all(bind=engine)
     return engine, sessionmaker(bind=engine)

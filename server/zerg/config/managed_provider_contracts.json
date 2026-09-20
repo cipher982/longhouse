@@ -2874,7 +2874,7 @@
           "owner_action": "run the transcript census for antigravity and name the raw source"
         }
       },
-      "adapter_digest": "d192397f2d24c9511dd0dded20eac328cbef7bcc3c76c359a0f99c21af75568e"
+      "adapter_digest": "678a93a855db7b00d172f471b108ecb0e6cec9cc604aa1714169e644f0bd5e68"
     },
     {
       "provider": "cursor",
@@ -3593,7 +3593,7 @@
           "owner_action": "run the transcript census for cursor and name the raw source"
         }
       },
-      "adapter_digest": "9f3093caab3d4fe431bc5e318b68d51835419843435b20072f297d459b032b60"
+      "adapter_digest": "0e8e74ab8e2ea57bfd7cd2511d19e5c9c623a1da2d1207c0c931ee64f208e9b2"
     },
     {
       "provider": "pi",
@@ -4778,7 +4778,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "9c5f04ca16bc62e00e3b30ce45b3c4db227e72c1d2111ebf02e0fe1861171b2c"
+      "adapter_digest": "f02a0339adcb1c82a91eca4aa40147ee0f7b8b8407476fd051b3b8aa205d4023"
     }
   ]
 }

@@ -16,13 +16,13 @@ os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from tests_lite.live_catalog_harness import LiveCatalog
-from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
-from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog as live_catalog
+from tests_lite.live_catalog_harness import live_catalog_client as live_catalog_client
 from zerg.database import initialize_database
+from zerg.database import initialize_live_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTurn
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
@@ -34,6 +34,8 @@ from zerg.services.managed_local_control import ManagedLocalTerminalResult
 from zerg.services.managed_local_event_polling import managed_local_events_include_expected_turn
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.session_locks import session_lock_manager
+from zerg.services.session_runtime import RuntimeEventIngest
+from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
 from zerg.services.session_turns import create_session_turn
@@ -44,6 +46,7 @@ def _make_db(tmp_path):
     db_path = tmp_path / "test_managed_local_session_chat.db"
     engine = make_engine(f"sqlite:///{db_path}")
     initialize_database(engine)
+    initialize_live_database(engine)
     return make_sessionmaker(engine)
 
 
@@ -72,24 +75,22 @@ def _seed_user_and_runner(db):
 def _seed_live_runtime_state(db, session: AgentSession, *, phase: str = "idle") -> None:
     now = datetime.now(timezone.utc)
     freshness_ms = phase_freshness_ms(phase) or int(timedelta(minutes=5).total_seconds() * 1000)
-    db.add(
-        SessionRuntimeState(
-            runtime_key=runtime_key_for_session(str(session.provider or "claude"), str(session.id)),
-            session_id=session.id,
-            provider=str(session.provider or "claude"),
-            device_id=session.device_id,
-            phase=phase,
-            phase_source="semantic",
-            phase_started_at=now,
-            last_runtime_signal_at=now,
-            last_progress_at=now,
-            last_live_at=now,
-            timeline_anchor_at=now,
-            freshness_expires_at=now + timedelta(milliseconds=freshness_ms),
-            terminal_state=None,
-            terminal_at=None,
-            runtime_version=1,
-        )
+    ingest_runtime_events(
+        db,
+        [
+            RuntimeEventIngest(
+                runtime_key=runtime_key_for_session(str(session.provider or "claude"), str(session.id)),
+                session_id=session.id,
+                provider=str(session.provider or "claude"),
+                device_id=session.device_id,
+                source="test_runtime",
+                kind="phase_signal",
+                phase=phase,
+                occurred_at=now,
+                freshness_ms=freshness_ms,
+                dedupe_key=f"test-runtime:{session.id}:{phase}:{now.isoformat()}",
+            )
+        ],
     )
     db.commit()
 
@@ -463,12 +464,12 @@ def test_managed_local_events_include_expected_turn_accepts_native_claude_channe
 # ---------------------------------------------------------------------------
 
 
-def _seed_owner(live_catalog: LiveCatalog, email: str) -> tuple[int, dict[str, str]]:
+def _seed_owner(live_catalog: LiveCatalog, email: str) -> tuple[int, dict[str, str]]:  # noqa: F811
     owner_id = live_catalog.create_user(email)
     return owner_id, {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
 
 
-def test_managed_local_claude_dispatch_returns_json_ack(live_catalog, live_catalog_client, monkeypatch):
+def test_managed_local_claude_dispatch_returns_json_ack(live_catalog, live_catalog_client, monkeypatch):  # noqa: F811
     """Managed-local Claude chat returns a JSON ack the moment control acknowledges."""
 
     owner_id, cookies = _seed_owner(live_catalog, "managed-local-claude@test.local")
@@ -507,7 +508,7 @@ def test_managed_local_claude_dispatch_returns_json_ack(live_catalog, live_catal
         asyncio.run(_clear_machine_control_registry())
 
 
-def test_managed_local_codex_dispatch_returns_json_ack(live_catalog, live_catalog_client, monkeypatch):
+def test_managed_local_codex_dispatch_returns_json_ack(live_catalog, live_catalog_client, monkeypatch):  # noqa: F811
     """Managed-local Codex chat also returns JSON ack."""
 
     owner_id, cookies = _seed_owner(live_catalog, "managed-local-codex@test.local")
@@ -535,7 +536,7 @@ def test_managed_local_codex_dispatch_returns_json_ack(live_catalog, live_catalo
         asyncio.run(_clear_machine_control_registry())
 
 
-def test_managed_local_dispatch_send_failure_returns_502(live_catalog, live_catalog_client):
+def test_managed_local_dispatch_send_failure_returns_502(live_catalog, live_catalog_client):  # noqa: F811
     """When live-session dispatch fails, returns {accepted: false} with 502."""
 
     owner_id, cookies = _seed_owner(live_catalog, "managed-local-502@test.local")
@@ -563,7 +564,7 @@ def test_managed_local_dispatch_send_failure_returns_502(live_catalog, live_cata
         asyncio.run(_clear_machine_control_registry())
 
 
-def test_managed_local_dispatch_send_failure_releases_lock_for_retry(live_catalog, live_catalog_client):
+def test_managed_local_dispatch_send_failure_releases_lock_for_retry(live_catalog, live_catalog_client):  # noqa: F811
     """Failed dispatches should release the lock so the next send can retry immediately."""
 
     owner_id, cookies = _seed_owner(live_catalog, "managed-local-retry@test.local")
@@ -596,7 +597,7 @@ def test_managed_local_dispatch_send_failure_releases_lock_for_retry(live_catalo
         asyncio.run(_clear_machine_control_registry())
 
 
-def test_managed_local_dispatch_keeps_lock_until_terminal(live_catalog, live_catalog_client, monkeypatch):
+def test_managed_local_dispatch_keeps_lock_until_terminal(live_catalog, live_catalog_client, monkeypatch):  # noqa: F811
     """Successful managed-local dispatch should keep the thread lock until terminal state."""
 
     owner_id, cookies = _seed_owner(live_catalog, "managed-local-lock@test.local")
@@ -624,7 +625,7 @@ def test_managed_local_dispatch_keeps_lock_until_terminal(live_catalog, live_cat
         asyncio.run(_clear_machine_control_registry())
 
 
-def test_managed_local_dispatch_updates_lock_endpoint_until_terminal(live_catalog, live_catalog_client, monkeypatch):
+def test_managed_local_dispatch_updates_lock_endpoint_until_terminal(live_catalog, live_catalog_client, monkeypatch):  # noqa: F811
     """Successful dispatch should surface the held lock via the lock-status endpoint."""
 
     owner_id, cookies = _seed_owner(live_catalog, "managed-local-lockstatus@test.local")
@@ -815,7 +816,7 @@ def test_managed_local_active_observer_is_noop_after_terminal_turn(monkeypatch, 
         assert row.active_phase_observed_at is None
 
 
-def test_managed_local_dispatch_send_crash_releases_lock(live_catalog, live_catalog_client, monkeypatch):
+def test_managed_local_dispatch_send_crash_releases_lock(live_catalog, live_catalog_client, monkeypatch):  # noqa: F811
     """A crashed dispatch answers 500 and leaves the session free to retry."""
 
     from zerg.services import managed_control_dispatcher

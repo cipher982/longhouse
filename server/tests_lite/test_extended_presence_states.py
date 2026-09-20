@@ -31,6 +31,7 @@ import os
 from datetime import datetime
 from datetime import timezone
 from types import SimpleNamespace
+from uuid import UUID
 from uuid import uuid4
 
 import pytest
@@ -42,16 +43,17 @@ os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from tests_lite.live_catalog_harness import LiveCatalog
-from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
-from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog as live_catalog
+from tests_lite.live_catalog_harness import live_catalog_client as live_catalog_client
 from zerg.database import Base
 from zerg.database import get_db
+from zerg.database import initialize_live_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionRuntimeState
+from zerg.services.session_runtime import load_runtime_state_map
 
 # ---------------------------------------------------------------------------
 # DB + client fixtures (same pattern as other tests_lite tests)
@@ -61,6 +63,7 @@ from zerg.models.agents import SessionRuntimeState
 def _make_db(tmp_path, name="test.db"):
     engine = make_engine(f"sqlite:///{tmp_path}/{name}")
     Base.metadata.create_all(bind=engine)
+    initialize_live_database(engine)
     return engine, make_sessionmaker(engine)
 
 
@@ -101,14 +104,9 @@ def _auth_headers() -> dict:
     return {"X-Agents-Token": "test-token"}
 
 
-def _runtime_state(SessionLocal, sid: str) -> SessionRuntimeState | None:
+def _runtime_state(SessionLocal, sid: str):
     with SessionLocal() as db:
-        return (
-            db.query(SessionRuntimeState)
-            .filter(SessionRuntimeState.session_id == sid)
-            .order_by(SessionRuntimeState.updated_at.desc())
-            .first()
-        )
+        return load_runtime_state_map(db, [UUID(sid)]).get(sid)
 
 
 def _make_session(
@@ -183,6 +181,7 @@ def test_unknown_state_still_ignored(client):
 def test_presence_releases_request_db_before_serialized_write(tmp_path, monkeypatch):
     engine = make_engine(f"sqlite:///{tmp_path}/presence_release.db", pool_size=1, max_overflow=0)
     Base.metadata.create_all(bind=engine)
+    initialize_live_database(engine)
     SessionLocal = make_sessionmaker(engine)
 
     observations: dict[str, int] = {}
@@ -316,7 +315,7 @@ def test_needs_user_clears_tool_name(client, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _snoozed_console_session(live_catalog: LiveCatalog, *, owner_id: int) -> str:
+def _snoozed_console_session(live_catalog: LiveCatalog, *, owner_id: int) -> str:  # noqa: F811
     """One Console session the user has snoozed, in the store that owns that fact."""
 
     now = datetime.now(timezone.utc)
@@ -352,11 +351,11 @@ def _snoozed_console_session(live_catalog: LiveCatalog, *, owner_id: int) -> str
     return str(session_id)
 
 
-def _user_state(live_catalog: LiveCatalog, session_id: str) -> str:
+def _user_state(live_catalog: LiveCatalog, session_id: str) -> str:  # noqa: F811
     return str(live_catalog.rpc("session.read.v2", {"session_id": session_id})["facts"]["catalog"]["user_state"])
 
 
-def _post_presence(live_catalog: LiveCatalog, client, *, owner_id: int, session_id: str, state: str) -> None:
+def _post_presence(live_catalog: LiveCatalog, client, *, owner_id: int, session_id: str, state: str) -> None:  # noqa: F811
     token = live_catalog.create_device_token(owner_id=owner_id, device_id="presence-fixture")
     response = client.post(
         "/agents/presence",
@@ -366,7 +365,7 @@ def _post_presence(live_catalog: LiveCatalog, client, *, owner_id: int, session_
     assert response.status_code == 204, response.text
 
 
-def test_needs_user_does_not_auto_resume_snoozed(live_catalog, live_catalog_client):
+def test_needs_user_does_not_auto_resume_snoozed(live_catalog, live_catalog_client):  # noqa: F811
     """needs_user must NOT auto-resume a snoozed session."""
     owner_id = live_catalog.create_user("owner@presence.test")
     session_id = _snoozed_console_session(live_catalog, owner_id=owner_id)
@@ -377,7 +376,7 @@ def test_needs_user_does_not_auto_resume_snoozed(live_catalog, live_catalog_clie
     assert user_state == "snoozed", f"needs_user should NOT auto-resume snoozed session, got user_state={user_state!r}"
 
 
-def test_blocked_does_not_auto_resume_snoozed(live_catalog, live_catalog_client):
+def test_blocked_does_not_auto_resume_snoozed(live_catalog, live_catalog_client):  # noqa: F811
     """blocked must NOT auto-resume a snoozed session."""
     owner_id = live_catalog.create_user("owner@presence.test")
     session_id = _snoozed_console_session(live_catalog, owner_id=owner_id)
@@ -388,7 +387,7 @@ def test_blocked_does_not_auto_resume_snoozed(live_catalog, live_catalog_client)
     assert user_state == "snoozed", f"blocked should NOT auto-resume snoozed session, got user_state={user_state!r}"
 
 
-def test_thinking_still_auto_resumes_snoozed(live_catalog, live_catalog_client):
+def test_thinking_still_auto_resumes_snoozed(live_catalog, live_catalog_client):  # noqa: F811
     """thinking still auto-resumes snoozed sessions (existing behaviour must not regress)."""
     owner_id = live_catalog.create_user("owner@presence.test")
     session_id = _snoozed_console_session(live_catalog, owner_id=owner_id)

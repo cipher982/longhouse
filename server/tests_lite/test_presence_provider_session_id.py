@@ -25,6 +25,7 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.database import Base
 from zerg.database import get_db
+from zerg.database import initialize_live_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
@@ -37,6 +38,7 @@ from zerg.services.session_kernel_projection import resolve_session_id_by_provid
 def client_env(tmp_path):
     engine = make_engine(f"sqlite:///{tmp_path}/presence_native.db")
     Base.metadata.create_all(bind=engine)
+    initialize_live_database(engine)
     SessionLocal = make_sessionmaker(engine)
 
     def override_db():

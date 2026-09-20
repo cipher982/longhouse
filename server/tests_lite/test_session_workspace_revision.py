@@ -17,14 +17,16 @@ os.environ.setdefault("INTERNAL_API_SECRET", Fernet.generate_key().decode())
 
 from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 from zerg.database import Base
+from zerg.database import initialize_live_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionLivePreview
-from zerg.models.agents import SessionRuntimeState
 from zerg.services.session_pause_requests import resolve_pause_request
 from zerg.services.session_pause_requests import upsert_pause_request
+from zerg.services.session_runtime import RuntimeEventIngest
+from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_workspace_revision import load_session_workspace_revision
 
 
@@ -32,6 +34,7 @@ def _make_db(tmp_path, name="session_workspace_revision.db"):
     db_path = tmp_path / name
     engine = make_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(bind=engine)
+    initialize_live_database(engine)
     return make_sessionmaker(engine)
 
 
@@ -211,17 +214,21 @@ def test_workspace_revision_tracks_runtime_state_updates(tmp_path):
         assert initial.latest_runtime_signal_at is None
         assert initial.runtime_version_sum == 0
 
-        runtime = SessionRuntimeState(
-            runtime_key=f"claude:{session_id}",
-            session_id=session_id,
-            provider="claude",
-            phase="running",
-            phase_source="runtime_event",
-            timeline_anchor_at=now,
-            updated_at=now,
-            runtime_version=1,
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=f"claude:{session_id}",
+                    session_id=session_id,
+                    provider="claude",
+                    source="test_runtime",
+                    kind="phase_signal",
+                    phase="running",
+                    occurred_at=now,
+                    dedupe_key=f"workspace-runtime:{session_id}:running",
+                )
+            ],
         )
-        db.add(runtime)
         db.commit()
 
         running = load_session_workspace_revision(db, session_id)
@@ -230,9 +237,21 @@ def test_workspace_revision_tracks_runtime_state_updates(tmp_path):
         assert running.runtime_version_sum == 1
         assert running.fingerprint != initial.fingerprint
 
-        runtime.runtime_version = 2
-        runtime.updated_at = now + timedelta(seconds=5)
-        db.add(runtime)
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=f"claude:{session_id}",
+                    session_id=session_id,
+                    provider="claude",
+                    source="test_runtime",
+                    kind="phase_signal",
+                    phase="idle",
+                    occurred_at=now + timedelta(seconds=5),
+                    dedupe_key=f"workspace-runtime:{session_id}:idle",
+                )
+            ],
+        )
         db.commit()
 
         updated = load_session_workspace_revision(db, session_id)

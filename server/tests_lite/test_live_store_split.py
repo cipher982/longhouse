@@ -28,7 +28,6 @@ from zerg.database import make_engine
 from zerg.database import make_live_engine
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionRuntimeState
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveInteractionRequest
 from zerg.models.live_store import LiveLaunchReadiness
@@ -57,7 +56,6 @@ from zerg.services.managed_local_launcher import build_managed_local_launch_plan
 from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_live_runtime_events
-from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import runtime_key_for_session
 from zerg.services.session_runtime import session_input_block_reason
@@ -329,13 +327,6 @@ def test_live_heartbeat_stamp_extends_legacy_columns_with_bounded_receipt():
     live_columns = {column.name for column in LiveHeartbeatStamp.__table__.columns if column.name != "id"}
 
     assert live_columns == archive_columns | {"request_sha256", "catalog_result_json"}
-
-
-def test_archive_and_live_runtime_state_columns_stay_in_sync():
-    archive_columns = {column.name for column in SessionRuntimeState.__table__.columns}
-    live_columns = {column.name for column in LiveRuntimeState.__table__.columns}
-
-    assert live_columns == archive_columns
 
 
 def test_hot_pause_request_reaches_the_timeline_card_before_archive_convergence(tmp_path, monkeypatch):
@@ -1259,25 +1250,17 @@ def test_runtime_events_touch_live_session_candidates(tmp_path):
         live_engine.dispose()
 
 
-def test_served_runtime_state_comes_from_the_catalog_not_the_archive_row(live: LiveCatalog, tmp_path):
-    """``session_runtime_state`` is legacy evidence, not served authority.
+def test_served_runtime_state_comes_from_catalogd_live_projection(live: LiveCatalog, tmp_path):
+    """The served runtime state is catalogd's canonical live projection.
 
-    This used to pin the cross-lane merge: an archive progress-derived idle row
-    stamped at write time had to lose to a fresher live phase_signal on signal
-    clock. Under a live catalog there is no merge to get wrong --
-    ``load_runtime_state_map`` returns catalogd's runtime fact and never reads
-    the session it was handed -- and ``_runtime_state_newer_than`` is reachable
-    only from the branch a Runtime Host does not take. The stronger claim
-    replaces it: the archive row below is written last, for the same runtime
-    key, with a different phase, and still cannot reach the served view.
+    The archive session passed to ``load_runtime_state_map`` is only the
+    compatibility-shaped caller boundary; it cannot supply runtime truth.
     """
 
     owner = live.create_user("merge@live-store-split.test")
     token = live.create_device_token(owner_id=owner, device_id="cinder")
     seeded = live.commit_session(owner_id=owner, device_id="cinder", project="live-merge")
     now = datetime.now(timezone.utc)
-    runtime_key = runtime_key_for_session("codex", str(seeded.session_id))
-
     archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
     Base.metadata.create_all(bind=archive_engine)
     ArchiveSession = sessionmaker(bind=archive_engine)
@@ -1304,31 +1287,9 @@ def test_served_runtime_state_comes_from_the_catalog_not_the_archive_row(live: L
             )
         assert response.status_code == 200, response.text
 
-        # Transcript ingest, writing its progress-derived phase into the cold
-        # lane after the live one landed.
+        # The served view comes directly from catalogd's canonical runtime fact;
+        # no archive compatibility row participates in this assertion.
         with ArchiveSession() as archive_db:
-            ingest_runtime_events(
-                archive_db,
-                [
-                    RuntimeEventIngest(
-                        runtime_key=runtime_key,
-                        session_id=seeded.session_id,
-                        provider="codex",
-                        device_id="cinder",
-                        source="agents_ingest",
-                        kind="progress_signal",
-                        occurred_at=now - timedelta(seconds=60),
-                        dedupe_key="merge-progress-1",
-                        payload={"progress_kind": "transcript_append"},
-                    )
-                ],
-            )
-            archive_db.commit()
-
-        with ArchiveSession() as archive_db:
-            archive_row = archive_db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
-            assert archive_row.phase != "running"
-
             served = load_runtime_state_map(archive_db, [seeded.session_id])[str(seeded.session_id)]
 
         assert isinstance(served, LiveRuntimeState)

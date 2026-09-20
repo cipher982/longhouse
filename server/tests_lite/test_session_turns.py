@@ -19,6 +19,7 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 from zerg.database import initialize_database
+from zerg.database import initialize_live_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
@@ -47,6 +48,7 @@ from zerg.utils.time import normalize_utc
 def _make_db(tmp_path):
     engine = make_engine(f"sqlite:///{tmp_path / 'test_session_turns.db'}")
     initialize_database(engine)
+    initialize_live_database(engine)
     return make_sessionmaker(engine)
 
 

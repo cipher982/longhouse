@@ -16,8 +16,11 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
+from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+from tests_lite.live_catalog_harness import live_catalog as live_catalog
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.database import initialize_database
+from zerg.database import initialize_live_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
@@ -49,13 +52,12 @@ from zerg.services.session_observations import record_runtime_observation
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.session_execution_home import ManagedSessionTransport
-from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
-from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
 
 
 def _make_db(tmp_path):
     engine = make_engine(f"sqlite:///{tmp_path / 'test_managed_local_control.db'}")
     initialize_database(engine)
+    initialize_live_database(engine)
     return make_sessionmaker(engine)
 
 
@@ -128,7 +130,7 @@ def _seed_user_runner_and_session(db, *, provider: str = "claude", owner_id: int
     return user, runner, session
 
 
-def _seed_managed_control_session(db, live_catalog, *, provider: str = "claude"):
+def _seed_managed_control_session(db, live_catalog, *, provider: str = "claude"):  # noqa: F811
     """Seed one managed session in both stores and return production's control facts.
 
     The archive keeps the kernel rows, transcript and observations the control
@@ -344,7 +346,7 @@ def _install_fake_control_dispatch(
     return dispatcher
 
 
-def test_send_text_to_managed_local_session_returns_baseline_event_id_for_claude(monkeypatch, tmp_path, live_catalog):
+def test_send_text_to_managed_local_session_returns_baseline_event_id_for_claude(monkeypatch, tmp_path, live_catalog):  # noqa: F811
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
 
@@ -377,7 +379,7 @@ def test_send_text_to_managed_local_session_returns_baseline_event_id_for_claude
         assert dispatcher.calls[0]["payload"] == {"text": "continue"}
 
 
-def test_interrupt_managed_local_session_uses_claude_channel_command(monkeypatch, tmp_path, live_catalog):
+def test_interrupt_managed_local_session_uses_claude_channel_command(monkeypatch, tmp_path, live_catalog):  # noqa: F811
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
 
@@ -401,7 +403,7 @@ def test_interrupt_managed_local_session_uses_claude_channel_command(monkeypatch
         assert dispatcher.calls[0]["payload"] == {}
 
 
-def test_interrupt_managed_local_session_uses_codex_bridge_command(monkeypatch, tmp_path, live_catalog):
+def test_interrupt_managed_local_session_uses_codex_bridge_command(monkeypatch, tmp_path, live_catalog):  # noqa: F811
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
 
@@ -424,7 +426,7 @@ def test_interrupt_managed_local_session_uses_codex_bridge_command(monkeypatch, 
         assert dispatcher.calls[0]["payload"] == {}
 
 
-def test_steer_text_to_managed_local_session_uses_claude_channel_command(monkeypatch, tmp_path, live_catalog):
+def test_steer_text_to_managed_local_session_uses_claude_channel_command(monkeypatch, tmp_path, live_catalog):  # noqa: F811
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
 
@@ -449,7 +451,7 @@ def test_steer_text_to_managed_local_session_uses_claude_channel_command(monkeyp
         assert dispatcher.calls[0]["payload"] == {"text": "redirect", "intent": "steer"}
 
 
-def test_steer_text_to_managed_local_session_passes_codex_attachments_to_engine(monkeypatch, tmp_path, live_catalog):
+def test_steer_text_to_managed_local_session_passes_codex_attachments_to_engine(monkeypatch, tmp_path, live_catalog):  # noqa: F811
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
     refs = [
@@ -510,7 +512,7 @@ def test_unsupported_steer_rejects_before_control_write(monkeypatch, tmp_path):
     assert dispatcher.calls == []
 
 
-def test_steer_text_turn_ended_maps_to_turn_ended_sentinel(monkeypatch, tmp_path, live_catalog):
+def test_steer_text_turn_ended_maps_to_turn_ended_sentinel(monkeypatch, tmp_path, live_catalog):  # noqa: F811
     """The turn_ended race branch surfaces the sentinel so the router maps
     Codex/Claude steer races to a structured 409 (preserved by the fix)."""
 
@@ -545,7 +547,7 @@ def test_steer_text_turn_ended_maps_to_turn_ended_sentinel(monkeypatch, tmp_path
         assert result.error == MANAGED_LOCAL_STEER_TURN_ENDED
 
 
-def test_interrupt_managed_local_session_reports_nonzero_exit(monkeypatch, tmp_path, live_catalog):
+def test_interrupt_managed_local_session_reports_nonzero_exit(monkeypatch, tmp_path, live_catalog):  # noqa: F811
     SessionLocal = _make_db(tmp_path)
     _install_fake_control_dispatch(
         monkeypatch,
@@ -620,7 +622,7 @@ def test_await_managed_local_turn_events_returns_new_persisted_events(tmp_path):
         assert [event.content_text for event in events] == ["after"]
 
 
-def test_send_text_to_managed_local_session_uses_engine_payload_for_codex(monkeypatch, tmp_path, live_catalog):
+def test_send_text_to_managed_local_session_uses_engine_payload_for_codex(monkeypatch, tmp_path, live_catalog):  # noqa: F811
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
 
@@ -642,7 +644,7 @@ def test_send_text_to_managed_local_session_uses_engine_payload_for_codex(monkey
         assert dispatcher.calls[0]["payload"] == {"text": "continue"}
 
 
-def test_send_text_to_managed_local_session_passes_codex_attachments_to_engine(monkeypatch, tmp_path, live_catalog):
+def test_send_text_to_managed_local_session_passes_codex_attachments_to_engine(monkeypatch, tmp_path, live_catalog):  # noqa: F811
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
     refs = [
@@ -671,7 +673,7 @@ def test_send_text_to_managed_local_session_passes_codex_attachments_to_engine(m
         assert dispatcher.calls[0]["payload"] == {"text": "continue", "attachments": refs}
 
 
-def test_send_text_to_managed_local_session_rejects_attachments_for_claude(monkeypatch, tmp_path, live_catalog):
+def test_send_text_to_managed_local_session_rejects_attachments_for_claude(monkeypatch, tmp_path, live_catalog):  # noqa: F811
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
 
@@ -700,7 +702,7 @@ def test_send_text_to_managed_local_session_rejects_attachments_for_claude(monke
         assert dispatcher.calls == []
 
 
-def test_send_text_to_managed_local_session_supports_repeated_claude_sends(monkeypatch, tmp_path, live_catalog):
+def test_send_text_to_managed_local_session_supports_repeated_claude_sends(monkeypatch, tmp_path, live_catalog):  # noqa: F811
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
 
@@ -869,7 +871,7 @@ def test_await_managed_local_hook_phase_update_accepts_opencode_event_phase_sour
         assert result.source == "opencode_event"
 
 
-def test_send_text_to_managed_local_session_uses_claude_channel_bridge_payload(monkeypatch, tmp_path, live_catalog):
+def test_send_text_to_managed_local_session_uses_claude_channel_bridge_payload(monkeypatch, tmp_path, live_catalog):  # noqa: F811
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
 
@@ -894,7 +896,7 @@ def test_send_text_to_managed_local_session_uses_claude_channel_bridge_payload(m
         assert dispatcher.calls[0]["payload"] == {"text": "continue from loop"}
 
 
-def test_send_text_to_managed_local_session_trusts_engine_turn_start_ack(monkeypatch, tmp_path, live_catalog):
+def test_send_text_to_managed_local_session_trusts_engine_turn_start_ack(monkeypatch, tmp_path, live_catalog):  # noqa: F811
     SessionLocal = _make_db(tmp_path)
     dispatch_calls: list[dict[str, object]] = []
 
@@ -1005,7 +1007,7 @@ def test_validate_managed_local_chat_done_payload_rejects_nonzero_exit_code():
     assert error == "expected exit_code=0, got 3"
 
 
-def test_send_text_to_managed_local_session_can_require_active_hook_phase_for_codex(monkeypatch, tmp_path, live_catalog):
+def test_send_text_to_managed_local_session_can_require_active_hook_phase_for_codex(monkeypatch, tmp_path, live_catalog):  # noqa: F811
     SessionLocal = _make_db(tmp_path)
     _install_fake_control_dispatch(monkeypatch)
 
@@ -1053,7 +1055,7 @@ def test_send_text_to_managed_local_session_can_require_active_hook_phase_for_co
         assert result.verified_turn_started is True
 
 
-def test_send_text_to_managed_local_session_reports_codex_verification_failure_without_runtime_signal(monkeypatch, tmp_path, live_catalog):
+def test_send_text_to_managed_local_session_reports_codex_verification_failure_without_runtime_signal(monkeypatch, tmp_path, live_catalog):  # noqa: F811
     SessionLocal = _make_db(tmp_path)
     _install_fake_control_dispatch(monkeypatch)
 
@@ -1085,7 +1087,7 @@ def test_send_text_to_managed_local_session_reports_codex_verification_failure_w
         assert result.error == "Managed local session did not acknowledge the prompt after send"
 
 
-def test_send_text_to_managed_local_session_verifies_codex_via_hook_activity(monkeypatch, tmp_path, live_catalog):
+def test_send_text_to_managed_local_session_verifies_codex_via_hook_activity(monkeypatch, tmp_path, live_catalog):  # noqa: F811
     SessionLocal = _make_db(tmp_path)
     _install_fake_control_dispatch(monkeypatch)
 
@@ -1133,7 +1135,7 @@ def test_send_text_to_managed_local_session_verifies_codex_via_hook_activity(mon
         assert result.verified_turn_started is True
 
 
-def test_send_text_to_managed_local_session_reports_codex_hook_verification_failure(monkeypatch, tmp_path, live_catalog):
+def test_send_text_to_managed_local_session_reports_codex_hook_verification_failure(monkeypatch, tmp_path, live_catalog):  # noqa: F811
     SessionLocal = _make_db(tmp_path)
     _install_fake_control_dispatch(monkeypatch)
 
@@ -1337,7 +1339,7 @@ def test_await_managed_local_turn_terminal_ignores_stale_terminal_inserted_after
         assert result is None
 
 
-def test_send_text_to_managed_local_session_verifies_claude_channel_bridge_via_persisted_prompt(monkeypatch, tmp_path, live_catalog):
+def test_send_text_to_managed_local_session_verifies_claude_channel_bridge_via_persisted_prompt(monkeypatch, tmp_path, live_catalog):  # noqa: F811
     """Native Claude channel sends verify against the persisted user prompt, not hook phases."""
     SessionLocal = _make_db(tmp_path)
     dispatcher = _install_fake_control_dispatch(monkeypatch)
@@ -1378,7 +1380,7 @@ def test_send_text_to_managed_local_session_verifies_claude_channel_bridge_via_p
     assert len(dispatcher.calls) == 1
 
 
-def test_send_text_to_managed_local_session_reports_claude_channel_verification_failure(monkeypatch, tmp_path, live_catalog):
+def test_send_text_to_managed_local_session_reports_claude_channel_verification_failure(monkeypatch, tmp_path, live_catalog):  # noqa: F811
     SessionLocal = _make_db(tmp_path)
     _install_fake_control_dispatch(monkeypatch)
     monkeypatch.setattr(

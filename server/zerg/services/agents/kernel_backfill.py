@@ -38,7 +38,6 @@ from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionLaunchAttempt
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRun
-from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTask
 from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
@@ -231,7 +230,6 @@ _CHILD_THREAD_ID_TABLES = (
     SessionObservation,
     SessionTurn,
     SessionInput,
-    SessionRuntimeState,
 )
 
 
@@ -313,7 +311,6 @@ def cleanup_workflow_journal_sessions(db: Session) -> dict[str, int]:
         # journal session is gone.
         db.query(SessionObservation).filter(SessionObservation.session_id == session_id).delete(synchronize_session=False)
         db.query(SessionTask).filter(SessionTask.session_id == str(session_id)).delete(synchronize_session=False)
-        db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).delete(synchronize_session=False)
         if thread_ids:
             db.query(SessionThreadAlias).filter(SessionThreadAlias.thread_id.in_(thread_ids)).delete(synchronize_session=False)
             db.query(SessionThread).filter(SessionThread.id.in_(thread_ids)).delete(synchronize_session=False)
@@ -360,7 +357,6 @@ def _move_subagent_session_under_parent(
         "observations_moved": 0,
         "turns_moved": 0,
         "inputs_moved": 0,
-        "runtime_rows_moved": 0,
         "runs_moved": 0,
         "legacy_tasks_deleted": 0,
         "sessions_removed": 0,
@@ -560,13 +556,6 @@ def _move_subagent_session_under_parent(
     )
     counts["inputs_moved"] += int(result.rowcount or 0)
 
-    result = db.execute(
-        sql_update(SessionRuntimeState)
-        .where(SessionRuntimeState.session_id == child_session_id)
-        .values(session_id=parent_thread.session_id, thread_id=child_thread.id)
-    )
-    counts["runtime_rows_moved"] += int(result.rowcount or 0)
-
     if old_thread_ids:
         result = db.execute(sql_update(SessionRun).where(SessionRun.thread_id.in_(old_thread_ids)).values(thread_id=child_thread.id))
         counts["runs_moved"] += int(result.rowcount or 0)
@@ -577,7 +566,7 @@ def _move_subagent_session_under_parent(
         )
 
     remaining = 0
-    for model in (AgentEvent, AgentSourceLine, SessionObservation, SessionTurn, SessionInput, SessionRuntimeState):
+    for model in (AgentEvent, AgentSourceLine, SessionObservation, SessionTurn, SessionInput):
         remaining += db.query(model).filter(model.session_id == child_session_id).limit(1).count()
     if remaining == 0:
         counts["legacy_tasks_deleted"] += (
@@ -768,7 +757,6 @@ def backfill_subagent_child_threads(db: Session) -> dict[str, int]:
         "observations_moved": 0,
         "turns_moved": 0,
         "inputs_moved": 0,
-        "runtime_rows_moved": 0,
         "runs_moved": 0,
         "legacy_tasks_deleted": 0,
     }
@@ -833,8 +821,8 @@ def backfill_runs_and_connections(db: Session) -> dict[str, int]:
     Phase 2 launchers create their own runs eagerly, so this only fills in
     history: pre-kernel sessions get a single run keyed to the primary thread.
 
-    For ``run_id`` stamping on legacy ``SessionRuntimeState`` and
-    ``SessionTurn`` rows, the **latest** run on the primary thread is used —
+    For ``run_id`` stamping on legacy ``SessionTurn`` rows, the **latest** run
+    on the primary thread is used —
     a resumed session must land on the active run, not the original. Rows
     are filtered by ``thread_id == primary.id`` so subagent/branch threads
     keep their own run pointer.
@@ -849,11 +837,10 @@ def backfill_runs_and_connections(db: Session) -> dict[str, int]:
 
     runs_created = 0
     connections_created = 0
-    runtime_state_run_ids = 0
     turn_run_ids = 0
 
     # Cheap early-out for converged DBs: no primary threads missing a run
-    # and no runtime/turn rows with run_id=NULL.
+    # and no turn rows with run_id=NULL.
     threads_missing_run_subq = (
         db.query(SessionThread.id)
         .outerjoin(SessionRun, SessionRun.thread_id == SessionThread.id)
@@ -861,13 +848,11 @@ def backfill_runs_and_connections(db: Session) -> dict[str, int]:
         .limit(1)
         .first()
     )
-    runtime_null = db.query(SessionRuntimeState.runtime_key).filter(SessionRuntimeState.run_id.is_(None)).limit(1).first()
     turn_null = db.query(SessionTurn.id).filter(SessionTurn.run_id.is_(None)).limit(1).first()
-    if threads_missing_run_subq is None and runtime_null is None and turn_null is None:
+    if threads_missing_run_subq is None and turn_null is None:
         return {
             "runs_created": 0,
             "connections_created": 0,
-            "runtime_state_run_ids": 0,
             "turn_run_ids": 0,
         }
 
@@ -917,19 +902,6 @@ def backfill_runs_and_connections(db: Session) -> dict[str, int]:
         else:
             run = existing_run
 
-        # Stamp run_id on runtime state / turns where NULL — but only on rows
-        # already keyed to *this* primary thread. Rows pointing at a child or
-        # branch thread keep their own (eventually-stamped) run pointer.
-        result = db.execute(
-            sql_update(SessionRuntimeState)
-            .where(
-                SessionRuntimeState.thread_id == thread.id,
-                SessionRuntimeState.run_id.is_(None),
-            )
-            .values(run_id=run.id)
-        )
-        runtime_state_run_ids += int(result.rowcount or 0)
-
         result = db.execute(
             sql_update(SessionTurn)
             .where(
@@ -944,7 +916,6 @@ def backfill_runs_and_connections(db: Session) -> dict[str, int]:
     return {
         "runs_created": runs_created,
         "connections_created": connections_created,
-        "runtime_state_run_ids": runtime_state_run_ids,
         "turn_run_ids": turn_run_ids,
     }
 

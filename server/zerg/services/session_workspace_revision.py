@@ -19,13 +19,13 @@ from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionLivePreview
 from zerg.models.agents import SessionPauseRequest
 from zerg.models.agents import SessionRun
-from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionThread
 from zerg.services.managed_control_state import _connection_priority as _managed_control_connection_priority
 from zerg.services.managed_provider_contracts import provider_for_control_plane
 from zerg.services.managed_provider_contracts import trusted_non_runner_control_planes
 from zerg.services.session_pause_requests import PENDING_STATUS
 from zerg.services.session_pause_requests import is_user_facing_pause_request
+from zerg.services.session_runtime import load_runtime_state_map
 from zerg.utils.time import normalize_utc
 
 
@@ -71,16 +71,19 @@ def load_session_workspace_revision(db: Session, session_id: UUID) -> SessionWor
     latest_event_timestamp = db.query(func.max(AgentEvent.timestamp)).filter(AgentEvent.session_id.in_(thread_session_id_strings)).scalar()
     latest_event_timestamp = normalize_utc(latest_event_timestamp)
 
-    latest_runtime_signal = (
-        db.query(func.max(SessionRuntimeState.updated_at)).filter(SessionRuntimeState.session_id.in_(thread_session_id_strings)).scalar()
+    runtime_state_map = load_runtime_state_map(db, thread_session_ids)
+    runtime_states = tuple(runtime_state_map.get(session_id) for session_id in thread_session_id_strings)
+    runtime_states = tuple(state for state in runtime_states if state is not None)
+    latest_runtime_signal = max(
+        (
+            signal
+            for state in runtime_states
+            for signal in (normalize_utc(getattr(state, "last_runtime_signal_at", None)),)
+            if signal is not None
+        ),
+        default=None,
     )
-    latest_runtime_signal = normalize_utc(latest_runtime_signal)
-    runtime_version_sum = (
-        db.query(func.sum(SessionRuntimeState.runtime_version))
-        .filter(SessionRuntimeState.session_id.in_(thread_session_id_strings))
-        .scalar()
-        or 0
-    )
+    runtime_version_sum = sum(int(getattr(state, "runtime_version", 0) or 0) for state in runtime_states)
 
     live_preview_updated_at = (
         db.query(func.max(SessionLivePreview.preview_updated_at))

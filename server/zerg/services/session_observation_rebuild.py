@@ -12,12 +12,13 @@ from sqlalchemy import func
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from zerg.database import live_store_configured
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
-from zerg.models.agents import SessionRuntimeState
+from zerg.models.live_store import LiveRuntimeState
 from zerg.services.provider_interaction_semantics import seed_persisted_provider_interaction_context
 from zerg.services.provider_interaction_semantics import seed_provider_interaction_sequence_context
 from zerg.services.provider_interaction_semantics import semantic_projection_facts
@@ -113,11 +114,17 @@ def rebuild_session_observation_projections(
                 else:
                     skipped_observations += 1
             elif observation.kind == OBS_KIND_RUNTIME_SIGNAL:
-                outcome = reduce_runtime_signal_observation(db, observation)
-                if outcome == "applied":
-                    runtime_signals_reduced += 1
-                else:
+                # Catalogd is the sole writer for the split hot lane. Runtime
+                # observations remain archived evidence there; replay them only
+                # in isolated stores where LiveRuntimeState is local.
+                if live_store_configured():
                     skipped_observations += 1
+                else:
+                    outcome = reduce_runtime_signal_observation(db, observation)
+                    if outcome == "applied":
+                        runtime_signals_reduced += 1
+                    else:
+                        skipped_observations += 1
             else:
                 skipped_observations += 1
         except Exception as exc:
@@ -223,11 +230,12 @@ def _clear_projection_rows(db: Session, *, session_id: UUID | None, runtime_key:
         db.query(AgentEvent).filter(AgentEvent.session_id == session_id).delete(synchronize_session=False)
         db.query(AgentSourceLine).filter(AgentSourceLine.session_id == session_id).delete(synchronize_session=False)
 
-    runtime_query = db.query(SessionRuntimeState)
-    if session_id is not None or runtime_key:
-        runtime_query.filter(_session_runtime_scope(SessionRuntimeState, session_id=session_id, runtime_key=runtime_key)).delete(
-            synchronize_session=False
-        )
+    if not live_store_configured():
+        runtime_query = db.query(LiveRuntimeState)
+        if session_id is not None or runtime_key:
+            runtime_query.filter(_session_runtime_scope(LiveRuntimeState, session_id=session_id, runtime_key=runtime_key)).delete(
+                synchronize_session=False
+            )
     db.flush()
 
 
@@ -481,8 +489,8 @@ def _projection_count(db: Session, model, *, session_id: UUID | None) -> int:
 def _runtime_state_count(db: Session, *, session_id: UUID | None, runtime_key: str | None) -> int:
     if session_id is None and not runtime_key:
         return 0
+    if live_store_configured():
+        return 0
     return int(
-        db.query(SessionRuntimeState)
-        .filter(_session_runtime_scope(SessionRuntimeState, session_id=session_id, runtime_key=runtime_key))
-        .count()
+        db.query(LiveRuntimeState).filter(_session_runtime_scope(LiveRuntimeState, session_id=session_id, runtime_key=runtime_key)).count()
     )

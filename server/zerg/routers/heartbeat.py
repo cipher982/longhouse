@@ -53,7 +53,6 @@ from zerg.metrics import agents_machine_evidence_dropped_total
 from zerg.metrics import managed_session_heartbeat_lease_rows_total
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionRuntimeState
 from zerg.models.device_token import DeviceToken
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.observability import get_tracer
@@ -64,6 +63,7 @@ from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.managed_provider_contracts import factory_provider_names
 from zerg.services.session_kernel_projection import project_provider_session_id
 from zerg.services.session_runtime import RuntimeEventIngest
+from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.write_serializer import WriteQueueTimeoutError
 from zerg.utils.time import UTCBaseModel
 from zerg.utils.time import normalize_utc
@@ -803,13 +803,8 @@ def _managed_lease_session_ids(leases: list[ManagedSessionLeaseIn]) -> set[UUID]
 
 
 def _has_final_managed_codex_terminal(db: Session, session_id: UUID) -> bool:
-    return (
-        db.query(SessionRuntimeState.runtime_key)
-        .filter(SessionRuntimeState.session_id == session_id)
-        .filter(SessionRuntimeState.terminal_state == "session_ended")
-        .first()
-        is not None
-    )
+    state = load_runtime_state_map(db, [session_id]).get(str(session_id))
+    return str(getattr(state, "terminal_state", "") or "").strip() == "session_ended"
 
 
 def _runtime_events_for_missing_unbound_unmanaged_sessions(
@@ -840,22 +835,21 @@ def _runtime_events_for_missing_unbound_unmanaged_sessions(
             observed_keys.add((provider, session_key))
 
     # The legacy UnmanagedSessionBinding table is gone; treat every
-    # session that has runtime state as eligible (kernel ``SessionConnection``
-    # ingest will replace this path soon).
+    # canonical runtime row as eligible (kernel ``SessionConnection`` ingest
+    # will replace this path soon). Read all runtime facts in one bounded batch.
     existing_binding_keys: set[tuple[str, str]] = set()
-
-    rows = (
-        db.query(SessionRuntimeState, AgentSession)
-        .join(AgentSession, SessionRuntimeState.session_id == AgentSession.id)
-        .filter(SessionRuntimeState.device_id == device_id)
-        .filter(SessionRuntimeState.session_id.isnot(None))
-        .filter(SessionRuntimeState.terminal_state.is_(None))
-        .filter(AgentSession.provider.in_(MISSING_UNBOUND_UNMANAGED_PROVIDERS))
-        .all()
-    )
+    sessions = db.query(AgentSession).filter(AgentSession.provider.in_(MISSING_UNBOUND_UNMANAGED_PROVIDERS)).all()
+    runtime_states = load_runtime_state_map(db, [session.id for session in sessions])
 
     events: list[RuntimeEventIngest] = []
-    for state, session in rows:
+    for session in sessions:
+        state = runtime_states.get(str(session.id))
+        if state is None:
+            continue
+        if str(getattr(state, "device_id", "") or "").strip() != device_id:
+            continue
+        if getattr(state, "terminal_state", None) is not None:
+            continue
         if _is_managed_session(db, session):
             continue
         provider = str(session.provider or state.provider or "").strip().lower()
@@ -898,13 +892,12 @@ def _runtime_events_for_missing_unbound_unmanaged_sessions(
             or normalize_utc(session.started_at)
             or received_at
         )
-        session_id = state.session_id
-        if session_id is None:
-            continue
+        session_id = session.id
         events.append(
             RuntimeEventIngest(
                 runtime_key=state.runtime_key,
                 session_id=session_id,
+                run_id=getattr(state, "run_id", None),
                 provider=provider,
                 device_id=device_id,
                 source=UNMANAGED_PROCESS_SNAPSHOT_SOURCE,
@@ -912,7 +905,8 @@ def _runtime_events_for_missing_unbound_unmanaged_sessions(
                 occurred_at=received_at,
                 dedupe_key=(
                     f"engine-unmanaged-unbound-missing-terminal:{device_id}:{session_id}:"
-                    f"{int(state.runtime_version or 0)}:{timeline_anchor_at.isoformat()}"
+                    f"{getattr(state, 'run_id', None) or ''}:{int(state.runtime_version or 0)}:"
+                    f"{timeline_anchor_at.isoformat()}"
                 ),
                 payload={
                     "terminal_state": "process_gone",

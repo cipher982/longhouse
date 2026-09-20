@@ -14,10 +14,11 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
 from zerg.database import Base
+from zerg.database import initialize_live_database
 from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionRuntimeState
+from zerg.models.live_store import LiveRuntimeState
 from zerg.services.session_observation_rebuild import SessionObservationRebuildCoverageError
 from zerg.services.session_observation_rebuild import rebuild_session_observation_projections
 from zerg.services.session_runtime import RuntimeEventIngest
@@ -26,6 +27,7 @@ from zerg.services.session_runtime import ingest_runtime_events
 
 def _sessionmaker(tmp_path):
     engine = make_engine(f"sqlite:///{tmp_path / 'observation_rebuild.db'}")
+    initialize_live_database(engine)
     engine = engine.execution_options(schema_translate_map={"agents": None})
     Base.metadata.create_all(bind=engine)
     return sessionmaker(bind=engine)
@@ -90,7 +92,7 @@ def test_runtime_observation_rebuild_is_idempotent(tmp_path):
         second = rebuild_session_observation_projections(db, session_id=session.id, runtime_key=runtime_key)
         db.commit()
 
-        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        state = db.query(LiveRuntimeState).filter(LiveRuntimeState.runtime_key == runtime_key).one()
 
     assert first.runtime_signals_reduced == second.runtime_signals_reduced == 1
     assert state.phase == "running"

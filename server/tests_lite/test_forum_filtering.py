@@ -22,15 +22,17 @@ os.environ.setdefault("TESTING", "1")
 
 from sqlalchemy.orm import Session as SqlSession
 
-from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
+from tests_lite.live_catalog_harness import live_catalog as live_catalog
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.database import Base
 from zerg.database import get_db
+from zerg.database import initialize_live_database
+from zerg.database import live_store_configured
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionRuntimeState
+from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.services.catalogd_supervisor import catalogd_paths
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
@@ -40,6 +42,7 @@ def _make_db(tmp_path, name="forum.db"):
     db_path = tmp_path / name
     engine = make_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(bind=engine)
+    initialize_live_database(engine)
     return make_sessionmaker(engine)
 
 
@@ -150,18 +153,33 @@ def _get_user_state(factory, session_id):
 
 
 def _get_presence_row(factory, session_id):
-    """Return (phase, active_tool) from the runtime-state reducer."""
+    """Return (phase, active_tool) from canonical runtime state."""
     db = factory()
-    row = (
-        db.query(SessionRuntimeState)
-        .filter(SessionRuntimeState.session_id == session_id)
-        .order_by(SessionRuntimeState.updated_at.desc())
-        .first()
-    )
-    phase = row.phase if row else None
-    active_tool = row.active_tool if row else None
-    db.close()
-    return phase, active_tool
+    try:
+        row = (
+            db.query(LiveRuntimeState)
+            .filter(LiveRuntimeState.session_id == session_id)
+            .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
+            .first()
+        )
+        if row is not None or not live_store_configured():
+            return (row.phase if row else None, row.active_tool if row else None)
+    finally:
+        db.close()
+
+    database_path, _socket_path = catalogd_paths()
+    engine = create_catalog_engine(database_path)
+    try:
+        with SqlSession(engine) as db:
+            row = (
+                db.query(LiveRuntimeState)
+                .filter(LiveRuntimeState.session_id == session_id)
+                .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
+                .first()
+            )
+            return (row.phase if row else None, row.active_tool if row else None)
+    finally:
+        engine.dispose()
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +187,7 @@ def _get_presence_row(factory, session_id):
 # ---------------------------------------------------------------------------
 
 
-def test_presence_auto_resumes_snoozed_on_thinking(tmp_path, live_catalog):
+def test_presence_auto_resumes_snoozed_on_thinking(tmp_path, live_catalog):  # noqa: F811
     """Presence thinking signal auto-resumes a snoozed session."""
     factory = _make_db(tmp_path, "auto_resume.db")
     sid = _seed(factory, user_state="snoozed")
@@ -233,7 +251,7 @@ def test_stale_presence_does_not_auto_resume_snoozed_session(tmp_path):
         api_app.dependency_overrides.clear()
 
 
-def test_presence_auto_resumes_snoozed_on_running(tmp_path, live_catalog):
+def test_presence_auto_resumes_snoozed_on_running(tmp_path, live_catalog):  # noqa: F811
     """Presence running signal auto-resumes a snoozed session."""
     factory = _make_db(tmp_path, "auto_resume_run.db")
     sid = _seed(factory, user_state="snoozed")

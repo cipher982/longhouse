@@ -23,11 +23,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-import zerg.database as database_module  # noqa: F401  # tests_lite monkeypatches session_chat_impl.database_module
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.metrics import managed_turn_wait_seconds
 from zerg.metrics import managed_turn_wait_total
-from zerg.models.agents import SessionRuntimeState
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
 from zerg.observability import get_tracer
@@ -859,18 +857,13 @@ def _runtime_terminal_result_after(*, db_bind, session_id: UUID, after: datetime
     Session = sessionmaker(bind=db_bind, expire_on_commit=False)
     db = Session()
     try:
-        if database_module.live_store_configured():
-            from zerg.services.session_runtime import load_runtime_state_map
+        from zerg.services.session_runtime import load_runtime_state_map
 
-            state = load_runtime_state_map(db, [session_id]).get(str(session_id))
-        else:
-            state = (
-                db.query(SessionRuntimeState)
-                .filter(SessionRuntimeState.session_id == session_id)
-                .order_by(SessionRuntimeState.updated_at.desc())
-                .first()
-            )
+        state = load_runtime_state_map(db, [session_id]).get(str(session_id))
         if state is None:
+            return None
+        freshness_expires_at = normalize_utc(getattr(state, "freshness_expires_at", None))
+        if freshness_expires_at is not None and freshness_expires_at <= datetime.now(timezone.utc):
             return None
         phase = str(getattr(state, "phase", "") or "").strip()
         if not phase or phase not in _MANAGED_LOCAL_TERMINAL_PHASES:

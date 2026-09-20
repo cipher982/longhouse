@@ -24,7 +24,6 @@ import zerg.database as database_module
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionInputDeliveryAttempt
-from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTurn
 from zerg.models.user import User
 from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
@@ -54,6 +53,7 @@ from zerg.services.session_runtime import session_is_closed_for_input
 from zerg.services.session_turns import SESSION_TURN_ERROR_SEND_FAILED
 from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
 from zerg.services.session_turns import SESSION_TURN_STATE_SEND_ACCEPTED
+from zerg.utils.time import normalize_utc
 
 logger = logging.getLogger(__name__)
 
@@ -103,18 +103,13 @@ def _is_transient_managed_control_unavailable(error_code: str | None, error_mess
 
 
 def _latest_runtime_phase(db: Session, session_id: UUID) -> str | None:
-    if database_module.live_store_configured():
-        from zerg.services.session_runtime import load_runtime_state_map
+    from zerg.services.session_runtime import load_runtime_state_map
 
-        runtime_state = load_runtime_state_map(db, [session_id]).get(str(session_id))
-    else:
-        runtime_state = (
-            db.query(SessionRuntimeState)
-            .filter(SessionRuntimeState.session_id == session_id)
-            .order_by(SessionRuntimeState.updated_at.desc(), SessionRuntimeState.runtime_version.desc())
-            .first()
-        )
+    runtime_state = load_runtime_state_map(db, [session_id]).get(str(session_id))
     if runtime_state is None:
+        return None
+    freshness_expires_at = normalize_utc(getattr(runtime_state, "freshness_expires_at", None))
+    if freshness_expires_at is not None and freshness_expires_at <= datetime.now(timezone.utc):
         return None
     return str(getattr(runtime_state, "phase", "") or "").strip() or None
 

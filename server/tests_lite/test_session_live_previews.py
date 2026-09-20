@@ -8,10 +8,11 @@ from uuid import uuid4
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import Base
+from zerg.database import initialize_live_database
 from zerg.database import make_engine
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionLivePreview
-from zerg.models.agents import SessionRuntimeState
+from zerg.models.live_store import LiveRuntimeState
 from zerg.services.session_live_previews import load_session_live_preview_map
 from zerg.services.session_live_previews import supersede_session_live_preview
 from zerg.services.session_runtime import RuntimeEventIngest
@@ -20,6 +21,7 @@ from zerg.services.session_runtime import ingest_runtime_events
 
 def _make_sessionmaker(tmp_path, name: str):
     engine = make_engine(f"sqlite:///{tmp_path / name}")
+    initialize_live_database(engine)
     engine = engine.execution_options(schema_translate_map={"agents": None})
     Base.metadata.create_all(bind=engine)
     return sessionmaker(bind=engine)
@@ -427,7 +429,6 @@ def test_pi_print_stream_projects_partial_native_tools_and_final_message(tmp_pat
         )
         replay = final.model_copy(update={"dedupe_key": final.dedupe_key})
         result = ingest_runtime_events(db, [final, replay])
-        assert db.query(SessionRuntimeState).count() == 0
         db.commit()
         row = db.get(SessionLivePreview, session.id)
         preview = load_session_live_preview_map(db, [session.id])[str(session.id)]
@@ -1002,7 +1003,7 @@ def test_late_terminal_for_current_run_settles_after_newer_signal(tmp_path):
         )
         db.commit()
 
-        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == f"codex:{session.id}").one()
+        state = db.query(LiveRuntimeState).filter(LiveRuntimeState.runtime_key == f"codex:{session.id}").one()
 
     assert state.phase == "finished"
     assert state.terminal_state == "run_completed"
@@ -1037,7 +1038,7 @@ def test_late_terminal_for_old_run_does_not_clobber_newer_run(tmp_path):
         )
         db.commit()
 
-        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == f"codex:{session.id}").one()
+        state = db.query(LiveRuntimeState).filter(LiveRuntimeState.runtime_key == f"codex:{session.id}").one()
 
     assert str(state.run_id) == new_run_id
     assert state.terminal_state is None

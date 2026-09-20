@@ -28,11 +28,6 @@ from zerg.managed_phase_contract import raw_phases
 from zerg.metrics import managed_codex_bridge_freshness_total
 from zerg.metrics import managed_codex_runtime_observations_total
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionConnection
-from zerg.models.agents import SessionInput
-from zerg.models.agents import SessionRun
-from zerg.models.agents import SessionRuntimeState
-from zerg.models.agents import SessionTurn
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
@@ -294,7 +289,7 @@ class SessionRuntimeView:
     freshness_expires_at: datetime | None = None
 
 
-def _confidence_for_state(state: SessionRuntimeState | LiveRuntimeState, *, now: datetime) -> str:
+def _confidence_for_state(state: LiveRuntimeState, *, now: datetime) -> str:
     freshness_expires_at = normalize_utc(state.freshness_expires_at)
     if freshness_expires_at is not None and freshness_expires_at > now:
         return "live"
@@ -356,7 +351,7 @@ def _signal_tier_for_state(*, phase_source: str, confidence: str | None) -> str:
 
 def build_runtime_view(
     *,
-    state: SessionRuntimeState | LiveRuntimeState,
+    state: LiveRuntimeState,
     session: AgentSession,
     now: datetime,
 ) -> SessionRuntimeView:
@@ -509,13 +504,12 @@ def resolve_runtime_overlay(
     session: AgentSession,
     *,
     last_activity_at: datetime | None,
-    runtime_state_map: Mapping[str, SessionRuntimeState | LiveRuntimeState],
+    runtime_state_map: Mapping[str, LiveRuntimeState],
     now: datetime,
 ) -> SessionRuntimeView:
     """Resolve the canonical runtime overlay, with archive fallback disabled in live mode.
 
-    Presence events materialize in LiveRuntimeState when the live catalog is
-    configured; SessionRuntimeState remains only for the no-live-store path.
+    Runtime state is always the canonical LiveRuntimeState projection.
     """
     session_key = str(session.id)
     runtime_state = runtime_state_map.get(session_key)
@@ -570,10 +564,16 @@ def _load_live_runtime_state_map(session_ids: list[UUID]) -> dict[str, LiveRunti
     return result
 
 
-def load_runtime_state_map(db: Session, session_ids: list[UUID]) -> dict[str, SessionRuntimeState | LiveRuntimeState]:
+def load_runtime_state_map(db: Session, session_ids: list[UUID]) -> dict[str, LiveRuntimeState]:
     if not session_ids:
         return {}
-    return _load_live_runtime_state_map(session_ids)
+    from zerg.database import live_store_configured
+
+    if live_store_configured():
+        return _load_live_runtime_state_map(session_ids)
+    session_keys = [str(session_id) for session_id in session_ids]
+    rows = db.query(LiveRuntimeState).filter(LiveRuntimeState.session_id.in_(session_keys)).all()
+    return {str(row.session_id): row for row in rows if row.session_id is not None}
 
 
 def _is_bridge_transcript_event(event: RuntimeEventIngest) -> bool:
@@ -637,6 +637,16 @@ def _is_omp_helm_stream_event(event: RuntimeEventIngest) -> bool:
 
 
 def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> RuntimeEventBatchResult:
+    """Archive observations and reduce canonical rows in standalone stores.
+
+    Catalogd owns the hot projection whenever the split Live Store is active;
+    this archive-facing entry point therefore never becomes a second writer in
+    that topology. Isolated harnesses use the same LiveRuntimeState reducer on
+    their one local engine.
+    """
+    from zerg.database import live_store_configured
+
+    reduce_local_runtime = not live_store_configured()
     accepted = 0
     duplicates = 0
     ignored = 0
@@ -671,7 +681,10 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
 
         if observation_result.observation is None:
             raise RuntimeError("accepted runtime observation was not readable after insert")
-        outcome = reduce_runtime_signal_observation(db, observation_result.observation)
+        if not reduce_local_runtime:
+            outcome = "stored_live_overlay"
+        else:
+            outcome = reduce_runtime_signal_observation(db, observation_result.observation)
         _record_managed_codex_runtime_observation(event, outcome)
         if outcome == "ignored":
             ignored += 1
@@ -723,12 +736,7 @@ def ingest_live_runtime_events(db: Session, events: list[RuntimeEventIngest]) ->
             # runtime phase evidence would fabricate provider state.
             outcome = "stored_live_overlay"
         else:
-            outcome = _apply_runtime_event(
-                db,
-                event,
-                state_model=LiveRuntimeState,
-                archive_side_effects=False,
-            )
+            outcome = _apply_runtime_event(db, event)
         if event.kind == "terminal_signal" and expire_live_interactions_for_terminal(db, event):
             outcome = "applied"
         elif outcome == "applied" and event.kind in {"phase_signal", "progress_signal"}:
@@ -936,35 +944,19 @@ def _apply_run_terminal_event(
     db: Session,
     *,
     event: RuntimeEventIngest,
-    state: SessionRuntimeState | LiveRuntimeState,
+    state: LiveRuntimeState,
     occurred_at: datetime,
 ) -> bool:
-    live_lane = isinstance(state, LiveRuntimeState)
-    connection_model = LiveSessionConnection if live_lane else SessionConnection
-    if live_lane:
-        run = _live_run_for_terminal(db, event=event, state=state, occurred_at=occurred_at)
-    else:
-        run_id = event.run_id or state.run_id
-        run = db.get(SessionRun, run_id) if run_id is not None else None
+    run = _live_run_for_terminal(db, event=event, state=state, occurred_at=occurred_at)
     if run is None:
         return False
     if event.session_id is not None:
-        if live_lane:
-            owned = (
-                db.query(LiveSessionThread.id)
-                .filter(LiveSessionThread.id == str(run.thread_id))
-                .filter(LiveSessionThread.session_id == str(event.session_id))
-                .first()
-            )
-        else:
-            from zerg.models.agents import SessionThread
-
-            owned = (
-                db.query(SessionThread.id)
-                .filter(SessionThread.id == run.thread_id)
-                .filter(SessionThread.session_id == event.session_id)
-                .first()
-            )
+        owned = (
+            db.query(LiveSessionThread.id)
+            .filter(LiveSessionThread.id == str(run.thread_id))
+            .filter(LiveSessionThread.session_id == str(event.session_id))
+            .first()
+        )
         if owned is None:
             return False
     terminal_state = str((event.payload or {}).get("terminal_state") or "finished").strip() or "finished"
@@ -978,9 +970,9 @@ def _apply_run_terminal_event(
     else:
         connection_released_at = run_ended_at
     for conn in (
-        db.query(connection_model)
-        .filter(connection_model.run_id == run.id)
-        .filter(connection_model.state.in_(("attached", "degraded", "detached")))
+        db.query(LiveSessionConnection)
+        .filter(LiveSessionConnection.run_id == run.id)
+        .filter(LiveSessionConnection.state.in_(("attached", "degraded", "detached")))
         .all()
     ):
         changed = True
@@ -992,30 +984,10 @@ def _apply_run_terminal_event(
         conn.can_terminate = 0
         conn.can_tail_output = 0
         conn.can_resume = 0
-    if not live_lane:
-        turn = db.query(SessionTurn).filter(SessionTurn.run_id == run.id, SessionTurn.source_kind == "console").one_or_none()
-        if turn is not None and turn.state in {"starting", "active", "draining"}:
-            outcome = {
-                "run_completed": "completed",
-                "run_cancelled": "cancelled",
-            }.get(terminal_state, "failed")
-            turn.state = outcome
-            turn.terminal_phase = terminal_state
-            turn.terminal_at = turn.terminal_at or occurred_at
-            turn.durable_at = occurred_at
-            from zerg.services.console_turns import stamp_console_result
-
-            stamp_console_result(db, session_id=turn.session_id, outcome=outcome, at=occurred_at)
-            if turn.session_input_id is not None:
-                input_row = db.get(SessionInput, turn.session_input_id)
-                if input_row is not None and outcome != "completed":
-                    input_row.status = "failed"
-                    input_row.last_error = terminal_state
-            changed = True
     return changed
 
 
-def _state_snapshot(state: SessionRuntimeState | LiveRuntimeState | None) -> tuple[Any, ...] | None:
+def _state_snapshot(state: LiveRuntimeState | None) -> tuple[Any, ...] | None:
     if state is None:
         return None
     return (
@@ -1041,27 +1013,16 @@ def _state_snapshot(state: SessionRuntimeState | LiveRuntimeState | None) -> tup
     )
 
 
-def _ensure_state(
-    db: Session,
-    event: RuntimeEventIngest,
-    *,
-    state_model: type[SessionRuntimeState] | type[LiveRuntimeState] = SessionRuntimeState,
-    archive_side_effects: bool = True,
-) -> SessionRuntimeState | LiveRuntimeState:
-    state = db.query(state_model).filter(state_model.runtime_key == event.runtime_key).first()
+def _ensure_state(db: Session, event: RuntimeEventIngest) -> LiveRuntimeState:
+    state = db.get(LiveRuntimeState, event.runtime_key)
     if state is not None:
         return state
 
     occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
-    thread_id = event.thread_id
-    if thread_id is None and archive_side_effects and event.session_id is not None:
-        from zerg.services.agents.kernel_writes import ensure_thread_id_for_session
-
-        thread_id = ensure_thread_id_for_session(db, event.session_id)
-    state = state_model(
+    state = LiveRuntimeState(
         runtime_key=event.runtime_key,
         session_id=event.session_id,
-        thread_id=thread_id,
+        thread_id=event.thread_id,
         run_id=event.run_id,
         provider=event.provider,
         device_id=event.device_id,
@@ -1094,13 +1055,7 @@ def _phase_reanchors(prev_phase: str | None, next_phase: str) -> bool:
     return prev_phase not in LIVE_EXECUTION_PHASES and next_phase in LIVE_EXECUTION_PHASES
 
 
-def _apply_runtime_event(
-    db: Session,
-    event: RuntimeEventIngest,
-    *,
-    state_model: type[SessionRuntimeState] | type[LiveRuntimeState] = SessionRuntimeState,
-    archive_side_effects: bool = True,
-) -> RuntimeEventApplyOutcome:
+def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEventApplyOutcome:
     if event.kind not in KNOWN_RUNTIME_EVENT_KINDS:
         logger.warning(
             "Ignored unrecognized runtime observation kind=%s provider=%s session=%s",
@@ -1110,16 +1065,12 @@ def _apply_runtime_event(
         )
         return "ignored"
     if event.kind in {"pause_request", "pause_resolution"}:
-        if not archive_side_effects:
-            from zerg.services.session_pause_requests import apply_live_interaction_event
+        from zerg.services.session_pause_requests import apply_live_interaction_event
 
-            state = _ensure_state(db, event, state_model=state_model, archive_side_effects=False)
-            changed = apply_live_interaction_event(db, event, state)
-            db.flush()
-            return "applied" if changed else "ignored"
-        from zerg.services.session_pause_requests import apply_pause_runtime_event
-
-        return "applied" if apply_pause_runtime_event(db, event) else "ignored"
+        state = _ensure_state(db, event)
+        changed = apply_live_interaction_event(db, event, state)
+        db.flush()
+        return "applied" if changed else "ignored"
 
     if event.kind == "status_assertion":
         # The Machine Agent vouching for a state it is *not* restating: the
@@ -1133,7 +1084,7 @@ def _apply_runtime_event(
         # would put a session on the board that never reported anything.
         if event.session_id is None:
             return "ignored"
-        state = db.query(state_model).filter(state_model.runtime_key == event.runtime_key).first()
+        state = db.get(LiveRuntimeState, event.runtime_key)
         if state is None:
             return "ignored"
         occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
@@ -1146,12 +1097,7 @@ def _apply_runtime_event(
         db.flush()
         return "applied"
 
-    state = _ensure_state(
-        db,
-        event,
-        state_model=state_model,
-        archive_side_effects=archive_side_effects,
-    )
+    state = _ensure_state(db, event)
     before = _state_snapshot(state)
     occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
     pause_changed = False
@@ -1164,10 +1110,9 @@ def _apply_runtime_event(
     superseded_run = False
     run_order_known = False
     if event.run_id is not None and event.kind in {"phase_signal", "progress_signal", "terminal_signal"}:
-        run_model = LiveSessionRun if isinstance(state, LiveRuntimeState) else SessionRun
-        incoming_run = db.get(run_model, str(event.run_id) if run_model is LiveSessionRun else event.run_id)
+        incoming_run = db.get(LiveSessionRun, str(event.run_id))
         if opens_new_run and current_run_id is not None and incoming_run is not None:
-            current_run = db.get(run_model, str(current_run_id) if run_model is LiveSessionRun else current_run_id)
+            current_run = db.get(LiveSessionRun, str(current_run_id))
             if current_run is not None:
                 run_order_known = True
                 # A delayed exit can be timestamped after its successor's work.
@@ -1229,10 +1174,6 @@ def _apply_runtime_event(
         state.session_id = event.session_id
         if event.thread_id is not None:
             state.thread_id = event.thread_id
-        elif archive_side_effects:
-            from zerg.services.agents.kernel_writes import ensure_thread_id_for_session
-
-            state.thread_id = ensure_thread_id_for_session(db, event.session_id)
     elif event.thread_id is not None and state.thread_id != event.thread_id:
         state.thread_id = event.thread_id
     if event.run_id is not None and state.run_id != event.run_id:
@@ -1333,23 +1274,6 @@ def _apply_runtime_event(
         # Event-driven provider phases can close a pending question once the
         # provider continues. Do not replace this with heartbeat-style signals
         # without preserving transcript-derived AskUserQuestion waits.
-        if (
-            archive_side_effects
-            and next_phase in LIVE_EXECUTION_PHASES
-            and not bool((event.payload or {}).get("pause_request_still_pending"))
-        ):
-            from zerg.services.session_pause_requests import resolve_pending_pause_requests_for_runtime
-
-            pause_changed = (
-                resolve_pending_pause_requests_for_runtime(
-                    db,
-                    runtime_key=event.runtime_key,
-                    status="resolved",
-                    occurred_at=occurred_at,
-                    response_text="Provider continued.",
-                )
-                > 0
-            )
 
     elif event.kind == "progress_signal":
         latest_progress_related_at = _latest_timestamp(
@@ -1395,8 +1319,6 @@ def _apply_runtime_event(
             and (event.run_id is None or event.run_id == current_run_id)
         )
         if same_run_terminal_replay:
-            if not archive_side_effects:
-                return "ignored"
             return "applied" if _apply_run_terminal_event(db, event=event, state=state, occurred_at=occurred_at) else "ignored"
         terminal_reason = str((event.payload or {}).get("terminal_reason") or "").strip() or None
         if terminal_reason is None and terminal_state in {"process_gone", "host_expired", "user_closed"}:
@@ -1418,37 +1340,13 @@ def _apply_runtime_event(
         if phase_started_at is None or phase_started_at < occurred_at:
             state.phase_started_at = occurred_at
         if terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES and event.session_id is not None:
-            session_model = AgentSession if archive_side_effects else LiveSessionCatalog
-            id_column = session_model.id if archive_side_effects else session_model.session_id
-            session_key = event.session_id if archive_side_effects else str(event.session_id)
-            session = db.query(session_model).filter(id_column == session_key).first()
+            session = db.query(LiveSessionCatalog).filter(LiveSessionCatalog.session_id == str(event.session_id)).first()
             if session is not None and session.closed_at is None:
                 session.closed_at = occurred_at
                 session.close_reason = terminal_state
-        if archive_side_effects and terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES and event.session_id is not None:
-            from zerg.services.session_pause_requests import expire_pending_pause_requests_for_session
+        from zerg.services.session_pause_requests import expire_live_interactions_for_terminal
 
-            pause_changed = (
-                expire_pending_pause_requests_for_session(
-                    db,
-                    session_id=event.session_id,
-                    occurred_at=occurred_at,
-                    response_text=f"Session ended: {terminal_state}.",
-                )
-                > 0
-            )
-        elif archive_side_effects:
-            from zerg.services.session_pause_requests import expire_pending_pause_requests_for_runtime
-
-            pause_changed = (
-                expire_pending_pause_requests_for_runtime(
-                    db,
-                    runtime_key=event.runtime_key,
-                    occurred_at=occurred_at,
-                    response_text=f"Runtime ended: {terminal_state}.",
-                )
-                > 0
-            )
+        pause_changed = expire_live_interactions_for_terminal(db, event) > 0
         if terminal_state in RUN_END_TERMINAL_STATES | RUN_TERMINAL_STATES:
             _apply_run_terminal_event(db, event=event, state=state, occurred_at=occurred_at)
 

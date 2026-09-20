@@ -13,6 +13,7 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.database import Base
 from zerg.database import get_db
+from zerg.database import initialize_live_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
@@ -38,6 +39,7 @@ class _QueueTimeoutSerializer:
 def _make_session_factory(tmp_path):
     engine = make_engine(f"sqlite:///{tmp_path}/hot_write_backpressure.db")
     Base.metadata.create_all(bind=engine)
+    initialize_live_database(engine)
     SessionLocal = make_sessionmaker(engine)
     with SessionLocal() as db:
         user = User(email="hot-write@example.test")
