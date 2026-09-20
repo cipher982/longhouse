@@ -40,6 +40,10 @@
   },
   "headline": "Longhouse native health is healthy",
   "health_state": "healthy",
+  "heartbeat_transport": {
+    "evidence_state": "unknown",
+    "state": "unknown"
+  },
   "managed_launch_recovery": {
     "active_count": 0,
     "exhausted_count": 0,

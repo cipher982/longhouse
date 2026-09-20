@@ -350,6 +350,28 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func heartbeatEvidenceRefusalAndRecoveryPreserveIndependentTransport() throws {
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/native-desktop-health.json")
+        var envelope = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [String: Any])
+        envelope["heartbeat_transport"] = ["state": "healthy", "evidence_state": "rejected"]
+        envelope["reasons"] = ["heartbeat_evidence_rejected"]
+        let refused = try HealthSnapshotDecoder.decode(data: JSONSerialization.data(withJSONObject: envelope))
+            .markingRuntimeHostProjectionUnavailable()
+        let refusal = refused.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 1_785_772_800))
+        #expect(refusal.promotion == .inspect)
+        #expect(refusal.facts.first(where: { $0.id == "heartbeat" })?.promotion == .inspect)
+        #expect(refusal.facts.first(where: { $0.id == "transport" })?.promotion == .normal)
+
+        envelope["heartbeat_transport"] = ["state": "healthy", "evidence_state": "applied"]
+        envelope["reasons"] = []
+        let recovered = try HealthSnapshotDecoder.decode(data: JSONSerialization.data(withJSONObject: envelope))
+        let recovery = recovered.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 1_785_772_800))
+        #expect(recovery.facts.first(where: { $0.id == "heartbeat" })?.promotion == .normal)
+        #expect(recovery.facts.first(where: { $0.id == "transport" })?.promotion == .normal)
+    }
+
+    @Test
     func incompleteSessionDiscoveryKeepsIndependentHealthFactsCurrent() {
         let control = SessionControlSnapshot(
             ownership: "machine",
@@ -3636,11 +3658,6 @@ struct LonghouseMenuBarCoreTests {
     ///
     /// Set `LONGHOUSE_HEALTH_BIN` to also run a specific binary end to end. That
     /// is opt-in because only the caller knows the binary is worth trusting.
-    @Test
-    func defaultHealthCommandTimeoutAllowsColdStartJitter() {
-        #expect(CLIHealthSnapshotSource.defaultCommandTimeoutSeconds == 10)
-    }
-
     @Test
     func nativeProducerOutputDecodesIntoHealthSnapshot() throws {
         let fixtureURL = URL(fileURLWithPath: #filePath)

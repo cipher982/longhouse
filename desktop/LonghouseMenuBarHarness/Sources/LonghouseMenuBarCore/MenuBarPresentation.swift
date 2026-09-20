@@ -74,6 +74,16 @@ public struct MenuBarPresentation: Equatable, Sendable {
 }
 
 extension HealthSnapshot {
+    private var heartbeatPostFailed: Bool {
+        heartbeatTransport?.state == "degraded" || reasons.contains("heartbeat_post_failed")
+    }
+
+    private var heartbeatEvidenceRejected: Bool {
+        reasons.contains("heartbeat_evidence_rejected")
+            || ["disabled", "failed", "oversize_evidence", "rejected", "unsupported_schema"]
+                .contains(heartbeatTransport?.evidenceState ?? "")
+    }
+
     public func menuBarPresentation(
         relativeTo referenceDate: Date,
         localEvidenceTrust: DataTrust = .current,
@@ -167,6 +177,8 @@ extension HealthSnapshot {
                     || orphanBridgeCount > 0
                     || transportAttentionReason != nil
                     || sessionDiscoveryAttention
+                    || heartbeatPostFailed
+                    || heartbeatEvidenceRejected
                     || !inspectReasons.isDisjoint(with: reasons) {
             promotion = .inspect
         } else {
@@ -196,6 +208,10 @@ extension HealthSnapshot {
             headline = "Durable upload needs inspection for \(deadLetterCount) dead letter\(deadLetterCount == 1 ? "" : "s")"
         case .inspect where reasons.contains("managed_launch_recovery_exhausted"):
             headline = "Managed session recovery needs attention"
+        case .inspect where heartbeatPostFailed:
+            headline = "Machine heartbeat failed"
+        case .inspect where heartbeatEvidenceRejected:
+            headline = "Machine evidence rejected"
         case .inspect where transportAttentionReason != nil:
             headline = "Local upload needs attention"
         case .inspect where sessionDiscoveryAttention:
@@ -392,7 +408,7 @@ extension HealthSnapshot {
             durableDetail = "last receipt \(lastShipValueLabel(relativeTo: referenceDate))"
         }
 
-        return [
+        var facts = [
             MenuBarSystemFact(
                 id: "local-agent", label: "Local agent", value: localValue,
                 detail: "observed \(engineAgeLabel(relativeTo: referenceDate)) ago",
@@ -419,6 +435,41 @@ extension HealthSnapshot {
                 promotion: freshnessIsCurrent ? .normal : .unavailable
             ),
         ]
+        if let heartbeat = heartbeatTransport {
+            let value: String
+            let detail: String?
+            let promotion: MenuBarPromotion
+            if localEngineEvidenceUnavailable {
+                value = "Unknown"
+                detail = "Local status evidence is unavailable"
+                promotion = .unavailable
+            } else if heartbeatPostFailed {
+                value = "POST failed"
+                detail = heartbeat.lastError ?? "The Runtime Host has not acknowledged this machine's heartbeat."
+                promotion = .inspect
+            } else if heartbeatEvidenceRejected {
+                value = "Evidence refused"
+                detail = "The Runtime Host is reachable, but session evidence was not applied."
+                promotion = .inspect
+            } else if heartbeat.evidenceState == "applied" {
+                value = "Accepted"
+                detail = "Machine liveness and session evidence acknowledged"
+                promotion = .normal
+            } else if heartbeat.state == "healthy" {
+                value = "Received"
+                detail = "Machine liveness acknowledged; no evidence acceptance reported"
+                promotion = .normal
+            } else {
+                value = "Unknown"
+                detail = "No heartbeat acknowledgement yet"
+                promotion = .unavailable
+            }
+            facts.insert(
+                MenuBarSystemFact(id: "heartbeat", label: "Status reporting", value: value, detail: detail, promotion: promotion),
+                at: facts.count - 1
+            )
+        }
+        return facts
     }
 
     public var archiveBackgroundActivity: String? {

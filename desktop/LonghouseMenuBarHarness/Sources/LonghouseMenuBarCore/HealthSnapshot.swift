@@ -56,6 +56,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     public let managedSessions: [ManagedSessionSnapshot]?
     public let realtime: RealtimeConnectionSnapshot?
     public let transport: NativeTransportSnapshot?
+    public let heartbeatTransport: NativeHeartbeatTransportSnapshot?
     public let unmanagedProcesses: [UnmanagedProcessSnapshot]?
     public let orphanBridges: [OrphanBridgeSnapshot]?
     public let launchReadiness: LaunchReadinessSnapshot?
@@ -80,6 +81,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         managedSessions: [ManagedSessionSnapshot]? = nil,
         realtime: RealtimeConnectionSnapshot? = nil,
         transport: NativeTransportSnapshot? = nil,
+        heartbeatTransport: NativeHeartbeatTransportSnapshot? = nil,
         unmanagedProcesses: [UnmanagedProcessSnapshot]? = nil,
         orphanBridges: [OrphanBridgeSnapshot]? = nil,
         launchReadiness: LaunchReadinessSnapshot?,
@@ -103,6 +105,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         self.managedSessions = managedSessions
         self.realtime = realtime
         self.transport = transport
+        self.heartbeatTransport = heartbeatTransport
         self.unmanagedProcesses = unmanagedProcesses
         self.orphanBridges = orphanBridges
         self.launchReadiness = launchReadiness
@@ -143,6 +146,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             managedSessions: sessions,
             realtime: realtime,
             transport: transport,
+            heartbeatTransport: heartbeatTransport,
             unmanagedProcesses: unmanagedProcesses,
             orphanBridges: orphanBridges,
             launchReadiness: launchReadiness,
@@ -216,6 +220,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
                 managedSessions: managedSessions,
                 realtime: realtime,
                 transport: projectedTransport.transport,
+                heartbeatTransport: heartbeatTransport,
                 unmanagedProcesses: unmanagedProcesses,
                 orphanBridges: orphanBridges,
                 launchReadiness: launchReadiness,
@@ -262,6 +267,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             managedSessions: managedSessions,
             realtime: realtime,
             transport: projectedTransport.transport,
+            heartbeatTransport: heartbeatTransport,
             unmanagedProcesses: unmanagedProcesses,
             orphanBridges: orphanBridges,
             launchReadiness: launchReadiness,
@@ -432,7 +438,8 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             suggestedActionIds: suggestedActionIds,
             attention: attention, service: service, engineStatus: replacementEngineStatus ?? engineStatus, outbox: outbox,
             activitySummary: activitySummary, managedSummary: managedSummary, managedSessions: sessions,
-            realtime: realtime, transport: transport, unmanagedProcesses: unmanagedProcesses, orphanBridges: orphanBridges,
+            realtime: realtime, transport: transport, heartbeatTransport: heartbeatTransport,
+            unmanagedProcesses: unmanagedProcesses, orphanBridges: orphanBridges,
             launchReadiness: launchReadiness, build: build, updateInfo: updateInfo
         )
     }
@@ -1609,6 +1616,15 @@ public struct NativeTransportSnapshot: Codable, Equatable, Sendable {
     public let status: String?
     public let statusReason: String?
     public let statusSummary: String?
+}
+
+public struct NativeHeartbeatTransportSnapshot: Codable, Equatable, Sendable {
+    public let state: String?
+    public let evidenceState: String?
+    public let lastAttemptAt: String?
+    public let lastSuccessAt: String?
+    public let lastFailureAt: String?
+    public let lastError: String?
 }
 
 public struct ServiceSnapshot: Codable, Equatable, Sendable {
