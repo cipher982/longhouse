@@ -479,6 +479,9 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Ensure make available
+        run: ./scripts/ci/ensure-make.sh
+
       - name: Run onboarding smoke on cube in the portable isolation boundary
         run: make test-e2e-onboarding PROJECT=onboarding-chromium
 
@@ -501,6 +504,9 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
+
+      - name: Ensure make available
+        run: ./scripts/ci/ensure-make.sh
 
       - name: Run onboarding smoke on Linux x64 in the portable isolation boundary
         run: make test-e2e-onboarding PROJECT=onboarding-chromium

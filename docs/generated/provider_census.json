@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 283,
+  "file_count": 284,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -582,6 +582,17 @@
         "codex",
         "cursor",
         "opencode"
+      ]
+    },
+    {
+      "path": "scripts/qa/console-served-state-e2e.py",
+      "providers": [
+        "claude",
+        "codex",
+        "cursor",
+        "omp",
+        "opencode",
+        "pi"
       ]
     },
     {

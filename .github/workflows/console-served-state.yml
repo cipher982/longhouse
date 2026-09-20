@@ -31,21 +31,31 @@ permissions:
 
 concurrency:
   group: console-served-state-${{ github.repository }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   console-served-state:
     name: "console-served-state"
-    runs-on: ubuntu-latest
+    runs-on: cube
     if: github.repository == 'cipher982/longhouse'
-    timeout-minutes: 20
+    timeout-minutes: 60
     env:
       LONGHOUSE_MACHINE_TOKEN: ${{ secrets.HOSTED_CANARY_RUNTIME_TOKEN }}
       INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
       LONGHOUSE_API_URL: https://${{ vars.HOSTED_CANARY_SUBDOMAIN }}.longhouse.ai
-      LONGHOUSE_DEVICE_ID: ${{ vars.CONSOLE_QA_DEVICE_ID || 'all' }}
-      CONSOLE_QA_CWD: ${{ vars.CONSOLE_QA_CWD }}
+      LONGHOUSE_QA_HOSTED_TARGET: https://${{ vars.HOSTED_CANARY_SUBDOMAIN }}.longhouse.ai
       CONSOLE_QA_PROVIDER: ${{ inputs.provider || 'all' }}
+      CODEX_API_KEY: ${{ secrets.LONGHOUSE_CI_OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.LONGHOUSE_CI_ANTHROPIC_API_KEY }}
+      CURSOR_API_KEY: ${{ secrets.LONGHOUSE_CI_CURSOR_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.LONGHOUSE_CI_GEMINI_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.LONGHOUSE_CI_OPENCODE_OPENROUTER_API_KEY }}
+      CODEX_MODEL: ${{ vars.CONSOLE_QA_CODEX_MODEL }}
+      ANTHROPIC_MODEL: ${{ vars.CONSOLE_QA_ANTHROPIC_MODEL }}
+      CURSOR_MODEL: ${{ vars.CONSOLE_QA_CURSOR_MODEL }}
+      LONGHOUSE_OPENCODE_QUALIFICATION_MODEL: ${{ vars.CONSOLE_QA_OPENCODE_MODEL }}
+      LONGHOUSE_PI_QUALIFICATION_MODEL: ${{ vars.CONSOLE_QA_PI_MODEL }}
+      LONGHOUSE_OMP_QUALIFICATION_MODEL: ${{ vars.CONSOLE_QA_OMP_MODEL }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -63,75 +73,113 @@ jobs:
             echo "::error::Missing HOSTED_CANARY_RUNTIME_TOKEN; refusing unauthenticated Console coverage." >&2
             exit 1
           fi
-          if [[ -z "$CONSOLE_QA_CWD" || ! "$CONSOLE_QA_CWD" =~ ^/[A-Za-z0-9_./-]+$ ]]; then
-            echo "::error::CONSOLE_QA_CWD must be an explicit absolute canary-machine path." >&2
-            exit 1
-          fi
+          for required_credential in CODEX_API_KEY ANTHROPIC_API_KEY CURSOR_API_KEY OPENROUTER_API_KEY GEMINI_API_KEY; do
+            if [[ -z "${!required_credential:-}" ]]; then
+              echo "::error::Missing scoped CI provider credential: $required_credential" >&2
+              exit 1
+            fi
+          done
           if [[ ! "$CONSOLE_QA_PROVIDER" =~ ^[A-Za-z0-9_-]+$ ]]; then
             echo "::error::Console provider input contains unsafe characters." >&2
             exit 1
           fi
-          if [[ ! "$LONGHOUSE_DEVICE_ID" =~ ^[A-Za-z0-9_.:-]+$ ]]; then
-            echo "::error::Console device target contains unsafe characters." >&2
-            exit 1
-          fi
+          for required_model in CODEX_MODEL ANTHROPIC_MODEL CURSOR_MODEL \
+            LONGHOUSE_OPENCODE_QUALIFICATION_MODEL LONGHOUSE_PI_QUALIFICATION_MODEL \
+            LONGHOUSE_OMP_QUALIFICATION_MODEL; do
+            if [[ -z "${!required_model:-}" ]]; then
+              echo "::error::Missing canonical provider model binding: $required_model" >&2
+              exit 1
+            fi
+          done
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
 
-      - name: Prepare credential-free isolation image
-        id: prepare
+      - name: Setup uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+
+      - name: Setup Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "22"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch head 2026-08-05
+
+      - name: Stage stock providers and native engine in job-owned paths
+        id: fixture
         run: |
           set -euo pipefail
-          echo "image=$(python3 scripts/qa/test-isolation.py --prepare)" >> "$GITHUB_OUTPUT"
+          fixture_root="$(mktemp -d "$RUNNER_TEMP/console-served-state-fixture.XXXXXX")"
+          staging_ok=0
+          trap 'if [[ "$staging_ok" != 1 ]]; then rm -rf -- "$fixture_root"; fi' EXIT INT TERM
+          chmod 700 "$fixture_root"
+          provider_root="$fixture_root/providers"
+          home="$fixture_root/home"
+          mkdir -p "$provider_root" "$home" "$fixture_root/bin" "$fixture_root/workspace" "$home/.gemini/antigravity-cli"
+          git init --quiet "$fixture_root/workspace"
+          echo "CONSOLE_QA_CWD=$fixture_root/workspace" >> "$GITHUB_ENV"
+          echo "CONSOLE_FIXTURE_ROOT=$fixture_root" >> "$GITHUB_ENV"
+          printf '%s\n' '{"modelProvider":"gemini"}' > "$home/.gemini/antigravity-cli/settings.json"
+          chmod 600 "$home/.gemini/antigravity-cli/settings.json"
+          python3 scripts/build/cargo.py exec -- build --manifest-path engine/Cargo.toml --profile ci --bin longhouse-engine
+          engine="$(python3 scripts/build/cargo.py artifact --profile ci --bin longhouse-engine)"
+          test -x "$engine"
+          export HOME="$home"
+          export PATH="$fixture_root/bin:$home/.local/bin:$PATH"
+          # Installation scripts are untrusted network inputs; never expose
+          # provider credentials while they run. The next step receives the
+          # job-scoped secrets again from the workflow environment.
+          unset CODEX_API_KEY ANTHROPIC_API_KEY CURSOR_API_KEY GEMINI_API_KEY OPENROUTER_API_KEY LONGHOUSE_MACHINE_TOKEN
+          # These are upstream package/install surfaces, staged below the
+          # disposable fixture root. Nothing is written to the runner's user
+          # profile or PATH.
+          npm install --prefix "$provider_root" --no-save \
+            @openai/codex \
+            @anthropic-ai/claude-code \
+            opencode-ai \
+            @earendil-works/pi-coding-agent
+          curl -fsSL https://omp.sh/install | sh -s -- --binary
+          curl -fsSL https://cursor.com/install -o "$fixture_root/cursor-install.sh"
+          bash "$fixture_root/cursor-install.sh"
+          curl -fsSL https://antigravity.google/cli/install.sh -o "$fixture_root/antigravity-install.sh"
+          bash "$fixture_root/antigravity-install.sh" --dir "$home/.local/bin"
+          echo "HOME=$home" >> "$GITHUB_ENV"
+          echo "CONSOLE_FIXTURE_ENGINE=$engine" >> "$GITHUB_ENV"
+          for pair in \
+            "LONGHOUSE_CODEX_BIN=$provider_root/node_modules/.bin/codex" \
+            "LONGHOUSE_CLAUDE_BIN=$provider_root/node_modules/.bin/claude" \
+            "LONGHOUSE_OPENCODE_BIN=$provider_root/node_modules/.bin/opencode" \
+            "LONGHOUSE_PI_BIN=$provider_root/node_modules/.bin/pi" \
+            "LONGHOUSE_OMP_BIN=$home/.local/bin/omp" \
+            "LONGHOUSE_CURSOR_BIN=$home/.local/bin/cursor-agent" \
+            "LONGHOUSE_ANTIGRAVITY_BIN=$home/.local/bin/agy"; do
+            name="${pair%%=*}"
+            path="${pair#*=}"
+            if [[ -x "$path" ]]; then
+              echo "$name=$path" >> "$GITHUB_ENV"
+            else
+              echo "::warning::Owned Console fixture lacks $name; all-provider report will retain it as unavailable."
+            fi
+          done
+          staging_ok=1
 
       - name: Prove Console on the browser-served surface
         id: served_state
         run: |
           set -euo pipefail
-          credentials="$(mktemp "$RUNNER_TEMP/console-served-state-credentials.XXXXXX.json")"
-          trap 'rm -f "$credentials"' EXIT INT TERM
-          chmod 600 "$credentials"
-          python3 - "$credentials" <<'PY'
-          import json
-          import os
-          import sys
-
-          with open(sys.argv[1], "w", encoding="utf-8") as stream:
-              json.dump({"LONGHOUSE_MACHINE_TOKEN": os.environ["LONGHOUSE_MACHINE_TOKEN"]}, stream)
-          PY
-          python3 scripts/qa/test-isolation.py \
-            --live \
-            --image "${{ steps.prepare.outputs.image }}" \
-            --credentials "$credentials" \
-            --target test-console-served-state-e2e \
-            --set "ARGS=--provider $CONSOLE_QA_PROVIDER --device-id $LONGHOUSE_DEVICE_ID --cwd $CONSOLE_QA_CWD --json-out /work/artifacts/console-served-state.json" \
-            --set "LONGHOUSE_API_URL=$LONGHOUSE_API_URL" \
-            --set "LONGHOUSE_DEVICE_ID=$LONGHOUSE_DEVICE_ID" \
-            --set "CONSOLE_QA_PROVIDER=$CONSOLE_QA_PROVIDER" \
-            --set "CONSOLE_QA_CWD=$CONSOLE_QA_CWD"
-          result="$(python3 - <<'PY'
-          from pathlib import Path
-
-          matches = sorted(
-              Path("artifacts/test-isolation").glob(
-                  "*/files/1/console-served-state.json"
-              )
-          )
-          print(matches[0] if matches else "")
-          PY
-          )"
-          if [[ -z "$result" ]]; then
-            echo "::error::Console served-state produced no collected result." >&2
-            exit 1
-          fi
-          # Green means the served surface completed a real Console turn.
-          # Unqualified means the canary could not run one; it is not evidence
-          # of success and must fail the check so release qualification cannot
-          # publish a green result for an empty machine directory.
-          verdict="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("verdict",""))' "$result" 2>/dev/null || echo "")"
+          mkdir -p artifacts
+          result="artifacts/console-served-state.json"
+          uv run --project server python scripts/qa/console-served-state-e2e.py \
+            --owned-machine-agent \
+            --engine "$CONSOLE_FIXTURE_ENGINE" \
+            --provider "$CONSOLE_QA_PROVIDER" \
+            --cwd "$CONSOLE_QA_CWD" \
+            --api-url "$LONGHOUSE_API_URL" \
+            --json-out "$result"
+          verdict="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("verdict", ""))' "$result" 2>/dev/null || echo "")"
           case "$verdict" in
             green) echo "Console proved on the served surface." ;;
             unqualified) echo "::error::No machine could serve a Console turn; nothing was proved."; exit 1 ;;
@@ -141,17 +189,7 @@ jobs:
       - name: Summarise
         if: always()
         run: |
-          result="$(python3 - <<'PY'
-          from pathlib import Path
-
-          matches = sorted(
-              Path("artifacts/test-isolation").glob(
-                  "*/files/1/console-served-state.json"
-              )
-          )
-          print(matches[0] if matches else "")
-          PY
-          )"
+          result="artifacts/console-served-state.json"
           if [[ -n "$result" && -s "$result" ]]; then
             python3 scripts/qa/summarise-console-served-state.py "$result" >> "$GITHUB_STEP_SUMMARY"
           else
@@ -164,5 +202,13 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: console-served-state-${{ github.run_id }}
-          path: artifacts/test-isolation/**/files/1/console-served-state.json
+          path: artifacts/console-served-state.json
           if-no-files-found: ignore
+
+      - name: Remove owned fixture state
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -n "${CONSOLE_FIXTURE_ROOT:-}" && "$CONSOLE_FIXTURE_ROOT" == "$RUNNER_TEMP"/* ]]; then
+            rm -rf -- "$CONSOLE_FIXTURE_ROOT"
+          fi

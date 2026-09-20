@@ -202,7 +202,7 @@ Issues: <https://github.com/cipher982/longhouse/issues>
     "python3 scripts/build/generate_build_identity.py",
     "uv venv .tmp-readme-serve-venv --python 3.12 -q",
     ". .tmp-readme-serve-venv/bin/activate",
-    "uv pip install -e server -q",
+    "uv sync --frozen --active --no-dev --project server --quiet",
     "scripts/qa/readme-serve-health-smoke.sh"
   ],
   "cleanup": [

@@ -576,26 +576,26 @@ def run(
 
     if args.drop_terminal:
         report["terminal_dropped"] = True
+    result = report
     try:
         with armed_terminal_drop(session_id, args.drop_terminal):
             result = _observe_turn(client, args, report, session_id, marker)
     except Exception as exc:  # noqa: BLE001 - return a typed failure with cleanup evidence
-        result = report
         result.setdefault("failures", []).append(f"{type(exc).__name__}: {exc}")
         result["verdict"] = "red"
-
-    cleanup = _retire_session(
-        api_url,
-        token,
-        client,
-        session_id,
-        provider=args.provider,
-        report=result,
-    )
-    result["cleanup_receipt"] = cleanup
-    if cleanup.get("status") != "pass":
-        result.setdefault("failures", []).append("qualification session cleanup did not satisfy its required contract")
-        result["verdict"] = "red"
+    finally:
+        cleanup = _retire_session(
+            api_url,
+            token,
+            client,
+            session_id,
+            provider=args.provider,
+            report=result,
+        )
+        result["cleanup_receipt"] = cleanup
+        if cleanup.get("status") != "pass":
+            result.setdefault("failures", []).append("qualification session cleanup did not satisfy its required contract")
+            result["verdict"] = "red"
     return result
 
 

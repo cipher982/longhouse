@@ -491,3 +491,24 @@ def test_dispatch_failure_without_vehicle_claim_cannot_certify_cleanup(monkeypat
     assert "dispatch response lost" in json.loads((evidence / "result.json").read_text())["error"]
     assert cleanup["status"] == "fail"
     assert cleanup["requirements"]["no_orphan_provider_processes"] is False
+
+
+def test_cancellation_retires_the_created_session_and_started_run(monkeypatch, tmp_path):
+    active = {"session-1": "run-1"}
+    monkeypatch.setattr(core, "_defaults", lambda: ("http://127.0.0.1:9", "test-only"))
+    monkeypatch.setattr(core, "_create_session", lambda *_args: {"session_id": "session-1"})
+
+    def interrupted(_client, _args, report, _session_id, _marker):
+        report["run_id"] = "run-1"
+        raise KeyboardInterrupt
+
+    def retire(_url, _token, _client, session_id, *, provider, report):
+        assert report["run_id"] == active.pop(session_id)
+        return {"status": "pass"}
+
+    monkeypatch.setattr(core, "_observe_turn", interrupted)
+    monkeypatch.setattr(core, "_retire_session", retire)
+    args = SimpleNamespace(api_url=None, provider="codex", device_id="owned", cwd=tmp_path, drop_terminal=False)
+    with pytest.raises(KeyboardInterrupt):
+        core.run(args)
+    assert active == {}
