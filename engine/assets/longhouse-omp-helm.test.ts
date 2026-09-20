@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -205,6 +205,109 @@ describe("coordination tools", () => {
       globalThis.fetch = previousFetch;
     }
     expect(attempts).toBe(2);
+  });
+});
+
+describe("subagent sessions", () => {
+  it("keeps a subagent's context off this launch's channel", async () => {
+    // The reconnect test removes the shared channel directory; each test owns
+    // the socket path it listens on.
+    mkdirSync(channelDir, { recursive: true });
+    rmSync(channelPath, { force: true });
+    const frames: Record<string, unknown>[] = [];
+    const frameWaiters: Array<{
+      matches: (frame: Record<string, unknown>) => boolean;
+      resolve: () => void;
+    }> = [];
+    const sockets: Socket[] = [];
+    const server = createServer((socket) => {
+      sockets.push(socket);
+      let buffer = "";
+      socket.on("data", (chunk) => {
+        buffer += chunk.toString("utf8");
+        let newline = buffer.indexOf("\n");
+        while (newline >= 0) {
+          const frame = JSON.parse(buffer.slice(0, newline));
+          buffer = buffer.slice(newline + 1);
+          newline = buffer.indexOf("\n");
+          frames.push(frame);
+          const waiting = frameWaiters.findIndex((candidate) =>
+            candidate.matches(frame),
+          );
+          if (waiting >= 0) frameWaiters.splice(waiting, 1)[0].resolve();
+          if (frame.kind === "extension_hello") {
+            socket.write(
+              `${JSON.stringify({ kind: "extension_ready", ok: true, connection_id: `c${sockets.length}`, lease_generation: "g1" })}\n`,
+            );
+          }
+        }
+      });
+    });
+    const listening = Promise.withResolvers<void>();
+    server.listen(channelPath, listening.resolve);
+    await listening.promise;
+    const waitForFrame = (matches: (frame: Record<string, unknown>) => boolean) => {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      if (frames.some(matches)) resolve();
+      else frameWaiters.push({ matches, resolve });
+      return promise;
+    };
+    const handlers: Record<
+      string,
+      (event: Record<string, unknown>, ctx: unknown) => Promise<unknown>
+    > = {};
+    registerExtension({
+      on: (name: string, handler: (typeof handlers)[string]) => {
+        handlers[name] = handler;
+      },
+    });
+    const contextFor = (nativeId: string, file: string) => ({
+      isIdle: () => false,
+      sessionManager: {
+        getSessionId: () => nativeId,
+        getSessionFile: () => file,
+      },
+    });
+    // OMP's own layout: a subagent session is a sibling file inside the parent
+    // session's artifacts directory, and OMP fires these events from both.
+    const parent = contextFor("native-parent", join(channelDir, "parent.jsonl"));
+    const subagent = contextFor(
+      "native-child",
+      join(channelDir, "parent", "CanTabletSurvey.jsonl"),
+    );
+    try {
+      // The handshake completes inside this call, so every frame below is
+      // written to a ready channel.
+      await handlers.session_start({ type: "session_start" }, parent);
+      await waitForFrame((frame) => frame.kind === "session_start");
+
+      await handlers.session_start({ type: "session_start" }, subagent);
+      await handlers.agent_start({ type: "agent_start" }, subagent);
+      await handlers.message_update({ type: "message_update" }, subagent);
+      await handlers.message_end({ type: "message_end" }, parent);
+      // One ordered channel: this frame arriving proves the subagent's were
+      // never written, and that the child never replaced the connection.
+      await waitForFrame((frame) => frame.kind === "message_end");
+      expect(
+        frames.some((frame) => frame.native_session_id === "native-child"),
+      ).toBe(false);
+      expect(sockets.length).toBe(1);
+
+      // A subagent ending is not this session ending — the channel stays up.
+      await handlers.session_shutdown({ type: "session_shutdown" }, subagent);
+      const moved = contextFor("native-parent", join(channelDir, "moved.jsonl"));
+      await handlers.title_change({ type: "title_change" }, moved);
+      await waitForFrame((frame) => frame.kind === "title_change");
+      expect(sockets[0].destroyed).toBe(false);
+      expect(frames.some((frame) => frame.kind === "session_shutdown")).toBe(false);
+    } finally {
+      await handlers.session_shutdown({ type: "session_shutdown" }, parent);
+      for (const socket of sockets) socket.destroy();
+      const closed = Promise.withResolvers<void>();
+      server.close(closed.resolve);
+      await closed.promise;
+      rmSync(channelPath, { force: true });
+    }
   });
 });
 

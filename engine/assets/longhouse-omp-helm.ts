@@ -1,6 +1,11 @@
 import { connect, type Socket } from "node:net";
+import { resolve, sep } from "node:path";
 
 type Frame = Record<string, unknown>;
+
+/// OMP's session transcript suffix. A session's artifacts — and every subagent
+/// session it opens — live in the sibling directory named after the file.
+const SESSION_FILE_SUFFIX = ".jsonl";
 
 const socketPath = process.env.LONGHOUSE_OMP_HELM_CHANNEL_PATH;
 const authToken = process.env.LONGHOUSE_OMP_HELM_CHANNEL_TOKEN;
@@ -62,6 +67,61 @@ export function agentEndIsTerminal(event: Record<string, unknown>): boolean {
   if (typeof event.isTerminal === "boolean") return event.isTerminal;
   if (typeof event.willContinue === "boolean") return !event.willContinue;
   return true;
+}
+
+/// Every session file this process has spoken for.
+///
+/// The first context to emit an event owns this launch, and a session file
+/// inside that owner's artifacts directory is a subagent of it: OMP opens a
+/// child session at `<parent file without .jsonl>/<title>.jsonl` and emits the
+/// same extension events from the child's context, whose `sessionManager` is
+/// the child's. Those frames are not this session, and the launcher reads an
+/// authenticated frame that reports another native session id as the provider
+/// moving its own session — so a subagent's frames made the managed session's
+/// identity flip between the agent and its children, one INFO line per flip,
+/// and its `session_start` reconnected the launch's channel onto the child's
+/// context. A file learned later is still learned: a session that compacts or
+/// switches reports a new file, and the launcher is the authority on following
+/// that move.
+const ownedSessionFiles = new Set<string>();
+
+/// The session file a provider context is speaking for, if it names one.
+const sessionFileOf = (ctx: unknown): string | undefined => {
+  if (typeof ctx !== "object" || ctx === null || !("sessionManager" in ctx)) {
+    return undefined;
+  }
+  const manager = ctx.sessionManager;
+  if (
+    typeof manager !== "object" ||
+    manager === null ||
+    !("getSessionFile" in manager)
+  ) {
+    return undefined;
+  }
+  const getSessionFile = manager.getSessionFile;
+  if (typeof getSessionFile !== "function") return undefined;
+  const file: unknown = getSessionFile.call(manager);
+  return typeof file === "string" && file.trim()
+    ? resolve(file.trim())
+    : undefined;
+};
+
+/// Whether a provider context belongs to a session OMP opened *under* the
+/// session this launch owns, rather than to the session itself.
+///
+/// Only a proven child is refused. An unrecognized file stays this session:
+/// the launcher is the authority on a provider moving its own session, and
+/// refusing an unknown file here would silence a live one.
+function subagentSessionContext(ctx: unknown): boolean {
+  const file = sessionFileOf(ctx);
+  if (!file || ownedSessionFiles.has(file)) return false;
+  for (const owned of ownedSessionFiles) {
+    const artifactsDir = owned.endsWith(SESSION_FILE_SUFFIX)
+      ? owned.slice(0, -SESSION_FILE_SUFFIX.length)
+      : owned;
+    if (file.startsWith(`${artifactsDir}${sep}`)) return true;
+  }
+  return false;
 }
 
 export default function (pi: any) {
@@ -646,6 +706,8 @@ export default function (pi: any) {
   /// new signature is no place to widen that.
   const requestInitialPrompt = (ctx: unknown) => {
     if (initialPromptDelivered || !initialPrompt?.trim()) return;
+    // The prompt belongs to this launch's session, never to a subagent's.
+    if (subagentSessionContext(ctx)) return;
     if (initialPromptAttempts >= INITIAL_PROMPT_MAX_ATTEMPTS) return;
     initialPromptAttempts += 1;
     sendEvent(
@@ -904,6 +966,11 @@ export default function (pi: any) {
   };
 
   const lifecycle = (name: string, event: Frame, ctx: any) => {
+    // A subagent's events are not this session's: they would publish the
+    // child's identity, activity and title as the managed session's.
+    if (subagentSessionContext(ctx)) return false;
+    const file = sessionFileOf(ctx);
+    if (file) ownedSessionFiles.add(file);
     return sendEvent(name, event, ctx);
   };
 
@@ -922,6 +989,10 @@ export default function (pi: any) {
   };
 
   pi.on("session_start", async (event: Frame, ctx: any) => {
+    // OMP emits this for every subagent session too. Connecting for one would
+    // replace the channel this launch owns with one bound to the child's
+    // context, so its keepalives and idle samples would describe the child.
+    if (subagentSessionContext(ctx)) return;
     shuttingDown = false;
     lastAgentEndTerminal = undefined;
     if (socket) close();
@@ -962,6 +1033,9 @@ export default function (pi: any) {
     lifecycle("session_branch", event, ctx);
   });
   pi.on("session_shutdown", async (event: Frame, ctx: any) => {
+    // A subagent ending is not this launch's session ending, and closing the
+    // channel for it would leave the managed session with no transport.
+    if (subagentSessionContext(ctx)) return;
     shuttingDown = true;
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (keepaliveTimer) clearInterval(keepaliveTimer);
