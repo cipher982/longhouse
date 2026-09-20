@@ -424,6 +424,7 @@ def test_heartbeat_endpoint_creates_row(live_catalog, live_catalog_client):
         },
     )
     assert response.status_code == 204, response.text
+    assert response.headers["x-longhouse-machine-evidence"] == "no_evidence"
 
     stamp = _one_stamp()
     assert stamp["device_id"] == DEVICE_ID
@@ -851,6 +852,7 @@ def test_heartbeat_accepts_and_retains_typed_machine_evidence_without_reducing_i
         json={"version": "phase-2", "daemon_pid": 42, "machine_evidence": evidence},
     )
     assert response.status_code == 204, response.text
+    assert response.headers["x-longhouse-machine-evidence"] == "unsupported_schema"
 
     # Evidence travels as its own field and is deliberately NOT duplicated into
     # the stamp's size-capped forensic copy: a machine whose evidence outgrew
@@ -886,6 +888,7 @@ def test_heartbeat_lands_when_machine_evidence_outgrows_the_stamp_copy(live_cata
         headers=_headers(live_catalog),
         json={"version": "oversize-evidence", "daemon_pid": 42, "machine_evidence": evidence},
     )
+    assert response.headers["x-longhouse-machine-evidence"] == "unsupported_schema"
     assert response.status_code == 204, response.text
 
     stamp = _one_stamp()
@@ -905,6 +908,7 @@ def test_heartbeat_drops_evidence_over_the_transport_budget_and_still_lands(live
         headers=headers,
         json={"version": "over-budget", "daemon_pid": 42, "machine_evidence": evidence},
     )
+    assert response.headers["x-longhouse-machine-evidence"] == "oversize_evidence"
     assert response.status_code == 204, response.text
 
     stamp = _one_stamp()
@@ -1113,6 +1117,7 @@ def test_heartbeat_accepts_live_omp_owner_with_invalid_resume_reason(live_catalo
         json={"version": "omp-owner-reason", "daemon_pid": 42, "machine_evidence": evidence},
     )
     assert response.status_code == 204, response.text
+    assert response.headers["x-longhouse-machine-evidence"] == "applied"
 
     retained = json.loads(_one_stamp()["raw_json"])
     assert "machine_evidence" not in retained
@@ -1199,6 +1204,7 @@ def test_heartbeat_lands_and_drops_machine_evidence_it_cannot_use(live_catalog, 
             headers=headers,
             json={"version": f"phase-2-{index}", "daemon_pid": 42, "machine_evidence": evidence},
         )
+        assert response.headers["x-longhouse-machine-evidence"] == "rejected"
         assert response.status_code == 204, response.text
 
     # Every heartbeat landed, none retained the evidence it could not use, and

@@ -138,6 +138,7 @@ struct NativeTransportStatus {
 #[derive(Debug, Clone, Serialize)]
 struct NativeHeartbeatTransportStatus {
     state: String,
+    evidence_state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_attempt_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1606,10 +1607,15 @@ fn native_health_from_parts(
         .and_then(|value| value.get("startup_refusal"))
         .and_then(Value::as_str)
         .map(str::to_string);
-
     let mut reasons = Vec::new();
     if heartbeat_transport.state == "degraded" {
         reasons.push("heartbeat_post_failed".to_string());
+    }
+    if matches!(
+        heartbeat_transport.evidence_state.as_str(),
+        "disabled" | "failed" | "oversize_evidence" | "rejected" | "unsupported_schema"
+    ) {
+        reasons.push("heartbeat_evidence_rejected".to_string());
     }
     if let Some(refusal) = startup_refusal.as_deref() {
         reasons.push(format!("startup_refused: {refusal}"));
@@ -2168,6 +2174,7 @@ fn native_desktop_suggested_action_ids(reasons: &[String]) -> Vec<String> {
             "storage_v2_outbox_unreadable" => "inspect_storage_outbox",
             "reported_offline"
             | "heartbeat_post_failed"
+            | "heartbeat_evidence_rejected"
             | "heartbeat_stale"
             | "engine_offline"
             | "transport_unavailable"
@@ -4799,8 +4806,30 @@ fn native_heartbeat_transport_status(
             .to_string(),
         _ => "unknown".to_string(),
     };
+    let evidence_state = match raw
+        .and_then(|value| value.get("evidence_state"))
+        .and_then(Value::as_str)
+    {
+        Some(value)
+            if matches!(
+                value,
+                "applied"
+                    | "disabled"
+                    | "failed"
+                    | "no_evidence"
+                    | "oversize_evidence"
+                    | "rejected"
+                    | "unsupported_schema"
+                    | "unknown"
+            ) =>
+        {
+            value.to_string()
+        }
+        _ => "unknown".to_string(),
+    };
     NativeHeartbeatTransportStatus {
         state,
+        evidence_state,
         last_attempt_at: optional_string("last_attempt_at"),
         last_success_at: optional_string("last_success_at"),
         last_failure_at: optional_string("last_failure_at"),
@@ -5444,6 +5473,67 @@ mod tests {
             .reasons
             .iter()
             .any(|reason| reason == "heartbeat_post_failed"));
+    }
+
+    #[test]
+    fn native_health_degrades_refused_machine_evidence_without_calling_machine_offline() {
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut payload = json!({
+            "is_offline": false,
+            "spool_pending_count": 0,
+            "spool_dead_count": 0,
+            "ship_attempts_10m": 1,
+            "shipping_progress": {
+                "pending_work": false,
+                "stalled": false,
+                "seconds_without_progress": 0,
+                "observed_at": now.clone()
+            },
+            "local_projection": {
+                "engine_pulse_at": now.clone(),
+                "generated_at": now.clone(),
+                "last_reconciled_at": now,
+                "reconciliation": {"state": "idle"}
+            },
+            "heartbeat_transport": {
+                "state": "healthy",
+                "evidence_state": "rejected",
+                "last_success_at": "2026-09-18T12:00:00Z"
+            }
+        });
+        let refused = native_health_from_parts(
+            Path::new("/tmp/engine-status.json"),
+            true,
+            Some(0),
+            Some(payload.clone()),
+            None,
+        );
+        assert_eq!(refused.heartbeat_transport.state, "healthy");
+        assert_eq!(refused.heartbeat_transport.evidence_state, "rejected");
+        assert_eq!(refused.health_state, "degraded");
+        assert!(refused
+            .reasons
+            .iter()
+            .any(|reason| reason == "heartbeat_evidence_rejected"));
+        assert!(!refused
+            .reasons
+            .iter()
+            .any(|reason| reason == "engine_offline"));
+        assert_eq!(refused.engine_status.is_offline, Some(false));
+
+        payload["heartbeat_transport"]["evidence_state"] = json!("applied");
+        let recovered = native_health_from_parts(
+            Path::new("/tmp/engine-status.json"),
+            true,
+            Some(0),
+            Some(payload),
+            None,
+        );
+        assert_eq!(recovered.heartbeat_transport.evidence_state, "applied");
+        assert!(!recovered
+            .reasons
+            .iter()
+            .any(|reason| reason == "heartbeat_evidence_rejected"));
     }
 
     #[test]

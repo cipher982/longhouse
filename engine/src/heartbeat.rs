@@ -170,6 +170,10 @@ pub struct HeartbeatPayload {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct HeartbeatTransportStatus {
     pub state: String,
+    /// Latest server disposition for the machine-evidence envelope. This is
+    /// independent from `state`: a 204 proves heartbeat liveness even when the
+    /// catalog refused the bulk evidence.
+    pub evidence_state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_attempt_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -181,11 +185,21 @@ pub struct HeartbeatTransportStatus {
 }
 
 const MAX_HEARTBEAT_ERROR_CHARS: usize = 256;
+const MACHINE_EVIDENCE_DISPOSITIONS: &[&str] = &[
+    "applied",
+    "disabled",
+    "failed",
+    "no_evidence",
+    "oversize_evidence",
+    "rejected",
+    "unsupported_schema",
+];
 
 impl Default for HeartbeatTransportStatus {
     fn default() -> Self {
         Self {
             state: "unknown".to_string(),
+            evidence_state: "unknown".to_string(),
             last_attempt_at: None,
             last_success_at: None,
             last_failure_at: None,
@@ -199,10 +213,35 @@ impl HeartbeatTransportStatus {
         self.last_attempt_at = Some(at);
     }
 
+    /// Record the acknowledgement independently of HTTP transport health.
+    ///
+    /// Missing or unrecognized values are deliberately `unknown`; only the
+    /// explicit `applied` disposition proves that the catalog accepted
+    /// machine evidence.
+    pub fn record_evidence_ack(&mut self, value: Option<&str>) -> bool {
+        let normalized = value
+            .map(str::trim)
+            .filter(|value| MACHINE_EVIDENCE_DISPOSITIONS.contains(value))
+            .unwrap_or("unknown");
+        let changed = self.evidence_state != normalized;
+        if changed {
+            normalized.clone_into(&mut self.evidence_state);
+        }
+        changed
+    }
+
+    pub fn evidence_refused(&self) -> bool {
+        matches!(
+            self.evidence_state.as_str(),
+            "disabled" | "failed" | "oversize_evidence" | "rejected" | "unsupported_schema"
+        )
+    }
+
     /// Returns true when this failure transitions the state into degraded.
     pub fn record_failure(&mut self, at: String, error: &str) -> bool {
         let transitioned = self.state != "degraded";
         self.state = "degraded".to_string();
+        self.evidence_state = "unknown".to_string();
         self.last_failure_at = Some(at);
         self.last_error = Some(bounded_heartbeat_error(error));
         transitioned
@@ -3759,7 +3798,9 @@ impl EmptyStringFallback for String {
     }
 }
 
-/// Send heartbeat to server via the existing authenticated client.
+/// Send heartbeat to server via the existing authenticated client and return
+/// the machine-evidence acknowledgement. A successful HTTP response without
+/// the acknowledgement is represented as `None` (unknown), never as applied.
 #[tracing::instrument(
     level = "info",
     name = "engine.heartbeat.send",
@@ -3773,11 +3814,19 @@ impl EmptyStringFallback for String {
         longhouse.ship_attempts_1h = payload.ship_attempts_1h as u64,
     )
 )]
-pub async fn send_heartbeat(client: &ShipperClient, payload: &HeartbeatPayload) -> Result<()> {
+pub async fn send_heartbeat(
+    client: &ShipperClient,
+    payload: &HeartbeatPayload,
+) -> Result<Option<String>> {
+    const MACHINE_EVIDENCE_ACK_HEADER: &str = "X-Longhouse-Machine-Evidence";
     let json = serde_json::to_vec(payload)?;
-    client
-        .post_json_with_timeout("/api/agents/heartbeat", json, Some(HEARTBEAT_POST_TIMEOUT))
-        .await
+    let headers = client
+        .post_json_with_timeout_headers("/api/agents/heartbeat", json, Some(HEARTBEAT_POST_TIMEOUT))
+        .await?;
+    Ok(headers
+        .get(MACHINE_EVIDENCE_ACK_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string))
 }
 
 /// Result of the caller's attempt to read fresh phase-ledger rows. Serializes
@@ -4157,6 +4206,7 @@ mod tests {
         let mut status = HeartbeatTransportStatus::default();
         assert_eq!(status.state, "unknown");
         assert!(status.last_attempt_at.is_none());
+        assert_eq!(status.evidence_state, "unknown");
 
         status.record_attempt("2026-09-18T12:00:00Z".to_string());
         assert_eq!(status.state, "unknown");
@@ -4168,6 +4218,7 @@ mod tests {
         let huge_error = "response body ".repeat(1_000);
         assert!(status.record_failure("2026-09-18T12:00:01Z".to_string(), &huge_error,));
         assert_eq!(status.state, "degraded");
+        assert_eq!(status.evidence_state, "unknown");
         assert_eq!(
             status.last_failure_at.as_deref(),
             Some("2026-09-18T12:00:01Z")
@@ -4188,6 +4239,28 @@ mod tests {
             status.last_failure_at.as_deref(),
             Some("2026-09-18T12:00:01Z")
         );
+    }
+
+    #[test]
+    fn heartbeat_evidence_ack_is_separate_and_recovers_on_applied_snapshot() {
+        let mut status = HeartbeatTransportStatus::default();
+
+        // A successful POST without the new response header is not evidence
+        // acceptance.
+        status.record_evidence_ack(None);
+        assert_eq!(status.evidence_state, "unknown");
+        assert!(!status.evidence_refused());
+
+        status.record_evidence_ack(Some("rejected"));
+        status.record_success("2026-09-18T12:00:01Z".to_string());
+        assert_eq!(status.state, "healthy");
+        assert_eq!(status.evidence_state, "rejected");
+        assert!(status.evidence_refused());
+
+        status.record_evidence_ack(Some("applied"));
+        status.record_success("2026-09-18T12:00:02Z".to_string());
+        assert_eq!(status.evidence_state, "applied");
+        assert!(!status.evidence_refused());
     }
 
     #[test]

@@ -246,6 +246,21 @@ impl ShipperClient {
         body: Vec<u8>,
         request_timeout: Option<Duration>,
     ) -> Result<()> {
+        self.post_json_with_timeout_headers(path_suffix, body, request_timeout)
+            .await
+            .map(|_| ())
+    }
+
+    /// POST a small JSON payload and retain response headers from a successful
+    /// request. Heartbeat uses this for the machine-evidence acknowledgement;
+    /// callers that do not consume headers should use
+    /// [`Self::post_json_with_timeout`].
+    pub async fn post_json_with_timeout_headers(
+        &self,
+        path_suffix: &str,
+        body: Vec<u8>,
+        request_timeout: Option<Duration>,
+    ) -> Result<HeaderMap> {
         let url = self.ingest_url.replace("/api/agents/ingest", path_suffix);
         let mut request = self
             .client
@@ -257,12 +272,12 @@ impl ShipperClient {
         if let Some(request_timeout) = request_timeout {
             request = request.timeout(request_timeout);
         }
-        let resp = request.send().await.context("POST failed")?;
+        let mut resp = request.send().await.context("POST failed")?;
         let status = resp.status();
+        let headers = std::mem::take(resp.headers_mut());
         if status.is_success() {
-            return Ok(());
+            return Ok(headers);
         }
-        let headers = resp.headers().clone();
         let body = resp.text().await.unwrap_or_default();
         if let Some(detail) =
             parse_server_write_backpressure(status.as_u16(), &headers, body.clone())

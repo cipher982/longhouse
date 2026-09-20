@@ -320,7 +320,7 @@ struct DeferredRetry {
 struct HeartbeatPostResult {
     signature: String,
     reason: &'static str,
-    result: Result<(), String>,
+    result: Result<Option<String>, String>,
     join_elapsed_ms: u64,
     task_elapsed_ms: u64,
 }
@@ -1950,15 +1950,29 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             );
                         }
                         match result.result {
-                            Ok(()) => {
+                            Ok(evidence_ack) => {
+                                let evidence_was_refused = heartbeat_transport.evidence_refused();
+                                let evidence_changed =
+                                    heartbeat_transport.record_evidence_ack(evidence_ack.as_deref());
+                                let evidence_refused = heartbeat_transport.evidence_refused();
                                 let recovered = heartbeat_transport
                                     .record_success(chrono::Utc::now().to_rfc3339());
                                 tracing::debug!(
                                     reason = result.reason,
                                     task_elapsed_ms = result.task_elapsed_ms,
                                     join_elapsed_ms = result.join_elapsed_ms,
+                                    evidence_state = %heartbeat_transport.evidence_state,
                                     "Runtime truth snapshot sent after local process/control change"
                                 );
+                                if evidence_changed && evidence_refused {
+                                    tracing::warn!(
+                                        reason = result.reason,
+                                        evidence_state = %heartbeat_transport.evidence_state,
+                                        "Heartbeat machine evidence was refused"
+                                    );
+                                } else if evidence_was_refused && heartbeat_transport.evidence_state == "applied" {
+                                    tracing::info!("Heartbeat machine evidence recovered");
+                                }
                                 if recovered {
                                     tracing::info!("Heartbeat POST recovered");
                                 }

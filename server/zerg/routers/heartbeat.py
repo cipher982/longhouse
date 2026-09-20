@@ -72,6 +72,24 @@ logger = logging.getLogger(__name__)
 _catalog_db_dependency = catalog_db_dependency()
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+# The response acknowledges liveness independently from the bulk evidence it
+# carried. Keep these wire values aligned with catalogd's
+# ``shadow_reducer.status`` values; ``rejected`` is reserved for evidence
+# refused before the catalog RPC (shape, typed validation, or a route budget).
+_MACHINE_EVIDENCE_ACK_HEADER = "X-Longhouse-Machine-Evidence"
+_MACHINE_EVIDENCE_DISPOSITIONS = frozenset(
+    {
+        "applied",
+        "disabled",
+        "failed",
+        "no_evidence",
+        "oversize_evidence",
+        "rejected",
+        "unknown",
+        "unsupported_schema",
+    }
+)
+
 
 # ``raw_json`` is meant to be a bounded forensic copy, but it was only bounded
 # by catalogd's 512 KiB refusal. These two keys are per-session arrays, so they
@@ -511,23 +529,26 @@ class HeartbeatIn(BaseModel):
             return HistoryImportSnapshot.unavailable()
 
 
-def _accepted_machine_evidence(evidence: object, *, device_id: str) -> dict | None:
-    """The machine evidence this heartbeat may ship, or None with the reason.
+def _accepted_machine_evidence(
+    evidence: object,
+    *,
+    device_id: str,
+) -> tuple[str | None, dict | None]:
+    """Return the pre-catalog disposition and evidence that may be shipped.
 
-    Evidence is bulk machine fact data and liveness outranks it: anything this
-    host cannot validate -- object shape, the typed reducer contract, or the
-    transport budget -- is dropped here so the machine keeps reporting in. The
-    catalog reducer validates the same evidence again before it trusts one
-    fact, so a drop costs evidence and never authority, and an unscannable
-    payload can no longer take a machine's liveness down with it.
+    ``None`` as the disposition means the document passed route validation and
+    catalogd is authoritative for its final disposition. A non-``None``
+    disposition is a refusal that happened before the RPC; the heartbeat still
+    proceeds, but the response must tell the engine why no evidence was
+    applied.
     """
 
     if evidence is None:
-        return None
+        return None, None
     if not isinstance(evidence, dict):
         agents_machine_evidence_dropped_total.labels(reason="not_an_object").inc()
         logger.warning("Dropping machine evidence device=%s reason=not_an_object", device_id)
-        return None
+        return "rejected", None
     try:
         parsed = MachineEvidenceIn.model_validate(evidence)
     except ValidationError as exc:
@@ -537,7 +558,7 @@ def _accepted_machine_evidence(evidence: object, *, device_id: str) -> dict | No
             device_id,
             _validation_reason(exc),
         )
-        return None
+        return "rejected", None
     serialized = parsed.model_dump(mode="json", exclude_none=True)
     size = machine_evidence_bytes(serialized)
     if size > MAX_MACHINE_EVIDENCE_BYTES:
@@ -548,8 +569,22 @@ def _accepted_machine_evidence(evidence: object, *, device_id: str) -> dict | No
             size,
             MAX_MACHINE_EVIDENCE_BYTES,
         )
-        return None
-    return serialized
+        return "oversize_evidence", None
+    return None, serialized
+
+
+def _catalog_machine_evidence_disposition(result: object) -> str:
+    """Extract catalogd's canonical evidence disposition from an apply result."""
+
+    if isinstance(result, dict):
+        reducer = result.get("shadow_reducer")
+        if isinstance(reducer, dict):
+            status_value = reducer.get("status")
+            if isinstance(status_value, str) and status_value in _MACHINE_EVIDENCE_DISPOSITIONS:
+                return status_value
+    # A successful old catalog does not provide an evidence receipt. Do not
+    # manufacture success: the engine must retain ``unknown``.
+    return "unknown"
 
 
 def _validation_reason(exc: ValidationError) -> str:
@@ -944,14 +979,15 @@ async def ingest_heartbeat(
                 # payload (catalogd caps it at 512 KiB). Machine evidence is
                 # bulk fact data -- hundreds of kilobytes on a busy machine --
                 # so it travels as its own catalogd parameter and never rides
-                # this copy: smuggling it here made every heartbeat from a
-                # machine whose evidence outgrew the cap fail validation, and
-                # a failed heartbeat is a machine reported offline.
+                # this size-capped forensic copy.
                 payload_for_retention = payload.model_dump(mode="json")
                 if "history_import" not in payload.model_fields_set:
                     payload_for_retention.pop("history_import", None)
                 payload_for_retention.pop("machine_evidence", None)
-                machine_evidence = _accepted_machine_evidence(payload.machine_evidence, device_id=device_id)
+                pre_catalog_evidence_disposition, machine_evidence = _accepted_machine_evidence(
+                    payload.machine_evidence,
+                    device_id=device_id,
+                )
                 payload_json = json.dumps(_retained_heartbeat_evidence(payload_for_retention))
                 agents_heartbeat_payload_bytes.observe(wire_bytes)
                 set_span_attributes(
@@ -1093,6 +1129,8 @@ async def ingest_heartbeat(
                     previous_sessions_digest = result.get("previous_sessions_digest")
                     commit_seq = result.get("commit_seq")
                     exact_replay = result.get("exact_replay")
+                    catalog_evidence_disposition = _catalog_machine_evidence_disposition(result)
+                    evidence_disposition = pre_catalog_evidence_disposition or catalog_evidence_disposition
                     if (
                         (previous_sessions_digest is not None and not isinstance(previous_sessions_digest, str))
                         or not isinstance(commit_seq, str)
@@ -1156,7 +1194,10 @@ async def ingest_heartbeat(
                 )
 
             request_status_label = "ok"
-            return Response(status_code=status.HTTP_204_NO_CONTENT)
+            return Response(
+                status_code=status.HTTP_204_NO_CONTENT,
+                headers={_MACHINE_EVIDENCE_ACK_HEADER: evidence_disposition},
+            )
         except HTTPException:
             # Preserve typed route errors such as hot-write backpressure instead
             # of logging them as heartbeat ingest internals.
