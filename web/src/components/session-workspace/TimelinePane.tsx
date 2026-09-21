@@ -810,7 +810,7 @@ function SubagentNode({ interaction }: { interaction: ToolInteraction }) {
       <ul className="tl-subagents__list">
         {children.map((child) => (
           <li key={child.session_id} className="tl-subagents__item">
-            <Link className="tl-subagents__link" to={`/sessions/${child.session_id}`}>
+            <Link className="tl-subagents__link" to={`/timeline/${child.session_id}`}>
               <span className="tl-subagents__label">{subagentLabel(child)}</span>
               <span className="tl-subagents__meta">
                 {child.tool_calls} {child.tool_calls === 1 ? "call" : "calls"}
