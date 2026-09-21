@@ -115,6 +115,27 @@ jobs:
           echo "staging elapsed: $((SECONDS - started))s"
           echo "staging elapsed: $((SECONDS - started))s" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Record the identities that actually ran
+        # A checkout SHA is not the running product identity: this lane targets a
+        # separately deployed canary, and the provider is installed at run time.
+        # Record what executed, so a receipt names its real subject.
+        env:
+          CANARY_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
+        run: |
+          set -euo pipefail
+          runtime_identity="$(curl -fsS "https://${CANARY_SUBDOMAIN}.longhouse.ai/api/health" \
+            | python3 -c 'import json,sys; b=json.load(sys.stdin)["build"]; print(b["commit"], b.get("built_at",""))')"
+          test -n "$runtime_identity"
+          {
+            echo "### Identities"
+            echo "- checked out: ${{ inputs.source_sha }}"
+            echo "- engine: $("$PRIVATE_INPUT_ENGINE" --version 2>&1 | head -1)"
+            echo "- longhouse: $("$PRIVATE_INPUT_LONGHOUSE" --version 2>&1 | head -1)"
+            echo "- cursor-agent version: $("$LONGHOUSE_CURSOR_BIN" --version 2>&1 | head -1)"
+            echo "- cursor-agent sha256: $(shasum -a 256 "$LONGHOUSE_CURSOR_BIN" | cut -d' ' -f1)"
+            echo "- runtime host build: $runtime_identity"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Trust the fixture workspace headlessly
         # A fresh VM with a clean HOME has no workspace-trust state, so the TUI exits
         # before the first turn ("Cursor exited before workspace trust was resolved").
