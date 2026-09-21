@@ -2099,6 +2099,20 @@ fn collect_metadata(
                     meta.version = Some(ver.clone());
                 }
             }
+            // Codex's session_meta payload id is the provider-native identity for
+            // this rollout. In a native child payload.session_id points back to
+            // the parent, so never use that shared tree pointer as the child's
+            // provider alias.
+            if meta.provider_session_id.is_none() {
+                if let Some(id) = payload
+                    .id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                {
+                    meta.provider_session_id = Some(id.to_string());
+                }
+            }
             // Override session_id with the canonical one from session_meta
             if meta.session_id.is_empty() {
                 if let Some(ref id) = payload.id {
@@ -4958,7 +4972,14 @@ fn extract_codex_delegation_activity(
     line_offset: u64,
     facts: &mut Vec<ParsedProviderFact>,
 ) {
-    let Some(provider_session_id) = payload
+    // Codex 0.151 wraps SubAgentActivity in event_msg.item_completed. Older
+    // native transcripts put the activity fields directly under payload.
+    let activity = payload
+        .get("item")
+        .and_then(Value::as_object)
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("SubAgentActivity"))
+        .unwrap_or(payload);
+    let Some(provider_session_id) = activity
         .get("agent_thread_id")
         .and_then(Value::as_str)
         .map(str::trim)
@@ -4966,10 +4987,9 @@ fn extract_codex_delegation_activity(
     else {
         return;
     };
-    let Some(kind) = payload
+    let Some(kind) = activity
         .get("kind")
         .and_then(Value::as_str)
-        .map(str::to_string)
         .filter(|kind| !kind.is_empty())
     else {
         return;
@@ -4977,32 +4997,47 @@ fn extract_codex_delegation_activity(
     let Some(at) = codex_activity_timestamp(obj, payload) else {
         return;
     };
-    let mut metadata = payload.clone();
+    let mut metadata = activity.clone();
     for key in [
         "type",
         "agent_thread_id",
         "kind",
         "event_id",
         "occurred_at_ms",
+        "id",
     ] {
         metadata.remove(key);
     }
+    let parent_tool_call_id = activity
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    let event_id = activity
+        .get("event_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
+    let occurred_at_ms = activity.get("occurred_at_ms").and_then(Value::as_i64);
     let mut fact = serde_json::Map::new();
     fact.insert(
         "provider_session_id".to_string(),
         Value::from(provider_session_id.to_string()),
     );
     fact.insert("kind".to_string(), Value::from(kind));
-    if let Some(event_id) = payload
-        .get("event_id")
-        .and_then(Value::as_str)
-        .filter(|id| !id.is_empty())
-    {
+    if let Some(parent_tool_call_id) = parent_tool_call_id {
+        fact.insert(
+            "parent_tool_call_id".to_string(),
+            Value::from(parent_tool_call_id.to_string()),
+        );
+    }
+    if let Some(event_id) = event_id {
         fact.insert("event_id".to_string(), Value::from(event_id.to_string()));
     }
-    if let Some(occurred_at_ms) = payload.get("occurred_at_ms").and_then(Value::as_i64) {
+    if let Some(occurred_at_ms) = occurred_at_ms {
         fact.insert("occurred_at_ms".to_string(), Value::from(occurred_at_ms));
     }
+    let spawn_metadata = (kind == "started").then(|| metadata.clone());
     fact.insert("metadata".to_string(), Value::Object(metadata));
     push_bounded_provider_fact(
         facts,
@@ -5011,8 +5046,32 @@ fn extract_codex_delegation_activity(
         line_offset,
         Value::Object(fact),
     );
-}
 
+    // A started SubAgentActivity is source-authored graph evidence. Emit it as
+    // a bounded spawn fact so storage can bind the already-served child to this
+    // exact parent tool call; this does not represent an active-worker count.
+    if let Some(metadata) = spawn_metadata {
+        let mut child = serde_json::Map::new();
+        child.insert(
+            "provider_session_id".to_string(),
+            Value::from(provider_session_id.to_string()),
+        );
+        if let Some(parent_tool_call_id) = parent_tool_call_id {
+            child.insert(
+                "parent_tool_call_id".to_string(),
+                Value::from(parent_tool_call_id.to_string()),
+            );
+        }
+        child.insert("metadata".to_string(), Value::Object(metadata));
+        push_bounded_provider_fact(
+            facts,
+            "delegation.spawn",
+            at,
+            line_offset,
+            serde_json::json!({"children": [Value::Object(child)]}),
+        );
+    }
+}
 /// Codex provider facts. Only the handful of line shapes that carry a signal
 /// are parsed as a JSON tree; `response_item` rows, the transcript hot path,
 /// never reach this point.
@@ -5036,6 +5095,7 @@ fn extract_codex_provider_facts(
             | (
                 "event_msg",
                 "sub_agent_activity"
+                    | "item_completed"
                     | "task_started"
                     | "token_count"
                     | "task_complete"
@@ -5068,7 +5128,20 @@ fn extract_codex_provider_facts(
         }
         _ => {}
     }
-    if line_type == "event_msg" && payload_type == "sub_agent_activity" {
+    if line_type == "event_msg" && matches!(payload_type, "sub_agent_activity" | "item_completed") {
+        // Codex 0.151 emits native spawn_agent activity as an item_completed
+        // envelope whose item is SubAgentActivity. Keep support for the older
+        // direct sub_agent_activity shape, but fail closed on unrelated items.
+        if payload_type == "item_completed"
+            && payload
+                .get("item")
+                .and_then(Value::as_object)
+                .and_then(|item| item.get("type"))
+                .and_then(Value::as_str)
+                != Some("SubAgentActivity")
+        {
+            return;
+        }
         extract_codex_delegation_activity(obj, payload, line_offset, facts);
         return;
     }
@@ -6129,15 +6202,24 @@ mod tests {
         .unwrap();
 
         let result = parse_session_file_with_provider(&path, 0, Some("omp")).unwrap();
-        assert_eq!(result.metadata.parent_provider_session_id.as_deref(), Some(parent_path.to_str().unwrap()));
+        assert_eq!(
+            result.metadata.parent_provider_session_id.as_deref(),
+            Some(parent_path.to_str().unwrap())
+        );
         assert!(result.metadata.is_sidechain);
         let lineage = result
             .provider_facts
             .iter()
             .find(|fact| fact.kind == "delegation.metadata")
             .unwrap();
-        assert_eq!(lineage.payload["metadata"]["parentSession"], parent_path.to_str().unwrap());
-        assert!(!result.provider_facts.iter().any(|fact| fact.kind == "delegation.activity"));
+        assert_eq!(
+            lineage.payload["metadata"]["parentSession"],
+            parent_path.to_str().unwrap()
+        );
+        assert!(!result
+            .provider_facts
+            .iter()
+            .any(|fact| fact.kind == "delegation.activity"));
     }
 
     #[test]
@@ -8997,6 +9079,90 @@ mod tests {
         let path = transcript_dir.join("transcript.jsonl");
         std::fs::write(&path, lines.join("\n") + "\n").unwrap();
         path
+    }
+
+    #[test]
+    fn test_codex_native_spawn_activity_preserves_child_alias_and_parent_tool_edge() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent_id = "01a0c16e-870f-7a12-a92a-096312721c71";
+        let child_id = "01a0c16e-939d-78d0-8163-dbebf6107ad7";
+        let tool_call_id = "call_W1Hm1looT5CKar8ZNxJeAyP3";
+        let lines = [
+            serde_json::json!({
+                "timestamp": "2026-09-21T00:47:21.363Z",
+                "type": "session_meta",
+                "payload": {
+                    "session_id": parent_id,
+                    "id": parent_id,
+                    "source": "vscode"
+                }
+            })
+            .to_string(),
+            serde_json::json!({
+                "timestamp": "2026-09-21T00:47:24.575Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {
+                        "type": "SubAgentActivity",
+                        "agent_thread_id": child_id,
+                        "kind": "started",
+                        "id": tool_call_id,
+                        "agent_path": "/root/native_child"
+                    }
+                }
+            })
+            .to_string(),
+        ];
+        let path = dir.path().join(format!("rollout-{parent_id}.jsonl"));
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(
+            result.metadata.provider_session_id.as_deref(),
+            Some(parent_id)
+        );
+        let child_path = dir.path().join(format!("rollout-{child_id}.jsonl"));
+        std::fs::write(&child_path, serde_json::json!({
+            "timestamp": "2026-09-21T00:47:24.575Z",
+            "type": "session_meta",
+            "payload": {
+                "session_id": parent_id,
+                "id": child_id,
+                "parent_thread_id": parent_id,
+                "source": {"subagent": {"thread_spawn": {"parent_thread_id": parent_id, "depth": 1}}}
+            }
+        }).to_string() + "\n").unwrap();
+        let child_result = parse_session_file(&child_path, 0).unwrap();
+        assert_eq!(
+            child_result.metadata.provider_session_id.as_deref(),
+            Some(child_id)
+        );
+        assert_eq!(
+            child_result.metadata.forked_from_session_id.as_deref(),
+            Some(parent_id)
+        );
+        let activity = result
+            .provider_facts
+            .iter()
+            .find(|fact| fact.kind == "delegation.activity")
+            .expect("native SubAgentActivity emits an activity fact");
+        assert_eq!(
+            activity.payload["provider_session_id"].as_str(),
+            Some(child_id)
+        );
+        assert_eq!(
+            activity.payload["parent_tool_call_id"].as_str(),
+            Some(tool_call_id)
+        );
+        let spawn = result
+            .provider_facts
+            .iter()
+            .find(|fact| fact.kind == "delegation.spawn")
+            .expect("native started activity emits a source-authored spawn fact");
+        let child = &spawn.payload["children"][0];
+        assert_eq!(child["provider_session_id"].as_str(), Some(child_id));
+        assert_eq!(child["parent_tool_call_id"].as_str(), Some(tool_call_id));
     }
 
     #[test]
