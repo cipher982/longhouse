@@ -216,6 +216,11 @@ impl ShipperClient {
             CONTENT_ENCODING,
             HeaderValue::from_static(content_encoding(compression)),
         );
+        default_headers.insert(
+            "X-Longhouse-Machine-Id",
+            HeaderValue::from_str(&config.machine_name)
+                .context("invalid machine identity header value")?,
+        );
 
         if let Some(ref token) = config.api_token {
             default_headers.insert(

@@ -1296,6 +1296,11 @@ mod tests {
         let mut live_ids = Vec::new();
         for (request_line, headers, body) in requests.into_iter().skip(1) {
             assert!(request_line.starts_with("POST /api/agents/storage/v2/envelopes"));
+            assert_eq!(
+                header_value(&headers, "X-Longhouse-Machine-Id").as_deref(),
+                Some("bench-machine"),
+                "native requests must preserve machine identity beyond capability negotiation"
+            );
             let lane = header_value(&headers, STORAGE_V2_LANE_HEADER)
                 .expect("storage-v2 lane header required");
             let envelope: StorageV2Envelope = serde_json::from_slice(&body).unwrap();
