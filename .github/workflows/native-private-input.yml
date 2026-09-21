@@ -1,0 +1,141 @@
+name: Native private-input proof
+run-name: Private-input proof ${{ inputs.request_id }}
+
+# The credential-free native lane (native-test-isolation.yml) cannot supply the two
+# proofs that need real provider inputs: Cursor's macOS bootstrap/Resume behaviour, and
+# fresh bridge loss with provider survival. This sibling workflow is that lane. It is
+# dispatch-only by construction: a push- or PR-triggered job that reads provider
+# credentials would hand them to any fork that opens a pull request.
+#
+# Cost and limits: standard public-repository runners only, so macOS minutes are free
+# here and no billed larger runner is used. GitHub Free allows 5 concurrent macOS jobs
+# and queues the rest, so an explicit concurrency group keeps a push burst from
+# stacking dispatches behind the deploy gate.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact pushed source revision to test
+        required: true
+        type: string
+      request_id:
+        description: Unique dispatch receipt identity
+        required: true
+        type: string
+      proof:
+        description: Which private-input proof to run
+        required: true
+        default: cursor-helm-product-e2e
+        type: choice
+        options:
+          - cursor-helm-product-e2e
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-private-input-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  private-input:
+    if: github.repository == 'cipher982/longhouse'
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      LONGHOUSE_QA_HOSTED_TARGET: https://${{ vars.HOSTED_CANARY_SUBDOMAIN }}.longhouse.ai
+      LONGHOUSE_RUNTIME_API_URL: https://${{ vars.HOSTED_CANARY_SUBDOMAIN }}.longhouse.ai
+      LONGHOUSE_RUNTIME_AGENTS_TOKEN: ${{ secrets.HOSTED_CANARY_RUNTIME_TOKEN }}
+      CURSOR_API_KEY: ${{ secrets.LONGHOUSE_CI_CURSOR_API_KEY }}
+      # Without this, cursor-agent reaches for the macOS Keychain and raises a dialog
+      # per turn. The credential then lives in the job-owned fixture HOME and dies with it.
+      AGENT_CLI_CREDENTIAL_STORE: file
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+
+      - name: Refuse a non-disposable target
+        run: |
+          set -euo pipefail
+          case "${LONGHOUSE_QA_HOSTED_TARGET,,}" in
+            ""|https://david010.longhouse.ai|https://longhouse.ai|https://demo.longhouse.ai)
+              echo "::error::Private-input proofs must target a disposable canary, never the personal dogfood or the public demo." >&2
+              exit 1
+              ;;
+          esac
+          if [[ -z "$LONGHOUSE_RUNTIME_AGENTS_TOKEN" ]]; then
+            echo "::error::Missing HOSTED_CANARY_RUNTIME_TOKEN." >&2
+            exit 1
+          fi
+          if [[ -z "$CURSOR_API_KEY" ]]; then
+            echo "::error::Missing LONGHOUSE_CI_CURSOR_API_KEY." >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch head 2026-08-05
+
+      - name: Stage the stock Cursor provider and native engine in job-owned paths
+        id: fixture
+        run: |
+          set -euo pipefail
+          fixture_root="$(mktemp -d "$RUNNER_TEMP/private-input-fixture.XXXXXX")"
+          staging_ok=0
+          trap 'if [[ "$staging_ok" != 1 ]]; then rm -rf -- "$fixture_root"; fi' EXIT INT TERM
+          chmod 700 "$fixture_root"
+          home="$fixture_root/home"
+          workspace="$fixture_root/workspace"
+          mkdir -p "$home" "$workspace"
+          git init --quiet "$workspace"
+          python3 scripts/build/cargo.py exec -- build --manifest-path engine/Cargo.toml --profile ci --bin longhouse-engine
+          engine="$(python3 scripts/build/cargo.py artifact --profile ci --bin longhouse-engine)"
+          test -x "$engine"
+          # The installer is an untrusted network input; never expose provider credentials to it.
+          curl -fsSL https://cursor.com/install -o "$fixture_root/cursor-install.sh"
+          env -u CURSOR_API_KEY HOME="$home" bash "$fixture_root/cursor-install.sh"
+          cursor_bin="$home/.local/bin/cursor-agent"
+          test -x "$cursor_bin"
+          echo "HOME=$home" >> "$GITHUB_ENV"
+          echo "PRIVATE_INPUT_FIXTURE_ROOT=$fixture_root" >> "$GITHUB_ENV"
+          echo "PRIVATE_INPUT_ENGINE=$engine" >> "$GITHUB_ENV"
+          echo "LONGHOUSE_CURSOR_BIN=$cursor_bin" >> "$GITHUB_ENV"
+          staging_ok=1
+
+      - name: Run the proof
+        id: proof
+        run: |
+          set -euo pipefail
+          result="$RUNNER_TEMP/cursor-helm-product-e2e.json"
+          set +e
+          uv run --project server python scripts/qa/cursor-helm-product-e2e.py \
+            --engine-bin "$PRIVATE_INPUT_ENGINE" \
+            --api-url "$LONGHOUSE_RUNTIME_API_URL" \
+            --agents-token "$LONGHOUSE_RUNTIME_AGENTS_TOKEN" >"$result" 2>&1
+          status=$?
+          set -e
+          cat "$result"
+          {
+            echo "## Private-input proof: ${{ inputs.proof }}"
+            echo ''
+            echo '```json'
+            head -c 20000 "$result"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$status" -ne 0 ]]; then
+            echo "::error::Private-input proof failed (exit $status)." >&2
+            exit "$status"
+          fi
+
+      - name: Remove owned fixture state
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -n "${PRIVATE_INPUT_FIXTURE_ROOT:-}" && "$PRIVATE_INPUT_FIXTURE_ROOT" == "$RUNNER_TEMP"/* ]]; then
+            rm -rf -- "$PRIVATE_INPUT_FIXTURE_ROOT"
+          fi
