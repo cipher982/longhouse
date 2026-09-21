@@ -91,6 +91,9 @@ pub(crate) struct CursorVisibilityEvidence {
     /// A failure is worth telling the user about only while nothing has
     /// superseded it.
     pub latest_terminal: Option<(String, bool)>,
+    /// Launch identity carried by the newest accepted provider prompt.
+    /// `None` means the source did not prove a launch identity.
+    pub latest_prompt_launch_id: Option<String>,
     pub session_ended: bool,
     pub ambiguous: bool,
     pub first_activity_at: Option<DateTime<Utc>>,
@@ -142,6 +145,7 @@ pub(crate) fn append_cursor_provider_receipt(
     session_id: &str,
     conversation_id: &str,
     generation_id: &str,
+    launch_id: &str,
     source: &str,
     receipt: CursorProviderReceipt<'_>,
 ) -> Result<()> {
@@ -163,14 +167,16 @@ pub(crate) fn append_cursor_provider_receipt(
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let mut line = serde_json::to_vec(&json!({
+    let row = json!({
         "event": event,
         "observed_at": Utc::now().to_rfc3339(),
         "session_id": session_id,
         "conversation_id": conversation_id,
+        "launch_id": launch_id,
         "source": source,
         "payload": payload,
-    }))?;
+    });
+    let mut line = serde_json::to_vec(&row)?;
     line.push(b'\n');
     fs::OpenOptions::new()
         .create(true)
@@ -185,6 +191,7 @@ pub(crate) fn has_cursor_prompt_receipt(
     session_id: &str,
     conversation_id: &str,
     generation_id: &str,
+    launch_id: &str,
 ) -> bool {
     let Ok(contents) = fs::read_to_string(receipt_events_path(root, session_id)) else {
         return false;
@@ -193,6 +200,7 @@ pub(crate) fn has_cursor_prompt_receipt(
         serde_json::from_str::<Value>(line).ok().is_some_and(|row| {
             row.get("event").and_then(Value::as_str) == Some("beforeSubmitPrompt")
                 && row.get("conversation_id").and_then(Value::as_str) == Some(conversation_id)
+                && row.get("launch_id").and_then(Value::as_str) == Some(launch_id)
                 && row
                     .get("payload")
                     .and_then(|payload| payload.get("generation_id"))
@@ -377,42 +385,81 @@ pub(crate) fn load_cursor_visibility_evidence(
                 .with_context(|| format!("reading Cursor provider receipts {}", path.display()));
         }
     };
+    let root = path
+        .parent()
+        .and_then(|events| events.parent())
+        .context("Cursor receipt path has no lifecycle root")?;
     let mut evidence = parse_cursor_visibility_evidence(&contents, conversation_id)?;
     if !evidence.turns.is_empty() {
         evidence.session_ended |= session_lifecycle_ended(
-            path.parent()
-                .and_then(|events| events.parent())
-                .context("Cursor receipt path has no lifecycle root")?,
+            root,
             session_id,
+            conversation_id,
+            evidence.latest_prompt_launch_id.as_deref(),
         );
     }
     Ok(Some(evidence))
 }
 
-fn session_lifecycle_ended(root: &std::path::Path, session_id: &str) -> bool {
-    let phase_ended = fs::read(root.join(format!("{session_id}.phase.json")))
+fn session_lifecycle_ended(
+    root: &std::path::Path,
+    session_id: &str,
+    conversation_id: &str,
+    current_launch_id: Option<&str>,
+) -> bool {
+    // The phase/state files are session-scoped and can outlive a launch. Do
+    // not treat an absent identity as matching an absent field: only an
+    // explicit current launch can authorize cleanup settlement.
+    let Some(current_launch_id) = current_launch_id else {
+        return false;
+    };
+    let phase = fs::read(root.join(format!("{session_id}.phase.json")))
         .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .and_then(|value| {
-            value
-                .get("phase")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .as_deref()
-        == Some("ended");
-    if phase_ended {
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+    let phase_matches = phase.as_ref().is_some_and(|value| {
+        value.get("session_id").and_then(Value::as_str) == Some(session_id)
+            && value.get("conversation_id").and_then(Value::as_str) == Some(conversation_id)
+            && value.get("launch_id").and_then(Value::as_str) == Some(current_launch_id)
+    });
+    if phase_matches
+        && phase
+            .as_ref()
+            .and_then(|value| value.get("phase"))
+            .and_then(Value::as_str)
+            == Some("ended")
+    {
         return true;
     }
     // The launcher writes ready=false/cursor_pid=0 in its independent cleanup
     // path, so a provider crash can settle raw-only even if Cursor never emits
-    // sessionEnd. A hook turn cannot exist during the launcher's pre-ready state.
+    // sessionEnd. State has a run_id but no launch_id; correlate that run
+    // through the exact binding probe that supplied the current launch id.
+    let binding = fs::read(
+        root.join("binding-probes")
+            .join(format!("{session_id}.json")),
+    )
+    .ok()
+    .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+    let Some(binding_run_id) = binding.as_ref().and_then(|claim| {
+        (claim.get("session_id").and_then(Value::as_str) == Some(session_id)
+            && claim.get("conversation_uuid").and_then(Value::as_str) == Some(conversation_id)
+            && claim.get("launch_id").and_then(Value::as_str) == Some(current_launch_id))
+        .then(|| claim.get("run_id").and_then(Value::as_str))
+        .flatten()
+        .filter(|run_id| !run_id.trim().is_empty())
+    }) else {
+        return false;
+    };
     fs::read(root.join(format!("{session_id}.json")))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .is_some_and(|state| {
-            state.get("ready").and_then(Value::as_bool) == Some(false)
+            state.get("session_id").and_then(Value::as_str) == Some(session_id)
+                && state.get("provider_session_id").and_then(Value::as_str) == Some(conversation_id)
+                && state.get("run_id").and_then(Value::as_str) == Some(binding_run_id)
+                && state.get("ready").and_then(Value::as_bool) == Some(false)
                 && state.get("cursor_pid").and_then(Value::as_u64) == Some(0)
+                && phase_matches
         })
 }
 
@@ -425,7 +472,9 @@ pub(crate) fn parse_cursor_visibility_evidence(
     let mut latest_terminal: Option<(String, bool)> = None;
     let mut failure_indices = HashMap::<String, usize>::new();
     let mut indices = HashMap::<String, usize>::new();
-    let mut session_ended = false;
+    let mut turn_launch_ids = Vec::<Option<String>>::new();
+    let mut current_prompt_launch_id: Option<Option<String>> = None;
+    let mut session_ended_for_current_launch = false;
     let mut ambiguous = false;
     let mut first_activity_at = None;
     let mut last_activity_at = None;
@@ -438,8 +487,24 @@ pub(crate) fn parse_cursor_visibility_evidence(
             continue;
         }
         let event = row.get("event").and_then(Value::as_str).unwrap_or_default();
+        let row_launch_id = row
+            .get("launch_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
         if event == "sessionEnd" {
-            session_ended = true;
+            // Only an explicit launch identity can prove that this end belongs
+            // to the current prompt. In particular, an old end arriving after
+            // the current end must not clear the already-proven current end.
+            let matches_current = current_prompt_launch_id
+                .as_ref()
+                .and_then(|current| current.as_ref())
+                .zip(row_launch_id.as_ref())
+                .is_some_and(|(current, row)| current == row);
+            if matches_current {
+                session_ended_for_current_launch = true;
+            }
             continue;
         }
         let payload = row.get("payload").and_then(Value::as_object);
@@ -480,6 +545,9 @@ pub(crate) fn parse_cursor_visibility_evidence(
                 ambiguous |= turns.get(index).is_some_and(|turn| turn.prompt != prompt);
                 continue;
             }
+            current_prompt_launch_id = Some(row_launch_id.clone());
+            session_ended_for_current_launch = false;
+            latest_terminal = None;
             indices.insert(generation_id.to_string(), turns.len());
             turns.push(CursorProviderTurn {
                 generation_id: generation_id.to_string(),
@@ -488,6 +556,7 @@ pub(crate) fn parse_cursor_visibility_evidence(
                 stop_status: None,
                 stop_observed_at: None,
             });
+            turn_launch_ids.push(row_launch_id.clone());
             if let Some(observed_at) = observed_at {
                 first_activity_at = Some(
                     first_activity_at
@@ -505,8 +574,16 @@ pub(crate) fn parse_cursor_visibility_evidence(
         // below would otherwise drop the whole generation on the floor.
         // A committed response is itself a successful terminal receipt, so a
         // turn that answers after a failed one supersedes it even when its own
-        // stop hook is dropped.
-        if event == "afterAgentResponse" {
+        // stop hook is dropped. A late callback from an older launch must not
+        // become the current launch's terminal receipt.
+        // A missing launch id is not correlation. Keep the receipt as
+        // historical evidence, but never let it become current authority.
+        let is_current_launch = current_prompt_launch_id
+            .as_ref()
+            .and_then(|current| current.as_ref())
+            .zip(row_launch_id.as_ref())
+            .is_some_and(|(current, row_launch)| current == row_launch);
+        if event == "afterAgentResponse" && is_current_launch {
             latest_terminal = Some((generation_id.to_string(), false));
         }
         if event == "stop" {
@@ -515,10 +592,12 @@ pub(crate) fn parse_cursor_visibility_evidence(
                 .and_then(Value::as_str)
                 .map(str::trim)
             {
-                latest_terminal = Some((
-                    generation_id.to_string(),
-                    matches!(status, "error" | "aborted"),
-                ));
+                if is_current_launch {
+                    latest_terminal = Some((
+                        generation_id.to_string(),
+                        matches!(status, "error" | "aborted"),
+                    ));
+                }
             }
             if let Some(status) = payload
                 .and_then(|payload| payload.get("status"))
@@ -547,6 +626,17 @@ pub(crate) fn parse_cursor_visibility_evidence(
         let Some(index) = indices.get(generation_id).copied() else {
             continue;
         };
+        let turn_launch_matches = turn_launch_ids
+            .get(index)
+            .and_then(|launch_id| launch_id.as_ref())
+            .zip(row_launch_id.as_ref())
+            .is_some_and(|(turn_launch, row_launch)| turn_launch == row_launch);
+        // A generation id alone is not enough to correlate assistant output:
+        // an old launch can reuse it after Resume. Keep that receipt in the
+        // raw evidence, but do not put its text/status into the served turn.
+        if !turn_launch_matches {
+            continue;
+        }
         let turn = turns.get_mut(index).with_context(|| {
             format!(
                 "Cursor hook turn index was invalid at evidence line {}",
@@ -600,11 +690,13 @@ pub(crate) fn parse_cursor_visibility_evidence(
             _ => {}
         }
     }
+    let latest_prompt_launch_id = current_prompt_launch_id.clone().flatten();
     Ok(CursorVisibilityEvidence {
         turns,
         failures,
         latest_terminal,
-        session_ended,
+        latest_prompt_launch_id,
+        session_ended: session_ended_for_current_launch,
         ambiguous,
         first_activity_at,
         last_activity_at,
@@ -623,11 +715,11 @@ mod tests {
     #[test]
     fn failed_generations_survive_without_a_prompt_receipt() {
         let evidence = parse_cursor_visibility_evidence(
-            r#"{"event":"beforeSubmitPrompt","observed_at":"2026-09-09T20:50:00Z","conversation_id":"conversation","payload":{"generation_id":"human","prompt":"build it"}}
-{"event":"afterAgentResponse","observed_at":"2026-09-09T20:56:50Z","conversation_id":"conversation","payload":{"generation_id":"human","text":"done"}}
-{"event":"stop","observed_at":"2026-09-09T20:56:50Z","conversation_id":"conversation","payload":{"generation_id":"human","status":"completed"}}
-{"event":"afterAgentThought","observed_at":"2026-09-09T20:57:45Z","conversation_id":"conversation","payload":{"generation_id":"continuation","text":"thinking"}}
-{"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"conversation","payload":{"generation_id":"continuation","status":"error"}}
+            r#"{"event":"beforeSubmitPrompt","observed_at":"2026-09-09T20:50:00Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"human","prompt":"build it"}}
+{"event":"afterAgentResponse","observed_at":"2026-09-09T20:56:50Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"human","text":"done"}}
+{"event":"stop","observed_at":"2026-09-09T20:56:50Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"human","status":"completed"}}
+{"event":"afterAgentThought","observed_at":"2026-09-09T20:57:45Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"continuation","text":"thinking"}}
+{"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"continuation","status":"error"}}
 {"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"other","payload":{"generation_id":"elsewhere","status":"error"}}"#,
             "conversation",
         )
@@ -662,10 +754,10 @@ mod tests {
     #[test]
     fn a_later_completed_turn_supersedes_an_earlier_failure() {
         let evidence = parse_cursor_visibility_evidence(
-            r#"{"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"conversation","payload":{"generation_id":"failed","status":"error"}}
-{"event":"beforeSubmitPrompt","observed_at":"2026-09-09T21:10:00Z","conversation_id":"conversation","payload":{"generation_id":"next","prompt":"try again"}}
-{"event":"afterAgentResponse","observed_at":"2026-09-09T21:11:00Z","conversation_id":"conversation","payload":{"generation_id":"next","text":"fixed"}}
-{"event":"stop","observed_at":"2026-09-09T21:11:01Z","conversation_id":"conversation","payload":{"generation_id":"next","status":"completed"}}"#,
+            r#"{"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"failed","status":"error"}}
+{"event":"beforeSubmitPrompt","observed_at":"2026-09-09T21:10:00Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"next","prompt":"try again"}}
+{"event":"afterAgentResponse","observed_at":"2026-09-09T21:11:00Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"next","text":"fixed"}}
+{"event":"stop","observed_at":"2026-09-09T21:11:01Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"next","status":"completed"}}"#,
             "conversation",
         )
         .unwrap();
@@ -679,9 +771,9 @@ mod tests {
     #[test]
     fn a_committed_response_supersedes_without_its_stop_hook() {
         let evidence = parse_cursor_visibility_evidence(
-            r#"{"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"conversation","payload":{"generation_id":"failed","status":"error"}}
-{"event":"beforeSubmitPrompt","observed_at":"2026-09-09T21:10:00Z","conversation_id":"conversation","payload":{"generation_id":"next","prompt":"try again"}}
-{"event":"afterAgentResponse","observed_at":"2026-09-09T21:11:00Z","conversation_id":"conversation","payload":{"generation_id":"next","text":"fixed"}}"#,
+            r#"{"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"failed","status":"error"}}
+{"event":"beforeSubmitPrompt","observed_at":"2026-09-09T21:10:00Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"next","prompt":"try again"}}
+{"event":"afterAgentResponse","observed_at":"2026-09-09T21:11:00Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"next","text":"fixed"}}"#,
             "conversation",
         )
         .unwrap();
@@ -692,8 +784,8 @@ mod tests {
     #[test]
     fn duplicate_stop_receipts_report_one_failure() {
         let evidence = parse_cursor_visibility_evidence(
-            r#"{"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"conversation","payload":{"generation_id":"g","status":"error"}}
-{"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"conversation","payload":{"generation_id":"g","status":"error"}}"#,
+            r#"{"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g","status":"error"}}
+{"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g","status":"error"}}"#,
             "conversation",
         )
         .unwrap();
@@ -703,15 +795,15 @@ mod tests {
     #[test]
     fn activity_tracks_provider_work_not_teardown_or_unrelated_receipts() {
         let evidence = parse_cursor_visibility_evidence(
-            r#"{"event":"beforeSubmitPrompt","observed_at":"2026-07-20T14:00:00Z","conversation_id":"conversation","payload":{"generation_id":"g1","prompt":"hello"}}
-{"event":"postToolUse","observed_at":"2026-07-20T14:01:00Z","conversation_id":"conversation","payload":{"generation_id":"g1"}}
-{"event":"afterAgentResponse","observed_at":"2026-07-20T14:02:00Z","conversation_id":"conversation","payload":{"generation_id":"g1","text":"done"}}
-{"event":"stop","observed_at":"2026-07-20T14:02:01Z","conversation_id":"conversation","payload":{"generation_id":"g1","status":"completed"}}
+            r#"{"event":"beforeSubmitPrompt","observed_at":"2026-07-20T14:00:00Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","prompt":"hello"}}
+{"event":"postToolUse","observed_at":"2026-07-20T14:01:00Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1"}}
+{"event":"afterAgentResponse","observed_at":"2026-07-20T14:02:00Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","text":"done"}}
+{"event":"stop","observed_at":"2026-07-20T14:02:01Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","status":"completed"}}
 {"event":"stop","observed_at":"2026-09-04T16:51:00Z","conversation_id":"other","payload":{"generation_id":"g1","status":"completed"}}
-{"event":"stop","observed_at":"2026-09-04T16:51:00Z","conversation_id":"conversation","payload":{"generation_id":"unknown","status":"completed"}}
-{"event":"beforeSubmitPrompt","observed_at":"2026-09-04T16:51:00Z","conversation_id":"conversation","payload":{"generation_id":"exit","prompt":"/exit"}}
-{"event":"stop","observed_at":"2026-09-04T16:51:01Z","conversation_id":"conversation","payload":{"generation_id":"exit","status":"completed"}}
-{"event":"sessionEnd","observed_at":"2026-09-04T16:51:02Z","conversation_id":"conversation","payload":{}}"#,
+{"event":"stop","observed_at":"2026-09-04T16:51:00Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"unknown","status":"completed"}}
+{"event":"beforeSubmitPrompt","observed_at":"2026-09-04T16:51:00Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"exit","prompt":"/exit"}}
+{"event":"stop","observed_at":"2026-09-04T16:51:01Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"exit","status":"completed"}}
+{"event":"sessionEnd","observed_at":"2026-09-04T16:51:02Z","conversation_id":"conversation","launch_id":"launch","payload":{}}"#,
             "conversation",
         ).unwrap();
         let (started_at, last_activity_at) =
@@ -720,8 +812,8 @@ mod tests {
         assert_eq!(last_activity_at.to_rfc3339(), "2026-07-20T14:02:01+00:00");
 
         let running = parse_cursor_visibility_evidence(
-            r#"{"event":"beforeSubmitPrompt","observed_at":"2026-07-23T10:00:00Z","conversation_id":"conversation","payload":{"generation_id":"g2","prompt":"keep working"}}
-{"event":"postToolUse","observed_at":"2026-07-23T10:05:00Z","conversation_id":"conversation","payload":{"generation_id":"g2"}}"#,
+            r#"{"event":"beforeSubmitPrompt","observed_at":"2026-07-23T10:00:00Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g2","prompt":"keep working"}}
+{"event":"postToolUse","observed_at":"2026-07-23T10:05:00Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g2"}}"#,
             "conversation",
         ).unwrap();
         let (_, progressed_at) =
@@ -736,8 +828,8 @@ mod tests {
     #[test]
     fn completed_turn_waits_for_response_when_stop_arrives_first() {
         let evidence = parse_cursor_visibility_evidence(
-            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"g1","prompt":"hello"}}
-{"event":"stop","conversation_id":"conversation","payload":{"generation_id":"g1","status":"completed"}}"#,
+            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","prompt":"hello"}}
+{"event":"stop","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","status":"completed"}}"#,
             "conversation",
         )
         .unwrap();
@@ -747,9 +839,9 @@ mod tests {
         );
 
         let evidence = parse_cursor_visibility_evidence(
-            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"g1","prompt":"hello"}}
-{"event":"stop","conversation_id":"conversation","payload":{"generation_id":"g1","status":"completed"}}
-{"event":"afterAgentResponse","conversation_id":"conversation","payload":{"generation_id":"g1","text":"world"}}"#,
+            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","prompt":"hello"}}
+{"event":"stop","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","status":"completed"}}
+{"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","text":"world"}}"#,
             "conversation",
         )
         .unwrap();
@@ -760,8 +852,8 @@ mod tests {
     #[test]
     fn failed_turn_without_response_is_settled_raw_only_evidence() {
         let evidence = parse_cursor_visibility_evidence(
-            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"g1","prompt":"hello"}}
-{"event":"stop","conversation_id":"conversation","payload":{"generation_id":"g1","status":"error"}}"#,
+            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","prompt":"hello"}}
+{"event":"stop","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","status":"error"}}"#,
             "conversation",
         )
         .unwrap();
@@ -773,11 +865,11 @@ mod tests {
     fn duplicate_hooks_and_other_conversations_do_not_duplicate_turns() {
         let evidence = parse_cursor_visibility_evidence(
             r#"{"event":"beforeSubmitPrompt","conversation_id":"other","payload":{"generation_id":"g0","prompt":"ignore"}}
-{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"g1","prompt":"hello"}}
-{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"g1","prompt":"hello"}}
-{"event":"afterAgentResponse","conversation_id":"conversation","payload":{"generation_id":"g1","text":"world"}}
-{"event":"afterAgentResponse","conversation_id":"conversation","payload":{"generation_id":"g1","text":"world"}}
-{"event":"stop","conversation_id":"conversation","payload":{"generation_id":"g1","status":"completed"}}"#,
+{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","prompt":"hello"}}
+{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","prompt":"hello"}}
+{"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","text":"world"}}
+{"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","text":"world"}}
+{"event":"stop","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","status":"completed"}}"#,
             "conversation",
         )
         .unwrap();
@@ -788,11 +880,11 @@ mod tests {
     #[test]
     fn local_cursor_commands_do_not_shift_provider_turn_alignment() {
         let evidence = parse_cursor_visibility_evidence(
-            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"g1","prompt":"hello"}}
-{"event":"afterAgentResponse","conversation_id":"conversation","payload":{"generation_id":"g1","text":"world"}}
-{"event":"stop","conversation_id":"conversation","payload":{"generation_id":"g1","status":"completed"}}
-{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"g2","prompt":"/exit"}}
-{"event":"stop","conversation_id":"conversation","payload":{"generation_id":"g2","status":"completed"}}"#,
+            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","prompt":"hello"}}
+{"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","text":"world"}}
+{"event":"stop","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","status":"completed"}}
+{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g2","prompt":"/exit"}}
+{"event":"stop","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g2","status":"completed"}}"#,
             "conversation",
         )
         .unwrap();
@@ -805,10 +897,10 @@ mod tests {
     #[test]
     fn an_old_incomplete_turn_does_not_block_a_later_settled_turn() {
         let evidence = parse_cursor_visibility_evidence(
-            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"g1","prompt":"crashed"}}
-{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"g2","prompt":"recovered"}}
-{"event":"afterAgentResponse","conversation_id":"conversation","payload":{"generation_id":"g2","text":"done"}}
-{"event":"stop","conversation_id":"conversation","payload":{"generation_id":"g2","status":"completed"}}"#,
+            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","prompt":"crashed"}}
+{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g2","prompt":"recovered"}}
+{"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g2","text":"done"}}
+{"event":"stop","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g2","status":"completed"}}"#,
             "conversation",
         )
         .unwrap();
@@ -818,12 +910,12 @@ mod tests {
     #[test]
     fn interrupt_stop_transition_does_not_hide_a_later_recovery() {
         let evidence = parse_cursor_visibility_evidence(
-            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"g1","prompt":"sleep"}}
-{"event":"stop","observed_at":"2026-07-21T12:00:00Z","conversation_id":"conversation","payload":{"generation_id":"g1","status":"aborted"}}
-{"event":"stop","observed_at":"2026-07-21T12:00:01Z","conversation_id":"conversation","payload":{"generation_id":"g1","status":"error"}}
-{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"g2","prompt":"recover"}}
-{"event":"afterAgentResponse","conversation_id":"conversation","payload":{"generation_id":"g2","text":"done"}}
-{"event":"stop","conversation_id":"conversation","payload":{"generation_id":"g2","status":"completed"}}"#,
+            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","prompt":"sleep"}}
+{"event":"stop","observed_at":"2026-07-21T12:00:00Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","status":"aborted"}}
+{"event":"stop","observed_at":"2026-07-21T12:00:01Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","status":"error"}}
+{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g2","prompt":"recover"}}
+{"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g2","text":"done"}}
+{"event":"stop","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g2","status":"completed"}}"#,
             "conversation",
         )
         .unwrap();
@@ -836,8 +928,8 @@ mod tests {
     #[test]
     fn response_receipt_settles_when_stop_hook_is_missing() {
         let evidence = parse_cursor_visibility_evidence(
-            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"g1","prompt":"hello"}}
-{"event":"afterAgentResponse","conversation_id":"conversation","payload":{"generation_id":"g1","text":"world"}}"#,
+            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","prompt":"hello"}}
+{"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","text":"world"}}"#,
             "conversation",
         )
         .unwrap();
@@ -847,8 +939,8 @@ mod tests {
     #[test]
     fn completed_turn_without_receipt_degrades_to_raw_only_after_grace() {
         let evidence = parse_cursor_visibility_evidence(
-            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"g1","prompt":"hello"}}
-{"event":"stop","observed_at":"2026-07-21T12:00:00Z","conversation_id":"conversation","payload":{"generation_id":"g1","status":"completed"}}"#,
+            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","prompt":"hello"}}
+{"event":"stop","observed_at":"2026-07-21T12:00:00Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","status":"completed"}}"#,
             "conversation",
         )
         .unwrap();
@@ -865,25 +957,67 @@ mod tests {
     #[test]
     fn session_end_settles_incomplete_turn_raw_only() {
         let evidence = parse_cursor_visibility_evidence(
+            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","prompt":"hello"}}
+{"event":"sessionEnd","conversation_id":"conversation","launch_id":"launch","payload":{}}"#,
+            "conversation",
+        )
+        .unwrap();
+        assert!(evidence.session_ended);
+        assert_eq!(evidence.latest_prompt_launch_id.as_deref(), Some("launch"));
+        assert_eq!(evidence.unsettled_reason(), None);
+    }
+
+    #[test]
+    fn session_end_without_launch_identity_does_not_settle() {
+        let evidence = parse_cursor_visibility_evidence(
             r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"g1","prompt":"hello"}}
 {"event":"sessionEnd","conversation_id":"conversation","payload":{}}"#,
             "conversation",
         )
         .unwrap();
-        assert!(evidence.session_ended);
-        assert_eq!(evidence.unsettled_reason(), None);
+        assert!(!evidence.session_ended);
+        assert_eq!(evidence.latest_prompt_launch_id, None);
+        assert_eq!(
+            evidence.unsettled_reason(),
+            Some(CursorEvidenceWait::InFlight)
+        );
     }
 
     #[test]
     fn conflicting_duplicate_receipts_are_ambiguous() {
         let evidence = parse_cursor_visibility_evidence(
-            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"g1","prompt":"hello"}}
-{"event":"afterAgentResponse","conversation_id":"conversation","payload":{"generation_id":"g1","text":"first"}}
-{"event":"afterAgentResponse","conversation_id":"conversation","payload":{"generation_id":"g1","text":"second"}}"#,
+            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","prompt":"hello"}}
+{"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","text":"first"}}
+{"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","text":"second"}}"#,
             "conversation",
         )
         .unwrap();
         assert!(evidence.ambiguous);
+    }
+
+    #[test]
+    fn console_receipt_writer_records_the_explicit_launch_identity() {
+        let root = tempfile::tempdir().unwrap();
+        append_cursor_provider_receipt(
+            root.path(),
+            "session",
+            "conversation",
+            "run-new",
+            "launch-new",
+            "cursor_print",
+            CursorProviderReceipt::Prompt("hello"),
+        )
+        .unwrap();
+        let row: Value = serde_json::from_str(
+            fs::read_to_string(receipt_events_path(root.path(), "session"))
+                .unwrap()
+                .trim(),
+        )
+        .unwrap();
+        assert_eq!(
+            row.get("launch_id").and_then(Value::as_str),
+            Some("launch-new")
+        );
     }
 
     #[test]
@@ -895,6 +1029,7 @@ mod tests {
                 "session",
                 "conversation",
                 "run-1",
+                "launch-1",
                 "cursor_print",
                 CursorProviderReceipt::Prompt("hello"),
             )
@@ -904,6 +1039,7 @@ mod tests {
                 "session",
                 "conversation",
                 "run-1",
+                "launch-1",
                 "cursor_print",
                 CursorProviderReceipt::Response("world"),
             )
@@ -913,6 +1049,7 @@ mod tests {
                 "session",
                 "conversation",
                 "run-1",
+                "launch-1",
                 "cursor_print",
                 CursorProviderReceipt::Stop("completed"),
             )
@@ -931,12 +1068,145 @@ mod tests {
     #[test]
     fn launcher_cleanup_settles_crashed_session_without_session_end_hook() {
         let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("binding-probes")).unwrap();
         fs::write(
-            root.path().join("session.json"),
-            r#"{"session_id":"session","ready":false,"cursor_pid":0}"#,
+            root.path().join("binding-probes/session.json"),
+            r#"{"session_id":"session","conversation_uuid":"conversation","launch_id":"launch","run_id":"run"}"#,
         )
         .unwrap();
-        assert!(session_lifecycle_ended(root.path(), "session"));
+        fs::write(
+            root.path().join("session.phase.json"),
+            r#"{"session_id":"session","conversation_id":"conversation","launch_id":"launch","phase":"active"}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("session.json"),
+            r#"{"session_id":"session","provider_session_id":"conversation","run_id":"run","ready":false,"cursor_pid":0}"#,
+        )
+        .unwrap();
+        assert!(session_lifecycle_ended(
+            root.path(),
+            "session",
+            "conversation",
+            Some("launch"),
+        ));
+    }
+
+    #[test]
+    fn old_ended_launch_does_not_settle_new_launch() {
+        let contents = r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"old-launch","payload":{"generation_id":"old-generation","prompt":"old"}}
+{"event":"stop","conversation_id":"conversation","launch_id":"old-launch","payload":{"generation_id":"old-generation","status":"error"}}
+{"event":"sessionEnd","conversation_id":"conversation","launch_id":"old-launch","payload":{}}
+{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"new-launch","payload":{"generation_id":"new-generation","prompt":"new"}}
+{"event":"stop","conversation_id":"conversation","launch_id":"old-launch","payload":{"generation_id":"old-generation","status":"error"}}"#;
+        let evidence = parse_cursor_visibility_evidence(contents, "conversation").unwrap();
+        assert_eq!(evidence.turns.len(), 2);
+        assert_eq!(evidence.turns[0].generation_id, "old-generation");
+        assert_eq!(evidence.turns[1].generation_id, "new-generation");
+        assert!(evidence.unsuperseded_failure().is_none());
+        assert!(!evidence.session_ended);
+        assert_eq!(
+            evidence.unsettled_reason_at(
+                DateTime::parse_from_rfc3339("2026-09-21T00:00:00Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            ),
+            Some(CursorEvidenceWait::InFlight),
+        );
+    }
+
+    #[test]
+    fn response_from_another_launch_does_not_enter_current_turn() {
+        let evidence = parse_cursor_visibility_evidence(
+            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"new-launch","payload":{"generation_id":"generation","prompt":"new"}}
+{"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"old-launch","payload":{"generation_id":"generation","text":"old answer"}}"#,
+            "conversation",
+        )
+        .unwrap();
+        assert_eq!(evidence.turns.len(), 1);
+        assert_eq!(evidence.turns[0].response_text, None);
+        assert_eq!(evidence.latest_terminal, None);
+        assert_eq!(
+            evidence.unsettled_reason(),
+            Some(CursorEvidenceWait::InFlight)
+        );
+    }
+
+    #[test]
+    fn current_session_end_survives_a_late_end_from_the_old_launch() {
+        let evidence = parse_cursor_visibility_evidence(
+            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"old-launch","payload":{"generation_id":"old-generation","prompt":"old"}}
+{"event":"sessionEnd","conversation_id":"conversation","launch_id":"old-launch","payload":{}}
+{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"new-launch","payload":{"generation_id":"new-generation","prompt":"new"}}
+{"event":"sessionEnd","conversation_id":"conversation","launch_id":"new-launch","payload":{}}
+{"event":"sessionEnd","conversation_id":"conversation","launch_id":"old-launch","payload":{}}"#,
+            "conversation",
+        )
+        .unwrap();
+        assert!(evidence.session_ended);
+        assert_eq!(
+            evidence.latest_prompt_launch_id.as_deref(),
+            Some("new-launch")
+        );
+        assert_eq!(evidence.unsettled_reason(), None);
+    }
+
+    #[test]
+    fn stale_phase_and_state_cannot_settle_new_launch() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("binding-probes")).unwrap();
+        fs::write(
+            root.path().join("binding-probes/session.json"),
+            r#"{"session_id":"session","conversation_uuid":"conversation","launch_id":"new-launch","run_id":"new-run"}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("session.phase.json"),
+            r#"{"session_id":"session","conversation_id":"conversation","launch_id":"old-launch","phase":"ended"}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("session.json"),
+            r#"{"session_id":"session","provider_session_id":"conversation","run_id":"old-run","ready":false,"cursor_pid":0}"#,
+        )
+        .unwrap();
+        assert!(!session_lifecycle_ended(
+            root.path(),
+            "session",
+            "conversation",
+            Some("new-launch"),
+        ));
+
+        fs::write(
+            root.path().join("session.phase.json"),
+            r#"{"session_id":"session","conversation_id":"conversation","launch_id":"new-launch","phase":"active"}"#,
+        )
+        .unwrap();
+        // The phase belongs to the current launch, but cleanup state is from
+        // the old execution. Launch identity alone must not settle it.
+        assert!(!session_lifecycle_ended(
+            root.path(),
+            "session",
+            "conversation",
+            Some("new-launch"),
+        ));
+        fs::write(
+            root.path().join("session.json"),
+            r#"{"session_id":"session","provider_session_id":"conversation","run_id":"new-run","ready":false,"cursor_pid":0}"#,
+        )
+        .unwrap();
+        assert!(session_lifecycle_ended(
+            root.path(),
+            "session",
+            "conversation",
+            Some("new-launch"),
+        ));
+        assert!(!session_lifecycle_ended(
+            root.path(),
+            "session",
+            "conversation",
+            None,
+        ));
     }
 }
 

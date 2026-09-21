@@ -656,6 +656,7 @@ impl CursorPrintSink {
                     &self.session_id,
                     &self.provider_thread_id,
                     &self.run_id,
+                    &self.launch_id,
                     CURSOR_PRINT_ADAPTER,
                     provider_receipt,
                 ) {
@@ -743,6 +744,7 @@ impl CursorPrintSink {
                 &self.session_id,
                 &self.provider_thread_id,
                 &self.run_id,
+                &self.launch_id,
                 CURSOR_PRINT_ADAPTER,
                 crate::cursor_visibility::CursorProviderReceipt::Stop(status),
             ) {
@@ -1035,6 +1037,7 @@ fn promote_binding(
         session_id,
         provider_thread_id,
         run_id,
+        launch_id,
     ) {
         anyhow::bail!("Cursor stream binding cannot publish before its prompt receipt");
     }
@@ -1308,6 +1311,7 @@ mod tests {
             &session_id,
             &provider_thread_id,
             &run_id,
+            &launch_id,
             CURSOR_PRINT_ADAPTER,
             crate::cursor_visibility::CursorProviderReceipt::Prompt("hello"),
         )

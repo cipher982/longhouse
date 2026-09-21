@@ -284,6 +284,11 @@ pub struct CursorBlobVisit {
 /// Visit exact generic blob wrappers through one WAL-consistent cursor without
 /// retaining the table in memory. Returning false stops at the current row and
 /// reports that source rows remain.
+///
+/// The hash-sorted cursor is retained only while a page is full or a bounded
+/// callback stops early. A short page proves EOF; clearing the cursor there
+/// makes the next externally-triggered capture restart at the head, so a later
+/// lower-sorting content hash cannot remain stranded behind a stale mark.
 pub fn visit_cursor_blob_records(
     path: &Path,
     conversation_uuid: &str,
@@ -328,7 +333,14 @@ pub fn visit_cursor_blob_records(
     drop(statement);
     snapshot.commit()?;
     Ok(CursorBlobVisit {
-        last_blob_id,
+        // A short page is the only bounded proof that the hash-sorted walk
+        // reached EOF. Do not persist its high-water ID: the next external
+        // capture must restart at the head to see lower IDs inserted later.
+        last_blob_id: if visited == max_rows {
+            last_blob_id
+        } else {
+            None
+        },
         has_more: visited == max_rows,
     })
 }
@@ -951,6 +963,54 @@ mod tests {
     }
 
     #[test]
+    fn completed_blob_scan_restarts_for_a_later_lower_hash_id() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("store.db");
+        let conn = fixture(&path);
+        conn.execute(
+            "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+            rusqlite::params!["ffffffffffffffffffffffffffffffff", vec![1_u8]],
+        )
+        .unwrap();
+        drop(conn);
+
+        let first =
+            visit_cursor_blob_records(&path, CONVERSATION_ID, "fixture", None, 256, |_| Ok(true))
+                .unwrap();
+        assert!(!first.has_more);
+        assert_eq!(
+            first.last_blob_id, None,
+            "confirmed EOF clears the hash mark"
+        );
+
+        let conn = Connection::open(&path).unwrap();
+        conn.execute(
+            "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+            rusqlite::params!["00000000000000000000000000000000", vec![2_u8]],
+        )
+        .unwrap();
+        drop(conn);
+
+        let mut second_ids = Vec::new();
+        let second = visit_cursor_blob_records(
+            &path,
+            CONVERSATION_ID,
+            "fixture",
+            first.last_blob_id.as_deref(),
+            256,
+            |record| {
+                let value: Value = serde_json::from_slice(&record)?;
+                second_ids.push(value["blob_id"].as_str().unwrap().to_string());
+                Ok(true)
+            },
+        )
+        .unwrap();
+        assert!(!second.has_more);
+        assert!(second_ids.contains(&"00000000000000000000000000000000".to_string()));
+        assert_eq!(second.last_blob_id, None);
+    }
+
+    #[test]
     fn blob_capture_pages_without_rescanning_the_first_page() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("store.db");
@@ -975,6 +1035,16 @@ mod tests {
         assert!(first.has_more);
         assert_eq!(first_ids.len(), 256);
 
+        // A write after the first bounded page belongs to the continuation
+        // range even though this scan's first page is already complete.
+        let conn = Connection::open(&path).unwrap();
+        conn.execute(
+            "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+            rusqlite::params!["page-254-new", vec![254_u8]],
+        )
+        .unwrap();
+        drop(conn);
+
         let mut second_ids = Vec::new();
         let second = visit_cursor_blob_records(
             &path,
@@ -990,7 +1060,12 @@ mod tests {
         )
         .unwrap();
         assert!(!second.has_more);
-        assert_eq!(second_ids.len(), 46);
+        assert_eq!(
+            second.last_blob_id, None,
+            "the empty tail confirms EOF and clears continuation"
+        );
+        assert_eq!(second_ids.len(), 47);
+        assert!(second_ids.contains(&"page-254-new".to_string()));
         assert!(first_ids.iter().all(|id| !second_ids.contains(id)));
     }
 }
