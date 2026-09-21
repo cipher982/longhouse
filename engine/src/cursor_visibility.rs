@@ -41,7 +41,6 @@ fn is_provider_work_event(event: &str) -> bool {
     PROVIDER_WORK_EVENTS.contains(&event)
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CursorEvidenceWait {
     InFlight,
@@ -641,8 +640,11 @@ pub(crate) fn parse_cursor_visibility_evidence(
         let turn = turns.get_mut(index).with_context(|| {
             format!("Cursor hook turn index was invalid at evidence line {}", line_index + 1)
         })?;
-        let turn_launch_matches = turn.launch_id.as_deref().zip(row_launch_id)
-            .is_some_and(|(expected, observed)| expected == observed);
+        // A missing launch id pairs with a missing launch id: this turn was
+        // created by a row that had none, so its own receipt still applies.
+        // Explicit launches that disagree never pair, and authority (terminal
+        // receipts, adoption, session end) still requires the current binding.
+        let turn_launch_matches = turn.launch_id.as_deref() == row_launch_id;
         if !turn_launch_matches {
             if !is_current_launch || Some(index) != latest_turn_index
                 || turn.response_text.is_some() || turn.launch_id.is_none()
