@@ -1253,6 +1253,54 @@ mod tests {
         assert!(evidence.unsuperseded_failure().is_none());
         assert!(!evidence.session_ended);
     }
+    /// The load path is the authority boundary: the binding claim supplies the
+    /// current launch, and a claim naming another conversation is not authority.
+    #[test]
+    fn load_takes_current_launch_authority_from_the_binding_claim() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join("binding-probes")).unwrap();
+        fs::create_dir_all(root.path().join("hook-events")).unwrap();
+        fs::write(
+            root.path().join("binding-probes/session.json"),
+            r#"{"session_id":"session","conversation_uuid":"conversation","launch_id":"new-launch","run_id":"run"}"#,
+        )
+        .unwrap();
+        fs::write(
+            receipt_events_path(root.path(), "session"),
+            concat!(
+                r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"old-launch","payload":{"generation_id":"g1","prompt":"work"}}"#,
+                "\n",
+                r#"{"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"new-launch","payload":{"generation_id":"g1","text":"resumed answer"}}"#,
+                "\n",
+                r#"{"event":"sessionEnd","conversation_id":"conversation","launch_id":"old-launch","payload":{}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        let evidence = load_cursor_visibility_evidence_in(root.path(), "session", "conversation")
+            .unwrap()
+            .expect("a receipt journal exists");
+        assert_eq!(evidence.current_launch_id.as_deref(), Some("new-launch"));
+        assert_eq!(
+            evidence.turns[0].response_text.as_deref(),
+            Some("resumed answer")
+        );
+        assert!(!evidence.session_ended);
+        assert_eq!(evidence.unsettled_reason(), None);
+
+        // A claim naming another conversation is not execution authority.
+        fs::write(
+            root.path().join("binding-probes/session.json"),
+            r#"{"session_id":"session","conversation_uuid":"other","launch_id":"new-launch","run_id":"run"}"#,
+        )
+        .unwrap();
+        let evidence = load_cursor_visibility_evidence_in(root.path(), "session", "conversation")
+            .unwrap()
+            .expect("a receipt journal exists");
+        assert_eq!(evidence.current_launch_id, None);
+        assert_eq!(evidence.turns[0].response_text, None);
+    }
 }
 
 #[cfg(test)]
