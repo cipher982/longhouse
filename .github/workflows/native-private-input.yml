@@ -99,9 +99,11 @@ jobs:
           # The engine refuses to build without a generated identity, and the file is
           # gitignored, so each job generates its own.
           python3 scripts/build/generate_build_identity.py
-          python3 scripts/build/cargo.py exec -- build --manifest-path engine/Cargo.toml --profile ci --bin longhouse-engine
+          python3 scripts/build/cargo.py exec -- build --manifest-path engine/Cargo.toml --profile ci --bin longhouse-engine --bin longhouse
           engine="$(python3 scripts/build/cargo.py artifact --profile ci --bin longhouse-engine)"
+          cli="$(python3 scripts/build/cargo.py artifact --profile ci --bin longhouse)"
           test -x "$engine"
+          test -x "$cli"
           # The installer is an untrusted network input; never expose provider credentials to it.
           curl -fsSL https://cursor.com/install -o "$fixture_root/cursor-install.sh"
           env -u CURSOR_API_KEY HOME="$home" bash "$fixture_root/cursor-install.sh"
@@ -110,6 +112,7 @@ jobs:
           echo "HOME=$home" >> "$GITHUB_ENV"
           echo "PRIVATE_INPUT_FIXTURE_ROOT=$fixture_root" >> "$GITHUB_ENV"
           echo "PRIVATE_INPUT_ENGINE=$engine" >> "$GITHUB_ENV"
+          echo "PRIVATE_INPUT_LONGHOUSE=$cli" >> "$GITHUB_ENV"
           echo "LONGHOUSE_CURSOR_BIN=$cursor_bin" >> "$GITHUB_ENV"
           staging_ok=1
 
@@ -120,6 +123,7 @@ jobs:
           result="$RUNNER_TEMP/cursor-helm-product-e2e.json"
           set +e
           uv run --project server python scripts/qa/cursor-helm-product-e2e.py \
+            --longhouse-bin "$PRIVATE_INPUT_LONGHOUSE" \
             --engine-bin "$PRIVATE_INPUT_ENGINE" \
             --api-url "$LONGHOUSE_RUNTIME_API_URL" \
             --agents-token "$LONGHOUSE_RUNTIME_AGENTS_TOKEN" >"$result" 2>&1
