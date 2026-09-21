@@ -61,14 +61,22 @@ pub fn codex_thread_value_is_subagent(thread: &Value) -> bool {
 
 pub fn codex_thread_value_subagent_source(thread: &Value) -> Option<CodexSubagentSource> {
     let mut source = thread.get("source").and_then(parse_codex_subagent_source);
-    // Current app-server Thread carries an explicit parent independently of
-    // its source tag. Only subagent threads can have this field.
+    // Native Thread.parentThreadId is subagent-only; root forks instead use
+    // forkedFromId. This evidence is independent of an unknown source tag.
     if let Some(parent_thread_id) = extract_parent_thread_id(thread) {
         source
             .get_or_insert_with(CodexSubagentSource::default)
             .parent_thread_id = Some(parent_thread_id);
     }
     source
+}
+
+pub fn codex_thread_value_has_primary_source(thread: &Value) -> bool {
+    let Some(source) = thread.get("source") else {
+        return false;
+    };
+    matches!(source.as_str(), Some("cli" | "vscode" | "exec" | "mcp"))
+        || source.get("custom").is_some_and(Value::is_string)
 }
 
 pub fn codex_rollout_file_is_subagent(path: &Path) -> bool {

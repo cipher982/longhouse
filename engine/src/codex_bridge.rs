@@ -24,8 +24,8 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::codex_source::{
-    codex_rollout_file_is_subagent, codex_thread_value_is_subagent,
-    codex_thread_value_subagent_source,
+    codex_rollout_file_is_subagent, codex_thread_value_has_primary_source,
+    codex_thread_value_is_subagent, codex_thread_value_subagent_source,
 };
 use crate::text::truncate_tail_chars;
 
@@ -4749,7 +4749,8 @@ async fn process_notification(
     let params = value.get("params").cloned().unwrap_or(Value::Null);
     if method != "thread/started" {
         if let Some(thread_id) = different_notification_thread_id(&params, context) {
-            if context.rejected_thread_ids.contains(&thread_id) {
+            if method != "thread/status/changed" || context.rejected_thread_ids.contains(&thread_id)
+            {
                 return Ok(None);
             }
             let thread = params.get("thread");
@@ -4757,14 +4758,10 @@ async fn process_notification(
                 context.rejected_thread_ids.insert(thread_id);
                 return Ok(None);
             }
-            if thread
-                .and_then(|value| value.get("source"))
-                .is_none_or(Value::is_null)
-            {
+            if !thread.is_some_and(codex_thread_value_has_primary_source) {
                 // App-server can broadcast child activity without its thread header.
                 // A bare status is not evidence that the controlled thread changed.
-                return Ok((method == "thread/status/changed")
-                    .then_some(BridgeFollowup::InspectThread { thread_id }));
+                return Ok(Some(BridgeFollowup::InspectThread { thread_id }));
             }
         }
     }
@@ -7028,19 +7025,42 @@ async fn handle_bridge_followup(
     loop {
         match followup {
             BridgeFollowup::InspectThread { thread_id } => {
-                let response = match send_request_with_runtime(
-                    client,
-                    "thread/read",
-                    json!({"threadId": thread_id, "includeTurns": false}),
-                    config,
-                    context,
+                let controlled_thread = context.state.thread_id.clone();
+                let request_id = client.next_request_id;
+                let response = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    send_request_with_runtime(
+                        client,
+                        "thread/read",
+                        json!({"threadId": thread_id, "includeTurns": false}),
+                        config,
+                        context,
+                    ),
                 )
-                .await
-                {
-                    Ok(response) => response,
-                    Err(error) => {
+                .await;
+                if response.is_err() {
+                    client.pending_methods.remove(&request_id);
+                }
+                // A real TUI switch received during the read takes precedence.
+                // Its followup was deferred by send_request_with_runtime.
+                if context.state.thread_id != controlled_thread {
+                    let Some(next) = subscribe_current_thread_without_path(context)? else {
+                        return Ok(());
+                    };
+                    followup = next;
+                    continue;
+                }
+                let response = match response {
+                    Ok(Ok(response)) => response,
+                    Ok(Err(error)) => {
                         eprintln!(
                             "[codex-bridge] could not classify foreign thread {thread_id}: {error}"
+                        );
+                        return Ok(());
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "[codex-bridge] timed out classifying foreign thread {thread_id}"
                         );
                         return Ok(());
                     }
@@ -7055,7 +7075,7 @@ async fn handle_bridge_followup(
                     context.rejected_thread_ids.insert(thread_id);
                     return Ok(());
                 }
-                if thread.get("source").is_none_or(Value::is_null) {
+                if !codex_thread_value_has_primary_source(thread) {
                     return Ok(());
                 }
                 let verified_status = json!({
@@ -10592,6 +10612,7 @@ mod tests {
                 "method": "turn/completed",
                 "params": {
                     "threadId": "thr-child",
+                    "thread": {"id": "thr-child", "source": "cli"},
                     "turn": {
                         "id": "turn-child",
                         "status": "completed"
@@ -10964,7 +10985,12 @@ mod tests {
 
     #[tokio::test]
     async fn status_only_thread_switch_requires_read_only_source_classification() {
-        for child in [true, false] {
+        for (source, child, expected_root) in [
+            ("unknown", true, None),
+            ("unknown", false, None),
+            ("cli", false, Some("thr-candidate")),
+            ("unknown", true, Some("thr-newer")),
+        ] {
             let temp = tempfile::tempdir().unwrap();
             let config = make_test_run_config(&temp);
             let mut context = make_test_context(&temp);
@@ -10987,16 +11013,21 @@ mod tests {
             assert_eq!(context.state.status, "ready");
             let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
             let (events_tx, events_rx) = mpsc::unbounded_channel();
-            let source = if child { "unknown" } else { "cli" };
+            if expected_root == Some("thr-newer") {
+                events_tx.send(StreamEvent::Rpc(json!({
+                    "method": "thread/status/changed",
+                    "params": {"thread": {"id": "thr-newer", "source": "cli", "status": {"type": "active"}}}
+                }))).unwrap();
+            }
             events_tx.send(StreamEvent::Rpc(json!({
                 "id": 1,
-                "result": {"thread": {"id": "thr-candidate", "source": source, "parentThreadId": child.then_some("thr-parent"), "status": {"type": "active"}}}
+                "result": {"thread": {"id": "thr-candidate", "source": source, "parentThreadId": child.then_some("thr-parent"), "forkedFromId": (source == "cli").then_some("thr-parent"), "status": {"type": "active"}}}
             }))).unwrap();
-            if !child {
+            if let Some(expected_root) = expected_root {
                 events_tx
                     .send(StreamEvent::Rpc(json!({
                         "id": 2,
-                        "result": {"thread": {"id": "thr-candidate", "source": "cli", "turns": []}}
+                        "result": {"thread": {"id": expected_root, "source": "cli", "turns": []}}
                     })))
                     .unwrap();
             }
@@ -11019,14 +11050,14 @@ mod tests {
             let first: Value = serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
             assert_eq!(first["method"], "thread/read");
             assert_eq!(first["params"]["includeTurns"], false);
-            if child {
+            if expected_root.is_none() {
                 assert_eq!(context.state.thread_id.as_deref(), Some("thr-parent"));
                 assert_eq!(context.state.active_turn_id.as_deref(), Some("turn-parent"));
                 assert_eq!(context.state.status, "ready");
                 assert_eq!(context.state.last_error, None);
                 assert!(
                     outbound_rx.try_recv().is_err(),
-                    "a child must never be resumed by its parent bridge"
+                    "a child or unclassified thread must never be resumed"
                 );
                 assert_eq!(process_notification(
                     &json!({"method": "item/agentMessage/delta", "params": {"threadId": "thr-candidate", "delta": "child output"}}),
@@ -11034,12 +11065,23 @@ mod tests {
                     &mut context,
                 ).await.unwrap(), None);
                 assert_eq!(context.state.thread_id.as_deref(), Some("thr-parent"));
+                if !child {
+                    process_notification(
+                        &json!({
+                            "method": "thread/status/changed",
+                            "params": {"thread": {"id": "thr-candidate", "source": "cli", "status": {"type": "active"}}}
+                        }),
+                        &config,
+                        &mut context,
+                    ).await.unwrap();
+                    assert_eq!(context.state.thread_id.as_deref(), Some("thr-candidate"));
+                }
             } else {
                 let resumed: Value =
                     serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
                 assert_eq!(resumed["method"], "thread/resume");
-                assert_eq!(resumed["params"]["threadId"], "thr-candidate");
-                assert_eq!(context.state.thread_id.as_deref(), Some("thr-candidate"));
+                assert_eq!(resumed["params"]["threadId"], expected_root.unwrap());
+                assert_eq!(context.state.thread_id.as_deref(), expected_root);
                 assert_eq!(context.state.status, "ready");
             }
         }

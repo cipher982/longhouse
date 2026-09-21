@@ -134,6 +134,9 @@ class PresenceIn(UTCBaseModel):
     occurred_at: Optional[datetime] = None
     dedupe_key: Optional[str] = None
     delegation: Optional[DelegationSnapshotIn] = None
+    # Managed hooks carry the exact provider run generation from the launcher;
+    # it is required to bind canonical facts without a timestamp join.
+    run_id: Optional[UUID] = None
     # Managed hooks report under the Longhouse session id; the provider-native
     # id rides along so the server can re-bind the alias without waiting for a
     # transcript ship (e.g. after an out-of-band resume rotates the native id).
@@ -184,6 +187,7 @@ async def upsert_presence(
         occurred_at=now,
         freshness_ms=phase_freshness_ms(payload.state),
         dedupe_key=runtime_dedupe_key,
+        run_id=payload.run_id,
         payload=({"delegation": payload.delegation.model_dump(exclude_none=True)} if payload.delegation is not None else {}),
     )
     runtime_events = [runtime_event]

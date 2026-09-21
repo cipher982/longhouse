@@ -116,6 +116,17 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
         "transcript_path": transcript_path,
         "control_path": if managed_session_id.is_some() { "managed" } else { "unmanaged" },
     });
+    // Managed launchers carry the exact durable run generation in the
+    // environment. Preserve it on the hook event so Runtime Host can bind
+    // provider facts to the run without a timestamp or session join.
+    if managed_session_id.is_some() {
+        if let Some(run_id) = std::env::var("LONGHOUSE_RUN_ID")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        {
+            payload["run_id"] = json!(run_id);
+        }
+    }
     // The in-flight registry rides every presence observation that carries it.
     // The daemon re-posts the latest observation per session, so the snapshot
     // stays asserted until Claude stops reporting it.
