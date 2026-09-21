@@ -124,9 +124,7 @@ export function getSessionHeaderState(
     return { tone: "unknown", text: "Activity uncertain" };
   }
 
-  const lastMs = Date.parse(
-    facts.last_result_at ?? facts.activity.observed_at ?? "",
-  );
+  const lastMs = Date.parse(facts.last_result_at ?? "");
   const clock = formatClockTime(lastMs);
   if (closed) {
     return { tone: "cool", text: clock ? `Ended ${clock}` : "Ended" };

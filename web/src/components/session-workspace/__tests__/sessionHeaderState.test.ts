@@ -161,6 +161,19 @@ describe("getSessionHeaderState", () => {
     expect(state.tone).toBe("cool");
     expect(state.text).toMatch(/^Idle since/);
   });
+
+  it("does not invent a new idle boundary when heartbeat evidence renews", () => {
+    const first = getSessionHeaderState(
+      session({ observedAt: "2026-04-15T16:12:00Z" }),
+      Date.parse("2026-04-15T16:12:00Z"),
+    );
+    const renewed = getSessionHeaderState(
+      session({ observedAt: "2026-04-15T16:22:00Z" }),
+      Date.parse("2026-04-15T16:22:00Z"),
+    );
+    expect(renewed).toEqual(first);
+    expect(renewed.tone).toBe("cool");
+  });
 });
 
 describe("buildSessionMetaSentence", () => {

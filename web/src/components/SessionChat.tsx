@@ -1548,9 +1548,10 @@ export function SessionChat({
   const composerUsingLabel =
     composerDelegatedLabel ?? (activityTool ? `Using ${activityTool}` : "Working");
   const composerLastTurnMs = Date.parse(
-    session.session_state.last_result_at ?? activity.observed_at ?? "",
+    session.session_state.last_result_at ?? "",
   );
   const composerIdleClock = formatClockTime(composerLastTurnMs);
+  const composerObservedClock = formatClockTime(Date.parse(activity.observed_at ?? ""));
 
   // Dock layout: this renders inside the composer frame itself, between
   // the head row and the input (see below) — one framed object, not a
@@ -1835,9 +1836,9 @@ export function SessionChat({
                     <span className="session-chat-composer__head-label">
                       Activity uncertain
                     </span>
-                    {composerIdleClock ? (
+                    {composerObservedClock ? (
                       <span className="session-chat-composer__head-detail">
-                        last observed at {composerIdleClock}
+                        last observed at {composerObservedClock}
                       </span>
                     ) : null}
                   </>
