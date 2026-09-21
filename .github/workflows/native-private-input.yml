@@ -23,13 +23,6 @@ on:
         description: Unique dispatch receipt identity
         required: true
         type: string
-      proof:
-        description: Which private-input proof to run
-        required: true
-        default: cursor-helm-product-e2e
-        type: choice
-        options:
-          - cursor-helm-product-e2e
 
 permissions:
   contents: read
@@ -141,7 +134,7 @@ jobs:
           set -e
           cat "$result"
           {
-            echo "## Private-input proof: ${{ inputs.proof }}"
+            echo "## Private-input proof"
             echo ''
             echo '```json'
             head -c 20000 "$result"
