@@ -38,6 +38,7 @@ const STATE_DESCRIPTION: Record<CertificationState, string> = {
   stale: "factory proof expired",
   failing: "latest factory run failing",
   unproven: "not yet proven",
+  unavailable: "certification status unavailable",
 };
 
 function joinClause(parts: string[]): string {
@@ -51,7 +52,10 @@ function joinClause(parts: string[]): string {
  * "Launch, send, and interrupt" directly beside a chip reading Interrupt: not
  * supported.
  */
-export function providerSummary(certified: ProvenChips): string {
+export function providerSummary(certified: ProvenChips, unavailable = false): string {
+  if (unavailable) {
+    return "Certification status is unavailable right now.";
+  }
   const claims: Array<[boolean, string]> = [
     [certified.launchAndSend, "launch and send"],
     [certified.interrupt, "interrupt"],
@@ -101,6 +105,7 @@ function CapabilityChip({
 export function IntegrationsSection() {
   const providers = getLaunchProviderSupportList();
   const certification = useProviderCertification();
+  const unavailable = certification === null;
   const certified = new Map(providers.map((provider) => [provider.id, certifiedChips(provider.id, provider.proven, certification)]));
   const searchable = providers.filter((provider) => certified.get(provider.id)?.search);
 
@@ -141,7 +146,7 @@ export function IntegrationsSection() {
                 </span>
                 <strong className="landing-provider-row-name">{provider.marketingName}</strong>
               </div>
-              <p className="landing-provider-summary">{providerSummary(certified.get(provider.id)!)}</p>
+              <p className="landing-provider-summary">{providerSummary(certified.get(provider.id)!, unavailable)}</p>
               <div className="landing-provider-capabilities" aria-label={`${provider.marketingName} capabilities`}>
                 {CAPABILITIES.map((capability) => (
                   <CapabilityChip capability={capability} provider={provider} certification={certification} key={capability.key} />
@@ -153,6 +158,7 @@ export function IntegrationsSection() {
 
         <p className="landing-providers-source">
           Lit only while the provider factory has a current passing live test against the real binary.
+          {unavailable ? " Certification status could not be loaded right now; chips below reflect the shipped proof graph only." : ""}
         </p>
       </div>
     </section>

@@ -66,7 +66,7 @@ afterEach(() => {
 });
 
 describe("landing provider claims", () => {
-  it("lights nothing when certification is unavailable, and marks tested chips unverified", async () => {
+  it("reports unavailable rather than unproven when certification cannot be read", async () => {
     serve(null);
     const railFor = renderRails();
     await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
@@ -76,9 +76,12 @@ describe("landing provider claims", () => {
       const rail = railFor(id);
       expect(chipsOf(rail, "data-supported")).toEqual(CHIP_ORDER.map(() => "false"));
       expect(chipsOf(rail, "data-certification")).toEqual(
-        CHIP_ORDER.map((chip) => (covered[chip] ? "unverified" : "unproven")),
+        CHIP_ORDER.map((chip) => (covered[chip] ? "unavailable" : "unproven")),
       );
     }
+    // A failed load must not be published as a negative product claim.
+    expect(screen.queryAllByText(/not yet release-proven/)).toHaveLength(0);
+    expect(screen.getAllByText("Certification status is unavailable right now.")).toHaveLength(IDS.length);
   });
 
   it("a certification for an uncovered chip never lights it", async () => {

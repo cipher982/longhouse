@@ -13,7 +13,7 @@ import { useEffect, useState } from "react";
 import type { GeneratedProviderId, ProvenChips } from "../generated/provider-capabilities";
 
 export type ChipKey = keyof ProvenChips;
-export type CertificationState = "certified" | "unverified" | "stale" | "failing" | "unproven";
+export type CertificationState = "certified" | "unverified" | "stale" | "failing" | "unproven" | "unavailable";
 
 export type ChipRequirement = {
   declared_in: string;
@@ -64,7 +64,12 @@ export function chipCertification(
   payload: ProviderCertificationPayload | null,
 ): CertificationState {
   if (!covered[chip]) return "unproven";
-  const state = payload?.providers.find((row) => row.provider === provider)?.chips[chip]?.state;
+  // No payload means the certification layer could not be read at all -- a
+  // network, origin, or malformed-body failure, not a negative result. Say so
+  // rather than rendering "unverified", which would publish "not proven" for
+  // every provider on the strength of a failed fetch.
+  if (payload === null) return "unavailable";
+  const state = payload.providers.find((row) => row.provider === provider)?.chips[chip]?.state;
   return state && KNOWN_STATES.has(state) ? state : "unverified";
 }
 
