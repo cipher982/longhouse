@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Live Claude Helm lifecycle proof through the stock Longhouse facade.
 
-Launches stock ``claude`` through ``longhouse claude`` and drives every control
-through the Runtime Host, the path a user's client takes: idle send, active-turn
-steer, abort, and terminate. The oracles below judge Claude's own transcript
-turn boundaries (``system/turn_duration``), not the requests Longhouse sent.
+Launches stock ``claude`` through ``longhouse claude``. Foreground work starts
+from the native terminal, as it does in an interactive Helm session; idle send,
+active-turn steer, abort, and terminate all use the Runtime Host. The oracles
+judge Claude's own transcript turn boundaries (``system/turn_duration``), not
+the requests Longhouse sent.
 
 ``--negative-control claude_steer_after_turn`` or ``claude_interrupt_noop`` runs
 the same scenario against a Machine Agent built with the ``qa-fault-injection``
@@ -77,9 +78,9 @@ _VARIANTS = tuple(
 
 REGISTRATION = ProducerRegistration(
     producer_id="claude.helm_lifecycle.v1",
-    producer_revision=2,
+    producer_revision=3,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=5,
+    scenario_revision=6,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("claude",),
     # Claude on macOS keeps credentials in the desktop Keychain; a relocated
@@ -619,7 +620,8 @@ def _drive_lifecycle(
         f"{_slow_echo(8, step + '_3')}. After all three checks, report the observations and include completion token {done}"
     )
     wait_can_send()
-    _post(api, token, f"sessions/{session_id}/send-live", {"message": steer_prompt})
+    # Establish native foreground work; the remote steer itself stays below.
+    session.submit_line(steer_prompt)
     try:
         wait_until(
             lambda: any(f"{step}_1" in command for command in _bash_commands(rows())),
@@ -641,7 +643,7 @@ def _drive_lifecycle(
         texts = _assistant_texts(rows())
         lifecycle["steer_active"] = {
             "passed": False,
-            "failure_code": "provider_declined_send",
+            "failure_code": "provider_declined_foreground_setup",
             "provider_declined": True,
             "first_step_started": False,
             "decline_text": texts[-1][:400] if texts else "",
@@ -690,12 +692,8 @@ def _drive_lifecycle(
         "background) and keep it active for its observation window: "
         f"{_slow_echo(int(tool_seconds), abort_prompt)}. When it finishes, include completion token {forbidden} in your report"
     )
-    _post(
-        api,
-        token,
-        f"sessions/{session_id}/send-live",
-        {"message": abort_request},
-    )
+    # A native task is the precondition, not the interrupt being qualified.
+    session.submit_line(abort_request)
     try:
         wait_until(
             lambda: any(abort_prompt in command for command in _bash_commands(rows())),
@@ -717,7 +715,7 @@ def _drive_lifecycle(
         texts = _assistant_texts(rows())
         abort_verdict = {
             "passed": False,
-            "failure_code": "provider_declined_abort_request",
+            "failure_code": "provider_declined_foreground_setup",
             "provider_declined": True,
             "tool_started": False,
             "decline_text": texts[-1][:400] if texts else "",

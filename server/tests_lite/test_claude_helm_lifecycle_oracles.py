@@ -55,7 +55,13 @@ def _steer(rows: list[dict]) -> dict:
 
 
 def _task() -> dict:
-    return _prompt(f"`sleep 8; echo {STEP}_1`, `sleep 8; echo {STEP}_2`, `sleep 8; echo {STEP}_3`, then {DONE}")
+    return {
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": f"`sleep 8; echo {STEP}_1`, `sleep 8; echo {STEP}_2`, `sleep 8; echo {STEP}_3`, then {DONE}",
+        },
+    }
 
 
 def test_steer_inside_the_active_turn_passes() -> None:
