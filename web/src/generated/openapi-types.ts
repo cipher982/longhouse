@@ -5899,6 +5899,8 @@ export interface components {
             /** Dedupe Key */
             dedupe_key?: string | null;
             delegation?: components["schemas"]["DelegationSnapshotIn"] | null;
+            /** Run Id */
+            run_id?: string | null;
             /** Provider Session Id */
             provider_session_id?: string | null;
         };
