@@ -575,6 +575,12 @@ def test_capability_projection_joins_a_real_proof_and_labels_the_unproven_rest(m
         # project_capabilities() checks it (review 2026-07-29), or this
         # "proven" row silently becomes unacceptable_evidence instead.
         evidence_class=EvidenceClass.LIVE_TOKEN,
+        # Likewise the scenario revision: 496de4902 raised codex
+        # coordination.awareness.create / coordination_instructions_model_visible
+        # to minimum_scenario_revision 6 in schemas/managed_providers.yml, so a
+        # stale revision 1 turns this row into proof_scenario_revision_mismatch
+        # (unacceptable_evidence) instead of pass.
+        scenario_revision=6,
     )
     _write_trusted(store, proof)
     client = _client(monkeypatch, tmp_path)
