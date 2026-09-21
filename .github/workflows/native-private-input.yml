@@ -1,3 +1,5 @@
+# ROLE: execution substrate for private-input proofs (real provider credentials on macOS).
+# It runs producers; admissibility of their output belongs to the qualification contract, not here.
 name: Native private-input proof
 run-name: Private-input proof ${{ inputs.request_id }}
 

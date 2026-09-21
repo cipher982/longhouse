@@ -1,3 +1,5 @@
+# ROLE: product acceptance on the browser-served surface, all providers, Console turns, runs
+# on the Linux pool against the canary ring. Assertions here are served-state, not per-cell receipts.
 name: Console Served State
 
 # One signal, one meaning: can a person who opens Longhouse in a browser

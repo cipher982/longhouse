@@ -1,3 +1,5 @@
+# ROLE: credential-free native fixtures (iOS, mobile chat, simlab, packaging). No provider
+# credentials may ever be added here — use native-private-input.yml for proofs that need them.
 name: Native test isolation
 run-name: Native isolation ${{ inputs.request_id }}
 
