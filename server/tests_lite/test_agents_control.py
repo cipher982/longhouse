@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+
 from sqlalchemy.orm import Session
 
 from tests_lite.live_catalog_harness import provision_live_catalog
@@ -82,10 +83,6 @@ def test_auth_disabled_control_channel_preserves_valid_device_token_identity():
     token = SimpleNamespace(owner_id=7, device_id="device-7")
 
     assert _control_identity({"device_id": "device-7"}, token, auth_disabled=True) == (7, "device-7")
-
-
-def test_auth_disabled_control_channel_keeps_tokenless_dev_fallback():
-    assert _control_identity({"device_id": "dev-machine"}, None, auth_disabled=True) == (0, "dev-machine")
 
 
 def test_control_channel_rejects_token_device_mismatch():

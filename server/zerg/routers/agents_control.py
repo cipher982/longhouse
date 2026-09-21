@@ -22,6 +22,7 @@ from zerg.models.device_token import DeviceToken
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.console_turns import reconcile_starting_console_turns_for_device
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.session_chat_impl import _resolve_agents_owner_id
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +45,12 @@ def _command_result_outcome_is_indeterminate(message: Mapping[str, Any]) -> bool
 
 
 def _auth_disabled_identity(hello: Mapping[str, Any]) -> tuple[int, str]:
+    # Keep the tokenless WebSocket owner aligned with the HTTP/session machine
+    # surfaces.  The canonical resolver owns the single-tenant active-owner
+    # lookup and its empty-catalog bootstrap semantics.
+    owner_id = _resolve_agents_owner_id(None, None)
     device_id = str(hello.get("device_id") or hello.get("machine_name") or "test-machine").strip()
-    return 0, device_id or "test-machine"
+    return owner_id, device_id or "test-machine"
 
 
 def _validate_websocket_device_token(websocket: WebSocket) -> DeviceToken | None:

@@ -629,6 +629,7 @@ pub fn run_benchmark_ship(
     let mut config = ShipperConfig::default();
     config.api_url = api_url.to_string();
     config.api_token = Some(token.to_string());
+    config.machine_name = machine_id.to_string();
 
     let client = ShipperClient::with_compression(&config, algo)?;
     let state_dir = SyntheticTempDir::create()?;
