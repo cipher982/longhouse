@@ -58,10 +58,13 @@ jobs:
           persist-credentials: false
 
       - name: Refuse a non-disposable target
+        env:
+          CANARY_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
         run: |
           set -euo pipefail
-          case "${LONGHOUSE_QA_HOSTED_TARGET,,}" in
-            ""|https://david010.longhouse.ai|https://longhouse.ai|https://demo.longhouse.ai)
+          # macOS runner shells are bash 3.2, so no ${var,,} lowercase expansion here.
+          case "${CANARY_SUBDOMAIN:-}" in
+            ""|david010|demo|longhouse.ai)
               echo "::error::Private-input proofs must target a disposable canary, never the personal dogfood or the public demo." >&2
               exit 1
               ;;
