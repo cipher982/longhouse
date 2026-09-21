@@ -880,10 +880,20 @@ def build_chip_certification_payload(*, now: datetime | None = None) -> dict[str
             if state == "certified" and (
                 controls is None or any(verdict != "pass" for row in rows for verdict in row["negative_controls"])
             ):
+                # Name *why* the control layer blocks certification. A control
+                # that was never run is a pending factory step; one that ran and
+                # did not pass is a product result. Collapsing both into one
+                # value let a permanently unrun control darken the public page
+                # while looking like a product failure.
+                if controls is None:
+                    blocked_by = "negative_control_snapshot_missing"
+                else:
+                    verdicts = [verdict for row in rows if row["negative_controls"] is not None for verdict in row["negative_controls"]]
+                    blocked_by = "negative_control_not_run" if "not_recorded" in verdicts else "negative_control"
                 entry = {
                     "state": "unverified",
                     "requirements": rows,
-                    "blocked_by": "negative_control_snapshot_missing" if controls is None else "negative_control",
+                    "blocked_by": blocked_by,
                 }
             chips[chip] = entry
         providers.append({"provider": provider, "chips": chips})

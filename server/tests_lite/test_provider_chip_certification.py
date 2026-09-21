@@ -151,9 +151,16 @@ def test_a_passing_chip_certifies_only_when_its_declared_negative_controls_passe
     edge = _edge("pi", "steerMidTurn")
     proofs = [_proof(a, at=NOW - timedelta(hours=1)) for a in edge]
     assert _chip(_payload(monkeypatch, tmp_path / "pass", proofs, [_steer_control("pass")]), "pi", "steerMidTurn")["state"] == "certified"
-    for verdict in ("fail", "inconclusive", "not_recorded"):
+    # A control that ran and did not pass is a product result; one that was never
+    # recorded is a pending factory step. They must not read alike, or a
+    # permanently unrun control looks like a product failure on the public page.
+    for verdict, expected in (
+        ("fail", "negative_control"),
+        ("inconclusive", "negative_control"),
+        ("not_recorded", "negative_control_not_run"),
+    ):
         chip = _chip(_payload(monkeypatch, tmp_path / verdict, proofs, [_steer_control(verdict)]), "pi", "steerMidTurn")
-        assert chip["state"] == "unverified" and chip["blocked_by"] == "negative_control", verdict
+        assert chip["state"] == "unverified" and chip["blocked_by"] == expected, verdict
 
 
 def test_passing_controls_from_another_epoch_cannot_certify_current_proofs(monkeypatch, tmp_path: Path) -> None:
