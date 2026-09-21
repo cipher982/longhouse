@@ -39,6 +39,7 @@ const STATE_DESCRIPTION: Record<CertificationState, string> = {
   failing: "latest factory run failing",
   unproven: "not yet proven",
   unavailable: "certification status unavailable",
+  controls_pending: "the factory's negative controls have not run for this epoch",
 };
 
 function joinClause(parts: string[]): string {
@@ -52,9 +53,12 @@ function joinClause(parts: string[]): string {
  * "Launch, send, and interrupt" directly beside a chip reading Interrupt: not
  * supported.
  */
-export function providerSummary(certified: ProvenChips, unavailable = false): string {
+export function providerSummary(certified: ProvenChips, unavailable = false, controlsPending = false): string {
   if (unavailable) {
     return "Certification status is unavailable right now.";
+  }
+  if (controlsPending) {
+    return "Tested, awaiting the factory's negative controls for this epoch.";
   }
   const claims: Array<[boolean, string]> = [
     [certified.launchAndSend, "launch and send"],
@@ -107,6 +111,14 @@ export function IntegrationsSection() {
   const certification = useProviderCertification();
   const unavailable = certification === null;
   const certified = new Map(providers.map((provider) => [provider.id, certifiedChips(provider.id, provider.proven, certification)]));
+  const controlsPending = new Map(
+    providers.map((provider) => [
+      provider.id,
+      (Object.keys(provider.proven) as ChipKey[]).some(
+        (chip) => chipCertification(provider.id, chip, provider.proven, certification) === "controls_pending",
+      ),
+    ]),
+  );
   const searchable = providers.filter((provider) => certified.get(provider.id)?.search);
 
   return (
@@ -146,7 +158,7 @@ export function IntegrationsSection() {
                 </span>
                 <strong className="landing-provider-row-name">{provider.marketingName}</strong>
               </div>
-              <p className="landing-provider-summary">{providerSummary(certified.get(provider.id)!, unavailable)}</p>
+              <p className="landing-provider-summary">{providerSummary(certified.get(provider.id)!, unavailable, controlsPending.get(provider.id))}</p>
               <div className="landing-provider-capabilities" aria-label={`${provider.marketingName} capabilities`}>
                 {CAPABILITIES.map((capability) => (
                   <CapabilityChip capability={capability} provider={provider} certification={certification} key={capability.key} />

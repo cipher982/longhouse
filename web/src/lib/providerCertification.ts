@@ -13,7 +13,14 @@ import { useEffect, useState } from "react";
 import type { GeneratedProviderId, ProvenChips } from "../generated/provider-capabilities";
 
 export type ChipKey = keyof ProvenChips;
-export type CertificationState = "certified" | "unverified" | "stale" | "failing" | "unproven" | "unavailable";
+export type CertificationState =
+  | "certified"
+  | "unverified"
+  | "stale"
+  | "failing"
+  | "unproven"
+  | "unavailable"
+  | "controls_pending";
 
 export type ChipRequirement = {
   declared_in: string;
@@ -32,7 +39,7 @@ export type ProviderCertificationPayload = {
   generated_at: string;
   providers: Array<{
     provider: string;
-    chips: Partial<Record<ChipKey, { state: CertificationState; requirements: ChipRequirement[] }>>;
+    chips: Partial<Record<ChipKey, { state: CertificationState; blocked_by?: string; requirements: ChipRequirement[] }>>;
   }>;
 };
 
@@ -69,7 +76,14 @@ export function chipCertification(
   // rather than rendering "unverified", which would publish "not proven" for
   // every provider on the strength of a failed fetch.
   if (payload === null) return "unavailable";
-  const state = payload.providers.find((row) => row.provider === provider)?.chips[chip]?.state;
+  const entry = payload.providers.find((row) => row.provider === provider)?.chips[chip];
+  const state = entry?.state;
+  // A proof that passes but carries no recorded negative control has not been
+  // shown to be capable of failing, so it cannot certify. That is a pending
+  // factory step, not a product result, and must not read as one.
+  if (state === "unverified" && typeof entry?.blocked_by === "string" && entry.blocked_by.startsWith("negative_control")) {
+    return "controls_pending";
+  }
   return state && KNOWN_STATES.has(state) ? state : "unverified";
 }
 
