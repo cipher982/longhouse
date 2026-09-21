@@ -1533,38 +1533,36 @@ def run_native_resume(provider: str, args: argparse.Namespace) -> dict[str, Any]
                 }
             live_session_toolkit.write_json(root / "post-resume-hook-correlation.json", post_resume_hook_sequence)
         hook_fallback = spec.provider == "cursor" and post_resume_hook_sequence.get("available") is False
-        if hook_fallback:
-            # The background shipper may already have projected the response.
-            # Wait for that exact marker/new-assistant proof before forcing a
-            # scan; flushing while Cursor is still working recreates the race
-            # this canary is intended to catch.
+        if spec.provider == "cursor":
+            # Keep the daemon alive until the authoritative store has projected
+            # the response. A response hook can precede Cursor committing its
+            # reachable root; pausing for a one-shot flush at that point loses
+            # the later wake. Require the same assistant proof with or without
+            # hook evidence before forcing the final scan.
             resumed_tail, response_correlation = live_session_toolkit.wait_assistant_response_after_marker(
                 args.api_url,
                 args.agents_token,
                 resumed_state["session_id"],
                 post_marker,
                 prior_assistant_event_digests=prior_assistant_event_digests,
-                require_assistant_marker=spec.provider != "claude",
+                require_assistant_marker=True,
                 timeout=args.live_send_timeout_secs,
             )
             if not _post_resume_response_correlated(provider, response_correlation):
                 live_session_toolkit.write_json(root / "post-resume-response-correlation.json", response_correlation)
                 raise RuntimeError(f"provider transcript did not correlate post-resume {provider} marker {post_marker}")
-            post_resume_ship_receipt = shipper.flush("post-resume")
-        else:
-            post_resume_ship_receipt = (
-                _cursor_idle_then_flush(
+            if not hook_fallback:
+                shipper.capture_cursor_projection_diagnostics(
                     resumed_state,
-                    environment,
-                    shipper,
-                    label="post-resume",
-                    minimum_hook_event_bytes=post_resume_hook_event_bytes,
-                    expected_generation_id=(post_resume_hook_sequence.get("generation_id") if spec.provider == "cursor" else None),
                     marker=post_marker,
-                    diagnostic_path=root / "cursor-idle-timeout-post-resume.json",
+                    label="post-resume-before-flush",
                 )
-                if spec.provider == "cursor"
-                else shipper.flush("post-resume")
+        post_resume_ship_receipt = shipper.flush("post-resume")
+        if spec.provider == "cursor" and not hook_fallback:
+            shipper.capture_cursor_projection_diagnostics(
+                resumed_state,
+                marker=post_marker,
+                label="post-resume-after-flush",
             )
         live_session_toolkit.write_json(root / "post-resume-transcript-ship-receipt.json", post_resume_ship_receipt)
         if spec.provider == "cursor":

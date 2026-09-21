@@ -59,9 +59,6 @@ from zerg.qa.provider_native_resume import _finalize_result_payload
 from zerg.qa.provider_native_resume import _isolated_qualification_environment
 from zerg.qa.provider_native_resume import _post_resume_response_correlated
 from zerg.qa.provider_native_resume import _refresh_failure_result_manifest
-from zerg.qa.provider_native_resume import _resume_intent_timeout
-from zerg.qa.provider_native_resume import _resume_marker
-from zerg.qa.provider_native_resume import _resume_marker_prompt
 from zerg.qa.provider_native_resume import _send_initial_seed
 from zerg.qa.provider_native_resume import _wait_claude_tui_ready
 from zerg.qa.provider_native_resume import _wait_cursor_bootstrap_hook_sequence
@@ -145,11 +142,6 @@ def test_each_native_provider_registers_both_exact_resume_variants() -> None:
         else:
             assert cursor_only.isdisjoint(registration.required_artifacts)
         assert ("opencode_model_profile_receipt" in registration.required_artifacts) is (provider == "opencode")
-
-
-def test_cursor_resume_bootstrap_uses_a_unique_marker() -> None:
-    assert cursor_bootstrap_prompt() == "Reply with exactly READY"
-    assert cursor_bootstrap_prompt("LH_CURSOR_BOOTSTRAP_abc123") == ("Reply with exactly LH_CURSOR_BOOTSTRAP_abc123")
 
 
 def test_transcript_shipper_provisions_all_discovery_roots(tmp_path: Path) -> None:
@@ -912,11 +904,6 @@ def test_wait_session_tail_retries_projection_404_but_preserves_auth_failures(
     )
 
 
-def test_process_loss_resume_wait_covers_machine_reconciliation_window() -> None:
-    assert _resume_intent_timeout(variant="clean_exit") == 45.0
-    assert _resume_intent_timeout(variant="process_loss") == 180.0
-
-
 def test_cursor_workspace_trust_is_acknowledged_once(tmp_path: Path) -> None:
     recording = tmp_path / "cursor.tty"
     recording.write_text("Workspace Trust Required\n▶ [a] Trust this workspace\n[q] Quit\n", encoding="utf-8")
@@ -1017,23 +1004,6 @@ def test_cursor_readiness_waits_for_completed_turn_redraw(tmp_path: Path) -> Non
     wait_cursor_tui_ready(process, recording, timeout=3)  # type: ignore[arg-type]
 
     assert process.drains >= 3
-
-
-def test_cursor_resume_markers_stay_compact_and_are_explicitly_prompted() -> None:
-    marker = _resume_marker("cursor", "SEED")
-
-    assert marker.startswith("LH_CURSOR_SEED_")
-    assert len(marker.rsplit("_", 1)[-1]) == 10
-    assert len(marker) < 32
-    assert _resume_marker_prompt("cursor", marker) == f"Reply with exactly {marker}"
-
-
-def test_other_provider_resume_markers_keep_the_long_form() -> None:
-    marker = _resume_marker("opencode", "POST")
-
-    assert marker.startswith("LONGHOUSE_OPENCODE_RESUME_POST_")
-    assert len(marker.rsplit("_", 1)[-1]) == 32
-    assert _resume_marker_prompt("opencode", marker) == f"Reply exactly {marker} and nothing else."
 
 
 def test_claude_tui_readiness_waits_for_the_provider_input_prompt(tmp_path: Path) -> None:

@@ -497,7 +497,7 @@ def _post(api_url: str, token: str, path: str, body: dict[str, Any] | None = Non
 
 
 def _slow_echo(seconds: int, marker: str) -> str:
-    return f"python3 -c \"import select; select.select([], [], [], {seconds}); print('{marker}')\""
+    return f"python3 -c \"import os, select; pid=os.getpid(); select.select([], [], [], {seconds}); print('{marker} pid=' + str(pid))\""
 
 
 def _drive_lifecycle(
@@ -611,49 +611,69 @@ def _drive_lifecycle(
     steered = f"LONGHOUSE_CLAUDE_STEERED_{token_hex}"
     done = f"LONGHOUSE_CLAUDE_UNSTEERED_{token_hex}"
     steer_text = f"Stop the remaining steps now. Do not run any more commands. Reply with exactly {steered}"
+    steer_prompt = (
+        "This disposable Longhouse QA session owns its workspace and is measuring whether a foreground process can "
+        "be steered while it is active. Run three independent process-monitoring checks one at a time, each in its own "
+        "foreground Bash tool call; each check waits for its observation window before the next check starts: "
+        f"The checks are: {_slow_echo(8, step + '_1')}, then {_slow_echo(8, step + '_2')}, then "
+        f"{_slow_echo(8, step + '_3')}. After all three checks, report the observations and include completion token {done}"
+    )
     wait_can_send()
-    _post(
-        api,
-        token,
-        f"sessions/{session_id}/send-live",
-        {
-            # Claude's own Bash guidance refuses idle `sleep`, so each step is
-            # a bounded wait that reads as work: an 8-second select() then echo.
-            "message": "Run these three Bash commands one at a time, each as its own separate foreground Bash tool call, "
-            f"waiting for each to finish: `{_slow_echo(8, step + '_1')}`, then `{_slow_echo(8, step + '_2')}`, then "
-            f"`{_slow_echo(8, step + '_3')}`. After all three, reply with exactly {done}"
-        },
-    )
-    wait_until(
-        lambda: any(f"{step}_1" in command for command in _bash_commands(rows())),
-        timeout=args.response_timeout_secs,
-        description="first slow Claude Bash step",
-    )
-    time.sleep(1.0)
-    _post(api, token, f"sessions/{session_id}/input", {"text": steer_text, "intent": "steer", "client_request_id": uuid.uuid4().hex})
-    wait_turn_end(f"{step}_1", "steered Claude turn completing", args.response_timeout_secs)
-    if fault == "claude_steer_after_turn":
-        # Let the delayed follow-up land and be answered before judging.
-        delay = float(os.environ.get("LH_QA_FAULT_DELAY_SECS") or 75)
+    _post(api, token, f"sessions/{session_id}/send-live", {"message": steer_prompt})
+    try:
         wait_until(
-            lambda: any(steered in text for text in _assistant_texts(rows())),
-            timeout=delay + args.response_timeout_secs,
-            description="delayed Claude follow-up answer",
+            lambda: any(f"{step}_1" in command for command in _bash_commands(rows())),
+            timeout=args.response_timeout_secs,
+            description="first slow Claude Bash step",
         )
+    except ScenarioError:
+        # A provider refusal ends this turn without starting a tool. Keep the
+        # steer assertion false with the refusal evidence, but do not turn an
+        # independent control's precondition into a scenario-wide error.
+        outcome = send_outcome(
+            _hosted_assistant_texts(api, token, session_id),
+            rows(),
+            marker=f"{step}_1",
+            prompt=steer_prompt,
+        )
+        if outcome != "declined":
+            raise
+        texts = _assistant_texts(rows())
+        lifecycle["steer_active"] = {
+            "passed": False,
+            "failure_code": "provider_declined_send",
+            "provider_declined": True,
+            "first_step_started": False,
+            "decline_text": texts[-1][:400] if texts else "",
+        }
+        if fault == "claude_steer_after_turn":
+            return
     else:
-        time.sleep(5.0)
-    steer_verdict = steer_landed_in_turn(
-        rows(),
-        prompt_marker=f"{step}_1",
-        steer_marker=steered,
-        steered_marker=steered,
-        done_marker=done,
-        later_step_command=f"{step}_3",
-    )
-    steer_verdict["qa_fault_receipt"] = _fault_receipt(home, session_id) if fault == "claude_steer_after_turn" else None
-    lifecycle["steer_active"] = steer_verdict
-    if fault == "claude_steer_after_turn":
-        return
+        time.sleep(1.0)
+        _post(api, token, f"sessions/{session_id}/input", {"text": steer_text, "intent": "steer", "client_request_id": uuid.uuid4().hex})
+        wait_turn_end(f"{step}_1", "steered Claude turn completing", args.response_timeout_secs)
+        if fault == "claude_steer_after_turn":
+            # Let the delayed follow-up land and be answered before judging.
+            delay = float(os.environ.get("LH_QA_FAULT_DELAY_SECS") or 75)
+            wait_until(
+                lambda: any(steered in text for text in _assistant_texts(rows())),
+                timeout=delay + args.response_timeout_secs,
+                description="delayed Claude follow-up answer",
+            )
+        else:
+            time.sleep(5.0)
+        steer_verdict = steer_landed_in_turn(
+            rows(),
+            prompt_marker=f"{step}_1",
+            steer_marker=steered,
+            steered_marker=steered,
+            done_marker=done,
+            later_step_command=f"{step}_3",
+        )
+        steer_verdict["qa_fault_receipt"] = _fault_receipt(home, session_id) if fault == "claude_steer_after_turn" else None
+        lifecycle["steer_active"] = steer_verdict
+        if fault == "claude_steer_after_turn":
+            return
     # A failed steer is that assertion's verdict, not a scenario error: the
     # steered turn has already ended, so abort and terminate still get judged
     # on their own instead of all three cells reporting the one steer failure.
@@ -669,9 +689,10 @@ def _drive_lifecycle(
         token,
         f"sessions/{session_id}/send-live",
         {
-            "message": "This is a Longhouse interrupt qualification. Use one foreground Bash tool call (not background) "
-            f"to run exactly: `{_slow_echo(int(tool_seconds), abort_prompt)}`. "
-            f"When it finishes, reply with exactly {forbidden}"
+            "message": "This disposable Longhouse QA session owns its workspace. To verify that Runtime Host can interrupt "
+            "an active owned process without ending the session, start one foreground process-monitoring check (not "
+            "background) and keep it active for its observation window: "
+            f"{_slow_echo(int(tool_seconds), abort_prompt)}. When it finishes, include completion token {forbidden} in your report"
         },
     )
     wait_until(
