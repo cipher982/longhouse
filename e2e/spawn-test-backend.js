@@ -96,7 +96,7 @@ const childEnv = safeChildEnvironment({
   E2E_HATCH_PATH: join(__dirname, "bin", "hatch"),
   LONGHOUSE_TOOL_STUBS_PATH: toolStubsPath,
   LONGHOUSE_SEARCH_PROJECTOR_WORKERS: "4",
-  LOG_LEVEL: "ERROR",
+  LOG_LEVEL: "WARNING",
   APP_PUBLIC_URL: "",
   PUBLIC_SITE_URL: "",
 });
@@ -113,6 +113,8 @@ console.log(
   `[spawn-backend] Starting E2E backend on port ${BACKEND_PORT} with SQLite: ${dbPath}`,
 );
 
+const backendLog = fs.openSync(path.join(runtime.artifactDir, "backend.log"), "a", 0o600);
+
 const backend = spawn(
   "uv",
   [
@@ -124,15 +126,21 @@ const backend = spawn(
     "--host=127.0.0.1",
     `--port=${BACKEND_PORT}`,
     "--workers=1",
-    "--log-level=error",
+    "--log-level=warning",
   ],
   {
     env: childEnv,
     cwd: join(__dirname, "..", "server"),
-    stdio: "inherit",
+    stdio: ["inherit", "pipe", "pipe"],
     detached: process.platform !== "win32",
   },
 );
+for (const stream of ["stdout", "stderr"]) {
+  backend[stream].on("data", (chunk) => {
+    fs.writeSync(backendLog, chunk);
+    process[stream].write(chunk);
+  });
+}
 
 let backendClosed = false;
 let shuttingDown = false;
@@ -178,6 +186,7 @@ backend.on("error", (error) => {
 
 backend.on("close", (code) => {
   backendClosed = true;
+  fs.closeSync(backendLog);
   clearTimeout(forceTimer);
   // A reparented descendant retains the detached process group. Kill that
   // group even when the uvicorn leader has already exited.
