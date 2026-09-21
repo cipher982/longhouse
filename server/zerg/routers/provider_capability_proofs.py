@@ -9,6 +9,8 @@ import hmac
 import json
 import re
 import time
+from collections.abc import Mapping
+from collections.abc import Sequence
 from datetime import UTC
 from datetime import datetime
 from typing import Any
@@ -807,6 +809,34 @@ def _negative_controls_by_requirement() -> tuple[dict[tuple[str, str], list[str]
     return out, snapshot["epoch_digest"]
 
 
+def _negative_control_status(
+    controls: Mapping[tuple[str, str], list[str]] | None,
+    controls_epoch: str | None,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    proof_epoch: str | None,
+) -> str:
+    """How the factory's declared negative controls stand for one chip.
+
+    Reported alongside a certified chip rather than gating it. Values are
+    ordered by how loud an alarm should be: ``not_run`` and ``snapshot_missing``
+    mean the factory has not demonstrated that the test can fail, ``failed`` and
+    ``epoch_mismatch`` mean it demonstrated the opposite, and ``passed`` means
+    the control judged this exact epoch and held.
+    """
+
+    if controls is None:
+        return "snapshot_missing"
+    if controls_epoch != proof_epoch:
+        return "epoch_mismatch"
+    verdicts = [verdict for row in rows if row["negative_controls"] is not None for verdict in row["negative_controls"]]
+    if not verdicts:
+        return "not_declared"
+    if "not_recorded" in verdicts:
+        return "not_run"
+    return "passed" if all(verdict == "pass" for verdict in verdicts) else "failed"
+
+
 CHIP_CERTIFICATION_VERSION = "provider-chip-certification-v1"
 _CERTIFICATION_TTL_SECONDS = 60.0
 _certification_cache: tuple[float, dict[str, Any]] | None = None
@@ -874,27 +904,15 @@ def build_chip_certification_payload(*, now: datetime | None = None) -> dict[str
                 )
             state = rollup_state(row["proof_status"] for row in rows)
             entry: dict[str, Any] = {"state": state, "requirements": rows}
-            # A pass certifies only when every declared negative control proved
-            # the judge can fail. Without the factory's snapshot nothing says
-            # which controls are declared, so no chip certifies.
-            if state == "certified" and (
-                controls is None or any(verdict != "pass" for row in rows for verdict in row["negative_controls"])
-            ):
-                # Name *why* the control layer blocks certification. A control
-                # that was never run is a pending factory step; one that ran and
-                # did not pass is a product result. Collapsing both into one
-                # value let a permanently unrun control darken the public page
-                # while looking like a product failure.
-                if controls is None:
-                    blocked_by = "negative_control_snapshot_missing"
-                else:
-                    verdicts = [verdict for row in rows if row["negative_controls"] is not None for verdict in row["negative_controls"]]
-                    blocked_by = "negative_control_not_run" if "not_recorded" in verdicts else "negative_control"
-                entry = {
-                    "state": "unverified",
-                    "requirements": rows,
-                    "blocked_by": blocked_by,
-                }
+            if state == "certified":
+                # The control layer is reported, not enforced. Certification
+                # follows the live proofs the chip advertises ("a current
+                # passing live test against the real binary"); whether the
+                # factory's own negative controls have run is an operator
+                # signal, not a public gate. Enforcing it here let a control
+                # that had simply never been recorded darken the page for every
+                # provider while every proof behind it passed.
+                entry["controls"] = _negative_control_status(controls, controls_epoch, rows, proof_epoch=p.accepted_epoch_digest)
             chips[chip] = entry
         providers.append({"provider": provider, "chips": chips})
     return {

@@ -147,32 +147,37 @@ def _steer_control(verdict: str) -> dict:
     return {"provider": "pi", "target_assertion": "pi_helm_steer_active", "fault": "pi_steer_as_follow_up", "verdict": verdict}
 
 
-def test_a_passing_chip_certifies_only_when_its_declared_negative_controls_passed(monkeypatch, tmp_path: Path) -> None:
+def test_a_passing_chip_certifies_and_reports_its_control_status(monkeypatch, tmp_path: Path) -> None:
     edge = _edge("pi", "steerMidTurn")
     proofs = [_proof(a, at=NOW - timedelta(hours=1)) for a in edge]
-    assert _chip(_payload(monkeypatch, tmp_path / "pass", proofs, [_steer_control("pass")]), "pi", "steerMidTurn")["state"] == "certified"
-    # A control that ran and did not pass is a product result; one that was never
-    # recorded is a pending factory step. They must not read alike, or a
-    # permanently unrun control looks like a product failure on the public page.
+    # The control layer is reported, never enforced: a chip with passing proofs
+    # certifies whatever the controls say, so the public claim matches its own
+    # caption ("a current passing live test against the real binary"). A control
+    # that never ran must not read as a product failure.
     for verdict, expected in (
-        ("fail", "negative_control"),
-        ("inconclusive", "negative_control"),
-        ("not_recorded", "negative_control_not_run"),
+        ("pass", "passed"),
+        ("fail", "failed"),
+        ("inconclusive", "failed"),
+        ("not_recorded", "not_run"),
     ):
         chip = _chip(_payload(monkeypatch, tmp_path / verdict, proofs, [_steer_control(verdict)]), "pi", "steerMidTurn")
-        assert chip["state"] == "unverified" and chip["blocked_by"] == expected, verdict
+        assert chip["state"] == "certified", verdict
+        assert chip["controls"] == expected, verdict
+        assert "blocked_by" not in chip, verdict
 
 
-def test_passing_controls_from_another_epoch_cannot_certify_current_proofs(monkeypatch, tmp_path: Path) -> None:
+def test_controls_from_another_epoch_are_reported_not_enforced(monkeypatch, tmp_path: Path) -> None:
     edge = _edge("pi", "steerMidTurn")
     proofs = [_proof(assertion, at=NOW - timedelta(hours=1)) for assertion in edge]
     payload = _payload(monkeypatch, tmp_path, proofs, [_steer_control("pass")], control_epoch="sha256:" + "f" * 64)
     chip = _chip(payload, "pi", "steerMidTurn")
-    assert chip["state"] == "unverified"
-    assert chip["blocked_by"] == "negative_control"
+    # A control judged another epoch is evidence about other code, so it is
+    # reported as such -- and still does not withhold the chip's own proofs.
+    assert chip["state"] == "certified"
+    assert chip["controls"] == "epoch_mismatch"
 
 
-def test_no_published_negative_control_snapshot_certifies_nothing(monkeypatch, tmp_path: Path) -> None:
+def test_a_missing_control_snapshot_is_reported_not_enforced(monkeypatch, tmp_path: Path) -> None:
     edge = _edge("pi", "resume")
     store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
     monkeypatch.setattr(routes, "_proof_store", lambda: store)
@@ -180,7 +185,8 @@ def test_no_published_negative_control_snapshot_certifies_nothing(monkeypatch, t
     for proof in [_proof(a, at=NOW - timedelta(hours=1)) for a in edge]:
         _write_trusted(store, proof)
     chip = _chip(routes.build_chip_certification_payload(now=NOW), "pi", "resume")
-    assert chip["state"] == "unverified" and chip["blocked_by"] == "negative_control_snapshot_missing"
+    assert chip["state"] == "certified"
+    assert chip["controls"] == "snapshot_missing"
 
 
 def test_factory_publishes_the_negative_control_snapshot_with_its_token(monkeypatch, tmp_path: Path) -> None:
@@ -189,7 +195,11 @@ def test_factory_publishes_the_negative_control_snapshot_with_its_token(monkeypa
     monkeypatch.setattr(routes, "_legacy_proof_store", lambda: ProviderCapabilityProofStore(tmp_path / "legacy"))
     for assertion in _edge("pi", "steerMidTurn"):
         _write_trusted(store, _proof(assertion, at=NOW - timedelta(hours=1)))
-    assert _chip(routes.build_chip_certification_payload(now=NOW), "pi", "steerMidTurn")["state"] == "unverified"
+    # Certification follows the proofs; the control layer is reported. The
+    # snapshot's effect is therefore visible in `controls`, not in the state.
+    before = _chip(routes.build_chip_certification_payload(now=NOW), "pi", "steerMidTurn")
+    assert before["state"] == "certified"
+    assert before["controls"] == "snapshot_missing"
     monkeypatch.setattr(routes, "get_settings", lambda: SimpleNamespace(provider_capability_factory_token="fixture-factory-token"))
     monkeypatch.setattr(routes, "_certification_cache", None)
     api_app.dependency_overrides.clear()
@@ -213,4 +223,6 @@ def test_factory_publishes_the_negative_control_snapshot_with_its_token(monkeypa
     )
     response = client.post(url, json=snapshot, headers={"X-Provider-Capability-Factory-Token": "fixture-factory-token"})
     assert response.status_code == 201, response.text
-    assert _chip(routes.build_chip_certification_payload(now=NOW), "pi", "steerMidTurn")["state"] == "certified"
+    after = _chip(routes.build_chip_certification_payload(now=NOW), "pi", "steerMidTurn")
+    assert after["state"] == "certified"
+    assert after["controls"] == "passed"
