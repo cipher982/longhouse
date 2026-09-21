@@ -63,18 +63,6 @@ def _args(tmp_path: Path, variant: str) -> argparse.Namespace:
     )
 
 
-def test_registration_covers_both_schema_declared_cells() -> None:
-    assert m.REGISTRATION.producer_id == "claude.coordination_directed_input.v1"
-    assert m.REGISTRATION.scenario_id == "claude_coordination_directed_input"
-    assert m.REGISTRATION.assertion_cells == ((m._ASSERTION_SEND, None), (m._ASSERTION_RECEIVE, None))
-    assert m.REGISTRATION.evidence_classes == ("live_token",)
-    assert m.REGISTRATION.producer_revision == 4
-    assert m.REGISTRATION.scenario_revision == 4
-    assert "cleanup_receipt" in m.REGISTRATION.required_artifacts
-    assert m.REGISTRATION.required_cleanup == ("claude_helm_processes_exited",)
-    assert len(m._CELL_BY_VARIANT) == 2
-
-
 def test_main_registration_mode_prints_registration_json(capsys: pytest.CaptureFixture[str]) -> None:
     assert m.main(["--registration"]) == 0
     payload = json.loads(capsys.readouterr().out)

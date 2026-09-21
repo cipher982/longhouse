@@ -91,9 +91,9 @@ _CELL_BY_VARIANT: dict[str, tuple[str, str]] = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="codex.coordination_awareness.v1",
-    producer_revision=8,
+    producer_revision=9,
     scenario_id=_SCENARIO_CREATE,
-    scenario_revision=5,
+    scenario_revision=6,
     scenario_ids=(_SCENARIO_CREATE, _SCENARIO_POST_COMPACTION, _SCENARIO_DIRECTED_INPUT),
     assertion_cells=tuple((assertion_id, None) for assertion_id, _scenario_id in _CELLS),
     providers=("codex",),
@@ -789,6 +789,7 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
         "version": bridge_canary._run([str(args.codex_bin), "--version"], timeout=30).stdout.strip(),
     }
     write_json(root / "provider-binary-receipt.json", provider_receipt)
+    result: dict[str, Any] = {}
     try:
         if scenario_id == _SCENARIO_CREATE:
             observation, assertions = _run_awareness_create(args, root)
@@ -797,7 +798,7 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
         else:
             observation, assertions = _run_directed_input(args, root)
         write_json(root / "coordination-observation.json", observation)
-        result: dict[str, Any] = {
+        result = {
             "schema_version": 1,
             "artifact_kind": "codex_coordination_result",
             "producer": REGISTRATION.to_dict(),
@@ -818,6 +819,7 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
         return result
     except Exception as exc:  # noqa: BLE001 - retain a typed failure artifact
         failure = {
+            **result,
             "schema_version": 1,
             "artifact_kind": "codex_coordination_result",
             "producer": REGISTRATION.to_dict(),
@@ -831,7 +833,7 @@ def run_coordination(args: argparse.Namespace) -> dict[str, Any]:
             "observation_scope": "scenario",
             "failure_code": "codex_coordination_scenario_failed",
             "error": f"{type(exc).__name__}: {exc}",
-            "assertions": {assertion_id: False},
+            "assertions": result.get("assertions") or {assertion_id: False},
             "artifact_manifest": artifact_manifest(root),
         }
         write_json(root / "result.json", failure)

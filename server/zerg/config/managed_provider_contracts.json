@@ -455,7 +455,7 @@
               "id": "coordination_instructions_model_visible",
               "scenario_id": "codex_coordination_awareness_create",
               "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 6,
               "acceptable_evidence": [
                 "live_token"
               ],
@@ -483,7 +483,7 @@
               "id": "coordination_instructions_model_visible_after_compaction",
               "scenario_id": "codex_coordination_awareness_post_compaction",
               "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
-              "minimum_scenario_revision": 2,
+              "minimum_scenario_revision": 6,
               "acceptable_evidence": [
                 "live_token"
               ],
@@ -494,7 +494,7 @@
               "id": "no_duplicate_visible_bootstrap",
               "scenario_id": "codex_coordination_awareness_post_compaction",
               "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
-              "minimum_scenario_revision": 2,
+              "minimum_scenario_revision": 6,
               "acceptable_evidence": [
                 "hermetic",
                 "live_token"
@@ -523,7 +523,7 @@
               "id": "provider_input_receipt_linked",
               "scenario_id": "codex_coordination_directed_input",
               "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 6,
               "acceptable_evidence": [
                 "hermetic",
                 "live_token"
@@ -552,7 +552,7 @@
               "id": "attributed_input_visible",
               "scenario_id": "codex_coordination_directed_input",
               "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 6,
               "acceptable_evidence": [
                 "hermetic",
                 "live_token"
@@ -1037,7 +1037,7 @@
               "id": "activity_returns_to_quiescent_at_turn_boundary",
               "scenario_id": "claude_turn_boundary_quiescent",
               "oracle_source": "server/zerg/qa/managed_claude_live.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 3,
               "acceptable_evidence": [
                 "live_token"
               ],
@@ -1324,7 +1324,7 @@
               "id": "coordination_instructions_model_visible",
               "scenario_id": "claude_coordination_awareness_create",
               "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
@@ -1352,7 +1352,7 @@
               "id": "coordination_instructions_model_visible_after_compaction",
               "scenario_id": "claude_coordination_awareness_post_compaction",
               "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "live_token"
               ],
@@ -1363,7 +1363,7 @@
               "id": "no_duplicate_visible_bootstrap",
               "scenario_id": "claude_coordination_awareness_post_compaction",
               "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 4,
               "acceptable_evidence": [
                 "hermetic",
                 "live_token"
@@ -1392,7 +1392,7 @@
               "id": "provider_input_receipt_linked",
               "scenario_id": "claude_coordination_directed_input",
               "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 5,
               "acceptable_evidence": [
                 "hermetic",
                 "live_token"
@@ -1421,7 +1421,7 @@
               "id": "attributed_input_visible",
               "scenario_id": "claude_coordination_directed_input",
               "oracle_source": "server/zerg/qa/provider_coordination_oracles.py",
-              "minimum_scenario_revision": 1,
+              "minimum_scenario_revision": 5,
               "acceptable_evidence": [
                 "hermetic",
                 "live_token"
@@ -4353,12 +4353,12 @@
               "id": "omp_helm_launch_registration",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 10,
+              "minimum_scenario_revision": 11,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "04d3f58db1f690bb223b750d20a1f66eba6c15373c167d4fbc8d9825e7d019ed"
+              "oracle_digest": "68fb7ab9d6665413831a908ff2a1ff9faae8671d980b487f3e3f4ae867863351"
             }
           ],
           "level": "live_token",
@@ -4378,12 +4378,12 @@
               "id": "omp_helm_cold_resume_exact_file",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 10,
+              "minimum_scenario_revision": 11,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "04d3f58db1f690bb223b750d20a1f66eba6c15373c167d4fbc8d9825e7d019ed"
+              "oracle_digest": "68fb7ab9d6665413831a908ff2a1ff9faae8671d980b487f3e3f4ae867863351"
             }
           ],
           "level": "live_token",
@@ -4396,12 +4396,12 @@
               "id": "omp_helm_send_idle",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 10,
+              "minimum_scenario_revision": 11,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "04d3f58db1f690bb223b750d20a1f66eba6c15373c167d4fbc8d9825e7d019ed"
+              "oracle_digest": "68fb7ab9d6665413831a908ff2a1ff9faae8671d980b487f3e3f4ae867863351"
             }
           ],
           "level": "live_token",
@@ -4414,12 +4414,12 @@
               "id": "omp_helm_abort_native",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 10,
+              "minimum_scenario_revision": 11,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "04d3f58db1f690bb223b750d20a1f66eba6c15373c167d4fbc8d9825e7d019ed"
+              "oracle_digest": "68fb7ab9d6665413831a908ff2a1ff9faae8671d980b487f3e3f4ae867863351"
             }
           ],
           "level": "live_token",
@@ -4432,12 +4432,12 @@
               "id": "omp_helm_steer_active",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 10,
+              "minimum_scenario_revision": 11,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "04d3f58db1f690bb223b750d20a1f66eba6c15373c167d4fbc8d9825e7d019ed"
+              "oracle_digest": "68fb7ab9d6665413831a908ff2a1ff9faae8671d980b487f3e3f4ae867863351"
             }
           ],
           "level": "live_token",
@@ -4458,12 +4458,12 @@
               "id": "omp_helm_terminate_owned",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 10,
+              "minimum_scenario_revision": 11,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "04d3f58db1f690bb223b750d20a1f66eba6c15373c167d4fbc8d9825e7d019ed"
+              "oracle_digest": "68fb7ab9d6665413831a908ff2a1ff9faae8671d980b487f3e3f4ae867863351"
             }
           ],
           "level": "live_token",
@@ -4544,78 +4544,78 @@
               "id": "omp_helm_launch_registration",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 10,
+              "minimum_scenario_revision": 11,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "04d3f58db1f690bb223b750d20a1f66eba6c15373c167d4fbc8d9825e7d019ed"
+              "oracle_digest": "68fb7ab9d6665413831a908ff2a1ff9faae8671d980b487f3e3f4ae867863351"
             },
             {
               "id": "omp_helm_send_idle",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 10,
+              "minimum_scenario_revision": 11,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "04d3f58db1f690bb223b750d20a1f66eba6c15373c167d4fbc8d9825e7d019ed"
+              "oracle_digest": "68fb7ab9d6665413831a908ff2a1ff9faae8671d980b487f3e3f4ae867863351"
             },
             {
               "id": "omp_helm_follow_up_native",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 10,
+              "minimum_scenario_revision": 11,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "04d3f58db1f690bb223b750d20a1f66eba6c15373c167d4fbc8d9825e7d019ed"
+              "oracle_digest": "68fb7ab9d6665413831a908ff2a1ff9faae8671d980b487f3e3f4ae867863351"
             },
             {
               "id": "omp_helm_steer_active",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 10,
+              "minimum_scenario_revision": 11,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "04d3f58db1f690bb223b750d20a1f66eba6c15373c167d4fbc8d9825e7d019ed"
+              "oracle_digest": "68fb7ab9d6665413831a908ff2a1ff9faae8671d980b487f3e3f4ae867863351"
             },
             {
               "id": "omp_helm_abort_native",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 10,
+              "minimum_scenario_revision": 11,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "04d3f58db1f690bb223b750d20a1f66eba6c15373c167d4fbc8d9825e7d019ed"
+              "oracle_digest": "68fb7ab9d6665413831a908ff2a1ff9faae8671d980b487f3e3f4ae867863351"
             },
             {
               "id": "omp_helm_terminate_owned",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 10,
+              "minimum_scenario_revision": 11,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "04d3f58db1f690bb223b750d20a1f66eba6c15373c167d4fbc8d9825e7d019ed"
+              "oracle_digest": "68fb7ab9d6665413831a908ff2a1ff9faae8671d980b487f3e3f4ae867863351"
             },
             {
               "id": "omp_helm_native_replacement_bound",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 10,
+              "minimum_scenario_revision": 11,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "04d3f58db1f690bb223b750d20a1f66eba6c15373c167d4fbc8d9825e7d019ed"
+              "oracle_digest": "68fb7ab9d6665413831a908ff2a1ff9faae8671d980b487f3e3f4ae867863351"
             }
           ]
         },
@@ -4637,23 +4637,23 @@
               "id": "omp_helm_cold_resume_exact_file",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 10,
+              "minimum_scenario_revision": 11,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "04d3f58db1f690bb223b750d20a1f66eba6c15373c167d4fbc8d9825e7d019ed"
+              "oracle_digest": "68fb7ab9d6665413831a908ff2a1ff9faae8671d980b487f3e3f4ae867863351"
             },
             {
               "id": "omp_helm_stale_owner_refused",
               "scenario_id": "omp_helm_lifecycle",
               "oracle_source": "server/zerg/qa/omp_helm_lifecycle.py",
-              "minimum_scenario_revision": 10,
+              "minimum_scenario_revision": 11,
               "acceptable_evidence": [
                 "live_token"
               ],
               "max_age_seconds": 604800,
-              "oracle_digest": "04d3f58db1f690bb223b750d20a1f66eba6c15373c167d4fbc8d9825e7d019ed"
+              "oracle_digest": "68fb7ab9d6665413831a908ff2a1ff9faae8671d980b487f3e3f4ae867863351"
             }
           ]
         },
@@ -4778,7 +4778,7 @@
           "trigger": "turn_end"
         }
       },
-      "adapter_digest": "6676bfb425930f2aeb2c7056d043b41633a03a9378845f7f6183227de55ea8e2"
+      "adapter_digest": "c788c4315f5e9e99ecaae13023bc69ea019b85d5777a9407c70f6ba78da7aac5"
     }
   ]
 }

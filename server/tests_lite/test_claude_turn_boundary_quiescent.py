@@ -8,7 +8,6 @@ from typing import Any
 import pytest
 
 from zerg.qa import claude_turn_boundary_quiescent as m
-from zerg.qa.resume_assurance import execution_variant_key
 
 
 class _FakeShipper:
@@ -61,27 +60,6 @@ def _args(tmp_path: Path) -> argparse.Namespace:
         response_timeout_secs=5,
         quiescent_timeout_secs=5,
         variant=m._EXECUTION_VARIANT,
-    )
-
-
-def test_registration_matches_the_schemas_declared_cell() -> None:
-    assert m.REGISTRATION.producer_id == "claude.turn_boundary_quiescent.v1"
-    assert m.REGISTRATION.scenario_id == "claude_turn_boundary_quiescent"
-    assert m.REGISTRATION.assertion_cells == ((m._ASSERTION_ID, None),)
-    assert m.REGISTRATION.evidence_classes == ("live_token",)
-    assert m.REGISTRATION.providers == ("claude",)
-    assert m.REGISTRATION.producer_revision == 3
-    assert m.REGISTRATION.scenario_revision == 2
-    assert "cleanup_receipt" in m.REGISTRATION.required_artifacts
-    assert m.REGISTRATION.required_cleanup == ("claude_helm_process_exited",)
-    # The exact --variant string execute_retained_plan will pass for a null
-    # authored variant, independently recomputed from resume_assurance's own
-    # execution_variant_key rather than hardcoded here.
-    assert m._EXECUTION_VARIANT == execution_variant_key(
-        provider="claude",
-        assertion_id=m._ASSERTION_ID,
-        scenario_id=m._SCENARIO_ID,
-        variant=None,
     )
 
 

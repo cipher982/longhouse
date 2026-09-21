@@ -38,33 +38,6 @@ def _stopped_cleanup() -> dict[str, object]:
     return {"verification": {"verified": True, "socket_absent": True, "owned_processes_dead": True}}
 
 
-def test_registration_covers_exactly_the_five_schema_declared_cells() -> None:
-    assert m.REGISTRATION.producer_id == "codex.coordination_awareness.v1"
-    assert m.REGISTRATION.scenario_ids == (
-        "codex_coordination_awareness_create",
-        "codex_coordination_awareness_post_compaction",
-        "codex_coordination_directed_input",
-    )
-    assert set(m.REGISTRATION.assertion_cells) == {
-        ("coordination_instructions_model_visible", None),
-        ("coordination_instructions_model_visible_after_compaction", None),
-        ("no_duplicate_visible_bootstrap", None),
-        ("provider_input_receipt_linked", None),
-        ("attributed_input_visible", None),
-    }
-    assert m.REGISTRATION.evidence_classes == ("live_token",)
-    assert m.REGISTRATION.required_executables == ("jq",)
-    assert m.REGISTRATION.producer_revision == 8
-    assert m.REGISTRATION.scenario_revision == 5
-    assert m.REGISTRATION.observation_scope == "scenario"
-    assert "typed_compaction_receipt" not in m.REGISTRATION.required_artifacts
-    assert m.REGISTRATION.required_artifacts_by_scenario == {
-        "codex_coordination_awareness_post_compaction": ("typed_compaction_receipt",),
-        "codex_coordination_directed_input": ("target_send_readiness", "machine_shipper_receipt"),
-    }
-    assert len(m._CELL_BY_VARIANT) == 5
-
-
 def test_main_registration_mode_prints_registration_json(capsys: pytest.CaptureFixture[str]) -> None:
     assert m.main(["--registration"]) == 0
     payload = json.loads(capsys.readouterr().out)

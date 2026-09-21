@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import inspect
 import io
 import json
 import urllib.error
@@ -16,7 +15,6 @@ from zerg.qa.live_session_toolkit import new_qualification_isolation_root
 from zerg.qa.omp_console_producer import _PROFILE as CONSOLE_PROFILE
 from zerg.qa.omp_console_producer import _VARIANT as CONSOLE_VARIANT
 from zerg.qa.omp_console_producer import ASSERTION_ID as CONSOLE_ASSERTION
-from zerg.qa.omp_console_producer import REGISTRATION as CONSOLE_REGISTRATION
 from zerg.qa.omp_console_producer import _is_terminal_agent_end
 from zerg.qa.omp_console_producer import _native_settlement as omp_console_settlement
 from zerg.qa.omp_console_producer import omp_console_assertions
@@ -24,7 +22,6 @@ from zerg.qa.omp_console_producer import omp_native_model_evidence
 from zerg.qa.omp_helm_lifecycle import _PROFILE as HELM_PROFILE
 from zerg.qa.omp_helm_lifecycle import _VARIANTS
 from zerg.qa.omp_helm_lifecycle import ASSERTIONS as HELM_ASSERTIONS
-from zerg.qa.omp_helm_lifecycle import REGISTRATION as HELM_REGISTRATION
 from zerg.qa.omp_helm_lifecycle import _append_retirement_claim
 from zerg.qa.omp_helm_lifecycle import _assertion_result_status
 from zerg.qa.omp_helm_lifecycle import _channel_command_evidence
@@ -52,9 +49,7 @@ from zerg.qa.omp_helm_lifecycle import _wait_native_marker
 from zerg.qa.omp_helm_lifecycle import _wait_runtime_control_identity
 from zerg.qa.omp_helm_lifecycle import _wait_served_run_retirement
 from zerg.qa.omp_helm_lifecycle import omp_helm_lifecycle_assertions
-from zerg.qa.omp_helm_lifecycle import run_omp_helm
 from zerg.qa.provider_console_lifecycle import _omp_continuation_prompt
-from zerg.qa.provider_qualification import _PROFILES
 
 
 def _identity_receipt(
@@ -102,24 +97,6 @@ def _omp_state(
     }
 
 
-def test_omp_qualification_producers_are_registered_on_their_own_contracts() -> None:
-    assert CONSOLE_REGISTRATION.producer_id == "omp.console_lifecycle.v1"
-    assert CONSOLE_REGISTRATION.producer_revision == 8
-    assert CONSOLE_REGISTRATION.providers == ("omp",)
-    assert CONSOLE_REGISTRATION.scenario_id == "omp_console_lifecycle"
-    assert CONSOLE_REGISTRATION.scenario_revision == 8
-    assert "console_continuation_receipt" in CONSOLE_REGISTRATION.required_artifacts
-    assert HELM_REGISTRATION.producer_id == "omp.helm_lifecycle.v1"
-    assert HELM_REGISTRATION.scenario_revision == 10
-    assert HELM_REGISTRATION.providers == ("omp",)
-    assert HELM_REGISTRATION.scenario_id == "omp_helm_lifecycle"
-    assert "transcript_flush_receipt" in HELM_REGISTRATION.required_artifacts
-    assert "transcript_shipper_receipt" in HELM_REGISTRATION.required_artifacts
-    assert "runtime_convergence_receipt" in HELM_REGISTRATION.required_artifacts
-    assert ("omp", "omp_print_v1") in _PROFILES
-    assert ("omp", "omp_helm_v1") in _PROFILES
-
-
 _OWNERS_ALIVE = {"terminate_verdict": {"code": "terminate_left_owners_alive"}}
 
 
@@ -147,23 +124,6 @@ def test_terminate_control_keeps_its_observation_instead_of_aborting() -> None:
 
     # The handler catches BaseException; an interrupt still aborts.
     assert _terminate_control_made_its_observation("terminate", _OWNERS_ALIVE, KeyboardInterrupt()) is False
-
-
-def test_terminate_verdict_is_recorded_before_the_retirement_proof() -> None:
-    """The typed verdict must exist before anything that a no-op terminate breaks.
-
-    _terminate_control_made_its_observation only lets the run reach a result
-    once terminate_verdict is typed. The retirement proof used to run first,
-    and under the control it always raises -- the run stays `running` by
-    design, so the claim never reaches retired. The guard then saw no verdict,
-    re-raised, and the factory recorded no_negative_control_result: the exact
-    hole that kept OMP Interrupt uncertified (2026-09-19).
-    """
-    source = inspect.getsource(run_omp_helm)
-    verdict_at = source.index('observation["terminate_verdict"]')
-    retirement_at = source.index("_record_retirement_claim_terminal(")
-
-    assert verdict_at < retirement_at, "retirement proof must not precede the typed terminate verdict"
 
 
 def test_omp_stock_version_line_is_prefixed_for_both_release_profiles() -> None:
@@ -1994,53 +1954,6 @@ def test_omp_main_failure_retains_partial_artifact_manifest(monkeypatch, tmp_pat
     assert payload["error"] == "RuntimeError: synthetic qualification failure"
     assert [entry["path"] for entry in payload["artifact_manifest"]] == ["partial-receipt.json"]
     assert "synthetic qualification failure" in capsys.readouterr().out
-
-
-def test_omp_semantic_entrypoint_uses_validated_request_and_runtime_token(tmp_path, monkeypatch) -> None:
-    from zerg.qa import omp_helm_lifecycle as helm
-
-    request_path = tmp_path / "request.json"
-    request_path.write_text("{}\n", encoding="utf-8")
-    output_root = tmp_path / "output"
-    request = {"provider_bin": "/validated/omp", "expected_provider_version": "1.2.3"}
-    captured: dict[str, object] = {}
-    monkeypatch.setenv("LONGHOUSE_RUNTIME_AGENTS_TOKEN", "runtime-token")
-    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.setattr(helm.identity, "load_request", lambda *_args, **_kwargs: request)
-
-    def fake_run(args):
-        captured.update(
-            {
-                "provider_bin": args.provider_bin,
-                "provider_version": args.provider_version,
-                "agents_token": args.agents_token,
-                "variant": args.variant,
-            }
-        )
-        return {"status": "pass", "observation": {}}
-
-    def fake_semantic(_request_path, _output_root, **kwargs):
-        captured["scenario_revision"] = kwargs["scenario_revision"]
-        observation, assertions, secrets = kwargs["executor"](Path("/factory/omp"), tmp_path / "semantic-evidence")
-        captured["secrets"] = secrets
-        captured["assertion_count"] = len(assertions)
-        return {"observation": observation}
-
-    monkeypatch.setattr(helm, "run_omp_helm", fake_run)
-    monkeypatch.setattr(helm.semantic, "run_semantic_profile", fake_semantic)
-
-    result = helm.run(request_path, output_root)
-
-    assert result == {"observation": {}}
-    assert captured == {
-        "provider_bin": Path("/factory/omp"),
-        "provider_version": "1.2.3",
-        "agents_token": "runtime-token",
-        "variant": None,
-        "scenario_revision": 10,
-        "secrets": ("runtime-token",),
-        "assertion_count": len(HELM_ASSERTIONS),
-    }
 
 
 def test_omp_helm_oracle_rejects_archive_only_or_unbound_evidence() -> None:

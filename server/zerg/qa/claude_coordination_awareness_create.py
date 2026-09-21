@@ -65,9 +65,9 @@ _EXECUTION_VARIANT = execution_variant_key(
 
 REGISTRATION = ProducerRegistration(
     producer_id="claude.coordination_awareness_create.v1",
-    producer_revision=4,
+    producer_revision=5,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=3,
+    scenario_revision=4,
     assertion_cells=((_ASSERTION_ID, None),),
     providers=("claude",),
     platforms=("linux",),
@@ -111,6 +111,7 @@ def run_awareness_create_scenario(args: argparse.Namespace) -> dict[str, Any]:
     shipper = None
     session = None
     close_receipt: dict[str, Any] = {"not_started": True, "alive_after_close": False}
+    result: dict[str, Any] = {}
     try:
         shipper, environment = start_machine_and_shipper(args, isolation_root=isolation_root, evidence_root=root)
         write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
@@ -200,7 +201,7 @@ def run_awareness_create_scenario(args: argparse.Namespace) -> dict[str, Any]:
             "tool_invocation": invocation,
         }
         assertions = awareness_create_assertions(observation)
-        result: dict[str, Any] = {
+        result = {
             "schema_version": 1,
             "artifact_kind": _ARTIFACT_KIND,
             "producer": REGISTRATION.to_dict(),
@@ -241,6 +242,7 @@ def run_awareness_create_scenario(args: argparse.Namespace) -> dict[str, Any]:
         except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error below
             cleanup_recording_error = f"{type(cleanup_exc).__name__}: {cleanup_exc}"
         failure = {
+            **result,
             "schema_version": 1,
             "artifact_kind": _ARTIFACT_KIND,
             "producer": REGISTRATION.to_dict(),

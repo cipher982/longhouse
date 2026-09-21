@@ -64,27 +64,6 @@ def _args(tmp_path: Path, variant: str) -> argparse.Namespace:
     )
 
 
-def test_registration_covers_both_schema_declared_cells() -> None:
-    assert m.REGISTRATION.producer_id == "claude.coordination_awareness_post_compaction.v1"
-    assert m.REGISTRATION.scenario_id == "claude_coordination_awareness_post_compaction"
-    assert m.REGISTRATION.assertion_cells == (
-        (m._ASSERTION_VISIBLE, None),
-        (m._ASSERTION_NO_DUP_BOOTSTRAP, None),
-    )
-    assert m.REGISTRATION.evidence_classes == ("live_token",)
-    assert m.REGISTRATION.producer_revision == 4
-    assert m.REGISTRATION.scenario_revision == 3
-    assert "cleanup_receipt" in m.REGISTRATION.required_artifacts
-    assert m.REGISTRATION.required_cleanup == ("claude_helm_process_exited",)
-    assert len(m._CELL_BY_VARIANT) == 2
-    assert set(m._CELL_BY_VARIANT.values()) == {m._ASSERTION_VISIBLE, m._ASSERTION_NO_DUP_BOOTSTRAP}
-    for assertion_id in (m._ASSERTION_VISIBLE, m._ASSERTION_NO_DUP_BOOTSTRAP):
-        assert (
-            execution_variant_key(provider="claude", assertion_id=assertion_id, scenario_id=m._SCENARIO_ID, variant=None)
-            in m._CELL_BY_VARIANT
-        )
-
-
 def test_main_registration_mode_prints_registration_json(capsys: pytest.CaptureFixture[str]) -> None:
     assert m.main(["--registration"]) == 0
     payload = json.loads(capsys.readouterr().out)

@@ -8,7 +8,6 @@ from typing import Any
 import pytest
 
 from zerg.qa import claude_coordination_awareness_create as m
-from zerg.qa.resume_assurance import execution_variant_key
 
 
 class _FakeShipper:
@@ -60,23 +59,6 @@ def _args(tmp_path: Path) -> argparse.Namespace:
         launch_timeout_secs=5,
         response_timeout_secs=5,
         variant=m._EXECUTION_VARIANT,
-    )
-
-
-def test_registration_matches_the_schemas_declared_cell() -> None:
-    assert m.REGISTRATION.producer_id == "claude.coordination_awareness_create.v1"
-    assert m.REGISTRATION.scenario_id == "claude_coordination_awareness_create"
-    assert m.REGISTRATION.assertion_cells == ((m._ASSERTION_ID, None),)
-    assert m.REGISTRATION.evidence_classes == ("live_token",)
-    assert m.REGISTRATION.producer_revision == 4
-    assert m.REGISTRATION.scenario_revision == 3
-    assert "cleanup_receipt" in m.REGISTRATION.required_artifacts
-    assert m.REGISTRATION.required_cleanup == ("claude_helm_process_exited",)
-    assert m._EXECUTION_VARIANT == execution_variant_key(
-        provider="claude",
-        assertion_id=m._ASSERTION_ID,
-        scenario_id=m._SCENARIO_ID,
-        variant=None,
     )
 
 

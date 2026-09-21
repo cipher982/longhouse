@@ -81,9 +81,9 @@ _CELL_BY_VARIANT: dict[str, str] = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="claude.coordination_awareness_post_compaction.v1",
-    producer_revision=4,
+    producer_revision=5,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=3,
+    scenario_revision=4,
     assertion_cells=(
         (_ASSERTION_VISIBLE, None),
         (_ASSERTION_NO_DUP_BOOTSTRAP, None),
@@ -143,6 +143,7 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
     shipper = None
     session = None
     close_receipt: dict[str, Any] = {"not_started": True, "alive_after_close": False}
+    result: dict[str, Any] = {}
     try:
         shipper, environment = start_machine_and_shipper(args, isolation_root=isolation_root, evidence_root=root)
         write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
@@ -296,7 +297,7 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
         # directed_input_assertions does the same with its extra
         # "directed_input_persisted" key), but it is not what this
         # invocation is being scored on.
-        result: dict[str, Any] = {
+        result = {
             "schema_version": 1,
             "artifact_kind": _ARTIFACT_KIND,
             "producer": REGISTRATION.to_dict(),
@@ -337,6 +338,7 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
         except Exception as cleanup_exc:  # noqa: BLE001 - preserve the causal error below
             cleanup_recording_error = f"{type(cleanup_exc).__name__}: {cleanup_exc}"
         failure = {
+            **result,
             "schema_version": 1,
             "artifact_kind": _ARTIFACT_KIND,
             "producer": REGISTRATION.to_dict(),
@@ -354,7 +356,7 @@ def run_awareness_post_compaction_scenario(args: argparse.Namespace) -> dict[str
             ),
             "error": f"{type(exc).__name__}: {exc}",
             **({"cleanup_recording_error": cleanup_recording_error} if cleanup_recording_error else {}),
-            "assertions": {requested_assertion_id: False},
+            "assertions": result.get("assertions") or {requested_assertion_id: False},
             "artifact_manifest": artifact_manifest(root),
         }
         write_json(root / "result.json", failure)

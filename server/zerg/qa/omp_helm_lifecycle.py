@@ -91,9 +91,9 @@ _CELL_BY_VARIANT = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="omp.helm_lifecycle.v1",
-    producer_revision=9,
+    producer_revision=10,
     scenario_id=SCENARIO_ID,
-    scenario_revision=10,
+    scenario_revision=11,
     assertion_cells=tuple((assertion, None) for assertion in ASSERTIONS),
     providers=("omp",),
     platforms=("linux", "darwin"),
@@ -3221,6 +3221,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = run_omp_helm(args)
     except Exception as exc:  # noqa: BLE001 - preserve a typed harness failure
+        partial = _read_state(args.evidence_root / "partial-observation.json") or {}
+        observation = partial.get("observation")
+        if not isinstance(observation, dict):
+            observation = {}
+        cleanup = _read_state(args.evidence_root / "cleanup-receipt.json")
+        if cleanup is not None:
+            observation["cleanup"] = cleanup
         result = {
             "schema_version": 1,
             "artifact_kind": "omp_helm_lifecycle_result",
@@ -3235,6 +3242,8 @@ def main(argv: list[str] | None = None) -> int:
             "status": "fail",
             "failure_code": "omp_helm_lifecycle_failed",
             "error": f"{type(exc).__name__}: {exc}",
+            "observation": observation,
+            "assertions": omp_helm_lifecycle_assertions(observation),
         }
         args.evidence_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         result["artifact_manifest"] = artifact_manifest(args.evidence_root)

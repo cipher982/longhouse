@@ -74,9 +74,9 @@ _CELL_BY_VARIANT: dict[str, str] = {
 
 REGISTRATION = ProducerRegistration(
     producer_id="claude.coordination_directed_input.v1",
-    producer_revision=4,
+    producer_revision=5,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=4,
+    scenario_revision=5,
     assertion_cells=(
         (_ASSERTION_SEND, None),
         (_ASSERTION_RECEIVE, None),
@@ -132,6 +132,7 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
         "sender": {"not_started": True, "alive_after_close": False},
         "receiver": {"not_started": True, "alive_after_close": False},
     }
+    result: dict[str, Any] = {}
     try:
         shipper, environment = start_machine_and_shipper(args, isolation_root=isolation_root, evidence_root=root)
         write_json(root / "transcript-shipper-receipt.json", shipper.receipt)
@@ -363,7 +364,7 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
         # scored on the specific assertion_id this --variant invocation is
         # for (see claude_coordination_awareness_post_compaction.py for the
         # identical reasoning).
-        result: dict[str, Any] = {
+        result = {
             "schema_version": 1,
             "artifact_kind": _ARTIFACT_KIND,
             "producer": REGISTRATION.to_dict(),
@@ -416,6 +417,7 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
         if isinstance(exc, RuntimeHostHTTPError):
             error_detail = f"RuntimeHostHTTPError[{exc.status}]: {exc.detail}"
         failure = {
+            **result,
             "schema_version": 1,
             "artifact_kind": _ARTIFACT_KIND,
             "producer": REGISTRATION.to_dict(),
@@ -433,7 +435,7 @@ def run_directed_input_scenario(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "error": error_detail,
             **({"cleanup_recording_error": cleanup_recording_error} if cleanup_recording_error else {}),
-            "assertions": {requested_assertion_id: False},
+            "assertions": result.get("assertions") or {requested_assertion_id: False},
             "artifact_manifest": artifact_manifest(root),
         }
         write_json(root / "result.json", failure)
