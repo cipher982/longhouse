@@ -77,9 +77,9 @@ _VARIANTS = tuple(
 
 REGISTRATION = ProducerRegistration(
     producer_id="claude.helm_lifecycle.v1",
-    producer_revision=1,
+    producer_revision=2,
     scenario_id=_SCENARIO_ID,
-    scenario_revision=4,
+    scenario_revision=5,
     assertion_cells=tuple((item, None) for item in ASSERTIONS),
     providers=("claude",),
     # Claude on macOS keeps credentials in the desktop Keychain; a relocated

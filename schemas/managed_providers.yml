@@ -744,31 +744,31 @@ providers:
       - id: claude_helm_launch_registration
         scenario_id: claude_helm_lifecycle
         oracle_source: server/zerg/qa/claude_helm_lifecycle.py
-        minimum_scenario_revision: 4
+        minimum_scenario_revision: 5
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
       - id: claude_helm_send_idle
         scenario_id: claude_helm_lifecycle
         oracle_source: server/zerg/qa/claude_helm_lifecycle.py
-        minimum_scenario_revision: 4
+        minimum_scenario_revision: 5
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
       - id: claude_helm_steer_active
         scenario_id: claude_helm_lifecycle
         oracle_source: server/zerg/qa/claude_helm_lifecycle.py
-        minimum_scenario_revision: 4
+        minimum_scenario_revision: 5
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
       - id: claude_helm_abort_native
         scenario_id: claude_helm_lifecycle
         oracle_source: server/zerg/qa/claude_helm_lifecycle.py
-        minimum_scenario_revision: 4
+        minimum_scenario_revision: 5
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
       - id: claude_helm_terminate_owned
         scenario_id: claude_helm_lifecycle
         oracle_source: server/zerg/qa/claude_helm_lifecycle.py
-        minimum_scenario_revision: 4
+        minimum_scenario_revision: 5
         acceptable_evidence: [live_token]
         max_age_seconds: 604800
     session.turn.start:
@@ -878,7 +878,7 @@ providers:
       - id: claude_helm_launch_registration
         scenario_id: claude_helm_lifecycle
         oracle_source: server/zerg/qa/claude_helm_lifecycle.py
-        minimum_scenario_revision: 4
+        minimum_scenario_revision: 5
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -900,7 +900,7 @@ providers:
       - id: claude_helm_send_idle
         scenario_id: claude_helm_lifecycle
         oracle_source: server/zerg/qa/claude_helm_lifecycle.py
-        minimum_scenario_revision: 4
+        minimum_scenario_revision: 5
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -913,7 +913,7 @@ providers:
       - id: claude_helm_abort_native
         scenario_id: claude_helm_lifecycle
         oracle_source: server/zerg/qa/claude_helm_lifecycle.py
-        minimum_scenario_revision: 4
+        minimum_scenario_revision: 5
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -923,7 +923,7 @@ providers:
       - id: claude_helm_steer_active
         scenario_id: claude_helm_lifecycle
         oracle_source: server/zerg/qa/claude_helm_lifecycle.py
-        minimum_scenario_revision: 4
+        minimum_scenario_revision: 5
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
@@ -939,7 +939,7 @@ providers:
       - id: claude_helm_terminate_owned
         scenario_id: claude_helm_lifecycle
         oracle_source: server/zerg/qa/claude_helm_lifecycle.py
-        minimum_scenario_revision: 4
+        minimum_scenario_revision: 5
         acceptable_evidence:
         - live_token
         max_age_seconds: 604800
