@@ -6250,6 +6250,7 @@ mod tests {
         let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
             turns: vec![crate::cursor_visibility::CursorProviderTurn {
                 generation_id: "generation-1".to_string(),
+                launch_id: None,
                 prompt: "hello test 1".to_string(),
                 response_text: None,
                 stop_status: Some("error".to_string()),
@@ -6304,6 +6305,7 @@ mod tests {
         let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
             turns: vec![crate::cursor_visibility::CursorProviderTurn {
                 generation_id: "generation-2".to_string(),
+                launch_id: None,
                 prompt: "do work".to_string(),
                 response_text: Some("progressdone".to_string()),
                 stop_status: Some("completed".to_string()),
@@ -6342,6 +6344,7 @@ mod tests {
         let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
             turns: vec![crate::cursor_visibility::CursorProviderTurn {
                 generation_id: "generation-2".to_string(),
+                launch_id: None,
                 prompt: "do work".to_string(),
                 response_text: Some("done".to_string()),
                 stop_status: Some("completed".to_string()),
@@ -6349,6 +6352,7 @@ mod tests {
             }],
             failures: vec![crate::cursor_visibility::CursorTurnFailure {
                 generation_id: "continuation".to_string(),
+                launch_id: None,
                 status: "error".to_string(),
                 observed_at: None,
             }],
@@ -6493,6 +6497,7 @@ mod tests {
             turns: vec![
                 crate::cursor_visibility::CursorProviderTurn {
                     generation_id: "g1".to_string(),
+                    launch_id: None,
                     prompt: "do work".to_string(),
                     response_text: Some("first answer".to_string()),
                     stop_status: Some("completed".to_string()),
@@ -6500,6 +6505,7 @@ mod tests {
                 },
                 crate::cursor_visibility::CursorProviderTurn {
                     generation_id: "g2".to_string(),
+                    launch_id: None,
                     prompt: "keep going".to_string(),
                     response_text: Some("second answer".to_string()),
                     stop_status: Some("completed".to_string()),
@@ -6640,6 +6646,7 @@ mod tests {
         let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
             turns: vec![crate::cursor_visibility::CursorProviderTurn {
                 generation_id: "generation-2".to_string(),
+                launch_id: None,
                 prompt: "do work".to_string(),
                 response_text: Some("done".to_string()),
                 stop_status: Some("completed".to_string()),
@@ -6647,6 +6654,7 @@ mod tests {
             }],
             failures: vec![crate::cursor_visibility::CursorTurnFailure {
                 generation_id: "older".to_string(),
+                launch_id: None,
                 status: "error".to_string(),
                 observed_at: None,
             }],
@@ -6679,6 +6687,7 @@ mod tests {
         let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
             failures: vec![crate::cursor_visibility::CursorTurnFailure {
                 generation_id: "continuation".to_string(),
+                launch_id: None,
                 status: "error".to_string(),
                 observed_at: None,
             }],
@@ -6720,6 +6729,7 @@ mod tests {
         let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
             turns: vec![crate::cursor_visibility::CursorProviderTurn {
                 generation_id: "generation-2".to_string(),
+                launch_id: None,
                 prompt: "do work".to_string(),
                 response_text: Some("done".to_string()),
                 stop_status: Some("completed".to_string()),
@@ -6756,6 +6766,7 @@ mod tests {
         let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
             turns: vec![crate::cursor_visibility::CursorProviderTurn {
                 generation_id: "generation-ambiguous".to_string(),
+                launch_id: None,
                 prompt: "repeat".to_string(),
                 response_text: Some("same answer".to_string()),
                 stop_status: Some("completed".to_string()),
@@ -6787,6 +6798,7 @@ mod tests {
         let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
             turns: vec![crate::cursor_visibility::CursorProviderTurn {
                 generation_id: "generation-conflict".to_string(),
+                launch_id: None,
                 prompt: "hello".to_string(),
                 response_text: Some("world".to_string()),
                 stop_status: Some("completed".to_string()),
@@ -6824,6 +6836,7 @@ mod tests {
         let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
             turns: vec![crate::cursor_visibility::CursorProviderTurn {
                 generation_id: "generation-failed-tool".to_string(),
+                launch_id: None,
                 prompt: "run it".to_string(),
                 response_text: None,
                 stop_status: Some("aborted".to_string()),
@@ -6893,6 +6906,7 @@ mod tests {
         let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
             turns: vec![crate::cursor_visibility::CursorProviderTurn {
                 generation_id: "generation-injected-context".to_string(),
+                launch_id: None,
                 prompt: "do work".to_string(),
                 response_text: Some("done".to_string()),
                 stop_status: Some("completed".to_string()),
@@ -6930,6 +6944,7 @@ mod tests {
             turns: vec![
                 crate::cursor_visibility::CursorProviderTurn {
                     generation_id: "generation-internal".to_string(),
+                    launch_id: None,
                     prompt: "provider internal setup".to_string(),
                     response_text: Some("setup complete".to_string()),
                     stop_status: Some("completed".to_string()),
@@ -6937,6 +6952,7 @@ mod tests {
                 },
                 crate::cursor_visibility::CursorProviderTurn {
                     generation_id: "generation-user".to_string(),
+                    launch_id: None,
                     prompt: "do work".to_string(),
                     response_text: Some("done".to_string()),
                     stop_status: Some("completed".to_string()),
@@ -6976,6 +6992,7 @@ mod tests {
 {"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"generation-2","prompt":"/exit"}}
 {"event":"stop","conversation_id":"conversation","payload":{"generation_id":"generation-2","status":"completed"}}"#,
             "conversation",
+            None,
         )
         .unwrap();
 
@@ -7015,6 +7032,7 @@ mod tests {
         let evidence = crate::cursor_visibility::CursorVisibilityEvidence {
             turns: vec![crate::cursor_visibility::CursorProviderTurn {
                 generation_id: "generation-repeated".to_string(),
+                launch_id: None,
                 prompt: "same prompt".to_string(),
                 response_text: Some("same reply".to_string()),
                 stop_status: Some("completed".to_string()),

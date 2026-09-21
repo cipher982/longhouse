@@ -19,6 +19,29 @@ use serde_json::{json, Value};
 
 const COMPLETED_RECEIPT_GRACE: Duration = Duration::seconds(30);
 
+/// Hook events that represent provider work for a generation.  Session
+/// lifecycle events (`sessionStart`/`sessionEnd`) are excluded: only evidence
+/// that the provider actually worked on a generation may let a resumed launch
+/// take over that generation's unanswered turn.
+const PROVIDER_WORK_EVENTS: &[&str] = &[
+    "beforeSubmitPrompt",
+    "afterAgentThought",
+    "afterAgentResponse",
+    "preToolUse",
+    "postToolUse",
+    "postToolUseFailure",
+    "beforeShellExecution",
+    "afterShellExecution",
+    "beforeMCPExecution",
+    "afterMCPExecution",
+    "stop",
+];
+
+fn is_provider_work_event(event: &str) -> bool {
+    PROVIDER_WORK_EVENTS.contains(&event)
+}
+
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CursorEvidenceWait {
     InFlight,
@@ -37,6 +60,7 @@ impl CursorEvidenceWait {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CursorProviderTurn {
     pub generation_id: String,
+    pub launch_id: Option<String>,
     pub prompt: String,
     pub response_text: Option<String>,
     pub stop_status: Option<String>,
@@ -79,6 +103,7 @@ impl CursorProviderTurn {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CursorTurnFailure {
     pub generation_id: String,
+    pub launch_id: Option<String>,
     pub status: String,
     pub observed_at: Option<DateTime<Utc>>,
 }
@@ -91,9 +116,8 @@ pub(crate) struct CursorVisibilityEvidence {
     /// A failure is worth telling the user about only while nothing has
     /// superseded it.
     pub latest_terminal: Option<(String, bool)>,
-    /// Launch identity carried by the newest accepted provider prompt.
-    /// `None` means the source did not prove a launch identity.
-    pub latest_prompt_launch_id: Option<String>,
+    /// Execution authority comes from the managed binding, not prompt history.
+    pub current_launch_id: Option<String>,
     pub session_ended: bool,
     pub ambiguous: bool,
     pub first_activity_at: Option<DateTime<Utc>>,
@@ -110,7 +134,10 @@ impl CursorVisibilityEvidence {
             .then(|| {
                 self.failures
                     .iter()
-                    .find(|failure| &failure.generation_id == generation_id)
+                    .find(|failure| {
+                        &failure.generation_id == generation_id
+                            && failure.launch_id == self.current_launch_id
+                    })
             })
             .flatten()
     }
@@ -122,9 +149,17 @@ impl CursorVisibilityEvidence {
     }
 
     fn unsettled_reason_at(&self, now: DateTime<Utc>) -> Option<CursorEvidenceWait> {
-        self.turns
-            .last()
-            .and_then(|turn| turn.unsettled_reason(self.session_ended, now))
+        let turn = self.turns.last()?;
+        if !self.session_ended
+            && self.current_launch_id.is_some()
+            && turn.launch_id != self.current_launch_id
+            && turn.response_text.is_none()
+        {
+            // An old aborted/ended attempt cannot settle an unanswered turn
+            // being resumed by the currently bound launch.
+            return Some(CursorEvidenceWait::InFlight);
+        }
+        turn.unsettled_reason(self.session_ended, now)
     }
 }
 
@@ -373,107 +408,72 @@ pub(crate) fn load_cursor_visibility_evidence(
     session_id: &str,
     conversation_id: &str,
 ) -> Result<Option<CursorVisibilityEvidence>> {
-    let path = receipt_events_path(
+    load_cursor_visibility_evidence_in(
         &crate::config::get_longhouse_home()?.join("managed-local/cursor-helm"),
         session_id,
-    );
-    let contents = match fs::read_to_string(&path) {
+        conversation_id,
+    )
+}
+
+fn load_cursor_visibility_evidence_in(
+    root: &Path,
+    session_id: &str,
+    conversation_id: &str,
+) -> Result<Option<CursorVisibilityEvidence>> {
+    let contents = match fs::read_to_string(receipt_events_path(root, session_id)) {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("reading Cursor provider receipts {}", path.display()));
-        }
+        Err(error) => return Err(error).context("read Cursor provider receipt journal"),
     };
-    let root = path
-        .parent()
-        .and_then(|events| events.parent())
-        .context("Cursor receipt path has no lifecycle root")?;
-    let mut evidence = parse_cursor_visibility_evidence(&contents, conversation_id)?;
-    if !evidence.turns.is_empty() {
-        evidence.session_ended |= session_lifecycle_ended(
-            root,
-            session_id,
-            conversation_id,
-            evidence.latest_prompt_launch_id.as_deref(),
-        );
-    }
+    // Resume replaces this claim before starting the provider. The last prompt
+    // can still belong to the previous launch and is not lifecycle authority.
+    let claim = fs::read(root.join("binding-probes").join(format!("{session_id}.json")))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .filter(|claim| {
+            claim.get("session_id").and_then(Value::as_str) == Some(session_id)
+                && claim.get("conversation_uuid").and_then(Value::as_str) == Some(conversation_id)
+        });
+    let current_launch_id = claim.as_ref()
+        .and_then(|claim| claim.get("launch_id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty());
+    let mut evidence = parse_cursor_visibility_evidence(&contents, conversation_id, current_launch_id)?;
+    evidence.session_ended |= session_lifecycle_ended(root, session_id, conversation_id, current_launch_id);
     Ok(Some(evidence))
 }
 
 fn session_lifecycle_ended(
-    root: &std::path::Path,
+    root: &Path,
     session_id: &str,
     conversation_id: &str,
     current_launch_id: Option<&str>,
 ) -> bool {
-    // The phase/state files are session-scoped and can outlive a launch. Do
-    // not treat an absent identity as matching an absent field: only an
-    // explicit current launch can authorize cleanup settlement.
     let Some(current_launch_id) = current_launch_id else {
         return false;
     };
-    let phase = fs::read(root.join(format!("{session_id}.phase.json")))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
-    let phase_matches = phase.as_ref().is_some_and(|value| {
-        value.get("session_id").and_then(Value::as_str) == Some(session_id)
-            && value.get("conversation_id").and_then(Value::as_str) == Some(conversation_id)
-            && value.get("launch_id").and_then(Value::as_str) == Some(current_launch_id)
-    });
-    if phase_matches
-        && phase
-            .as_ref()
-            .and_then(|value| value.get("phase"))
-            .and_then(Value::as_str)
-            == Some("ended")
-    {
-        return true;
-    }
-    // The launcher writes ready=false/cursor_pid=0 in its independent cleanup
-    // path, so a provider crash can settle raw-only even if Cursor never emits
-    // sessionEnd. State has a run_id but no launch_id; correlate that run
-    // through the exact binding probe that supplied the current launch id.
-    let binding = fs::read(
-        root.join("binding-probes")
-            .join(format!("{session_id}.json")),
-    )
-    .ok()
-    .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
-    let Some(binding_run_id) = binding.as_ref().and_then(|claim| {
-        (claim.get("session_id").and_then(Value::as_str) == Some(session_id)
-            && claim.get("conversation_uuid").and_then(Value::as_str) == Some(conversation_id)
-            && claim.get("launch_id").and_then(Value::as_str) == Some(current_launch_id))
-        .then(|| claim.get("run_id").and_then(Value::as_str))
-        .flatten()
-        .filter(|run_id| !run_id.trim().is_empty())
-    }) else {
-        return false;
-    };
-    fs::read(root.join(format!("{session_id}.json")))
+    fs::read(root.join(format!("{session_id}.phase.json")))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .is_some_and(|state| {
-            state.get("session_id").and_then(Value::as_str) == Some(session_id)
-                && state.get("provider_session_id").and_then(Value::as_str) == Some(conversation_id)
-                && state.get("run_id").and_then(Value::as_str) == Some(binding_run_id)
-                && state.get("ready").and_then(Value::as_bool) == Some(false)
-                && state.get("cursor_pid").and_then(Value::as_u64) == Some(0)
-                && phase_matches
+        .is_some_and(|phase| {
+            phase.get("session_id").and_then(Value::as_str) == Some(session_id)
+                && phase.get("conversation_id").and_then(Value::as_str) == Some(conversation_id)
+                && phase.get("launch_id").and_then(Value::as_str) == Some(current_launch_id)
+                && phase.get("phase").and_then(Value::as_str) == Some("ended")
         })
 }
 
 pub(crate) fn parse_cursor_visibility_evidence(
     contents: &str,
     conversation_id: &str,
+    current_launch_id: Option<&str>,
 ) -> Result<CursorVisibilityEvidence> {
+    let current_launch_id = current_launch_id.map(str::trim).filter(|id| !id.is_empty());
     let mut turns = Vec::<CursorProviderTurn>::new();
     let mut failures = Vec::<CursorTurnFailure>::new();
     let mut latest_terminal: Option<(String, bool)> = None;
-    let mut failure_indices = HashMap::<String, usize>::new();
-    let mut indices = HashMap::<String, usize>::new();
-    let mut turn_launch_ids = Vec::<Option<String>>::new();
-    let mut current_prompt_launch_id: Option<Option<String>> = None;
+    let mut failure_indices = HashMap::<String, HashMap<String, usize>>::new();
+    let mut indices = HashMap::<String, HashMap<String, usize>>::new();
     let mut session_ended_for_current_launch = false;
     let mut ambiguous = false;
     let mut first_activity_at = None;
@@ -487,24 +487,18 @@ pub(crate) fn parse_cursor_visibility_evidence(
             continue;
         }
         let event = row.get("event").and_then(Value::as_str).unwrap_or_default();
+        let provider_work = is_provider_work_event(event);
         let row_launch_id = row
             .get("launch_id")
             .and_then(Value::as_str)
             .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned);
+            .filter(|value| !value.is_empty());
+        let is_current_launch = current_launch_id
+            .zip(row_launch_id)
+            .is_some_and(|(current, observed)| current == observed);
         if event == "sessionEnd" {
-            // Only an explicit launch identity can prove that this end belongs
-            // to the current prompt. In particular, an old end arriving after
-            // the current end must not clear the already-proven current end.
-            let matches_current = current_prompt_launch_id
-                .as_ref()
-                .and_then(|current| current.as_ref())
-                .zip(row_launch_id.as_ref())
-                .is_some_and(|(current, row)| current == row);
-            if matches_current {
-                session_ended_for_current_launch = true;
-            }
+            // Late history cannot settle, or unset an end for, the live binding.
+            session_ended_for_current_launch |= is_current_launch;
             continue;
         }
         let payload = row.get("payload").and_then(Value::as_object);
@@ -541,22 +535,26 @@ pub(crate) fn parse_cursor_visibility_evidence(
             ) {
                 continue;
             }
-            if let Some(index) = indices.get(generation_id).copied() {
+            if let Some(index) = indices.get(generation_id)
+                .and_then(|launches| launches.get(row_launch_id.unwrap_or_default())).copied()
+            {
                 ambiguous |= turns.get(index).is_some_and(|turn| turn.prompt != prompt);
                 continue;
             }
-            current_prompt_launch_id = Some(row_launch_id.clone());
-            session_ended_for_current_launch = false;
-            latest_terminal = None;
-            indices.insert(generation_id.to_string(), turns.len());
+            if is_current_launch {
+                session_ended_for_current_launch = false;
+                latest_terminal = None;
+            }
+            indices.entry(generation_id.to_owned()).or_default()
+                .insert(row_launch_id.unwrap_or_default().to_owned(), turns.len());
             turns.push(CursorProviderTurn {
                 generation_id: generation_id.to_string(),
+                launch_id: row_launch_id.map(str::to_owned),
                 prompt: prompt.to_string(),
                 response_text: None,
                 stop_status: None,
                 stop_observed_at: None,
             });
-            turn_launch_ids.push(row_launch_id.clone());
             if let Some(observed_at) = observed_at {
                 first_activity_at = Some(
                     first_activity_at
@@ -578,11 +576,6 @@ pub(crate) fn parse_cursor_visibility_evidence(
         // become the current launch's terminal receipt.
         // A missing launch id is not correlation. Keep the receipt as
         // historical evidence, but never let it become current authority.
-        let is_current_launch = current_prompt_launch_id
-            .as_ref()
-            .and_then(|current| current.as_ref())
-            .zip(row_launch_id.as_ref())
-            .is_some_and(|(current, row_launch)| current == row_launch);
         if event == "afterAgentResponse" && is_current_launch {
             latest_terminal = Some((generation_id.to_string(), false));
         }
@@ -605,7 +598,9 @@ pub(crate) fn parse_cursor_visibility_evidence(
                 .map(str::trim)
                 .filter(|status| matches!(*status, "error" | "aborted"))
             {
-                match failure_indices.get(generation_id).copied() {
+                match failure_indices.get(generation_id)
+                    .and_then(|launches| launches.get(row_launch_id.unwrap_or_default())).copied()
+                {
                     Some(index) => {
                         if let Some(existing) = failures.get_mut(index) {
                             existing.status = status.to_string();
@@ -613,9 +608,11 @@ pub(crate) fn parse_cursor_visibility_evidence(
                         }
                     }
                     None => {
-                        failure_indices.insert(generation_id.to_string(), failures.len());
+                        failure_indices.entry(generation_id.to_owned()).or_default()
+                            .insert(row_launch_id.unwrap_or_default().to_owned(), failures.len());
                         failures.push(CursorTurnFailure {
                             generation_id: generation_id.to_string(),
+                            launch_id: row_launch_id.map(str::to_owned),
                             status: status.to_string(),
                             observed_at,
                         });
@@ -623,26 +620,41 @@ pub(crate) fn parse_cursor_visibility_evidence(
                 }
             }
         }
-        let Some(index) = indices.get(generation_id).copied() else {
-            continue;
-        };
-        let turn_launch_matches = turn_launch_ids
-            .get(index)
-            .and_then(|launch_id| launch_id.as_ref())
-            .zip(row_launch_id.as_ref())
-            .is_some_and(|(turn_launch, row_launch)| turn_launch == row_launch);
-        // A generation id alone is not enough to correlate assistant output:
-        // an old launch can reuse it after Resume. Keep that receipt in the
-        // raw evidence, but do not put its text/status into the served turn.
-        if !turn_launch_matches {
-            continue;
-        }
+        let latest_turn_index = turns.len().checked_sub(1);
+        let index = indices.get(generation_id)
+            .and_then(|launches| launches.get(row_launch_id.unwrap_or_default())).copied()
+            .or_else(|| {
+                // Resume may continue the exact unanswered provider generation
+                // without a new prompt. Only provider work from the bound launch
+                // can take it over; a lifecycle event, an unrelated generation,
+                // or an answered historical turn cannot.
+                let index = latest_turn_index?;
+                let turn = &turns[index];
+                (provider_work
+                    && is_current_launch
+                    && turn.generation_id == generation_id
+                    && turn.response_text.is_none()
+                    && turn.launch_id.is_some())
+                    .then_some(index)
+            });
+        let Some(index) = index else { continue; };
         let turn = turns.get_mut(index).with_context(|| {
-            format!(
-                "Cursor hook turn index was invalid at evidence line {}",
-                line_index + 1
-            )
+            format!("Cursor hook turn index was invalid at evidence line {}", line_index + 1)
         })?;
+        let turn_launch_matches = turn.launch_id.as_deref().zip(row_launch_id)
+            .is_some_and(|(expected, observed)| expected == observed);
+        if !turn_launch_matches {
+            if !is_current_launch || Some(index) != latest_turn_index
+                || turn.response_text.is_some() || turn.launch_id.is_none()
+            {
+                continue;
+            }
+            turn.launch_id = row_launch_id.map(str::to_owned);
+            turn.stop_status = None;
+            turn.stop_observed_at = None;
+            indices.entry(generation_id.to_owned()).or_default()
+                .insert(row_launch_id.unwrap_or_default().to_owned(), index);
+        }
         // Only provider work belonging to an accepted prompt advances activity.
         // Session teardown, binding refresh and local commands are not turns.
         if matches!(
@@ -690,12 +702,11 @@ pub(crate) fn parse_cursor_visibility_evidence(
             _ => {}
         }
     }
-    let latest_prompt_launch_id = current_prompt_launch_id.clone().flatten();
     Ok(CursorVisibilityEvidence {
         turns,
         failures,
         latest_terminal,
-        latest_prompt_launch_id,
+        current_launch_id: current_launch_id.map(str::to_owned),
         session_ended: session_ended_for_current_launch,
         ambiguous,
         first_activity_at,
@@ -722,6 +733,7 @@ mod tests {
 {"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"continuation","status":"error"}}
 {"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"other","payload":{"generation_id":"elsewhere","status":"error"}}"#,
             "conversation",
+            Some("launch"),
         )
         .unwrap();
 
@@ -759,6 +771,7 @@ mod tests {
 {"event":"afterAgentResponse","observed_at":"2026-09-09T21:11:00Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"next","text":"fixed"}}
 {"event":"stop","observed_at":"2026-09-09T21:11:01Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"next","status":"completed"}}"#,
             "conversation",
+            Some("launch"),
         )
         .unwrap();
 
@@ -775,6 +788,7 @@ mod tests {
 {"event":"beforeSubmitPrompt","observed_at":"2026-09-09T21:10:00Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"next","prompt":"try again"}}
 {"event":"afterAgentResponse","observed_at":"2026-09-09T21:11:00Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"next","text":"fixed"}}"#,
             "conversation",
+            Some("launch"),
         )
         .unwrap();
 
@@ -787,6 +801,7 @@ mod tests {
             r#"{"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g","status":"error"}}
 {"event":"stop","observed_at":"2026-09-09T20:57:46Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g","status":"error"}}"#,
             "conversation",
+            Some("launch"),
         )
         .unwrap();
         assert_eq!(evidence.failures.len(), 1);
@@ -805,6 +820,7 @@ mod tests {
 {"event":"stop","observed_at":"2026-09-04T16:51:01Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"exit","status":"completed"}}
 {"event":"sessionEnd","observed_at":"2026-09-04T16:51:02Z","conversation_id":"conversation","launch_id":"launch","payload":{}}"#,
             "conversation",
+            Some("launch"),
         ).unwrap();
         let (started_at, last_activity_at) =
             crate::cursor_store::cursor_session_timestamps(None, None, Some(&evidence)).unwrap();
@@ -815,6 +831,7 @@ mod tests {
             r#"{"event":"beforeSubmitPrompt","observed_at":"2026-07-23T10:00:00Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g2","prompt":"keep working"}}
 {"event":"postToolUse","observed_at":"2026-07-23T10:05:00Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g2"}}"#,
             "conversation",
+            Some("launch"),
         ).unwrap();
         let (_, progressed_at) =
             crate::cursor_store::cursor_session_timestamps(None, None, Some(&running)).unwrap();
@@ -831,6 +848,7 @@ mod tests {
             r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","prompt":"hello"}}
 {"event":"stop","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","status":"completed"}}"#,
             "conversation",
+            Some("launch"),
         )
         .unwrap();
         assert_eq!(
@@ -843,6 +861,7 @@ mod tests {
 {"event":"stop","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","status":"completed"}}
 {"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","text":"world"}}"#,
             "conversation",
+            Some("launch"),
         )
         .unwrap();
         assert_eq!(evidence.unsettled_reason(), None);
@@ -855,6 +874,7 @@ mod tests {
             r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","prompt":"hello"}}
 {"event":"stop","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","status":"error"}}"#,
             "conversation",
+            Some("launch"),
         )
         .unwrap();
         assert_eq!(evidence.unsettled_reason(), None);
@@ -871,6 +891,7 @@ mod tests {
 {"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","text":"world"}}
 {"event":"stop","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","status":"completed"}}"#,
             "conversation",
+            Some("launch"),
         )
         .unwrap();
         assert_eq!(evidence.turns.len(), 1);
@@ -886,6 +907,7 @@ mod tests {
 {"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g2","prompt":"/exit"}}
 {"event":"stop","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g2","status":"completed"}}"#,
             "conversation",
+            Some("launch"),
         )
         .unwrap();
         assert!(!evidence.ambiguous);
@@ -902,6 +924,7 @@ mod tests {
 {"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g2","text":"done"}}
 {"event":"stop","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g2","status":"completed"}}"#,
             "conversation",
+            Some("launch"),
         )
         .unwrap();
         assert_eq!(evidence.unsettled_reason(), None);
@@ -917,6 +940,7 @@ mod tests {
 {"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g2","text":"done"}}
 {"event":"stop","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g2","status":"completed"}}"#,
             "conversation",
+            Some("launch"),
         )
         .unwrap();
         assert!(!evidence.ambiguous);
@@ -931,6 +955,7 @@ mod tests {
             r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","prompt":"hello"}}
 {"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","text":"world"}}"#,
             "conversation",
+            Some("launch"),
         )
         .unwrap();
         assert_eq!(evidence.unsettled_reason(), None);
@@ -942,6 +967,7 @@ mod tests {
             r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","prompt":"hello"}}
 {"event":"stop","observed_at":"2026-07-21T12:00:00Z","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","status":"completed"}}"#,
             "conversation",
+            Some("launch"),
         )
         .unwrap();
         assert_eq!(
@@ -960,10 +986,11 @@ mod tests {
             r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","prompt":"hello"}}
 {"event":"sessionEnd","conversation_id":"conversation","launch_id":"launch","payload":{}}"#,
             "conversation",
+            Some("launch"),
         )
         .unwrap();
         assert!(evidence.session_ended);
-        assert_eq!(evidence.latest_prompt_launch_id.as_deref(), Some("launch"));
+        assert_eq!(evidence.current_launch_id.as_deref(), Some("launch"));
         assert_eq!(evidence.unsettled_reason(), None);
     }
 
@@ -973,10 +1000,11 @@ mod tests {
             r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","payload":{"generation_id":"g1","prompt":"hello"}}
 {"event":"sessionEnd","conversation_id":"conversation","payload":{}}"#,
             "conversation",
+            None,
         )
         .unwrap();
         assert!(!evidence.session_ended);
-        assert_eq!(evidence.latest_prompt_launch_id, None);
+        assert_eq!(evidence.current_launch_id, None);
         assert_eq!(
             evidence.unsettled_reason(),
             Some(CursorEvidenceWait::InFlight)
@@ -990,34 +1018,10 @@ mod tests {
 {"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","text":"first"}}
 {"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","text":"second"}}"#,
             "conversation",
+            Some("launch"),
         )
         .unwrap();
         assert!(evidence.ambiguous);
-    }
-
-    #[test]
-    fn console_receipt_writer_records_the_explicit_launch_identity() {
-        let root = tempfile::tempdir().unwrap();
-        append_cursor_provider_receipt(
-            root.path(),
-            "session",
-            "conversation",
-            "run-new",
-            "launch-new",
-            "cursor_print",
-            CursorProviderReceipt::Prompt("hello"),
-        )
-        .unwrap();
-        let row: Value = serde_json::from_str(
-            fs::read_to_string(receipt_events_path(root.path(), "session"))
-                .unwrap()
-                .trim(),
-        )
-        .unwrap();
-        assert_eq!(
-            row.get("launch_id").and_then(Value::as_str),
-            Some("launch-new")
-        );
     }
 
     #[test]
@@ -1056,7 +1060,8 @@ mod tests {
             .unwrap();
         }
         let contents = fs::read_to_string(receipt_events_path(root.path(), "session")).unwrap();
-        let evidence = parse_cursor_visibility_evidence(&contents, "conversation").unwrap();
+        let evidence =
+            parse_cursor_visibility_evidence(&contents, "conversation", Some("launch-1")).unwrap();
         assert_eq!(evidence.turns.len(), 1);
         assert_eq!(evidence.turns[0].prompt, "hello");
         assert_eq!(evidence.turns[0].response_text.as_deref(), Some("world"));
@@ -1066,40 +1071,14 @@ mod tests {
     }
 
     #[test]
-    fn launcher_cleanup_settles_crashed_session_without_session_end_hook() {
-        let root = tempfile::tempdir().unwrap();
-        fs::create_dir_all(root.path().join("binding-probes")).unwrap();
-        fs::write(
-            root.path().join("binding-probes/session.json"),
-            r#"{"session_id":"session","conversation_uuid":"conversation","launch_id":"launch","run_id":"run"}"#,
-        )
-        .unwrap();
-        fs::write(
-            root.path().join("session.phase.json"),
-            r#"{"session_id":"session","conversation_id":"conversation","launch_id":"launch","phase":"active"}"#,
-        )
-        .unwrap();
-        fs::write(
-            root.path().join("session.json"),
-            r#"{"session_id":"session","provider_session_id":"conversation","run_id":"run","ready":false,"cursor_pid":0}"#,
-        )
-        .unwrap();
-        assert!(session_lifecycle_ended(
-            root.path(),
-            "session",
-            "conversation",
-            Some("launch"),
-        ));
-    }
-
-    #[test]
     fn old_ended_launch_does_not_settle_new_launch() {
         let contents = r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"old-launch","payload":{"generation_id":"old-generation","prompt":"old"}}
 {"event":"stop","conversation_id":"conversation","launch_id":"old-launch","payload":{"generation_id":"old-generation","status":"error"}}
 {"event":"sessionEnd","conversation_id":"conversation","launch_id":"old-launch","payload":{}}
 {"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"new-launch","payload":{"generation_id":"new-generation","prompt":"new"}}
 {"event":"stop","conversation_id":"conversation","launch_id":"old-launch","payload":{"generation_id":"old-generation","status":"error"}}"#;
-        let evidence = parse_cursor_visibility_evidence(contents, "conversation").unwrap();
+        let evidence =
+            parse_cursor_visibility_evidence(contents, "conversation", Some("new-launch")).unwrap();
         assert_eq!(evidence.turns.len(), 2);
         assert_eq!(evidence.turns[0].generation_id, "old-generation");
         assert_eq!(evidence.turns[1].generation_id, "new-generation");
@@ -1121,6 +1100,7 @@ mod tests {
             r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"new-launch","payload":{"generation_id":"generation","prompt":"new"}}
 {"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"old-launch","payload":{"generation_id":"generation","text":"old answer"}}"#,
             "conversation",
+            Some("new-launch"),
         )
         .unwrap();
         assert_eq!(evidence.turns.len(), 1);
@@ -1141,33 +1121,26 @@ mod tests {
 {"event":"sessionEnd","conversation_id":"conversation","launch_id":"new-launch","payload":{}}
 {"event":"sessionEnd","conversation_id":"conversation","launch_id":"old-launch","payload":{}}"#,
             "conversation",
+            Some("new-launch"),
         )
         .unwrap();
         assert!(evidence.session_ended);
         assert_eq!(
-            evidence.latest_prompt_launch_id.as_deref(),
+            evidence.current_launch_id.as_deref(),
             Some("new-launch")
         );
         assert_eq!(evidence.unsettled_reason(), None);
     }
 
+    /// The launcher's phase file is lifecycle evidence only for the launch it
+    /// names: another launch's phase cannot settle the current one, and a
+    /// missing binding is not terminal evidence at all.
     #[test]
-    fn stale_phase_and_state_cannot_settle_new_launch() {
+    fn phase_file_settles_only_the_launch_it_names() {
         let root = tempfile::tempdir().unwrap();
-        fs::create_dir_all(root.path().join("binding-probes")).unwrap();
-        fs::write(
-            root.path().join("binding-probes/session.json"),
-            r#"{"session_id":"session","conversation_uuid":"conversation","launch_id":"new-launch","run_id":"new-run"}"#,
-        )
-        .unwrap();
         fs::write(
             root.path().join("session.phase.json"),
             r#"{"session_id":"session","conversation_id":"conversation","launch_id":"old-launch","phase":"ended"}"#,
-        )
-        .unwrap();
-        fs::write(
-            root.path().join("session.json"),
-            r#"{"session_id":"session","provider_session_id":"conversation","run_id":"old-run","ready":false,"cursor_pid":0}"#,
         )
         .unwrap();
         assert!(!session_lifecycle_ended(
@@ -1179,20 +1152,7 @@ mod tests {
 
         fs::write(
             root.path().join("session.phase.json"),
-            r#"{"session_id":"session","conversation_id":"conversation","launch_id":"new-launch","phase":"active"}"#,
-        )
-        .unwrap();
-        // The phase belongs to the current launch, but cleanup state is from
-        // the old execution. Launch identity alone must not settle it.
-        assert!(!session_lifecycle_ended(
-            root.path(),
-            "session",
-            "conversation",
-            Some("new-launch"),
-        ));
-        fs::write(
-            root.path().join("session.json"),
-            r#"{"session_id":"session","provider_session_id":"conversation","run_id":"new-run","ready":false,"cursor_pid":0}"#,
+            r#"{"session_id":"session","conversation_id":"conversation","launch_id":"new-launch","phase":"ended"}"#,
         )
         .unwrap();
         assert!(session_lifecycle_ended(
@@ -1207,6 +1167,91 @@ mod tests {
             "conversation",
             None,
         ));
+    }
+
+    /// A resumed launch may continue the exact unanswered generation without
+    /// emitting a new prompt, so its response adopts that turn.
+    #[test]
+    fn resume_without_a_new_prompt_adopts_the_unanswered_turn() {
+        let evidence = parse_cursor_visibility_evidence(
+            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"old-launch","payload":{"generation_id":"g1","prompt":"work"}}
+{"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"new-launch","payload":{"generation_id":"g1","text":"resumed answer"}}
+{"event":"stop","conversation_id":"conversation","launch_id":"new-launch","payload":{"generation_id":"g1","status":"completed"}}"#,
+            "conversation",
+            Some("new-launch"),
+        )
+        .unwrap();
+        assert_eq!(evidence.turns.len(), 1);
+        assert_eq!(evidence.turns[0].launch_id.as_deref(), Some("new-launch"));
+        assert_eq!(
+            evidence.turns[0].response_text.as_deref(),
+            Some("resumed answer")
+        );
+        assert_eq!(evidence.unsettled_reason(), None);
+    }
+
+    /// A generation id is unique only within a launch: the same id under a
+    /// later launch is a second attempt, not a duplicate of the first.
+    #[test]
+    fn a_generation_id_reused_by_a_later_launch_is_a_second_turn() {
+        let evidence = parse_cursor_visibility_evidence(
+            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"old-launch","payload":{"generation_id":"g1","prompt":"first attempt"}}
+{"event":"stop","conversation_id":"conversation","launch_id":"old-launch","payload":{"generation_id":"g1","status":"error"}}
+{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"new-launch","payload":{"generation_id":"g1","prompt":"second attempt"}}
+{"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"new-launch","payload":{"generation_id":"g1","text":"second answer"}}"#,
+            "conversation",
+            Some("new-launch"),
+        )
+        .unwrap();
+        assert_eq!(evidence.turns.len(), 2);
+        assert_eq!(evidence.turns[0].prompt, "first attempt");
+        assert_eq!(evidence.turns[1].prompt, "second attempt");
+        assert_eq!(
+            evidence.turns[1].response_text.as_deref(),
+            Some("second answer")
+        );
+        assert!(!evidence.ambiguous);
+    }
+
+    /// Once the bound launch has adopted the turn, a late callback carrying the
+    /// old launch id is history: it can neither rewrite the answer nor become
+    /// the session's terminal state.
+    #[test]
+    fn a_late_old_launch_callback_cannot_mutate_the_adopted_turn() {
+        let evidence = parse_cursor_visibility_evidence(
+            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"old-launch","payload":{"generation_id":"g1","prompt":"work"}}
+{"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"new-launch","payload":{"generation_id":"g1","text":"resumed answer"}}
+{"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"old-launch","payload":{"generation_id":"g1","text":"stale answer"}}
+{"event":"stop","conversation_id":"conversation","launch_id":"old-launch","payload":{"generation_id":"g1","status":"error"}}"#,
+            "conversation",
+            Some("new-launch"),
+        )
+        .unwrap();
+        assert_eq!(
+            evidence.turns[0].response_text.as_deref(),
+            Some("resumed answer")
+        );
+        assert_eq!(evidence.turns[0].stop_status, None);
+        assert!(evidence.unsuperseded_failure().is_none());
+    }
+
+    /// Without a current launch binding there is no execution authority: the
+    /// journal stays readable history, but nothing in it is a terminal verdict.
+    #[test]
+    fn missing_current_authority_never_authorizes_terminal_state() {
+        let evidence = parse_cursor_visibility_evidence(
+            r#"{"event":"beforeSubmitPrompt","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","prompt":"work"}}
+{"event":"afterAgentResponse","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","text":"answer"}}
+{"event":"stop","conversation_id":"conversation","launch_id":"launch","payload":{"generation_id":"g1","status":"error"}}
+{"event":"sessionEnd","conversation_id":"conversation","launch_id":"launch","payload":{}}"#,
+            "conversation",
+            None,
+        )
+        .unwrap();
+        assert_eq!(evidence.current_launch_id, None);
+        assert!(evidence.latest_terminal.is_none());
+        assert!(evidence.unsuperseded_failure().is_none());
+        assert!(!evidence.session_ended);
     }
 }
 
