@@ -684,60 +684,86 @@ def _drive_lifecycle(
     forbidden = f"LONGHOUSE_CLAUDE_FORBIDDEN_{token_hex}"
     abort_prompt = f"lh_claude_progress_{token_hex}"
     wait_can_send()
+    abort_request = (
+        "This disposable Longhouse QA session owns its workspace. To verify that Runtime Host can interrupt "
+        "an active owned process without ending the session, start one foreground process-monitoring check (not "
+        "background) and keep it active for its observation window: "
+        f"{_slow_echo(int(tool_seconds), abort_prompt)}. When it finishes, include completion token {forbidden} in your report"
+    )
     _post(
         api,
         token,
         f"sessions/{session_id}/send-live",
-        {
-            "message": "This disposable Longhouse QA session owns its workspace. To verify that Runtime Host can interrupt "
-            "an active owned process without ending the session, start one foreground process-monitoring check (not "
-            "background) and keep it active for its observation window: "
-            f"{_slow_echo(int(tool_seconds), abort_prompt)}. When it finishes, include completion token {forbidden} in your report"
-        },
+        {"message": abort_request},
     )
-    wait_until(
-        lambda: any(abort_prompt in command for command in _bash_commands(rows())),
-        timeout=args.response_timeout_secs,
-        description="active Claude tool turn to abort",
-    )
-    time.sleep(3.0)
-    interrupted_at = time.time()
-    _post(api, token, f"sessions/{session_id}/interrupt-live")
-    wait_turn_end(abort_prompt, "interrupted Claude turn ending", tool_seconds + args.response_timeout_secs)
-    time.sleep(2.0)
-    abort_verdict = abort_stopped_turn(
-        rows(),
-        prompt_marker=abort_prompt,
-        forbidden_marker=forbidden,
-        interrupted_at=interrupted_at,
-        tool_seconds=tool_seconds,
-    )
-    abort_verdict["session_alive_after_abort"] = session.alive()
-    abort_verdict["qa_fault_receipt"] = _fault_receipt(home, session_id) if fault == "claude_interrupt_noop" else None
-    lifecycle["abort_native"] = abort_verdict
-    if fault == "claude_interrupt_noop":
-        return
-    if not abort_verdict["passed"] or not session.alive():
+    try:
+        wait_until(
+            lambda: any(abort_prompt in command for command in _bash_commands(rows())),
+            timeout=args.response_timeout_secs,
+            description="active Claude tool turn to abort",
+        )
+    except ScenarioError:
+        # A provider refusal ends the request without an active tool. Preserve
+        # the abort failure and raw refusal, skip its following-turn proof, and
+        # continue to the independent owned-termination assertion.
+        outcome = send_outcome(
+            _hosted_assistant_texts(api, token, session_id),
+            rows(),
+            marker=abort_prompt,
+            prompt=abort_request,
+        )
+        if outcome != "declined":
+            raise
+        texts = _assistant_texts(rows())
+        abort_verdict = {
+            "passed": False,
+            "failure_code": "provider_declined_abort_request",
+            "provider_declined": True,
+            "tool_started": False,
+            "decline_text": texts[-1][:400] if texts else "",
+            "session_alive_after_abort": session.alive(),
+            "qa_fault_receipt": _fault_receipt(home, session_id) if fault == "claude_interrupt_noop" else None,
+        }
+        lifecycle["abort_native"] = abort_verdict
+    else:
+        time.sleep(3.0)
+        interrupted_at = time.time()
+        _post(api, token, f"sessions/{session_id}/interrupt-live")
+        wait_turn_end(abort_prompt, "interrupted Claude turn ending", tool_seconds + args.response_timeout_secs)
+        time.sleep(2.0)
+        abort_verdict = abort_stopped_turn(
+            rows(),
+            prompt_marker=abort_prompt,
+            forbidden_marker=forbidden,
+            interrupted_at=interrupted_at,
+            tool_seconds=tool_seconds,
+        )
+        abort_verdict["session_alive_after_abort"] = session.alive()
+        abort_verdict["qa_fault_receipt"] = _fault_receipt(home, session_id) if fault == "claude_interrupt_noop" else None
+        lifecycle["abort_native"] = abort_verdict
+        if fault == "claude_interrupt_noop":
+            return
+        if not abort_verdict["passed"] or not session.alive():
+            abort_verdict["passed"] = False
+            raise ScenarioError(f"Claude abort oracle failed: {abort_verdict}")
+        recovery = f"LONGHOUSE_CLAUDE_RECOVERED_{token_hex}"
+        # The named abort verdict is not a pass until the surviving session has
+        # completed a following turn; record it failed until that is observed.
         abort_verdict["passed"] = False
-        raise ScenarioError(f"Claude abort oracle failed: {abort_verdict}")
-    recovery = f"LONGHOUSE_CLAUDE_RECOVERED_{token_hex}"
-    # The named abort verdict is not a pass until the surviving session has
-    # completed a following turn; record it failed until that is observed.
-    abort_verdict["passed"] = False
-    abort_verdict["failure_code"] = "abort_following_turn_missing"
-    recovery_declines = send_marker_prompt(recovery, "post-abort Claude turn in hosted archive")
-    abort_verdict["recovery_declines"] = recovery_declines
-    final_abort = abort_stopped_turn(
-        rows(),
-        prompt_marker=abort_prompt,
-        forbidden_marker=forbidden,
-        interrupted_at=interrupted_at,
-        tool_seconds=tool_seconds,
-        recovery_marker=recovery,
-    )
-    abort_verdict.update(final_abort)
-    if not final_abort["passed"]:
-        raise ScenarioError(f"Claude abort oracle failed after recovery: {abort_verdict}")
+        abort_verdict["failure_code"] = "abort_following_turn_missing"
+        recovery_declines = send_marker_prompt(recovery, "post-abort Claude turn in hosted archive")
+        abort_verdict["recovery_declines"] = recovery_declines
+        final_abort = abort_stopped_turn(
+            rows(),
+            prompt_marker=abort_prompt,
+            forbidden_marker=forbidden,
+            interrupted_at=interrupted_at,
+            tool_seconds=tool_seconds,
+            recovery_marker=recovery,
+        )
+        abort_verdict.update(final_abort)
+        if not final_abort["passed"]:
+            raise ScenarioError(f"Claude abort oracle failed after recovery: {abort_verdict}")
 
     # Terminate through the Runtime Host, then prove the owned provider process
     # is gone and the served run ended.

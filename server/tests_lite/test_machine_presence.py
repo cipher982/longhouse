@@ -216,6 +216,20 @@ def test_machine_presence_auth_disabled_uses_single_tenant_owner(live_catalog):
     assert _presence_rows(owner_id)[0]["device_id"] == "auth-disabled-local"
 
 
+def test_machine_presence_auth_disabled_honors_explicit_machine_header(live_catalog):
+    owner_id = live_catalog.create_user("user-explicit-machine@example.com")
+    machine_id = "coordination-native-ack-machine"
+    with live_catalog.http_client(extra_overrides={verify_agents_token: lambda: None}) as client:
+        response = client.post(
+            "/agents/machine-presence",
+            headers={"X-Longhouse-Machine-Id": machine_id},
+            json={"state": "active", "source": "macos_hid_idle", "idle_seconds": 2},
+        )
+    assert response.status_code == 200, response.text
+    assert response.json()["device_id"] == machine_id
+    assert _presence_rows(owner_id)[0]["device_id"] == machine_id
+
+
 def test_machine_presence_requires_device_token_identity(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "machine_presence_auth.db")
 

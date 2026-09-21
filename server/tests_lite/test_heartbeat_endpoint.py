@@ -36,6 +36,7 @@ from tests_lite.live_catalog_harness import live_catalog  # noqa: E402, F401
 from tests_lite.live_catalog_harness import live_catalog_client  # noqa: E402, F401
 from zerg.catalogd.models import FactHead  # noqa: E402
 from zerg.catalogd.schema import create_catalog_engine  # noqa: E402
+from zerg.dependencies.agents_auth import verify_agents_caller  # noqa: E402
 from zerg.machine_evidence import canonical_evidence_hash  # noqa: E402
 from zerg.machine_evidence import validate_machine_evidence_identities  # noqa: E402
 from zerg.models.live_store import LiveControlLease  # noqa: E402
@@ -447,6 +448,20 @@ def test_heartbeat_endpoint_creates_row(live_catalog, live_catalog_client):
     assert stamp["ship_latency_p95_ms_1h"] is None
     assert stamp["disk_free_bytes"] == 50_000_000_000
     assert stamp["is_offline"] == 0
+
+
+def test_heartbeat_auth_disabled_honors_explicit_machine_identity(live_catalog):
+    """A proxied dev heartbeat must use its explicit machine identity, not proxy IP."""
+    live_catalog.create_user("owner@heartbeat-auth-disabled.test")
+    machine_id = "coordination-native-ack-machine"
+    with live_catalog.http_client(extra_overrides={verify_agents_caller: lambda: None}) as client:
+        response = client.post(
+            "/agents/heartbeat",
+            headers={"X-Longhouse-Machine-Id": machine_id},
+            json={"version": "auth-disabled", "daemon_pid": 42},
+        )
+    assert response.status_code == 204, response.text
+    assert [row["device_id"] for row in _stamps()] == [machine_id]
 
 
 def test_heartbeat_endpoint_appends_history_rows(live_catalog, live_catalog_client):

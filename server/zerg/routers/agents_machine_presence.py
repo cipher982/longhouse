@@ -9,6 +9,7 @@ from typing import Literal
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
+from fastapi import Request
 from fastapi import status
 from pydantic import Field
 from pydantic import field_validator
@@ -20,6 +21,7 @@ from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_caller
 from zerg.dependencies.request_db import no_request_db
 from zerg.models.device_token import DeviceToken
+from zerg.services.machine_identity import resolve_machine_id
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
 from zerg.utils.time import UTCBaseModel
 
@@ -77,7 +79,7 @@ class MachinePresencePolicyResponse(UTCBaseModel):
     min_interval_seconds: int = 60
 
 
-def _machine_presence_identity(db: Session | None, token: DeviceToken | None) -> tuple[int, str]:
+def _machine_presence_identity(db: Session | None, token: DeviceToken | None, request: Request) -> tuple[int, str]:
     token = caller_principal(token)
     if token is not None and not isinstance(token, DeviceToken):
         raise HTTPException(
@@ -93,16 +95,24 @@ def _machine_presence_identity(db: Session | None, token: DeviceToken | None) ->
         owner_id = active_owner_id()
     if owner_id is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Machine owner is unavailable")
-    device_id = (str(token.device_id or f"device:{token.id}") if isinstance(token, DeviceToken) else "auth-disabled-local")[:255]
+    try:
+        device_id = resolve_machine_id(
+            token,
+            explicit_machine_id=request.headers.get("X-Longhouse-Machine-Id"),
+            fallback_machine_id="auth-disabled-local",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return owner_id, device_id
 
 
 @router.get("/machine-presence/policy", response_model=MachinePresencePolicyResponse)
 async def get_machine_presence_policy(
+    request: Request,
     db: Session | None = Depends(_machine_presence_db_dependency),
     token: DeviceToken | None = Depends(verify_agents_caller),
 ) -> MachinePresencePolicyResponse:
-    owner_id, _device_id = _machine_presence_identity(db, token)
+    owner_id, _device_id = _machine_presence_identity(db, token, request)
     result = await _catalog_call("machine.presence.policy.v2", {"owner_id": owner_id})
     return MachinePresencePolicyResponse(enabled=result.get("enabled") is not False)
 
@@ -110,10 +120,11 @@ async def get_machine_presence_policy(
 @router.post("/machine-presence", response_model=MachinePresenceResponse)
 async def update_machine_presence(
     payload: MachinePresenceIn,
+    request: Request,
     db: Session | None = Depends(_machine_presence_db_dependency),
     token: DeviceToken | None = Depends(verify_agents_caller),
 ) -> MachinePresenceResponse:
-    owner_id, device_id = _machine_presence_identity(db, token)
+    owner_id, device_id = _machine_presence_identity(db, token, request)
     policy = await _catalog_call("machine.presence.policy.v2", {"owner_id": owner_id})
     enabled = policy.get("enabled") is not False
     if not enabled:

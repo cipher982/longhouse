@@ -60,6 +60,7 @@ from zerg.observability import set_span_attributes
 from zerg.schemas.history_import import HistoryImportSnapshot
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.catalogd_supervisor import get_catalogd_client
+from zerg.services.machine_identity import resolve_machine_id
 from zerg.services.managed_provider_contracts import factory_provider_names
 from zerg.services.session_kernel_projection import project_provider_session_id
 from zerg.services.session_runtime import RuntimeEventIngest
@@ -947,13 +948,19 @@ async def ingest_heartbeat(
 
         try:
             with tracer.start_as_current_span("longhouse.heartbeat.validate") as validate_span:
-                # Determine device_id: prefer device token, fall back to request metadata
-                device_id: str
-                if _token is not None:
-                    device_id = _token.device_id or f"device:{_token.id}"
-                else:
-                    # Dev mode or legacy token — use IP as proxy
-                    device_id = request.client.host if request.client else "unknown"
+                # Device-token identity is authoritative. In AUTH_DISABLED/dev mode,
+                # preserve the explicit machine identity used by storage and control
+                # WebSocket requests; only fall back to the peer address when absent.
+                explicit_machine_id = request.headers.get("X-Longhouse-Machine-Id")
+                fallback_machine_id = request.client.host if request.client else "unknown"
+                try:
+                    device_id = resolve_machine_id(
+                        _token,
+                        explicit_machine_id=explicit_machine_id,
+                        fallback_machine_id=fallback_machine_id,
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
                 last_ship_at: datetime | None = None
                 if payload.last_ship_at:

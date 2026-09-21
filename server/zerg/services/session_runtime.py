@@ -651,8 +651,9 @@ def _local_runtime_reducer_available(db: Session) -> bool:
 
     if live_store_configured():
         return False
-    bind = db.get_bind()
-    return bind is not None and inspect(bind).has_table(LiveRuntimeState.__tablename__)
+    # Inspect the transaction's connection, not the Engine: reflection must not
+    # request a second pool slot while this writer already owns the only one.
+    return inspect(db.connection()).has_table(LiveRuntimeState.__tablename__)
 
 
 def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> RuntimeEventBatchResult:
