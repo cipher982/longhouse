@@ -114,8 +114,18 @@ jobs:
           echo "PRIVATE_INPUT_ENGINE=$engine" >> "$GITHUB_ENV"
           echo "PRIVATE_INPUT_LONGHOUSE=$cli" >> "$GITHUB_ENV"
           echo "LONGHOUSE_CURSOR_BIN=$cursor_bin" >> "$GITHUB_ENV"
+          echo "PRIVATE_INPUT_WORKSPACE=$workspace" >> "$GITHUB_ENV"
           staging_ok=1
 
+      - name: Trust the fixture workspace headlessly
+        # A fresh VM with a clean HOME has no workspace-trust state, so the TUI exits
+        # before the first turn ("Cursor exited before workspace trust was resolved").
+        # This is the same headless --trust preflight the repo's gate0 proof uses.
+        run: |
+          set -euo pipefail
+          "$LONGHOUSE_CURSOR_BIN" --print --trust --mode ask \
+            --workspace "$PRIVATE_INPUT_WORKSPACE" \
+            "Reply with exactly LONGHOUSE_TRUST_OK and nothing else."
       - name: Run the proof
         id: proof
         run: |
