@@ -96,6 +96,9 @@ jobs:
           workspace="$fixture_root/workspace"
           mkdir -p "$home" "$workspace"
           git init --quiet "$workspace"
+          # The engine refuses to build without a generated identity, and the file is
+          # gitignored, so each job generates its own.
+          python3 scripts/build/generate_build_identity.py
           python3 scripts/build/cargo.py exec -- build --manifest-path engine/Cargo.toml --profile ci --bin longhouse-engine
           engine="$(python3 scripts/build/cargo.py artifact --profile ci --bin longhouse-engine)"
           test -x "$engine"
