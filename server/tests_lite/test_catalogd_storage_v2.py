@@ -4488,7 +4488,7 @@ async def test_native_parent_id_from_spawn_fact_commits_in_both_arrival_orders(d
     await daemon.start()
     client = CatalogClient(socket_path)
     try:
-        for raw in ((child, parent) if child_first else (parent, child)):
+        for raw in (child, parent) if child_first else (parent, child):
             await client.call("storage.raw_object.commit.v2", raw)
     finally:
         await client.close()
