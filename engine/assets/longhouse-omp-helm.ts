@@ -168,6 +168,7 @@ export default function (pi: any) {
       "X-Agents-Token": token,
       [CURRENT_SESSION_HEADER]: launchSessionId,
     };
+    if (options.body) headers["Content-Type"] = "application/json";
     const deadline = Date.now() + COORDINATION_OPERATION_TIMEOUT_MS;
     const body = options.body ? JSON.stringify(options.body) : undefined;
     const method = options.method ?? "GET";

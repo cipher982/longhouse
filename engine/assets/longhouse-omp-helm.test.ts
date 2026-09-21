@@ -90,57 +90,53 @@ describe("agentEndIsTerminal", () => {
   });
 });
 describe("coordination tools", () => {
-  it("registers the peer tools and sends with session-scoped authority", async () => {
-    const tools = new Map<string, RegisteredTool>();
-    registerExtension({
-      on: () => undefined,
-      registerTool: (tool: RegisteredTool) => tools.set(tool.name, tool),
+  it("delivers an authenticated reply to a JSON HTTP endpoint", async () => {
+    const previousUrl = process.env.LONGHOUSE_OMP_HELM_URL;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        if (
+          request.headers.get("X-Agents-Token") !== "coordination-test-token" ||
+          request.headers.get("X-Longhouse-Session-Id") !==
+            "omp-helm-test-session"
+        )
+          return new Response("Forbidden", { status: 403 });
+        if (request.headers.get("Content-Type") !== "application/json") {
+          return new Response("JSON object required", { status: 422 });
+        }
+        const body = await request.json();
+        if (
+          new URL(request.url).pathname !==
+            "/api/agents/directed-inputs/7/reply" ||
+          body.text !== "reply" ||
+          body.client_request_id !== "reply-1"
+        )
+          return new Response("Invalid reply", { status: 422 });
+        return Response.json({ id: 41 }, { status: 201 });
+      },
     });
-
-    expect([...tools.keys()]).toEqual([
-      "peers",
-      "search_sessions",
-      "tail",
-      "send",
-      "inbox",
-      "reply",
-    ]);
-
-    const calls: Array<{ url: string; init: RequestInit }> = [];
-    const previousFetch = globalThis.fetch;
-    globalThis.fetch = (async (input, init) => {
-      calls.push({ url: String(input), init: init ?? {} });
-      return new Response(JSON.stringify({ accepted: true }), {
-        status: 201,
-        headers: { "content-type": "application/json" },
-      });
-    }) as typeof fetch;
     try {
+      process.env.LONGHOUSE_OMP_HELM_URL = server.url.origin;
+      const tools = new Map<string, RegisteredTool>();
+      registerExtension({
+        on: () => undefined,
+        registerTool: (tool: RegisteredTool) => tools.set(tool.name, tool),
+      });
       const response = await tools
-        .get("send")!
+        .get("reply")!
         .execute(
-          "tool-call-1",
-          {
-            session_id: "target",
-            text: "hello",
-            client_request_id: "request-1",
-          },
+          "reply-call",
+          { input_id: 7, text: "reply", client_request_id: "reply-1" },
           new AbortController().signal,
         );
       expect(response).toMatchObject({
-        content: [{ type: "text", text: JSON.stringify({ accepted: true }) }],
+        content: [{ type: "text", text: JSON.stringify({ id: 41 }) }],
       });
     } finally {
-      globalThis.fetch = previousFetch;
+      process.env.LONGHOUSE_OMP_HELM_URL = previousUrl;
+      await server.stop(true);
     }
-
-    expect(calls[0]?.url).toBe(
-      "https://runtime.test/api/agents/directed-inputs",
-    );
-    expect(calls[0]?.init.headers).toMatchObject({
-      "X-Agents-Token": "coordination-test-token",
-      "X-Longhouse-Session-Id": "omp-helm-test-session",
-    });
   });
 
   it("asks the wall for automation peers without changing the generic wall default", async () => {
@@ -187,17 +183,15 @@ describe("coordination tools", () => {
       return new Response(JSON.stringify({ accepted: true }), { status: 201 });
     }) as typeof fetch;
     try {
-      const response = await tools
-        .get("send")!
-        .execute(
-          "tool-call-3",
-          {
-            session_id: "target",
-            text: "hello",
-            client_request_id: "stable-request",
-          },
-          new AbortController().signal,
-        );
+      const response = await tools.get("send")!.execute(
+        "tool-call-3",
+        {
+          session_id: "target",
+          text: "hello",
+          client_request_id: "stable-request",
+        },
+        new AbortController().signal,
+      );
       expect(response).toMatchObject({
         content: [{ text: JSON.stringify({ accepted: true }) }],
       });
@@ -246,7 +240,9 @@ describe("subagent sessions", () => {
     const listening = Promise.withResolvers<void>();
     server.listen(channelPath, listening.resolve);
     await listening.promise;
-    const waitForFrame = (matches: (frame: Record<string, unknown>) => boolean) => {
+    const waitForFrame = (
+      matches: (frame: Record<string, unknown>) => boolean,
+    ) => {
       const { promise, resolve } = Promise.withResolvers<void>();
       if (frames.some(matches)) resolve();
       else frameWaiters.push({ matches, resolve });
@@ -270,7 +266,10 @@ describe("subagent sessions", () => {
     });
     // OMP's own layout: a subagent session is a sibling file inside the parent
     // session's artifacts directory, and OMP fires these events from both.
-    const parent = contextFor("native-parent", join(channelDir, "parent.jsonl"));
+    const parent = contextFor(
+      "native-parent",
+      join(channelDir, "parent.jsonl"),
+    );
     const subagent = contextFor(
       "native-child",
       join(channelDir, "parent", "CanTabletSurvey.jsonl"),
@@ -295,11 +294,16 @@ describe("subagent sessions", () => {
 
       // A subagent ending is not this session ending — the channel stays up.
       await handlers.session_shutdown({ type: "session_shutdown" }, subagent);
-      const moved = contextFor("native-parent", join(channelDir, "moved.jsonl"));
+      const moved = contextFor(
+        "native-parent",
+        join(channelDir, "moved.jsonl"),
+      );
       await handlers.title_change({ type: "title_change" }, moved);
       await waitForFrame((frame) => frame.kind === "title_change");
       expect(sockets[0].destroyed).toBe(false);
-      expect(frames.some((frame) => frame.kind === "session_shutdown")).toBe(false);
+      expect(frames.some((frame) => frame.kind === "session_shutdown")).toBe(
+        false,
+      );
     } finally {
       await handlers.session_shutdown({ type: "session_shutdown" }, parent);
       for (const socket of sockets) socket.destroy();
