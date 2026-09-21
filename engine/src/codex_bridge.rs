@@ -662,6 +662,9 @@ enum BridgeFollowup {
         thread_id: String,
         thread_path: Option<String>,
     },
+    InspectThread {
+        thread_id: String,
+    },
 }
 
 fn validate_thread_start_contract(
@@ -4744,6 +4747,27 @@ async fn process_notification(
         return Ok(None);
     };
     let params = value.get("params").cloned().unwrap_or(Value::Null);
+    if method != "thread/started" {
+        if let Some(thread_id) = different_notification_thread_id(&params, context) {
+            if context.rejected_thread_ids.contains(&thread_id) {
+                return Ok(None);
+            }
+            let thread = params.get("thread");
+            if thread.is_some_and(codex_thread_value_is_subagent) {
+                context.rejected_thread_ids.insert(thread_id);
+                return Ok(None);
+            }
+            if thread
+                .and_then(|value| value.get("source"))
+                .is_none_or(Value::is_null)
+            {
+                // App-server can broadcast child activity without its thread header.
+                // A bare status is not evidence that the controlled thread changed.
+                return Ok((method == "thread/status/changed")
+                    .then_some(BridgeFollowup::InspectThread { thread_id }));
+            }
+        }
+    }
     let mut followup = None;
     match method {
         "thread/started" => {
@@ -5214,13 +5238,11 @@ fn mark_bridge_ready_after_thread_switch(context: &mut BridgeContext) -> Result<
 fn subscribe_current_thread_without_path(
     context: &mut BridgeContext,
 ) -> Result<Option<BridgeFollowup>> {
-    let followup = subscribe_current_thread(context)?;
-    Ok(followup.map(|followup| match followup {
-        BridgeFollowup::SubscribeThread { thread_id, .. } => BridgeFollowup::SubscribeThread {
-            thread_id,
-            thread_path: None,
-        },
-    }))
+    let mut followup = subscribe_current_thread(context)?;
+    if let Some(BridgeFollowup::SubscribeThread { thread_path, .. }) = &mut followup {
+        *thread_path = None;
+    }
+    Ok(followup)
 }
 
 fn subscribe_current_thread(context: &mut BridgeContext) -> Result<Option<BridgeFollowup>> {
@@ -7002,121 +7024,168 @@ async fn handle_bridge_followup(
     context: &mut BridgeContext,
     followup: BridgeFollowup,
 ) -> Result<()> {
-    match followup {
-        BridgeFollowup::SubscribeThread {
-            thread_id,
-            thread_path,
-        } => {
-            let mut requested_thread_id = thread_id;
-            let mut requested_thread_path = thread_path;
-            let mut params =
-                thread_resume_params(&requested_thread_id, requested_thread_path.as_deref());
-            let mut last_error = None;
-            for attempt in 0..=THREAD_SUBSCRIBE_RETRY_ATTEMPTS {
-                context.state.thread_subscription_attempts =
-                    context.state.thread_subscription_attempts.saturating_add(1);
-                update_thread_subscription_tracking(
-                    context,
-                    ThreadSubscriptionStatus::Subscribing,
-                    None,
-                )?;
-                match send_request_with_runtime(
+    let mut followup = followup;
+    loop {
+        match followup {
+            BridgeFollowup::InspectThread { thread_id } => {
+                let response = match send_request_with_runtime(
                     client,
-                    "thread/resume",
-                    params.clone(),
+                    "thread/read",
+                    json!({"threadId": thread_id, "includeTurns": false}),
                     config,
                     context,
                 )
                 .await
                 {
-                    Ok(response) => {
-                        let resume_thread = response.get("thread").cloned().unwrap_or(Value::Null);
-                        if let Some(subagent) = codex_thread_value_subagent_source(&resume_thread) {
-                            let resume_thread_id = extract_string(&resume_thread, &["id"])
-                                .unwrap_or_else(|| requested_thread_id.clone());
-                            if let Some(parent_thread_id) = subagent
-                                .parent_thread_id
-                                .filter(|parent| parent != &resume_thread_id)
-                            {
-                                context.rejected_thread_ids.insert(resume_thread_id.clone());
-                                if attempt < THREAD_SUBSCRIBE_RETRY_ATTEMPTS {
-                                    eprintln!(
-                                        "[codex-bridge] redirected resumed Codex subagent {resume_thread_id} to primary parent {parent_thread_id}"
-                                    );
-                                    requested_thread_id = parent_thread_id;
-                                    requested_thread_path = None;
-                                    params = thread_resume_params(&requested_thread_id, None);
-                                    continue;
-                                }
-                            }
-                            let error_text = format!(
-                                "thread/resume returned Codex subagent thread {resume_thread_id} without a usable parent; refusing to adopt as managed primary"
-                            );
-                            context.rejected_thread_ids.insert(resume_thread_id);
-                            update_thread_subscription_tracking(
-                                context,
-                                ThreadSubscriptionStatus::Failed,
-                                Some(error_text.clone()),
-                            )?;
-                            bail!("{error_text}");
-                        }
-                        let resume_thread_id = extract_string(&resume_thread, &["id"])
-                            .or_else(|| Some(requested_thread_id.clone()));
-                        let resume_thread_path = extract_string(&resume_thread, &["path"])
-                            .or_else(|| requested_thread_path.clone());
-                        let _ = adopt_thread_identity(
-                            config,
-                            context,
-                            resume_thread_id,
-                            resume_thread_path,
-                            true,
-                        )?;
-                        apply_thread_resume_snapshot(config, context, &response).await?;
-                        context.subscribed_thread_id = context.state.thread_id.clone();
-                        update_thread_subscription_tracking(
-                            context,
-                            ThreadSubscriptionStatus::Subscribed,
-                            None,
-                        )?;
+                    Ok(response) => response,
+                    Err(error) => {
+                        eprintln!(
+                            "[codex-bridge] could not classify foreign thread {thread_id}: {error}"
+                        );
                         return Ok(());
                     }
-                    Err(err) => {
-                        let error_text = err.to_string();
-                        // Upstream can emit `thread/started` before the rollout file is
-                        // materialized, and the running-thread resume path can also see the
-                        // rollout file before its initial contents land on disk.
-                        let retryable = is_retryable_thread_subscription_error(&error_text);
-                        let status = if retryable {
-                            ThreadSubscriptionStatus::Retrying
-                        } else {
-                            ThreadSubscriptionStatus::Failed
-                        };
-                        update_thread_subscription_tracking(
-                            context,
-                            status,
-                            Some(error_text.clone()),
-                        )?;
-                        last_error = Some(err);
-                        if retryable && attempt < THREAD_SUBSCRIBE_RETRY_ATTEMPTS {
-                            tokio::time::sleep(Duration::from_millis(
-                                THREAD_SUBSCRIBE_RETRY_DELAY_MS,
-                            ))
-                            .await;
-                            continue;
-                        }
-                        if retryable {
+                };
+                let Some(thread) = response.get("thread") else {
+                    return Ok(());
+                };
+                if thread.get("id").and_then(Value::as_str) != Some(thread_id.as_str()) {
+                    return Ok(());
+                }
+                if codex_thread_value_is_subagent(thread) {
+                    context.rejected_thread_ids.insert(thread_id);
+                    return Ok(());
+                }
+                if thread.get("source").is_none_or(Value::is_null) {
+                    return Ok(());
+                }
+                let verified_status = json!({
+                    "method": "thread/status/changed",
+                    "params": {"thread": thread},
+                });
+                let Some(next) = process_notification(&verified_status, config, context).await?
+                else {
+                    return Ok(());
+                };
+                followup = next;
+            }
+            BridgeFollowup::SubscribeThread {
+                thread_id,
+                thread_path,
+            } => {
+                let mut requested_thread_id = thread_id;
+                let mut requested_thread_path = thread_path;
+                let mut params =
+                    thread_resume_params(&requested_thread_id, requested_thread_path.as_deref());
+                let mut last_error = None;
+                for attempt in 0..=THREAD_SUBSCRIBE_RETRY_ATTEMPTS {
+                    context.state.thread_subscription_attempts =
+                        context.state.thread_subscription_attempts.saturating_add(1);
+                    update_thread_subscription_tracking(
+                        context,
+                        ThreadSubscriptionStatus::Subscribing,
+                        None,
+                    )?;
+                    match send_request_with_runtime(
+                        client,
+                        "thread/resume",
+                        params.clone(),
+                        config,
+                        context,
+                    )
+                    .await
+                    {
+                        Ok(response) => {
+                            let resume_thread =
+                                response.get("thread").cloned().unwrap_or(Value::Null);
+                            if let Some(subagent) =
+                                codex_thread_value_subagent_source(&resume_thread)
+                            {
+                                let resume_thread_id = extract_string(&resume_thread, &["id"])
+                                    .unwrap_or_else(|| requested_thread_id.clone());
+                                if let Some(parent_thread_id) = subagent
+                                    .parent_thread_id
+                                    .filter(|parent| parent != &resume_thread_id)
+                                {
+                                    context.rejected_thread_ids.insert(resume_thread_id.clone());
+                                    if attempt < THREAD_SUBSCRIBE_RETRY_ATTEMPTS {
+                                        eprintln!(
+                                        "[codex-bridge] redirected resumed Codex subagent {resume_thread_id} to primary parent {parent_thread_id}"
+                                    );
+                                        requested_thread_id = parent_thread_id;
+                                        requested_thread_path = None;
+                                        params = thread_resume_params(&requested_thread_id, None);
+                                        continue;
+                                    }
+                                }
+                                let error_text = format!(
+                                "thread/resume returned Codex subagent thread {resume_thread_id} without a usable parent; refusing to adopt as managed primary"
+                            );
+                                context.rejected_thread_ids.insert(resume_thread_id);
+                                update_thread_subscription_tracking(
+                                    context,
+                                    ThreadSubscriptionStatus::Failed,
+                                    Some(error_text.clone()),
+                                )?;
+                                bail!("{error_text}");
+                            }
+                            let resume_thread_id = extract_string(&resume_thread, &["id"])
+                                .or_else(|| Some(requested_thread_id.clone()));
+                            let resume_thread_path = extract_string(&resume_thread, &["path"])
+                                .or_else(|| requested_thread_path.clone());
+                            let _ = adopt_thread_identity(
+                                config,
+                                context,
+                                resume_thread_id,
+                                resume_thread_path,
+                                true,
+                            )?;
+                            apply_thread_resume_snapshot(config, context, &response).await?;
+                            context.subscribed_thread_id = context.state.thread_id.clone();
                             update_thread_subscription_tracking(
                                 context,
-                                derive_thread_subscription_status(context),
-                                Some(error_text),
+                                ThreadSubscriptionStatus::Subscribed,
+                                None,
                             )?;
                             return Ok(());
                         }
-                        break;
+                        Err(err) => {
+                            let error_text = err.to_string();
+                            // Upstream can emit `thread/started` before the rollout file is
+                            // materialized, and the running-thread resume path can also see the
+                            // rollout file before its initial contents land on disk.
+                            let retryable = is_retryable_thread_subscription_error(&error_text);
+                            let status = if retryable {
+                                ThreadSubscriptionStatus::Retrying
+                            } else {
+                                ThreadSubscriptionStatus::Failed
+                            };
+                            update_thread_subscription_tracking(
+                                context,
+                                status,
+                                Some(error_text.clone()),
+                            )?;
+                            last_error = Some(err);
+                            if retryable && attempt < THREAD_SUBSCRIBE_RETRY_ATTEMPTS {
+                                tokio::time::sleep(Duration::from_millis(
+                                    THREAD_SUBSCRIBE_RETRY_DELAY_MS,
+                                ))
+                                .await;
+                                continue;
+                            }
+                            if retryable {
+                                update_thread_subscription_tracking(
+                                    context,
+                                    derive_thread_subscription_status(context),
+                                    Some(error_text),
+                                )?;
+                                return Ok(());
+                            }
+                            break;
+                        }
                     }
                 }
+                return Err(last_error.expect("subscribe retry loop should capture an error"));
             }
-            Err(last_error.expect("subscribe retry loop should capture an error"))
         }
     }
 }
@@ -10494,22 +10563,8 @@ mod tests {
             Some("/tmp/bad-thread.jsonl")
         );
         assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-bad"));
-        assert_eq!(
-            context.state.thread_subscription_status.as_deref(),
-            Some(ThreadSubscriptionStatus::ProviderThreadSwitched.as_str())
-        );
-        assert_eq!(context.state.status, "detached");
-        assert!(context
-            .state
-            .last_error
-            .as_deref()
-            .is_some_and(|message| message.contains(PROVIDER_THREAD_SWITCHED_REASON)));
-        assert_eq!(context.state.active_turn_id, None);
-        assert_eq!(context.state.last_turn_status, None);
-        assert_eq!(
-            context.state.thread_subscription_last_error.as_deref(),
-            context.state.last_error.as_deref()
-        );
+        assert_eq!(context.state.status, "ready");
+        assert_eq!(context.state.last_error, None);
         assert_eq!(
             binding
                 .get_for_provider("/tmp/bad-thread.jsonl", "codex")
@@ -10520,7 +10575,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_notification_degrades_on_unknown_foreign_turn_completed() {
+    async fn process_notification_ignores_foreign_turn_completion_without_ownership_evidence() {
         let temp = tempfile::tempdir().unwrap();
         let config = make_test_run_config(&temp);
         let mut context = make_test_context(&temp);
@@ -10555,18 +10610,13 @@ mod tests {
             context.state.thread_path.as_deref(),
             Some("/tmp/thread-live.jsonl")
         );
-        assert_eq!(context.state.status, "detached");
-        assert_eq!(context.state.active_turn_id, None);
-        assert_eq!(context.runtime_tracker.active_turn_id, None);
+        assert_eq!(context.state.status, "ready");
+        assert_eq!(context.state.active_turn_id.as_deref(), Some("turn-live"));
         assert_eq!(
-            context.state.thread_subscription_status.as_deref(),
-            Some(ThreadSubscriptionStatus::ProviderThreadSwitched.as_str())
+            context.runtime_tracker.active_turn_id.as_deref(),
+            Some("turn-live")
         );
-        assert!(context
-            .state
-            .last_error
-            .as_deref()
-            .is_some_and(|message| message.contains("observed_thread=thr-child")));
+        assert_eq!(context.state.last_error, None);
     }
 
     #[tokio::test]
@@ -10913,51 +10963,86 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_notification_follows_active_tui_status_thread_switch_without_path() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let config = make_test_run_config(&temp);
-        let mut context = make_test_context(&temp);
-        let parent_path = temp.path().join("parent.jsonl");
-        fs::write(&parent_path, "{}\n").unwrap();
-        let parent = parent_path.display().to_string();
-        context.state.thread_id = Some("thr-parent".to_string());
-        context.state.thread_path = Some(parent.clone());
-        context.runtime.thread_id = Some("thr-parent".to_string());
-        context.subscribed_thread_id = Some("thr-parent".to_string());
-
-        let followup = process_notification(
-            &json!({
-                "method": "thread/status/changed",
-                "params": {
-                    "threadId": "thr-resumed",
-                    "status": {
-                        "type": "active",
-                        "activeFlags": ["waitingOnUserInput"]
-                    }
-                }
-            }),
-            &config,
-            &mut context,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            followup,
-            Some(BridgeFollowup::SubscribeThread {
-                thread_id: "thr-resumed".to_string(),
-                thread_path: None,
-            })
-        );
-        assert_eq!(context.state.thread_id.as_deref(), Some("thr-resumed"));
-        assert_eq!(context.state.thread_path, None);
-        assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-resumed"));
-        assert_eq!(context.state.status, "ready");
-        assert_eq!(context.state.last_error, None);
-        assert_eq!(
-            context.state.thread_subscription_status.as_deref(),
-            Some(ThreadSubscriptionStatus::ReadyToSubscribe.as_str())
-        );
+    async fn status_only_thread_switch_requires_read_only_source_classification() {
+        for child in [true, false] {
+            let temp = tempfile::tempdir().unwrap();
+            let config = make_test_run_config(&temp);
+            let mut context = make_test_context(&temp);
+            context.state.thread_id = Some("thr-parent".to_string());
+            context.runtime.thread_id = Some("thr-parent".to_string());
+            context.subscribed_thread_id = Some("thr-parent".to_string());
+            context.state.active_turn_id = Some("turn-parent".to_string());
+            let followup = process_notification(
+                &json!({
+                    "method": "thread/status/changed",
+                    "params": {"threadId": "thr-candidate", "status": {"type": "active"}}
+                }),
+                &config,
+                &mut context,
+            )
+            .await
+            .unwrap()
+            .expect("unknown thread requires inspection");
+            assert_eq!(context.state.thread_id.as_deref(), Some("thr-parent"));
+            assert_eq!(context.state.status, "ready");
+            let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
+            let (events_tx, events_rx) = mpsc::unbounded_channel();
+            let source = if child { "unknown" } else { "cli" };
+            events_tx.send(StreamEvent::Rpc(json!({
+                "id": 1,
+                "result": {"thread": {"id": "thr-candidate", "source": source, "parentThreadId": child.then_some("thr-parent"), "status": {"type": "active"}}}
+            }))).unwrap();
+            if !child {
+                events_tx
+                    .send(StreamEvent::Rpc(json!({
+                        "id": 2,
+                        "result": {"thread": {"id": "thr-candidate", "source": "cli", "turns": []}}
+                    })))
+                    .unwrap();
+            }
+            let mut client = RpcClient {
+                child: None,
+                child_pid: None,
+                child_pgid: None,
+                child_ws_url: None,
+                outbound: RpcOutbound::WebSocket(outbound_tx),
+                events_rx,
+                pending_methods: BTreeMap::new(),
+                next_request_id: 1,
+                ws_url: "ws://example.test".to_string(),
+                ws_auth_token: None,
+                token_files: Vec::new(),
+            };
+            handle_bridge_followup(&config, &mut client, &mut context, followup)
+                .await
+                .unwrap();
+            let first: Value = serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+            assert_eq!(first["method"], "thread/read");
+            assert_eq!(first["params"]["includeTurns"], false);
+            if child {
+                assert_eq!(context.state.thread_id.as_deref(), Some("thr-parent"));
+                assert_eq!(context.state.active_turn_id.as_deref(), Some("turn-parent"));
+                assert_eq!(context.state.status, "ready");
+                assert_eq!(context.state.last_error, None);
+                assert!(
+                    outbound_rx.try_recv().is_err(),
+                    "a child must never be resumed by its parent bridge"
+                );
+                assert_eq!(process_notification(
+                    &json!({"method": "item/agentMessage/delta", "params": {"threadId": "thr-candidate", "delta": "child output"}}),
+                    &config,
+                    &mut context,
+                ).await.unwrap(), None);
+                assert_eq!(context.state.thread_id.as_deref(), Some("thr-parent"));
+            } else {
+                let resumed: Value =
+                    serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+                assert_eq!(resumed["method"], "thread/resume");
+                assert_eq!(resumed["params"]["threadId"], "thr-candidate");
+                assert_eq!(context.state.thread_id.as_deref(), Some("thr-candidate"));
+                assert_eq!(context.state.status, "ready");
+            }
+        }
     }
 
     #[tokio::test]
