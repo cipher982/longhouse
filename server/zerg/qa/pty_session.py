@@ -147,28 +147,53 @@ class ProviderPtySession:
             time.sleep(self.steer_queue_settle_seconds)
             os.write(self.master_fd, b"\r")
 
+    @staticmethod
+    def _group_alive(process_group: int) -> bool:
+        """Whether any process still belongs to an owned process group."""
+
+        try:
+            os.killpg(process_group, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
     def close(self) -> None:
+        """Stop the reader and reap the whole owned process group.
+
+        ``start`` runs the child through ``os.setsid()``, so the direct child
+        leads its own process group and its pid remains that group's id after
+        it exits. A provider may leave a descendant behind in that group (the
+        Cursor Agent leaves a ``node ... worker-server``), so the group is
+        signalled unconditionally: keying off the direct child's liveness
+        orphans those descendants, which is how a qualification run left a
+        live provider worker behind after its artifact root was removed.
+
+        The pid-reuse window this opens is bounded by callers closing promptly
+        in their own ``finally``; a reused pid would have to land on a group
+        leader within that window to matter.
+        """
+
         self._stop_reader.set()
-        if self.alive():
-            process_group: int | None = None
+        process_group = self.process.pid
+        try:
+            os.killpg(process_group, signal.SIGTERM)
+        except (PermissionError, ProcessLookupError):
+            pass
+        deadline = time.monotonic() + 5
+        while self._group_alive(process_group) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        if self._group_alive(process_group):
             try:
-                process_group = os.getpgid(self.process.pid)
-                os.killpg(process_group, signal.SIGTERM)
+                os.killpg(process_group, signal.SIGKILL)
             except (PermissionError, ProcessLookupError):
-                self.process.terminate()
+                pass
+        if self.alive():
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                try:
-                    if process_group is None:
-                        process_group = os.getpgid(self.process.pid)
-                    os.killpg(process_group, signal.SIGKILL)
-                except (PermissionError, ProcessLookupError):
-                    self.process.kill()
-                try:
-                    self.process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    pass
+                pass
         self._reader.join(timeout=2)
         try:
             os.close(self.master_fd)
