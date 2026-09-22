@@ -25,7 +25,7 @@ export function PricingSection() {
     trackAcquisitionEvent("hosted_signup_click", {
       surface: "landing",
       placement: "pricing",
-      plan: "hosted_5",
+      plan: "hosted_starter",
     });
     window.location.href = "https://control.longhouse.ai/signup";
   };
@@ -47,8 +47,8 @@ export function PricingSection() {
     },
     {
       name: "Hosted",
-      callout: "$5/month",
-      description: "We run a private server for you.",
+      callout: "$20/month",
+      description: "We run a private server for you, with direct setup support.",
       features: [
         "We run and patch the server; you install the agent where your work runs",
         "Your own address on longhouse.ai",
@@ -68,8 +68,8 @@ export function PricingSection() {
         </h2>
         <p className="landing-pricing-subhead">
           Longhouse&rsquo;s server holds your session archive and serves the web UI. Run it
-          on your own hardware for free, or pay $5 a month and we run a private one for
-          you. Either way the agents run on your machines.
+          on your own hardware for free, or pay $20 a month for a private hosted server
+          with direct setup support. Either way the agents run on your machines.
         </p>
 
         <div className="landing-pricing-grid">

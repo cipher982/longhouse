@@ -36,7 +36,7 @@ export default function TermsPage() {
         <p className="info-page-subtitle">
           The deal between you and the hosted Longhouse service.
         </p>
-        <p className="info-page-updated">Last updated: August 25, 2026</p>
+        <p className="info-page-updated">Last updated: September 22, 2026</p>
 
         <div className="legal-content">
           <h2>What This Covers</h2>
@@ -88,7 +88,7 @@ export default function TermsPage() {
 
           <h2>Billing</h2>
           <p>
-            Self-hosting is free. The hosted plan is $5 a month, billed through Stripe until you
+            Self-hosting is free. The hosted plan is $20 a month, billed through Stripe until you
             cancel. Cancel anytime from the billing portal; you keep access through the period you
             already paid for, and we don't prorate a partial month. If something goes wrong on our
             end, email us — we would rather refund you than argue.

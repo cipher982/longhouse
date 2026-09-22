@@ -41,14 +41,14 @@ export function FooterCTA() {
             </Button>
           </div>
           <p className="landing-footer-subnote">
-            Hosted is $5 per month.{" "}
+            Hosted is $20 per month, with direct setup support.{" "}
             <a
               href="https://control.longhouse.ai/signup"
               onClick={() =>
                 trackAcquisitionEvent("hosted_signup_click", {
                   surface: "landing",
                   placement: "footer",
-                  plan: "hosted_5",
+                  plan: "hosted_starter",
                 })
               }
             >

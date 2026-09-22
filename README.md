@@ -75,7 +75,7 @@ A laptop runtime stops when the laptop sleeps. For real durability, run the Runt
 | | Self-host | Hosted |
 |---|---|---|
 | You operate | Runtime Host on a VPS, homelab, or Mac mini | Nothing — we run it |
-| Cost | Free (Apache-2.0) | $5/mo |
+| Cost | Free (Apache-2.0) | $20/mo |
 | Setup | `longhouse-server serve` (steps below) | [control.longhouse.ai/signup](https://control.longhouse.ai/signup) |
 | Always-on | Up to you | Yes |
 | iOS push on `needs_user` | Yes (APNs config required) | Yes |
