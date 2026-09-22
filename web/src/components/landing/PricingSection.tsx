@@ -18,7 +18,9 @@ export function PricingSection() {
       surface: "landing",
       placement: "pricing",
     });
-    document.getElementById("landing-install")?.scrollIntoView({ behavior: "smooth" });
+    document
+      .getElementById("landing-install")
+      ?.scrollIntoView({ behavior: "smooth" });
   };
 
   const handleGetHosted = () => {
@@ -38,7 +40,7 @@ export function PricingSection() {
       features: [
         "Start on your laptop, move it to a Mac mini, home server, or VPS later",
         "Your archive is a SQLite file on your disk",
-        "Web UI, CLI, iPhone app, and machine API all included",
+        "Web UI, CLI, and machine API all included",
         "Apache-2.0, no account required",
       ],
       ctaText: "Download for macOS",
@@ -48,12 +50,13 @@ export function PricingSection() {
     {
       name: "Hosted",
       callout: "$20/month",
-      description: "We run a private server for you, with direct setup support.",
+      description:
+        "We run a private server for you, with direct setup support.",
       features: [
         "We run and patch the server; you install the agent where your work runs",
         "Your own address on longhouse.ai",
         "Your history and timeline stay reachable when your laptop is asleep",
-        "Same Mac, Linux, and iPhone clients",
+        "Same web UI and Mac/Linux clients",
       ],
       ctaText: "Get hosted",
       ctaAction: handleGetHosted,
@@ -67,9 +70,10 @@ export function PricingSection() {
           The server is yours to run, or ours.
         </h2>
         <p className="landing-pricing-subhead">
-          Longhouse&rsquo;s server holds your session archive and serves the web UI. Run it
-          on your own hardware for free, or pay $20 a month for a private hosted server
-          with direct setup support. Either way the agents run on your machines.
+          Longhouse&rsquo;s server holds your session archive and serves the web
+          UI. Run it on your own hardware for free, or pay $20 a month for a
+          private hosted server with direct setup support. Either way the agents
+          run on your machines.
         </p>
 
         <div className="landing-pricing-grid">
@@ -81,13 +85,19 @@ export function PricingSection() {
               <div className="landing-pricing-header">
                 <h3 className="landing-pricing-name">{tier.name}</h3>
                 <p className="landing-pricing-callout">{tier.callout}</p>
-                <p className="landing-pricing-description">{tier.description}</p>
+                <p className="landing-pricing-description">
+                  {tier.description}
+                </p>
               </div>
 
               <ul className="landing-pricing-features">
                 {tier.features.map((feature, featureIndex) => (
                   <li key={featureIndex}>
-                    <CheckCircleIcon width={18} height={18} className="landing-pricing-check" />
+                    <CheckCircleIcon
+                      width={18}
+                      height={18}
+                      className="landing-pricing-check"
+                    />
                     {feature}
                   </li>
                 ))}
@@ -105,7 +115,6 @@ export function PricingSection() {
           ))}
         </div>
       </div>
-
     </section>
   );
 }

@@ -4,7 +4,13 @@ import { prewarmLiveSession } from "./demo/liveSession";
 import "../../styles/steer-playground.css";
 
 /** Input only a person produces; crawlers and prerenderers never do. */
-const HUMAN_EVENTS = ["pointermove", "pointerdown", "wheel", "touchstart", "keydown"] as const;
+const HUMAN_EVENTS = [
+  "pointermove",
+  "pointerdown",
+  "wheel",
+  "touchstart",
+  "keydown",
+] as const;
 
 /**
  * Warm the sandbox once a real person is within about a screen of the demo,
@@ -28,7 +34,8 @@ function useWarmWhenApproached(onApproach: () => void) {
       human = true;
       maybeFire();
     };
-    for (const type of HUMAN_EVENTS) window.addEventListener(type, onHuman, { passive: true, once: true });
+    for (const type of HUMAN_EVENTS)
+      window.addEventListener(type, onHuman, { passive: true, once: true });
     const observer = new IntersectionObserver(
       ([entry]) => {
         near = Boolean(entry?.isIntersecting);
@@ -39,7 +46,8 @@ function useWarmWhenApproached(onApproach: () => void) {
     observer.observe(el);
     return () => {
       observer.disconnect();
-      for (const type of HUMAN_EVENTS) window.removeEventListener(type, onHuman);
+      for (const type of HUMAN_EVENTS)
+        window.removeEventListener(type, onHuman);
     };
   }, [onApproach]);
   return ref;
@@ -70,16 +78,22 @@ export function SteerPlayground() {
             <p className="steer-playground-kicker">TRY IT LIVE</p>
             <h2>Send the next move.</h2>
             <p className="steer-playground-lead">
-              Edit the instruction in the phone and press Send whenever you like. A real
-              Claude Code session picks it up in the terminal as soon as it is running.
+              Edit the instruction in the live panel and press Send whenever you
+              like. A real Claude Code session picks it up in the terminal as
+              soon as it is running.
             </p>
-            <div className="steer-playground-live-facts" aria-label="Live demo details">
-              <span><i aria-hidden="true" /> Real Claude Code</span>
+            <div
+              className="steer-playground-live-facts"
+              aria-label="Live demo details"
+            >
+              <span>
+                <i aria-hidden="true" /> Real Claude Code
+              </span>
               <span>Disposable Linux sandbox</span>
             </div>
             <p className="steer-playground-honesty">
-              The repository and network are limited for safety. Nothing persists after the
-              session ends.
+              The repository and network are limited for safety. Nothing
+              persists after the session ends.
             </p>
           </div>
 

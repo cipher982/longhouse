@@ -8,9 +8,11 @@ import { HeroDemoFallback } from "./demo/HeroDemoFallback";
 const INSTALL_COMMAND = "curl -fsSL https://get.longhouse.ai/install.sh | bash";
 const MAC_DOWNLOAD_URL = "/download/macos";
 const DEMO_ARIA_LABEL =
-  "Longhouse demo: recorded Claude Code, Codex, and OpenCode sessions dock into one timeline, then the Claude session takes a follow-up sent from a phone";
+  "Longhouse demo: recorded Claude Code, Codex, and OpenCode sessions dock into one timeline, then the Claude session takes a follow-up from the web";
 const HeroDemo = lazy(() =>
-  import("./demo/HeroDemo").then(({ HeroDemo: Component }) => ({ default: Component })),
+  import("./demo/HeroDemo").then(({ HeroDemo: Component }) => ({
+    default: Component,
+  })),
 );
 
 function AppleIcon() {
@@ -31,14 +33,26 @@ function AppleIcon() {
 function CopyIcon({ copied }: { copied: boolean }) {
   if (copied) {
     return (
-      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 16 16"
+        fill="currentColor"
+        aria-hidden="true"
+      >
         <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" />
       </svg>
     );
   }
 
   return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="currentColor"
+      aria-hidden="true"
+    >
       <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25v-7.5z" />
       <path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25v-7.5zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25h-7.5z" />
     </svg>
@@ -81,20 +95,22 @@ export function HeroSection() {
     <section className="landing-hero" id="landing-install">
       <div className="landing-hero-content">
         <p className="landing-hero-kicker">
-          Claude Code <span>/</span> Codex CLI <span>/</span> Cursor Agent <span>/</span> OpenCode
+          Claude Code <span>/</span> Codex CLI <span>/</span> Cursor Agent{" "}
+          <span>/</span> OpenCode
         </p>
 
         <h1 className="landing-hero-headline">
-          Remote control for <span className="gradient-text">your coding agents.</span>
+          Remote control for{" "}
+          <span className="gradient-text">your coding agents.</span>
         </h1>
 
         <p className="landing-hero-subhead">
-          Longhouse connects to coding-agent CLIs already installed on your machines
-          and puts every session in one system.{" "}
+          Longhouse connects to coding-agent CLIs already installed on your
+          machines and puts every session in one system.{" "}
           <span className="landing-hero-subhead-more">
-            Watch from the web or your iPhone. Launch supported agents through Longhouse
-            to send instructions, interrupt, and resume, with the controls each provider
-            exposes.
+            Watch from the web. Launch supported agents through Longhouse to
+            send instructions, interrupt, and resume, with the controls each
+            provider exposes.
           </span>
         </p>
 
@@ -107,7 +123,9 @@ export function HeroSection() {
             <AppleIcon />
             <span className="hero-install-mac-text">
               <span className="hero-install-mac-label">Download for macOS</span>
-              <span className="hero-install-mac-detail">Free and open source · Apple silicon</span>
+              <span className="hero-install-mac-detail">
+                Free and open source · Apple silicon
+              </span>
             </span>
           </a>
         </div>
@@ -119,21 +137,25 @@ export function HeroSection() {
           <HeroDemo aria-label={DEMO_ARIA_LABEL} />
         </Suspense>
         <p className="landing-hero-video-note">
-          Real provider CLIs replayed from recordings, with scripted model responses.
-          No live model runs in this hero demo.
+          Real provider CLIs replayed from recordings, with scripted model
+          responses. No live model runs in this hero demo.
         </p>
       </div>
 
       <div className="landing-hero-secondary">
         <div className="hero-install-shell">
-          <span className="hero-install-shell-label">Linux, WSL, or automation</span>
+          <span className="hero-install-shell-label">
+            Linux, WSL, or automation
+          </span>
           <button
             type="button"
             className="hero-install-cmd"
             onClick={handleCopy}
             aria-label={`Copy install command: ${INSTALL_COMMAND}`}
           >
-            <span className="hero-install-prompt" aria-hidden="true">$</span>
+            <span className="hero-install-prompt" aria-hidden="true">
+              $
+            </span>
             <code className="hero-install-text">
               <span>curl -fsSL</span>{" "}
               <span>https://get.longhouse.ai/install.sh | bash</span>
@@ -160,7 +182,9 @@ export function HeroSection() {
               Open the live demo
             </Button>
           )}
-          <a href="/docs" className="hero-install-docs">Read the setup guide</a>
+          <a href="/docs" className="hero-install-docs">
+            Read the setup guide
+          </a>
         </div>
       </div>
     </section>
