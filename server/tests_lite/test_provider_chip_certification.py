@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import os
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
-from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -63,32 +61,12 @@ def _proof(assertion, *, outcome=AssertionOutcome.PASS, at: datetime, sha: str =
     )
 
 
-def _write_controls(tmp_path: Path, controls: list[dict] | None, epoch_digest: str | None = None) -> None:
-    if controls is None:
-        return
-    path = tmp_path / "negative-controls.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "artifact_kind": "provider_negative_control_snapshot",
-                "epoch_digest": epoch_digest or _record().accepted_epoch_digest,
-                "published_at": "2026-09-16T11:00:00Z",
-                "controls": controls,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-
-def _payload(monkeypatch, tmp_path: Path, proofs, controls: list[dict] | None = None, *, control_epoch: str | None = None) -> dict:
+def _payload(monkeypatch, tmp_path: Path, proofs) -> dict:
     store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
     monkeypatch.setattr(routes, "_proof_store", lambda: store)
     monkeypatch.setattr(routes, "_legacy_proof_store", lambda: ProviderCapabilityProofStore(tmp_path / "legacy"))
     for proof in proofs:
         _write_trusted(store, proof)
-    _write_controls(tmp_path, [] if controls is None else controls, control_epoch)
     return routes.build_chip_certification_payload(now=NOW)
 
 
@@ -138,91 +116,11 @@ def test_public_route_needs_no_auth_and_leaks_no_evidence_locations(monkeypatch,
     assert response.status_code == 200
     assert response.headers["cache-control"] == "public, max-age=60"
     body = response.text
-    assert response.json()["artifact_kind"] == "provider_chip_certification"
+    payload = response.json()
+    assert payload["artifact_kind"] == "provider_chip_certification"
+    for provider in payload["providers"]:
+        for chip in provider["chips"].values():
+            assert "controls" not in chip
+            assert all("negative_controls" not in requirement for requirement in chip["requirements"])
     for forbidden in ("artifact_id", "run_reference", "raw_reference", "worker_id", "invocation_id"):
         assert forbidden not in body
-
-
-def _steer_control(verdict: str) -> dict:
-    return {"provider": "pi", "target_assertion": "pi_helm_steer_active", "fault": "pi_steer_as_follow_up", "verdict": verdict}
-
-
-def test_a_passing_chip_certifies_and_reports_its_control_status(monkeypatch, tmp_path: Path) -> None:
-    edge = _edge("pi", "steerMidTurn")
-    proofs = [_proof(a, at=NOW - timedelta(hours=1)) for a in edge]
-    # The control layer is reported, never enforced: a chip with passing proofs
-    # certifies whatever the controls say, so the public claim matches its own
-    # caption ("a current passing live test against the real binary"). A control
-    # that never ran must not read as a product failure.
-    for verdict, expected in (
-        ("pass", "passed"),
-        ("fail", "failed"),
-        ("inconclusive", "failed"),
-        ("not_recorded", "not_run"),
-    ):
-        chip = _chip(_payload(monkeypatch, tmp_path / verdict, proofs, [_steer_control(verdict)]), "pi", "steerMidTurn")
-        assert chip["state"] == "certified", verdict
-        assert chip["controls"] == expected, verdict
-        assert "blocked_by" not in chip, verdict
-
-
-def test_controls_from_another_epoch_are_reported_not_enforced(monkeypatch, tmp_path: Path) -> None:
-    edge = _edge("pi", "steerMidTurn")
-    proofs = [_proof(assertion, at=NOW - timedelta(hours=1)) for assertion in edge]
-    payload = _payload(monkeypatch, tmp_path, proofs, [_steer_control("pass")], control_epoch="sha256:" + "f" * 64)
-    chip = _chip(payload, "pi", "steerMidTurn")
-    # A control judged another epoch is evidence about other code, so it is
-    # reported as such -- and still does not withhold the chip's own proofs.
-    assert chip["state"] == "certified"
-    assert chip["controls"] == "epoch_mismatch"
-
-
-def test_a_missing_control_snapshot_is_reported_not_enforced(monkeypatch, tmp_path: Path) -> None:
-    edge = _edge("pi", "resume")
-    store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
-    monkeypatch.setattr(routes, "_proof_store", lambda: store)
-    monkeypatch.setattr(routes, "_legacy_proof_store", lambda: ProviderCapabilityProofStore(tmp_path / "legacy"))
-    for proof in [_proof(a, at=NOW - timedelta(hours=1)) for a in edge]:
-        _write_trusted(store, proof)
-    chip = _chip(routes.build_chip_certification_payload(now=NOW), "pi", "resume")
-    assert chip["state"] == "certified"
-    assert chip["controls"] == "snapshot_missing"
-
-
-def test_factory_publishes_the_negative_control_snapshot_with_its_token(monkeypatch, tmp_path: Path) -> None:
-    store = ProviderCapabilityProofStore(tmp_path / "proofs", require_authenticated_publication=True)
-    monkeypatch.setattr(routes, "_proof_store", lambda: store)
-    monkeypatch.setattr(routes, "_legacy_proof_store", lambda: ProviderCapabilityProofStore(tmp_path / "legacy"))
-    for assertion in _edge("pi", "steerMidTurn"):
-        _write_trusted(store, _proof(assertion, at=NOW - timedelta(hours=1)))
-    # Certification follows the proofs; the control layer is reported. The
-    # snapshot's effect is therefore visible in `controls`, not in the state.
-    before = _chip(routes.build_chip_certification_payload(now=NOW), "pi", "steerMidTurn")
-    assert before["state"] == "certified"
-    assert before["controls"] == "snapshot_missing"
-    monkeypatch.setattr(routes, "get_settings", lambda: SimpleNamespace(provider_capability_factory_token="fixture-factory-token"))
-    monkeypatch.setattr(routes, "_certification_cache", None)
-    api_app.dependency_overrides.clear()
-    client = TestClient(app, backend="asyncio")
-    snapshot = {
-        "schema_version": 1,
-        "artifact_kind": "provider_negative_control_snapshot",
-        "epoch_digest": _record().accepted_epoch_digest,
-        "published_at": "2026-09-16T11:00:00Z",
-        "controls": [_steer_control("pass")],
-    }
-    url = "/api/internal/provider-negative-controls"
-    assert client.post(url, json=snapshot).status_code == 403
-    assert (
-        client.post(
-            url,
-            json={**snapshot, "controls": [{**_steer_control("pass"), "verdict": "maybe"}]},
-            headers={"X-Provider-Capability-Factory-Token": "fixture-factory-token"},
-        ).status_code
-        == 422
-    )
-    response = client.post(url, json=snapshot, headers={"X-Provider-Capability-Factory-Token": "fixture-factory-token"})
-    assert response.status_code == 201, response.text
-    after = _chip(routes.build_chip_certification_payload(now=NOW), "pi", "steerMidTurn")
-    assert after["state"] == "certified"
-    assert after["controls"] == "passed"

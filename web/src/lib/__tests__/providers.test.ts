@@ -182,8 +182,8 @@ describe("providers launch support", () => {
       expect(support!.interrupt).toBe((contract.interrupt && contract.terminate) || turnInterrupt);
       expect(support!.steerMidTurn).toBe(contract.steer_active_turn);
       expect(support!.resume).toBe(contract.can_resume);
-      // Landing chips follow live-token factory proof, never the runtime flags
-      // alone (scripts/generate/provider_capabilities_ts.py).
+      // Landing chips follow live-token proof, never the runtime flags alone
+      // (scripts/generate/provider_capabilities_ts.py).
       const isLive = (a: ProofAssertion) => JSON.stringify(a.acceptable_evidence) === JSON.stringify(["live_token"]);
       const liveOnly = (assertions: ProofAssertion[] | undefined) =>
         Array.isArray(assertions) && assertions.length > 0 && assertions.every(isLive);

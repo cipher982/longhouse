@@ -1,9 +1,9 @@
 /**
  * Provider truth. Every chip and every sentence derives from two layers: the
- * generated proof edges say a live factory test exists for a claim ("covered"),
- * and the Runtime Host's certification says that test currently passes
- * against the real binary ("certified"). A claim is lit only when certified.
- * This component only turns those states into copy.
+ * shipped proof graph says a live test exists for a claim ("covered"), and the
+ * Runtime Host's certification says that test currently passes against the
+ * real binary ("certified"). A claim is lit only when certified. This
+ * component only turns those states into copy.
  */
 
 import type { ProvenChips } from "../../generated/provider-capabilities";
@@ -34,9 +34,9 @@ const CAPABILITIES: Capability[] = [
 
 const STATE_DESCRIPTION: Record<CertificationState, string> = {
   certified: "proven against the real binary",
-  unverified: "tested, awaiting a current factory pass",
-  stale: "factory proof expired",
-  failing: "latest factory run failing",
+  unverified: "tested, awaiting a current proof",
+  stale: "proof expired",
+  failing: "latest proof failing",
   unproven: "not yet proven",
   unavailable: "certification status unavailable",
 };
@@ -67,7 +67,7 @@ export function providerSummary(certified: ProvenChips, unavailable = false): st
   if (missing.length === 0) {
     return "Full remote control, including steering during a turn.";
   }
-  const pending = `${capitalize(joinClause(missing))} ${missing.length === 1 ? "is" : "are"} not yet release-proven.`;
+  const pending = `${capitalize(joinClause(missing))} ${missing.length === 1 ? "is" : "are"} not currently proven.`;
   if (have.length === 0) return pending;
   return `${capitalize(joinClause(have))}. ${pending}`;
 }
@@ -115,7 +115,7 @@ export function IntegrationsSection() {
         <h2 className="landing-providers-title">Control support, provider by provider.</h2>
         <p className="landing-providers-lead">
           What Longhouse can do with each CLI once you launch through it. A capability
-          lights up only when the provider factory proves it against the real binary.
+          lights up only when a current live test proves it against the real binary.
         </p>
 
         {searchable.length > 0 ? (
@@ -157,7 +157,7 @@ export function IntegrationsSection() {
         </ul>
 
         <p className="landing-providers-source">
-          Lit only while the provider factory has a current passing live test against the real binary.
+          Lit only while a current live test passes against the real binary.
           {unavailable ? " Certification status could not be loaded right now; chips below reflect the shipped proof graph only." : ""}
         </p>
       </div>

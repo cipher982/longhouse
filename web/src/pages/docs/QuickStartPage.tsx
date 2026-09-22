@@ -100,7 +100,7 @@ longhouse antigravity  # Antigravity CLI, send only`}
         takes send alone, and refuses to start if its Longhouse hook is not
         installed. The{" "}
         <Link to="/docs/integrations">Integrations</Link> page carries the full
-        matrix, generated from the provider contract.
+        provider detail, generated from the managed-provider declarations.
       </p>
       <div className="docs-callout">
         <p>

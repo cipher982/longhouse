@@ -17,9 +17,9 @@ function strongestProvidersAnswer(certification: ProviderCertificationPayload | 
     .map((provider) => provider.marketingName);
   const lead =
     full.length === 0
-      ? "No provider has every control capability release-proven yet."
-      : `${full.join(", ")} ${full.length === 1 ? "has" : "have"} launch, send, interrupt, mid-turn steering, and resume all release-proven.`;
-  return `${lead} Each chip in the provider list above lights only while the provider factory has a current passing live test against the real binary.`;
+      ? "No provider has every control capability currently proven."
+      : `${full.join(", ")} ${full.length === 1 ? "has" : "have"} launch, send, interrupt, mid-turn steering, and resume currently proven.`;
+  return `${lead} Each chip in the provider list above lights only while a current live test passes against the real binary.`;
 }
 
 function buildFaqs(certification: ProviderCertificationPayload | null): FAQ[] {
@@ -32,7 +32,7 @@ function buildFaqs(certification: ProviderCertificationPayload | null): FAQ[] {
   {
     question: "Which sessions can I control?",
     answer:
-      "Sessions started outside Longhouse are searchable and inspectable. Sessions started through Longhouse can also be controlled: send the next instruction, interrupt a turn, steer it, and resume where the provider supports it. The provider list above shows which of those the provider factory has proven for each CLI.",
+      "Sessions started outside Longhouse are searchable and inspectable. Sessions started through Longhouse can also be controlled: send the next instruction, interrupt a turn, steer it, and resume where the provider supports it. The provider list above shows what is currently proven for each CLI.",
   },
   {
     question: "What happens when my laptop sleeps?",

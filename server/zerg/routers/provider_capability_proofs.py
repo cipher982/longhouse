@@ -9,8 +9,6 @@ import hmac
 import json
 import re
 import time
-from collections.abc import Mapping
-from collections.abc import Sequence
 from datetime import UTC
 from datetime import datetime
 from typing import Any
@@ -729,122 +727,14 @@ def list_provider_capabilities(
     return build_capability_projection_payload()
 
 
-_NEGATIVE_CONTROL_KIND = "provider_negative_control_snapshot"
-_NEGATIVE_CONTROL_VERDICTS = frozenset({"pass", "fail", "inconclusive", "not_recorded"})
-_MAX_NEGATIVE_CONTROLS = 512
-
-
-def _negative_control_path():
-    return _proof_store().root.parent / "negative-controls.json"
-
-
-def _validated_negative_control_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
-    if set(payload) != {"schema_version", "artifact_kind", "epoch_digest", "published_at", "controls"}:
-        raise ValueError("negative-control snapshot has an unexpected schema")
-    if payload["schema_version"] != 1 or payload["artifact_kind"] != _NEGATIVE_CONTROL_KIND:
-        raise ValueError("negative-control snapshot kind or version is not admitted")
-    if not isinstance(payload["epoch_digest"], str) or not payload["epoch_digest"].startswith("sha256:"):
-        raise ValueError("negative-control snapshot must name its accepted epoch digest")
-    if not isinstance(payload["published_at"], str) or not payload["published_at"]:
-        raise ValueError("negative-control snapshot must carry published_at")
-    controls = payload["controls"]
-    if not isinstance(controls, list) or len(controls) > _MAX_NEGATIVE_CONTROLS:
-        raise ValueError("negative-control snapshot controls must be a bounded list")
-    for control in controls:
-        if not isinstance(control, dict) or set(control) != {"provider", "target_assertion", "fault", "verdict"}:
-            raise ValueError("negative-control entry has an unexpected schema")
-        if not all(isinstance(control[key], str) and control[key] for key in ("provider", "target_assertion", "fault")):
-            raise ValueError("negative-control entry identity is incomplete")
-        if control["verdict"] not in _NEGATIVE_CONTROL_VERDICTS:
-            raise ValueError("negative-control verdict is not admitted")
-    return payload
-
-
-@router.post("/internal/provider-negative-controls", status_code=status.HTTP_201_CREATED)
-async def publish_provider_negative_controls(
-    request: Request,
-    _factory: None = Depends(_verify_factory_token),
-) -> dict[str, Any]:
-    """Replace the factory's current negative-control snapshot.
-
-    The factory owns which requirements declare controls and which verdicts
-    judged the accepted producer and oracle; this host stores the latest
-    snapshot so public certification can require those controls.
-    """
-
-    global _certification_cache
-    payload = await _read_capped_json(request)
-    try:
-        snapshot = _validated_negative_control_snapshot(payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-    path = _negative_control_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(snapshot, sort_keys=True), encoding="utf-8")
-    temporary.replace(path)
-    _certification_cache = None
-    return {"accepted": len(snapshot["controls"]), "epoch_digest": snapshot["epoch_digest"]}
-
-
-def _negative_controls_by_requirement() -> tuple[dict[tuple[str, str], list[str]] | None, str | None]:
-    """((provider, assertion) -> declared control verdicts, snapshot epoch).
-
-    Both are None when no snapshot has ever been published. The epoch travels
-    with the verdicts because a control only speaks for the epoch it judged:
-    joining it to a proof accepted under a different epoch would certify a chip
-    with evidence about other code.
-    """
-
-    path = _negative_control_path()
-    if not path.is_file():
-        return None, None
-    try:
-        snapshot = _validated_negative_control_snapshot(json.loads(path.read_text(encoding="utf-8")))
-    except (OSError, ValueError, json.JSONDecodeError):
-        return None, None
-    out: dict[tuple[str, str], list[str]] = {}
-    for control in snapshot["controls"]:
-        out.setdefault((control["provider"], control["target_assertion"]), []).append(control["verdict"])
-    return out, snapshot["epoch_digest"]
-
-
-def _negative_control_status(
-    controls: Mapping[tuple[str, str], list[str]] | None,
-    controls_epoch: str | None,
-    rows: Sequence[Mapping[str, Any]],
-    *,
-    proof_epoch: str | None,
-) -> str:
-    """How the factory's declared negative controls stand for one chip.
-
-    Reported alongside a certified chip rather than gating it. Values are
-    ordered by how loud an alarm should be: ``not_run`` and ``snapshot_missing``
-    mean the factory has not demonstrated that the test can fail, ``failed`` and
-    ``epoch_mismatch`` mean it demonstrated the opposite, and ``passed`` means
-    the control judged this exact epoch and held.
-    """
-
-    if controls is None:
-        return "snapshot_missing"
-    if controls_epoch != proof_epoch:
-        return "epoch_mismatch"
-    verdicts = [verdict for row in rows if row["negative_controls"] is not None for verdict in row["negative_controls"]]
-    if not verdicts:
-        return "not_declared"
-    if "not_recorded" in verdicts:
-        return "not_run"
-    return "passed" if all(verdict == "pass" for verdict in verdicts) else "failed"
-
-
 CHIP_CERTIFICATION_VERSION = "provider-chip-certification-v1"
 _CERTIFICATION_TTL_SECONDS = 60.0
 _certification_cache: tuple[float, dict[str, Any]] | None = None
 
 
 def build_chip_certification_payload(*, now: datetime | None = None) -> dict[str, Any]:
-    """The *certified* landing layer: each chip's proof edges joined to the
-    factory proofs this Runtime Host holds.
+    """The public landing layer: each chip's proof edges joined to the
+    proof records this Runtime Host holds.
 
     A chip with no edge is ``unproven``. Otherwise the per-requirement
     projection statuses roll up (`provider_chip_edges.rollup_state`): all
@@ -856,7 +746,6 @@ def build_chip_certification_payload(*, now: datetime | None = None) -> dict[str
     """
 
     edges = load_chip_edge_assertions()
-    controls, controls_epoch = _negative_controls_by_requirement()
     all_records, integrity_reasons = _published_records()
     flat = tuple(assertion for chips in edges.values() for chip in chips.values() if chip for assertion in chip)
     projected = project_capabilities(flat, all_records, now=now, integrity_reasons=integrity_reasons)
@@ -887,32 +776,10 @@ def build_chip_certification_payload(*, now: datetime | None = None) -> dict[str
                         "provider_version": p.provider_version,
                         "accepted_epoch_id": p.accepted_epoch_id,
                         "max_age_seconds": assertion.max_age_seconds,
-                        # A control judged one accepted epoch. Joining it to a
-                        # proof accepted under a different one would certify
-                        # this chip with evidence about other code, so a proof
-                        # outside the snapshot's epoch has no controls at all.
-                        "negative_controls": (
-                            None
-                            if controls is None
-                            else (
-                                controls.get((provider, p.assertion_id), [])
-                                if controls_epoch == p.accepted_epoch_digest
-                                else ["epoch_mismatch"]
-                            )
-                        ),
                     }
                 )
             state = rollup_state(row["proof_status"] for row in rows)
             entry: dict[str, Any] = {"state": state, "requirements": rows}
-            if state == "certified":
-                # The control layer is reported, not enforced. Certification
-                # follows the live proofs the chip advertises ("a current
-                # passing live test against the real binary"); whether the
-                # factory's own negative controls have run is an operator
-                # signal, not a public gate. Enforcing it here let a control
-                # that had simply never been recorded darken the page for every
-                # provider while every proof behind it passed.
-                entry["controls"] = _negative_control_status(controls, controls_epoch, rows, proof_epoch=p.accepted_epoch_digest)
             chips[chip] = entry
         providers.append({"provider": provider, "chips": chips})
     return {

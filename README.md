@@ -39,44 +39,25 @@ operators install `longhouse-server` in that server environment.
 ## First Session
 
 ```bash
-longhouse claude       # managed channel session: send, interrupt, steer, resume
-longhouse codex        # managed app-server session: send, interrupt, steer, resume
-longhouse opencode     # managed server session: send, interrupt, step-boundary steer, reattach
-longhouse cursor       # managed PTY session: send, steer at the next tool boundary, interrupt, reattach
-longhouse pi           # stock Pi TUI: send, interrupt, boundary steer, cold resume
-longhouse omp          # stock Oh My Pi TUI: send, interrupt, steer, cold resume
-longhouse antigravity  # managed hook-inbox session: send only
+longhouse claude       # managed Claude Code session
+longhouse codex        # managed Codex app-server session
+longhouse opencode     # managed OpenCode server session
+longhouse cursor       # managed Cursor PTY session
+longhouse pi           # managed Pi TUI session
+longhouse omp          # managed Oh My Pi TUI session
+longhouse antigravity  # managed Antigravity hook session
 ```
 
-Use `longhouse opencode --model <provider/model>` when the OpenCode session
-must stay on a specific model. Longhouse carries that explicit choice through
-both the initial Helm launch and a later cold reattach.
+Managed sessions keep the provider's native client and local identity while
+adding Longhouse's session-scoped control path. Bare provider sessions remain
+Shadow: searchable and observable, but not remotely controlled by Longhouse.
+Console is the no-terminal path for sending a turn to a connected machine.
 
-Pi Helm keeps the stock terminal UI through a launch-scoped extension.
-Steering is delivered at the next model boundary, not mid-token. After the
-previous owner exits, `longhouse pi --resume-session <session-id>` opens a
-new TUI on the exact native session file; it is not live terminal attachment.
-Pi Console uses the configured tools, context, model, and local credentials
-and resumes that native history in a new process for each turn.
-
-OMP Helm keeps the stock Oh My Pi terminal UI through a launch-scoped
-Longhouse extension. Its active-turn steer uses OMP's native delivery mode,
-and cold resume starts a new owner on the exact native session file after the
-previous owner exits. OMP Console runs one stock JSON turn per request while
-preserving the configured model, tools, context, extensions, skills, auth, and
-native history.
-Keep Pi's Node runtime current: Node 23.6.1 lacks the Zstandard API used by
-some model HTTP responses and can crash stock Pi. Longhouse does not replace
-your Pi or Node installation.
-
-OpenCode Helm supports send, interrupt, terminate, pause-answer, and active-turn steer that lands at the next step boundary. Cursor Helm supports send, active-turn steer (delivered at the next tool boundary), interrupt, terminate, and reattach, but not pause-answer. OMP supports send, interrupt, native active-turn steer, terminate, and exact-file cold resume. Antigravity is the narrowest of the seven: it launches under Longhouse's hook inbox and accepts send, but not interrupt, terminate, or reattach — and it refuses to start at all if its hook is not installed, rather than opening an unmanaged session wearing a managed session id.
-
-Bare provider CLI sessions still get ingested into the timeline — they stay unmanaged: searchable and observable, but without Longhouse-owned remote control.
-
-Console is the no-terminal path. From the web or iOS interface, choose an
-installed provider and a connected machine. Longhouse dispatches each turn to
-that machine, where the real provider client runs with the same local identity
-and project state it would have from a terminal.
+Provider behavior is intentionally capability-specific and changes with the
+native clients. Read [Provider Integrations](https://longhouse.ai/docs/integrations)
+for the current control and archive details; this README stays focused on the
+product shape rather than promising every provider/version/configuration
+combination.
 
 The web UI lives at `http://localhost:8080`. Runtime Host administration is a
 separate server lane and uses `longhouse-server`:
@@ -136,17 +117,12 @@ Other tools spin up sandboxed cloud agents or wrap a single vendor's dashboard. 
 
 ## Status
 
-Actively developed pre-release. Every provider Longhouse supports syncs into one searchable timeline today:
-
-| Provider | Search | Launch | Interrupt | Mid-turn steer | Resume |
-|---|---|---|---|---|---|
-| Claude Code | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Codex CLI | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Cursor Agent | ✓ | ✓ | ✓ | — | ✓ |
-| OpenCode | ✓ | ✓ | ✓ | — | ✓ |
-| Antigravity | ✓ | ✓ | — | — | — |
-| Pi Agent | ✓ | ✓ | ✓ | ✓ | ✓ |
-| OMP (Oh My Pi) | ✓ | ✓ | ✓ | ✓ | ✓ |
+Actively developed pre-release. Longhouse currently supports Claude Code, Codex,
+Cursor, OpenCode, Antigravity, Pi Agent, and OMP across archive and managed
+control paths. The exact operation support is capability-specific; see
+[Provider Integrations](https://longhouse.ai/docs/integrations) and the
+in-product provider view for current details. This README is not a
+compatibility matrix.
 
 The iOS client lives in `ios/` and handles APNs push on `needs_user`, but there is no
 TestFlight or App Store build and no `.ipa` in any release. Getting it on a phone today
@@ -163,6 +139,11 @@ Built and maintained by [David W. Rose](https://drose.io/)
 - **Runtime Host** — FastAPI + bundled web UI + SQLite. Lives where durability should live.
 
 On a laptop both run together for trial use. For the full system map, component detail, and a glossary of the project's nouns (Shadow/Helm/Console, wall, recall, peers, …) see [`ARCHITECTURE.md`](ARCHITECTURE.md) and [`VISION.md`](VISION.md).
+
+For code navigation, start with `server/`, `web/`, and `engine/` for the core
+runtime; `ios/`, `desktop/`, and `runner/` for clients and support; and
+`schemas/`, `config/`, and `scripts/` for contracts and tooling. The
+[contributor guide](CONTRIBUTING.md#project-layout) has the complete tree.
 
 ## Contributing
 

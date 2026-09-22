@@ -110,7 +110,7 @@ def render_ts() -> str:
         "",
         f"export type GeneratedProviderId = {ids};",
         "",
-        "// Landing chips: lit only by live-token factory assertions behind every",
+        "// Landing chips: lit only by live-token assertions behind every",
         "// backing operation. The runtime capability fields never light a chip.",
         "export type ProvenChips = {",
         "  readonly search: boolean;",

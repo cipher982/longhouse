@@ -90,9 +90,9 @@ Longhouse steer this at all, vs. exactly how).
 
 ### Mapping to code
 
-Read `schemas/managed_providers.yml` for the current, authoritative
-per-provider support matrix — it changes independently of this document and
-this document does not restate it. The product terms above and the
+Read `schemas/managed_providers.yml` for the current, authoritative provider
+support declarations — they change independently of this document and this
+document does not restate them. The product terms above and the
 manifest/engine field names below refer to the same three modes:
 
 | Product term | Manifest/code fields |

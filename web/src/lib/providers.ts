@@ -15,7 +15,7 @@ export type LaunchProviderSupport = {
   id: LaunchProviderId;
   marketingName: string;
   /**
-   * Landing capability matrix. Mirrors
+   * Landing capability facts. Mirrors
    * server/zerg/config/managed_provider_contracts.json — launchAndSend folds
    * launch_local + send_input, interrupt folds interrupt + terminate.
    */
@@ -24,8 +24,8 @@ export type LaunchProviderSupport = {
   steerMidTurn: boolean;
   resume: boolean;
   /**
-   * Landing chips. Lit only by live-token provider-factory assertions; the
-   * runtime flags above describe what the product can dispatch.
+   * Landing proof chips. Lit only by live-token assertions; the runtime flags
+   * above describe what the product can dispatch.
    */
   proven: ProvenChips;
   /**

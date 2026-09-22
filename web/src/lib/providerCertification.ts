@@ -1,12 +1,11 @@
 /**
  * The certified landing layer.
  *
- * Two layers, never merged (control-plane docs/specs/provider-chip-proof-graph.md):
- * `proven` in the generated capabilities says a live factory test exists for
- * every edge behind a chip ("covered"); this module asks the Runtime Host which
- * of those tests have a current admissible pass ("certified"). A chip lights
- * only when both agree. Anything we cannot confirm -- no response, an older
- * server, an unknown state -- renders as unverified, never as lit.
+ * Two layers, never merged: the shipped proof graph says a live test exists
+ * for every edge behind a chip ("covered"); this module asks the Runtime Host
+ * which of those tests have a current admissible pass ("certified"). A chip
+ * lights only when both agree. Anything we cannot confirm -- no response, an
+ * older server, an unknown state -- renders as unverified, never as lit.
  */
 
 import { useEffect, useState } from "react";

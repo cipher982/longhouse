@@ -1288,30 +1288,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/internal/provider-negative-controls": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Publish Provider Negative Controls
-         * @description Replace the factory's current negative-control snapshot.
-         *
-         *     The factory owns which requirements declare controls and which verdicts
-         *     judged the accepted producer and oracle; this host stores the latest
-         *     snapshot so public certification can require those controls.
-         */
-        post: operations["publish_provider_negative_controls_internal_provider_negative_controls_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/public/provider-certification": {
         parameters: {
             query?: never;
@@ -12741,28 +12717,6 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-        };
-    };
-    publish_provider_negative_controls_internal_provider_negative_controls_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            201: {
                 headers: {
                     [name: string]: unknown;
                 };

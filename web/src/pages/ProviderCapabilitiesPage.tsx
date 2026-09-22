@@ -5,9 +5,8 @@ import config from "../lib/config";
 import { parseUTC } from "../lib/dateUtils";
 import { toTitleCaseWords } from "../lib/sessionUtils";
 
-// docs/specs/provider-factory-coherence.md, Phase 5: capability projection
-// from the contract, proof status attached separately, both rendered. This
-// page is that rendering -- the human-facing mirror of
+// Capability projection from the managed-provider declarations with proof
+// status attached separately. This page is the human-facing mirror of
 // GET /agents/provider-capabilities (device-token machine surface), served
 // here via GET /admin/provider-capabilities (cookie-authenticated, same
 // underlying projection).

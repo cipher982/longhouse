@@ -9,7 +9,7 @@
 
 export type GeneratedProviderId = "antigravity" | "claude" | "codex" | "cursor" | "omp" | "opencode" | "pi";
 
-// Landing chips: lit only by live-token factory assertions behind every
+// Landing chips: lit only by live-token assertions behind every
 // backing operation. The runtime capability fields never light a chip.
 export type ProvenChips = {
   readonly search: boolean;

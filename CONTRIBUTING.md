@@ -38,13 +38,22 @@ Host with authentication disabled.
 ## Project layout
 
 ```
-server/    Python: FastAPI Runtime Host, CLI, SQLite-backed state
-web/        TypeScript/React frontend (bundled into the Runtime Host)
-engine/     Rust Machine Agent (longhouse-engine) — ships session events
-runner/     Rust optional WebSocket command executor
-ios/        SwiftUI read/steer client
-schemas/    Source-of-truth contracts (e.g. ws-protocol-asyncapi.yml) for generated code
-docs/       Specs and runbooks — see docs/README.md for an index
+Core runtime:
+  server/    Python: FastAPI Runtime Host, CLI, SQLite-backed state
+  web/       TypeScript/React frontend bundled into the Runtime Host
+  engine/    Rust Machine Agent (longhouse-engine) — ships session events
+
+Clients and support:
+  runner/    Rust optional WebSocket command executor
+  ios/       SwiftUI read/steer client
+  desktop/   macOS local setup and health surface
+  scripts/   generation, release, and QA entrypoints
+
+Contracts and docs:
+  schemas/   Source-of-truth contracts for generated code
+  config/    checked-in runtime/provider configuration
+  docs/      public specs and runbooks — see docs/README.md
+  e2e/       end-to-end fixtures and launch-surface coverage
 ```
 
 ## Tests
@@ -183,13 +192,13 @@ These checks use real served data, not API mocks. They retain ordered-reply,
 cold-open/return, screenshots, and timing evidence under
 `artifacts/terminal-fidelity/`. iOS additionally verifies painted final text
 and termination/reopen. Prefer short, distinct natural-word replies for optical
-checks; long machine identifiers can wrap ambiguously. A provider matrix failure
-must stay visible even when other providers pass. These checks complement
-simlab's connection-recovery scenarios; neither proves cellular-radio behavior.
+checks; keep a failed provider result visible even when other providers pass.
+These checks complement simlab's connection-recovery scenarios; neither proves
+cellular-radio behavior.
 There is no complete local terminal-fidelity campaign command. The public
 dispatcher can run the web proof only; it refuses the private native iOS proof.
 The separately authorized disposable worker may compose web, iOS, and simlab
-stages with an explicit provider matrix and `--token-env NAME`, retaining
+stages with an explicit provider list and `--token-env NAME`, retaining
 failures and all evidence under a unique
 `artifacts/terminal-fidelity/gate-*` directory. This is an operator
 qualification, not a credential-dependent gate on every push.

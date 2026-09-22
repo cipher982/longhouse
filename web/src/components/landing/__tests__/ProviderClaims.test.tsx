@@ -17,7 +17,7 @@ import {
 
 // The rails render generated contract data joined to the served
 // certification, so expectations are derived from that same contract rather
-// than transcribed. A hand-typed matrix here would only detect change.
+// than transcribed. A hand-typed provider table here would only detect change.
 const IDS = Object.keys(GENERATED_PROVIDER_CAPABILITIES) as GeneratedProviderId[];
 const CHIP_ORDER: ChipKey[] = ["search", "launchAndSend", "interrupt", "steerMidTurn", "resume"];
 
@@ -82,11 +82,11 @@ describe("landing provider claims", () => {
       );
     }
     // A failed load must not be published as a negative product claim.
-    expect(screen.queryAllByText(/not yet release-proven/)).toHaveLength(0);
+    expect(screen.queryAllByText(/not currently proven/)).toHaveLength(0);
     expect(screen.getAllByText("Certification status is unavailable right now.")).toHaveLength(IDS.length);
   });
 
-  it("does not expose factory control bookkeeping in public claims", async () => {
+  it("does not expose internal control bookkeeping in public claims", async () => {
     serve(payload(() => "unverified"));
     const railFor = renderRails();
     await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
@@ -126,7 +126,7 @@ describe("landing provider claims", () => {
         expect(rail.querySelector('[data-capability="steer"]')?.getAttribute("data-certification")).toBe("failing");
       }
       const summary = rail.querySelector("p")?.textContent ?? "";
-      const pendingAt = summary.search(/[^.]*not yet release-proven/);
+      const pendingAt = summary.search(/[^.]*not currently proven/);
       const claim = summary.slice(0, Math.max(pendingAt, 0)).toLowerCase();
       const pending = summary.slice(Math.max(pendingAt, 0)).toLowerCase();
       for (const [proven, label] of [
