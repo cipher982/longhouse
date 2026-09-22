@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { IntegrationsSection } from "../IntegrationsSection";
@@ -21,20 +21,14 @@ import {
 const IDS = Object.keys(GENERATED_PROVIDER_CAPABILITIES) as GeneratedProviderId[];
 const CHIP_ORDER: ChipKey[] = ["search", "launchAndSend", "interrupt", "steerMidTurn", "resume"];
 
-function payload(
-  stateFor: (id: GeneratedProviderId, chip: ChipKey) => CertificationState,
-  blockedByFor?: (id: GeneratedProviderId, chip: ChipKey) => string | undefined,
-): ProviderCertificationPayload {
+function payload(stateFor: (id: GeneratedProviderId, chip: ChipKey) => CertificationState): ProviderCertificationPayload {
   return {
     artifact_kind: "provider_chip_certification",
     generated_at: "2026-09-16T12:00:00Z",
     providers: IDS.map((id) => ({
       provider: id,
       chips: Object.fromEntries(
-        CHIP_ORDER.map((chip) => {
-          const blocked = blockedByFor?.(id, chip);
-          return [chip, { state: stateFor(id, chip), ...(blocked ? { blocked_by: blocked } : {}), requirements: [] }];
-        }),
+        CHIP_ORDER.map((chip) => [chip, { state: stateFor(id, chip), requirements: [] }]),
       ),
     })),
   };
@@ -92,30 +86,19 @@ describe("landing provider claims", () => {
     expect(screen.getAllByText("Certification status is unavailable right now.")).toHaveLength(IDS.length);
   });
 
-  it("names an unrecorded negative control instead of reporting the capability unproven", async () => {
-    // The served payload's shape today: a passing proof whose declared control
-    // was never recorded, so the chip cannot certify. That is a pending
-    // factory step, and must not be published as a negative product claim.
-    serve(payload(() => "unverified", () => "negative_control"));
+  it("does not expose factory control bookkeeping in public claims", async () => {
+    serve(payload(() => "unverified"));
     const railFor = renderRails();
     await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
     for (const id of IDS) {
       const covered = GENERATED_PROVIDER_CAPABILITIES[id].proven;
-      const rail = railFor(id);
-      expect(chipsOf(rail, "data-certification")).toEqual(
-        CHIP_ORDER.map((chip) => (covered[chip] ? "controls_pending" : "unproven")),
+      expect(chipsOf(railFor(id), "data-certification")).toEqual(
+        CHIP_ORDER.map((chip) => (covered[chip] ? "unverified" : "unproven")),
       );
-      if (CHIP_ORDER.some((chip) => covered[chip])) {
-        expect(within(rail).getByText(/awaiting the factory's negative controls/)).toBeTruthy();
-      }
     }
-    // Only providers with no proof edges at all may still say "not yet
-    // release-proven" -- for them it is literally true.
-    const entirelyUncovered = IDS.filter(
-      (id) => !CHIP_ORDER.some((chip) => GENERATED_PROVIDER_CAPABILITIES[id].proven[chip]),
-    );
-    expect(screen.queryAllByText(/not yet release-proven/)).toHaveLength(entirelyUncovered.length);
+    expect(screen.queryAllByText(/negative controls|controls_pending/)).toHaveLength(0);
   });
+
 
   it("a certification for an uncovered chip never lights it", async () => {
     serve(payload(() => "certified"));

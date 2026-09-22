@@ -19,8 +19,7 @@ export type CertificationState =
   | "stale"
   | "failing"
   | "unproven"
-  | "unavailable"
-  | "controls_pending";
+  | "unavailable";
 
 export type ChipRequirement = {
   declared_in: string;
@@ -39,7 +38,7 @@ export type ProviderCertificationPayload = {
   generated_at: string;
   providers: Array<{
     provider: string;
-    chips: Partial<Record<ChipKey, { state: CertificationState; blocked_by?: string; requirements: ChipRequirement[] }>>;
+    chips: Partial<Record<ChipKey, { state: CertificationState; requirements: ChipRequirement[] }>>;
   }>;
 };
 
@@ -78,12 +77,6 @@ export function chipCertification(
   if (payload === null) return "unavailable";
   const entry = payload.providers.find((row) => row.provider === provider)?.chips[chip];
   const state = entry?.state;
-  // A proof that passes but carries no recorded negative control has not been
-  // shown to be capable of failing, so it cannot certify. That is a pending
-  // factory step, not a product result, and must not read as one.
-  if (state === "unverified" && typeof entry?.blocked_by === "string" && entry.blocked_by.startsWith("negative_control")) {
-    return "controls_pending";
-  }
   return state && KNOWN_STATES.has(state) ? state : "unverified";
 }
 
