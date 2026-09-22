@@ -1292,12 +1292,6 @@ test.describe("Session Detail Page", () => {
         };
       });
 
-    const streamConnected = page.waitForResponse(
-      (response) =>
-        response.url().includes(`/workspace/stream`) &&
-        response.status() === 200,
-    );
-
     await ingestSession(request, {
       id: sessionId,
       project: `tail-anchor-${suffix}`,
@@ -1305,6 +1299,12 @@ test.describe("Session Detail Page", () => {
       ended_at: new Date(now + 249_000).toISOString(),
       events: makeEvents(250),
     });
+
+    const streamConnected = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/workspace/stream`) &&
+        response.status() === 200,
+    );
 
     await page.goto(`/timeline/${sessionId}`);
     await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
