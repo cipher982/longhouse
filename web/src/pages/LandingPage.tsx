@@ -41,7 +41,7 @@ export default function LandingPage() {
   usePageMeta({
     title: "Longhouse - Remote control for your coding agents",
     description:
-      "Longhouse connects to coding-agent CLIs already on your machines. Watch any session live, search everything they have done, and control supported sessions from the web or your iPhone while the agent keeps running in its real terminal. Self-hosted and Apache-2.0.",
+      "Longhouse connects to coding-agent CLIs already on your machines. Watch sessions live, search past work, and control supported sessions from the web while the agent runs on your machine. Self-hosted and Apache-2.0.",
   });
 
   // Auth only matters when it can redirect us to /timeline. When no redirect
