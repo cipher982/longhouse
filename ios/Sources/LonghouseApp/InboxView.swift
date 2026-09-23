@@ -83,9 +83,13 @@ func buildTimelineInboxLayout(_ sessions: [SessionSummary]) -> TimelineInboxLayo
         }
     }
 
-    newResults.sort {
-        resultDate(for: $0) > resultDate(for: $1)
-    }
+    // Keys first, as in applyUpsert: parsing inside the comparator re-parses
+    // each row's date O(log n) times. Equal dates keep server order.
+    newResults = newResults
+        .enumerated()
+        .map { (date: resultDate(for: $0.element), index: $0.offset, session: $0.element) }
+        .sorted { $0.date != $1.date ? $0.date > $1.date : $0.index < $1.index }
+        .map(\.session)
     return TimelineInboxLayout(
         needsYou: needsYou,
         newResults: newResults,
@@ -468,11 +472,10 @@ struct TimelineSessionList: View {
     /// change, because the resident rows are the filter's corpus.
     var search: TimelineSearchPresentation?
 
-    private var layout: TimelineInboxLayout {
-        buildTimelineInboxLayout(sessions)
-    }
-
     var body: some View {
+        // Once per render: as a computed property it was rebuilt, and its
+        // new-results section re-sorted, for each of the four sections.
+        let layout = buildTimelineInboxLayout(sessions)
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 14) {
                 ConnectionStatusStrip(banner: connectivityBanner)
@@ -1494,9 +1497,10 @@ final class TimelineViewModel: ObservableObject {
         // Keys first: parsing inside the comparator re-parsed each row's
         // anchor O(log n) times per upsert, on the main thread.
         current = current
-            .map { (anchorDate(for: $0), $0) }
-            .sorted { $0.0 > $1.0 }
-            .map(\.1)
+            .enumerated()
+            .map { (date: anchorDate(for: $0.element), index: $0.offset, session: $0.element) }
+            .sorted { $0.date != $1.date ? $0.date > $1.date : $0.index < $1.index }
+            .map(\.session)
         if current.count > limit {
             current = Array(current.prefix(limit))
         }
