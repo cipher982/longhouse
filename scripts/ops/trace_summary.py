@@ -31,6 +31,8 @@ WAIT_LEAVES = {
     "kevent_qos", "__workq_kernreturn", "__semwait_signal", "__select",
 }
 SKIPPED_CALLER_PREFIXES = ("closure", "partial apply", "thunk", "outlined", "merged", "$s")
+# App frames Instruments left as bare addresses: name -> (binary, load address).
+UNRESOLVED: dict[str, tuple[str, str]] = {}
 
 
 def export(trace: str, schema: str, directory: str) -> str | None:
@@ -59,6 +61,7 @@ def stream_rows(path: str):
     """
     plain: dict[str, tuple[str, str]] = {}
     binaries: dict[str, str] = {}
+    loads: dict[str, str] = {}
     frames: dict[str, tuple[str, str]] = {}
     backtraces: dict[str, list[tuple[str, str]]] = {}
     # A repeated <tagged-backtrace ref=N/> names the tagged-backtrace's own
@@ -92,12 +95,19 @@ def stream_rows(path: str):
         tag = el.tag
         if tag == "binary" and "id" in el.attrib:
             binaries[el.attrib["id"]] = el.attrib.get("name", "?")
+            loads[el.attrib["id"]] = el.attrib.get("load-addr", "")
         elif tag == "frame" and "id" in el.attrib:
             binary = el.find("binary")
             name = "?"
+            load = ""
             if binary is not None:
-                name = binaries.get(binary.attrib.get("id") or binary.attrib.get("ref", ""), "?")
-            frames[el.attrib["id"]] = (el.attrib.get("name", "?"), name)
+                key = binary.attrib.get("id") or binary.attrib.get("ref", "")
+                name = binaries.get(key, "?")
+                load = loads.get(key, "")
+            frame_name = el.attrib.get("name", "?")
+            if frame_name.startswith("0x") and name in APP_BINARIES and load:
+                UNRESOLVED.setdefault(frame_name, (name, load))
+            frames[el.attrib["id"]] = (frame_name, name)
         elif tag == "backtrace" and "id" in el.attrib:
             backtraces[el.attrib["id"]] = [frame_of(f) for f in el.findall("frame")]
         elif tag == "tagged-backtrace" and "id" in el.attrib:
@@ -128,7 +138,31 @@ def stream_rows(path: str):
             plain.setdefault(el.attrib["id"], (el.attrib.get("fmt", ""), (el.text or "").strip()))
 
 
-def time_profile(trace: str, directory: str, top: int, process: str | None, callers_of: str | None) -> None:
+def resolve_addresses(dsym: str | None) -> dict[str, str]:
+    """atos the app addresses Instruments could not name, against the build's
+    .dSYM. symbolicate misses some frames even with the right dSYM."""
+    if not dsym or not UNRESOLVED:
+        return {}
+    names: dict[str, str] = {}
+    by_binary: dict[tuple[str, str], list[str]] = collections.defaultdict(list)
+    for address, key in UNRESOLVED.items():
+        by_binary[key].append(address)
+    for (binary, load), addresses in by_binary.items():
+        dwarf = os.path.join(dsym, "Contents", "Resources", "DWARF", binary)
+        if not os.path.exists(dwarf):
+            continue
+        out = subprocess.run(
+            ["xcrun", "atos", "-o", dwarf, "-arch", "arm64", "-l", load, *addresses],
+            capture_output=True, text=True,
+        ).stdout.splitlines()
+        for address, line in zip(addresses, out):
+            if line and not line.startswith("0x"):
+                names[address] = line.split(" (in ")[0]
+    return names
+
+
+def time_profile(trace: str, directory: str, top: int, process: str | None, callers_of: str | None,
+                 dsym: str | None = None) -> None:
     path = export(trace, "time-profile", directory)
     if path is None:
         print("time-profile: none (template without CPU sampling)")
@@ -140,8 +174,15 @@ def time_profile(trace: str, directory: str, top: int, process: str | None, call
     inclusive = collections.Counter()
     app_total = 0
     total = 0
+    names: dict[str, str] = {}
+    if dsym:
+        for _ in stream_rows(path):  # collect the addresses to name first
+            pass
+        names = resolve_addresses(dsym)
     for row in stream_rows(path):
         stack = row.get("stack") or []
+        if names:
+            stack = [(names.get(name, name), binary) for name, binary in stack]
         if not stack or stack[0][0] in WAIT_LEAVES:
             continue
         # Templates that sample every thread (App Launch) include blocked
@@ -165,7 +206,7 @@ def time_profile(trace: str, directory: str, top: int, process: str | None, call
             # Samples with no app frame anywhere are system or simulator
             # overhead the app did not ask for; everything else is the
             # app's cost, and inclusive time ranks where it went.
-            deep = [n for n in app_names if n not in ("static LonghouseApp.$main()", "__debug_main_executable_dylib_entry_point")]
+            deep = [n for n in app_names if n not in ("main", "static LonghouseApp.$main()", "__debug_main_executable_dylib_entry_point")]
             if deep:
                 app_total += weight
                 for name in set(n for n in deep if not n.startswith(SKIPPED_CALLER_PREFIXES)):
@@ -221,9 +262,10 @@ def main() -> None:
     parser.add_argument("--top", type=int, default=15)
     parser.add_argument("--process", help="only this process (for --all-processes traces)")
     parser.add_argument("--callers", metavar="SYMBOL", help="also attribute samples containing SYMBOL to the app frames that called it")
+    parser.add_argument("--dsym", help="the app's .dSYM, to name frames Instruments left as addresses")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="trace-summary-") as directory:
-        time_profile(args.trace, directory, args.top, args.process, args.callers)
+        time_profile(args.trace, directory, args.top, args.process, args.callers, args.dsym)
         intervals(args.trace, directory, "potential-hangs", "Potential hangs", args.process)
         intervals(args.trace, directory, "hitches", "Animation hitches", args.process)
 

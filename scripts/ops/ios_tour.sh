@@ -68,6 +68,9 @@ declare -a signing=()
 # Hitches is device-only; asking for it on a simulator fails the whole
 # recording, CPU samples included.
 declare -a instruments=(--instrument os_log)
+# TOUR_SWIFTUI=1 adds view-body counts; on the 8 GB bench it slows the tour
+# enough to distort it and breaks symbolication, so it is opt-in.
+[[ "${TOUR_SWIFTUI:-0}" == 1 ]] && instruments+=(--instrument SwiftUI)
 case "$TARGET" in
   simulator)
     [[ -f "$STATE" ]] || die "no simlab run; start one with simlab.py up --seed-corpus <dir>"
@@ -212,11 +215,11 @@ if [[ -s "$BASE-app.log" ]]; then
 fi
 if [[ -d "$launch_trace" ]]; then
   echo; echo "== cold launch: $launch_trace"
-  python3 "$ROOT_DIR/scripts/ops/trace_summary.py" "$launch_trace" --process Longhouse --top 15
+  python3 "$ROOT_DIR/scripts/ops/trace_summary.py" "$launch_trace" --process Longhouse --top 15 ${dsym:+--dsym "$dsym"}
 fi
 if [[ -d "$trace" ]]; then
   echo; echo "== tour: $trace"
-  python3 "$ROOT_DIR/scripts/ops/trace_summary.py" "$trace" --process Longhouse
+  python3 "$ROOT_DIR/scripts/ops/trace_summary.py" "$trace" --process Longhouse ${dsym:+--dsym "$dsym"}
 else
   echo "no tour trace: the app process never appeared (see $BASE-test.log)"
 fi
