@@ -316,6 +316,36 @@ def build_binaries() -> None:
     )
 
 
+def seed_corpus(source: Path, home: Path) -> int:
+    """Copy real transcripts, in a HOME-shaped tree (`.claude/projects/...`,
+    `.codex/sessions/...`), into the scratch HOME before the engine starts, so
+    they arrive through real ingest: realistic sizes and shapes without
+    touching anyone's Runtime Host."""
+    if not source.is_dir():
+        die(f"--seed-corpus {source} is not a directory")
+    shutil.copytree(source, home, dirs_exist_ok=True)
+    count = sum(1 for _ in source.rglob("*.jsonl"))
+    log(f"seeded {count} transcripts from {source}")
+    return count
+
+
+def wait_for_seeded_ingest(base_url: str, expected: int) -> None:
+    """Ready when the timeline stops growing: a transcript can hold several
+    sessions or none worth listing, so the file count is only a scale."""
+    seen = {"count": -1, "stable_since": time.monotonic()}
+
+    def settled() -> bool:
+        body = http("GET", f"{base_url}/api/timeline/sessions?days_back=90&limit=100", timeout=30)
+        count = len(body.get("sessions", []))
+        now = time.monotonic()
+        if count != seen["count"]:
+            seen.update(count=count, stable_since=now)
+        return count > 0 and now - seen["stable_since"] >= 15
+
+    wait_for(f"seeded ingest of {expected} transcripts", settled, timeout_s=900, interval_s=3)
+    log(f"seeded ingest settled at {seen['count']} timeline sessions")
+
+
 def cmd_up(args: argparse.Namespace) -> None:
     if STATE_FILE.exists():
         previous = load_state()
@@ -329,6 +359,7 @@ def cmd_up(args: argparse.Namespace) -> None:
     projects = home / ".claude" / "projects" / PROJECT_CWD.replace("/", "-")
     projects.mkdir(parents=True)
     (home / ".longhouse").mkdir()
+    seeded = seed_corpus(Path(args.seed_corpus).expanduser(), home) if args.seed_corpus else 0
     port = args.port or free_port()
     base_url = f"http://127.0.0.1:{port}"
     state = {
@@ -450,6 +481,10 @@ def cmd_up(args: argparse.Namespace) -> None:
             appended_log_contains(scratch / "server.log", "control/ws accepted"), timeout_s=60,
         )
         record_timing(state, "engine_attach", started)
+        if seeded:
+            started = time.monotonic()
+            wait_for_seeded_ingest(base_url, seeded)
+            record_timing(state, "seed_ingest", started)
         record_timing(state, "up", up_started)
         state["startup_status"] = "ready"
         save_state(state)
@@ -1425,6 +1460,7 @@ def main() -> None:
     up = sub.add_parser("up", help="start a scratch runtime host and machine agent")
     up.add_argument("--port", type=int, default=0)
     up.add_argument("--build", action="store_true", help="build the engine binaries from this checkout first")
+    up.add_argument("--seed-corpus", help="copy this HOME-shaped tree of real transcripts (.claude/projects, .codex/sessions) in first")
     up.set_defaults(func=cmd_up)
 
     sub.add_parser("down", help="stop the scratch runtime host and machine agent").set_defaults(func=cmd_down)

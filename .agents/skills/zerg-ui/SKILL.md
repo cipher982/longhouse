@@ -176,6 +176,25 @@ takes the install and refuses the launch (`phone.sh` says so). Unlocked:
 `phone.sh console [--seconds N]` relaunches and streams the app's stdout and
 OSLog as Xcode's console would; `phone.sh profile` records Instruments.
 
+### The bench (wisp) and the performance tour
+- `scripts/ops/bench.sh run <cmd>` runs any of this on `wisp`, the MacBook
+  Neo test bench, not the laptop: mirror, lock, run, copy `$BENCH_OUT` back
+  to `/tmp/agents/bench/<stamp>/`. Cold sim build ~70 s; `simlab.py up
+  --build` ~220 s cold.
+- Realistic data: `~/bench/corpus/home` on wisp holds 100 of
+  David's recent Claude transcripts. `simlab.py up --build --seed-corpus
+  ~/bench/corpus/home` ships them through a real Machine Agent
+  into the scratch Runtime Host, never his instance. Refresh the corpus by
+  rsyncing newer `~/.claude/projects` files there.
+- `scripts/ops/ios_tour.sh` (simulator by default, `TOUR_TARGET=device` for a
+  test phone) runs the read-only `testLiveDogfoodTour` (cold launch,
+  timeline scroll, open and scroll three sessions, background/resume) under
+  Instruments and prints the timings plus `trace_summary.py`. One line:
+  `bench.sh run 'python3 scripts/qa/simlab.py up --build --seed-corpus
+  ~/bench/corpus/home && scripts/ops/ios_tour.sh; python3
+  scripts/qa/simlab.py down'`.
+- Never tour David's own phone; it is not a test device.
+
 ### Warnings, console noise, profiling
 - Every `sim.sh`/`phone.sh` build prints its compiler warnings to stderr. Keep
   it at zero: Xcode's GUI only shows warnings for recompiled files, and a

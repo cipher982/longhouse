@@ -246,6 +246,75 @@ final class SessionOpenPerformanceUITests: XCTestCase {
         ].joined(separator: " "))
     }
 
+    /// A read-only tour of the installed, signed-in app on a physical phone,
+    /// driven the way a person uses it: cold launch to the timeline, scroll
+    /// it, open the top sessions and scroll back through each transcript, then
+    /// background and resume. It taps nothing that writes.
+    /// `scripts/ops/ios_tour.sh` records Instruments across it; the elapsed times
+    /// here include XCUITest's own synthesis and idle waits, so they are
+    /// ceilings, and the trace carries the app's real cost.
+    func testLiveDogfoodTour() throws {
+        guard ProcessInfo.processInfo.environment["LONGHOUSE_RUN_LIVE_TOUR"] == "1" else {
+            throw XCTSkip("The live tour is opt-in.")
+        }
+        let app = XCUIApplication()
+        // On a simulator the app signs in headlessly to a scratch Runtime Host
+        // (simlab); on a phone it uses the installed app's own sign-in.
+        for key in ["LONGHOUSE_HEADLESS_SERVER_URL", "LONGHOUSE_HEADLESS_AUTH_TOKEN"] {
+            if let value = ProcessInfo.processInfo.environment[key], !value.isEmpty {
+                app.launchEnvironment[key] = value
+            }
+        }
+        addFailureScreenshot(app)
+        var metrics: [String] = []
+
+        let launchStartedAt = Date()
+        app.launch()
+        let rows = app.buttons.matching(identifier: "timeline-session-row")
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 30), "Signed-in timeline did not appear.")
+        metrics.append("cold_launch_to_timeline_ms=\(elapsedMs(since: launchStartedAt))")
+
+        var scrollMs: [Int] = []
+        for _ in 0..<3 {
+            let startedAt = Date()
+            app.swipeUp(velocity: .fast)
+            scrollMs.append(elapsedMs(since: startedAt))
+        }
+        for _ in 0..<3 { app.swipeDown(velocity: .fast) }
+        metrics.append("timeline_scroll_ms=\(scrollMs)")
+
+        var openMs: [Int] = []
+        var transcriptScrollMs: [Int] = []
+        let sessionCount = min(3, rows.count)
+        for index in 0..<sessionCount {
+            let row = rows.element(boundBy: index)
+            guard row.waitForExistence(timeout: 10), row.isHittable else { continue }
+            let startedAt = Date()
+            row.tap()
+            let transcript = app.descendants(matching: .any)["session-chat-transcript"]
+            XCTAssertTrue(transcript.waitForExistence(timeout: 20), "Transcript did not open.")
+            openMs.append(elapsedMs(since: startedAt))
+            for _ in 0..<2 {
+                let scrollStartedAt = Date()
+                transcript.swipeDown(velocity: .fast)
+                transcriptScrollMs.append(elapsedMs(since: scrollStartedAt))
+            }
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+            XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 10))
+        }
+        metrics.append("session_open_ms=\(openMs)")
+        metrics.append("transcript_scroll_ms=\(transcriptScrollMs)")
+
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 5)
+        let resumeStartedAt = Date()
+        app.activate()
+        XCTAssertTrue(waitUntil(timeout: 15) { rows.firstMatch.isHittable }, "Timeline did not come back.")
+        metrics.append("warm_resume_to_timeline_ms=\(elapsedMs(since: resumeStartedAt))")
+
+        print((["IOS_LIVE_TOUR_METRIC"] + metrics).joined(separator: " "))
+    }
+
     /// Physical-device dogfood profiler. This is intentionally opt-in because
     /// it uses the installed app's real authenticated state and creates one real
     /// empty Console session. Run only with both environment variables set.

@@ -673,6 +673,7 @@ struct TimelineSessionList: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("timeline-session-row")
             }
         }
     }
