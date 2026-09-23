@@ -63,7 +63,7 @@ def frame_binary(frame: ET.Element, binaries: dict[str, str]) -> str:
     return binaries.get(binary.attrib.get("ref", ""), "?")
 
 
-def time_profile(trace: str, top: int) -> None:
+def time_profile(trace: str, top: int, process: str | None, callers_of: str | None = None) -> None:
     root = export(trace, "time-profile")
     if root is None:
         print("time-profile: none (template without CPU sampling)")
@@ -74,14 +74,18 @@ def time_profile(trace: str, top: int) -> None:
     leaf = collections.Counter()
     app_frame = collections.Counter()
     threads = collections.Counter()
+    callers = collections.Counter()
     total = 0
     for cols in rows(root):
         weight = 0
         thread_name = "?"
         running = True
+        in_process = process is None
         stack: list[ET.Element] = []
         for col in cols:
-            if col.tag == "thread-state":
+            if col.tag == "process" and process is not None:
+                in_process = col.attrib.get("fmt", "").startswith(f"{process} (")
+            elif col.tag == "thread-state":
                 # Templates that sample every thread (App Launch) include
                 # blocked ones; only on-CPU time is cost.
                 running = col.attrib.get("fmt", "Running") == "Running"
@@ -105,7 +109,7 @@ def time_profile(trace: str, top: int) -> None:
                         stack.append(f)
                     if "id" in bt.attrib:
                         backtraces[bt.attrib["id"]] = stack
-        if not stack or not running or stack[0].attrib.get("name") in WAIT_LEAVES:
+        if not in_process or not stack or not running or stack[0].attrib.get("name") in WAIT_LEAVES:
             continue
         total += weight
         threads[thread_name] += weight
@@ -114,6 +118,18 @@ def time_profile(trace: str, top: int) -> None:
             if frame_binary(f, binaries) in APP_BINARIES:
                 app_frame[f.attrib.get("name", "?")] += weight
                 break
+        if callers_of:
+            names = [f.attrib.get("name", "?") for f in stack]
+            hits = [i for i, name in enumerate(names) if callers_of in name]
+            if hits:
+                # The nearest app frames above the outermost hit, closures
+                # and thunks skipped: who asked for this work.
+                above = [
+                    name for f, name in zip(stack[hits[-1] + 1:], names[hits[-1] + 1:])
+                    if frame_binary(f, binaries) in APP_BINARIES
+                    and not name.startswith(("closure", "partial apply", "thunk", "outlined", "merged", "$s"))
+                ][:3]
+                callers[" <- ".join(above) or "(no app frame)"] += weight
 
     ms = lambda ns: f"{ns / 1e6:8.1f} ms"
     print(f"CPU samples: {ms(total)} total")
@@ -125,6 +141,10 @@ def time_profile(trace: str, top: int) -> None:
     print(f"\nTop app frames (innermost Longhouse frame on each sample):")
     for name, w in app_frame.most_common(top):
         print(f"  {ms(w)}  {name[:140]}")
+    if callers_of:
+        print(f"\nCallers of {callers_of}:")
+        for chain, w in callers.most_common(top):
+            print(f"  {ms(w)}  {chain[:200]}")
 
 
 def intervals(trace: str, schema: str, label: str) -> None:
@@ -141,8 +161,10 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("trace")
     parser.add_argument("--top", type=int, default=15)
+    parser.add_argument("--process", help="only this process (for --all-processes traces)")
+    parser.add_argument("--callers", metavar="SYMBOL", help="also attribute samples containing SYMBOL to the app frames that called it")
     args = parser.parse_args()
-    time_profile(args.trace, args.top)
+    time_profile(args.trace, args.top, args.process, args.callers)
     intervals(args.trace, "potential-hangs", "Potential hangs")
     intervals(args.trace, "hitches", "Animation hitches")
 
