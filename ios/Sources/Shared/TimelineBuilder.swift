@@ -100,8 +100,13 @@ enum LonghouseDateParser {
             guard b[4] == 0x2D, b[7] == 0x2D, b[10] == 0x54, b[13] == 0x3A, b[16] == 0x3A,
                   let year = number(0, 4), let month = number(5, 2), let day = number(8, 2),
                   let hour = number(11, 2), let minute = number(14, 2), let second = number(17, 2),
-                  (1...12).contains(month), (1...31).contains(day), hour < 24, minute < 60, second < 60
+                  (1...12).contains(month), day >= 1, hour < 24, minute < 60, second < 60
             else { return nil }
+            // Impossible dates (Feb 30, Feb 29 in a common year) fall through
+            // to the formatter rather than rolling into the next month.
+            let isLeap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+            let monthDays = [31, isLeap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+            guard day <= monthDays[month - 1] else { return nil }
             var i = 19
             var fraction = 0.0
             if b[i] == 0x2E {
@@ -444,6 +449,9 @@ enum TimelineBuilder {
         var raw: [TimelineItem] = []
         var callIdToIndex: [String: Int] = [:]
         var fifoToolCallIndexes: [Int] = []
+        // A head index, not removeFirst(): that shifted the whole array for
+        // every unkeyed result, quadratic in a long tool-heavy transcript.
+        var fifoHead = 0
         /// Indexes of rows that absorbed a final-answer tool call. Their tool
         /// result is a bare ack with nothing left to render.
         var answerIndexes: Set<Int> = []
@@ -510,8 +518,9 @@ enum TimelineBuilder {
                 }
                 if matchedIndex == nil,
                    (event.toolCallId ?? "").isEmpty,
-                   !fifoToolCallIndexes.isEmpty {
-                    matchedIndex = fifoToolCallIndexes.removeFirst()
+                   fifoHead < fifoToolCallIndexes.count {
+                    matchedIndex = fifoToolCallIndexes[fifoHead]
+                    fifoHead += 1
                     resultPairing = .fifo
                 }
 
