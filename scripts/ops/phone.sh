@@ -20,6 +20,8 @@
 #   PHONE_OUT_DIR          capture directory (default: artifacts/phone)
 #   PHONE_TEAM_ID          Apple team id (default: read from the Apple Development cert)
 #   PHONE_DERIVED_DATA     xcodebuild derived data path
+#   PHONE_OPTIMIZED        1 (default): Debug compiled -O, whole-module, no debug
+#                          dylib, the way it ships; 0 for a plain -Onone build
 #   PHONE_LOG_SSH_TARGET   ssh alias of the host running the tenant (default: zerg)
 #   PHONE_LOG_CONTAINER    tenant container name (default: longhouse-david010)
 set -euo pipefail
@@ -117,6 +119,13 @@ cmd_build() {
     make ios-project >/dev/null
     mkdir -p "$DERIVED" "$OUT_DIR"
     local log="$OUT_DIR/build-$(stamp).log"
+    # The phone is where David uses the app, so it gets optimized code. Plain
+    # Debug (-Onone) made per-byte SSE parsing, key conversion, and decoding
+    # several times costlier in the phone's own traces; DEBUG hooks stay.
+    local -a optimize=()
+    if [[ "${PHONE_OPTIMIZED:-1}" == 1 ]]; then
+      optimize=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule GCC_OPTIMIZATION_LEVEL=s ENABLE_DEBUG_DYLIB=NO)
+    fi
     # The build's exit status is the verdict; a filtered pipeline would hide
     # a failure behind yesterday's still-present .app.
     if ! xcodebuild \
@@ -127,6 +136,7 @@ cmd_build() {
       -derivedDataPath "$DERIVED" \
       -allowProvisioningUpdates \
       DEVELOPMENT_TEAM="$team" \
+      ${optimize[@]+"${optimize[@]}"} \
       build > "$log" 2>&1; then
       grep -E "error:|BUILD FAILED" "$log" | head -20 >&2
       die "build failed; full log at $log"
