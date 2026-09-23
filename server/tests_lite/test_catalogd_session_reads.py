@@ -882,20 +882,35 @@ def _insert_attached_helm(connection, *, activity_at: datetime, observed_at: dat
     )
     connection.execute(
         LiveSessionThread.__table__.insert().values(
-            id=thread_id, session_id=session_id, provider="omp", branch_kind="root", is_primary=1,
-            created_at=observed_at, updated_at=observed_at,
+            id=thread_id,
+            session_id=session_id,
+            provider="omp",
+            branch_kind="root",
+            is_primary=1,
+            created_at=observed_at,
+            updated_at=observed_at,
         )
     )
     connection.execute(
         LiveSessionRun.__table__.insert().values(
-            id=run_id, thread_id=thread_id, provider="omp", launch_origin="longhouse_spawned", started_at=observed_at,
+            id=run_id,
+            thread_id=thread_id,
+            provider="omp",
+            launch_origin="longhouse_spawned",
+            started_at=observed_at,
         )
     )
     connection.execute(
         LiveSessionConnection.__table__.insert().values(
-            run_id=run_id, adapter_connection_id=connection_id, lease_generation=lease_generation,
-            control_plane="omp_helm", acquisition_kind="spawned_control", state="attached",
-            device_id="cinder", acquired_at=observed_at, last_health_at=observed_at,
+            run_id=run_id,
+            adapter_connection_id=connection_id,
+            lease_generation=lease_generation,
+            control_plane="omp_helm",
+            acquisition_kind="spawned_control",
+            state="attached",
+            device_id="cinder",
+            acquired_at=observed_at,
+            last_health_at=observed_at,
         )
     )
     _insert_control_head(
@@ -974,9 +989,7 @@ def test_timeline_page_is_stable_while_dead_heads_are_restamped(daemon_paths):
             session_id = str(uuid4())
             _insert_page_session(connection, session_id=session_id, activity_at=now - timedelta(days=2))
             _insert_control_head(connection, session_id=session_id, observed_at=dead_at)
-        open_ids = [
-            _insert_attached_helm(connection, activity_at=now - timedelta(days=1), observed_at=now) for _ in range(3)
-        ]
+        open_ids = [_insert_attached_helm(connection, activity_at=now - timedelta(days=1), observed_at=now) for _ in range(3)]
 
     store = CatalogStore(engine)
     first = _timeline_page(store, limit=5)
@@ -1022,14 +1035,22 @@ def test_timeline_window_admits_every_kind_of_current_work(daemon_paths):
         _insert_page_session(connection, session_id=running_id, activity_at=now - timedelta(days=1))
         connection.execute(
             LiveSessionThread.__table__.insert().values(
-                id=running_thread, session_id=running_id, provider="omp", branch_kind="root", is_primary=1,
-                created_at=now, updated_at=now,
+                id=running_thread,
+                session_id=running_id,
+                provider="omp",
+                branch_kind="root",
+                is_primary=1,
+                created_at=now,
+                updated_at=now,
             )
         )
         connection.execute(
             LiveSessionRun.__table__.insert().values(
-                id=running_run, thread_id=running_thread, provider="omp",
-                launch_origin="longhouse_spawned", started_at=now,
+                id=running_run,
+                thread_id=running_thread,
+                provider="omp",
+                launch_origin="longhouse_spawned",
+                started_at=now,
             )
         )
         connection.execute(
