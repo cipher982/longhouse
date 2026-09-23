@@ -2,17 +2,23 @@
 """Summarize an Instruments .trace for a terminal reader: where CPU went,
 which of the app's own frames it went through, and any hangs or hitches.
 
-    scripts/ops/trace_summary.py <file.trace> [--top 15]
+    scripts/ops/trace_summary.py <file.trace> [--top 15] [--process Longhouse]
+                                 [--callers SYMBOL]
 
 A raw `xctrace export` is tens of thousands of XML lines with id/ref
-de-duplication; this resolves the refs and prints a page.
+de-duplication; this resolves the refs and prints a page. The export goes to
+a file and is parsed as a stream, keeping only small lookup tables: an
+all-processes trace of a few minutes is gigabytes as a tree, which swapped
+the 8 GB bench until it dropped off the network.
 """
 from __future__ import annotations
 
 import argparse
 import collections
+import os
 import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 
 APP_BINARIES = {"Longhouse", "Longhouse.debug.dylib", "LonghouseWidgets"}
@@ -24,110 +30,145 @@ WAIT_LEAVES = {
     "semaphore_wait_trap", "__ulock_wait", "__ulock_wait2", "kevent_id",
     "kevent_qos", "__workq_kernreturn", "__semwait_signal", "__select",
 }
+SKIPPED_CALLER_PREFIXES = ("closure", "partial apply", "thunk", "outlined", "merged", "$s")
 
 
-def export(trace: str, schema: str) -> ET.Element | None:
+def export(trace: str, schema: str, directory: str) -> str | None:
+    """Export one table to a file; None when the trace has no such rows."""
+    path = os.path.join(directory, f"{schema}.xml")
     xpath = f'/trace-toc/run[@number="1"]/data/table[@schema="{schema}"]'
     proc = subprocess.run(
-        ["xcrun", "xctrace", "export", "--input", trace, "--xpath", xpath],
+        ["xcrun", "xctrace", "export", "--input", trace, "--xpath", xpath, "--output", path],
         capture_output=True,
         text=True,
     )
-    if proc.returncode != 0 or "<row" not in proc.stdout:
+    if proc.returncode != 0 or not os.path.exists(path):
         return None
-    return ET.fromstring(proc.stdout)
+    with open(path, "rb") as handle:
+        if b"<row" not in handle.read(1 << 20):
+            return None
+    return path
 
 
-def rows(root: ET.Element):
-    """Yield each row as a list of resolved elements (refs followed)."""
-    by_id: dict[str, ET.Element] = {}
+def stream_rows(path: str):
+    """Yield each row as {column tag: (fmt, text)}, plus "stack": a list of
+    (frame name, binary name), innermost first, for a backtrace column.
 
-    def resolve(el: ET.Element) -> ET.Element:
-        for sub in el.iter():
-            if "id" in sub.attrib:
-                by_id[sub.attrib["id"]] = sub
+    Values are kept per id as small tuples, never elements, so the tree is
+    cleared as it goes.
+    """
+    plain: dict[str, tuple[str, str]] = {}
+    binaries: dict[str, str] = {}
+    frames: dict[str, tuple[str, str]] = {}
+    backtraces: dict[str, list[tuple[str, str]]] = {}
+    # A repeated <tagged-backtrace ref=N/> names the tagged-backtrace's own
+    # id, not its inner backtrace's; resolving it through `backtraces`
+    # silently dropped every repeated stack.
+    tagged: dict[str, list[tuple[str, str]]] = {}
+    parents: list[ET.Element] = []
+
+    def frame_of(el: ET.Element) -> tuple[str, str]:
         ref = el.attrib.get("ref")
-        return by_id.get(ref, el) if ref else el
+        if ref:
+            return frames.get(ref, ("?", "?"))
+        return frames.get(el.attrib.get("id", ""), (el.attrib.get("name", "?"), "?"))
 
-    for row in root.iter("row"):
-        yield [resolve(child) for child in row]
+    def backtrace_of(el: ET.Element) -> list[tuple[str, str]]:
+        ref = el.attrib.get("ref")
+        if ref:
+            return backtraces.get(ref, [])
+        return backtraces.get(el.attrib.get("id", ""), [frame_of(f) for f in el.findall("frame")])
+
+    def tagged_stack(el: ET.Element) -> list[tuple[str, str]]:
+        # Frames sit either in an inner <backtrace> or directly in the tag.
+        inner = el.find("backtrace")
+        return backtrace_of(inner) if inner is not None else [frame_of(f) for f in el.findall("frame")]
+
+    for event, el in ET.iterparse(path, events=("start", "end")):
+        if event == "start":
+            parents.append(el)
+            continue
+        parents.pop()
+        tag = el.tag
+        if tag == "binary" and "id" in el.attrib:
+            binaries[el.attrib["id"]] = el.attrib.get("name", "?")
+        elif tag == "frame" and "id" in el.attrib:
+            binary = el.find("binary")
+            name = "?"
+            if binary is not None:
+                name = binaries.get(binary.attrib.get("id") or binary.attrib.get("ref", ""), "?")
+            frames[el.attrib["id"]] = (el.attrib.get("name", "?"), name)
+        elif tag == "backtrace" and "id" in el.attrib:
+            backtraces[el.attrib["id"]] = [frame_of(f) for f in el.findall("frame")]
+        elif tag == "tagged-backtrace" and "id" in el.attrib:
+            tagged[el.attrib["id"]] = tagged_stack(el)
+        elif tag == "row":
+            out: dict[str, object] = {}
+            for col in el:
+                if col.tag == "tagged-backtrace":
+                    ref = col.attrib.get("ref")
+                    out["stack"] = tagged.get(ref, []) if ref else tagged.get(col.attrib.get("id", ""), tagged_stack(col))
+                    continue
+                if col.tag == "backtrace":
+                    out["stack"] = backtrace_of(col)
+                    continue
+                ref = col.attrib.get("ref")
+                if ref:
+                    out[col.tag] = plain.get(ref, ("", ""))
+                else:
+                    value = (col.attrib.get("fmt", ""), (col.text or "").strip())
+                    if "id" in col.attrib:
+                        plain[col.attrib["id"]] = value
+                    out[col.tag] = value
+            yield out
+            # Drop the rows parsed so far; ids live on in the tables above.
+            if parents:
+                parents[-1].clear()
+        elif "id" in el.attrib and tag != "row":
+            plain.setdefault(el.attrib["id"], (el.attrib.get("fmt", ""), (el.text or "").strip()))
 
 
-def frame_binary(frame: ET.Element, binaries: dict[str, str]) -> str:
-    binary = frame.find("binary")
-    if binary is None:
-        return "?"
-    if "id" in binary.attrib:
-        binaries[binary.attrib["id"]] = binary.attrib.get("name", "?")
-        return binaries[binary.attrib["id"]]
-    return binaries.get(binary.attrib.get("ref", ""), "?")
-
-
-def time_profile(trace: str, top: int, process: str | None, callers_of: str | None = None) -> None:
-    root = export(trace, "time-profile")
-    if root is None:
+def time_profile(trace: str, directory: str, top: int, process: str | None, callers_of: str | None) -> None:
+    path = export(trace, "time-profile", directory)
+    if path is None:
         print("time-profile: none (template without CPU sampling)")
         return
-    frames: dict[str, ET.Element] = {}
-    backtraces: dict[str, list[ET.Element]] = {}
-    binaries: dict[str, str] = {}
     leaf = collections.Counter()
     app_frame = collections.Counter()
     threads = collections.Counter()
     callers = collections.Counter()
     total = 0
-    for cols in rows(root):
-        weight = 0
-        thread_name = "?"
-        running = True
-        in_process = process is None
-        stack: list[ET.Element] = []
-        for col in cols:
-            if col.tag == "process" and process is not None:
-                in_process = col.attrib.get("fmt", "").startswith(f"{process} (")
-            elif col.tag == "thread-state":
-                # Templates that sample every thread (App Launch) include
-                # blocked ones; only on-CPU time is cost.
-                running = col.attrib.get("fmt", "Running") == "Running"
-            elif col.tag == "weight":
-                weight = int(col.text or 0)
-            elif col.tag == "thread":
-                fmt = col.attrib.get("fmt", "?")
-                thread_name = "main" if fmt.startswith("Main Thread") else fmt.split(" (")[0]
-            elif col.tag in ("tagged-backtrace", "backtrace"):
-                bt = col.find("backtrace") if col.tag == "tagged-backtrace" else col
-                bt = bt if bt is not None else col
-                if "ref" in bt.attrib:
-                    stack = backtraces.get(bt.attrib["ref"], [])
-                else:
-                    stack = []
-                    for f in bt.iter("frame"):
-                        if "ref" in f.attrib:
-                            f = frames.get(f.attrib["ref"], f)
-                        else:
-                            frames[f.attrib.get("id", "")] = f
-                        stack.append(f)
-                    if "id" in bt.attrib:
-                        backtraces[bt.attrib["id"]] = stack
-        if not in_process or not stack or not running or stack[0].attrib.get("name") in WAIT_LEAVES:
+    for row in stream_rows(path):
+        stack = row.get("stack") or []
+        if not stack or stack[0][0] in WAIT_LEAVES:
             continue
+        # Templates that sample every thread (App Launch) include blocked
+        # ones; only on-CPU time is cost.
+        if row.get("thread-state", ("Running", ""))[0] not in ("Running", ""):
+            continue
+        if process is not None and not row.get("process", ("", ""))[0].startswith(f"{process} ("):
+            continue
+        try:
+            weight = int(row.get("weight", ("", "0"))[1] or 0)
+        except ValueError:
+            continue
+        thread_fmt = row.get("thread", ("?", ""))[0]
+        thread = "main" if thread_fmt.startswith("Main Thread") else thread_fmt.split(" (")[0]
         total += weight
-        threads[thread_name] += weight
-        leaf[stack[0].attrib.get("name", "?")] += weight
-        for f in stack:
-            if frame_binary(f, binaries) in APP_BINARIES:
-                app_frame[f.attrib.get("name", "?")] += weight
+        threads[thread] += weight
+        leaf[stack[0][0]] += weight
+        for name, binary in stack:
+            if binary in APP_BINARIES:
+                app_frame[name] += weight
                 break
         if callers_of:
-            names = [f.attrib.get("name", "?") for f in stack]
-            hits = [i for i, name in enumerate(names) if callers_of in name]
+            hits = [i for i, (name, _) in enumerate(stack) if callers_of in name]
             if hits:
                 # The nearest app frames above the outermost hit, closures
                 # and thunks skipped: who asked for this work.
                 above = [
-                    name for f, name in zip(stack[hits[-1] + 1:], names[hits[-1] + 1:])
-                    if frame_binary(f, binaries) in APP_BINARIES
-                    and not name.startswith(("closure", "partial apply", "thunk", "outlined", "merged", "$s"))
+                    name for name, binary in stack[hits[-1] + 1:]
+                    if binary in APP_BINARIES and not name.startswith(SKIPPED_CALLER_PREFIXES)
                 ][:3]
                 callers[" <- ".join(above) or "(no app frame)"] += weight
 
@@ -135,10 +176,10 @@ def time_profile(trace: str, top: int, process: str | None, callers_of: str | No
     print(f"CPU samples: {ms(total)} total")
     for name, w in threads.most_common(5):
         print(f"  {ms(w)}  thread {name}")
-    print(f"\nTop self-time symbols:")
+    print("\nTop self-time symbols:")
     for name, w in leaf.most_common(top):
         print(f"  {ms(w)}  {name[:140]}")
-    print(f"\nTop app frames (innermost Longhouse frame on each sample):")
+    print("\nTop app frames (innermost Longhouse frame on each sample):")
     for name, w in app_frame.most_common(top):
         print(f"  {ms(w)}  {name[:140]}")
     if callers_of:
@@ -147,14 +188,19 @@ def time_profile(trace: str, top: int, process: str | None, callers_of: str | No
             print(f"  {ms(w)}  {chain[:200]}")
 
 
-def intervals(trace: str, schema: str, label: str) -> None:
-    root = export(trace, schema)
-    if root is None:
+def intervals(trace: str, directory: str, schema: str, label: str, process: str | None) -> None:
+    path = export(trace, schema, directory)
+    if path is None:
         return
-    found = list(rows(root))
+    found = []
+    for row in stream_rows(path):
+        values = [fmt or text for key, (fmt, text) in row.items() if key != "stack"]
+        if process is not None and not any(v.startswith(f"{process} (") for v in values):
+            continue
+        found.append(values)
     print(f"\n{label}: {len(found)}")
-    for cols in found[:20]:
-        print("  " + " | ".join(c.attrib.get("fmt", c.text or "")[:80] for c in cols if c.attrib.get("fmt") or c.text))
+    for values in found[:20]:
+        print("  " + " | ".join(v[:80] for v in values if v))
 
 
 def main() -> None:
@@ -164,9 +210,10 @@ def main() -> None:
     parser.add_argument("--process", help="only this process (for --all-processes traces)")
     parser.add_argument("--callers", metavar="SYMBOL", help="also attribute samples containing SYMBOL to the app frames that called it")
     args = parser.parse_args()
-    time_profile(args.trace, args.top, args.process, args.callers)
-    intervals(args.trace, "potential-hangs", "Potential hangs")
-    intervals(args.trace, "hitches", "Animation hitches")
+    with tempfile.TemporaryDirectory(prefix="trace-summary-") as directory:
+        time_profile(args.trace, directory, args.top, args.process, args.callers)
+        intervals(args.trace, directory, "potential-hangs", "Potential hangs", args.process)
+        intervals(args.trace, directory, "hitches", "Animation hitches", args.process)
 
 
 if __name__ == "__main__":
