@@ -25,7 +25,9 @@
 #                       never pays, which buried the app's own hotspots.
 #   TOUR_OUT_DIR        output directory (default: /tmp/agents/ios-tour)
 #   TOUR_TEMPLATE       Instruments template for the tour (default: Time
-#                       Profiler; "Leaks" or "Allocations" for memory)
+#                       Profiler). The Leaks template attaches before libmalloc
+#                       is up and slows the app past XCUITest's timeouts on the
+#                       bench; leaks are checked after the tour instead.
 #   SIM_UDID / PHONE_DEVICE  pick the simulator or phone
 set -euo pipefail
 
@@ -65,7 +67,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-declare -a runner_env=(TEST_RUNNER_LONGHOUSE_RUN_LIVE_TOUR=1)
+declare -a runner_env=(TEST_RUNNER_LONGHOUSE_RUN_LIVE_TOUR=1 TEST_RUNNER_LONGHOUSE_TOUR_HOLD_SECONDS=20)
 declare -a signing=()
 # Hitches is device-only; asking for it on a simulator fails the whole
 # recording, CPU samples included.
@@ -158,8 +160,24 @@ if [[ -n "$pid" ]]; then
     --time-limit 600s --output "$trace" > "$BASE-xctrace.log" 2>&1 &
   recorder=$!
 fi
+# Leaks: once the tour has opened and closed its sessions, snapshot the
+# still-running app with leaks(1). Costs nothing during the tour.
+leaks_watch=""
+if [[ "$TARGET" == simulator && -n "$pid" ]]; then
+  (
+    while kill -0 "$tester" 2>/dev/null; do
+      if grep -q "IOS_LIVE_TOUR_METRIC" "$BASE-test.log" 2>/dev/null && kill -0 "$pid" 2>/dev/null; then
+        leaks "$pid" > "$BASE-leaks.txt" 2>&1 || true
+        break
+      fi
+      sleep 0.2
+    done
+  ) &
+  leaks_watch=$!
+fi
 test_status=0
 wait "$tester" || test_status=$?
+[[ -n "$leaks_watch" ]] && wait "$leaks_watch" 2>/dev/null || true
 echo "tour: $((SECONDS - test_started))s" >&2
 if [[ -n "$recorder" ]]; then
   kill -INT "$recorder" 2>/dev/null || true
@@ -214,6 +232,10 @@ if [[ -s "$BASE-app.log" ]]; then
   echo "app milestones ($BASE-app.log):"
   grep -E "timeline (first paint|cache (hit|miss)|refresh finished)|session open stage=(start|request_start|detail_request_start|stop|history_fill)|stall" "$BASE-app.log" \
     | sed -E 's/^([0-9-]+ )?([0-9:.]+).*\[([A-Za-z]+)\] /\2 \3 /' | cut -c1-170 | head -60
+fi
+if [[ -s "$BASE-leaks.txt" ]]; then
+  echo; echo "== leaks after the tour ($BASE-leaks.txt):"
+  grep -E "^Process .*: [0-9]+ leaks? for|leaked bytes|^ *[0-9]+ \(|ROOT CYCLE|ROOT LEAK" "$BASE-leaks.txt" | head -40
 fi
 if [[ -d "$launch_trace" ]]; then
   echo; echo "== cold launch: $launch_trace"

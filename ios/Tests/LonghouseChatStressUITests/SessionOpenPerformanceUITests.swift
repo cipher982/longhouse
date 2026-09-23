@@ -313,6 +313,10 @@ final class SessionOpenPerformanceUITests: XCTestCase {
         metrics.append("warm_resume_to_timeline_ms=\(elapsedMs(since: resumeStartedAt))")
 
         print((["IOS_LIVE_TOUR_METRIC"] + metrics).joined(separator: " "))
+        // Leave the settled app running so the harness can inspect it (leaks).
+        if let hold = ProcessInfo.processInfo.environment["LONGHOUSE_TOUR_HOLD_SECONDS"].flatMap(Double.init) {
+            Thread.sleep(forTimeInterval: hold)
+        }
     }
 
     /// Physical-device dogfood profiler. This is intentionally opt-in because
