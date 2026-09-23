@@ -81,6 +81,25 @@ struct TimelineInboxLayoutTests {
         #expect(layout.open.map(\.id) == ["stalled"])
     }
 
+    @Test
+    func residentCapKeepsEveryOpenRowAndCutsHistoryInstead() {
+        // The quiet-but-open Helm row carries the oldest anchor, so a naive
+        // prefix(limit) drops exactly the session the server tiered into view.
+        let quietOpen = session(
+            id: "quiet-open",
+            facts: makeSessionStateFacts(activity: "quiescent", workingSet: "open")
+        )
+        let history = (0..<6).map {
+            session(id: "history-\($0)", facts: makeSessionStateFacts(activity: "quiescent", workingSet: "history"))
+        }
+
+        let capped = SessionSummary.residentCap(history + [quietOpen], limit: 3)
+
+        #expect(capped.count == 3)
+        #expect(capped.first?.id == "quiet-open")
+        #expect(capped.dropFirst().map(\.id) == ["history-0", "history-1"])
+    }
+
     private func session(id: String, facts: SessionStateFacts) -> SessionSummary {
         SessionSummary(
             id: id,

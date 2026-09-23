@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { isOnShelf } from "../lib/timelineInbox";
 import {
   connectTimelineSessionsStream,
   type AgentSessionFilters,
@@ -27,9 +28,15 @@ function upsertTimelineSession(
     event.session,
     ...current.sessions.filter((session) => session.thread_id !== event.session.thread_id),
   ]);
+  // The cap is history's, never the shelf's. The server admits every open
+  // session by predicate, so dropping whichever row has the oldest anchor
+  // drops exactly the quiet-but-open session that admission exists to protect:
+  // a Helm session with a terminal attached and no transcript write for a day.
+  const shelf = sessions.filter((session) => isOnShelf(session));
+  const rest = sessions.filter((session) => !isOnShelf(session));
 
   return {
-    sessions: typeof limit === "number" ? sessions.slice(0, limit) : sessions,
+    sessions: [...shelf, ...(typeof limit === "number" ? rest.slice(0, Math.max(0, limit - shelf.length)) : rest)],
     total: event.total ?? current.total,
     has_real_sessions: event.has_real_sessions ?? current.has_real_sessions,
   };

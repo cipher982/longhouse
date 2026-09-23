@@ -324,6 +324,14 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
 
     var isClosed: Bool { stateFacts.dispositionState == "closed" }
 
+    /// Is this session part of what the user is currently carrying?
+    ///
+    /// Reads the server's `working_set` tier, never the disposition: a closed
+    /// session is never open, and an idle session with no terminal is history
+    /// even though its disposition still reads open. Server-side, so the phone
+    /// and the page cut cannot disagree about what "open" means.
+    var isOpen: Bool { stateFacts.workingSet == "open" }
+
     var isBlocked: Bool { isBlocked(asOf: Date()) }
     var isUserActive: Bool { userState == nil || userState == "active" }
     var needsAttention: Bool {
@@ -471,6 +479,19 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         let attention = active.filter(\.needsAttention)
         let recent = active.filter { !$0.needsAttention }
         return Array((attention + recent).prefix(limit))
+    }
+
+    /// Cap a resident timeline list to `limit` rows without cutting the shelf.
+    ///
+    /// The limit belongs to history. The server admits every open session by
+    /// predicate, so dropping whichever row has the oldest anchor drops exactly
+    /// the quiet-but-open session that admission exists to protect: a Helm
+    /// session with a terminal attached and no transcript write for a day.
+    static func residentCap(_ sessions: [SessionSummary], limit: Int) -> [SessionSummary] {
+        guard sessions.count > limit else { return sessions }
+        let open = sessions.filter(\.isOpen)
+        let history = sessions.filter { !$0.isOpen }
+        return open + history.prefix(max(0, limit - open.count))
     }
 }
 

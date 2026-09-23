@@ -145,6 +145,11 @@ SHADOW_STATE_FACT_HEAD_LIMIT = 256
 SHADOW_STATE_HEALTH_SAMPLE_LIMIT = 100
 SHADOW_STATE_HEALTH_WINDOW = timedelta(minutes=15)
 _CONTROL_LEASE_TTL = timedelta(minutes=15)
+# How long a dispatched Console turn counts as in flight for page admission
+# once its own state stops being touched. Matches the control lease horizon:
+# a turn nobody has advanced in fifteen minutes is not current work, and
+# `live_console_turns` keeps such rows forever.
+_CONSOLE_TURN_FRESHNESS = timedelta(minutes=15)
 _TRUTHY_ENV = frozenset({"1", "true", "yes", "on"})
 _SHADOW_PARITY_ENV = "LONGHOUSE_SHADOW_PARITY_ENABLED"
 _MAX_PARITY_DELTAS = 2_048
@@ -161,42 +166,12 @@ def _has_durable_timeline_content(row) -> Any:
     )
 
 
-def _timeline_window_order_at(session_id_column, activity_at) -> Any:
-    """Newest live-evidence observation, falling back to transcript activity.
+def _run_bound_activity_is_live(*, session_id, thread_id, observed_at: datetime, prefix: str) -> Any:
+    """A run-bound activity head saying the provider loop is thinking or running."""
 
-    The page window decides which sessions a client ever sees, and the client
-    ranks what it receives by the card anchor the projector derives from these
-    same heads. Ordering the window by transcript recency alone dropped a
-    live-but-quiet Helm session below the page cut — terminal attached, no
-    transcript write for a day — so it left Live now entirely while the browser
-    would have ranked it first. ``_empty_human_helm_is_open`` already consults
-    these heads for admission; this makes the window *order* agree with the same
-    evidence. ``max`` here is SQLite's two-argument scalar function, and the
-    head term is coalesced first so both arguments are non-null.
-    """
-
-    head = FactHead.__table__
-    live_at = (
-        select(func.max(head.c.observed_at))
-        .where(head.c.session_id == session_id_column, head.c.family.in_(("activity", "control", "delegation")))
-        .scalar_subquery()
-    )
-    return func.max(func.coalesce(live_at, activity_at), activity_at)
-
-
-def _empty_human_helm_is_open(*, session_id, thread_id, observed_at: datetime) -> Any:
-    """Admit an empty human Helm only on canonical current-work evidence.
-
-    Empty shells are not history. A human terminal launch enters the timeline
-    only while a run-bound activity head says it is executing or an exact,
-    fresh control head says its terminal is attached. The served projector
-    still owns the final working-set classification from these same heads.
-    """
-
-    run = LiveSessionRun.__table__.alias("timeline_empty_run")
-    thread = LiveSessionThread.__table__.alias("timeline_empty_thread")
-    control = LiveSessionConnection.__table__.alias("timeline_empty_control")
-    head = FactHead.__table__.alias("timeline_empty_head")
+    run = LiveSessionRun.__table__.alias(f"{prefix}_run")
+    thread = LiveSessionThread.__table__.alias(f"{prefix}_thread")
+    head = FactHead.__table__.alias(f"{prefix}_activity_head")
     value = head.c.value_json
 
     active_activity = (
@@ -224,6 +199,18 @@ def _empty_human_helm_is_open(*, session_id, thread_id, observed_at: datetime) -
         )
         .exists()
     )
+    return active_activity
+
+
+def _attached_terminal_is_live(*, session_id, thread_id, observed_at: datetime, prefix: str) -> Any:
+    """An exact, fresh control head saying a human terminal is attached."""
+
+    run = LiveSessionRun.__table__.alias(f"{prefix}_run")
+    thread = LiveSessionThread.__table__.alias(f"{prefix}_thread")
+    control = LiveSessionConnection.__table__.alias(f"{prefix}_control")
+    head = FactHead.__table__.alias(f"{prefix}_control_head")
+    value = head.c.value_json
+
     control_valid_until = func.julianday(head.c.observed_at) + (cast(func.json_extract(value, "$.lease_ttl_ms"), Float) / 86_400_000.0)
     attached_terminal = (
         select(1)
@@ -259,7 +246,145 @@ def _empty_human_helm_is_open(*, session_id, thread_id, observed_at: datetime) -
         )
         .exists()
     )
-    return or_(active_activity, attached_terminal)
+    return attached_terminal
+
+
+def _pending_interaction_is_open(*, session_id, observed_at: datetime, prefix: str) -> Any:
+    """An unexpired provider interaction nobody has answered.
+
+    Mirrors the canonical pending read the served pending-interaction axis is
+    built from (`status = 'pending'`, `expires_at` in the future), so a
+    Needs-you row cannot be paged out of the window.
+    """
+
+    interaction = LiveInteractionRequest.__table__.alias(f"{prefix}_interaction")
+    return (
+        select(1)
+        .select_from(interaction)
+        .where(
+            interaction.c.session_id == session_id,
+            interaction.c.status == "pending",
+            or_(interaction.c.expires_at.is_(None), interaction.c.expires_at > observed_at),
+        )
+        .exists()
+    )
+
+
+def _delegated_work_is_pending(*, session_id, observed_at: datetime, prefix: str) -> Any:
+    """A fresh delegation head reporting background work still in flight."""
+
+    head = FactHead.__table__.alias(f"{prefix}_delegation_head")
+    return (
+        select(1)
+        .select_from(head)
+        .where(
+            head.c.session_id == session_id,
+            head.c.family == "delegation",
+            head.c.valid_until > observed_at,
+            cast(func.json_extract(head.c.value_json, "$.count"), Float) > 0,
+        )
+        .exists()
+    )
+
+
+def _console_turn_is_in_flight(*, session_id, observed_at: datetime, prefix: str) -> Any:
+    """A Console turn dispatched and not yet terminal, and recently touched.
+
+    Console dispatches are open before they carry any activity evidence, so the
+    activity branch cannot see them. The gate is the turn's own `updated_at`:
+    `live_console_turns` retains stale in-flight rows whose runs never ended
+    (105 of them on the dogfood catalog), and admitting those would refill the
+    page with the same dead rows this predicate exists to keep out.
+    """
+
+    turn = LiveConsoleTurn.__table__.alias(f"{prefix}_console_turn")
+    return (
+        select(1)
+        .select_from(turn)
+        .where(
+            turn.c.session_id == session_id,
+            turn.c.state.in_(("queued", "starting", "active", "draining")),
+            turn.c.terminal_at.is_(None),
+            turn.c.updated_at > observed_at - _CONSOLE_TURN_FRESHNESS,
+        )
+        .exists()
+    )
+
+
+def _empty_human_helm_is_open(*, session_id, thread_id, observed_at: datetime) -> Any:
+    """Admit an empty human Helm only on canonical current-work evidence.
+
+    Empty shells are not history. A human terminal launch enters the timeline
+    only while a run-bound activity head says it is executing or an exact,
+    fresh control head says its terminal is attached. The served projector
+    still owns the final working-set classification from these same heads.
+    """
+
+    return or_(
+        _run_bound_activity_is_live(
+            session_id=session_id,
+            thread_id=thread_id,
+            observed_at=observed_at,
+            prefix="timeline_empty",
+        ),
+        _attached_terminal_is_live(
+            session_id=session_id,
+            thread_id=thread_id,
+            observed_at=observed_at,
+            prefix="timeline_empty",
+        ),
+    )
+
+
+def _timeline_current_work_is_open(*, session_id, thread_id, observed_at: datetime) -> Any:
+    """SQL superset of the served `open` working set, for page admission and rank.
+
+    The page window decides which sessions a client is ever told about, and the
+    client then ranks what it receives. Both must agree on what a person has
+    open right now, and the window may not rank on anything else. Ordering it by
+    the newest reducer-head write put a rotating batch of *dead* sessions
+    (re-stamped `detached` control heads, hundreds of them) at the top of a
+    40-row page, so live sessions were pushed out every second, the client
+    deleted every row that left the page, and re-added it on the way back in.
+
+    This is deliberately a *superset* of `_working_set` in
+    `zerg.services.session_state_contract`, branch for branch against that
+    function: attached terminal, run-bound activity, pending interaction,
+    pending delegation, and an in-flight Console turn. Over-inclusion costs a
+    page slot and can never mislabel a row — the served projector classifies
+    every returned row from the same snapshot and owns `working_set` — while
+    under-inclusion would page a genuinely open session out of view.
+    """
+
+    return or_(
+        _run_bound_activity_is_live(
+            session_id=session_id,
+            thread_id=thread_id,
+            observed_at=observed_at,
+            prefix="timeline_open_activity",
+        ),
+        _attached_terminal_is_live(
+            session_id=session_id,
+            thread_id=thread_id,
+            observed_at=observed_at,
+            prefix="timeline_open_terminal",
+        ),
+        _pending_interaction_is_open(
+            session_id=session_id,
+            observed_at=observed_at,
+            prefix="timeline_open_interaction",
+        ),
+        _delegated_work_is_pending(
+            session_id=session_id,
+            observed_at=observed_at,
+            prefix="timeline_open_delegation",
+        ),
+        _console_turn_is_in_flight(
+            session_id=session_id,
+            observed_at=observed_at,
+            prefix="timeline_open_console",
+        ),
+    )
 
 
 _MACHINE_HEALTH_HEARTBEAT_FIELDS = frozenset(
@@ -6041,21 +6166,28 @@ class CatalogStore:
                     storage.c.last_console_result_at > storage.c.last_read_at,
                 ),
             )
-            legacy_order_at = _timeline_window_order_at(
-                card.c.session_id,
-                func.coalesce(card.c.last_activity_at, card.c.started_at),
+            legacy_activity_at = func.coalesce(card.c.last_activity_at, card.c.started_at)
+            storage_activity_at = func.coalesce(storage.c.last_activity_at, storage.c.started_at)
+            # Current work is admitted by predicate, not by rank: a session the
+            # served state calls open must survive the recency window and the
+            # page cut no matter how quiet its transcript is.
+            legacy_open = _timeline_current_work_is_open(
+                session_id=card.c.session_id,
+                thread_id=catalog.c.primary_thread_id,
+                observed_at=observed_at,
             )
-            storage_order_at = _timeline_window_order_at(
-                storage.c.session_id,
-                func.coalesce(storage.c.last_activity_at, storage.c.started_at),
+            storage_open = _timeline_current_work_is_open(
+                session_id=storage.c.session_id,
+                thread_id=catalog.c.primary_thread_id,
+                observed_at=observed_at,
             )
             legacy_where = [
-                or_(legacy_order_at >= since, legacy_unread),
+                or_(legacy_activity_at >= since, legacy_unread, legacy_open),
                 catalog.c.user_state.notin_(("archived", "snoozed", "deleted")),
                 ~select(storage.c.session_id).where(storage.c.session_id == card.c.session_id).exists(),
             ]
             storage_where = [
-                or_(storage_order_at >= since, storage_unread),
+                or_(storage_activity_at >= since, storage_unread, storage_open),
                 storage.c.user_state.notin_(("archived", "snoozed", "deleted")),
                 ~select(tombstones.c.session_id).where(tombstones.c.session_id == storage.c.session_id).exists(),
             ]
@@ -6187,29 +6319,39 @@ class CatalogStore:
             candidates = union_all(
                 select(
                     card.c.session_id.label("session_id"),
-                    legacy_order_at.label("order_at"),
+                    legacy_activity_at.label("order_at"),
                     case((legacy_unread, 1), else_=0).label("unread"),
+                    case((legacy_open, 1), else_=0).label("open_now"),
                 )
                 .select_from(joined)
                 .where(*legacy_where),
                 select(
                     storage.c.session_id.label("session_id"),
-                    storage_order_at.label("order_at"),
+                    storage_activity_at.label("order_at"),
                     case((storage_unread, 1), else_=0).label("unread"),
+                    case((storage_open, 1), else_=0).label("open_now"),
                 )
                 .select_from(storage_joined)
                 .where(*storage_where),
             ).subquery()
             total = int(connection.execute(select(func.count()).select_from(candidates)).scalar_one())
-            # Unread first, then the newest live evidence: a session the served
-            # state calls open, or whose Console result nobody has read, must
-            # never be paged out of the first window. Clients keep doing their
-            # own visual sort.
+            # Unread first, then current work, then transcript recency. A
+            # session the served state calls open, or whose Console result
+            # nobody has read, must never be paged out of the first window.
+            # Nothing here may rank on when the reducer last wrote a head:
+            # that clock moves while the session does not, which is what made
+            # the page rotate under a watcher. Clients keep doing their own
+            # visual sort.
             session_ids = [
                 str(value)
                 for value in connection.execute(
                     select(candidates.c.session_id)
-                    .order_by(candidates.c.unread.desc(), candidates.c.order_at.desc(), candidates.c.session_id.desc())
+                    .order_by(
+                        candidates.c.unread.desc(),
+                        candidates.c.open_now.desc(),
+                        candidates.c.order_at.desc(),
+                        candidates.c.session_id.desc(),
+                    )
                     .limit(limit)
                     .offset(offset)
                 ).scalars()

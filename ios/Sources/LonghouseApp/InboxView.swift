@@ -70,7 +70,7 @@ func buildTimelineInboxLayout(_ sessions: [SessionSummary]) -> TimelineInboxLayo
     var recent: [SessionSummary] = []
 
     for session in sessions {
-        if session.stateFacts.workingSet == "open" {
+        if session.isOpen {
             if session.needsAttention {
                 needsYou.append(session)
             } else {
@@ -1501,9 +1501,7 @@ final class TimelineViewModel: ObservableObject {
             .map { (date: anchorDate(for: $0.element), index: $0.offset, session: $0.element) }
             .sorted { $0.date != $1.date ? $0.date > $1.date : $0.index < $1.index }
             .map(\.session)
-        if current.count > limit {
-            current = Array(current.prefix(limit))
-        }
+        current = SessionSummary.residentCap(current, limit: limit)
         applySessions(current, source: "stream")
         schedulePersist(sessions: current, appState: appState)
         reloadWidgetTimelineIfNeeded()

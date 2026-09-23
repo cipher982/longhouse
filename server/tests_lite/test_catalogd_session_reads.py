@@ -37,6 +37,7 @@ from zerg.catalogd.server import CatalogDaemon
 from zerg.catalogd.store import CatalogStore
 from zerg.routers import agents_sessions
 from zerg.models.live_store import LiveControlLease
+from zerg.models.live_store import LiveConsoleTurn
 from zerg.models.live_store import LiveDeviceToken
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveInteractionRequest
@@ -786,71 +787,151 @@ def test_canonical_storage_timeline_filters_fall_back_to_live_owner(daemon_paths
     engine.dispose()
 
 
-def test_timeline_window_orders_by_live_evidence_not_only_transcript(daemon_paths):
+def _timeline_page(store: CatalogStore, *, limit: int, days_back: int = 7) -> list[str]:
+    result = store.list_session_timeline(
+        project=None,
+        provider=None,
+        environment=None,
+        include_test=False,
+        hide_autonomous=True,
+        include_automation=False,
+        device_id=None,
+        days_back=days_back,
+        limit=limit,
+        offset=0,
+    )
+    return [row["facts"]["catalog"]["session_id"] for row in result["rows"]]
+
+
+def _insert_page_session(connection, *, session_id: str, activity_at: datetime) -> None:
+    """One ordinary catalog + card row at ``activity_at``."""
+
+    connection.execute(
+        LiveSessionCatalog.__table__.insert().values(
+            session_id=session_id,
+            provider="omp",
+            environment="development",
+            project="zerg",
+            device_id="cinder",
+            device_name="cinder",
+            cwd="/workspace/zerg",
+            started_at=activity_at,
+            last_activity_at=activity_at,
+        )
+    )
+    connection.execute(
+        LiveTimelineCard.__table__.insert().values(
+            session_id=session_id,
+            provider="omp",
+            environment="development",
+            project="zerg",
+            device_id="cinder",
+            cwd="/workspace/zerg",
+            started_at=activity_at,
+            last_activity_at=activity_at,
+            user_messages=1,
+            parser_revision="parser-v2",
+        )
+    )
+
+
+def _insert_control_head(connection, *, session_id: str, observed_at: datetime, **overrides) -> str:
+    """A control head for one session, returning its subject key for re-stamping."""
+
+    subject_key = overrides.pop("subject_key", f"connection:{uuid4()}:{uuid4()}")
+    source = overrides.pop("source", "omp_helm_scan")
+    source_epoch = overrides.pop("source_epoch", str(uuid4()))
+    value = {
+        "authority_class": "provider_control",
+        "session_id": session_id,
+        "state": "detached",
+        "terminal_attached": 0,
+        "lease_ttl_ms": 900_000,
+        "observed_at": observed_at.isoformat(),
+        **overrides.pop("value", {}),
+    }
+    connection.execute(
+        FactHead.__table__.insert().values(
+            family="control",
+            subject_key=subject_key,
+            source=source,
+            source_epoch=source_epoch,
+            session_id=session_id,
+            ordering_mode="latest",
+            source_seq=1,
+            evidence_hash=hashlib.sha256(f"{subject_key}{observed_at.isoformat()}".encode()).hexdigest(),
+            observed_at=observed_at,
+            value_json=json.dumps(value),
+            updated_commit_seq=1,
+            received_at=observed_at,
+        )
+    )
+    return subject_key
+
+
+def _insert_attached_helm(connection, *, activity_at: datetime, observed_at: datetime) -> str:
+    """A human Helm with an exact, fresh attached terminal and a quiet transcript."""
+
+    session_id, thread_id, run_id = str(uuid4()), str(uuid4()), str(uuid4())
+    connection_id, lease_generation = str(uuid4()), str(uuid4())
+    _insert_page_session(connection, session_id=session_id, activity_at=activity_at)
+    connection.execute(
+        LiveSessionCatalog.__table__.update()
+        .where(LiveSessionCatalog.__table__.c.session_id == session_id)
+        .values(primary_thread_id=thread_id, launch_actor="human_shell", launch_surface="terminal")
+    )
+    connection.execute(
+        LiveSessionThread.__table__.insert().values(
+            id=thread_id, session_id=session_id, provider="omp", branch_kind="root", is_primary=1,
+            created_at=observed_at, updated_at=observed_at,
+        )
+    )
+    connection.execute(
+        LiveSessionRun.__table__.insert().values(
+            id=run_id, thread_id=thread_id, provider="omp", launch_origin="longhouse_spawned", started_at=observed_at,
+        )
+    )
+    connection.execute(
+        LiveSessionConnection.__table__.insert().values(
+            run_id=run_id, adapter_connection_id=connection_id, lease_generation=lease_generation,
+            control_plane="omp_helm", acquisition_kind="spawned_control", state="attached",
+            device_id="cinder", acquired_at=observed_at, last_health_at=observed_at,
+        )
+    )
+    _insert_control_head(
+        connection,
+        session_id=session_id,
+        observed_at=observed_at,
+        source="omp_helm_scan",
+        value={
+            "run_id": run_id,
+            "connection_id": connection_id,
+            "lease_generation": lease_generation,
+            "state": "attached",
+            "terminal_attached": 1,
+        },
+    )
+    return session_id
+
+
+def test_timeline_window_keeps_a_quiet_attached_helm_session(daemon_paths):
     """A session the served state calls open cannot be paged out of the window.
 
-    The browser ranks the cards it receives by the anchor the projector derives
-    from activity/control heads. Picking the window by transcript recency alone
-    dropped a Helm session whose terminal was attached but whose transcript had
-    been quiet for a day: it left Live now entirely, while the browser would
-    have ranked the same session first.
+    A Helm session can be open with a terminal attached and no transcript write
+    for a day. Ordering the window by transcript recency alone put it outside
+    the first page — it left the app entirely while its own card anchor still
+    sorted it first. The window keeps it by tier now, not by luck.
     """
 
     database_path, _socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
     now = datetime.now(UTC)
-    quiet_at = now - timedelta(days=1)
-    quiet_id = str(uuid4())
-    busy_ids = [str(uuid4()) for _ in range(2)]
 
     with engine.begin() as connection:
-        for index, session_id in enumerate([quiet_id, *busy_ids]):
-            activity_at = quiet_at if session_id == quiet_id else now - timedelta(minutes=index)
-            connection.execute(
-                LiveSessionCatalog.__table__.insert().values(
-                    session_id=session_id,
-                    provider="omp",
-                    environment="development",
-                    project="zerg",
-                    device_id="cinder",
-                    device_name="cinder",
-                    cwd="/workspace/zerg",
-                    started_at=activity_at,
-                    last_activity_at=activity_at,
-                )
-            )
-            connection.execute(
-                LiveTimelineCard.__table__.insert().values(
-                    session_id=session_id,
-                    provider="omp",
-                    environment="development",
-                    project="zerg",
-                    device_id="cinder",
-                    cwd="/workspace/zerg",
-                    started_at=activity_at,
-                    last_activity_at=activity_at,
-                    user_messages=1,
-                    parser_revision="parser-v2",
-                )
-            )
-        # The quiet session's only recent evidence is its attached terminal.
-        connection.execute(
-            FactHead.__table__.insert().values(
-                family="control",
-                subject_key=f"connection:{uuid4()}",
-                source="omp_helm_scan",
-                source_epoch=str(uuid4()),
-                session_id=quiet_id,
-                ordering_mode="latest",
-                source_seq=1,
-                evidence_hash=hashlib.sha256(quiet_id.encode()).hexdigest(),
-                observed_at=now,
-                value_json=json.dumps({"authority_class": "provider_control", "observed_at": now.isoformat()}),
-                updated_commit_seq=1,
-                received_at=now,
-            )
-        )
+        for index in range(20):
+            _insert_page_session(connection, session_id=str(uuid4()), activity_at=now - timedelta(minutes=index))
+        quiet_id = _insert_attached_helm(connection, activity_at=now - timedelta(days=1), observed_at=now)
 
     result = CatalogStore(engine).list_session_timeline(
         project=None,
@@ -861,13 +942,192 @@ def test_timeline_window_orders_by_live_evidence_not_only_transcript(daemon_path
         include_automation=False,
         device_id=None,
         days_back=7,
-        limit=2,
+        limit=5,
         offset=0,
     )
 
     page = [row["facts"]["catalog"]["session_id"] for row in result["rows"]]
-    assert result["total"] == 3
+    assert result["total"] == 21
+    assert quiet_id in page
     assert page[0] == quiet_id
+    engine.dispose()
+
+
+def test_timeline_page_is_stable_while_dead_heads_are_restamped(daemon_paths):
+    """Dead sessions must not take the page from live ones, read after read.
+
+    Every Helm provider ships a control fact for each retained state file, dead
+    or alive, stamped with the heartbeat's own time. Those heads are re-stamped
+    continuously, so ranking the page on "newest head write" served a rotating
+    batch of dead sessions and pushed live ones out — the iOS timeline then
+    deleted every row that left and re-added it on the way back in.
+    """
+
+    database_path, _socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC)
+    dead_at = now + timedelta(seconds=10)
+
+    with engine.begin() as connection:
+        for index in range(30):
+            session_id = str(uuid4())
+            _insert_page_session(connection, session_id=session_id, activity_at=now - timedelta(days=2))
+            _insert_control_head(connection, session_id=session_id, observed_at=dead_at)
+        open_ids = [
+            _insert_attached_helm(connection, activity_at=now - timedelta(days=1), observed_at=now) for _ in range(3)
+        ]
+
+    store = CatalogStore(engine)
+    first = _timeline_page(store, limit=5)
+
+    # The next engine sweep re-stamps every control head it carries, including
+    # the ones that say the session is not live.
+    with engine.begin() as connection:
+        connection.execute(
+            FactHead.__table__.update()
+            .where(FactHead.__table__.c.family == "control")
+            .values(observed_at=dead_at + timedelta(seconds=10), received_at=dead_at + timedelta(seconds=10))
+        )
+
+    second = _timeline_page(store, limit=5)
+    assert second == first
+    for session_id in open_ids:
+        assert session_id in second
+    engine.dispose()
+
+
+def test_timeline_window_admits_every_kind_of_current_work(daemon_paths):
+    """Each branch of the served open tier survives the page cut.
+
+    The SQL predicate is a superset of `_working_set`, so a Needs-you row, a
+    session waiting on delegated work, or a Console turn dispatched without
+    activity evidence yet cannot be hidden behind newer history.
+    """
+
+    database_path, _socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC)
+    activity_until = now + timedelta(minutes=5)
+
+    with engine.begin() as connection:
+        for index in range(20):
+            _insert_page_session(connection, session_id=str(uuid4()), activity_at=now - timedelta(minutes=index))
+
+        attached_id = _insert_attached_helm(connection, activity_at=now - timedelta(days=1), observed_at=now)
+
+        # Running, run-bound activity with no terminal at all.
+        running_id, running_thread, running_run = str(uuid4()), str(uuid4()), str(uuid4())
+        _insert_page_session(connection, session_id=running_id, activity_at=now - timedelta(days=1))
+        connection.execute(
+            LiveSessionThread.__table__.insert().values(
+                id=running_thread, session_id=running_id, provider="omp", branch_kind="root", is_primary=1,
+                created_at=now, updated_at=now,
+            )
+        )
+        connection.execute(
+            LiveSessionRun.__table__.insert().values(
+                id=running_run, thread_id=running_thread, provider="omp",
+                launch_origin="longhouse_spawned", started_at=now,
+            )
+        )
+        connection.execute(
+            FactHead.__table__.insert().values(
+                family="activity",
+                subject_key=f"run:{running_run}",
+                source="provider_runtime",
+                source_epoch=str(uuid4()),
+                session_id=running_id,
+                ordering_mode="latest",
+                source_seq=1,
+                evidence_hash=hashlib.sha256(running_id.encode()).hexdigest(),
+                observed_at=now,
+                valid_until=activity_until,
+                value_json=json.dumps(
+                    {
+                        "authority_class": "provider_runtime",
+                        "session_id": running_id,
+                        "run_id": running_run,
+                        "kind": "running",
+                    }
+                ),
+                updated_commit_seq=1,
+                received_at=now,
+            )
+        )
+
+        # A provider question nobody has answered.
+        asking_id = str(uuid4())
+        _insert_page_session(connection, session_id=asking_id, activity_at=now - timedelta(days=1))
+        connection.execute(
+            LiveInteractionRequest.__table__.insert().values(
+                id=str(uuid4()),
+                session_id=asking_id,
+                runtime_key=f"omp:{asking_id}",
+                provider="omp",
+                request_key=str(uuid4()),
+                kind="question",
+                status="pending",
+                can_respond=1,
+                projection_json="{}",
+                occurred_at=now,
+                last_seen_at=now,
+                expires_at=now + timedelta(minutes=10),
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+        # Background work this session started and is still waiting on.
+        delegating_id = str(uuid4())
+        _insert_page_session(connection, session_id=delegating_id, activity_at=now - timedelta(days=1))
+        connection.execute(
+            FactHead.__table__.insert().values(
+                family="delegation",
+                subject_key=f"delegation:{delegating_id}",
+                source="provider_runtime",
+                source_epoch=str(uuid4()),
+                session_id=delegating_id,
+                ordering_mode="latest",
+                source_seq=1,
+                evidence_hash=hashlib.sha256(delegating_id.encode()).hexdigest(),
+                observed_at=now,
+                valid_until=activity_until,
+                value_json=json.dumps(
+                    {
+                        "authority_class": "provider_runtime",
+                        "session_id": delegating_id,
+                        "count": 2,
+                        "kinds": {"subagent": 2},
+                    }
+                ),
+                updated_commit_seq=1,
+                received_at=now,
+            )
+        )
+
+        # A Console turn dispatched and not yet carrying activity evidence.
+        console_id = str(uuid4())
+        _insert_page_session(connection, session_id=console_id, activity_at=now - timedelta(days=1))
+        connection.execute(
+            LiveConsoleTurn.__table__.insert().values(
+                id=str(uuid4()),
+                session_id=console_id,
+                thread_id=str(uuid4()),
+                receipt_id=str(uuid4()),
+                state="active",
+                provider="omp",
+                device_id="cinder",
+                cwd="/workspace/zerg",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    open_ids = {attached_id, running_id, asking_id, delegating_id, console_id}
+    page = _timeline_page(CatalogStore(engine), limit=len(open_ids))
+    assert open_ids <= set(page)
     engine.dispose()
 
 
