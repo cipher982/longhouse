@@ -17,13 +17,14 @@ struct SessionsWidgetView: View {
 
     private var smallView: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 4) {
-                Image(systemName: "house.lodge.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 5) {
+                Image("LonghouseMascot")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 14, height: 14)
                 Text("Longhouse")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
+                    .font(Ember.serif(12, relativeTo: .caption))
+                    .foregroundStyle(Ember.textSecondary)
             }
 
             Spacer()
@@ -31,24 +32,24 @@ struct SessionsWidgetView: View {
             if !entry.isSignedIn && !entry.isPlaceholder {
                 Image(systemName: "person.crop.circle.badge.questionmark")
                     .font(.system(size: 24))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Ember.textSecondary)
                 Text(entry.statusTitle ?? "Sign in to get started")
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Ember.textSecondary)
                     .multilineTextAlignment(.leading)
             } else if entry.sessions.isEmpty && !entry.isPlaceholder {
                 Text("No active sessions")
                     .font(.system(size: 20, weight: .semibold))
                 Text("Longhouse is caught up")
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Ember.textSecondary)
             } else {
                 Text("\(widgetMetric.count)")
-                    .font(.system(size: 36, weight: .bold))
+                    .font(Ember.serif(42, relativeTo: .largeTitle))
                     .foregroundStyle(widgetMetric.color)
                 Text(widgetMetric.label)
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Ember.textSecondary)
             }
 
             Spacer()
@@ -59,13 +60,15 @@ struct SessionsWidgetView: View {
     private var mediumView: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                HStack(spacing: 4) {
-                    Image(systemName: "house.lodge.fill")
-                        .font(.system(size: 11))
+                HStack(spacing: 5) {
+                    Image("LonghouseMascot")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 14, height: 14)
                     Text("Longhouse")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(Ember.serif(12, relativeTo: .caption))
                 }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Ember.textSecondary)
 
                 Spacer()
 
@@ -84,12 +87,12 @@ struct SessionsWidgetView: View {
                     VStack(spacing: 4) {
                         Image(systemName: "person.crop.circle.badge.questionmark")
                             .font(.system(size: 24))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Ember.textSecondary)
                         Text(entry.statusTitle ?? "Not signed in")
                             .font(.system(size: 13, weight: .medium))
                         Text(entry.statusMessage ?? "Open Longhouse to sign in")
                             .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Ember.textSecondary)
                             .multilineTextAlignment(.center)
                     }
                     Spacer()
@@ -102,12 +105,12 @@ struct SessionsWidgetView: View {
                     VStack(spacing: 4) {
                         Image(systemName: "checkmark.circle")
                             .font(.system(size: 24))
-                            .foregroundStyle(.green)
+                            .foregroundStyle(Ember.sage)
                         Text("No active sessions")
                             .font(.system(size: 13, weight: .medium))
                         Text("Longhouse is caught up")
                             .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Ember.textSecondary)
                     }
                     Spacer()
                 }
@@ -130,14 +133,14 @@ struct SessionsWidgetView: View {
                 count: attentionCount,
                 label: attentionCount == 1 ? "needs permission" : "need permission",
                 shortLabel: "permission",
-                color: TimelineSignal.amber
+                color: TimelineSignal.attentionColor
             )
         }
         return WidgetMetric(
             count: entry.totalActive,
             label: entry.totalActive == 1 ? "active session" : "active sessions",
             shortLabel: "active",
-            color: .blue
+            color: TimelineSignal.workingColor
         )
     }
 }
@@ -165,7 +168,7 @@ struct SessionRow: View {
                     if let project = session.project {
                         Text(project)
                             .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Ember.textSecondary)
                     }
                     Text(session.displayPhaseLabel)
                         .font(.system(size: 10))

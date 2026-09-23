@@ -12,10 +12,15 @@ struct LonghouseApp: App {
     @UIApplicationDelegateAdaptor(LonghousePushAppDelegate.self) private var pushDelegate
     @Environment(\.scenePhase) private var scenePhase
 
+    init() {
+        EmberAppearance.install()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(appState)
+                .emberChrome()
                 .applyUITestAppearanceOverride()
                 .onOpenURL { url in
                     if !handleLonghouseURL(url) {

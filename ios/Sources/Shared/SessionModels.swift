@@ -477,8 +477,8 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
 /// The single attention axis for a timeline row, shared by the app card and the
 /// home-screen widget (and mirrored on web in lib/sessionRuntime.ts). Three
 /// semantic stops the user can read pre-attentively, plus a closed/quiet rest:
-///   - attention: the session is WAITING ON YOU - steady amber, never pulses.
-///   - working:   the session is actively running - teal, breathing (live only).
+///   - attention: the session is WAITING ON YOU - steady ember, never pulses.
+///   - working:   the session is actively running - flame, breathing (live only).
 ///   - quiet:     idle/stale - grey, static.
 ///   - closed:    ended - dimmed grey, static.
 /// Provider identity color stays on the glyph; it never bleeds into this axis.
@@ -489,18 +489,19 @@ enum TimelineSignal {
     case unknown
     case closed
 
-    /// Amber for "needs you". Separated from teal/grey on luminance + hue so it
-    /// survives colorblindness; the status label text is the redundant code.
-    static let amber = Color(red: 0.91, green: 0.64, blue: 0.24)
-    static let teal = Color(red: 0.24, green: 0.71, blue: 0.78)
+    /// Ember for "needs you", flame for live work, cooled ash at rest — the
+    /// web's fire ramp. Ember and flame also differ in motion (only work
+    /// breathes) and the status label text is the redundant code.
+    static let attentionColor = Ember.ember
+    static let workingColor = Ember.flame
 
     /// The leading dot color - the loudest at-a-glance signal.
     var dotColor: Color {
         switch self {
-        case .attention: return Self.amber
-        case .working: return Self.teal
-        case .quiet, .unknown: return .secondary
-        case .closed: return .secondary.opacity(0.6)
+        case .attention: return Self.attentionColor
+        case .working: return Self.workingColor
+        case .quiet, .unknown: return Ember.ash
+        case .closed: return Ember.ash.opacity(0.55)
         }
     }
 
@@ -508,20 +509,20 @@ enum TimelineSignal {
     /// wants you lights up, so it pops by contrast rather than a wall of color.
     var accentColor: Color {
         switch self {
-        case .attention: return Self.amber
-        case .working: return Self.teal.opacity(0.8)
-        case .quiet, .unknown: return .secondary.opacity(0.4)
-        case .closed: return .secondary.opacity(0.3)
+        case .attention: return Self.attentionColor
+        case .working: return Self.workingColor.opacity(0.8)
+        case .quiet, .unknown: return Ember.ash.opacity(0.4)
+        case .closed: return Ember.ash.opacity(0.3)
         }
     }
 
     /// Status-label text color, demoted relative to the dot.
     var statusColor: Color {
         switch self {
-        case .attention: return Self.amber
-        case .working: return Self.teal
-        case .closed: return .secondary.opacity(0.7)
-        case .quiet, .unknown: return .secondary
+        case .attention: return Self.attentionColor
+        case .working: return Self.workingColor
+        case .closed: return Ember.textMuted
+        case .quiet, .unknown: return Ember.textSecondary
         }
     }
 

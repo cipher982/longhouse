@@ -134,7 +134,9 @@ struct SessionSignalField<Content: View>: View {
                     workSheen(kind: kind)
                     ActivityReceiptTrail(
                         store: activity,
-                        tone: signalTone,
+                        // Flame is far more saturated than the old pale green;
+                        // at half strength the bars stay texture under the text.
+                        tone: signalTone.opacity(0.5),
                         evidenceLive: kind == .working
                     )
                     .opacity(kind == .working ? 1 : 0)
@@ -157,6 +159,7 @@ struct SessionSignalField<Content: View>: View {
                 .clipped()
             }
             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay { BrassCornerPoints(inset: 9) }
             .overlay(
                 RoundedRectangle(cornerRadius: 24, style: .continuous)
                     .strokeBorder(borderColor(for: kind), lineWidth: 0.75)
@@ -269,26 +272,18 @@ struct SessionSignalField<Content: View>: View {
         }
     }
 
-    private var signalTone: Color {
-        colorScheme == .dark
-            ? Color(red: 0.72, green: 0.86, blue: 0.77)
-            : Color(red: 0.20, green: 0.47, blue: 0.31)
-    }
+    /// Live work reads as flame, the web composer's running glow.
+    private var signalTone: Color { Ember.flame }
 
     private var sheenColor: Color {
-        colorScheme == .dark ? Color(red: 0.72, green: 1.0, blue: 0.82) : Color.white
+        colorScheme == .dark ? Ember.uiHex(0xFFB25A) : Ember.uiHex(0xFFE2B8)
     }
 
     private var workMaterial: LinearGradient {
-        if colorScheme == .dark {
-            return LinearGradient(
-                colors: [Color(red: 0.09, green: 0.21, blue: 0.16), Color(red: 0.06, green: 0.14, blue: 0.11)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        }
-        return LinearGradient(
-            colors: [Color(red: 0.91, green: 0.97, blue: 0.93), Color(red: 0.82, green: 0.93, blue: 0.86)],
+        LinearGradient(
+            colors: colorScheme == .dark
+                ? [Ember.uiHex(0x2A1B12), Ember.uiHex(0x1A120E)]
+                : [Ember.uiHex(0xFFF6E8), Ember.uiHex(0xFBEBD4)],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )
@@ -297,24 +292,20 @@ struct SessionSignalField<Content: View>: View {
     private var exceptionMaterial: LinearGradient {
         LinearGradient(
             colors: colorScheme == .dark
-                ? [Color(red: 0.22, green: 0.18, blue: 0.12), Color(red: 0.13, green: 0.11, blue: 0.08)]
-                : [Color(red: 0.99, green: 0.95, blue: 0.87), Color(red: 0.96, green: 0.90, blue: 0.79)],
+                ? [Ember.uiHex(0x2C1510), Ember.uiHex(0x1B0F0C)]
+                : [Ember.uiHex(0xFCEDE3), Ember.uiHex(0xF6DECF)],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )
     }
 
-    private var settledMaterial: Color {
-        colorScheme == .dark
-            ? Color(red: 0.09, green: 0.13, blue: 0.10)
-            : Color(.secondarySystemBackground)
-    }
+    private var settledMaterial: Color { Ember.card }
 
     private func borderColor(for kind: SessionSignalMaterialKind) -> Color {
         switch kind {
         case .working: return signalTone.opacity(0.28)
         case .exception: return TranscriptPalette.attention.opacity(0.48)
-        case .settled: return Color.secondary.opacity(0.22)
+        case .settled: return Ember.border.opacity(0.9)
         }
     }
 }
@@ -559,7 +550,7 @@ struct SessionRuntimeDock: View {
                     if let operationLine = operationLine(for: state) {
                         Text(operationLine)
                             .font(.caption.monospaced())
-                            .foregroundStyle(state == .uncertain ? Color.secondary : Color.primary.opacity(0.78))
+                            .foregroundStyle(state == .uncertain ? Ember.textSecondary : Ember.text.opacity(0.82))
                             .lineLimit(typeSize.isAccessibilitySize ? 3 : 2)
                             .truncationMode(.tail)
                             .fixedSize(horizontal: false, vertical: true)
@@ -680,8 +671,8 @@ struct SessionRuntimeDock: View {
         if state == .uncertain { return TranscriptPalette.attention }
         switch style.dot {
         case .attention: return TranscriptPalette.attention
-        case .live: return .primary
-        case .idle, .dormant: return .secondary
+        case .live: return Ember.text
+        case .idle, .dormant: return Ember.textSecondary
         }
     }
 
@@ -829,10 +820,7 @@ struct SessionRuntimeDock: View {
     }
 
     private func elapsedText(_ label: String, state: SessionLedgerEvidence) -> some View {
-        Text(label)
-            .font(.subheadline)
-            .monospacedDigit()
-            .foregroundStyle(isExecuting ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary))
+        NixieReadout(text: label, live: isExecuting)
             .lineLimit(1)
             .accessibilityIdentifier("session-runtime-elapsed")
     }
@@ -845,12 +833,13 @@ struct SessionRuntimeDock: View {
                 .lineLimit(1)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
-                .foregroundStyle(style.capability == .warning ? TranscriptPalette.attention : Color.secondary)
+                .foregroundStyle(style.capability == .warning ? TranscriptPalette.attention : Ember.textSecondary)
                 .background(
-                    Capsule(style: .continuous).fill(
+                    Capsule(style: .continuous).strokeBorder(
                         style.capability == .warning
-                            ? TranscriptPalette.attention.opacity(0.14)
-                            : Color(.quaternarySystemFill)
+                            ? TranscriptPalette.attention.opacity(0.4)
+                            : Ember.border,
+                        lineWidth: 0.75
                     )
                 )
                 .accessibilityIdentifier("session-runtime-capability")

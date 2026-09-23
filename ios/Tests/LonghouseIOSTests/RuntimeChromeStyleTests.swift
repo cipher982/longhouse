@@ -84,7 +84,7 @@ final class RuntimeChromeStyleTests: XCTestCase {
         let s = RuntimeChromeStyle(runtimeTone: "idle", capabilityTone: "warning").capability
         XCTAssertEqual(s, .warning)
         XCTAssertFalse(s.showsLiveDot)
-        XCTAssertEqual(s.color, .orange)
+        XCTAssertEqual(s.color, Ember.ember)
     }
 
     func testNeutralCapabilityIsMonochrome() {
@@ -107,8 +107,8 @@ final class RuntimeChromeStyleTests: XCTestCase {
             RuntimeSignal.idle.color,
             RuntimeSignal.dormant.color,
         ]
-        XCTAssertEqual(RuntimeSignal.live.color, .green)
-        XCTAssertEqual(RuntimeSignal.attention.color, .orange)
+        XCTAssertEqual(RuntimeSignal.live.color, Ember.flame)
+        XCTAssertEqual(RuntimeSignal.attention.color, Ember.ember)
         // Live and attention must never collapse to the same hue.
         XCTAssertNotEqual(colors[0], colors[1])
     }

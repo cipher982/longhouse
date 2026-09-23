@@ -250,20 +250,20 @@ struct LaunchSessionSheet: View {
                         .padding(.top, 14)
                     }
                     .padding(16)
-                    .tint(.primary)
+                    .tint(Ember.textSecondary)
                 }
 
                 if let submitError {
                     Text(submitError)
                         .font(.footnote)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Ember.ember)
                 }
             }
             .padding(.horizontal, 20)
             .padding(.top, 18)
             .padding(.bottom, 24)
         }
-        .background(Color(uiColor: .systemGroupedBackground))
+        .background(Ember.page)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             Button {
                 Task { await submit() }
@@ -276,13 +276,16 @@ struct LaunchSessionSheet: View {
                         .frame(maxWidth: .infinity)
                 }
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
+            .buttonStyle(EmberPrimaryButtonStyle())
             .disabled(!canSubmit)
             .accessibilityIdentifier("launch-submit")
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
-            .background(.bar)
+            .background {
+                Ember.page
+                    .overlay(alignment: .top) { Ember.hairline.frame(height: 0.75) }
+                    .ignoresSafeArea()
+            }
         }
     }
 
@@ -304,7 +307,7 @@ struct LaunchSessionSheet: View {
         VStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 32))
-                .foregroundStyle(.red)
+                .foregroundStyle(Ember.ember)
             Text(message)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
@@ -491,11 +494,7 @@ struct LaunchSessionSheet: View {
 
     @ViewBuilder
     private func launchSectionTitle(_ title: String) -> some View {
-        Text(title.uppercased())
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 2)
-            .accessibilityAddTraits(.isHeader)
+        EmberSectionHeader(title: title, count: nil, size: 20)
     }
 
     private func providerDisplayName(_ provider: String) -> String {
@@ -512,10 +511,10 @@ private enum LaunchStatusStyle {
 
     var color: Color {
         switch self {
-        case .ready: .green
+        case .ready: Ember.sage
         case .offline: .secondary
-        case .warning: .orange
-        case .repair: .red
+        case .warning: Ember.flame
+        case .repair: Ember.ember
         }
     }
 }
@@ -525,7 +524,11 @@ private struct LaunchCard<Content: View>: View {
 
     var body: some View {
         VStack(spacing: 0) { content }
-            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+            .background(Ember.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(Ember.hairline, lineWidth: 0.75)
+            }
     }
 }
 
@@ -551,18 +554,18 @@ private struct LaunchSummaryRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
                     .font(.body)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(Ember.text)
                 if let subtitle, !subtitle.isEmpty {
                     Text(subtitle)
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Ember.textSecondary)
                 }
             }
             Spacer(minLength: 12)
             if showsChevron {
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Ember.textMuted)
                     .accessibilityHidden(true)
             }
         }
@@ -584,10 +587,10 @@ private struct MachineAvailabilityIcon: View {
                 Circle().stroke(Color.secondary, lineWidth: 2)
             case "auth_failed", "runtime_unreachable":
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Ember.ember)
             default:
                 Image(systemName: "info.circle.fill")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Ember.flame)
             }
         }
         .frame(width: 14, height: 14)
@@ -616,6 +619,7 @@ private struct MachineSelectionView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
+                .listRowBackground(Ember.card)
             }
             if !ready.isEmpty {
                 Section("Available") {
@@ -625,7 +629,7 @@ private struct MachineSelectionView: View {
                             dismiss()
                         } label: {
                             HStack(spacing: 12) {
-                                Circle().fill(Color.green).frame(width: 10, height: 10)
+                                Circle().fill(Ember.sage).frame(width: 10, height: 10)
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(machine.machineName).foregroundStyle(.primary)
                                     Text("Ready").font(.subheadline).foregroundStyle(.secondary)
@@ -645,6 +649,7 @@ private struct MachineSelectionView: View {
                         .accessibilityAddTraits(machine.deviceId == selectedDeviceId ? .isSelected : [])
                     }
                 }
+                .listRowBackground(Ember.card)
             }
 
             if !unavailable.isEmpty {
@@ -663,8 +668,10 @@ private struct MachineSelectionView: View {
                         .accessibilityLabel("\(machine.machineName), \(statusText(machine)), Not available")
                     }
                 }
+                .listRowBackground(Ember.card)
             }
         }
+        .emberListGround()
         .navigationTitle("Choose Machine")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -685,7 +692,7 @@ private struct ProviderSelectionView: View {
                 dismiss()
             } label: {
                 HStack(spacing: 12) {
-                    Text(displayName(provider)).foregroundStyle(.primary)
+                    Text(displayName(provider)).foregroundStyle(Ember.text)
                     Spacer(minLength: 12)
                     if provider == selectedProvider { Image(systemName: "checkmark") }
                 }
@@ -695,7 +702,9 @@ private struct ProviderSelectionView: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("launch-provider-row-\(provider)")
             .accessibilityAddTraits(provider == selectedProvider ? .isSelected : [])
+            .listRowBackground(Ember.card)
         }
+        .emberListGround()
         .navigationTitle("Choose Agent")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -725,9 +734,13 @@ private struct WorkspaceSelectionView: View {
 
     var body: some View {
         List {
-            if loading { ProgressView("Loading recent workspaces…") }
+            if loading {
+                ProgressView("Loading recent workspaces…")
+                    .listRowBackground(Ember.card)
+            }
             if let errorMessage, workspaces.isEmpty {
                 Text(errorMessage).foregroundStyle(.secondary)
+                    .listRowBackground(Ember.card)
             }
             if !filtered.isEmpty {
                 Section("Recent") {
@@ -756,6 +769,7 @@ private struct WorkspaceSelectionView: View {
                         .accessibilityIdentifier("launch-workspace-row-\(workspace.path)")
                     }
                 }
+                .listRowBackground(Ember.card)
             }
             Section("Other") {
                 TextField("Absolute path", text: $manualPath)
@@ -765,10 +779,13 @@ private struct WorkspaceSelectionView: View {
                     onSelect(normalizedManualPath)
                     dismiss()
                 }
+                .foregroundStyle(normalizedManualPath.starts(with: "/") ? Ember.gold : Ember.textMuted)
                 .disabled(!normalizedManualPath.starts(with: "/"))
             }
+            .listRowBackground(Ember.card)
         }
         .searchable(text: $search, prompt: "Filter workspaces")
+        .emberListGround()
         .navigationTitle("Choose Workspace")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
@@ -929,6 +946,7 @@ private func previewMachine(
     ) { _ in }
     .environmentObject(AppState())
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Launch session without recent workspaces") {
@@ -938,6 +956,7 @@ private func previewMachine(
     ) { _ in }
     .environmentObject(AppState())
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Launch session offline machine") {
@@ -954,6 +973,7 @@ private func previewMachine(
     ) { _ in }
     .environmentObject(AppState())
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #if DEBUG
@@ -1009,4 +1029,5 @@ struct LaunchSessionUITestFixtureView: View {
         )
     }
     .preferredColorScheme(.dark)
+    .emberChrome()
 }

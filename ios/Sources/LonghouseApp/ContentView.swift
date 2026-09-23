@@ -8,6 +8,8 @@ struct ContentView: View {
 #if DEBUG
             if UITestHooks.shouldUseLaunchSessionFixture {
                 LaunchSessionUITestFixtureView()
+            } else if UITestHooks.shouldUseInboxGalleryFixture {
+                InboxGalleryUITestFixtureView()
             } else if UITestHooks.shouldUseTimelineOpenFixture {
                 TimelineOpenUITestFixtureView()
             } else if let fixtureName = UITestHooks.chatFixtureName {
@@ -39,13 +41,16 @@ struct ContentView: View {
 private struct LoadingScreen: View {
     var body: some View {
         ZStack {
-            Color(red: 0.04, green: 0.04, blue: 0.06).ignoresSafeArea()
-            VStack(spacing: 16) {
-                Image(systemName: "house.lodge.fill")
-                    .font(.system(size: 36))
-                    .foregroundStyle(.white.opacity(0.6))
+            Ember.uiHex(0x0B0908).ignoresSafeArea()
+            VStack(spacing: 18) {
+                Image("LonghouseMascot")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 56, height: 56)
+                    .opacity(0.9)
+                    .accessibilityHidden(true)
                 ProgressView()
-                    .tint(.white.opacity(0.6))
+                    .tint(LoginInk.gold)
             }
         }
     }
@@ -60,9 +65,9 @@ private struct ServerConfigButton: View {
         } label: {
             Image(systemName: "server.rack")
                 .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.white.opacity(0.4))
+                .foregroundStyle(LoginInk.clay)
                 .padding(10)
-                .background(.white.opacity(0.06), in: Circle())
+                .background(LoginInk.gold.opacity(0.10), in: Circle())
         }
         .accessibilityIdentifier("login.serverConfig")
         .padding(.trailing, 8)
@@ -90,15 +95,18 @@ struct ServerConfigSheet: View {
                         .textInputAutocapitalization(.never)
                         .keyboardType(.URL)
                 }
+                .listRowBackground(Ember.card)
                 Section {
                     Text("Enter the URL of your Longhouse instance.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                .listRowBackground(Ember.card)
 #if DEBUG
                 widgetDebugSection
 #endif
             }
+            .emberListGround()
             .navigationTitle("Server")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -167,6 +175,7 @@ struct ServerConfigSheet: View {
                 LabeledContent("Probe Cookies", value: "\(widgetProbeResult.debugState.cookieCount)")
             }
         }
+        .listRowBackground(Ember.card)
     }
 #endif
 }

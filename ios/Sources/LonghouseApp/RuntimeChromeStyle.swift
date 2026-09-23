@@ -7,11 +7,11 @@ import SwiftUI
 /// chrome, and degraded states must stay loud.
 ///
 /// Discipline rules this encodes:
-///   • The dot is the only signal — running/thinking = live (green),
-///     blocked = attention (orange), idle = idle (quiet grey), everything
-///     else = dormant (grey).
+///   • The dot is the only signal — running/thinking = live (flame),
+///     blocked = attention (ember), idle = idle (cooled ash), everything
+///     else = dormant (dimmer ash).
 ///   • Capability color is monochrome (secondary) UNLESS it's a warning, which
-///     stays loud (orange). "success" is shown as a small live dot, not green text.
+///     stays loud (ember). "success" is shown as a small live dot, not colored text.
 ///   • None of this gates sending — `canSendLive` is the hard gate elsewhere.
 enum RuntimeSignal: Equatable {
     case live        // executing / healthy
@@ -23,15 +23,15 @@ enum RuntimeSignal: Equatable {
         switch self {
         case .live: return TranscriptPalette.live
         case .attention: return TranscriptPalette.attention
-        case .idle: return Color(.systemGray2)
-        case .dormant: return Color(.systemGray)
+        case .idle: return Ember.ash
+        case .dormant: return Ember.ash.opacity(0.55)
         }
     }
 }
 
 enum CapabilitySignal: Equatable {
-    case live        // success — show a small green presence dot
-    case warning     // degraded — stays loud (orange)
+    case live        // success — show a small live presence dot
+    case warning     // degraded — stays loud (ember)
     case neutral     // monochrome secondary
 
     var color: Color {

@@ -10,6 +10,7 @@ enum UITestHooks {
     static let chatFixtureTriggerPathEnvironmentKey = "LONGHOUSE_UI_TEST_CHAT_TRIGGER_PATH"
     static let chatFixtureReplayPathEnvironmentKey = "LONGHOUSE_UI_TEST_CHAT_REPLAY_PATH"
     static let timelineOpenFixtureEnvironmentKey = "LONGHOUSE_UI_TEST_TIMELINE_OPEN_FIXTURE"
+    static let inboxGalleryFixtureEnvironmentKey = "LONGHOUSE_UI_TEST_INBOX_GALLERY_FIXTURE"
     static let launchSessionFixtureEnvironmentKey = "LONGHOUSE_UI_TEST_LAUNCH_SESSION_FIXTURE"
     static let mobileDetailDelayMsEnvironmentKey = "LONGHOUSE_UI_TEST_MOBILE_DETAIL_DELAY_MS"
     static let mobileTailDelayMsEnvironmentKey = "LONGHOUSE_UI_TEST_MOBILE_TAIL_DELAY_MS"
@@ -74,7 +75,11 @@ enum UITestHooks {
     /// continuously redrawing view never lets it. Fixture-driven runs hold
     /// ambient motion still; the state they assert on does not depend on it.
     static var holdsAmbientMotion: Bool {
-        chatFixtureName != nil || shouldUseTimelineOpenFixture || shouldUseLaunchSessionFixture
+        chatFixtureName != nil || shouldUseTimelineOpenFixture || shouldUseLaunchSessionFixture || shouldUseInboxGalleryFixture
+    }
+
+    static var shouldUseInboxGalleryFixture: Bool {
+        ProcessInfo.processInfo.environment[inboxGalleryFixtureEnvironmentKey] == "1"
     }
 
     static var shouldUseLaunchSessionFixture: Bool {

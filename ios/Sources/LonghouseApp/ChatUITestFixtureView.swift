@@ -271,7 +271,7 @@ struct TimelineOpenUITestFixtureView: View {
                 }
                 .padding(16)
             }
-            .background(Color(.systemGroupedBackground))
+            .background(Ember.page)
             .navigationTitle("Timeline")
             .navigationDestination(for: TimelineOpenRoute.self) { route in
                 if let session = sessions.first(where: { $0.id == route.id }) {

@@ -135,10 +135,13 @@ struct SessionsWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: SessionProvider()) { entry in
             SessionsWidgetView(entry: entry)
+                // Always the hearth at night, like the Live Activity: adaptive
+                // colors are not trusted to resolve against the Home Screen.
+                .environment(\.colorScheme, .dark)
                 .containerBackground(for: .widget) {
                     // Keep the widget background on APIs available in the CI toolchain.
                     // Restore glass-specific styling once the build fleet supports that SDK.
-                    Color(.systemFill).opacity(0.6)
+                    EmberWidgetGround()
                 }
         }
         .configurationDisplayName("Timeline")
@@ -151,8 +154,8 @@ struct SessionWatchLiveActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: SessionWatchAttributes.self) { context in
             SessionWatchLiveActivityView(context: context)
-                .activityBackgroundTint(Color(.systemFill).opacity(0.72))
-                .activitySystemActionForegroundColor(.blue)
+                .activityBackgroundTint(Ember.uiHex(0x0B0908).opacity(0.86))
+                .activitySystemActionForegroundColor(Ember.uiHex(0xE9B949))
                 .widgetURL(sessionURL(context.attributes.sessionId))
         } dynamicIsland: { context in
             DynamicIsland {
@@ -174,13 +177,13 @@ struct SessionWatchLiveActivityWidget: Widget {
                 }
             } compactLeading: {
                 Image(systemName: context.state.isAttention ? "exclamationmark.circle.fill" : "dot.radiowaves.left.and.right")
-                    .foregroundStyle(context.state.isAttention ? .orange : .blue)
+                    .foregroundStyle(context.state.isAttention ? Ember.uiHex(0xE4572E) : Ember.uiHex(0xF08A24))
             } compactTrailing: {
                 Text(shortState(context.state.presenceState))
                     .font(.caption2.weight(.semibold))
             } minimal: {
                 Image(systemName: context.state.isAttention ? "exclamationmark.circle.fill" : "dot.radiowaves.left.and.right")
-                    .foregroundStyle(context.state.isAttention ? .orange : .blue)
+                    .foregroundStyle(context.state.isAttention ? Ember.uiHex(0xE4572E) : Ember.uiHex(0xF08A24))
             }
             .widgetURL(sessionURL(context.attributes.sessionId))
         }
@@ -194,24 +197,26 @@ private struct SessionWatchLiveActivityView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Circle()
-                    .fill(context.state.isAttention ? Color.orange : liveActivityStateColor(context.state.presenceState))
+                    .fill(context.state.isAttention ? Ember.uiHex(0xE4572E) : liveActivityStateColor(context.state.presenceState))
                     .frame(width: 9, height: 9)
                 Text(context.state.displayPhase)
                     .font(.headline.weight(.semibold))
+                    .foregroundStyle(Ember.uiHex(0xF6EBD6))
                     .lineLimit(1)
                 Spacer(minLength: 8)
                 ProviderGlyph(provider: context.attributes.provider, size: 16)
                 Text(providerDisplayLabel(context.attributes.provider))
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Ember.uiHex(0xC4B096))
             }
             Text(context.attributes.title)
-                .font(.subheadline)
+                .font(Ember.serif(17, relativeTo: .subheadline))
+                .foregroundStyle(Ember.uiHex(0xF6EBD6))
                 .lineLimit(1)
             if let project = context.attributes.project {
                 Text(project)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Ember.uiHex(0xC4B096))
                     .lineLimit(1)
             }
         }
@@ -243,21 +248,14 @@ private func shortState(_ state: String) -> String {
 }
 
 private func liveActivityStateColor(_ state: String) -> Color {
+    // The fire ramp: live work is flame, a hold is ember, rest cools to ash.
     switch state {
-    case "running":
-        return .green
-    case "thinking":
-        return .orange
-    case "blocked":
-        return .orange
-    case "needs_user":
-        return .secondary
-    case "idle":
-        return .secondary
-    case "unknown":
-        return .secondary
+    case "running", "thinking", "executing":
+        return Ember.uiHex(0xF08A24)
+    case "blocked", "stalled":
+        return Ember.uiHex(0xE4572E)
     default:
-        return .blue
+        return Ember.uiHex(0x7C8790)
     }
 }
 
@@ -271,10 +269,11 @@ struct PushSessionsWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: SessionProvider()) { entry in
             SessionsWidgetView(entry: entry)
+                .environment(\.colorScheme, .dark)
                 .containerBackground(for: .widget) {
                     // Keep the widget background on APIs available in the CI toolchain.
                     // Restore glass-specific styling once the build fleet supports that SDK.
-                    Color(.systemFill).opacity(0.6)
+                    EmberWidgetGround()
                 }
         }
         .configurationDisplayName("Timeline Live")
@@ -315,3 +314,18 @@ struct SessionsWidgetPushHandler: WidgetPushHandler {
     }
 }
 #endif
+
+/// Widget ground: soot under the hearth light, fixed dark like the Live Activity.
+private struct EmberWidgetGround: View {
+    var body: some View {
+        ZStack {
+            Ember.uiHex(0x0B0908)
+            RadialGradient(
+                colors: [Ember.uiHex(0xE9B949).opacity(0.14), .clear],
+                center: UnitPoint(x: 0.2, y: -0.1),
+                startRadius: 0,
+                endRadius: 240
+            )
+        }
+    }
+}

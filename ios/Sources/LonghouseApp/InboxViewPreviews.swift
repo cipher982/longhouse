@@ -293,8 +293,9 @@ private func mockSession(
         }
         .padding(16)
     }
-    .background(Color(.systemGroupedBackground))
+    .background(Ember.page)
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Timeline cards — attention colors light") {
@@ -357,8 +358,9 @@ private func mockSession(
         }
         .padding(16)
     }
-    .background(Color(.systemGroupedBackground))
+    .background(Ember.page)
     .preferredColorScheme(.light)
+    .emberChrome()
 }
 
 #Preview("Summary status — all four") {
@@ -422,8 +424,9 @@ private func mockSession(
         }
         .padding(16)
     }
-    .background(Color(.systemGroupedBackground))
+    .background(Ember.page)
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Connection banners") {
@@ -460,8 +463,9 @@ private func mockSession(
         }
         .padding(16)
     }
-    .background(Color(.systemGroupedBackground))
+    .background(Ember.page)
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Timeline shell — toolbar") {
@@ -560,10 +564,11 @@ private func mockSession(
 
     NavigationStack {
         TimelineSessionList(sessions: sessions, connectivityBanner: .none)
-            .background(Color(.systemGroupedBackground))
+            .background(Ember.page)
             .navigationTitle("Timeline")
     }
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Timeline search — resident rows filtered") {
@@ -584,10 +589,11 @@ private func mockSession(
                 onRetry: {}
             )
         )
-        .background(Color(.systemGroupedBackground))
+        .background(Ember.page)
         .navigationTitle("Timeline")
     }
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Timeline search — results from all sessions") {
@@ -608,10 +614,11 @@ private func mockSession(
                 onRetry: {}
             )
         )
-        .background(Color(.systemGroupedBackground))
+        .background(Ember.page)
         .navigationTitle("Timeline")
     }
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Timeline search — nothing matches") {
@@ -632,10 +639,11 @@ private func mockSession(
                 onRetry: {}
             )
         )
-        .background(Color(.systemGroupedBackground))
+        .background(Ember.page)
         .navigationTitle("Timeline")
     }
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 private func searchPreviewSessions() -> [SessionSummary] {
@@ -682,5 +690,110 @@ private func searchPreviewSessions() -> [SessionSummary] {
             turns: 8
         ),
     ]
+}
+// MARK: - Inbox gallery fixture
+
+/// Every timeline row shape at once — waiting on you, new results, open work
+/// running and idle, recent history — for fixture launches and previews.
+enum InboxGalleryFixture {
+    static var sessions: [SessionSummary] {
+        [
+            mockSession(
+                id: "needs-1", project: "longhouse", title: "Approve hosted smoke test",
+                summary: "Waiting for permission before running the hosted smoke test.",
+                provider: "codex", machine: "clifford",
+                statusLabel: "Permission required", statusTone: "blocked", activityRecency: "live",
+                anchorSecondsAgo: 120, seenAtSecondsAgo: 120
+            ),
+            mockSession(
+                id: "result-complete", project: "site-optimizer", title: "Evaluate candidate quality regression",
+                summary: "Compared the latest candidate set against the known-good distribution.",
+                provider: "codex", branch: nil, machine: "ml-gpu-02",
+                statusLabel: "Idle", statusTone: "idle", activityRecency: "stale",
+                anchorSecondsAgo: 7 * 60, unread: true, resultSecondsAgo: 7 * 60, lastResultOutcome: "completed"
+            ),
+            mockSession(
+                id: "result-failed", project: "sauron", title: "Repair nightly location refresh",
+                summary: "The refresh failed while reconnecting to the source mirror.",
+                branch: nil, machine: "clifford",
+                statusLabel: "Closed", statusTone: "closed", activityRecency: "none",
+                anchorSecondsAgo: 18 * 60, unread: true, resultSecondsAgo: 18 * 60, lastResultOutcome: "failed"
+            ),
+            mockSession(
+                id: "open-working", project: "zerg", title: "Build iOS unread result states",
+                summary: "Rendering canonical preview states and validating the timeline layout.",
+                summaryTitle: "Now wiring the web interceptor retries",
+                machine: "cube",
+                statusLabel: "Using bash", statusTone: "running", activityRecency: "live",
+                anchorSecondsAgo: 38, seenAtSecondsAgo: 38
+            ),
+            mockSession(
+                id: "open-thinking", project: "chaos", title: "BranchTrace blog post refinement",
+                summary: "Critiquing and removing the branch cards section.",
+                machine: "cinder",
+                statusLabel: "Thinking", statusTone: "thinking", activityRecency: "live",
+                anchorSecondsAgo: 5, seenAtSecondsAgo: 5
+            ),
+            mockSession(
+                id: "open-ready", project: "agent-home", title: "Provider registry cleanup",
+                summary: "Quiet but ready to continue on its recorded machine.",
+                provider: "codex", branch: nil, machine: "macbook-pro",
+                statusLabel: "Idle", statusTone: "idle", activityRecency: "live",
+                anchorSecondsAgo: 12 * 60, seenAtSecondsAgo: 12 * 60, workingSet: "open"
+            ),
+            mockSession(
+                id: "recent-1", project: "g55", title: "NAG TCU telemetry and adaptations",
+                summary: "Captured a short log and the learned adaptation row.",
+                provider: "codex", machine: "garage-mac",
+                statusLabel: "Closed", statusTone: "closed", activityRecency: "none",
+                anchorSecondsAgo: 5 * 24 * 3600
+            ),
+            mockSession(
+                id: "recent-2", project: "acme-api", title: "Scheduler maintenance sweep",
+                summary: "Closed cleanly after the job graph drained.",
+                provider: "claude",
+                statusLabel: "Closed", statusTone: "closed", activityRecency: "none",
+                anchorSecondsAgo: 2 * 60 * 60, seenAtSecondsAgo: 2 * 60 * 60, seenAtPrefix: "Closed"
+            ),
+            mockSession(
+                id: "recent-3", project: "hdr", title: "Photo pipeline rebuild",
+                summary: "Idle with a fresh control path.",
+                provider: "antigravity", branch: "feat/tone-mapping",
+                statusLabel: "Activity unknown", statusTone: "idle", activityRecency: "stale",
+                anchorSecondsAgo: 26 * 60 * 60, phaseExpiresInSeconds: -45
+            ),
+        ]
+    }
+}
+
+struct InboxGalleryUITestFixtureView: View {
+    @State private var searchText = ""
+
+    var body: some View {
+        NavigationStack {
+            TimelineSessionList(sessions: InboxGalleryFixture.sessions, connectivityBanner: .none)
+                .background { EmberHearthBackground() }
+                .navigationTitle("Timeline")
+                .searchable(text: $searchText, prompt: "Filter sessions")
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {} label: {
+                            Label("Report a problem", systemImage: "exclamationmark.bubble").labelStyle(.iconOnly)
+                        }
+                        .foregroundStyle(Color.primary)
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {} label: {
+                            Image(systemName: "plus").fontWeight(.semibold).foregroundStyle(Ember.gold)
+                        }
+                        .emberProminentToolbarButton()
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {} label: { Image(systemName: "gearshape") }
+                            .foregroundStyle(Color.primary)
+                    }
+                }
+        }
+    }
 }
 #endif

@@ -22,8 +22,10 @@ struct SettingsView: View {
                         Spacer()
                         Button("Change") { showingServerSheet = true }
                             .font(.callout)
+                            .foregroundStyle(Ember.gold)
                     }
                 }
+                .listRowBackground(Ember.card)
 
                 Section {
                     Toggle("Attention alerts", isOn: Binding(
@@ -34,6 +36,7 @@ struct SettingsView: View {
                             Task { await updateNotificationPreference(newValue, previousValue: previousValue) }
                         }
                     ))
+                    .tint(Ember.goldFill)
                     .disabled(!notificationsLoaded || isSavingNotifications)
 
                     if let notificationsError {
@@ -47,14 +50,17 @@ struct SettingsView: View {
                     Text("Alerts fire when a session is waiting for you or needs permission. The app asks for iOS notification permission the first time it opens.")
                         .font(.caption2)
                 }
+                .listRowBackground(Ember.card)
 
                 Section {
                     Button(role: .destructive) {
                         showingSignOutConfirm = true
                     } label: {
                         Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
+                            .foregroundStyle(Ember.ember)
                     }
                 }
+                .listRowBackground(Ember.card)
 
                 Section {
                     LabeledContent("Version", value: appVersion)
@@ -62,7 +68,9 @@ struct SettingsView: View {
                     Text("Longhouse — native iOS pager")
                         .font(.caption2)
                 }
+                .listRowBackground(Ember.card)
             }
+            .emberListGround()
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -153,4 +161,5 @@ struct SettingsView: View {
 #Preview("Settings sheet") {
     SettingsView()
         .environmentObject(AppState())
+        .emberChrome()
 }

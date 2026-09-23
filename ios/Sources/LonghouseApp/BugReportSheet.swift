@@ -77,6 +77,7 @@ struct BugReportSheet: View {
                 } header: {
                     Text("Describe the problem")
                 }
+                .listRowBackground(Ember.card)
                 .disabled(reportID != nil)
 
                 Section {
@@ -91,6 +92,7 @@ struct BugReportSheet: View {
                             self.screenshotData = nil
                             saveDraft()
                         }
+                        .foregroundStyle(Ember.ember)
                     } else {
                         Label("No screen capture", systemImage: "rectangle.slash")
                             .foregroundStyle(.secondary)
@@ -101,6 +103,7 @@ struct BugReportSheet: View {
                         matching: .images
                     ) {
                         Label("Add screenshots from Photos", systemImage: "photo.on.rectangle")
+                            .foregroundStyle(Ember.gold)
                     }
                     if !additionalFiles.isEmpty {
                         HStack {
@@ -119,21 +122,25 @@ struct BugReportSheet: View {
                             : "This report is saved and immutable. Start a fix below when you are ready."
                     )
                 }
+                .listRowBackground(Ember.card)
                 .disabled(reportID != nil)
 
                 if let errorMessage {
                     Section {
                         Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Ember.ember)
                     }
+                    .listRowBackground(Ember.card)
                 }
                 if let statusMessage {
                     Section {
                         Label(statusMessage, systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
+                            .foregroundStyle(Ember.sage)
                     }
+                    .listRowBackground(Ember.card)
                 }
             }
+            .emberListGround()
             .navigationTitle("Report a problem")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -529,7 +536,7 @@ struct BugReportSavedBanner: View {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.title3)
-                    .foregroundStyle(.green)
+                    .foregroundStyle(Ember.sage)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Report saved")
                         .font(.headline)
@@ -544,7 +551,7 @@ struct BugReportSavedBanner: View {
                 Button("Done", action: onDone)
                     .buttonStyle(.bordered)
                 Button("Start a fix", action: onStartFix)
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.bordered)
             }
         }
         .padding(16)
@@ -579,7 +586,7 @@ struct BugReportSavedBanner: View {
 
 #Preview("Report saved confirmation") {
     ZStack(alignment: .bottom) {
-        Color(.systemBackground)
+        Ember.page
             .ignoresSafeArea()
         BugReportSavedBanner(
             onStartFix: {},
@@ -588,5 +595,6 @@ struct BugReportSavedBanner: View {
         .padding(16)
     }
     .preferredColorScheme(.dark)
+    .emberChrome()
     .frame(width: 390, height: 844)
 }

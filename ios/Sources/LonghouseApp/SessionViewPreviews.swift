@@ -400,6 +400,7 @@ private struct PreviewConnectionDrop: View {
         draft: "Check the newest restore checkpoint"
     )
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Working · quiet tool · Dark") {
@@ -423,6 +424,7 @@ private struct PreviewConnectionDrop: View {
         transcript: ["The command is still running. No new output has arrived."]
     )
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 #Preview("Composer · sending · Dark") {
     SessionScreenPreview(
@@ -448,6 +450,7 @@ private struct PreviewConnectionDrop: View {
         isSending: true
     )
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Working · Claude · long tool · Dark") {
@@ -479,6 +482,7 @@ private struct PreviewConnectionDrop: View {
         queuedInputCount: 1
     )
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Thinking · Codex streaming · Light") {
@@ -505,6 +509,7 @@ private struct PreviewConnectionDrop: View {
         activity: codexBurst()
     )
     .preferredColorScheme(.light)
+    .emberChrome()
 }
 
 #Preview("Needs approval · Dark") {
@@ -528,6 +533,7 @@ private struct PreviewConnectionDrop: View {
         draft: "Keep this draft while I review the request."
     )
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Activity expired · connected viewer · Light") {
@@ -558,6 +564,7 @@ private struct PreviewConnectionDrop: View {
         connection: .connected
     )
     .preferredColorScheme(.light)
+    .emberChrome()
 }
 
 #Preview("Ledger · Accessibility text") {
@@ -577,6 +584,7 @@ private struct PreviewConnectionDrop: View {
         connection: .connected
     )
     .preferredColorScheme(.dark)
+    .emberChrome()
     .environment(\.dynamicTypeSize, .accessibility2)
 }
 
@@ -604,6 +612,7 @@ private struct PreviewConnectionDrop: View {
         draft: "Keep the draft anchored while checking the next result."
     )
     .preferredColorScheme(.light)
+    .emberChrome()
     .environment(\.dynamicTypeSize, .accessibility3)
     .frame(width: 320, height: 740)
 }
@@ -634,6 +643,7 @@ private struct PreviewConnectionDrop: View {
         transcript: ["The session was working when this viewer lost updates."]
     )
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Idle · disconnected after connection · Dark") {
@@ -654,6 +664,7 @@ private struct PreviewConnectionDrop: View {
         transcript: ["Restore complete: 9.4 GB, 0 errors. Checksums match the manifest."]
     )
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Connecting startup · checking · Dark") {
@@ -677,6 +688,7 @@ private struct PreviewConnectionDrop: View {
         connection: .connecting
     )
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Approval · disconnected after connection · Dark") {
@@ -700,6 +712,7 @@ private struct PreviewConnectionDrop: View {
         transcript: ["The provider is waiting for approval before continuing."]
     )
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Idle · Dark") {
@@ -720,6 +733,7 @@ private struct PreviewConnectionDrop: View {
         transcript: ["Restore complete: 9.4 GB, 0 errors. Checksums match the manifest."]
     )
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Control offline · chip · Dark") {
@@ -743,6 +757,7 @@ private struct PreviewConnectionDrop: View {
         transcript: ["Restore complete: 9.4 GB, 0 errors. Checksums match the manifest."]
     )
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Ended Helm · Resume command") {
@@ -785,60 +800,65 @@ private struct PreviewConnectionDrop: View {
 
 #Preview("Transcript · hard error · Dark") {
     ZStack {
-        Color(.systemBackground).ignoresSafeArea()
+        Ember.page.ignoresSafeArea()
         TranscriptStateOverlay(
             state: .hardError("Couldn't load session: The Internet connection appears to be offline."),
             onRetry: {}
         )
     }
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Transcript · refresh banner · Dark") {
     ZStack {
-        Color(.systemBackground).ignoresSafeArea()
+        Ember.page.ignoresSafeArea()
         TranscriptStateOverlay(
             state: .contentWithRefreshError("Live update temporarily unavailable. Showing saved messages."),
             onRetry: {}
         )
     }
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Transcript · empty refresh error · Dark") {
     ZStack {
-        Color(.systemBackground).ignoresSafeArea()
+        Ember.page.ignoresSafeArea()
         TranscriptStateOverlay(
             state: .emptyWithRefreshError("Live update temporarily unavailable. Retry to check again."),
             onRetry: {}
         )
     }
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Transcript · syncing refresh error · Dark") {
     ZStack {
-        Color(.systemBackground).ignoresSafeArea()
+        Ember.page.ignoresSafeArea()
         TranscriptStateOverlay(
             state: .syncingWithRefreshError("Archive sync is delayed. Retry to check again."),
             onRetry: {}
         )
     }
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Transcript · loading · Dark") {
     ZStack {
-        Color(.systemBackground).ignoresSafeArea()
+        Ember.page.ignoresSafeArea()
         TranscriptStateOverlay(state: .loading, onRetry: {})
     }
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Session · first paint loading shell · Dark") {
     NavigationStack {
         ZStack {
-            Color(.systemBackground).ignoresSafeArea()
+            Ember.page.ignoresSafeArea()
             TranscriptStateOverlay(state: .loading, onRetry: {})
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -862,14 +882,16 @@ private struct PreviewConnectionDrop: View {
         }
     }
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Transcript · restoring · Dark") {
     ZStack {
-        Color(.systemBackground).ignoresSafeArea()
+        Ember.page.ignoresSafeArea()
         TranscriptStateOverlay(state: .restoring, onRetry: {})
     }
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 // MARK: - Provider facts chrome
@@ -924,6 +946,7 @@ private struct ProviderChromePreview: View {
         usage: SessionUsageLatest(model: "claude-opus-5", effort: "high", contextTokens: 501_447, outputTokens: 177, thinkingTokens: 0, at: "2026-09-02T23:07:00Z")
     )
     .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Usage chip alone · Light") {
@@ -932,4 +955,5 @@ private struct ProviderChromePreview: View {
         usage: SessionUsageLatest(model: "openai/gpt-5.6-sol", effort: "xhigh", contextTokens: 25_210, outputTokens: 80, thinkingTokens: 33, at: "2026-09-02T23:07:00Z", contextWindow: 258_400)
     )
     .preferredColorScheme(.light)
+    .emberChrome()
 }

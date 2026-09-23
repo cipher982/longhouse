@@ -78,6 +78,7 @@ struct SessionView: View {
             bottomChrome
                 .frame(maxWidth: .infinity)
         }
+        .background(Ember.page.ignoresSafeArea())
         // The principal toolbar item owns the visible title surface. Keep a
         // stable fallback navigation title for the Back label; never bind the
         // navigation title to detail so it cannot resize during the push.
@@ -330,6 +331,10 @@ struct SessionView: View {
                     .labelStyle(.iconOnly)
             }
         }
+        // A standalone glass toolbar button resolves the app's adaptive Ember
+        // foreground against the wrong appearance (ink on dark, parchment on
+        // light). A concrete style here lets the gold tint through instead.
+        .foregroundStyle(Color.primary)
         .accessibilityLabel("Session actions")
         .accessibilityIdentifier("session-overflow-menu")
     }
@@ -362,7 +367,7 @@ struct SessionView: View {
                     .lineLimit(2)
                 Spacer(minLength: 0)
             }
-            .foregroundStyle(.orange)
+            .foregroundStyle(Ember.ember)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(
@@ -606,7 +611,7 @@ struct SessionView: View {
                 if let err = attachmentStore.errorMessage {
                     Text(err)
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Ember.ember)
                         .onTapGesture { attachmentStore.errorMessage = nil }
                 }
             }
@@ -625,7 +630,7 @@ struct SessionView: View {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: detail.controlBlockIcon)
                         .font(.body)
-                        .foregroundStyle(detail.isControlOffline ? .orange : .secondary)
+                        .foregroundStyle(detail.isControlOffline ? Ember.ember : Ember.textSecondary)
                     Text(message)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
@@ -644,7 +649,7 @@ struct SessionView: View {
                     )
                     .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
                 .disabled(viewModel.isPreparingResume)
                 .accessibilityIdentifier("session-resume-button")
             // Gate on the run, not the disposition. Exiting a terminal ends the
@@ -661,7 +666,7 @@ struct SessionView: View {
             if let error = viewModel.resumeErrorMessage {
                 Text(error)
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Ember.ember)
             }
             // Resume hands back a command to type on the laptop, which is the
             // wrong shape for the device this app runs on. Branching is the
@@ -746,14 +751,15 @@ struct SessionNavigationHeader: View {
     var body: some View {
         VStack(spacing: 0) {
             Text(title)
-                .font(.headline)
+                .font(Ember.serif(17, relativeTo: .headline, bold: true))
+                .foregroundStyle(Ember.text)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
                 .truncationMode(.tail)
             if let subtitle, !subtitle.isEmpty {
                 Text(subtitle)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Ember.textSecondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
                     .truncationMode(.tail)
@@ -791,10 +797,10 @@ struct SessionLoadingDock: View {
         .padding(.vertical, 12)
         .background(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(Ember.card)
                 .overlay(
                     RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .strokeBorder(.white.opacity(0.10), lineWidth: 0.75)
+                        .strokeBorder(Ember.border.opacity(0.9), lineWidth: 0.75)
                 )
         )
         .shadow(color: .black.opacity(0.28), radius: 16, y: 5)

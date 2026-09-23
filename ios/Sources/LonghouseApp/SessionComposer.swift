@@ -81,6 +81,7 @@ struct SessionComposerActionMenu: View {
             .frame(width: 32, height: 32)
             .contentShape(Rectangle())
         }
+        .tint(Ember.textSecondary)
         .disabled(isSending)
         .accessibilityLabel("Message actions")
         .accessibilityIdentifier("session-chat-compose-actions")
@@ -174,7 +175,7 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
                      ? "1 queued message failed to send."
                      : "\(failedInputCount) queued messages failed to send.")
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Ember.ember)
                     .accessibilityIdentifier("session-chat-queued-failed")
             }
 
@@ -195,7 +196,7 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Active turn ended")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Ember.flame)
                     Text(turnEndedDraft)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -204,7 +205,7 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
                         Button("Queue instead") {
                             Task { await onQueueInstead() }
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.bordered)
                         .controlSize(.small)
                         Button("Dismiss", action: onDismissTurnEnded)
                             .buttonStyle(.bordered)
@@ -212,7 +213,7 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
                     }
                 }
                 .padding(8)
-                .background(Color.orange.opacity(0.08))
+                .background(Ember.flame.opacity(0.08))
                 .cornerRadius(8)
                 .accessibilityIdentifier("session-chat-turn-ended")
             }
@@ -281,7 +282,11 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity)
-            .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background(Ember.well, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Ember.hairline, lineWidth: 0.75)
+            }
             .accessibilityIdentifier("session-chat-composer")
     }
 
@@ -294,14 +299,15 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
                     .frame(width: 30, height: 30)
             } else {
                 Image(systemName: SessionComposerControlState.sendIcon(for: detail, asOf: evidenceNow))
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundStyle(enabled ? Color(.systemBackground) : Color(.systemGray))
-                    .frame(width: 30, height: 30)
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(enabled ? Ember.gold : Ember.textMuted)
+                    .frame(width: 34, height: 34)
                     .background(
-                        Circle().fill(enabled
-                            ? AnyShapeStyle(Color.primary)
-                            : AnyShapeStyle(Color(.tertiarySystemFill)))
+                        Circle().fill(enabled ? Ember.goldFill.opacity(0.18) : Ember.well)
                     )
+                    .overlay {
+                        Circle().strokeBorder(enabled ? Ember.gold.opacity(0.6) : Ember.hairline, lineWidth: 1)
+                    }
             }
         }
         .frame(minWidth: 44, minHeight: 44)

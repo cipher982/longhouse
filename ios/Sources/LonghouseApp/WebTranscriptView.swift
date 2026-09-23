@@ -2260,7 +2260,7 @@ private extension WebTranscriptView {
     }
 
     .error {
-      color: #b26b00;
+      color: var(--attention);
     }
 
     .row {
@@ -2292,10 +2292,15 @@ private extension WebTranscriptView {
     .bubble {
       display: inline-block;
       max-width: 100%;
-      padding: 9px 13px;
+      padding: 9px 14px 10px;
       border-radius: 17px;
       background: var(--user);
       white-space: pre-wrap;
+      /* The user's own words in the hall's voice, as on the web. */
+      font-family: "Iowan Old Style", Georgia, serif;
+      font-style: italic;
+      font-size: 1.08em;
+      line-height: 1.38;
     }
 
     /* An unsent message sits exactly where its durable row will land, in
@@ -2585,7 +2590,8 @@ private extension WebTranscriptView {
       background: transparent;
       box-shadow: none;
       margin-left: 2px;
-      border-left: 1.5px solid var(--rule);
+      /* The brass trace down the left edge, the web's tool line. */
+      border-left: 1.5px solid var(--trace);
       overflow: hidden;
     }
 
@@ -2699,8 +2705,8 @@ private extension WebTranscriptView {
     }
 
     .diff-gutter { opacity: 0.6; user-select: none; }
-    .diff-line--add { color: #6fbf73; }
-    .diff-line--remove { color: #d1706a; }
+    .diff-line--add { color: var(--diff-add); }
+    .diff-line--remove { color: var(--diff-remove); }
     .diff-line--equal { opacity: 0.75; }
 
     .details-body {

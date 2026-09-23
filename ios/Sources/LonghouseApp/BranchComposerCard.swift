@@ -32,13 +32,13 @@ struct BranchComposerCard: View {
                 if let errorMessage {
                     Text(errorMessage)
                         .font(.caption)
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Ember.ember)
                 }
                 Button(action: submit) {
                     Label(isSubmitting ? "Starting…" : "Continue here", systemImage: "arrow.branch")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
                 .disabled(!canSubmit)
                 .accessibilityIdentifier("session-branch-button")
             }

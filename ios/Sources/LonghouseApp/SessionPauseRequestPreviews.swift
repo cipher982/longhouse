@@ -27,8 +27,9 @@ private struct PauseRequestPreviewChrome<Content: View>: View {
             .padding(.bottom, 10)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemBackground))
+        .background(Ember.page)
         .preferredColorScheme(.dark)
+        .emberChrome()
     }
 }
 

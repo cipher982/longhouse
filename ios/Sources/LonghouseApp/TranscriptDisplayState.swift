@@ -158,7 +158,7 @@ struct TranscriptLoadingSurface: View {
         .padding(.horizontal, 28)
         .padding(.top, 28)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color(.systemBackground))
+        .background(Ember.page)
         .accessibilityIdentifier(identifier)
     }
 }
@@ -243,11 +243,11 @@ struct TranscriptStateOverlay: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             Button("Try again", action: onRetry)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemBackground))
+        .background(Ember.page)
         .accessibilityIdentifier("session-transcript-restoring-error")
     }
 
@@ -269,13 +269,13 @@ struct TranscriptStateOverlay: View {
         VStack(spacing: 14) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 40))
-                .foregroundStyle(.orange)
+                .foregroundStyle(Ember.ember)
             Text(message)
                 .font(.callout)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.primary)
             Button("Try again", action: onRetry)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -295,7 +295,7 @@ struct TranscriptStateOverlay: View {
                 Text("Retry").font(.caption.weight(.semibold))
             }
         }
-        .foregroundStyle(.orange)
+        .foregroundStyle(Ember.flame)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar)

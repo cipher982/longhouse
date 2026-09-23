@@ -10,12 +10,12 @@ struct SessionAttentionFallbackCard: View {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "exclamationmark.bubble")
                     .font(.subheadline)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Ember.ember)
                     .frame(width: 18, height: 18)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Needs attention")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Ember.ember)
                     Text(detail.runtimeHeadline)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
@@ -89,12 +89,12 @@ struct SessionPauseRequestCard: View {
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: "questionmark.bubble")
                     .font(.subheadline)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Ember.ember)
                     .frame(width: 18, height: 18)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(isPermissionPrompt ? "Permission" : "Needs answer")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Ember.ember)
                     Text(pauseRequest.title?.nonEmptyTrimmed ?? (isPermissionPrompt ? "Tool permission" : "Provider question"))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
@@ -143,7 +143,7 @@ struct SessionPauseRequestCard: View {
             if let errorMessage {
                 Text(errorMessage)
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Ember.ember)
                     .accessibilityIdentifier("session-pause-error")
             }
 
@@ -236,7 +236,7 @@ struct SessionPauseRequestCard: View {
                     } label: {
                         Label("Next", systemImage: "chevron.right")
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.bordered)
                     .controlSize(.small)
                     .disabled(isDisabled || !currentPageAnswered)
                     .accessibilityHint(currentPageAnswered ? "" : "Select an option to continue")
@@ -251,7 +251,7 @@ struct SessionPauseRequestCard: View {
                             Label(primaryActionLabel, systemImage: "checkmark.circle")
                         }
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.bordered)
                     .controlSize(.small)
                     .disabled(!canSubmitAnswer || isDisabled)
                     .accessibilityIdentifier("session-pause-send")

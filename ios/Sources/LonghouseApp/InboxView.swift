@@ -209,7 +209,7 @@ struct TimelineView: View {
     var body: some View {
         NavigationStack(path: $path) {
             content
-            .background(Color(.systemGroupedBackground))
+            .background { EmberHearthBackground() }
             .navigationTitle("Timeline")
             .searchable(text: $searchText, prompt: "Filter sessions")
             .navigationDestination(for: SessionRoute.self) { route in
@@ -237,6 +237,9 @@ struct TimelineView: View {
                             .labelStyle(.iconOnly)
                     }
                     .accessibilityHint("Capture diagnostics without opening a session")
+                    // See SessionView's overflow menu: standalone glass buttons
+                    // need a concrete style so the gold tint resolves correctly.
+                    .foregroundStyle(Color.primary)
                     .accessibilityIdentifier("timeline-report-problem")
                     .transaction { transaction in
                         transaction.animation = nil
@@ -249,9 +252,12 @@ struct TimelineView: View {
                     Button {
                         launchSheetPresented = true
                     } label: {
-                        Image(systemName: "plus.circle.fill")
+                        Image(systemName: "plus")
+                            .fontWeight(.semibold)
+                            .foregroundStyle(Ember.gold)
                             .accessibilityLabel("Start session")
                     }
+                    .emberProminentToolbarButton()
                     // Keep the parent toolbar slot stable during a push, but
                     // remove its controls immediately once the session route
                     // owns the navigation bar. Otherwise UIKit cross-fades
@@ -270,6 +276,7 @@ struct TimelineView: View {
                         Image(systemName: "gearshape")
                             .accessibilityLabel("Settings")
                     }
+                    .foregroundStyle(Color.primary)
                     .transaction { transaction in
                         transaction.animation = nil
                     }
@@ -427,14 +434,14 @@ struct TimelineView: View {
         VStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 36))
-                .foregroundStyle(.orange)
+                .foregroundStyle(Ember.ember)
             Text(message)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             Button("Try again") {
                 Task { await viewModel.refresh(using: appState, reloadWidget: true, force: true) }
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.bordered)
         }
         .padding()
     }
@@ -637,13 +644,10 @@ struct TimelineSessionList: View {
             .padding(.vertical, 11)
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                Color(.secondarySystemGroupedBackground),
-                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-            )
+            .background(Ember.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.secondary.opacity(0.16), lineWidth: 0.8)
+                    .stroke(Ember.hairline, lineWidth: 0.8)
             }
         }
         .buttonStyle(.plain)
@@ -653,18 +657,8 @@ struct TimelineSessionList: View {
     @ViewBuilder
     private func section(title: String, sessions: [SessionSummary], role: TimelineRowRole) -> some View {
         if !sessions.isEmpty {
-            HStack {
-                Text(title)
-                    .font(.headline.weight(.semibold))
-                    .accessibilityAddTraits(.isHeader)
-                Spacer(minLength: 8)
-                Text("\(sessions.count)")
-                    .font(.caption.weight(.semibold))
-                    .monospacedDigit()
-            }
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 2)
-            .padding(.top, role == .needsYou ? 0 : 6)
+            EmberSectionHeader(title: title, count: sessions.count, italic: role == .recent)
+                .padding(.top, role == .needsYou ? 0 : 8)
 
             ForEach(sessions) { session in
                 NavigationLink(value: SessionRoute(
@@ -723,8 +717,12 @@ struct TimelineSessionCardRow: View {
     var body: some View {
         let signal = TimelineSignal.resolve(for: session, suppressed: connectivityBanner != .none)
         let isNewResult = role == .newResult
-        let cardAccent = isNewResult ? Color.accentColor : signal.accentColor
-        let dotColor = isNewResult ? Color.accentColor : signal.dotColor
+        let dotColor = isNewResult ? newResultStatusColor(for: session) : signal.dotColor
+        // Only the rows that want you carry an edge; everything else is a
+        // quiet char card and lets the dot and status line speak. A new result
+        // is marked by its bold title and outcome dot, never by gold, which
+        // stays the brand and the primary action.
+        let edgeColor: Color? = role == .needsYou ? signal.dotColor : nil
         let dotPulses = !isNewResult && signal.pulses
         let titleWeight: Font.Weight = isNewResult ? .bold : .semibold
         let titleLineLimit = role == .needsYou || isNewResult ? 2 : 1
@@ -744,20 +742,20 @@ struct TimelineSessionCardRow: View {
                     if let project = session.projectLabel {
                         Text(project)
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Ember.textSecondary)
                             .lineLimit(1)
                     }
                     if let machine = session.timelineMachineLabel {
                         Text("· \(machine)")
                             .font(.caption2.weight(.medium))
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(Ember.textMuted)
                             .lineLimit(1)
                             .layoutPriority(-1)
                     }
                     if let branch = session.timelineBranchBadgeLabel {
                         Text("· \(branch)")
                             .font(.caption2.weight(.medium))
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(Ember.textMuted)
                             .lineLimit(1)
                             .layoutPriority(-1)
                     }
@@ -765,7 +763,7 @@ struct TimelineSessionCardRow: View {
                     if !isNewResult, let duration = stateDurationLabel(for: session) {
                         Text(duration)
                             .font(.caption2.weight(.medium))
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(Ember.textMuted)
                             .monospacedDigit()
                     }
                 }
@@ -775,7 +773,7 @@ struct TimelineSessionCardRow: View {
                         .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
                     Text(session.title)
                         .font(.subheadline.weight(titleWeight))
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(Ember.text)
                         .lineLimit(titleLineLimit)
                 }
                 // The dot is color-only; fold its meaning into the headline so
@@ -799,26 +797,25 @@ struct TimelineSessionCardRow: View {
                     Text("now: \(drift)")
                         .font(.caption2)
                         .italic()
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Ember.textMuted)
                         .lineLimit(1)
                 }
             }
         }
         .padding(.vertical, 11)
         .padding(.horizontal, 12)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(Ember.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(cardAccent)
-                .frame(width: role == .recent ? 3 : 4)
-                .padding(.vertical, 10)
+            if let edgeColor {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(edgeColor.opacity(0.85))
+                    .frame(width: 3)
+                    .padding(.vertical, 12)
+            }
         }
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(
-                    cardAccent.opacity(role == .recent ? 0.16 : 0.42),
-                    lineWidth: role == .recent ? 0.8 : 1.1
-                )
+                .stroke(edgeColor?.opacity(0.28) ?? Ember.hairline, lineWidth: 0.8)
         }
     }
 }
@@ -882,13 +879,10 @@ private struct TimelineSearchResultRow: View {
         }
         .padding(.vertical, 11)
         .padding(.horizontal, 12)
-        .background(
-            Color(.secondarySystemGroupedBackground),
-            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-        )
+        .background(Ember.card, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.secondary.opacity(0.16), lineWidth: 0.8)
+                .stroke(Ember.hairline, lineWidth: 0.8)
         }
     }
 }
@@ -911,7 +905,7 @@ private struct CompactRuntimeLine: View {
             if sessionStale {
                 Text("· stale")
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Ember.flame)
                     .lineLimit(1)
             }
         }
@@ -961,16 +955,16 @@ struct ConnectionStatusStrip: View {
             return nil
         case .degraded:
             return Style(label: "Connection degraded", symbol: "exclamationmark.triangle",
-                         foreground: .orange,
-                         background: Color.orange.opacity(0.18))
+                         foreground: Ember.flame,
+                         background: Ember.flame.opacity(0.12))
         case .offline:
             return Style(label: "Offline", symbol: "exclamationmark.triangle.fill",
-                         foreground: .red,
-                         background: Color.red.opacity(0.18))
+                         foreground: Ember.ember,
+                         background: Ember.ember.opacity(0.12))
         case .authRequired:
             return Style(label: "Sign in required", symbol: "person.crop.circle.badge.exclamationmark",
-                         foreground: .red,
-                         background: Color.red.opacity(0.18))
+                         foreground: Ember.ember,
+                         background: Ember.ember.opacity(0.12))
         }
     }
 }
@@ -1608,9 +1602,9 @@ private func newResultStatusText(for session: SessionSummary) -> String {
 
 private func newResultStatusColor(for session: SessionSummary) -> Color {
     switch session.stateFacts.lastResultOutcome?.lowercased() {
-    case "failed": return .red
-    case "cancelled": return .secondary
-    default: return .accentColor
+    case "failed": return Ember.ember
+    case "cancelled": return Ember.textSecondary
+    default: return Ember.sage
     }
 }
 

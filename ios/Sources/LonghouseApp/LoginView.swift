@@ -47,24 +47,27 @@ struct LoginView: View {
 
     var body: some View {
         ZStack {
-            Color(red: 0.04, green: 0.04, blue: 0.06)
-                .ignoresSafeArea()
+            LoginHearth()
 
             VStack(spacing: 32) {
                 Spacer()
 
-                VStack(spacing: 12) {
-                    Image(systemName: "house.lodge.fill")
-                        .font(.system(size: 48))
-                        .foregroundStyle(.white.opacity(0.9))
+                VStack(spacing: 14) {
+                    Image("LonghouseMascot")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 96, height: 96)
+                        .shadow(color: LoginInk.gold.opacity(0.35), radius: 28, y: 6)
+                        .accessibilityHidden(true)
+                        .padding(.bottom, 6)
 
                     Text("Longhouse")
-                        .font(.largeTitle.weight(.bold))
-                        .foregroundStyle(.white)
+                        .font(Ember.serif(40, relativeTo: .largeTitle))
+                        .foregroundStyle(LoginInk.parchment)
 
                     Text("Mission control for your AI agents")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.6))
+                        .font(Ember.serif(17, relativeTo: .subheadline, italic: true))
+                        .foregroundStyle(LoginInk.clay)
                 }
 
                 Spacer()
@@ -74,11 +77,11 @@ struct LoginView: View {
                         hostedBootstrapControls
                     } else if isLoadingAuthMethods && authMethods == nil {
                         ProgressView()
-                            .tint(.white)
+                            .tint(LoginInk.gold)
                             .scaleEffect(1.2)
                     } else if isSigningIn {
                         ProgressView()
-                            .tint(.white)
+                            .tint(LoginInk.gold)
                             .scaleEffect(1.2)
                     } else if let authMethods {
                         authControls(for: authMethods)
@@ -88,12 +91,12 @@ struct LoginView: View {
                                 .font(.system(size: 16, weight: .medium))
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 14)
-                                .background(.white.opacity(0.08))
-                                .foregroundStyle(.white)
+                                .background(LoginInk.gold.opacity(0.13))
+                                .foregroundStyle(LoginInk.parchment)
                                 .clipShape(RoundedRectangle(cornerRadius: 12))
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 12)
-                                        .strokeBorder(.white.opacity(0.15), lineWidth: 1)
+                                        .strokeBorder(LoginInk.gold.opacity(0.5), lineWidth: 1)
                                 )
                         }
                     }
@@ -101,7 +104,7 @@ struct LoginView: View {
                     if let errorMessage = displayedErrorMessage {
                         Text(errorMessage)
                             .font(.caption)
-                            .foregroundStyle(.red.opacity(0.8))
+                            .foregroundStyle(LoginInk.ember)
                             .multilineTextAlignment(.center)
                     }
                 }
@@ -111,6 +114,9 @@ struct LoginView: View {
                     .frame(height: 60)
             }
         }
+        // Always the hall at night, so the status bar must be light too.
+        .environment(\.colorScheme, .dark)
+        .preferredColorScheme(.dark)
         .task(id: appState.serverURL) {
             await loadAuthMethods()
         }
@@ -134,26 +140,26 @@ struct LoginView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
-                .background(.white.opacity(0.08))
-                .foregroundStyle(.white)
+                .background(LoginInk.gold.opacity(0.13))
+                .foregroundStyle(LoginInk.parchment)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .overlay(
                     RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(.white.opacity(0.15), lineWidth: 1)
+                        .strokeBorder(LoginInk.gold.opacity(0.5), lineWidth: 1)
                 )
             }
             .accessibilityIdentifier("login.continueWithLonghouse")
 
             Text("Hosted instances sign in through the Longhouse control plane.")
                 .font(.caption)
-                .foregroundStyle(.white.opacity(0.45))
+                .foregroundStyle(LoginInk.muted)
                 .multilineTextAlignment(.center)
             if forceEphemeralHostedSignIn {
                 Button("Sign in with a different Longhouse account") {
                     startHostedSignIn(methods, ephemeral: true)
                 }
                 .font(.caption.weight(.medium))
-                .foregroundStyle(.white.opacity(0.8))
+                .foregroundStyle(LoginInk.clay)
                 .accessibilityIdentifier("login.switchLonghouseAccount")
             }
         } else {
@@ -176,12 +182,12 @@ struct LoginView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
-                .background(.white.opacity(0.08))
-                .foregroundStyle(.white)
+                .background(LoginInk.gold.opacity(0.13))
+                .foregroundStyle(LoginInk.parchment)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .overlay(
                     RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(.white.opacity(0.15), lineWidth: 1)
+                        .strokeBorder(LoginInk.gold.opacity(0.5), lineWidth: 1)
                 )
             }
         }
@@ -189,7 +195,7 @@ struct LoginView: View {
         if methods.password {
             if methods.google {
                 Divider()
-                    .background(.white.opacity(0.15))
+                    .background(LoginInk.gold.opacity(0.25))
             }
 
             SecureField("Password", text: $password)
@@ -198,12 +204,12 @@ struct LoginView: View {
                 .textInputAutocapitalization(.never)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
-                .background(.white.opacity(0.08))
-                .foregroundStyle(.white)
+                .background(LoginInk.gold.opacity(0.13))
+                .foregroundStyle(LoginInk.parchment)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .overlay(
                     RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(.white.opacity(0.15), lineWidth: 1)
+                        .strokeBorder(LoginInk.gold.opacity(0.5), lineWidth: 1)
                 )
 
             Button(action: signInWithPassword) {
@@ -211,12 +217,12 @@ struct LoginView: View {
                     .font(.system(size: 16, weight: .medium))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
-                    .background(.white.opacity(0.08))
-                    .foregroundStyle(.white)
+                    .background(LoginInk.gold.opacity(0.13))
+                    .foregroundStyle(LoginInk.parchment)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
-                            .strokeBorder(.white.opacity(0.15), lineWidth: 1)
+                            .strokeBorder(LoginInk.gold.opacity(0.5), lineWidth: 1)
                     )
             }
             .disabled(password.isEmpty)
@@ -226,7 +232,7 @@ struct LoginView: View {
         if !methods.sso && !methods.google && !methods.password {
             Text("This Longhouse server does not advertise a supported sign-in method.")
                 .font(.caption)
-                .foregroundStyle(.white.opacity(0.45))
+                .foregroundStyle(LoginInk.muted)
                 .multilineTextAlignment(.center)
         }
     }
@@ -242,26 +248,26 @@ struct LoginView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
-            .background(.white.opacity(0.08))
-            .foregroundStyle(.white)
+            .background(LoginInk.gold.opacity(0.13))
+            .foregroundStyle(LoginInk.parchment)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(.white.opacity(0.15), lineWidth: 1)
+                    .strokeBorder(LoginInk.gold.opacity(0.5), lineWidth: 1)
             )
         }
         .accessibilityIdentifier("login.continueWithLonghouse")
 
         Text("Hosted Longhouse accounts sign in through the control plane. Custom or self-hosted servers can still be set from the server icon.")
             .font(.caption)
-            .foregroundStyle(.white.opacity(0.45))
+            .foregroundStyle(LoginInk.muted)
             .multilineTextAlignment(.center)
 
         if let hostedAuthAttemptURL = appState.hostedAuthAttemptURL,
            UITestHooks.shouldCaptureHostedAuthAttempt {
             Text(hostedAuthAttemptURL)
                 .font(.caption2)
-                .foregroundStyle(.white.opacity(0.45))
+                .foregroundStyle(LoginInk.muted)
                 .multilineTextAlignment(.center)
                 .accessibilityIdentifier("login.hostedAuthAttemptURL")
         }
@@ -710,5 +716,35 @@ struct LoginView: View {
         }
 
         return nil
+    }
+}
+
+/// The sign-in screen is always the hall at night, whatever the system
+/// appearance: the first thing anyone sees is the fire, not a form.
+enum LoginInk {
+    static let parchment = Ember.uiHex(0xF6EBD6)
+    static let clay = Ember.uiHex(0xC4B096)
+    static let muted = Ember.uiHex(0x8A7862)
+    static let gold = Ember.uiHex(0xE9B949)
+    static let ember = Ember.uiHex(0xE4572E)
+}
+
+private struct LoginHearth: View {
+    var body: some View {
+        ZStack {
+            Ember.uiHex(0x0B0908)
+            RadialGradient(
+                colors: [LoginInk.gold.opacity(0.20), LoginInk.gold.opacity(0.05), .clear],
+                center: UnitPoint(x: 0.5, y: 0.36),
+                startRadius: 0,
+                endRadius: 380
+            )
+            LinearGradient(
+                colors: [.clear, Ember.uiHex(0xF08A24).opacity(0.07)],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+        }
+        .ignoresSafeArea()
     }
 }

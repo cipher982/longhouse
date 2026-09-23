@@ -18,7 +18,7 @@ struct ResumeCommandSheet: View {
                         systemImage: "exclamationmark.triangle"
                     )
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Ember.flame)
                 }
                 if intent.available, let command = intent.command {
                     Text(command)
@@ -26,7 +26,11 @@ struct ResumeCommandSheet: View {
                         .textSelection(.enabled)
                         .padding(14)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                        .background(Ember.well, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(Ember.hairline, lineWidth: 0.75)
+                        }
                     Button {
                         UIPasteboard.general.string = command
                         copied = true
@@ -34,7 +38,7 @@ struct ResumeCommandSheet: View {
                         Label(copied ? "Copied" : "Copy command", systemImage: copied ? "checkmark" : "doc.on.doc")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.bordered)
                 } else {
                     Text("Resume is no longer available: \(resumeReasonLabel(intent.reason)).")
                         .foregroundStyle(.secondary)
@@ -42,6 +46,8 @@ struct ResumeCommandSheet: View {
                 Spacer()
             }
             .padding()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(Ember.page.ignoresSafeArea())
             .navigationTitle("Resume on \(intent.machineLabel ?? intent.machineId ?? "its machine")")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
