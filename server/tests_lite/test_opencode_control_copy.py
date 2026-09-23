@@ -6,9 +6,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 EXPECTED_COPY = {
-    "README.md": [
-        "OpenCode Helm supports send, interrupt, terminate, pause-answer, and active-turn steer that lands at the next step boundary",
-    ],
+    # README.md carried the OpenCode capability sentence until d2c2dee0
+    # ("Simplify provider proof public surface", 2026-09-22) removed the
+    # per-provider prose from the public README on purpose. That surface no
+    # longer exists, so nothing here may require it back; FORBIDDEN_COPY below
+    # still guards README.md against stale live-send-only copy.
     "web/src/pages/docs/IntegrationsPage.tsx": [
         "send, interrupt, terminate, and pause-answer",
         "permission reply endpoint",
