@@ -32,8 +32,30 @@ jobs:
           fetch-depth: 1
           show-progress: false
 
+      # The cube deploy runner has no GitHub CLI and promote-dogfood.sh needs
+      # it; install a pinned, checksum-verified copy into the job's temp dir.
+      - name: Install GitHub CLI
+        env:
+          GH_VERSION: "2.101.0"
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) arch=amd64 ;;
+            aarch64|arm64) arch=arm64 ;;
+            *) echo "unsupported arch $(uname -m)" >&2; exit 1 ;;
+          esac
+          name="gh_${GH_VERSION}_linux_${arch}"
+          base="https://github.com/cli/cli/releases/download/v${GH_VERSION}"
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "${base}/${name}.tar.gz"
+          curl -fsSL "${base}/gh_${GH_VERSION}_checksums.txt" | grep " ${name}.tar.gz\$" | sha256sum -c -
+          tar -xzf "${name}.tar.gz"
+          echo "$RUNNER_TEMP/${name}/bin" >> "$GITHUB_PATH"
+          for tool in jq python3 curl unzip; do command -v "$tool" >/dev/null || { echo "missing $tool" >&2; exit 1; }; done
+
       - name: Promote
         env:
+          GH_TOKEN: ${{ github.token }}
           CONTROL_PLANE_URL: https://control.longhouse.ai
           CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
           REGISTRY_USERNAME: ${{ github.actor }}
