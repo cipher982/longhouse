@@ -1584,10 +1584,13 @@ struct WebTranscriptView: UIViewRepresentable {
             _ rhs: WebTranscriptPreparedPayload?
         ) -> Bool {
             guard let rhs else { return false }
-            return lhs.base64 == rhs.base64
-                && lhs.contentRevision == rhs.contentRevision
+            // Revisions and the fingerprint first: the base64 is the whole
+            // transcript, and a changed payload almost always differs there.
+            return lhs.contentRevision == rhs.contentRevision
                 && lhs.transcriptReadThrough == rhs.transcriptReadThrough
                 && lhs.retryRevision == rhs.retryRevision
+                && lhs.payloadFingerprint == rhs.payloadFingerprint
+                && lhs.base64 == rhs.base64
         }
 
         private func renderReceipt(for payload: WebTranscriptPreparedPayload) -> WebTranscriptRenderReceipt {
