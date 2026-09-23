@@ -1980,7 +1980,7 @@ final class SessionViewModel: ObservableObject {
         shouldPublish: Bool
     ) {
         realtimePreviewBuildTask = nil
-        var pending = pendingRealtimePreviewBuild
+        let pending = pendingRealtimePreviewBuild
         pendingRealtimePreviewBuild = nil
         var didPublish = false
 

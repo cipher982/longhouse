@@ -1086,7 +1086,7 @@ struct WebTranscriptView: UIViewRepresentable {
         func webView(
             _ webView: WKWebView,
             decidePolicyFor navigationAction: WKNavigationAction,
-            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+            decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void
         ) {
             guard self.webView === webView else {
                 decisionHandler(.cancel)
@@ -1270,8 +1270,8 @@ struct WebTranscriptView: UIViewRepresentable {
             contentSizeObservation = webView.scrollView.observe(
                 \.contentSize,
                 options: [.new]
-            ) { [weak webView] _, _ in
-                guard let webView else { return }
+            ) { [weak self, weak webView] _, _ in
+                guard webView != nil else { return }
                 DispatchQueue.main.async { [weak self, weak webView] in
                     guard let self, let webView else { return }
                     self.contentSizeDidChange(on: webView)
@@ -2053,7 +2053,7 @@ private final class WebTranscriptSpareDelegate: NSObject, WKNavigationDelegate {
     func webView(
         _ webView: WKWebView,
         decidePolicyFor navigationAction: WKNavigationAction,
-        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+        decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void
     ) {
         guard allowsDocumentLoad, navigationAction.navigationType == .other else {
             decisionHandler(.cancel)

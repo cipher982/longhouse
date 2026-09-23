@@ -231,7 +231,7 @@ private func readRunMarker(at url: URL) -> RunMarker? {
 /// `NSSetUncaughtExceptionHandler` needs a C function pointer, and referencing a
 /// type's static storage from one is a captured context.
 nonisolated(unsafe) private var runMarkerLatest: Data?
-nonisolated(unsafe) private let runMarkerLock = NSLock()
+private let runMarkerLock = NSLock()
 nonisolated(unsafe) private var runMarkerURLValue: URL?
 nonisolated(unsafe) private var runMarkerHandlerInstalled = false
 
