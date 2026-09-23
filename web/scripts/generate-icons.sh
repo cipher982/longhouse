@@ -34,6 +34,20 @@ magick "${PUBLIC_DIR}/favicon-16.png" "${PUBLIC_DIR}/favicon-32.png" "${PUBLIC_D
 echo "Generating Apple touch icon (180px)…"
 magick "${PUBLIC_DIR}/favicon-512.png" -resize 180x180 "${PUBLIC_DIR}/apple-touch-icon.png"
 
+echo "Generating iOS app icon (1024px, opaque)…"
+# App icons must be opaque; the mascot sits on the web page's soot ground under
+# its hearth light, inset so the home-screen squircle never clips the helmet.
+IOS_ICON_OUT="${ROOT_DIR}/../ios/Resources/Assets.xcassets/AppIcon.appiconset/app-icon-1024.png"
+IOS_TMP=$(mktemp -d)
+node "${ROOT_DIR}/scripts/render-svg-asset.mjs" "${SRC}" "${IOS_TMP}/mascot.png" 1024 1024
+magick "${IOS_TMP}/mascot.png" -trim +repage -resize 800x800 "${IOS_TMP}/mascot-800.png"
+magick -size 1024x1024 xc:'#0B0908' \
+  \( -size 1400x1400 radial-gradient:'rgba(233,185,73,0.22)'-'rgba(233,185,73,0)' -gravity north -crop 1024x1024+188+0 +repage \) \
+  -compose over -composite \
+  "${IOS_TMP}/mascot-800.png" -gravity center -geometry +0+8 -compose over -composite \
+  -alpha off "${IOS_ICON_OUT}"
+rm -rf "${IOS_TMP}"
+
 echo "Generating panel status variants from master logo geometry…"
 mkdir -p "$(dirname "${PANEL_GREEN_OUT}")"
 # Source icon geometry should be edge-to-edge; panel variants add their own inset.

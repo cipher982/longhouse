@@ -122,29 +122,52 @@ function paletteForTone(rawTone) {
   }
 }
 
+function swap(svg, pattern, replacement, role) {
+  const next = svg.replace(pattern, replacement);
+  if (next === svg) {
+    // A silent miss renders the master's own colors under a severity name.
+    throw new Error(`render-menubar-icon: master SVG has no ${role}; update deriveMenubarSvg to the master's current structure`);
+  }
+  return next;
+}
+
+function recolorStops(svg, gradientId, colors, role) {
+  const block = new RegExp(`(<linearGradient id="${gradientId}"[\\s\\S]*?</linearGradient>)`);
+  return swap(svg, block, (gradient) => {
+    let index = 0;
+    return gradient.replace(/stop-color="[^"]*"( stop-opacity="[^"]*")?/g, (_, opacity) => {
+      const [color, stopOpacity] = colors[Math.min(index++, colors.length - 1)];
+      const nextOpacity = stopOpacity ?? opacity?.match(/"([^"]*)"/)[1];
+      return `stop-color="${color}"` + (nextOpacity == null ? "" : ` stop-opacity="${nextOpacity}"`);
+    });
+  }, role);
+}
+
 function deriveMenubarSvg(svg, rawTone) {
   let derived = svg;
   const palette = paletteForTone(rawTone);
 
-  // Keep one geometry source of truth and recolor the existing gradients
-  // rather than flattening the mark into a single fill.
-  derived = derived.replace('stop-color="#A883FF"', `stop-color="${palette.shellStart}"`);
-  derived = derived.replace('stop-color="#7A57E5"', `stop-color="${palette.shellMid}"`);
-  derived = derived.replace('stop-color="#5832B9"', `stop-color="${palette.shellEnd}"`);
-  derived = derived.replace('stop-color="#30245B"', `stop-color="${palette.visorStart}"`);
-  derived = derived.replace('stop-color="#17112E"', `stop-color="${palette.visorEnd}"`);
-  derived = derived.replace('stop-color="#ffffff" stop-opacity="0.34"', `stop-color="${palette.highlightStart}" stop-opacity="${palette.highlightStartOpacity}"`);
-  derived = derived.replace('stop-color="#ffffff" stop-opacity="0"', `stop-color="${palette.highlightEnd}" stop-opacity="${palette.highlightEndOpacity}"`);
-  derived = derived.replaceAll('stroke="#2E1A62"', `stroke="${palette.shellStroke}"`);
-  derived = derived.replace('stroke="#8EF0AA"', `stroke="${palette.visorStroke}"`);
-  derived = derived.replace('stroke="#AAFFD0"', `stroke="${palette.visorStroke}"`);
-  derived = derived.replaceAll('fill="#9AF7A8"', `fill="${palette.detailFill}"`);
-  derived = derived.replaceAll('stroke="#9AF7A8"', `stroke="${palette.detailStroke}"`);
-  derived = derived.replace('fill="#ffffff" opacity="0.14"', `fill="${palette.sparkleFill}"`);
-
-  // The master viewBox is already tight to content bounds.
-  // The menu bar needs a tiny optical inset and downward nudge so the
-  // helmet reads centered at 18pt without clipping the crown.
+  // Keep one geometry source of truth and recolor by role (gradient id and
+  // element), not by the master's hex values: the master's palette changes.
+  derived = recolorStops(derived, "helmetGrad", [[palette.shellStart], [palette.shellMid], [palette.shellEnd]], "helmetGrad");
+  derived = recolorStops(derived, "visorGrad", [[palette.visorStart], [palette.visorEnd]], "visorGrad");
+  derived = recolorStops(
+    derived,
+    "highlightGrad",
+    [[palette.highlightStart, palette.highlightStartOpacity], [palette.highlightEnd, palette.highlightEndOpacity]],
+    "highlightGrad",
+  );
+  // Visor frame: the rects' strokes.
+  derived = swap(derived, /(<rect[^>]*?stroke=")[^"]*(")/g, `$1${palette.visorStroke}$2`, "visor rect");
+  // Shell outlines: every remaining stroke on a helmet-filled shape or bare path.
+  derived = swap(derived, /(<(?:ellipse|path)[^>]*?fill="(?:url\(#helmetGrad\)|none)"[^>]*?stroke=")[^"]*(")/g, `$1${palette.shellStroke}$2`, "shell outline");
+  derived = derived.replace(/(<path d="[^"]*" stroke=")[^"]*(")/g, `$1${palette.shellStroke}$2`);
+  // Eyes and their links.
+  derived = swap(derived, /(<ellipse cx="\d+" cy="\d+" rx="\d+" ry="\d+" fill=")#[0-9A-Fa-f]{6}(" \/>)/g, `$1${palette.detailFill}$2`, "eye fill");
+  derived = swap(derived, /(<ellipse cx="\d+" cy="\d+" rx="\d+" ry="\d+" fill="none" stroke=")[^"]*(")/g, `$1${palette.detailStroke}$2`, "eye outline");
+  derived = swap(derived, /(<g stroke=")[^"]*(")/, `$1${palette.detailStroke}$2`, "eye links");
+  // Small glint on the right cheek.
+  derived = swap(derived, /fill="[^"]*"( opacity="0\.14")/, `fill="${palette.sparkleFill}"$1`, "glint");
 
   return derived;
 }

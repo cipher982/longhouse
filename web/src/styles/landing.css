@@ -20,7 +20,7 @@
     overflow: hidden;
     color: var(--color-text-primary);
     background:
-      radial-gradient(circle at 78% 8%, rgba(95, 67, 138, 0.12), transparent 26rem),
+      radial-gradient(circle at 78% 8%, rgba(240, 138, 36, 0.08), transparent 26rem),
       radial-gradient(circle at 22% 17%, rgba(201, 166, 107, 0.09), transparent 30rem),
       var(--color-surface-page);
     font-family: var(--font-family-base);
