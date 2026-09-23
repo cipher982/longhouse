@@ -18,6 +18,11 @@
 # Environment:
 #   TOUR_TARGET         simulator or device
 #   TOUR_CONFIGURATION  Debug (default) or Release
+#   TOUR_OPTIMIZED      1 (default): compile Debug with -O, whole-module, no
+#                       debug dylib. The test hooks (headless sign-in) are
+#                       DEBUG-only, and unoptimized Swift on a simulator spends
+#                       seconds in runtime metadata lookups the shipping app
+#                       never pays, which buried the app's own hotspots.
 #   TOUR_OUT_DIR        output directory (default: /tmp/agents/ios-tour)
 #   SIM_UDID / PHONE_DEVICE  pick the simulator or phone
 set -euo pipefail
@@ -26,7 +31,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROJECT="$ROOT_DIR/ios/XcodeHarness/LonghouseIOS.xcodeproj"
 TARGET="${TOUR_TARGET:-simulator}"
 CONFIGURATION="${TOUR_CONFIGURATION:-Debug}"
-DERIVED="$HOME/Library/Developer/Xcode/DerivedData/LonghouseIOS-Tour-$TARGET-$CONFIGURATION"
+declare -a optimize=()
+FLAVOR="$CONFIGURATION"
+if [[ "${TOUR_OPTIMIZED:-1}" == 1 ]]; then
+  optimize=(SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule GCC_OPTIMIZATION_LEVEL=s ENABLE_DEBUG_DYLIB=NO)
+  FLAVOR="$CONFIGURATION-O"
+fi
+DERIVED="$HOME/Library/Developer/Xcode/DerivedData/LonghouseIOS-Tour-$TARGET-$FLAVOR"
 OUT_DIR="${TOUR_OUT_DIR:-/tmp/agents/ios-tour}"
 LABEL="${1:-tour}"
 STATE="$ROOT_DIR/artifacts/simlab/current/simlab.json"
@@ -92,12 +103,12 @@ print(phones[0]["hardwareProperties"]["udid"] if phones else "")
 esac
 
 mkdir -p "$OUT_DIR"
-BASE="$OUT_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$LABEL-$TARGET-$CONFIGURATION"
+BASE="$OUT_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$LABEL-$TARGET-$FLAVOR"
 started=$SECONDS
 (cd "$ROOT_DIR" && make ios-project >/dev/null)
 if ! xcodebuild -project "$PROJECT" -scheme LonghouseChatStress -configuration "$CONFIGURATION" \
   -destination "$destination" -derivedDataPath "$DERIVED" ${signing[@]+"${signing[@]}"} \
-  DEBUG_INFORMATION_FORMAT=dwarf-with-dsym build-for-testing > "$BASE-build.log" 2>&1; then
+  ${optimize[@]+"${optimize[@]}"} DEBUG_INFORMATION_FORMAT=dwarf-with-dsym build-for-testing > "$BASE-build.log" 2>&1; then
   grep -E "error:" "$BASE-build.log" | head -10 >&2
   die "build failed; log at $BASE-build.log"
 fi
@@ -201,7 +212,7 @@ if [[ -s "$BASE-app.log" ]]; then
 fi
 if [[ -d "$launch_trace" ]]; then
   echo; echo "== cold launch: $launch_trace"
-  python3 "$ROOT_DIR/scripts/ops/trace_summary.py" "$launch_trace" --process Longhouse --top 12
+  python3 "$ROOT_DIR/scripts/ops/trace_summary.py" "$launch_trace" --process Longhouse --top 15
 fi
 if [[ -d "$trace" ]]; then
   echo; echo "== tour: $trace"

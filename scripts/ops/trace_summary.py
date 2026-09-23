@@ -137,6 +137,8 @@ def time_profile(trace: str, directory: str, top: int, process: str | None, call
     app_frame = collections.Counter()
     threads = collections.Counter()
     callers = collections.Counter()
+    inclusive = collections.Counter()
+    app_total = 0
     total = 0
     for row in stream_rows(path):
         stack = row.get("stack") or []
@@ -157,10 +159,17 @@ def time_profile(trace: str, directory: str, top: int, process: str | None, call
         total += weight
         threads[thread] += weight
         leaf[stack[0][0]] += weight
-        for name, binary in stack:
-            if binary in APP_BINARIES:
-                app_frame[name] += weight
-                break
+        app_names = [name for name, binary in stack if binary in APP_BINARIES]
+        if app_names:
+            app_frame[app_names[0]] += weight
+            # Samples with no app frame anywhere are system or simulator
+            # overhead the app did not ask for; everything else is the
+            # app's cost, and inclusive time ranks where it went.
+            deep = [n for n in app_names if n not in ("static LonghouseApp.$main()", "__debug_main_executable_dylib_entry_point")]
+            if deep:
+                app_total += weight
+                for name in set(n for n in deep if not n.startswith(SKIPPED_CALLER_PREFIXES)):
+                    inclusive[name] += weight
         if callers_of:
             hits = [i for i, (name, _) in enumerate(stack) if callers_of in name]
             if hits:
@@ -178,6 +187,9 @@ def time_profile(trace: str, directory: str, top: int, process: str | None, call
         print(f"  {ms(w)}  thread {name}")
     print("\nTop self-time symbols:")
     for name, w in leaf.most_common(top):
+        print(f"  {ms(w)}  {name[:140]}")
+    print(f"\nApp-attributable CPU (an app frame below main on the stack): {ms(app_total)}")
+    for name, w in inclusive.most_common(top):
         print(f"  {ms(w)}  {name[:140]}")
     print("\nTop app frames (innermost Longhouse frame on each sample):")
     for name, w in app_frame.most_common(top):
