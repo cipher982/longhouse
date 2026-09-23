@@ -170,8 +170,28 @@ re-renders the row when it arrives. The view model's diagnostics line
 where to look before blaming a style.
 
 ### Phone
-Only for device-only behavior (APNS, Live Activity, cellular):
-The App Store build is an Xcode build; state clearly when the phone needs one.
+Real performance and device-only behavior (APNS, Live Activity, cellular).
+`make phone-deploy` builds and installs over the Wi-Fi tunnel; a locked phone
+takes the install and refuses the launch (`phone.sh` says so). Unlocked:
+`phone.sh console [--seconds N]` relaunches and streams the app's stdout and
+OSLog as Xcode's console would; `phone.sh profile` records Instruments.
+
+### Warnings, console noise, profiling
+- Every `sim.sh`/`phone.sh` build prints its compiler warnings to stderr. Keep
+  it at zero: Xcode's GUI only shows warnings for recompiled files, and a
+  "nearly matches optional requirement" warning meant WebKit silently never
+  called a delegate method. Check a suspect `@objc` witness with
+  `otool -oV <app>/Longhouse.debug.dylib | grep <selector>`.
+- Console yellow is os_log Error, red is Fault. On a normal simlab run ~47 of
+  48 are Apple frameworks (cfprefsd, CoreAnimation "dropping" handlers,
+  nw_connection on unconnected sockets, UIKit dictation asserts, "Could not
+  resolve UID for user mobile"). Filter to `subsystem == "ai.longhouse.ios"`
+  (`sim.sh logs`) and read only ours.
+- `sim.sh profile|phone.sh profile [--template "Animation Hitches"] [--seconds 20]`
+  attaches Instruments to the running app and prints CPU by thread, top
+  symbols, the app frames they came through, hangs and hitches
+  (`scripts/ops/trace_summary.py`). Simulator Debug numbers find hotspots;
+  judge speed on the phone.
 
 ## Web
 

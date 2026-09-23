@@ -13,6 +13,8 @@
 #   scripts/ops/sim.sh record <seconds> [label]    MP4 into artifacts/sim/
 #   scripts/ops/sim.sh logs [--follow] [--since 5m] [--all]
 #                                                  the app's OSLog (ai.longhouse.ios)
+#   scripts/ops/sim.sh profile [--template T] [--seconds 15] [label]
+#                                                  Instruments trace of the running app + summary
 #   scripts/ops/sim.sh shutdown                    shut the simulator down
 #
 # Environment:
@@ -130,7 +132,46 @@ cmd_build() {
     die "build failed; full log at $log"
   fi
   test -d "$(built_app)" || die "build produced no app at $(built_app)"
+  report_warnings "$log"
   printf '%s\n' "$(built_app)"
+}
+
+# Compiler warnings go to stderr after a green build. Xcode's GUI only shows
+# warnings for files it recompiled, so an incremental click hides them; a
+# "nearly matches optional requirement" warning here once meant WebKit never
+# called the transcript's navigation guard.
+report_warnings() {
+  local log="$1" warnings
+  warnings="$(grep -E '^/.*: warning: ' "$log" | sed "s|^$ROOT_DIR/||" | sort -u || true)"
+  [[ -z "$warnings" ]] && return
+  echo "$(printf '%s\n' "$warnings" | wc -l | tr -d ' ') compiler warning(s):" >&2
+  printf '%s\n' "$warnings" | head -30 >&2
+}
+
+# Instruments from the terminal: attach to the running app, record, then
+# print a one-page summary (CPU by thread and symbol, hangs, hitches).
+# Templates: "Time Profiler" (default), "Animation Hitches", "SwiftUI",
+# "Allocations", "Leaks", "App Launch"; `xcrun xctrace list templates`.
+cmd_profile() {
+  local template="Time Profiler" seconds="15" label="profile"
+  while (($# > 0)); do
+    case "$1" in
+      --template) template="$2"; shift 2 ;;
+      --seconds) seconds="$2"; shift 2 ;;
+      *) label="$1"; shift ;;
+    esac
+  done
+  require_udid
+  local pid
+  pid="$(xcrun simctl spawn "$UDID" launchctl list | awk -v id="UIKitApplication:$BUNDLE_ID" 'index($3, id) == 1 {print $1}')"
+  [[ "$pid" =~ ^[0-9]+$ ]] || die "the app is not running on $UDID; launch it first"
+  mkdir -p "$OUT_DIR"
+  local dest
+  dest="$OUT_DIR/$(stamp)-$label.trace"
+  xcrun xctrace record --template "$template" --device "$UDID" --attach "$pid" \
+    --time-limit "${seconds}s" --no-prompt --output "$dest" >/dev/null
+  echo "trace: $dest"
+  python3 "$ROOT_DIR/scripts/ops/trace_summary.py" "$dest"
 }
 
 cmd_install() {
@@ -242,6 +283,7 @@ main() {
     shot) cmd_shot "$@" ;;
     record) cmd_record "$@" ;;
     logs) cmd_logs "$@" ;;
+    profile) cmd_profile "$@" ;;
     -h|--help|help|"") usage ;;
     *) die "unknown command: $cmd" ;;
   esac

@@ -9,6 +9,9 @@
 #   scripts/ops/phone.sh install                  install + relaunch the last build
 #   scripts/ops/phone.sh deploy                   build, then install
 #   scripts/ops/phone.sh launch [<session-id>]    relaunch the app, optionally on a session
+#   scripts/ops/phone.sh console [--seconds 60]   relaunch and stream the app's stdout + OSLog
+#   scripts/ops/phone.sh profile [--template T] [--seconds 15] [label]
+#                                                 Instruments trace of the running app + summary
 #   scripts/ops/phone.sh logs [--since 30m] [--session <id>] [--server] [--follow]
 #                                                 client_diag lines from the tenant log
 #
@@ -130,6 +133,7 @@ cmd_build() {
     fi
     grep -E "BUILD SUCCEEDED" "$log" >/dev/null || die "build produced no success marker; log at $log"
     test -d "$(built_app)" || die "build produced no app at $(built_app)"
+    report_warnings "$log"
   )
   printf '%s\n' "$(built_app)"
 }
@@ -141,8 +145,66 @@ cmd_launch() {
   if [[ -n "$session_id" ]]; then
     payload=(--payload-url "ai.longhouse.ios://session/$session_id")
   fi
-  xcrun devicectl device process launch --device "$DEVICE" --terminate-existing "${payload[@]}" "$BUNDLE_ID" >/dev/null
+  local output
+  if ! output="$(xcrun devicectl device process launch --device "$DEVICE" --terminate-existing "${payload[@]}" "$BUNDLE_ID" 2>&1)"; then
+    [[ "$output" == *"BSErrorCodeDescription = Locked"* ]] \
+      && die "phone is locked: the installed build runs the next time the app is opened; unlock to launch, shot, console, or profile"
+    printf '%s\n' "$output" | tail -8 >&2
+    die "launch failed"
+  fi
   echo "launched $BUNDLE_ID${session_id:+ on session $session_id}"
+}
+
+# Compiler warnings go to stderr after a green build. Xcode's GUI only shows
+# warnings for files it recompiled, so an incremental click hides them; a
+# "nearly matches optional requirement" warning here once meant WebKit never
+# called the transcript's navigation guard.
+report_warnings() {
+  local log="$1" warnings
+  warnings="$(grep -E '^/.*: warning: ' "$log" | sed "s|^$ROOT_DIR/||" | sort -u || true)"
+  [[ -z "$warnings" ]] && return
+  echo "$(printf '%s\n' "$warnings" | wc -l | tr -d ' ') compiler warning(s):" >&2
+  printf '%s\n' "$warnings" | head -30 >&2
+}
+
+# The app's own stdout/stderr and OSLog, as Xcode's console shows them.
+# OS_ACTIVITY_DT_MODE makes os_log mirror to stderr, which is how Xcode
+# gets it; devicectl forwards DEVICECTL_CHILD_* into the app's environment.
+# There is no devicectl log stream, so this relaunches the app.
+cmd_console() {
+  require_device
+  local seconds="60"
+  [[ "${1:-}" == "--seconds" ]] && seconds="$2"
+  mkdir -p "$OUT_DIR"
+  local dest
+  dest="$OUT_DIR/$(stamp)-console.log"
+  echo "console: $dest (${seconds}s)" >&2
+  DEVICECTL_CHILD_OS_ACTIVITY_DT_MODE=enable \
+    timeout "$seconds" xcrun devicectl device process launch --device "$DEVICE" \
+    --terminate-existing --console "$BUNDLE_ID" 2>&1 | tee "$dest" || true
+}
+
+# Instruments from the terminal: attach to the running app, record, then
+# print a one-page summary (CPU by thread and symbol, hangs, hitches).
+# Templates: "Time Profiler" (default), "Animation Hitches", "SwiftUI",
+# "Allocations", "Leaks", "App Launch"; `xcrun xctrace list templates`.
+cmd_profile() {
+  local template="Time Profiler" seconds="15" label="profile"
+  while (($# > 0)); do
+    case "$1" in
+      --template) template="$2"; shift 2 ;;
+      --seconds) seconds="$2"; shift 2 ;;
+      *) label="$1"; shift ;;
+    esac
+  done
+  require_device
+  mkdir -p "$OUT_DIR"
+  local dest
+  dest="$OUT_DIR/$(stamp)-$label.trace"
+  xcrun xctrace record --template "$template" --device "$DEVICE" --attach Longhouse \
+    --time-limit "${seconds}s" --no-prompt --output "$dest" >/dev/null
+  echo "trace: $dest"
+  python3 "$ROOT_DIR/scripts/ops/trace_summary.py" "$dest"
 }
 
 cmd_install() {
@@ -197,6 +259,8 @@ main() {
     deploy) cmd_deploy "$@" ;;
     launch) cmd_launch "$@" ;;
     logs) cmd_logs "$@" ;;
+    console) cmd_console "$@" ;;
+    profile) cmd_profile "$@" ;;
     -h|--help|help|"") usage ;;
     *) die "unknown command: $cmd" ;;
   esac
