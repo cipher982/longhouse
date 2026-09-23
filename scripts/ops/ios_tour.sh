@@ -24,6 +24,8 @@
 #                       seconds in runtime metadata lookups the shipping app
 #                       never pays, which buried the app's own hotspots.
 #   TOUR_OUT_DIR        output directory (default: /tmp/agents/ios-tour)
+#   TOUR_TEMPLATE       Instruments template for the tour (default: Time
+#                       Profiler; "Leaks" or "Allocations" for memory)
 #   SIM_UDID / PHONE_DEVICE  pick the simulator or phone
 set -euo pipefail
 
@@ -152,7 +154,7 @@ for _ in $(seq 1 240); do
 done
 if [[ -n "$pid" ]]; then
   xcrun xctrace record --device "$DEVICE" --attach "$pid" --no-prompt \
-    --template "Time Profiler" "${instruments[@]}" \
+    --template "${TOUR_TEMPLATE:-Time Profiler}" "${instruments[@]}" \
     --time-limit 600s --output "$trace" > "$BASE-xctrace.log" 2>&1 &
   recorder=$!
 fi
