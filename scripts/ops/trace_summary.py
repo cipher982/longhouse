@@ -16,6 +16,14 @@ import sys
 import xml.etree.ElementTree as ET
 
 APP_BINARIES = {"Longhouse", "Longhouse.debug.dylib", "LonghouseWidgets"}
+# A sample whose innermost frame is one of these is a parked thread. Device
+# templates weight such a sample by the whole time since the thread last ran,
+# so counting them turns seconds of sleep into "CPU".
+WAIT_LEAVES = {
+    "start_wqthread", "mach_msg2_trap", "mach_msg_trap", "__psynch_cvwait",
+    "semaphore_wait_trap", "__ulock_wait", "__ulock_wait2", "kevent_id",
+    "kevent_qos", "__workq_kernreturn", "__semwait_signal", "__select",
+}
 
 
 def export(trace: str, schema: str) -> ET.Element | None:
@@ -70,9 +78,14 @@ def time_profile(trace: str, top: int) -> None:
     for cols in rows(root):
         weight = 0
         thread_name = "?"
+        running = True
         stack: list[ET.Element] = []
         for col in cols:
-            if col.tag == "weight":
+            if col.tag == "thread-state":
+                # Templates that sample every thread (App Launch) include
+                # blocked ones; only on-CPU time is cost.
+                running = col.attrib.get("fmt", "Running") == "Running"
+            elif col.tag == "weight":
                 weight = int(col.text or 0)
             elif col.tag == "thread":
                 fmt = col.attrib.get("fmt", "?")
@@ -92,7 +105,7 @@ def time_profile(trace: str, top: int) -> None:
                         stack.append(f)
                     if "id" in bt.attrib:
                         backtraces[bt.attrib["id"]] = stack
-        if not stack:
+        if not stack or not running or stack[0].attrib.get("name") in WAIT_LEAVES:
             continue
         total += weight
         threads[thread_name] += weight
