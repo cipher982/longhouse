@@ -1496,9 +1496,12 @@ final class TimelineViewModel: ObservableObject {
             return false
         }
         current.append(session)
-        current.sort { lhs, rhs in
-            anchorDate(for: lhs) > anchorDate(for: rhs)
-        }
+        // Keys first: parsing inside the comparator re-parsed each row's
+        // anchor O(log n) times per upsert, on the main thread.
+        current = current
+            .map { (anchorDate(for: $0), $0) }
+            .sorted { $0.0 > $1.0 }
+            .map(\.1)
         if current.count > limit {
             current = Array(current.prefix(limit))
         }
