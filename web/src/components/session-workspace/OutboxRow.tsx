@@ -1,7 +1,7 @@
 /**
  * A message the user sent from Longhouse that the transcript has not echoed
  * yet. It renders in the ask's own place and shape (the tail of the
- * transcript, serif italic under a "You" label) so the durable row that
+ * transcript, under a "You" label) so the durable row that
  * replaces it lands without moving anything; only the label carries delivery
  * state.
  */

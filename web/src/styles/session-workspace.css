@@ -1674,7 +1674,7 @@
 /* --- Prose messages: no card, no border, just text. ---
      Assistant turns are the document: full reading width, left edge
      shared with tool rows. The user's ask shares that same left edge and
-     measure — serif italic with "You asked at …" above it is what marks it
+     measure — the "You asked at …" label and a touch more weight mark it
      as the ask, not a right-aligned bubble. */
 .tl-msg {
   display: flex;
@@ -1753,12 +1753,13 @@
   font-family: var(--font-family-base);
   font-size: 11.5px;
 }
-/* The ask: serif italic, no bubble — "You asked at …" is the label. */
+/* The ask: the prose face at a touch more weight, no bubble — "You asked
+   at …" is the label. The serif stays a heading voice. */
 .tl-msg--user .tl-msg__body {
-  font-family: var(--font-family-serif);
-  font-style: italic;
-  font-size: 19px;
-  line-height: 1.4;
+  font-family: var(--font-family-base);
+  font-size: 16px;
+  font-weight: var(--font-weight-medium);
+  line-height: 1.5;
   color: var(--color-text-primary);
 }
 

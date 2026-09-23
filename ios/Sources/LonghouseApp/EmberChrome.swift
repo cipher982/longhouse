@@ -42,13 +42,12 @@ extension View {
 struct EmberSectionHeader: View {
     let title: String
     let count: Int?
-    var italic: Bool = false
     var size: CGFloat = 21
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(title)
-                .font(Ember.serif(size, relativeTo: .title3, italic: italic))
+                .font(Ember.serif(size, relativeTo: .title3))
                 .foregroundStyle(Ember.text)
                 .accessibilityAddTraits(.isHeader)
             if let count {

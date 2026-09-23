@@ -44,9 +44,8 @@
   }
 
   /* Section rules: a fading hairline that starts gold and burns out to
-   * transparent, carrying a serif title. "Live now" / "Needs attention" use
-   * the upright serif voice; "History" is the italic display size. Ember
-   * spec, Phase 3 §1. */
+   * transparent, carrying an upright serif title; "History" is the larger
+   * display size. Ember spec, Phase 3 §1. */
   .inbox-live-divider,
   .inbox-history-divider {
     display: flex;
@@ -106,7 +105,6 @@
   .inbox-history-divider-label {
     margin: 0;
     font-family: var(--font-family-serif);
-    font-style: italic;
     font-size: 30px;
     font-weight: 500;
     line-height: 1;

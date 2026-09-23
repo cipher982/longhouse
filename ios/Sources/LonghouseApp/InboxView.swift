@@ -657,7 +657,7 @@ struct TimelineSessionList: View {
     @ViewBuilder
     private func section(title: String, sessions: [SessionSummary], role: TimelineRowRole) -> some View {
         if !sessions.isEmpty {
-            EmberSectionHeader(title: title, count: sessions.count, italic: role == .recent)
+            EmberSectionHeader(title: title, count: sessions.count)
                 .padding(.top, role == .needsYou ? 0 : 8)
 
             ForEach(sessions) { session in

@@ -2296,11 +2296,6 @@ private extension WebTranscriptView {
       border-radius: 17px;
       background: var(--user);
       white-space: pre-wrap;
-      /* The user's own words in the hall's voice, as on the web. */
-      font-family: "Iowan Old Style", Georgia, serif;
-      font-style: italic;
-      font-size: 1.08em;
-      line-height: 1.38;
     }
 
     /* An unsent message sits exactly where its durable row will land, in

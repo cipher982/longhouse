@@ -50,8 +50,8 @@ enum Ember {
 
     // MARK: Type
 
-    /// The hall's voice, shared with the web: titles, section heads, and the
-    /// user's own words. Never body copy.
+    /// The hall's voice, shared with the web: titles and section heads only.
+    /// Never body copy; italic is reserved for the sign-in tagline.
     static func serif(_ size: CGFloat, relativeTo style: Font.TextStyle = .body, italic: Bool = false, bold: Bool = false) -> Font {
         let name: String
         switch (italic, bold) {
