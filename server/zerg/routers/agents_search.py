@@ -1363,6 +1363,7 @@ def _fit_recall_search_response(
     lanes: list[Literal["lexical", "dense"]],
     degraded: list[RecallLaneFailure],
     coverage: RecallCoverageSummary | None = None,
+    coverage_unavailable_reason: str | None = None,
 ) -> RecallResponse:
     """Keep the highest-ranked cards that fit the hard serialized page ceiling."""
 
@@ -1372,6 +1373,7 @@ def _fit_recall_search_response(
         lanes=lanes,
         degraded=degraded,
         coverage=coverage,
+        coverage_unavailable_reason=coverage_unavailable_reason,
     )
     dropped = 0
     while len(candidate.model_dump_json(exclude_none=True).encode("utf-8")) > RECALL_SERIALIZED_RESPONSE_BYTES:
@@ -1941,9 +1943,17 @@ async def recall_sessions(
     # A lexical index rebuild is asynchronous. Carry its lag even with hits so a
     # caller never reads a partial result as proof that history lacks the query.
     lexical_coverage = await read_search_coverage(owner_id=owner_id)
+    coverage = _lexical_coverage_summary(lexical_coverage) if lexical_coverage is not None else None
+    if coverage is None:
+        # Keep the established projector-only summary when searchd's scope read
+        # is unavailable. If that short read also fails, successful auto recall
+        # remains usable and says coverage is unknown rather than returning 500.
+        projector_coverage = await _read_projection_coverage(projector="search-v2", timeout_seconds=1.5)
+        coverage = _projector_coverage_summary(projector_coverage) if projector_coverage is not None else None
     return _fit_recall_search_response(
         results=results,
         lanes=list(lanes),
         degraded=degraded,
-        coverage=_lexical_coverage_summary(lexical_coverage) if lexical_coverage is not None else None,
+        coverage=coverage,
+        coverage_unavailable_reason="search_coverage_unavailable" if coverage is None else None,
     )

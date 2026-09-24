@@ -248,7 +248,7 @@ _SEARCHABLE_SEARCH_SQL = """
           AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
           AND (e.role != 'user' OR (e.title_eligible = 1
                AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
-        ORDER BY searchable_fts.rowid DESC
+        ORDER BY e.order_time_us DESC, e.source_event_id DESC
         LIMIT ?
     ), top AS (
         SELECT search_event_id, rank, (SELECT COUNT(*) FROM candidates) AS candidate_count

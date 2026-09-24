@@ -467,6 +467,32 @@ async def test_auto_mode_serves_lexical_when_the_dense_lane_is_down(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_auto_mode_keeps_dense_results_when_lexical_coverage_is_unavailable(monkeypatch):
+    dense_hit = _match(str(uuid4()), 0.9)
+
+    async def lexical(**_kwargs):
+        return []
+
+    async def dense(**_kwargs):
+        return agents_search._DenseRecallResult(matches=[dense_hit], coverage=agents_search.RecallCoverage.model_construct())
+
+    async def unavailable_coverage(**_kwargs):
+        return None
+
+    monkeypatch.setattr(agents_search, "_lexical_recall_matches", lexical)
+    monkeypatch.setattr(agents_search, "_semantic_recall", dense)
+    monkeypatch.setattr(agents_search, "read_search_coverage", unavailable_coverage)
+    monkeypatch.setattr(agents_search, "_hydrate_recall_match", _noop_hydrate)
+
+    response = await _recall(mode="auto")
+
+    assert [result.session_id for result in response.results] == [dense_hit.session_id]
+    assert response.lanes == ["lexical", "dense"]
+    assert response.coverage is None
+    assert response.coverage_unavailable_reason == "search_coverage_unavailable"
+
+
+@pytest.mark.asyncio
 async def test_semantic_mode_still_fails_when_its_only_lane_is_down(monkeypatch):
     """A caller who named one lane gets that lane's fault, not an empty success."""
 

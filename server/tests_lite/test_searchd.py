@@ -1241,13 +1241,12 @@ def test_archive_search_uses_fts_rank_top_k_without_temp_sort(tmp_path):
         connection.close()
 
 
-def test_searchable_search_walks_rowid_descending_and_sorts_only_candidates(tmp_path):
-    """The interactive lane must not rank the whole match set.
+def test_searchable_search_walks_event_time_descending_and_sorts_only_candidates(tmp_path):
+    """The interactive lane must select its bounded candidates by event time.
 
-    Rank-ordered FTS (`VIRTUAL TABLE INDEX 32:`) scores every match before the
-    limit applies, which cost seconds on broad terms. Walking rowid-descending
-    (`192:`) lets FTS5 stop early, so the temp sort that remains covers only the
-    bounded candidate window rather than the full doclist.
+    FTS rowids reflect projector insertion order, which reverses recency after
+    a newest-first rebuild. The bounded candidate selection must instead order
+    metadata by its actual event timestamp.
     """
 
     connection = open_search_database(tmp_path / "search.db")
@@ -1275,11 +1274,32 @@ def test_searchable_search_walks_rowid_descending_and_sorts_only_candidates(tmp_
             ),
         ).fetchall()
         details = [str(row[3]) for row in plan]
-        assert any("searchable_fts" in detail and "VIRTUAL TABLE INDEX 192:" in detail for detail in details)
-        assert not any("VIRTUAL TABLE INDEX 32:" in detail for detail in details)
+        assert any("searchable_fts" in detail and "VIRTUAL TABLE" in detail for detail in details)
+        assert any("USE TEMP B-TREE FOR ORDER BY" in detail for detail in details)
         # The owner/project/window predicates must be evaluated inside the walk.
         # Applied afterwards they made narrow windows slower, not faster.
         assert any("SEARCH e USING INTEGER PRIMARY KEY" in detail for detail in details)
+    finally:
+        connection.close()
+
+
+def test_searchable_candidate_order_uses_event_time_after_newest_first_rebuild(tmp_path):
+    connection = open_search_database(tmp_path / "search.db")
+    try:
+        # A newest-first projector inserts the newer event first, making its FTS
+        # rowid lower than the older event's rowid.
+        for event_id, order_time_us in ((1, 2_000), (2, 1_000)):
+            connection.execute(
+                "INSERT INTO searchable_events(source_event_id, owner_id, project, provider, environment, order_time_us, session_id, generation_id, source_object_id, record_ordinal, event_id, role, tool_name, indexed_through, event_count) "
+                "VALUES (?, '42', NULL, 'codex', 'local', ?, ?, 'g', 'o', 0, ?, 'assistant', NULL, 1, 1)",
+                (event_id, order_time_us, f"session-{event_id}", str(event_id)),
+            )
+            connection.execute("INSERT INTO searchable_fts(rowid, content_text) VALUES (?, 'needle')", (event_id,))
+        rows = connection.execute(
+            "SELECT e.session_id FROM searchable_fts JOIN searchable_events e ON e.source_event_id = searchable_fts.rowid "
+            "WHERE searchable_fts MATCH 'needle' AND e.owner_id = '42' ORDER BY e.order_time_us DESC, e.source_event_id DESC LIMIT 2"
+        ).fetchall()
+        assert [row[0] for row in rows] == ["session-1", "session-2"]
     finally:
         connection.close()
 

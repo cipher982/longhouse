@@ -42,6 +42,7 @@ describe("query timeline normalization", () => {
       sessions: [card],
       total: 1,
       has_real_sessions: true,
+      coverage: { indexed_sessions: 8, expected_sessions: 10, complete: false, lagging_sessions: 2 },
     });
 
     const result = await fetchAgentSessions({ query: "durable storage", limit: 50 });
@@ -49,6 +50,7 @@ describe("query timeline normalization", () => {
     expect(result.sessions).toEqual([card]);
     expect(result.sessions[0].head).toBe(head);
     expect(result.query_grouping_mode).toBe("grouped_results");
+    expect(result.coverage).toEqual({ indexed_sessions: 8, expected_sessions: 10, complete: false, lagging_sessions: 2 });
   });
 });
 

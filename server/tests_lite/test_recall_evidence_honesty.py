@@ -144,6 +144,14 @@ def test_recall_response_exposes_only_compact_coverage_and_consistent_lanes():
 
     with pytest.raises(ValueError, match="dense recall requires"):
         RecallResponse(results=[card], total=1, lanes=["dense"])
+    unknown = RecallResponse(
+        results=[card.model_copy(update={"matched_by": ["dense"]})],
+        total=1,
+        lanes=["dense"],
+        coverage_unavailable_reason="search_coverage_unavailable",
+    )
+    assert unknown.coverage is None
+    assert unknown.coverage_unavailable_reason == "search_coverage_unavailable"
     # Lexical coverage is required while its asynchronous projector is rebuilding.
     assert RecallResponse(results=[card], total=1, lanes=["lexical"], coverage=coverage).coverage == coverage
     with pytest.raises(ValueError, match="lane attribution"):

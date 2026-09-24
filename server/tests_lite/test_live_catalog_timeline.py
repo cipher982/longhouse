@@ -488,6 +488,34 @@ async def test_storage_v2_browser_search_hydrates_hits_with_owner_scope(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_storage_v2_browser_search_reports_lexical_rebuild_coverage(monkeypatch):
+    async def search_matches(**_kwargs):
+        return [], ["lexical"]
+
+    async def coverage(**_kwargs):
+        return {
+            "indexed_sessions": 3,
+            "expected_sessions": 5,
+            "complete": False,
+            "lagging_sessions": 2,
+        }
+
+    monkeypatch.setattr(timeline_router._search_router, "search_session_matches", search_matches)
+    monkeypatch.setattr(timeline_router._search_router, "read_search_coverage", coverage)
+
+    result = await timeline_router._search_storage_v2_timeline(owner_id=7, params=_params(query="needle"))
+
+    assert result.total == 0
+    assert result.coverage is not None
+    assert result.coverage.model_dump(include={"indexed_sessions", "expected_sessions", "complete", "lagging_sessions"}) == {
+        "indexed_sessions": 3,
+        "expected_sessions": 5,
+        "complete": False,
+        "lagging_sessions": 2,
+    }
+
+
+@pytest.mark.asyncio
 async def test_storage_v2_browser_search_batches_catalog_hydration(monkeypatch):
     session_ids = [uuid4() for _ in range(12)]
     active = 0

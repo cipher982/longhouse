@@ -63,6 +63,7 @@ from zerg.services.session_listing import SessionListingError
 from zerg.services.session_resume import SessionResumeIntentResponse
 from zerg.services.session_resume import build_session_resume_intent
 from zerg.services.session_views import FiltersResponse
+from zerg.services.session_views import MachineSearchCoverage
 from zerg.services.session_views import MachineSearchLaneFailure
 from zerg.services.session_views import RecallContextResponse
 from zerg.services.session_views import RecallMatch
@@ -215,12 +216,22 @@ async def _search_storage_v2_timeline(
             )
         )
     page = cards[params.offset : params.offset + params.limit]
+    # Use the same index/projector summary as the machine API so browser search
+    # hits and misses cannot hide an in-progress rebuild.
+    coverage = None
+    raw_coverage = await _search_router.read_search_coverage(owner_id=owner_id)
+    if raw_coverage is not None:
+        try:
+            coverage = MachineSearchCoverage.model_validate(raw_coverage)
+        except ValueError:
+            pass
     return TimelineSessionsListResponse(
         sessions=page,
         total=len(cards),
         has_real_sessions=bool(cards),
         lanes=lanes,
         degraded=degraded,
+        coverage=coverage,
     )
 
 

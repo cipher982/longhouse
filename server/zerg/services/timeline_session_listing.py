@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import Field
 
 from zerg.schemas.history_import import HistoryImportSnapshot
+from zerg.services.session_views import MachineSearchCoverage
 from zerg.services.session_views import MachineSearchLaneFailure
 from zerg.services.session_views import SessionResponse
 from zerg.utils.time import UTCBaseModel
@@ -38,6 +39,7 @@ class TimelineSessionsListResponse(UTCBaseModel):
     # meaning" label keeps making a promise the response did not keep.
     lanes: list[Literal["lexical", "dense"]] = Field(default_factory=list)
     degraded: list[MachineSearchLaneFailure] = Field(default_factory=list)
+    coverage: MachineSearchCoverage | None = None
     history_imports: list[TimelineHistoryImportResponse] = Field(default_factory=list)
 
 

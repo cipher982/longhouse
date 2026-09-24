@@ -2150,6 +2150,7 @@ class RecallResponse(BaseModel):
         ),
     )
     coverage: Optional[RecallCoverageSummary] = None
+    coverage_unavailable_reason: Optional[str] = Field(default=None, max_length=300)
 
     @model_validator(mode="after")
     def validate_recall_contract(self) -> "RecallResponse":
@@ -2168,8 +2169,10 @@ class RecallResponse(BaseModel):
             raise ValueError("recall cannot report the same lane failing twice")
         if lane_set & set(degraded_lanes):
             raise ValueError("a lane cannot both serve results and be reported as degraded")
-        if "dense" in lane_set and self.coverage is None:
-            raise ValueError("dense recall requires a corpus-coverage summary")
+        if "dense" in lane_set and self.coverage is None and self.coverage_unavailable_reason is None:
+            raise ValueError("dense recall requires a corpus-coverage summary or unavailable reason")
+        if self.coverage is not None and self.coverage_unavailable_reason is not None:
+            raise ValueError("recall coverage cannot be both present and unavailable")
         # Coverage describes the projector backing the served lane. Lexical
         # rebuild lag must be exposed too, or an empty response reads as history
         # absence while the disposable search store is still catching up.
