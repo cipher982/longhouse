@@ -111,6 +111,25 @@ def run(args: argparse.Namespace) -> int:
             "native CI needs a clean source revision; commit and push the worktree first"
         )
     sha = capture("git", "rev-parse", "HEAD")
+    # Everything below needs an authenticated GitHub CLI: it reads the repo
+    # visibility, proves the revision is pushed, dispatches the workflow, and
+    # reconciles the run it owns. Without this preflight a host that has no gh
+    # (the bench, a fresh machine) fails inside capture() with a bare
+    # CalledProcessError that names a command instead of the missing credential.
+    try:
+        subprocess.run(
+            ["gh", "auth", "status"], capture_output=True, check=True, timeout=30
+        )
+    except FileNotFoundError as exc:
+        raise ValueError(
+            "native dispatch needs the GitHub CLI on the dispatching host: install gh and run `gh auth login`. "
+            "Simulator and container lanes do not need it; only dispatched ones (test-ios, ios-previews, simlab-run) do."
+        ) from exc
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise ValueError(
+            "native dispatch needs an authenticated gh on this host (`gh auth login`): it checks repo visibility, "
+            "proves the revision is pushed, dispatches the workflow, and reconciles its own run."
+        ) from exc
     repo = json.loads(
         capture("gh", "repo", "view", "--json", "nameWithOwner,visibility")
     )
@@ -259,7 +278,12 @@ def run(args: argparse.Namespace) -> int:
         run_id = str(receipt["run_id"])
         receipt["url"] = f"https://github.com/{repository}/actions/runs/{run_id}"
         receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
-        print(f"[native-test-isolation] {receipt['url']} source={sha}", flush=True)
+        print(
+            f"[native-test-isolation] {receipt['url']} source={sha} "
+            "(the VM checks out source; the workflow definition comes from main, so the run's own "
+            "head_sha is main and is not the revision under test)",
+            flush=True,
+        )
         if interrupted:
             raise KeyboardInterrupt
         watch = subprocess.Popen(

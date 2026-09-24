@@ -40,7 +40,11 @@ cmd_sync() {
   # gets negations and ** wrong and dropped tracked directories. Excluded
   # paths are neither sent nor deleted, so the bench keeps its build caches.
   {
-    printf '%s\n' /.git/ /.build/ /server/.venv/ /artifacts/ node_modules/ .DS_Store
+    # `/.git` without a trailing slash, because a linked worktree's `.git` is a
+    # file that points at the shared common dir. Excluding only `/.git/` copied
+    # that file and then tried to rsync into it, which fails with "cannot stat
+    # destination .git/: Not a directory" on every worktree checkout.
+    printf '%s\n' /.git /.build/ /server/.venv/ /artifacts/ node_modules/ .DS_Store
     git -C "$ROOT_DIR" ls-files --others --ignored --exclude-standard --directory | sed 's|^|/|'
   } > "$excludes"
   ssh -o BatchMode=yes "$HOST" "mkdir -p '$REMOTE_DIR/.git'"

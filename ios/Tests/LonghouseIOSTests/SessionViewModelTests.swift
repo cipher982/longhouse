@@ -383,6 +383,9 @@ struct SessionViewModelTests {
         // the resume never blanks the transcript while a refresh is in flight.
         // The refresh still happens; it just isn't awaited by start().
         await waitForWorkspaceRequestCount(api, atLeast: 2)
+        await waitForCondition("tail refresh applies the transcript") {
+            model.items.map(\.id) == ["user:11"]
+        }
         #expect(model.items.map(\.id) == ["user:11"])
         #expect(await api.workspaceRequestCount() == 2)
     }
@@ -1299,6 +1302,9 @@ struct SessionViewModelTests {
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
         await waitForWorkspaceRequestCount(api, atLeast: 2)
+        await waitForCondition("post-send tail refresh applies the transcript") {
+            model.items.map(\.id) == ["user:11"]
+        }
 
         #expect(sent)
         #expect(model.submittedInputs.count == 1)
@@ -1668,6 +1674,9 @@ struct SessionViewModelTests {
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
         await waitForWorkspaceRequestCount(api, atLeast: 2)
+        await waitForCondition("post-send tail refresh applies the transcript") {
+            model.items.map(\.id) == ["user:11"]
+        }
 
         #expect(sent)
         #expect(model.submittedInputs.count == 1)
@@ -1739,6 +1748,9 @@ struct SessionViewModelTests {
         await model.start(sessionId: "session-1", appState: appState)
         let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
         await waitForWorkspaceRequestCount(api, atLeast: 2)
+        await waitForCondition("post-send tail refresh applies the transcript") {
+            model.items.map(\.id) == ["user:11"]
+        }
 
         #expect(sent)
         #expect(model.submittedInputs.count == 1)

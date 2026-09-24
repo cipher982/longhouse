@@ -94,6 +94,17 @@ explicit `NATIVE_OPTIONS_JSON`; it creates a disposable home and records
 no self-hosted Mac or paid-runner substitute. Inspect the one-day CI artifact
 and its receipt when a native fixture fails.
 
+Dispatching one of these lanes from a workstation (`make test-ios`,
+`make ios-previews`, `make simlab-run`) requires an **authenticated `gh` on the
+dispatching host**: the dispatcher reads the repository visibility, proves the
+revision is pushed, submits the workflow, and reconciles the run it owns. Run
+dispatched targets from the machine that holds that credential; a host without
+it (a bench, a fresh box) can still run the local container and simulator lanes.
+The workflow definition is always taken from `main` while the VM checks out your
+`source_sha`, so a dispatched run's own `head_sha` is `main` — read the
+`source=<sha>` line the dispatcher prints, not the run's SHA, when asking what
+was tested.
+
 Fixture lanes never use real provider credentials. Live proofs require an
 explicit image through
 `scripts/qa/test-isolation.py --live --image IMAGE --target TARGET`.
