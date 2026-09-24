@@ -516,6 +516,10 @@ test-shipper-synthetic-live-bench: ## Synthetic mixed live/archive shipper bench
 	port="$$(cat "$$port_file")"; \
 	$(CARGO_ENGINE) run --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine -- bench --synthetic-files 6 --synthetic-events-per-file 50 --synthetic-bytes-per-event 1024 --level L3 --ship-url "http://127.0.0.1:$$port" --ship-token synthetic --ship-machine-id synthetic-machine --ship-concurrency 4 --mixed-live-count 8 --mixed-live-max-p95-ms 10000
 
+import-bench: ## Disposable authenticated Claude-history import benchmark (ARGS required)
+	@test -n "$(ARGS)" || (echo "ARGS is required; see scripts/qa/import_bench.py --help" >&2; exit 2)
+	@python3 scripts/qa/import_bench.py $(ARGS)
+
 perf-proof: ## Collect trendable startup/shipper/live perf proof JSON
 	@python3 scripts/build/generate_build_identity.py
 	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release)
