@@ -93,8 +93,6 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Authenticate to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -132,6 +130,9 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
             echo "Fixture dependency image absent; building once for this manifest hash"
           fi
+      - name: Set up Docker Buildx for a missing image
+        if: ${{ steps.key.outputs.exists != 'true' }}
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Build and publish fixture dependency image
         if: ${{ steps.key.outputs.exists != 'true' }}
         id: build
