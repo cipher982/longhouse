@@ -829,6 +829,10 @@ print_success() {
         echo "macOS:"
         echo "  The terminal installer only acquires Longhouse."
         echo "  Longhouse.app owns first-run setup, repair, and local status."
+    elif [[ "$CONNECTED_THIS_MACHINE" == "1" ]]; then
+        echo "Next:"
+        echo "  Open Longhouse, start a session, and pick this machine."
+        echo "  Sign in to each coding agent from the launcher's 'Sign in' button."
     else
         echo "Next:"
         echo "  1. Export LONGHOUSE_DEVICE_TOKEN from your Runtime Host"
@@ -865,6 +869,37 @@ print_success() {
     fi
 }
 
+# A headless server has no browser for `longhouse auth --browser`, whose
+# approval callback only works on the machine running the browser. When the
+# Devices page's "connect a server" line passes LONGHOUSE_URL and
+# LONGHOUSE_DEVICE_TOKEN, finish the whole setup here instead of printing three
+# follow-up commands. macOS keeps its app-driven setup.
+CONNECTED_THIS_MACHINE=0
+connect_this_machine() {
+    [[ -n "${LONGHOUSE_URL:-}" && -n "${LONGHOUSE_DEVICE_TOKEN:-}" ]] || return 0
+    [[ "$(uname -s)" != "Darwin" ]] || return 0
+    CURRENT_INSTALL_STAGE="connect"
+    step "Connecting this machine to ${LONGHOUSE_URL}"
+    local longhouse_bin="$HOME/.local/bin/longhouse"
+    local machine_name="${LONGHOUSE_MACHINE_NAME:-$(hostname -s 2>/dev/null || hostname)}"
+    if ! "$longhouse_bin" auth --url "$LONGHOUSE_URL" --device "$machine_name"; then
+        error "Could not store the device token; create a new one on the Devices page and rerun"
+        return 1
+    fi
+    if ! "$longhouse_bin" machine repair --repair-service; then
+        error "Stored credentials, but the Machine Agent service did not start; run: longhouse machine repair --repair-service"
+        return 1
+    fi
+    if has_command claude; then
+        "$longhouse_bin" claude configure >/dev/null 2>&1 || warn "Could not configure Claude hooks; run: longhouse claude configure"
+    fi
+    if has_command loginctl && ! loginctl show-user "$(id -un)" -p Linger 2>/dev/null | grep -q "yes"; then
+        warn "Run 'sudo loginctl enable-linger $(id -un)' so the Machine Agent keeps running after you log out"
+    fi
+    CONNECTED_THIS_MACHINE=1
+    success "Connected as ${machine_name}; it will appear on the Machines page"
+}
+
 # Main installation flow
 main() {
     echo -e "${BOLD}"
@@ -898,6 +933,10 @@ main() {
 
     # Verify everything works
     verify_installation
+
+    # One-line server setup: connect and start the Machine Agent when the
+    # Devices page handed us a URL and token.
+    connect_this_machine
 
     # Done!
     INSTALL_COMPLETED=1

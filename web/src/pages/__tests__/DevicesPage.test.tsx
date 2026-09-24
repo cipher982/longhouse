@@ -13,7 +13,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfirmProvider } from "../../components/confirm";
-import DevicesPage from "../DevicesPage";
+import DevicesPage, { connectServerCommand } from "../DevicesPage";
 
 const deviceApiMocks = vi.hoisted(() => ({
   listDeviceTokens: vi.fn(),
@@ -145,5 +145,14 @@ describe("DevicesPage device-auth callback", () => {
 
     await screen.findByRole("button", { name: /create token/i });
     expect(screen.queryByRole("button", { name: /connect this device/i })).toBeNull();
+  });
+
+  it("gives a headless server one line that installs and connects it", () => {
+    const line = connectServerCommand("vps-1", "zdt_abc'def");
+    expect(line).toMatch(/^curl -fsSL https:\/\/get\.longhouse\.ai\/install\.sh \| /);
+    expect(line).toContain("LONGHOUSE_DEVICE_TOKEN='zdt_abc'\\''def'");
+    expect(line).toContain("LONGHOUSE_MACHINE_NAME='vps-1'");
+    expect(line).toContain(`LONGHOUSE_URL='${window.location.origin}'`);
+    expect(line.endsWith(" bash")).toBe(true);
   });
 });

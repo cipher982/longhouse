@@ -19,6 +19,16 @@ import { useConfirm } from "../components/confirm";
 import { parseUTC } from "../lib/dateUtils";
 import "./DevicesPage.css";
 
+/** One line that installs Longhouse on a server and connects it as `deviceId`. */
+export function connectServerCommand(deviceId: string, token: string): string {
+  const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+  return (
+    `curl -fsSL https://get.longhouse.ai/install.sh | ` +
+    `LONGHOUSE_URL=${quote(window.location.origin)} LONGHOUSE_DEVICE_TOKEN=${quote(token)} ` +
+    `LONGHOUSE_MACHINE_NAME=${quote(deviceId)} bash`
+  );
+}
+
 function formatDate(iso: string | null): string {
   if (!iso) return "Never";
   const d = parseUTC(iso);
@@ -216,8 +226,17 @@ export default function DevicesPage() {
             </Button>
           </div>
           <p className="token-reveal-hint">
-            Copy this token now — it won't be shown again. It is for headless automation only; normal device setup uses browser approval with <code>longhouse auth --url {window.location.origin}</code>.
+            Copy this token now — it won't be shown again.
           </p>
+          {/* A server has no browser for `longhouse auth` approval, so hand it
+              one line that installs, connects, and starts the Machine Agent. */}
+          <p className="token-reveal-hint">To connect a Linux server or VPS, run this one line on it:</p>
+          <div className="token-reveal-value" data-testid="connect-server-command">
+            <code>{connectServerCommand(newToken.device_id, newToken.token)}</code>
+            <Button variant="secondary" size="sm" onClick={() => handleCopy(connectServerCommand(newToken.device_id, newToken.token))}>
+              Copy
+            </Button>
+          </div>
         </div>
       )}
 
