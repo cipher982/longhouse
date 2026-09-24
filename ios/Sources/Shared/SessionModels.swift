@@ -239,6 +239,9 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     let provider: String?
     let project: String?
     let lastActivityAt: String?
+    /// When this session began. Frozen for the life of the session, which is
+    /// what the timeline's display order uses.
+    let startedAt: String?
     let summary: String?
     let summaryStatus: String?
     let firstUserMessage: String?
@@ -272,6 +275,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         provider: String?,
         project: String?,
         lastActivityAt: String?,
+        startedAt: String? = nil,
         summary: String? = nil,
         summaryStatus: String? = nil,
         firstUserMessage: String? = nil,
@@ -300,6 +304,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         self.provider = provider
         self.project = project
         self.lastActivityAt = lastActivityAt
+        self.startedAt = startedAt
         self.summary = summary
         self.summaryStatus = summaryStatus
         self.firstUserMessage = firstUserMessage

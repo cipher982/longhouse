@@ -60,6 +60,27 @@ struct TimelineInboxLayout: Equatable {
     let recent: [SessionSummary]
 }
 
+/// Order one timeline section by a key that does not move while you watch it.
+///
+/// Never `timelineAnchorAt`: that is an evidence clock, and the engine re-stamps
+/// a session's heads continuously — including idle Helm sessions — so ordering
+/// on it made rows swap places every few seconds ("popcorn"). Mirrors the web's
+/// `startedAtMs`/`historySortKey`: open work lays out by launch, history by the
+/// last time the session actually did something. Equal keys keep input order.
+func timelineDisplayOrder(_ sessions: [SessionSummary]) -> [SessionSummary] {
+    sessions
+        .enumerated()
+        .map { (time: timelineDisplayTime(for: $0.element), index: $0.offset, session: $0.element) }
+        .sorted { $0.time != $1.time ? $0.time > $1.time : $0.index < $1.index }
+        .map(\.session)
+}
+
+private func timelineDisplayTime(for session: SessionSummary) -> Date {
+    let raw = session.isClosed ? (session.lastActivityAt ?? session.startedAt) : session.startedAt
+    guard let raw, let date = LonghouseDateParser.parse(raw) else { return .distantPast }
+    return date
+}
+
 /// Obligation-ranked presentation over canonical server facts. This does not
 /// create another state model: `working_set`, explicit interaction facts, and
 /// `unread` remain authoritative.
@@ -91,10 +112,10 @@ func buildTimelineInboxLayout(_ sessions: [SessionSummary]) -> TimelineInboxLayo
         .sorted { $0.date != $1.date ? $0.date > $1.date : $0.index < $1.index }
         .map(\.session)
     return TimelineInboxLayout(
-        needsYou: needsYou,
+        needsYou: timelineDisplayOrder(needsYou),
         newResults: newResults,
-        open: open,
-        recent: recent
+        open: timelineDisplayOrder(open),
+        recent: timelineDisplayOrder(recent)
     )
 }
 
@@ -1497,12 +1518,10 @@ final class TimelineViewModel: ObservableObject {
         }
         current.append(session)
         // Keys first: parsing inside the comparator re-parsed each row's
-        // anchor O(log n) times per upsert, on the main thread.
-        current = current
-            .enumerated()
-            .map { (date: anchorDate(for: $0.element), index: $0.offset, session: $0.element) }
-            .sorted { $0.date != $1.date ? $0.date > $1.date : $0.index < $1.index }
-            .map(\.session)
+        // date O(log n) times per upsert, on the main thread. The key is the
+        // frozen display time, not the moving card anchor, so an upsert for a
+        // session touches only that row's position, never everyone else's.
+        current = timelineDisplayOrder(current)
         current = SessionSummary.residentCap(current, limit: limit)
         applySessions(current, source: "stream")
         schedulePersist(sessions: current, appState: appState)
@@ -1547,13 +1566,6 @@ final class TimelineViewModel: ObservableObject {
             }.value
             _ = self
         }
-    }
-
-    private func anchorDate(for session: SessionSummary) -> Date {
-        if let anchor = session.timelineAnchor, let date = LonghouseDateParser.parse(anchor) {
-            return date
-        }
-        return .distantPast
     }
 
     private func reloadWidgetTimelineIfNeeded() {

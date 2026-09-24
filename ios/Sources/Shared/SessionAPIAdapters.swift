@@ -547,6 +547,7 @@ private extension APISessionResponse {
             provider: provider,
             project: project,
             lastActivityAt: lastActivityAt,
+            startedAt: startedAt,
             summary: summary,
             summaryStatus: summaryStatus,
             firstUserMessage: firstUserMessage,

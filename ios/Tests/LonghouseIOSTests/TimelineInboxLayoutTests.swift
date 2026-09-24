@@ -82,6 +82,43 @@ struct TimelineInboxLayoutTests {
     }
 
     @Test
+    func sectionsKeepAFrozenOrderWhileTheEvidenceClockMoves() {
+        // Two snapshots of the same two open sessions. Between them every
+        // anchor moved — the engine re-stamps heads for idle sessions too, so
+        // an anchor is not a stable thing to sort on. Starts did not move.
+        let olderFirst = session(
+            id: "older",
+            facts: makeSessionStateFacts(activity: "quiescent", workingSet: "open"),
+            startedAt: "2026-08-01T10:00:00Z",
+            anchorAt: "2026-08-01T10:00:00Z"
+        )
+        let newerFirst = session(
+            id: "newer",
+            facts: makeSessionStateFacts(activity: "quiescent", workingSet: "open"),
+            startedAt: "2026-08-01T11:00:00Z",
+            anchorAt: "2026-08-01T11:00:00Z"
+        )
+        let olderSecond = session(
+            id: "older",
+            facts: makeSessionStateFacts(activity: "quiescent", workingSet: "open"),
+            startedAt: "2026-08-01T10:00:00Z",
+            anchorAt: "2026-08-01T12:30:00Z"
+        )
+        let newerSecond = session(
+            id: "newer",
+            facts: makeSessionStateFacts(activity: "quiescent", workingSet: "open"),
+            startedAt: "2026-08-01T11:00:00Z",
+            anchorAt: "2026-08-01T12:00:00Z"
+        )
+
+        let first = buildTimelineInboxLayout([olderFirst, newerFirst]).open.map(\.id)
+        let second = buildTimelineInboxLayout([olderSecond, newerSecond]).open.map(\.id)
+
+        #expect(first == ["newer", "older"])
+        #expect(second == first)
+    }
+
+    @Test
     func residentCapKeepsEveryOpenRowAndCutsHistoryInstead() {
         // The quiet-but-open Helm row carries the oldest anchor, so a naive
         // prefix(limit) drops exactly the session the server tiered into view.
@@ -100,7 +137,12 @@ struct TimelineInboxLayoutTests {
         #expect(capped.dropFirst().map(\.id) == ["history-0", "history-1"])
     }
 
-    private func session(id: String, facts: SessionStateFacts) -> SessionSummary {
+    private func session(
+        id: String,
+        facts: SessionStateFacts,
+        startedAt: String? = nil,
+        anchorAt: String? = nil
+    ) -> SessionSummary {
         SessionSummary(
             id: id,
             title: "Session \(id)",
@@ -108,8 +150,9 @@ struct TimelineInboxLayoutTests {
             provider: "codex",
             project: "longhouse",
             lastActivityAt: "2026-08-01T12:00:00Z",
+            startedAt: startedAt,
             homeLabel: "cube",
-            timelineAnchorAt: "2026-08-01T12:00:00Z",
+            timelineAnchorAt: anchorAt ?? "2026-08-01T12:00:00Z",
             runtimeDisplay: runtimeDisplay(for: facts),
             stateFacts: facts
         )
