@@ -19,14 +19,14 @@ import OSLog
 actor TimelineSessionsStream {
     enum Event: Sendable {
         case connected
-        case upsert(card: APITimelineSessionCardResponse, total: Int?, hasRealSessions: Bool?)
+        case upsert(card: TimelineCard, total: Int?, hasRealSessions: Bool?)
         case remove(threadId: String, total: Int?, hasRealSessions: Bool?)
         case heartbeat
         case disconnected(Error?)
     }
 
     struct UpsertPayload: Decodable, Sendable {
-        let session: APITimelineSessionCardResponse
+        let session: TimelineCard
         let total: Int?
         let hasRealSessions: Bool?
     }

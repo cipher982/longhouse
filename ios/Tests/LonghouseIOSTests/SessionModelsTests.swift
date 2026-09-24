@@ -936,6 +936,38 @@ struct SessionModelsTests {
     }
 
     @Test
+    func headOnlyTimelineCardDecodesTheSameSummaryAsTheFullCard() throws {
+        let sessionJSON = apiSessionJSON()
+        let json = """
+        {
+          "sessions": [
+            {
+              "thread_id": "session-card-contract",
+              "timeline_anchor_at": "2026-04-25T20:05:00Z",
+              "head_origin_label": "On this Mac",
+              "head": \(sessionJSON),
+              "detail": \(sessionJSON),
+              "root": \(sessionJSON),
+              "continuation_count": 0
+            }
+          ],
+          "total": 1,
+          "has_real_sessions": true
+        }
+        """
+        let full = try JSONDecoder.snakeCase.decodeSessionFixture(APITimelineSessionsListResponse.self, from: Data(json.utf8))
+        let headOnly = try JSONDecoder.snakeCase.decodeSessionFixture(TimelineCardList.self, from: Data(json.utf8))
+        #expect(headOnly.sessions.map(\.sessionSummary) == full.sessions.map(\.sessionSummary))
+
+        // The app never needed detail or root; a card without them still decodes.
+        let lean = """
+        {"sessions": [{"thread_id": "t", "timeline_anchor_at": null, "head_origin_label": null, "head": \(sessionJSON)}]}
+        """
+        let leanDecoded = try JSONDecoder.snakeCase.decodeSessionFixture(TimelineCardList.self, from: Data(lean.utf8))
+        #expect(leanDecoded.sessions.count == 1)
+    }
+
+    @Test
     func apiTimelineSessionsListResponseDecodesTimelineCardContract() throws {
         let sessionJSON = apiSessionJSON()
         let json = """

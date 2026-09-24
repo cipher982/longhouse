@@ -571,6 +571,31 @@ private extension APISessionResponse {
     }
 }
 
+/// A timeline card as the app reads it: `head` only. The server sends each
+/// card's session three times (`head`, `detail`, `root`, identical in the
+/// catalog projection) and nothing here reads the other two; decoding the
+/// generated card built all three, and that session decode was the largest
+/// app cost in a phone launch trace after the date-parsing fix. JSONDecoder
+/// skips keys a type does not declare.
+struct TimelineCard: Decodable, Sendable {
+    let threadId: String
+    let timelineAnchorAt: String?
+    let head: APISessionResponse
+    let headOriginLabel: String?
+
+    var sessionSummary: SessionSummary {
+        head.sessionSummary(
+            threadId: threadId,
+            headOriginLabel: headOriginLabel,
+            timelineAnchorAt: timelineAnchorAt
+        )
+    }
+}
+
+struct TimelineCardList: Decodable, Sendable {
+    let sessions: [TimelineCard]
+}
+
 extension APITimelineSessionCardResponse {
     var sessionSummary: SessionSummary {
         head.sessionSummary(
