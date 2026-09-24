@@ -1511,7 +1511,9 @@ async def test_session_timeline_and_read_return_assembled_snapshot_facts(daemon_
             "is_offline": 0,
         }
         assert heartbeat_statements
-        assert all("max(" in statement and "group by" in statement for statement in heartbeat_statements)
+        # Bounded to one row per device: an index seek per machine, never the
+        # machine's heartbeat history.
+        assert all("limit" in statement and "live_heartbeat_stamps.device_id =" in statement for statement in heartbeat_statements)
         assert facts["provider_alias"] is None
         assert facts["resume"] is None
         assert "display_phase" not in facts and "status" not in facts
