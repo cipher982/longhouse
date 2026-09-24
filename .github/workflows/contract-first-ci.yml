@@ -70,7 +70,12 @@ jobs:
     # date, which is exactly how twelve of its members went dark. The live proof
     # below is the one member with a real dependency boundary, and it is gated.
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    # !cancelled() and not the default `success()`: `Changed paths` runs a git
+    # fetch against GitHub, and a network timeout there used to fail it -- which
+    # would now skip this whole job, because it needs that job's outputs. When the
+    # filter cannot tell, the gated live proof below is skipped and everything
+    # else still runs.
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: cube
     name: "Validation"
     # Must exceed the sum of the step budgets below, or the job kills a healthy

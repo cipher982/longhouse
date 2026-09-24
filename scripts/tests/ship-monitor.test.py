@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -72,11 +73,7 @@ def with_fakes(
     deploy_status_output: str | list[str] | None = None,
     ancestry_path_shas: list[str] | None = None,
 ) -> None:
-    deploy_status_outputs = (
-        deploy_status_output
-        if isinstance(deploy_status_output, list)
-        else [deploy_status_output]
-    )
+    deploy_status_outputs = deploy_status_output if isinstance(deploy_status_output, list) else [deploy_status_output]
     deploy_status_index = 0
 
     def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -107,10 +104,7 @@ def with_fakes(
         return subprocess.CompletedProcess(args=args, returncode=0, stdout=output, stderr="")
 
     def fake_fetch_run_jobs(repo: str, run_id: int) -> list[dict[str, str]]:
-        return [
-            {"name": name, "conclusion": conclusion}
-            for name, conclusion in job_conclusions.get(run_id, {}).items()
-        ]
+        return [{"name": name, "conclusion": conclusion} for name, conclusion in job_conclusions.get(run_id, {}).items()]
 
     ship_monitor.run = fake_run
     ship_monitor.fetch_run_jobs = fake_fetch_run_jobs
@@ -409,10 +403,7 @@ def _assert_gate_heartbeat_names_blocking_job(gate_step_name: str) -> None:
 
     summary = ship_monitor.summarize_incomplete_runs("cipher982/longhouse", "abc123", runs)
 
-    assert (
-        "Deploy and Verify #1 / gate -> CI #2 / Core E2E tests / "
-        "Run Core E2E Tests: in_progress"
-    ) in summary
+    assert ("Deploy and Verify #1 / gate -> CI #2 / Core E2E tests / Run Core E2E Tests: in_progress") in summary
 
 
 def test_deploy_heartbeat_names_active_deploy_step() -> None:
@@ -439,10 +430,7 @@ def test_deploy_heartbeat_names_active_deploy_step() -> None:
 
     summary = ship_monitor.summarize_incomplete_runs("cipher982/longhouse", "abc123", runs)
 
-    assert (
-        "Deploy and Verify #1 / Deploy public demo runtime / "
-        "Deploy public demo runtime: in_progress"
-    ) in summary
+    assert ("Deploy and Verify #1 / Deploy public demo runtime / Deploy public demo runtime: in_progress") in summary
 
 
 def test_manual_deploy_recovery_supersedes_failed_push_deploy() -> None:
@@ -459,6 +447,53 @@ def test_manual_deploy_recovery_supersedes_failed_push_deploy() -> None:
     assert ship_monitor.runs_succeeded(selected)
 
 
+def test_runs_on_a_topic_branch_do_not_speak_for_the_ship() -> None:
+    """The same SHA often exists on a topic branch and on main; only main ships.
+
+    A topic-branch run of the same commit failed on a git fetch network timeout
+    while main's own run was green, and the monitor read the branch run as the
+    ship's verdict. Prefer the default branch's runs when it has any.
+    """
+
+    payload = [
+        {
+            "databaseId": 1,
+            "workflowName": "CI",
+            "status": "completed",
+            "conclusion": "success",
+            "url": "",
+            "headSha": "abc123",
+            "createdAt": "",
+            "event": "push",
+            "headBranch": "main",
+        },
+        {
+            "databaseId": 2,
+            "workflowName": "CI",
+            "status": "completed",
+            "conclusion": "failure",
+            "url": "",
+            "headSha": "abc123",
+            "createdAt": "",
+            "event": "push",
+            "headBranch": "ci-gate-shape",
+        },
+    ]
+
+    def fake_run(cmd, cwd=None, check=True, env=None):  # noqa: ANN001
+        stdout = "origin/main\n" if cmd[:2] == ["git", "symbolic-ref"] else json.dumps(payload)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=stdout, stderr="")
+
+    previous = ship_monitor.run
+    ship_monitor.run = fake_run
+    try:
+        runs = ship_monitor.fetch_runs("cipher982/longhouse", "abc123")
+    finally:
+        ship_monitor.run = previous
+
+    assert [run.databaseId for run in runs] == [1]
+
+
 if __name__ == "__main__":
     test_no_runtime_change_does_not_require_exact_live_sha()
     test_no_runtime_change_accepts_deploy_stamped_target_sha()
@@ -472,6 +507,7 @@ if __name__ == "__main__":
     test_no_runtime_change_reports_explicit_disposition_without_live_sha_requirement()
     test_gate_heartbeat_names_blocking_ci_job_and_step()
     test_deploy_gate_heartbeat_names_blocking_ci_job_and_step()
+    test_runs_on_a_topic_branch_do_not_speak_for_the_ship()
     test_deploy_heartbeat_names_active_deploy_step()
     test_manual_deploy_recovery_supersedes_failed_push_deploy()
     print("ship-monitor tests passed")

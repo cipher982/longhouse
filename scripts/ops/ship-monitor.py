@@ -74,6 +74,8 @@ class RunInfo:
     headSha: str | None = None
     createdAt: str | None = None
     event: str | None = None
+    headBranch: str | None = None
+
 
 @dataclass(frozen=True)
 class SurfaceInfo:
@@ -164,7 +166,7 @@ def fetch_runs_for_event(repo: str, sha: str, event: str) -> list[RunInfo]:
             "--limit",
             "100",
             "--json",
-            "databaseId,workflowName,status,conclusion,url,headSha,createdAt,event",
+            "databaseId,workflowName,status,conclusion,url,headSha,createdAt,event,headBranch",
         ]
     )
     payload = json.loads(proc.stdout or "[]")
@@ -182,9 +184,28 @@ def fetch_runs_for_event(repo: str, sha: str, event: str) -> list[RunInfo]:
                 headSha=item.get("headSha"),
                 createdAt=item.get("createdAt"),
                 event=item.get("event"),
+                headBranch=item.get("headBranch"),
             )
         )
     return runs
+
+
+def default_branch() -> str | None:
+    """The branch a ship targets, from the checkout's own remote head.
+
+    No network call: `origin/HEAD` is set by clone and by every fetch, and the
+    monitor already runs in a checkout of the repository it is shipping.
+    """
+
+    try:
+        proc = run(
+            ["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+            check=False,
+        )
+    except OSError:
+        return None
+    value = (proc.stdout or "").strip()
+    return value.split("/", 1)[1] if proc.returncode == 0 and "/" in value else None
 
 
 def fetch_runs(repo: str, sha: str) -> list[RunInfo]:
@@ -193,6 +214,18 @@ def fetch_runs(repo: str, sha: str) -> list[RunInfo]:
         for run_info in fetch_runs_for_event(repo, sha, event):
             runs_by_id[run_info.databaseId] = run_info
     runs = list(runs_by_id.values())
+    # The same commit often exists on a topic branch and on the default branch:
+    # a ship pushes a branch, then main. A failure on the topic branch is not a
+    # fact about the ship -- a branch run of the *same* SHA failed on a git fetch
+    # network timeout while main's own run was green, and the monitor read the
+    # branch run as the ship's verdict. Prefer the default branch's runs whenever
+    # that branch has any for this SHA; otherwise keep everything (dispatch-only
+    # shas, or a repository whose remote head is not resolvable here).
+    branch = default_branch()
+    if branch is not None:
+        on_default = [run_info for run_info in runs if run_info.headBranch == branch]
+        if on_default:
+            runs = on_default
     runs.sort(key=lambda run: (run.workflowName, run.databaseId))
     return runs
 
@@ -295,20 +328,13 @@ def runs_succeeded(runs: list[RunInfo]) -> bool:
 
 
 def failed_runs(runs: list[RunInfo]) -> list[RunInfo]:
-    return [
-        run
-        for run in runs
-        if run.status == "completed" and run.conclusion not in ACCEPTED_CONCLUSIONS
-    ]
+    return [run for run in runs if run.status == "completed" and run.conclusion not in ACCEPTED_CONCLUSIONS]
 
 
 def job_succeeded(repo: str, run: RunInfo, expected_job_name: str) -> bool:
     if run.status != "completed" or run.conclusion != "success":
         return False
-    return any(
-        job.get("name") == expected_job_name and job.get("conclusion") == "success"
-        for job in fetch_run_jobs(repo, run.databaseId)
-    )
+    return any(job.get("name") == expected_job_name and job.get("conclusion") == "success" for job in fetch_run_jobs(repo, run.databaseId))
 
 
 def select_load_bearing_runs(runs: list[RunInfo]) -> tuple[list[RunInfo], list[str]]:
@@ -419,10 +445,7 @@ def describe_run_progress(repo: str, run_info: RunInfo) -> str:
     step_name = field(step, "name") or "current step"
     status = field(step, "status") or "unknown"
     started_at = field(step, "started_at", "startedAt")
-    return (
-        f"{run_info.workflowName} #{run_info.databaseId} / {job_name} / "
-        f"{step_name}: {status}{current_duration_suffix(started_at)}"
-    )
+    return f"{run_info.workflowName} #{run_info.databaseId} / {job_name} / {step_name}: {status}{current_duration_suffix(started_at)}"
 
 
 def find_run(runs: list[RunInfo], workflow_name: str) -> RunInfo | None:
@@ -476,8 +499,7 @@ def describe_deploy_run_blocker(repo: str, sha: str, runs: list[RunInfo], deploy
             return f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / gate -> {blocker}"
 
         return (
-            f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / {DEPLOY_GATE_JOB} / "
-            f"{step_name}: {status}{current_duration_suffix(started_at)}"
+            f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / {DEPLOY_GATE_JOB} / {step_name}: {status}{current_duration_suffix(started_at)}"
         )
 
     active = active_job(jobs)
@@ -490,10 +512,7 @@ def describe_deploy_run_blocker(repo: str, sha: str, runs: list[RunInfo], deploy
     step_name = field(step, "name") or "current step"
     status = field(step, "status") or "unknown"
     started_at = field(step, "started_at", "startedAt")
-    return (
-        f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / {job_name} / "
-        f"{step_name}: {status}{current_duration_suffix(started_at)}"
-    )
+    return f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / {job_name} / {step_name}: {status}{current_duration_suffix(started_at)}"
 
 
 def describe_ship_blocker(repo: str, sha: str, runs: list[RunInfo]) -> str | None:
@@ -585,8 +604,7 @@ def wait_for_workflows(args: argparse.Namespace, sha: str) -> list[RunInfo]:
                 ignored = sorted({run.workflowName for run in runs if run.workflowName not in required_names})
                 if ignored:
                     print(
-                        f"Load-bearing ship scope for {sha[:10]}: {scope_label} "
-                        f"(ignoring: {', '.join(ignored)})",
+                        f"Load-bearing ship scope for {sha[:10]}: {scope_label} (ignoring: {', '.join(ignored)})",
                         file=sys.stderr,
                     )
                 else:
@@ -606,8 +624,7 @@ def wait_for_workflows(args: argparse.Namespace, sha: str) -> list[RunInfo]:
 
         if next_heartbeat is not None and now >= next_heartbeat:
             print(
-                f"Still waiting on {sha[:10]} after {format_elapsed(now - start)}: "
-                f"{summarize_incomplete_runs(args.repo, sha, runs)}",
+                f"Still waiting on {sha[:10]} after {format_elapsed(now - start)}: {summarize_incomplete_runs(args.repo, sha, runs)}",
                 file=sys.stderr,
             )
             next_heartbeat = now + max(args.heartbeat, 1)
@@ -616,6 +633,7 @@ def wait_for_workflows(args: argparse.Namespace, sha: str) -> list[RunInfo]:
             raise PollTimeoutError(f"Timed out waiting for push workflows for {sha[:10]}")
 
         time.sleep(args.poll)
+
 
 def parse_deploy_status(output: str) -> dict[str, SurfaceInfo]:
     surfaces: dict[str, SurfaceInfo] = {}
@@ -687,10 +705,7 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
                 return True
         return False
 
-    runtime_image_published = any(
-        run.workflowName == RUNTIME_IMAGE_WORKFLOW and job_succeeded(run, RUNTIME_IMAGE_JOB)
-        for run in runs
-    )
+    runtime_image_published = any(run.workflowName == RUNTIME_IMAGE_WORKFLOW and job_succeeded(run, RUNTIME_IMAGE_JOB) for run in runs)
     expected_runtime_sha = latest_runtime_affecting_sha(root, sha)
     if runtime_image_published:
         expected_runtime_sha = sha
@@ -701,8 +716,7 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
             [str(root / "scripts" / "ops" / "deploy-status.sh")],
             cwd=root,
             env={
-                "HOSTED_CANARY_HEALTH_URL": os.environ.get("HOSTED_CANARY_HEALTH_URL")
-                or DEFAULT_CANARY_HEALTH_URL,
+                "HOSTED_CANARY_HEALTH_URL": os.environ.get("HOSTED_CANARY_HEALTH_URL") or DEFAULT_CANARY_HEALTH_URL,
             },
         )
         raw = proc.stdout
@@ -728,25 +742,13 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
             errors.append(f"{surface_name} health is {surface.health}, expected one of {sorted(allowed_health)}")
 
     deploy_run_completed = any(
-        run.workflowName == DEPLOY_AND_VERIFY
-        and run.status == "completed"
-        and run.conclusion in ACCEPTED_CONCLUSIONS
-        for run in runs
+        run.workflowName == DEPLOY_AND_VERIFY and run.status == "completed" and run.conclusion in ACCEPTED_CONCLUSIONS for run in runs
     )
     deploy_run_succeeded = any(
-        run.workflowName == DEPLOY_AND_VERIFY
-        and run.status == "completed"
-        and run.conclusion in {"success", "neutral"}
-        for run in runs
+        run.workflowName == DEPLOY_AND_VERIFY and run.status == "completed" and run.conclusion in {"success", "neutral"} for run in runs
     )
-    deploy_job_succeeded = any(
-        run.workflowName == DEPLOY_AND_VERIFY and job_succeeded(run, DEPLOY_AND_VERIFY_JOB)
-        for run in runs
-    )
-    no_runtime_change = any(
-        run.workflowName == DEPLOY_AND_VERIFY and job_succeeded(run, NO_RUNTIME_CHANGE_JOB)
-        for run in runs
-    )
+    deploy_job_succeeded = any(run.workflowName == DEPLOY_AND_VERIFY and job_succeeded(run, DEPLOY_AND_VERIFY_JOB) for run in runs)
+    no_runtime_change = any(run.workflowName == DEPLOY_AND_VERIFY and job_succeeded(run, NO_RUNTIME_CHANGE_JOB) for run in runs)
     expected_runtime_shas = {expected_runtime_short} if expected_runtime_short else set()
     if (deploy_job_succeeded or deploy_run_succeeded) and not no_runtime_change:
         expected_runtime_shas = runtime_reuse_accepted_shas(root, expected_runtime_sha, sha)
@@ -811,8 +813,7 @@ def main() -> int:
                 for item in recent_runs:
                     conclusion = item["conclusion"] or "-"
                     print(
-                        f"  - {item['short_sha']} {item['workflow_name']} #{item['run_id']}: "
-                        f"{item['status']}/{conclusion}",
+                        f"  - {item['short_sha']} {item['workflow_name']} #{item['run_id']}: {item['status']}/{conclusion}",
                         file=sys.stderr,
                     )
             print(
@@ -840,11 +841,7 @@ def main() -> int:
     monitored_payload = [asdict(run) for run in monitored_runs]
     runtime_disposition = (
         "no_runtime_change"
-        if any(
-            run.workflowName == DEPLOY_AND_VERIFY
-            and job_succeeded(args.repo, run, NO_RUNTIME_CHANGE_JOB)
-            for run in runs
-        )
+        if any(run.workflowName == DEPLOY_AND_VERIFY and job_succeeded(args.repo, run, NO_RUNTIME_CHANGE_JOB) for run in runs)
         else "unverified"
     )
 
@@ -905,9 +902,7 @@ def main() -> int:
                     print(live_output.rstrip(), file=sys.stderr)
             return EXIT_LIVE_DRIFT
         if runtime_disposition == "unverified" and any(
-            run.workflowName == DEPLOY_AND_VERIFY
-            and job_succeeded(args.repo, run, DEPLOY_AND_VERIFY_JOB)
-            for run in runs
+            run.workflowName == DEPLOY_AND_VERIFY and job_succeeded(args.repo, run, DEPLOY_AND_VERIFY_JOB) for run in runs
         ):
             runtime_disposition = "deployed"
 
