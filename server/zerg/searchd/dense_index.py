@@ -45,6 +45,30 @@ class ResidentIndexIntegrityError(RuntimeError):
     """A failed update left the resident snapshot unsafe to serve."""
 
 
+# Values `_build` writes into unused capacity; `_grow` must pad identically.
+_TAIL_DEFAULTS = {
+    "session_ids": None,
+    "episode_ordinals": -1,
+    "generation_ids": None,
+    "revisions": -1,
+    "start_order_times": -1,
+    "event_index_starts": -1,
+    "event_index_ends": -1,
+    "owner_ids": None,
+    "projects": "",
+    "providers": "",
+    "environments": "",
+    "hidden_from_default_timeline": False,
+    "test_scope_visible": False,
+    "user_hidden_from_timeline": False,
+    "user_states": "active",
+    "tombstoned": False,
+    "started_ats": "",
+    "content_hashes": None,
+    "active": False,
+}
+
+
 @dataclass(frozen=True)
 class _Snapshot:
     """One consistent view. Never mutated after publication."""
@@ -412,8 +436,9 @@ class ResidentEpisodeIndex:
             source = getattr(snapshot, name)
             grown = np.empty(capacity, dtype=source.dtype)
             grown[: source.shape[0]] = source
-            if name == "active":
-                grown[source.shape[0] :] = False
+            # Pad exactly like `_build`: filters compare the whole array, so an
+            # unset object slot (None) would break `started_ats >= since_iso`.
+            grown[source.shape[0] :] = _TAIL_DEFAULTS[name]
             values[name] = grown
         return _Snapshot(**values)
 

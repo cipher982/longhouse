@@ -495,12 +495,15 @@ def test_identical_episode_text_collapses_to_one_result(tmp_path):
 def _assert_same_resident_results(incremental, full, queries):
     assert incremental.coverage == full.coverage
     assert incremental.size == full.size
+    # Filters compare whole arrays, so grown capacity must be padded like a full
+    # load; exercise the date filter on both sides of the seeded dates.
     for query in queries:
-        incremental_hits = incremental.search(query, owner_id="42", limit=5)
-        full_hits = full.search(query, owner_id="42", limit=5)
-        assert [(hit["session_id"], hit["episode_ordinal"], hit["score"]) for hit in incremental_hits] == [
-            (hit["session_id"], hit["episode_ordinal"], hit["score"]) for hit in full_hits
-        ]
+        for since_iso in (None, "2026-06-01", "2026-12-01"):
+            incremental_hits = incremental.search(query, owner_id="42", limit=5, since_iso=since_iso)
+            full_hits = full.search(query, owner_id="42", limit=5, since_iso=since_iso)
+            assert [(hit["session_id"], hit["episode_ordinal"], hit["score"]) for hit in incremental_hits] == [
+                (hit["session_id"], hit["episode_ordinal"], hit["score"]) for hit in full_hits
+            ]
 
 
 def test_incremental_refresh_matches_full_load_after_mutations_and_restart(tmp_path):
