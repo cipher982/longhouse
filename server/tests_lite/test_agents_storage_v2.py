@@ -1971,3 +1971,82 @@ def test_json_string_raw_record_cannot_acquire_native_provider_authority():
 
     assert raw_spec.records[0].data == data
     assert metadata["render_spec"].records[0].interaction_kind == "durable_user_message"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encoding", ["zstd", "identity"])
+async def test_storage_v2_envelope_commits_in_each_advertised_encoding(monkeypatch, encoding):
+    import zstandard
+
+    async with _storage_v2_stack(
+        monkeypatch,
+        render_pool_factory=_InlineRenderPool,
+        prefix="lh2-encoding-",
+    ) as stack:
+        capabilities = await stack.client.get("/agents/storage/v2/capabilities")
+        assert capabilities.json()["envelope_content_encodings"] == ["zstd", "identity"]
+
+        payload = _payload(tenant_id=get_settings().archive_primary_tenant_id, machine_id="cinder", epoch=uuid4())
+        body = json.dumps(payload).encode()
+        if encoding == "zstd":
+            body = zstandard.ZstdCompressor(level=1).compress(body)
+        response = await stack.client.post(
+            "/agents/storage/v2/envelopes",
+            content=body,
+            headers={
+                "Content-Type": "application/json",
+                "Content-Encoding": encoding,
+                "X-Longhouse-Storage-Lane": "live",
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["envelope_id"] == payload["expected_envelope_id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "status_code", "code"),
+    [
+        ("expands_past_cap", 413, "storage_envelope_too_large"),
+        ("not_zstd", 400, "invalid_content_encoding"),
+        ("trailing_garbage", 400, "invalid_content_encoding"),
+        ("unknown_encoding", 415, "unsupported_content_encoding"),
+    ],
+)
+async def test_storage_v2_rejects_bad_encoded_bodies_before_catalog_work(monkeypatch, case, status_code, code):
+    import zstandard
+
+    class ForbiddenCatalog:
+        async def call(self, *_args, **_kwargs):
+            raise AssertionError("rejected body reached catalogd")
+
+    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: ForbiddenCatalog())
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", _AdmissionOnlyPool)
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", _AdmissionOnlyPool)
+    # A small cap keeps the expansion case cheap; the decoder must refuse
+    # output past it no matter how small the compressed body is.
+    monkeypatch.setattr(storage_router, "MAX_WIRE_BODY_BYTES", 64 * 1024)
+    encoding = "zstd"
+    if case == "expands_past_cap":
+        body = zstandard.ZstdCompressor(level=1).compress(b"{" + b" " * (1024 * 1024) + b"}")
+        assert len(body) < 64 * 1024
+    elif case == "not_zstd":
+        body = b'{"not": "compressed"}'
+    elif case == "trailing_garbage":
+        body = zstandard.ZstdCompressor(level=1).compress(b"{}") + b"garbage"
+    else:
+        body = b"{}"
+        encoding = "br"
+
+    app = FastAPI()
+    app.include_router(storage_router.router)
+    app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="cinder", owner_id=1)
+    app.dependency_overrides[require_single_tenant] = lambda: None
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/agents/storage/v2/envelopes",
+            content=body,
+            headers={"Content-Encoding": encoding, "X-Longhouse-Storage-Lane": "live"},
+        )
+    assert response.status_code == status_code, response.text
+    assert response.json()["detail"]["code"] == code

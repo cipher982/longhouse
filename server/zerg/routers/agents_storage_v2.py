@@ -16,6 +16,7 @@ from typing import Any
 from uuid import UUID
 from weakref import WeakValueDictionary
 
+import zstandard
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
@@ -99,6 +100,14 @@ router = APIRouter(prefix="/agents/storage/v2", tags=["agents"])
 logger = logging.getLogger(__name__)
 
 MAX_WIRE_BODY_BYTES = 48 * 1024 * 1024
+# Envelope bodies the Machine Agent may send. It persists every envelope as
+# zstd and used to decompress it just to send it; shipping the stored bytes
+# cuts wire volume several-fold on the uplinks that bound history import.
+ENVELOPE_CONTENT_ENCODINGS = ("zstd", "identity")
+# The engine's level-1 streaming encoder uses windows of a few MiB. The cap
+# bounds decoder memory for any frame a client can send.
+_ZSTD_MAX_WINDOW_BYTES = 32 * 1024 * 1024
+_ZSTD_READ_CHUNK_BYTES = 1024 * 1024
 _EXPECTED_ENVELOPE_FIELDS = {
     "protocol_version",
     "tenant_id",
@@ -318,13 +327,36 @@ def _parse_session_facts(value: object) -> dict[str, object]:
     return result
 
 
+class _EnvelopeTooLarge(Exception):
+    pass
+
+
+def _decode_zstd_envelope(body: bytes) -> bytes:
+    """Decompress a zstd envelope, bounding output and decoder memory.
+
+    The compressed body is already capped at ``MAX_WIRE_BODY_BYTES``; that cap
+    says nothing about what it expands to. Output is read in bounded chunks and
+    refused once it would exceed the same limit, so a small body cannot expand
+    into a large allocation. Anything that is not a sequence of complete zstd
+    frames raises ``zstandard.ZstdError``.
+    """
+    decompressor = zstandard.ZstdDecompressor(max_window_size=_ZSTD_MAX_WINDOW_BYTES)
+    decoded = bytearray()
+    with decompressor.stream_reader(body, read_across_frames=True) as reader:
+        while chunk := reader.read(_ZSTD_READ_CHUNK_BYTES):
+            if len(decoded) + len(chunk) > MAX_WIRE_BODY_BYTES:
+                raise _EnvelopeTooLarge
+            decoded.extend(chunk)
+    return bytes(decoded)
+
+
 async def _read_bounded_json(request: Request) -> dict[str, Any]:
-    content_encoding = request.headers.get("content-encoding", "identity").strip().lower()
-    if content_encoding not in {"", "identity"}:
+    content_encoding = request.headers.get("content-encoding", "identity").strip().lower() or "identity"
+    if content_encoding not in ENVELOPE_CONTENT_ENCODINGS:
         raise _http_error(
             status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             "unsupported_content_encoding",
-            "Storage v2 accepts identity-encoded JSON only.",
+            f"Storage v2 accepts {', '.join(ENVELOPE_CONTENT_ENCODINGS)} envelope bodies.",
         )
     content_length = request.headers.get("content-length")
     if content_length is not None:
@@ -348,6 +380,21 @@ async def _read_bounded_json(request: Request) -> dict[str, Any]:
                 f"Storage-v2 wire body exceeds {MAX_WIRE_BODY_BYTES} bytes.",
             )
         body.extend(chunk)
+    if content_encoding == "zstd":
+        try:
+            body = await asyncio.to_thread(_decode_zstd_envelope, bytes(body))
+        except _EnvelopeTooLarge as exc:
+            raise _http_error(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                "storage_envelope_too_large",
+                f"Storage-v2 envelope decodes past {MAX_WIRE_BODY_BYTES} bytes.",
+            ) from exc
+        except zstandard.ZstdError as exc:
+            raise _http_error(
+                status.HTTP_400_BAD_REQUEST,
+                "invalid_content_encoding",
+                "Storage-v2 body is not valid zstd.",
+            ) from exc
     try:
         decoded = await asyncio.to_thread(json.loads, body)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -1236,6 +1283,7 @@ async def storage_v2_capabilities(
         "machine_id": machine_id,
         "ingest_path": "/api/agents/storage/v2/envelopes",
         "max_wire_body_bytes": MAX_WIRE_BODY_BYTES,
+        "envelope_content_encodings": list(ENVELOPE_CONTENT_ENCODINGS),
         "max_raw_record_bytes": MAX_RECORD_BYTES,
         "max_records": MAX_RECORDS,
         "media_claim_path": "/api/agents/storage/v2/media/claims",
