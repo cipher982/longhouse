@@ -1104,7 +1104,7 @@ private func previewMachine(
 
 #Preview("Sign-in relay · device code and paste-back") {
     ScrollView {
-        VStack(spacing: 16) {
+        LaunchCard {
             ProviderSignInRow(
                 deviceId: "workbench",
                 machineName: "workbench",
@@ -1130,8 +1130,9 @@ private func previewMachine(
                 """.utf8))
             )
         }
-        .padding(.vertical, 20)
+        .padding(16)
     }
+    .background(Ember.page)
     .preferredColorScheme(.dark)
     .emberChrome()
 }
