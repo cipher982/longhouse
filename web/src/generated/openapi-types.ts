@@ -1537,7 +1537,7 @@ export interface paths {
         };
         /**
          * List Session Inputs Endpoint
-         * @description List queued + recently-failed inputs for the chip UI.
+         * @description List queued + recently settled inputs for the chip UI.
          *
          *     The web composer polls this every 2s while any row is queued or
          *     delivering. Most polls return the same shape, so we emit a weak
@@ -7796,7 +7796,7 @@ export interface components {
             can_interrupt_active_turn: boolean;
             /**
              * Attach Images
-             * @description True when the session can accept image attachments on input (codex_app_server only)
+             * @description True when this session's provider and mode accept image attachments on input
              * @default false
              */
             attach_images: boolean;
@@ -13315,6 +13315,8 @@ export interface operations {
     list_session_inputs_endpoint_sessions__session_id__inputs_get: {
         parameters: {
             query?: {
+                /** @description Return only the receipt for this client request identity. */
+                client_request_id?: string | null;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };

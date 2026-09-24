@@ -1617,10 +1617,15 @@ final class SessionViewModel: ObservableObject {
 
     static func pendingInputPollDelay(submittedInputs: [SubmittedInput], now: Date) -> UInt64? {
         let activeAges = submittedInputs.compactMap { input -> TimeInterval? in
-            guard input.phase == .submitting || input.phase == .working || input.phase == .sent else { return nil }
+            guard input.phase == .submitting
+                || input.phase == .queued
+                || input.phase == .working
+                || input.phase == .sent else { return nil }
             return max(0, now.timeIntervalSince(input.createdAt))
         }
-        guard let youngest = activeAges.min(), youngest <= 120 else { return nil }
+        guard let youngest = activeAges.min() else { return nil }
+        let hasQueuedInput = submittedInputs.contains { $0.phase == .queued }
+        guard hasQueuedInput || youngest <= 120 else { return nil }
         if youngest <= 15 { return 750_000_000 }
         if youngest <= 45 { return 2_000_000_000 }
         return 5_000_000_000
@@ -1838,6 +1843,21 @@ final class SessionViewModel: ObservableObject {
 
     private func pollTick(sessionId: String, appState: AppState) async {
         guard let api = apiFactory(appState.serverURL) else { return }
+        let normalizedServerURL = TranscriptSnapshot.normalizedServerURL(appState.serverURL)
+        let authGeneration = SharedAuthStore.authGeneration(for: normalizedServerURL)
+        let pending = pendingInputStore.load(
+            serverURL: normalizedServerURL,
+            sessionId: sessionId,
+            authGeneration: authGeneration
+        )
+        if !pending.isEmpty {
+            await reconcilePendingInputs(
+                pending,
+                sessionId: sessionId,
+                appState: appState,
+                authGeneration: authGeneration
+            )
+        }
         try? await refreshTail(api: api, sessionId: sessionId, allowFailure: true)
     }
 

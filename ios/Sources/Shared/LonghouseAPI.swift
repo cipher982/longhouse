@@ -433,11 +433,17 @@ struct LonghouseAPI: Sendable {
         let decoded = try JSONDecoder.snakeCase.decode(TimelineCardList.self, from: data)
         return decoded.sessions.map(\.sessionSummary)
     }
-    /// The authority returns the recent receipt list; filtering by
-    /// client_request_id happens locally because this route intentionally has
-    /// no identity query parameter.
-    static func sessionInputReceiptsURL(baseURL: URL, id: String) -> URL {
-        baseURL.appendingPathComponent("/api/sessions/\(id)/inputs")
+    /// The authority can return one durable receipt by client request ID,
+    /// even after it falls outside the recent chip projection.
+    static func sessionInputReceiptsURL(baseURL: URL, id: String, clientRequestId: String? = nil) -> URL {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("/api/sessions/\(id)/inputs"),
+            resolvingAgainstBaseURL: false
+        )!
+        if let clientRequestId, !clientRequestId.isEmpty {
+            components.queryItems = [URLQueryItem(name: "client_request_id", value: clientRequestId)]
+        }
+        return components.url!
     }
 
     static func sessionWorkspaceURL(baseURL: URL, id: String, limit: Int = 200, branchMode: String = "head") -> URL {
@@ -564,7 +570,11 @@ struct LonghouseAPI: Sendable {
     }
     func sessionInputReceipt(id: String, clientRequestId: String) async throws -> SessionInputReceiptState? {
         var request = URLRequest(
-            url: Self.sessionInputReceiptsURL(baseURL: baseURL, id: id),
+            url: Self.sessionInputReceiptsURL(
+                baseURL: baseURL,
+                id: id,
+                clientRequestId: clientRequestId
+            ),
             cachePolicy: .reloadIgnoringLocalCacheData
         )
         request.addValue("application/json", forHTTPHeaderField: "Accept")

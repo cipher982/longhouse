@@ -1892,23 +1892,41 @@ describe("SessionChat", () => {
         screen.queryByTestId("session-chat-queued"),
       ).not.toBeInTheDocument();
     });
-    it("keeps an ambiguous Console turn in the outbox until it is delivered", async () => {
+    it("reconciles a queued Console turn when its receipt later delivers", async () => {
       const user = userEvent.setup();
       const onOutboxChange = vi.fn();
+      let inputListCalls = 0;
+      let clientRequestId = "";
       requestMock.mockImplementation((path: string, init?: RequestInit) => {
         if (String(path).endsWith("/lock")) {
           return Promise.resolve({ locked: false, fork_available: false });
         }
         if (String(path).endsWith("/inputs") && !init) {
-          return Promise.resolve([]);
+          inputListCalls += 1;
+          return Promise.resolve(
+            inputListCalls === 1
+              ? []
+              : [
+                  {
+                    id: 7,
+                    live_input_id: "turn-1",
+                    client_request_id: clientRequestId,
+                    text: "keep this Console turn",
+                    intent: "auto",
+                    status: "delivered",
+                    created_at: null,
+                  },
+                ],
+          );
         }
         if (String(path).endsWith("/input") && init?.method === "POST") {
           const payload = JSON.parse(String(init.body ?? "{}"));
+          clientRequestId = payload.client_request_id;
           return Promise.resolve({
             outcome: "queued",
             input_id: null,
             intent: "auto",
-            client_request_id: payload.client_request_id,
+            client_request_id: clientRequestId,
             turn: { turn_id: "turn-1", run_id: "run-1", state: "starting" },
             queued: [],
           });
@@ -1922,14 +1940,17 @@ describe("SessionChat", () => {
         onOutboxChange,
       });
 
+      await waitFor(() => expect(inputListCalls).toBe(1));
+
       await user.type(screen.getByRole("textbox"), "keep this Console turn");
       await user.click(screen.getByRole("button", { name: /send/i }));
 
-      await waitFor(() =>
-        expect(lastOutbox(onOutboxChange)).toMatchObject([
-          { text: "keep this Console turn", state: "queued" },
-        ]),
-      );
+      await waitFor(() => {
+        const storedSlots = Object.keys(window.localStorage).filter((key) =>
+          key.startsWith("longhouse:session-input:sess-1:"),
+        );
+        expect(storedSlots).toEqual([]);
+      });
     });
 
   });

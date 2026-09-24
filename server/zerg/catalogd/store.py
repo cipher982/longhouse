@@ -665,6 +665,7 @@ def _live_console_turn_dto(
         "session_id": turn.session_id,
         "thread_id": turn.thread_id,
         "run_id": turn.run_id,
+        "receipt_id": turn.receipt_id,
         "state": turn.state,
         "report_id": turn.report_id,
         "attachments": _console_turn_attachments(turn).get("refs") or [],
@@ -6034,7 +6035,6 @@ class CatalogStore:
         Console uploads explicitly set ``allow_unbound`` because their UUID
         group is created before the live Console receipt in the same request.
         """
-
         observed_at = datetime.now(UTC)
         table = LiveSessionInputAttachment.__table__
         with _write_transaction(self.engine) as connection:

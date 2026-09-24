@@ -24,6 +24,12 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
+
+use uuid::Uuid;
+
+use crate::codex_attachments::{fetch_one_into, AttachmentRef};
+use tokio::task::JoinSet;
+
 /// Delivery mode shared by the engine's Helm and Console dispatch branches.
 /// The Runtime Host mirrors this table for capability projection; an unknown
 /// pair is rejected rather than silently dropping an image.
@@ -40,10 +46,6 @@ pub fn attachment_delivery(provider: &str, mode: &str) -> Option<&'static str> {
         _ => None,
     }
 }
-
-use uuid::Uuid;
-
-use crate::codex_attachments::{fetch_one_into, AttachmentRef};
 
 /// Prefix of the prompt block that names staged files. The server's
 /// receipt-to-transcript matcher strips everything from this marker to the
@@ -72,6 +74,28 @@ impl StagedAttachment {
             "path": self.path.to_string_lossy(),
             "mime_type": self.mime_type,
         })
+    }
+}
+struct StageCleanup<'a> {
+    dir: &'a Path,
+    armed: bool,
+}
+
+impl<'a> StageCleanup<'a> {
+    fn new(dir: &'a Path) -> Self {
+        Self { dir, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for StageCleanup<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            cleanup_dir(self.dir);
+        }
     }
 }
 
@@ -125,34 +149,40 @@ pub async fn stage(
     if refs.is_empty() {
         return Ok(Vec::new());
     }
+    let mut cleanup = StageCleanup::new(dir);
     if let Some(parent) = dir.parent() {
         reap_stale(parent);
     }
     let started = Instant::now();
-    let mut handles = Vec::with_capacity(refs.len());
-    for attachment in refs {
+    let mut tasks = JoinSet::new();
+    for (index, attachment) in refs.iter().enumerate() {
         let http = http.clone();
         let api_url = api_url.to_string();
         let token = api_token.to_string();
         let session = session_id.to_string();
         let attachment = attachment.clone();
         let dir = dir.to_path_buf();
-        handles.push(tokio::spawn(async move {
-            fetch_one_into(&http, &api_url, &token, &session, &attachment, &dir)
-                .await
-                .map(|fetched| StagedAttachment {
-                    path: fetched.path,
-                    mime_type: attachment.mime_type,
-                })
-        }));
+        tasks.spawn(async move {
+            (
+                index,
+                fetch_one_into(&http, &api_url, &token, &session, &attachment, &dir)
+                    .await
+                    .map(|fetched| StagedAttachment {
+                        path: fetched.path,
+                        mime_type: attachment.mime_type,
+                    }),
+            )
+        });
     }
-    let mut staged = Vec::with_capacity(refs.len());
+    let mut staged: Vec<Option<StagedAttachment>> = (0..refs.len()).map(|_| None).collect();
     let mut first_err: Option<anyhow::Error> = None;
-    for handle in handles {
-        match handle.await {
-            Ok(Ok(item)) => staged.push(item),
-            Ok(Err(err)) => {
-                first_err.get_or_insert(err);
+    while let Some(result) = tasks.join_next().await {
+        match result {
+            Ok((index, Ok(item))) => staged[index] = Some(item),
+            Ok((_index, Err(err))) => {
+                if first_err.is_none() {
+                    first_err = Some(err);
+                }
             }
             Err(join_err) => {
                 first_err.get_or_insert(anyhow!("attachment fetch task panicked: {join_err}"));
@@ -160,7 +190,6 @@ pub async fn stage(
         }
     }
     if let Some(err) = first_err {
-        cleanup_dir(dir);
         eprintln!(
             "[attach] stage failed session={} dir={} count={} elapsed_ms={} error={}",
             session_id,
@@ -171,6 +200,13 @@ pub async fn stage(
         );
         return Err(err);
     }
+    let staged: Vec<StagedAttachment> = staged
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| {
+            item.ok_or_else(|| anyhow!("attachment fetch task {index} returned no item"))
+        })
+        .collect::<Result<_>>()?;
     eprintln!(
         "[attach] staged session={} dir={} count={} elapsed_ms={}",
         session_id,
@@ -178,6 +214,7 @@ pub async fn stage(
         staged.len(),
         started.elapsed().as_millis()
     );
+    cleanup.disarm();
     Ok(staged)
 }
 
@@ -380,6 +417,43 @@ mod tests {
             text_or_attachments(&json!({"text": "hi"}), "text", &[]).unwrap(),
             "hi"
         );
+    }
+
+    #[tokio::test]
+    async fn staging_cancellation_removes_partial_staging_directory() {
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (_socket, _) = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("staging");
+        fs::create_dir_all(&dir).unwrap();
+        let attachment = AttachmentRef {
+            id: Uuid::new_v4().to_string(),
+            mime_type: "image/png".to_string(),
+            sha256: "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881".to_string(),
+            blob_url: "/api/agents/sessions/session/inputs/input/attachments/blob".to_string(),
+        };
+        let http = reqwest::Client::new();
+        let api_url = format!("http://{address}");
+        let session_id = Uuid::new_v4().to_string();
+        let result = tokio::time::timeout(
+            Duration::from_millis(25),
+            stage(&http, &api_url, "token", &session_id, &[attachment], &dir),
+        )
+        .await;
+        assert!(result.is_err(), "staging should exceed the deadline");
+        assert!(
+            !dir.exists(),
+            "cancelling stage must remove partial staging"
+        );
+        server.abort();
+        let _ = server.await;
     }
 
     #[test]

@@ -198,6 +198,7 @@ async def _enqueue_console_input_with_attachments(
             detail="This session's provider does not accept image attachments",
         )
     group_id: str | None = None
+    existing_receipt = None
 
     async def cleanup_stored_group() -> None:
         if group_id is None:
@@ -262,7 +263,7 @@ async def _enqueue_console_input_with_attachments(
         record_outcome("rejected_idempotency_conflict")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "idempotency_conflict", "message": str(exc)},
+            detail={"error_code": "idempotency_conflict", "message": str(exc)},
         ) from exc
     except ConsoleTurnUnavailable as exc:
         await cleanup_stored_group()
@@ -270,15 +271,24 @@ async def _enqueue_console_input_with_attachments(
         error_status = status.HTTP_404_NOT_FOUND if exc.code == "report_not_found" else status.HTTP_409_CONFLICT
         raise HTTPException(
             status_code=error_status,
-            detail={"code": exc.code, "message": str(exc)},
+            detail={"error_code": exc.code, "message": str(exc)},
         ) from exc
-    # A transport/catalog error is ambiguous: catalogd may have committed the
-    # turn before the reply was lost. Keep the group until catalogd's retention
-    # reaper proves it is unbound; deleting it here would strand committed refs.
-    # Two identical requests can both upload before catalogd's idempotency
-    # check. If this request lost that race, its group is not the receipt
-    # returned by the catalog and must not remain as an orphan.
+    except Exception as exc:
+        # catalogd may have committed the turn before its response was lost;
+        # retain the unbound group for the receipt reaper and let an idempotent
+        # retry recover the same operation.
+        logger.exception("console attachment dispatch outcome unknown for session %s", source_session.id)
+        record_outcome("dispatch_unknown")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error_code": "input_receipt_unknown",
+                "message": "The server could not confirm this operation; retry with the same client_request_id.",
+            },
+        ) from exc
     if group_id is not None and not turn.created:
+        # Another request won the idempotency race. Its turn owns the durable
+        # attachment group; discard this request's duplicate upload.
         await cleanup_stored_group()
         group_id = None
     if turn.error and turn.error_code not in {
@@ -286,16 +296,13 @@ async def _enqueue_console_input_with_attachments(
         "turn_start_outcome_unknown",
         "attachment_stage_outcome_unknown",
     }:
-        # This request received a definite dispatch rejection. Only its newly
-        # created group is safe to remove; a replay has group_id=None, and an
-        # ambiguous catalog/transport outcome is handled above by retention.
         if turn.created:
             await cleanup_stored_group()
             group_id = None
         record_outcome("dispatch_failed")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={"code": turn.error_code or "provider_launch_failed", "message": turn.error},
+            detail={"error_code": turn.error_code or "provider_launch_failed", "message": turn.error},
         )
     if turn.error:
         record_outcome("dispatch_deferred")
@@ -332,6 +339,17 @@ async def _finish_catalog_receipt(*, receipt_id: str, delivery_request_id: str, 
         },
         timeout_seconds=1.0,
     )
+
+
+async def _cleanup_catalog_attachment_group(*, owner_id: int, session_id: str, receipt_id: str) -> None:
+    try:
+        await delete_catalog_attachment_blobs(
+            owner_id=owner_id,
+            session_id=session_id,
+            input_receipt_id=receipt_id,
+        )
+    except Exception:
+        logger.exception("attachment cleanup failed for session %s receipt %s", session_id, receipt_id)
 
 
 @router.post("/{session_id}/inputs-multipart", response_model=SessionInputResponse)
@@ -658,6 +676,11 @@ async def create_session_input_with_attachments(
                 delivery_request_id=delivery_request_id,
                 error="attachment store rejected",
             )
+            await _cleanup_catalog_attachment_group(
+                owner_id=int(current_user.id),
+                session_id=str(source_session.id),
+                receipt_id=catalog_receipt_id,
+            )
         _record_outcome("store_rejected")
         raise
     except Exception as exc:
@@ -667,6 +690,11 @@ async def create_session_input_with_attachments(
                 receipt_id=catalog_receipt_id,
                 delivery_request_id=delivery_request_id,
                 error=f"attachment store failed: {exc}",
+            )
+            await _cleanup_catalog_attachment_group(
+                owner_id=int(current_user.id),
+                session_id=str(source_session.id),
+                receipt_id=catalog_receipt_id,
             )
         logger.exception("attachment upload failed for session %s", source_session.id)
         _record_outcome("store_failed")
@@ -693,20 +721,34 @@ async def create_session_input_with_attachments(
             delivery_request_id=delivery_request_id,
             error="dispatch rejected",
         )
+        await _cleanup_catalog_attachment_group(
+            owner_id=int(current_user.id),
+            session_id=str(source_session.id),
+            receipt_id=catalog_receipt_id,
+        )
         _record_outcome("dispatch_rejected")
         raise
     except Exception as exc:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
-        await _finish_catalog_receipt(
+        unknown_error = f"Provider dispatch outcome is unknown: {exc}"[:500]
+        marked = await _set_catalog_live_receipt_error(
             receipt_id=catalog_receipt_id,
+            source_session=source_session,
+            owner_id=int(current_user.id),
+            text=text,
+            intent=INPUT_INTENT_AUTO,
+            client_request_id=request_id,
             delivery_request_id=delivery_request_id,
-            error=str(exc)[:200],
+            payload_digest=payload_digest,
+            error={"code": "delivery_unknown", "message": unknown_error},
         )
-        logger.exception("attachment dispatch failed for session %s", source_session.id)
-        _record_outcome("dispatch_failed")
+        if not marked:
+            unknown_error = "The server could not confirm this operation; retry with the same client_request_id."
+        logger.exception("attachment dispatch outcome unknown for session %s", source_session.id)
+        _record_outcome("dispatch_unknown")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"dispatch failed: {exc}",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error_code": "delivery_unknown", "message": unknown_error},
         ) from exc
 
     dispatch_status = int(getattr(dispatch_response, "status_code", 200) or 200)
@@ -760,6 +802,11 @@ async def create_session_input_with_attachments(
                 )
             _record_outcome("dispatch_unknown")
             raise HTTPException(status_code=dispatch_status, detail=payload)
+        await _cleanup_catalog_attachment_group(
+            owner_id=int(current_user.id),
+            session_id=str(source_session.id),
+            receipt_id=catalog_receipt_id,
+        )
         await _finish_catalog_receipt(
             receipt_id=catalog_receipt_id,
             delivery_request_id=delivery_request_id,

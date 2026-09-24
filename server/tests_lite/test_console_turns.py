@@ -6,7 +6,6 @@ from uuid import uuid4
 import pytest
 
 import zerg.services.console_sessions as console_sessions
-from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
@@ -21,6 +20,8 @@ from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
 from zerg.services.session_turns import SESSION_TURN_STATE_COMPLETED
 from zerg.services.session_turns import SESSION_TURN_STATE_FAILED
 from zerg.services.session_turns import SESSION_TURN_STATE_STARTING
+
+pytest_plugins = ("tests_lite.live_catalog_harness",)
 
 
 def _db(tmp_path):
@@ -324,6 +325,7 @@ async def test_control_reconnect_replays_live_catalog_turn_with_same_run_id(monk
         "client_request_id": "catalog-reconnect-request",
         "provider_config": {"permission_mode": "bypass"},
         "resume_provider_thread_id": None,
+        "receipt_id": str(uuid4()),
         # Refs persisted on the turn ride the replayed dispatch too; a
         # reconnect after a restart must not deliver a text-only turn.
         "attachments": [{"id": str(uuid4()), "mime_type": "image/png", "sha256": "ab" * 32, "blob_url": "/api/agents/x"}],

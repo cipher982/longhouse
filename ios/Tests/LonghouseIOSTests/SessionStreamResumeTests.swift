@@ -560,6 +560,16 @@ struct SessionStreamResumeTests {
             lastError: nil,
             createdAt: createdAt
         )
+        let queued = SubmittedInput(
+            id: "queued",
+            clientRequestId: "queued",
+            text: "queued image",
+            intent: "auto",
+            phase: .queued,
+            serverInputId: 7,
+            lastError: nil,
+            createdAt: createdAt
+        )
         let failed = SubmittedInput(
             id: "failed",
             clientRequestId: "failed",
@@ -570,6 +580,8 @@ struct SessionStreamResumeTests {
             lastError: "failed",
             createdAt: createdAt
         )
+        #expect(SessionViewModel.pendingInputPollDelay(submittedInputs: [queued], now: createdAt) == 750_000_000)
+        #expect(SessionViewModel.pendingInputPollDelay(submittedInputs: [queued], now: createdAt.addingTimeInterval(121)) == 5_000_000_000)
         #expect(SessionViewModel.pendingInputPollDelay(submittedInputs: [working], now: createdAt) == 750_000_000)
         #expect(SessionViewModel.pendingInputPollDelay(submittedInputs: [working], now: createdAt.addingTimeInterval(20)) == 2_000_000_000)
         #expect(SessionViewModel.pendingInputPollDelay(submittedInputs: [working], now: createdAt.addingTimeInterval(60)) == 5_000_000_000)

@@ -334,7 +334,11 @@ async def test_catalogd_claims_and_finishes_queued_input_exactly_once(daemon_pat
         assert read["receipt"]["id"] == second_id
         recent = await client.call("session.input.recent.list.v2", {"session_id": str(session_id)})
         assert recent["queued_count"] == 1
-        assert [receipt["id"] for receipt in recent["receipts"]] == [second_id]
+        assert {receipt["id"] for receipt in recent["receipts"]} == {receipt_id, second_id}
+        assert recent["receipts"] == sorted(
+            recent["receipts"],
+            key=lambda receipt: (receipt["created_at"], receipt["id"]),
+        )
         cancelled = await client.call(
             "session.input.cancel.v2",
             {"session_id": str(session_id), "receipt_id": second_id},
@@ -443,6 +447,70 @@ async def test_catalogd_attachment_metadata_is_receipt_scoped_and_bounded(daemon
             },
         )
         assert created["created"] is True
+        attachment_read = await client.call(
+            "session.input.attachment.read.v2",
+            {
+                "owner_id": 7,
+                "session_id": str(session_id),
+                "input_receipt_id": receipt_id,
+                "attachment_id": attachment_id,
+            },
+        )
+        assert attachment_read["found"] is True
+        assert attachment_read["attachment"]["sha256"] == "a" * 64
+        expired_id = str(uuid4())
+        expired = await client.call(
+            "session.input.attachment.create.v2",
+            {
+                "attachment": {
+                    "id": expired_id,
+                    "input_receipt_id": receipt_id,
+                    "owner_id": 7,
+                    "session_id": str(session_id),
+                    "mime_type": "image/png",
+                    "byte_size": 67,
+                    "sha256": "b" * 64,
+                    "blob_path": f"{session_id}/{expired_id}.bin",
+                    "original_filename": "expired.png",
+                    "original_byte_size": 67,
+                    "expires_at": (datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+                },
+                "allow_unbound": False,
+            },
+        )
+        assert expired["created"] is True
+        expired_read = await client.call(
+            "session.input.attachment.read.v2",
+            {
+                "owner_id": 7,
+                "session_id": str(session_id),
+                "input_receipt_id": receipt_id,
+                "attachment_id": expired_id,
+            },
+        )
+        assert expired_read["found"] is False
+        replacement_id = str(uuid4())
+        replacement = await client.call(
+            "session.input.attachment.create.v2",
+            {
+                "attachment": {
+                    "id": replacement_id,
+                    "input_receipt_id": receipt_id,
+                    "owner_id": 7,
+                    "session_id": str(session_id),
+                    "mime_type": "image/png",
+                    "byte_size": 67,
+                    "sha256": "c" * 64,
+                    "blob_path": f"{session_id}/{replacement_id}.bin",
+                    "original_filename": "replacement.png",
+                    "original_byte_size": 67,
+                    "expires_at": expires_at.isoformat(),
+                },
+                "allow_unbound": False,
+            },
+        )
+        assert replacement["created"] is True
+        assert replacement["pruned_blob_paths"] == [f"{session_id}/{expired_id}.bin"]
         missing_receipt = await client.call(
             "session.input.attachment.create.v2",
             {

@@ -20,6 +20,7 @@ from uuid import UUID
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
+from fastapi import Query
 from fastapi import Request
 from fastapi import Response
 from fastapi import status
@@ -2469,10 +2470,14 @@ async def list_session_inputs_endpoint(
     session_id: str,
     request: Request,
     response: Response,
+    client_request_id: str | None = Query(
+        default=None,
+        description="Return only the receipt for this client request identity.",
+    ),
     db: Session = Depends(_catalog_control_db_dependency),
     current_user: Caller = Depends(get_current_browser_route_caller),
 ):
-    """List queued + recently-failed inputs for the chip UI.
+    """List queued + recently settled inputs for the chip UI.
 
     The web composer polls this every 2s while any row is queued or
     delivering. Most polls return the same shape, so we emit a weak
@@ -2481,6 +2486,19 @@ async def list_session_inputs_endpoint(
     at the aggregate QPS of many active session-detail pages.
     """
     source_session = _load_session_for_continuation(db, session_id, owner_id=current_user.id)
+    requested_client_request_id = (client_request_id or "").strip()
+    if requested_client_request_id:
+        if len(requested_client_request_id) > 64:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="client_request_id is too long")
+        try:
+            receipt = await load_live_input_receipt_by_client_request(
+                owner_id=current_user.id,
+                session_id=source_session.id,
+                client_request_id=requested_client_request_id,
+            )
+        except LiveInputReceiptUnavailable as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Live input catalog is unavailable") from exc
+        return [] if receipt is None else [_live_queued_summary(receipt)]
     state = await _catalog_recent_input_summaries(source_session.id)
     if state is None:
         raise HTTPException(status_code=503, detail="Live input catalog is unavailable")

@@ -26,6 +26,8 @@ from zerg.utils.time import normalize_utc
 
 logger = logging.getLogger(__name__)
 
+RECENT_DELIVERED_WINDOW_SECS = 5 * 60
+
 
 class LiveInputPayloadConflict(ValueError):
     """A request id was reused for a different semantic input."""
@@ -138,7 +140,9 @@ def load_live_input_receipt_by_id(
 
 
 def list_recent_live_input_receipts(db: Session, *, session_id: UUID | str) -> list[LiveInputReceiptSnapshot]:
-    cutoff = datetime.now(timezone.utc) - timedelta(seconds=RECENT_FAILED_WINDOW_SECS)
+    now = datetime.now(timezone.utc)
+    failed_cutoff = now - timedelta(seconds=RECENT_FAILED_WINDOW_SECS)
+    delivered_cutoff = now - timedelta(seconds=RECENT_DELIVERED_WINDOW_SECS)
     rows = (
         db.query(LiveSessionInputReceipt)
         .filter(
@@ -146,7 +150,8 @@ def list_recent_live_input_receipts(db: Session, *, session_id: UUID | str) -> l
             (
                 (LiveSessionInputReceipt.status == INPUT_STATUS_QUEUED)
                 | (LiveSessionInputReceipt.status == INPUT_STATUS_DELIVERING)
-                | ((LiveSessionInputReceipt.status == INPUT_STATUS_FAILED) & (LiveSessionInputReceipt.updated_at >= cutoff))
+                | ((LiveSessionInputReceipt.status == INPUT_STATUS_FAILED) & (LiveSessionInputReceipt.updated_at >= failed_cutoff))
+                | ((LiveSessionInputReceipt.status == INPUT_STATUS_DELIVERED) & (LiveSessionInputReceipt.updated_at >= delivered_cutoff))
             ),
         )
         .order_by(LiveSessionInputReceipt.created_at.asc(), LiveSessionInputReceipt.id.asc())

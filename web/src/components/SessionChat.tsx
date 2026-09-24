@@ -916,6 +916,9 @@ export function SessionChat({
                   : pending,
               ),
             );
+            void queryClient.invalidateQueries({
+              queryKey: ["session-inputs", session.id],
+            });
           } else {
             markInputDelivered(clientRequestId, result.input_id);
           }

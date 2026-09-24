@@ -205,6 +205,180 @@ async def test_catalog_multipart_uses_live_receipt_without_legacy_db(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_catalog_multipart_keeps_group_when_dispatch_outcome_is_unknown(monkeypatch, tmp_path):
+    import zerg.routers.session_inputs_attachments as route
+
+    _set_blob_root(monkeypatch, tmp_path)
+    session_id = uuid4()
+    receipt_id = str(uuid4())
+    source_session = SimpleNamespace(
+        id=session_id,
+        provider="claude",
+        device_id="cinder",
+        primary_thread_id=uuid4(),
+        command_family="managed_local",
+        catalog_facts={},
+    )
+    calls: dict[str, object] = {}
+    monkeypatch.setattr(route, "_load_session_for_continuation", lambda db, sid, *, owner_id: source_session)
+    monkeypatch.setattr(route, "_assert_live_session_send_available", lambda *args, **kwargs: None)
+
+    async def load_receipt(**kwargs):
+        return None
+
+    async def record_receipt(**kwargs):
+        calls["receipt"] = kwargs
+        return receipt_id
+
+    async def store_blob(**kwargs):
+        return StoredAttachment(
+            id=uuid4(),
+            session_input_id=receipt_id,
+            session_id=session_id,
+            mime_type="image/png",
+            byte_size=len(_PNG_BYTES),
+            sha256=hashlib.sha256(_PNG_BYTES).hexdigest(),
+            blob_path=tmp_path / "blob.bin",
+            original_filename="a.png",
+            original_byte_size=len(_PNG_BYTES),
+        )
+
+    async def unknown_dispatch(**kwargs):
+        raise RuntimeError("control response lost")
+
+    async def mark_unknown(**kwargs):
+        calls["unknown"] = kwargs
+        return True
+
+    async def delete_forbidden(**kwargs):
+        raise AssertionError("ambiguous dispatch must retain attachment refs")
+
+    async def acquire(**kwargs):
+        return SimpleNamespace()
+
+    async def release(*args, **kwargs):
+        calls["release"] = kwargs
+
+    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_receipt)
+    monkeypatch.setattr(route, "record_live_input_receipt_best_effort", record_receipt)
+    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob)
+    monkeypatch.setattr(route, "_build_managed_local_chat_response", unknown_dispatch)
+    monkeypatch.setattr(route, "_set_catalog_live_receipt_error", mark_unknown)
+    monkeypatch.setattr(route, "delete_catalog_attachment_blobs", delete_forbidden)
+    monkeypatch.setattr(route.session_lock_manager, "acquire", acquire)
+    monkeypatch.setattr(route.session_lock_manager, "release", release)
+
+    with pytest.raises(HTTPException) as excinfo:
+        await route.create_session_input_with_attachments(
+            session_id=str(session_id),
+            request=SimpleNamespace(headers={}, url=SimpleNamespace(scheme="http", netloc="testserver")),
+            text="look",
+            intent="auto",
+            client_request_id="catalog-attachment-unknown",
+            attachments=[
+                UploadFile(
+                    file=io.BytesIO(_PNG_BYTES),
+                    filename="a.png",
+                    headers=Headers({"content-type": "image/png"}),
+                )
+            ],
+            user_agent="Longhouse-iOS",
+            db=None,
+            current_user=SimpleNamespace(id=7),
+        )
+
+    assert excinfo.value.status_code == 503
+    assert excinfo.value.detail["error_code"] == "delivery_unknown"
+    assert calls["unknown"]["error"]["code"] == "delivery_unknown"
+
+
+@pytest.mark.asyncio
+async def test_catalog_multipart_cleans_group_after_partial_store_failure(monkeypatch, tmp_path):
+    import zerg.routers.session_inputs_attachments as route
+
+    _set_blob_root(monkeypatch, tmp_path)
+    session_id = uuid4()
+    receipt_id = str(uuid4())
+    source_session = SimpleNamespace(
+        id=session_id,
+        provider="claude",
+        device_id="cinder",
+        primary_thread_id=uuid4(),
+        command_family="managed_local",
+        catalog_facts={},
+    )
+    calls: dict[str, object] = {}
+    monkeypatch.setattr(route, "_assert_live_session_send_available", lambda *args, **kwargs: None)
+    monkeypatch.setattr(route, "_load_session_for_continuation", lambda db, sid, *, owner_id: source_session)
+
+    async def load_receipt(**kwargs):
+        return None
+
+    async def record_receipt(**kwargs):
+        return receipt_id
+
+    stored_count = 0
+
+    async def store_blob(**kwargs):
+        nonlocal stored_count
+        stored_count += 1
+        if stored_count == 2:
+            raise RuntimeError("disk full")
+        return StoredAttachment(
+            id=uuid4(),
+            session_input_id=receipt_id,
+            session_id=session_id,
+            mime_type="image/png",
+            byte_size=len(_PNG_BYTES),
+            sha256=hashlib.sha256(_PNG_BYTES).hexdigest(),
+            blob_path=tmp_path / "blob.bin",
+            original_filename="a.png",
+            original_byte_size=len(_PNG_BYTES),
+        )
+
+    async def finish(**kwargs):
+        calls["finish"] = kwargs
+
+    async def delete_group(**kwargs):
+        calls["deleted_group"] = kwargs["input_receipt_id"]
+        return 1
+
+    async def acquire(**kwargs):
+        return SimpleNamespace()
+
+    async def release(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_receipt)
+    monkeypatch.setattr(route, "record_live_input_receipt_best_effort", record_receipt)
+    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob)
+    monkeypatch.setattr(route, "_finish_catalog_receipt", finish)
+    monkeypatch.setattr(route, "delete_catalog_attachment_blobs", delete_group)
+    monkeypatch.setattr(route.session_lock_manager, "acquire", acquire)
+    monkeypatch.setattr(route.session_lock_manager, "release", release)
+
+    with pytest.raises(HTTPException) as excinfo:
+        await route.create_session_input_with_attachments(
+            session_id=str(session_id),
+            request=SimpleNamespace(headers={}, url=SimpleNamespace(scheme="http", netloc="testserver")),
+            text="look",
+            intent="auto",
+            client_request_id="catalog-attachment-partial",
+            attachments=[
+                UploadFile(file=io.BytesIO(_PNG_BYTES), filename="a.png", headers=Headers({"content-type": "image/png"})),
+                UploadFile(file=io.BytesIO(_PNG_BYTES), filename="b.png", headers=Headers({"content-type": "image/png"})),
+            ],
+            user_agent="Longhouse-iOS",
+            db=None,
+            current_user=SimpleNamespace(id=7),
+        )
+
+    assert excinfo.value.status_code == 500
+    assert calls["deleted_group"] == receipt_id
+    assert calls["finish"]["receipt_id"] == receipt_id
+
+
+@pytest.mark.asyncio
 async def test_console_multipart_stores_blobs_then_enqueues_turn_with_refs(monkeypatch, tmp_path):
     """A Console session takes the Console enqueue path: blobs first, then
     the turn carries their refs and a digest; no Helm lock, no live receipt."""
@@ -409,8 +583,7 @@ async def test_console_multipart_keeps_group_when_catalog_reply_is_ambiguous(mon
     monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob)
     monkeypatch.setattr(route, "delete_catalog_attachment_blobs", delete_forbidden)
     monkeypatch.setattr(console_turns, "enqueue_catalog_console_turn", enqueue_ambiguous)
-
-    with pytest.raises(RuntimeError, match="reply lost"):
+    with pytest.raises(HTTPException) as excinfo:
         await route.create_session_input_with_attachments(
             session_id=str(session_id),
             request=SimpleNamespace(headers={}, url=SimpleNamespace(scheme="http", netloc="testserver")),
@@ -428,6 +601,8 @@ async def test_console_multipart_keeps_group_when_catalog_reply_is_ambiguous(mon
             db=None,
             current_user=SimpleNamespace(id=7),
         )
+    assert excinfo.value.status_code == 503
+    assert excinfo.value.detail["error_code"] == "input_receipt_unknown"
     assert len(group_ids) == 1
 
 
