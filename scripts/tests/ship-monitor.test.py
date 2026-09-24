@@ -517,6 +517,59 @@ def test_runtime_schema_only_change_requires_new_runtime() -> None:
         assert ship_monitor.latest_runtime_affecting_sha(root, target_sha) == target_sha
 
 
+def _run(name: str, conclusion: str | None, status: str = "completed", run_id: int = 1) -> "ship_monitor.RunInfo":
+    return ship_monitor.RunInfo(databaseId=run_id, workflowName=name, status=status, conclusion=conclusion, url="u")
+
+
+def test_superseded_run_follows_the_main_head_that_contains_it() -> None:
+    # A dropped queued run is not a failure of the pushed commit: main's newer
+    # head contains it, and that head's deploy ships the change.
+    old, head = "a" * 40, "b" * 40
+    runs_by_sha = {
+        old: [_run("CI", "cancelled"), _run("Deploy and Verify", "success", run_id=2)],
+        head: [_run("CI", "success", run_id=3), _run("Deploy and Verify", "success", run_id=4)],
+    }
+    saved = (ship_monitor.wait_for_workflows, ship_monitor.fetch_remote_head, ship_monitor.contains_commit, ship_monitor.fetch_run_jobs)
+    ship_monitor.wait_for_workflows = lambda args, sha: runs_by_sha[sha]
+    ship_monitor.fetch_remote_head = lambda repo, branch="main": head
+    ship_monitor.contains_commit = lambda root, descendant, ancestor: (descendant, ancestor) == (head, old)
+    ship_monitor.fetch_run_jobs = lambda repo, run_id: []
+    try:
+        sha, runs = ship_monitor.wait_following_coverage(type("A", (), {"repo": "r"})(), Path("."), old)
+    finally:
+        ship_monitor.wait_for_workflows, ship_monitor.fetch_remote_head, ship_monitor.contains_commit, ship_monitor.fetch_run_jobs = saved
+    assert sha == head
+    assert runs == runs_by_sha[head]
+
+
+def test_a_real_failure_on_main_head_is_not_treated_as_superseded() -> None:
+    head = "c" * 40
+    runs = [_run("CI", "failure")]
+    saved = (ship_monitor.wait_for_workflows, ship_monitor.fetch_remote_head)
+    ship_monitor.wait_for_workflows = lambda args, sha: runs
+    ship_monitor.fetch_remote_head = lambda repo, branch="main": head
+    try:
+        sha, got = ship_monitor.wait_following_coverage(type("A", (), {"repo": "r"})(), Path("."), head)
+    finally:
+        ship_monitor.wait_for_workflows, ship_monitor.fetch_remote_head = saved
+    assert (sha, got) == (head, runs)
+
+
+def test_deploy_that_stood_down_counts_as_superseded() -> None:
+    jobs = [
+        {"name": ship_monitor.GATE_JOB, "conclusion": "success"},
+        {"name": ship_monitor.CANARY_REPROVISION_JOB, "conclusion": "skipped"},
+    ]
+    saved = ship_monitor.fetch_run_jobs
+    ship_monitor.fetch_run_jobs = lambda repo, run_id: jobs
+    try:
+        assert ship_monitor.was_superseded("r", [_run(ship_monitor.DEPLOY_AND_VERIFY, "success")])
+        jobs.append({"name": ship_monitor.NO_RUNTIME_CHANGE_JOB, "conclusion": "success"})
+        assert not ship_monitor.was_superseded("r", [_run(ship_monitor.DEPLOY_AND_VERIFY, "success")])
+    finally:
+        ship_monitor.fetch_run_jobs = saved
+
+
 if __name__ == "__main__":
     test_runtime_schema_only_change_requires_new_runtime()
     test_no_runtime_change_does_not_require_exact_live_sha()
@@ -534,4 +587,7 @@ if __name__ == "__main__":
     test_runs_on_a_topic_branch_do_not_speak_for_the_ship()
     test_deploy_heartbeat_names_active_deploy_step()
     test_manual_deploy_recovery_supersedes_failed_push_deploy()
+    test_superseded_run_follows_the_main_head_that_contains_it()
+    test_a_real_failure_on_main_head_is_not_treated_as_superseded()
+    test_deploy_that_stood_down_counts_as_superseded()
     print("ship-monitor tests passed")

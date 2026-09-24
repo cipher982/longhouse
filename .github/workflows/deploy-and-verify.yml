@@ -45,9 +45,13 @@ permissions:
   packages: read
 
 concurrency:
-  # Each exact source SHA has its own durable deployment graph. Do not let a
-  # newer push cancel an older candidate before the control plane can order it.
-  group: deploy-${{ github.repository }}-${{ github.sha }}
+  # Each exact source SHA has its own durable deployment graph, ordered by its
+  # publishing run number. Pushes to main share one group: a running deploy
+  # always finishes, and only the newest queued one waits behind it, because a
+  # newer main commit contains every older one. A deploy whose prerequisites
+  # were dropped for a newer commit stands down green (see the gate's
+  # "Stand down if a newer main commit superseded this one" step).
+  group: deploy-${{ github.repository }}-${{ github.event_name == 'push' && 'main' || github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -129,6 +133,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.deploy_verify == 'true' }}
     outputs:
+      superseded_by: ${{ steps.superseded.outputs.by }}
       predecessor_sha: ${{ steps.meta.outputs.predecessor_sha }}
       head_sha: ${{ steps.meta.outputs.head_sha }}
       head_branch: ${{ steps.meta.outputs.head_branch }}
@@ -204,10 +209,12 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Wait for the suites that can invalidate this deploy
+        id: wait_suites
         if: ${{ needs.changes.outputs.runtime_image == 'true' && vars.DEPLOY_WAIT_FULL_CI != 'true' }}
         uses: ./.github/actions/wait-for-ci
         with:
           head_sha: ${{ steps.meta.outputs.runtime_image_tag }}
+          superseded_branch: ${{ github.event_name == 'push' && github.ref_name || '' }}
           # The action's 20m default is shorter than a queued run: on 2026-09-18
           # `Core E2E tests` took 15m of runtime but only started ~20m after the
           # push, so the gate expired first and reported a timeout against a job
@@ -226,28 +233,52 @@ jobs:
           ignored_failure_jobs: Core E2E tests,Accessibility E2E tests,Model smoke tests,OSS onboarding smoke
 
       - name: Wait for full CI gate (temporary opt-in)
+        id: wait_full
         if: ${{ needs.changes.outputs.runtime_image == 'true' && vars.DEPLOY_WAIT_FULL_CI == 'true' }}
         uses: ./.github/actions/wait-for-ci
         with:
           head_sha: ${{ steps.meta.outputs.runtime_image_tag }}
+          superseded_branch: ${{ github.event_name == 'push' && github.ref_name || '' }}
           github_token: ${{ github.token }}
           event: ""
           required_jobs: Changed paths,Prepare immutable fixture image,Backend tests,Engine tests,Core E2E tests,Accessibility E2E tests,CLI wheel packaging
           ignored_failure_jobs: OSS onboarding smoke
 
       - name: Wait for exact runtime image publication
-        if: ${{ needs.changes.outputs.runtime_image == 'true' }}
+        id: wait_image
+        if: ${{ needs.changes.outputs.runtime_image == 'true' && steps.wait_suites.outputs.superseded_by == '' && steps.wait_full.outputs.superseded_by == '' }}
         uses: ./.github/actions/wait-for-ci
         with:
           head_sha: ${{ steps.meta.outputs.runtime_image_tag }}
+          superseded_branch: ${{ github.event_name == 'push' && github.ref_name || '' }}
           github_token: ${{ github.token }}
           workflow_id: runtime-image.yml
           event: ""
           timeout_seconds: "2700"
 
+      # main CI drops queued runs for commits that are no longer main's head
+      # (one concurrency group per branch), because only the newest verified
+      # commit deploys and it contains the older ones. A dropped prerequisite
+      # is therefore not a failure: this deploy stands down, green, and names
+      # the commit whose deploy carries it.
+      - name: Stand down if a newer main commit superseded this one
+        id: superseded
+        env:
+          BY: ${{ steps.wait_suites.outputs.superseded_by || steps.wait_full.outputs.superseded_by || steps.wait_image.outputs.superseded_by }}
+        run: |
+          echo "by=$BY" >> "$GITHUB_OUTPUT"
+          if [[ -n "$BY" ]]; then
+            {
+              echo "## Superseded"
+              echo ""
+              echo "A prerequisite run for \`${{ steps.meta.outputs.head_sha }}\` was dropped from the queue because main moved to \`$BY\`, which contains it."
+              echo "No hosted mutation was submitted; that commit's Deploy and Verify ships this change."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Resolve publishing workflow and publication artifact
         id: source
-        if: ${{ needs.changes.outputs.runtime_image == 'true' }}
+        if: ${{ needs.changes.outputs.runtime_image == 'true' && steps.superseded.outputs.by == '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_SHA: ${{ steps.meta.outputs.runtime_image_tag }}
@@ -295,7 +326,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
       - name: Resolve immutable runtime image from publication receipt
         id: digest
-        if: ${{ needs.changes.outputs.runtime_image == 'true' }}
+        if: ${{ needs.changes.outputs.runtime_image == 'true' && steps.superseded.outputs.by == '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_RUN_ID: ${{ steps.source.outputs.source_run_id }}
@@ -328,6 +359,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
       - name: Resolve exact artifact catalog schema and source
         id: artifact_schema
+        if: ${{ steps.superseded.outputs.by == '' }}
         env:
           IMAGE_REF: ${{ steps.digest.outputs.image_ref }}
           HEAD_SHA: ${{ steps.meta.outputs.head_sha }}
@@ -360,6 +392,7 @@ jobs:
           PY
       - name: Resolve immutable runtime build identity
         id: identity
+        if: ${{ steps.superseded.outputs.by == '' }}
         env:
           IMAGE_REF: ${{ steps.digest.outputs.image_ref }}
           EXPECTED_SOURCE_SHA: ${{ steps.artifact_schema.outputs.source_sha }}
@@ -377,7 +410,7 @@ jobs:
   deploy_demo:
     name: "Deploy public demo runtime"
     runs-on: cube-deploy
-    if: github.repository == 'cipher982/longhouse'
+    if: github.repository == 'cipher982/longhouse' && needs.gate.outputs.superseded_by == ''
     timeout-minutes: 60
     needs: [changes, gate, fast_smoke, reprovision_canary]
     outputs:
@@ -454,7 +487,7 @@ jobs:
   reprovision_canary:
     name: "Reprovision hosted canary"
     runs-on: cube-deploy
-    if: github.repository == 'cipher982/longhouse'
+    if: github.repository == 'cipher982/longhouse' && needs.gate.outputs.superseded_by == ''
     timeout-minutes: 60
     needs: [changes, gate]
     outputs:
@@ -539,7 +572,7 @@ jobs:
   fast_smoke:
     name: "Canary qualification smoke"
     runs-on: cube-deploy
-    if: github.repository == 'cipher982/longhouse'
+    if: github.repository == 'cipher982/longhouse' && needs.gate.outputs.superseded_by == ''
     timeout-minutes: 20
     needs: [gate, reprovision_canary]
     env:
@@ -684,7 +717,7 @@ jobs:
   hosted_live_qa:
     name: "Dispatch hosted live QA (async)"
     needs: [gate, reprovision_canary, fast_smoke, deploy_demo]
-    if: github.repository == 'cipher982/longhouse'
+    if: github.repository == 'cipher982/longhouse' && needs.gate.outputs.superseded_by == ''
     runs-on: cube-deploy
     permissions:
       actions: write

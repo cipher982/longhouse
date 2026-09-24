@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Tell an agent how busy CI is before it pushes or starts waiting.
+"""Tell an agent how busy CI is when it ships.
 
-    make ci-queue                # overview
-    make ci-queue SHA=<commit>   # plus: where that commit stands
+`make ship` prints the brief form right after pushing; run this file directly
+for the full report (`scripts/ops/ci-queue.py [--sha <commit>]`).
 
 Facts only, so the agent decides: batch commits instead of pushing each one,
 skip waiting and do other work, or wait on a newer commit that already

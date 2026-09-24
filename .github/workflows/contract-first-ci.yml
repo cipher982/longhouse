@@ -19,13 +19,15 @@ permissions:
   pull-requests: read
 
 concurrency:
-  # A new commit has a different identity and must not cancel the gates for an
-  # older release candidate. Reruns of the same commit may still coalesce.
-  group: ci-${{ github.repository }}-${{ github.event.pull_request.head.sha || github.sha }}
-  # A main run is a deploy candidate: the gate that produces its deployment
-  # receipt must not disappear because a branch push of the same commit, or a
-  # rerun, arrived afterwards. Main runs therefore queue; branch and PR runs
-  # stay cancellable, where losing a superseded run costs nothing.
+  # Pushes to main share one group. A running main CI always finishes, but a
+  # queued one is dropped when a newer main push arrives: only the newest
+  # verified main commit deploys, and it contains the older ones. (Per-SHA
+  # groups queued every commit; on 2026-09-24 that was 15 runs for commits
+  # already behind main head on a saturated cube pool.) A dropped run is
+  # "superseded", not failed: Deploy and Verify stands down green for it
+  # (wait-for-ci superseded_branch), and make ship follows the covering
+  # commit. Branch and PR runs keep a per-SHA group and stay cancellable.
+  group: ci-${{ github.repository }}-${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'main' || (github.event.pull_request.head.sha || github.sha) }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/heads/main') }}
 
 env:

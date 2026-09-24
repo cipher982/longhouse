@@ -29,9 +29,13 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  # Image preparation is immutable per source SHA. Keep a rerun for the same
-  # source ordered, but never serialize unrelated pushes behind main.
-  group: runtime-image-${{ github.repository }}-${{ github.sha }}
+  # Image preparation is immutable per source SHA. Pushes to main share one
+  # group so a queued build for a commit main has already moved past is
+  # dropped (only the newest verified main commit deploys, and it contains the
+  # older ones); a running build always finishes. Tags and manual runs keep
+  # their own per-SHA group. Deploy and Verify treats a dropped prerequisite
+  # as superseded, not failed (wait-for-ci superseded_branch).
+  group: runtime-image-${{ github.repository }}-${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && 'main' || github.sha }}
   cancel-in-progress: false
 
 env:

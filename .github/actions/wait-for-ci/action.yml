@@ -40,11 +40,27 @@ inputs:
     required: false
     default: ""
 
+  superseded_branch:
+    description: >-
+      When set (e.g. main), a run that concluded cancelled while the target SHA
+      is no longer this branch's head is reported as superseded instead of
+      failing: main CI drops queued runs for older commits, and the newer head
+      carries them. Outputs superseded_by=<head sha>.
+    required: false
+    default: ""
+
+outputs:
+  superseded_by:
+    description: Head SHA that superseded the target's cancelled run; empty otherwise
+    value: ${{ steps.wait.outputs.superseded_by }}
+
 runs:
   using: composite
   steps:
-    - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+    - id: wait
+      uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
       env:
+        SUPERSEDED_BRANCH: ${{ inputs.superseded_branch }}
         HEAD_SHA: ${{ inputs.head_sha }}
         HEAD_BRANCH: ${{ inputs.head_branch }}
         WORKFLOW_ID: ${{ inputs.workflow_id }}
@@ -234,6 +250,19 @@ runs:
               if (run.status === 'completed') {
                 if (!requireSuccess || run.conclusion === 'success') {
                   return;
+                }
+                const supersededBranch = (process.env.SUPERSEDED_BRANCH || '').trim();
+                if (run.conclusion === 'cancelled' && supersededBranch) {
+                  const { data: head } = await github.rest.repos.getBranch({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    branch: supersededBranch,
+                  });
+                  if (head.commit.sha !== sha) {
+                    core.notice(`${workflowId} for ${sha} was dropped from the queue because ${supersededBranch} moved to ${head.commit.sha}, which contains it; that commit's run covers this one.`);
+                    core.setOutput('superseded_by', head.commit.sha);
+                    return;
+                  }
                 }
                 if (sawFailure) {
                   // Still failed after one rerun grace period — give up

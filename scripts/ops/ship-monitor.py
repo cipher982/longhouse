@@ -637,6 +637,49 @@ def wait_for_workflows(args: argparse.Namespace, sha: str) -> list[RunInfo]:
         time.sleep(args.poll)
 
 
+GATE_JOB = "Resolve exact-SHA deploy metadata"
+CANARY_REPROVISION_JOB = "Reprovision hosted canary"
+
+
+def was_superseded(repo: str, runs: list[RunInfo]) -> bool:
+    """Main CI drops queued runs for commits main has moved past, and the deploy
+    for such a commit stands down green. Either shape means another commit
+    carries this one; neither is a failure of this commit."""
+    if any(run.status == "completed" and run.conclusion == "cancelled" for run in runs):
+        return True
+    for run in runs:
+        if run.workflowName != DEPLOY_AND_VERIFY or run.status != "completed" or run.conclusion != "success":
+            continue
+        jobs = {job.get("name"): job.get("conclusion") for job in fetch_run_jobs(repo, run.databaseId)}
+        if jobs.get(GATE_JOB) == "success" and jobs.get(CANARY_REPROVISION_JOB) == "skipped" and jobs.get(NO_RUNTIME_CHANGE_JOB) != "success":
+            return True
+    return False
+
+
+def contains_commit(root: Path, descendant: str, ancestor: str) -> bool:
+    run(["git", "-C", str(root), "fetch", "--quiet", "origin", "main"], check=False)
+    return run(["git", "-C", str(root), "merge-base", "--is-ancestor", ancestor, descendant], check=False).returncode == 0
+
+
+def wait_following_coverage(args: argparse.Namespace, root: Path, sha: str) -> tuple[str, list[RunInfo]]:
+    """Wait on `sha`; when its runs were superseded, follow main's head, which contains it.
+
+    This is the descendant-coverage mode: a newer main commit's verified deploy
+    ships this change, so the ship result is that commit's result.
+    """
+    while True:
+        runs = wait_for_workflows(args, sha)
+        head = fetch_remote_head(args.repo)
+        if not head or head == sha or not was_superseded(args.repo, runs) or not contains_commit(root, head, sha):
+            return sha, runs
+        print(
+            f"{sha[:10]} was superseded: its queued runs were dropped because main moved to {head[:10]}, "
+            f"which contains it. Following {head[:10]}; its deploy ships this change.",
+            file=sys.stderr,
+        )
+        sha = head
+
+
 def parse_deploy_status(output: str) -> dict[str, SurfaceInfo]:
     surfaces: dict[str, SurfaceInfo] = {}
     for raw_line in output.splitlines():
@@ -789,8 +832,12 @@ def main() -> int:
     target_sha = resolve_commit_sha(root, args.sha.strip()) if args.sha else resolve_head_sha(root)
     short_sha = target_sha[:10]
 
+    requested_sha = target_sha
     try:
-        runs = wait_for_workflows(args, target_sha)
+        target_sha, runs = wait_following_coverage(args, root, target_sha)
+        short_sha = target_sha[:10]
+        if target_sha != requested_sha:
+            print(f"Verifying {short_sha} as the ship for {requested_sha[:10]} (descendant coverage).", file=sys.stderr)
     except NoRunsError as exc:
         message = str(exc)
         remote_head = fetch_remote_head(args.repo)
