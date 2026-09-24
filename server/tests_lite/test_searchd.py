@@ -2878,3 +2878,33 @@ def test_delayed_publish_preserves_newer_reconciled_visibility(tmp_path):
         assert store.search(**_search_params("scope needle"), include_test=True)["results"] == []
     finally:
         connection.close()
+
+
+def test_publish_maintenance_refreshes_statistics_recorded_on_an_empty_store(tmp_path):
+    """A rebuild must not keep the empty-store statistic that makes FTS5 merges scan the index."""
+
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    store.startup_maintenance()
+
+    def events_fts_data_rows() -> int:
+        row = connection.execute("SELECT stat FROM sqlite_stat1 WHERE tbl = 'events_fts_data'").fetchone()
+        return int(str(row[0]).split()[0]) if row else 0
+
+    assert events_fts_data_rows() <= 2
+    for batch in range(40):
+        connection.execute("BEGIN")
+        for offset in range(120):
+            rowid = batch * 120 + offset + 1
+            connection.execute(
+                "INSERT INTO events_fts(rowid, content_text, tool_output_text) VALUES (?, ?, ?)",
+                (rowid, f"turn {rowid} about topic{rowid % 97} and more words", None),
+            )
+        connection.execute("COMMIT")
+
+    # A rebuild hours after startup: well past the refresh interval, well
+    # short of a day.
+    store._last_optimize_mono -= 3 * 3600
+    store._maintain_after_publish()
+
+    assert events_fts_data_rows() > 2
