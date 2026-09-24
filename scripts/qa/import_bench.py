@@ -68,6 +68,9 @@ def http(method: str, url: str, payload: dict[str, Any] | None = None, *, bearer
     body = json.dumps(payload).encode() if payload is not None else None
     request = urllib.request.Request(url, data=body, method=method)
     request.add_header("Content-Type", "application/json")
+    # Hosted Cloudflare policy admits native Longhouse clients, not urllib's
+    # default anonymous user agent. Keep remote benchmark probes on that path.
+    request.add_header("User-Agent", "longhouse-engine/0.1")
     if bearer:
         request.add_header("Authorization", f"Bearer {bearer}")
     if token:
