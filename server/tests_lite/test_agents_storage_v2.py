@@ -546,7 +546,7 @@ async def test_storage_v2_claude_tail_stops_after_requested_head_window_without_
         async def call(self, method, params, *, timeout_seconds=None):
             assert method == "storage.session.render_manifest.v2"
             assert params["anchor"] == "tail"
-            assert params["limit"] == 1_000
+            assert params["limit"] == 32
             return {
                 "found": True,
                 "current_generation_id": str(generation_id),
@@ -2073,3 +2073,93 @@ async def test_storage_v2_rejects_bad_encoded_bodies_before_catalog_work(monkeyp
         )
     assert response.status_code == status_code, response.text
     assert response.json()["detail"]["code"] == code
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("limit", "expected_calls"), [(1, 1), (100, 2)])
+async def test_storage_v2_render_reader_pages_the_manifest_only_as_far_as_it_reads(monkeypatch, limit, expected_calls):
+    """A short tail read costs one small manifest page; a long one continues exactly where it stopped."""
+
+    session_id, generation_id, source_epoch = uuid4(), uuid4(), uuid4()
+    base_us = 1_720_780_400_000_000
+    specs, manifests = {}, []
+    for index in range(40):
+        object_hash = f"{index:064x}"
+        specs[object_hash] = RenderObjectSpec(
+            session_id=session_id,
+            render_generation=generation_id,
+            parser_revision="engine-parser-v2",
+            ordering_revision="semantic-order-v2",
+            machine_id="cinder",
+            provider="codex",
+            opaque_source_id="history.jsonl",
+            source_epoch=source_epoch,
+            source_envelope_id=object_hash,
+            records=(
+                RenderRecord(
+                    event_id=f"event-{index}",
+                    order_time_us=base_us + index,
+                    source_position=index,
+                    event_subordinal=0,
+                    role="user",
+                    content_text=f"message {index}",
+                ),
+            ),
+        )
+        order_key = json.dumps([base_us + index, "cinder", "codex", "history.jsonl", str(source_epoch), index, 0])
+        manifests.append(
+            {
+                "object_id": f"object-{index:02d}",
+                "object_path": object_hash,
+                "object_hash": object_hash,
+                "source_envelope_id": object_hash,
+                "first_order_key": order_key,
+                "last_order_key": order_key,
+            }
+        )
+    calls = []
+
+    class _Catalog:
+        async def call(self, method, params, *, timeout_seconds=None):
+            assert method == "storage.session.render_manifest.v2"
+            calls.append(params)
+            newest_first = list(reversed(manifests))
+            cursor = params.get("object_cursor")
+            if cursor is not None:
+                last_object_id = json.loads(cursor)[-1]
+                newest_first = newest_first[[item["object_id"] for item in newest_first].index(last_object_id) + 1 :]
+            return {
+                "found": True,
+                "current_generation_id": str(generation_id),
+                "generation": {"generation_id": str(generation_id), "event_count": 40},
+                "abandoned_events": 0,
+                "objects": newest_first[: params["limit"]],
+                "objects_truncated": len(newest_first) > params["limit"],
+            }
+
+    class _RenderPool:
+        async def read(self, object_path, *_args, **_kwargs):
+            return SimpleNamespace(spec=specs[object_path], object_hash=object_path, payload_hash=object_path)
+
+    async def no_recovery(**_kwargs):
+        return {}
+
+    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: _Catalog())
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: _RenderPool())
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: SimpleNamespace())
+    monkeypatch.setattr(storage_router, "recover_render_interaction_kinds", no_recovery)
+
+    page = await storage_router.read_storage_v2_session_events_page(
+        session_id=session_id,
+        owner_id="1",
+        cursor=None,
+        anchor="tail",
+        limit=limit,
+    )
+
+    assert [event["event_id"] for event in page["events"]] == [f"event-{index}" for index in range(40 - min(limit, 40), 40)]
+    assert page["has_more"] is (limit < 40)
+    assert len(calls) == expected_calls
+    assert calls[0]["limit"] == 32 and "object_cursor" not in calls[0]
+    if expected_calls == 2:
+        assert json.loads(calls[1]["object_cursor"])[-1] == "object-08"

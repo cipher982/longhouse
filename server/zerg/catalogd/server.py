@@ -3380,15 +3380,8 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_storage_session_render_manifest(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {
-            "session_id",
-            "owner_id",
-            "generation_id",
-            "anchor",
-            "after_order_key",
-            "before_order_key",
-            "limit",
-        }:
+        required = {"session_id", "owner_id", "generation_id", "anchor", "after_order_key", "before_order_key", "limit"}
+        if not required <= set(request.params) <= required | {"object_cursor"}:
             return self._error(request, "invalid_request", "storage.session.render_manifest.v2 has invalid parameters")
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
@@ -3417,6 +3410,18 @@ class CatalogDaemon:
                 _validate_render_order_key(before_order_key, "before_order_key")
             except ValueError as exc:
                 return self._error(request, "invalid_request", str(exc))
+        object_cursor = request.params.get("object_cursor")
+        if object_cursor is not None:
+            try:
+                decoded_cursor = json.loads(object_cursor) if isinstance(object_cursor, str) else None
+            except json.JSONDecodeError:
+                decoded_cursor = None
+            if not isinstance(decoded_cursor, list) or len(decoded_cursor) != 8 or not _is_string(decoded_cursor[7], maximum=64):
+                return self._error(request, "invalid_request", "object_cursor must be an order key followed by an object_id")
+            try:
+                _validate_render_order_key(json.dumps(decoded_cursor[:7]), "object_cursor")
+            except ValueError as exc:
+                return self._error(request, "invalid_request", str(exc))
         limit = request.params["limit"]
         if type(limit) is not int or not 1 <= limit <= 1_000:
             return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
@@ -3431,6 +3436,7 @@ class CatalogDaemon:
             after_order_key=after_order_key,
             before_order_key=before_order_key,
             limit=limit,
+            object_cursor=object_cursor,
         )
         return CatalogRpcResponse(id=request.id, result=result)
 

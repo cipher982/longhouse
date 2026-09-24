@@ -1007,6 +1007,57 @@ async def test_render_abandoned_counts_cover_generation_and_repair_unknown_histo
 
 
 @pytest.mark.asyncio
+async def test_render_manifest_object_cursor_pages_concatenate_to_one_page(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch, session_id, generation_id = uuid4(), uuid4(), uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        for index in range(5):
+            data = f"{index}\n".encode()
+            render = _render_manifest(generation_id, seed=data, position=index * 2, source_epoch=epoch, provider="cursor")
+            raw = _raw_params(
+                epoch=epoch,
+                session_id=session_id,
+                start=index * 2,
+                end=index * 2 + 2,
+                records=(data,),
+                sealed_at=now,
+                provider="cursor",
+            )
+            raw.update(render_state="ready", render_manifest=render, projectors=["search-v2"])
+            await client.call("storage.raw_object.commit.v2", raw)
+
+        for anchor, edge in (("tail", "last_order_key"), ("start", "first_order_key")):
+            params = {
+                "session_id": str(session_id),
+                "owner_id": "42",
+                "generation_id": str(generation_id),
+                "anchor": anchor,
+                "after_order_key": None,
+                "before_order_key": None,
+            }
+            whole = await client.call("storage.session.render_manifest.v2", {**params, "limit": 1_000})
+            paged, cursor, truncated = [], None, True
+            while truncated:
+                page = await client.call("storage.session.render_manifest.v2", {**params, "limit": 2, "object_cursor": cursor})
+                paged.extend(page["objects"])
+                truncated = page["objects_truncated"]
+                last = page["objects"][-1]
+                cursor = json.dumps([*json.loads(last[edge]), last["object_id"]])
+            assert len(whole["objects"]) == 5
+            assert [item["object_id"] for item in paged] == [item["object_id"] for item in whole["objects"]]
+
+        with pytest.raises(CatalogRemoteError):
+            await client.call("storage.session.render_manifest.v2", {**params, "limit": 2, "object_cursor": "[1]"})
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_cursor_product_marker_classifies_storage_ingest_as_hidden_canary(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)

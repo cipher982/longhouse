@@ -639,6 +639,18 @@ def _receipt_error_code(receipt: LiveSessionInputReceipt | None) -> str | None:
     return str(code).strip() or None if code else None
 
 
+def _console_turn_attachments(turn: LiveConsoleTurn) -> dict[str, Any]:
+    """Decode `attachments_json`; an absent or malformed column is no attachments."""
+    raw = getattr(turn, "attachments_json", None)
+    if not raw:
+        return {}
+    try:
+        decoded = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
 def _live_console_turn_dto(
     turn: LiveConsoleTurn,
     *,
@@ -655,6 +667,7 @@ def _live_console_turn_dto(
         "run_id": turn.run_id,
         "state": turn.state,
         "report_id": turn.report_id,
+        "attachments": _console_turn_attachments(turn).get("refs") or [],
         "provider": turn.provider,
         "device_id": turn.device_id,
         "cwd": turn.cwd,
@@ -4573,6 +4586,16 @@ class CatalogStore:
                 report_id = str(UUID(str(report_id)))
             except (TypeError, ValueError) as exc:
                 raise ValueError("invalid report_id") from exc
+        attachment_refs = data.get("attachments") or []
+        if not isinstance(attachment_refs, list) or not all(isinstance(ref, dict) for ref in attachment_refs):
+            raise ValueError("invalid attachments")
+        attachments_digest = data.get("attachments_digest")
+        attachments_digest = str(attachments_digest) if attachments_digest else None
+        attachments_json = (
+            json.dumps({"digest": attachments_digest, "refs": attachment_refs}, sort_keys=True)
+            if attachment_refs or attachments_digest
+            else None
+        )
         with _write_transaction(self.engine) as connection:
             orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
             try:
@@ -4614,7 +4637,11 @@ class CatalogStore:
                 )
                 if existing_receipt is not None:
                     turn = orm.query(LiveConsoleTurn).filter(LiveConsoleTurn.receipt_id == existing_receipt.id).one()
-                    exact = existing_receipt.text == data["message"] and turn.report_id == report_id
+                    exact = (
+                        existing_receipt.text == data["message"]
+                        and turn.report_id == report_id
+                        and (_console_turn_attachments(turn).get("digest") or None) == attachments_digest
+                    )
                     replay_turn = _live_console_turn_dto(
                         turn,
                         message=existing_receipt.text,
@@ -4724,6 +4751,7 @@ class CatalogStore:
                     receipt_id=receipt_id,
                     state="queued",
                     report_id=report_id,
+                    attachments_json=attachments_json,
                     provider=session.provider,
                     device_id=thread.device_id,
                     cwd=thread.cwd,
@@ -11244,6 +11272,7 @@ class CatalogStore:
         after_order_key: str | None,
         before_order_key: str | None,
         limit: int,
+        object_cursor: str | None = None,
     ) -> dict[str, Any]:
         session_table = StorageSession.__table__
         generation_table = RenderGeneration.__table__
@@ -11327,6 +11356,29 @@ class CatalogStore:
                         )
                         < before_values
                     )
+                if object_cursor is not None:
+                    # Continue a manifest page exactly where the previous one
+                    # stopped: the cursor is the last object's full ordering
+                    # key, object_id included, so pages concatenate to what
+                    # one larger page would have returned.
+                    edge = "last" if anchor == "tail" else "first"
+                    object_key = tuple_(
+                        *(
+                            object_table.c[f"{edge}_{name}"]
+                            for name in (
+                                "order_time_us",
+                                "machine_id",
+                                "provider",
+                                "opaque_source_id",
+                                "source_epoch",
+                                "source_position",
+                                "event_subordinal",
+                            )
+                        ),
+                        object_table.c.object_id,
+                    )
+                    cursor_values = tuple(json.loads(object_cursor))
+                    statement = statement.where(object_key < cursor_values if anchor == "tail" else object_key > cursor_values)
                 ordering = (
                     (
                         object_table.c.last_order_time_us.desc(),

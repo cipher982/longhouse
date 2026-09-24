@@ -179,6 +179,11 @@ _EXPECTED_RENDER_RECORD_FIELDS = (
     _LEGACY_RENDER_RECORD_FIELDS | {"interaction_kind", "parent_uuid"},
 )
 _RENDER_MANIFEST_LIMIT = 1_000
+# Most reads stop within a handful of objects (live 48h: p50 2, p99 47), so
+# the manifest is fetched in growing pages up to the same total bound instead
+# of shipping all 1000 descriptors on every open.
+_RENDER_MANIFEST_FIRST_PAGE = 32
+_RENDER_MANIFEST_GROWTH = 4
 _RENDER_READ_BATCH = 2
 _MAX_MEDIA_REFS = 1_000
 _MAX_MEDIA_CLAIMS = 512
@@ -2146,7 +2151,7 @@ async def _read_storage_v2_session_events_page_admitted(
                     "anchor": anchor,
                     "after_order_key": cursor_order_key if anchor == "start" else None,
                     "before_order_key": cursor_order_key if anchor == "tail" else None,
-                    "limit": _RENDER_MANIFEST_LIMIT,
+                    "limit": _RENDER_MANIFEST_FIRST_PAGE,
                 },
                 timeout_seconds=_SESSION_DETAIL_CATALOG_TIMEOUT_SECONDS,
             )
@@ -2203,6 +2208,55 @@ async def _read_storage_v2_session_events_page_admitted(
             "render_manifest_invalid",
             "The catalog returned invalid abandoned event counts.",
         )
+    objects_truncated = manifest.get("objects_truncated") is True
+
+    async def fetch_more_objects() -> bool:
+        """Append the next manifest page; False once the manifest is exhausted."""
+        nonlocal objects_truncated
+        if not objects_truncated or not objects or len(objects) >= _RENDER_MANIFEST_LIMIT:
+            return False
+        last = objects[-1]
+        edge_key = _manifest_last_key(last) if anchor == "tail" else _manifest_first_key(last)
+        started = monotonic()
+        try:
+            page = await catalogd.call(
+                "storage.session.render_manifest.v2",
+                {
+                    "session_id": str(session_id),
+                    "owner_id": owner_id,
+                    "generation_id": str(generation_id),
+                    "anchor": anchor,
+                    "after_order_key": cursor_order_key if anchor == "start" else None,
+                    "before_order_key": cursor_order_key if anchor == "tail" else None,
+                    "limit": min(len(objects) * (_RENDER_MANIFEST_GROWTH - 1), _RENDER_MANIFEST_LIMIT - len(objects)),
+                    "object_cursor": json.dumps([*edge_key, str(last["object_id"])], separators=(",", ":")),
+                },
+                timeout_seconds=_SESSION_DETAIL_CATALOG_TIMEOUT_SECONDS,
+            )
+        except (CatalogUnavailable, CatalogRemoteError) as exc:
+            raise _http_error(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "catalog_unavailable",
+                "The session catalog is temporarily unavailable.",
+            ) from exc
+        finally:
+            timing.record("render_manifest_page", (monotonic() - started) * 1000.0)
+        if page.get("deleted") is True or page.get("found") is not True:
+            raise _http_error(status.HTTP_404_NOT_FOUND, "session_not_found", "Session was not found.")
+        if page.get("stale_generation") is True:
+            raise _http_error(
+                status.HTTP_409_CONFLICT,
+                "stale_generation",
+                "The render generation changed; restart pagination from the current generation.",
+                details={"current_generation_id": page.get("current_generation_id")},
+            )
+        more = page.get("objects")
+        if not isinstance(more, list):
+            raise ValueError("render manifest page is invalid")
+        objects.extend(more)
+        objects_truncated = page.get("objects_truncated") is True
+        return bool(more)
+
     workers = get_render_object_worker_pool()
     raw_workers = get_raw_object_worker_pool()
     raw_manifest_cache: dict[str, dict[str, dict[str, object]]] = {}
@@ -2217,7 +2271,7 @@ async def _read_storage_v2_session_events_page_admitted(
     semantic_recovery_duration_ms = 0.0
     semantic_recovery_stats = SemanticRecoveryStats()
     try:
-        while next_object_index < len(objects):
+        while next_object_index < len(objects) or await fetch_more_objects():
             batch_manifests = objects[next_object_index : next_object_index + _RENDER_READ_BATCH]
             if any(not isinstance(item, dict) for item in batch_manifests):
                 raise ValueError("render object manifest is invalid")
@@ -2320,6 +2374,9 @@ async def _read_storage_v2_session_events_page_admitted(
                         ordered_events.append((key, wire))
             next_object_index += len(batch_manifests)
             ordered_events.sort(key=lambda item: item[0])
+            if next_object_index >= len(objects):
+                # The stop checks below read the next unread descriptor.
+                await fetch_more_objects()
             if claude_generation and anchor == "tail":
                 visible_events = ordered_events
                 if branch_mode == "head":
@@ -2392,7 +2449,7 @@ async def _read_storage_v2_session_events_page_admitted(
         ordered_events = [(key, wire) for key, wire in ordered_events if wire.get("event_id") not in abandoned_ids]
 
     page = ordered_events[:limit] if anchor == "start" else ordered_events[-limit:]
-    has_more = len(ordered_events) > limit or next_object_index < len(objects) or manifest.get("objects_truncated") is True
+    has_more = len(ordered_events) > limit or next_object_index < len(objects) or objects_truncated
     logger.info(
         "storage-v2 session detail read session_id=%s generation_id=%s anchor=%s branch_mode=%s "
         "objects_read=%s events_kept=%s semantic_candidates=%s raw_companions=%s has_more=%s",
