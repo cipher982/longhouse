@@ -834,6 +834,11 @@ print_success() {
         echo "  1. Export LONGHOUSE_DEVICE_TOKEN from your Runtime Host"
         echo "  2. Run longhouse auth --url <runtime-url>"
         echo "  3. Run longhouse machine repair --repair-service"
+        if has_command claude; then
+            # Claude Console turns stay unavailable until the native lifecycle
+            # hook is installed; nothing else tells a Linux user that.
+            echo "  4. Run longhouse claude configure   (enables Claude Console sessions on this machine)"
+        fi
     fi
     if has_command claude; then
       echo ""

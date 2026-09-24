@@ -298,6 +298,16 @@ export default function LaunchSessionModal({
                 ) : (
                   <div className="launch-static-choice"><strong>{getProviderLabel(provider)}</strong><small>Coding agent</small></div>
                 )}
+                {selectedMachine && (selectedMachine.launch.unavailable_providers ?? []).length > 0 && (
+                  <ul className="launch-unavailable-providers" data-testid="launch-unavailable-providers">
+                    {(selectedMachine.launch.unavailable_providers ?? []).map((item) => (
+                      <li key={item.provider}>
+                        <strong>{getProviderLabel(item.provider)}</strong>
+                        <small>{item.remediation ?? (item.reason === "cli_missing" ? "Not installed on this machine" : "Sign in required on this machine")}</small>
+                      </li>
+                    ))}
+                  </ul>
+                )}
 
                 <details ref={workspacePickerRef} className="launch-choice launch-choice--nested">
                   <summary><span className="launch-choice-copy"><strong>{workspaceTitle(cwd, workspaces)}</strong><small>Workspace · {cwd ? compactPath(cwd) : "Choose a workspace"}</small></span></summary>

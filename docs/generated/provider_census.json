@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 287,
+  "file_count": 288,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -441,6 +441,7 @@
       "providers": [
         "claude",
         "codex",
+        "omp",
         "opencode"
       ]
     },
@@ -495,6 +496,7 @@
         "claude",
         "codex",
         "cursor",
+        "omp",
         "opencode"
       ]
     },
@@ -774,6 +776,14 @@
         "codex",
         "omp",
         "pi"
+      ]
+    },
+    {
+      "path": "scripts/ui-capture.ts",
+      "providers": [
+        "claude",
+        "codex",
+        "omp"
       ]
     },
     {
@@ -1166,6 +1176,7 @@
         "claude",
         "codex",
         "cursor",
+        "omp",
         "opencode"
       ]
     },
@@ -2377,7 +2388,9 @@
     {
       "path": "web/src/components/__tests__/LaunchSessionModal.test.tsx",
       "providers": [
+        "claude",
         "codex",
+        "omp",
         "opencode"
       ]
     },

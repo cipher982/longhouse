@@ -454,6 +454,30 @@ struct LonghouseAPITests {
     }
 
     @Test
+    func machineLaunchDecodesUnavailableProvidersAndToleratesOlderHosts() throws {
+        let current = try #require("""
+        {
+          "blocked_by": null,
+          "providers": [{"provider": "omp"}],
+          "default_provider": "omp",
+          "unavailable_providers": [
+            {"provider": "claude", "reason": "not_authenticated", "remediation": "Sign in to claude on this machine"}
+          ]
+        }
+        """.data(using: .utf8))
+        let older = try #require("""
+        {"blocked_by": null, "providers": [{"provider": "codex"}], "default_provider": "codex"}
+        """.data(using: .utf8))
+
+        let decoded = try JSONDecoder.snakeCase.decode(MachineLaunchProjection.self, from: current)
+        #expect(decoded.providers.map(\.provider) == ["omp"])
+        #expect(decoded.unavailableProviders == [
+            MachineLaunchUnavailableProvider(provider: "claude", reason: "not_authenticated", remediation: "Sign in to claude on this machine")
+        ])
+        #expect(try JSONDecoder.snakeCase.decode(MachineLaunchProjection.self, from: older).unavailableProviders.isEmpty)
+    }
+
+    @Test
     func unknownLaunchStateDoesNotFailDecode() throws {
         let data = try #require("""
         {

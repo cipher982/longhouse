@@ -1365,10 +1365,50 @@ public struct MachineLaunchProviderOption: Decodable, Sendable, Hashable {
     public let provider: String
 }
 
+/// A provider the machine's engine can drive but cannot run right now
+/// (signed out, CLI missing). Never launchable; shown so the user can fix it.
+public struct MachineLaunchUnavailableProvider: Decodable, Sendable, Hashable {
+    public let provider: String
+    public let reason: String
+    public let remediation: String?
+
+    public init(provider: String, reason: String, remediation: String?) {
+        self.provider = provider
+        self.reason = reason
+        self.remediation = remediation
+    }
+}
+
 public struct MachineLaunchProjection: Decodable, Sendable, Hashable {
     public let blockedBy: String?
     public let providers: [MachineLaunchProviderOption]
     public let defaultProvider: String?
+    public let unavailableProviders: [MachineLaunchUnavailableProvider]
+
+    public init(
+        blockedBy: String?,
+        providers: [MachineLaunchProviderOption],
+        defaultProvider: String?,
+        unavailableProviders: [MachineLaunchUnavailableProvider] = []
+    ) {
+        self.blockedBy = blockedBy
+        self.providers = providers
+        self.defaultProvider = defaultProvider
+        self.unavailableProviders = unavailableProviders
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case blockedBy, providers, defaultProvider, unavailableProviders
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        blockedBy = try c.decodeIfPresent(String.self, forKey: .blockedBy)
+        providers = try c.decode([MachineLaunchProviderOption].self, forKey: .providers)
+        defaultProvider = try c.decodeIfPresent(String.self, forKey: .defaultProvider)
+        // Absent on Runtime Hosts that predate provider readiness gating.
+        unavailableProviders = try c.decodeIfPresent([MachineLaunchUnavailableProvider].self, forKey: .unavailableProviders) ?? []
+    }
 }
 
 public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {

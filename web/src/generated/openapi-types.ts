@@ -5087,11 +5087,16 @@ export interface components {
              * Blocked By
              * @description Reason no Console launch option is available; null when providers is non-empty.
              */
-            blocked_by?: ("control_down" | "no_launch_support" | "engine_too_old" | "auth_failed" | "runtime_unreachable") | null;
+            blocked_by?: ("control_down" | "no_launch_support" | "engine_too_old" | "auth_failed" | "runtime_unreachable" | "providers_not_ready") | null;
             /** Providers */
             providers: components["schemas"]["MachineLaunchProviderOption"][];
             /** Default Provider */
             default_provider?: string | null;
+            /**
+             * Unavailable Providers
+             * @description Providers this machine's engine can drive whose readiness says a turn would fail now (signed out, CLI missing). Never launchable; shown so the user knows what to fix.
+             */
+            unavailable_providers?: components["schemas"]["MachineLaunchUnavailableProvider"][];
         };
         /** MachineLaunchProviderOption */
         MachineLaunchProviderOption: {
@@ -5100,6 +5105,25 @@ export interface components {
              * @description Provider identifier.
              */
             provider: string;
+        };
+        /** MachineLaunchUnavailableProvider */
+        MachineLaunchUnavailableProvider: {
+            /**
+             * Provider
+             * @description Provider identifier.
+             */
+            provider: string;
+            /**
+             * Reason
+             * @description Engine readiness state that makes a Console turn fail before any work.
+             * @enum {string}
+             */
+            reason: "not_authenticated" | "cli_missing";
+            /**
+             * Remediation
+             * @description Human instruction, e.g. 'Sign in to codex on this machine'.
+             */
+            remediation?: string | null;
         };
         /** MachinePresenceIn */
         MachinePresenceIn: {

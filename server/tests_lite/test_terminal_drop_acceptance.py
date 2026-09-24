@@ -106,6 +106,10 @@ class _MachineRegistry:
     def is_online(*, owner_id, device_id):
         return owner_id == 1 and device_id == "cinder"
 
+    @staticmethod
+    def provider_readiness_state(*, owner_id, device_id, provider):
+        return None
+
     def supports(self, *, owner_id, device_id, capability):
         if owner_id != 1 or device_id != "cinder":
             return False

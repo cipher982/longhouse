@@ -417,6 +417,7 @@ def test_agents_machines_route_matches_timeline_route():
         "blocked_by": None,
         "providers": [{"provider": "codex"}],
         "default_provider": "codex",
+        "unavailable_providers": [],
     }
     assert body["machines"][1]["online"] is False
     assert body["machines"][1]["supports"] == []
@@ -426,6 +427,7 @@ def test_agents_machines_route_matches_timeline_route():
         "blocked_by": "control_down",
         "providers": [],
         "default_provider": None,
+        "unavailable_providers": [],
     }
 
 
@@ -927,3 +929,92 @@ def test_an_offline_machine_reports_neither_uptime_nor_readiness(tmp_path):
     assert entry.online is False
     assert entry.connected_since is None
     assert entry.provider_readiness == {}
+
+
+def test_signed_out_provider_is_unavailable_not_launchable(tmp_path):
+    # The engine knows claude is signed out; offering it as launchable only
+    # moves the failure to the user's first message.
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    registry = MachineControlChannelRegistry()
+    _register(
+        registry,
+        owner_id=OWNER_ID,
+        device_id="workbench",
+        supports=("claude.turn_start", "omp.turn_start"),
+        provider_readiness={
+            "claude": {"state": "not_authenticated", "remediation": "Sign in to claude on this machine"},
+            "omp": {"state": "unknown", "detail": "OMP owns its native profile credentials"},
+        },
+    )
+
+    entry = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)[0]
+    launch = entry.to_response()["launch"]
+
+    assert [p["provider"] for p in launch["providers"]] == ["omp"]
+    assert launch["default_provider"] == "omp"
+    assert launch["blocked_by"] is None
+    assert launch["unavailable_providers"] == [
+        {"provider": "claude", "reason": "not_authenticated", "remediation": "Sign in to claude on this machine"}
+    ]
+
+
+def test_machine_with_only_signed_out_providers_says_why(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    registry = MachineControlChannelRegistry()
+    _register(
+        registry,
+        owner_id=OWNER_ID,
+        device_id="workbench",
+        supports=("codex.turn_start",),
+        provider_readiness={"codex": {"state": "not_authenticated", "remediation": "Sign in to codex on this machine"}},
+    )
+
+    launch = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)[0].launch
+
+    assert launch.providers == ()
+    assert launch.default_provider is None
+    assert launch.blocked_by == "providers_not_ready"
+
+
+def test_readiness_update_frame_replaces_the_hello_snapshot(tmp_path):
+    # Readiness used to be frozen at hello: signing in after the engine
+    # connected left the provider "not ready" until a reconnect.
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    registry = MachineControlChannelRegistry()
+    websocket = _FakeWebSocket()
+    _register(
+        registry,
+        owner_id=OWNER_ID,
+        device_id="workbench",
+        supports=("claude.turn_start",),
+        provider_readiness={"claude": {"state": "not_authenticated", "remediation": "Sign in to claude on this machine"}},
+        websocket=websocket,
+    )
+
+    updated = asyncio.run(
+        registry.update_capabilities(
+            owner_id=OWNER_ID,
+            device_id="workbench",
+            websocket=websocket,
+            supports=["claude.turn_start", "omp.turn_start"],
+            provider_readiness={"claude": {"state": "ready", "detail": "max plan"}},
+        )
+    )
+    stale = asyncio.run(
+        registry.update_capabilities(
+            owner_id=OWNER_ID,
+            device_id="workbench",
+            websocket=_FakeWebSocket(),
+            supports=[],
+            provider_readiness={},
+        )
+    )
+    launch = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)[0].launch
+
+    assert updated is True
+    assert stale is False
+    assert [option.provider for option in launch.providers] == ["claude", "omp"]
+    assert launch.unavailable_providers == ()

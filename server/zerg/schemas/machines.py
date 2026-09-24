@@ -26,6 +26,7 @@ LaunchBlockedBy = Literal[
     "engine_too_old",
     "auth_failed",
     "runtime_unreachable",
+    "providers_not_ready",
 ]
 
 
@@ -80,6 +81,14 @@ class MachineLaunchProviderOption(UTCBaseModel):
     provider: str = Field(..., description="Provider identifier.")
 
 
+class MachineLaunchUnavailableProvider(UTCBaseModel):
+    provider: str = Field(..., description="Provider identifier.")
+    reason: Literal["not_authenticated", "cli_missing"] = Field(
+        ..., description="Engine readiness state that makes a Console turn fail before any work."
+    )
+    remediation: str | None = Field(default=None, description="Human instruction, e.g. 'Sign in to codex on this machine'.")
+
+
 class MachineLaunchProjection(UTCBaseModel):
     blocked_by: LaunchBlockedBy | None = Field(
         default=None,
@@ -87,6 +96,13 @@ class MachineLaunchProjection(UTCBaseModel):
     )
     providers: list[MachineLaunchProviderOption] = Field(...)
     default_provider: str | None = None
+    unavailable_providers: list[MachineLaunchUnavailableProvider] = Field(
+        default_factory=list,
+        description=(
+            "Providers this machine's engine can drive whose readiness says a turn would fail now "
+            "(signed out, CLI missing). Never launchable; shown so the user knows what to fix."
+        ),
+    )
 
 
 class MachineDirectoryResponse(UTCBaseModel):

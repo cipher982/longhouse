@@ -78,6 +78,10 @@ class _MachineRegistry:
             return True
         return capability == "claude.turn_interrupt" and self.interrupt_supported
 
+    @staticmethod
+    def provider_readiness_state(*, owner_id, device_id, provider):
+        return None
+
     async def send_command(self, **kwargs):
         self.commands.append(kwargs)
         if kwargs["command_type"] == "session.turn.start" and self.crash_next_start:

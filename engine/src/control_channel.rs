@@ -97,6 +97,9 @@ const COMMAND_RECEIPT_DIR: &str = "control-command-receipts";
 // queue protocol pongs internally and flush them on the next write, so the
 // app-level heartbeat also keeps server keepalive pongs moving through proxies.
 const HEARTBEAT_INTERVAL_SECS: u64 = 10;
+/// How often the engine re-probes provider CLIs and readiness after hello.
+/// Only a change is sent, so a quiet machine costs one probe pass a minute.
+const READINESS_REFRESH_SECS: u64 = 60;
 const CONTROL_CONNECT_TIMEOUT_SECS: u64 = 15;
 const CONTROL_WRITE_TIMEOUT_SECS: u64 = 5;
 const CONTROL_HEARTBEAT_LATE_WARN_MS: u128 = 500;
@@ -837,17 +840,18 @@ async fn run_once(
     .await
     .map_err(|_| anyhow!("timed out connecting machine control websocket {ws_url}"))?
     .with_context(|| format!("connecting machine control websocket {ws_url}"))?;
+    let mut last_capabilities = capabilities_snapshot().await;
     let hello = json!({
         "type": "hello",
         "schema_version": 1,
         "device_id": config.machine_name,
         "machine_name": config.machine_name,
         "engine_build": build_identity::COMMIT_SHORT,
-        "supports": control_supports(),
         // supports[] says what this engine can drive. Readiness says whether
         // the machine can actually do it right now, and why not when it
         // cannot -- the reason the browser previously never received.
-        "provider_readiness": provider_readiness_snapshot().await,
+        "supports": last_capabilities["supports"].clone(),
+        "provider_readiness": last_capabilities["provider_readiness"].clone(),
     });
     send_control_message(
         &mut stream,
@@ -866,9 +870,36 @@ async fn run_once(
     let mut next_heartbeat_due = Instant::now() + heartbeat_interval;
     let (command_result_tx, mut command_result_rx) = mpsc::unbounded_channel::<(String, Value)>();
     let mut in_flight_commands: HashSet<String> = HashSet::new();
+    // Hello is a snapshot; without a refresh, signing in to a provider or
+    // installing its CLI after connect stayed invisible until a reconnect.
+    let mut readiness_refresh = tokio::time::interval(Duration::from_secs(READINESS_REFRESH_SECS));
+    readiness_refresh.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    readiness_refresh.tick().await;
+    let (capabilities_tx, mut capabilities_rx) = mpsc::unbounded_channel::<Value>();
+    let mut capabilities_probe_in_flight = false;
 
     loop {
         tokio::select! {
+            _ = readiness_refresh.tick(), if !capabilities_probe_in_flight => {
+                capabilities_probe_in_flight = true;
+                let tx = capabilities_tx.clone();
+                tokio::spawn(async move {
+                    let _ = tx.send(capabilities_snapshot().await);
+                });
+            }
+            Some(capabilities) = capabilities_rx.recv() => {
+                capabilities_probe_in_flight = false;
+                if let Some(frame) = readiness_update_frame(&last_capabilities, &capabilities) {
+                    send_control_message(
+                        &mut stream,
+                        Message::Text(frame.to_string()),
+                        "machine control readiness update",
+                        status,
+                    )
+                    .await?;
+                    last_capabilities = capabilities;
+                }
+            }
             Some((command_id, result)) = command_result_rx.recv() => {
                 in_flight_commands.remove(&command_id);
                 completed_commands.insert(command_id, result.clone());
@@ -1014,6 +1045,26 @@ where
 
 fn heartbeat_frame() -> Value {
     json!({"type": "heartbeat"})
+}
+
+async fn capabilities_snapshot() -> Value {
+    json!({
+        "supports": control_supports(),
+        "provider_readiness": provider_readiness_snapshot().await,
+    })
+}
+
+/// The frame to send when supports or readiness changed since the last one
+/// the Runtime Host saw; `None` when nothing changed.
+fn readiness_update_frame(previous: &Value, current: &Value) -> Option<Value> {
+    if previous == current {
+        return None;
+    }
+    Some(json!({
+        "type": "readiness_update",
+        "supports": current["supports"].clone(),
+        "provider_readiness": current["provider_readiness"].clone(),
+    }))
 }
 
 async fn handle_command_frame(
@@ -3860,6 +3911,28 @@ mod tests {
     #[test]
     fn heartbeat_frame_uses_server_schema() {
         assert_eq!(heartbeat_frame(), json!({"type": "heartbeat"}));
+    }
+
+    #[test]
+    fn readiness_update_is_sent_only_when_capabilities_change() {
+        let signed_out = json!({
+            "supports": ["claude.turn_start"],
+            "provider_readiness": {"claude": {"state": "not_authenticated"}},
+        });
+        let signed_in = json!({
+            "supports": ["claude.turn_start"],
+            "provider_readiness": {"claude": {"state": "ready", "detail": "max plan"}},
+        });
+
+        assert_eq!(readiness_update_frame(&signed_out, &signed_out), None);
+        assert_eq!(
+            readiness_update_frame(&signed_out, &signed_in),
+            Some(json!({
+                "type": "readiness_update",
+                "supports": ["claude.turn_start"],
+                "provider_readiness": {"claude": {"state": "ready", "detail": "max plan"}},
+            }))
+        );
     }
 
     #[test]

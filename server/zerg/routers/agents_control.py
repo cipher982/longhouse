@@ -261,6 +261,15 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
                             "Failed to reconcile machine operation result command_id=%s",
                             message.get("command_id"),
                         )
+            elif message_type == "readiness_update":
+                supports_raw = message.get("supports")
+                await registry.update_capabilities(
+                    owner_id=owner_id,
+                    device_id=device_id,
+                    websocket=websocket,
+                    supports=[str(item) for item in supports_raw] if isinstance(supports_raw, list) else None,
+                    provider_readiness=message.get("provider_readiness"),
+                )
             else:
                 logger.warning("Unknown machine control message type from %s: %s", device_id, message_type)
     finally:

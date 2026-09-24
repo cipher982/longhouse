@@ -325,6 +325,32 @@ describe("LaunchSessionModal", () => {
     );
   });
 
+  it("lists signed-out providers as unavailable instead of offering them", async () => {
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({
+          device_id: "workbench",
+          machine_name: "workbench",
+          control_operations_by_provider: { claude: ["turn_start"], omp: ["turn_start"] },
+          supports: ["claude.turn_start", "omp.turn_start"],
+          launch: {
+            blocked_by: null,
+            providers: [{ provider: "omp" }],
+            default_provider: "omp",
+            unavailable_providers: [
+              { provider: "claude", reason: "not_authenticated", remediation: "Sign in to claude on this machine" },
+            ],
+          },
+        }),
+      ],
+    });
+    renderModal();
+
+    const note = await screen.findByTestId("launch-unavailable-providers");
+    expect(note).toHaveTextContent("Sign in to claude on this machine");
+    expect(screen.queryByTestId("launch-provider-select")).toBeNull();
+  });
+
   it("prefills the top-ranked workspace and lets you pick another by label", async () => {
     apiMocks.listMachines.mockResolvedValue({
       machines: [machine({ device_id: "cinder", machine_name: "cinder", online: true })],
