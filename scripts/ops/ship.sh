@@ -115,4 +115,8 @@ fi
 cleanup_lock
 trap - EXIT
 
+# Say how busy CI is before waiting on it, so the agent can decide whether to
+# block here, batch its next commits, or do other work. Never fails the ship.
+(cd "$ROOT" && "$ROOT/scripts/ops/ci-queue.py" --sha "$SHA" --brief) >&2 || true
+
 exec "$ROOT/scripts/ops/ship-monitor.py" --sha "$SHA" ${MONITOR_ARGS[@]+"${MONITOR_ARGS[@]}"}

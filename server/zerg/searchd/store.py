@@ -437,6 +437,14 @@ def open_search_read_database(path: Path) -> sqlite3.Connection:
 # search.db-wal sat at 2.36 GB while holding 396 live frames (0.1%). With a
 # limit, the file is truncated back to it each time a checkpoint rewinds the log.
 WAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024
+# startup_maintenance analyzes a new store while it is empty, recording
+# events_fts_data as a 2-row table. With that statistic FTS5's segment-delete
+# range query scans the whole table after every merge, so each commit of a
+# rebuild read the index again (45 -> 230 MB per commit over 140 MB, quadratic)
+# until the next optimize, a day later. optimize re-analyzes only tables whose
+# size moved far from their statistic, so a short interval is a no-op when
+# nothing changed and keeps a rebuild at ~1 MB per commit.
+OPTIMIZE_INTERVAL_SECONDS = 300
 
 
 def _connect(path: Path) -> sqlite3.Connection:
@@ -446,6 +454,8 @@ def _connect(path: Path) -> sqlite3.Connection:
     connection.execute("PRAGMA synchronous=NORMAL")
     connection.execute("PRAGMA busy_timeout=5000")
     connection.execute(f"PRAGMA journal_size_limit={WAL_SIZE_LIMIT_BYTES}")
+    # Bounds any ANALYZE that PRAGMA optimize decides to run to a sample.
+    connection.execute("PRAGMA analysis_limit=400")
     return connection
 
 
@@ -1928,8 +1938,8 @@ class SearchStore:
 
     def _maintain_after_publish(self) -> dict[str, int]:
         checkpoint = self.connection.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
-        if time.monotonic() - self._last_optimize_mono >= 86_400:
-            self.connection.execute("PRAGMA optimize")
+        if time.monotonic() - self._last_optimize_mono >= OPTIMIZE_INTERVAL_SECONDS:
+            self.connection.execute("PRAGMA optimize=0x10002")
             self._last_optimize_mono = time.monotonic()
         return {
             "checkpoint_busy": int(checkpoint[0]),
