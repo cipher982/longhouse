@@ -45,11 +45,16 @@ mod managed_claude_scan;
 mod managed_contract_janitor;
 mod managed_cursor_helm_scan;
 mod managed_identity;
+// Generated from schemas/ by scripts/generate/*_rs.py, whose --check validators
+// compare byte-for-byte; rustfmt must not rewrite them (it did, breaking
+// validate-managed-identity on main).
+#[rustfmt::skip]
 mod managed_identity_contract;
 mod managed_launch_lifecycle;
 mod managed_launch_payload;
 mod managed_omp_helm_scan;
 mod managed_opencode_scan;
+#[rustfmt::skip]
 mod managed_phase_contract;
 mod managed_pi_helm_scan;
 mod managed_process_janitor;
