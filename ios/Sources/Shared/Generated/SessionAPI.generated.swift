@@ -65,7 +65,7 @@ struct APISourceInventory: Codable, Hashable, Sendable {
     let providers: [APIProviderSourceInventory]?
 }
 
-struct APIHistoryImportSnapshot-Output: Codable, Hashable, Sendable {
+struct APIHistoryImportSnapshotOutput: Codable, Hashable, Sendable {
     let state: String
     let inventory: APISourceInventory?
     let progress: APIHistoryImportProgress?
@@ -73,7 +73,7 @@ struct APIHistoryImportSnapshot-Output: Codable, Hashable, Sendable {
 
 struct APITimelineHistoryImportResponse: Codable, Hashable, Sendable {
     let deviceId: String
-    let historyImport: APIHistoryImportSnapshot-Output
+    let historyImport: APIHistoryImportSnapshotOutput
 }
 
 struct APILastTurnResponse: Codable, Hashable, Sendable {

@@ -87,7 +87,9 @@ SWIFT_RESERVED = {
 
 
 def swift_type_name(schema_name: str) -> str:
-    return f"API{schema_name}"
+    # Pydantic names a model whose request and response schemas differ
+    # `Name-Input` / `Name-Output`; a hyphen is not a Swift identifier.
+    return "API" + re.sub(r"[^0-9A-Za-z_]", "", schema_name)
 
 
 def camel_case(name: str) -> str:
