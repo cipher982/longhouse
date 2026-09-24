@@ -17,10 +17,11 @@ from typing import Any
 from uuid import UUID
 from uuid import uuid4
 
+from zerg.searchd.hydration import RenderHydrator
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
 
 SCHEMA_VERSION = 1
-SCHEMA_GENERATION = "searchd-v3-published-semantic-corpus-with-fenced-embeddings"
+SCHEMA_GENERATION = "searchd-v4-render-references-contentless-fts"
 SEARCHABLE_RETENTION_DAYS = 91
 SEARCHABLE_FAST_WINDOW_DAYS = 90
 SEARCHABLE_FAST_WINDOW_MARGIN_SECONDS = 300
@@ -59,8 +60,7 @@ _ARCHIVE_SEARCH_SQL = """
     SELECT e.id AS search_event_id, e.session_id, e.generation_id, e.source_object_id,
            e.record_ordinal, e.event_id, e.order_time_us,
            e.role, e.tool_name,
-           snippet(events_fts, 0, '', '', ' … ', 24) AS content_snippet,
-           snippet(events_fts, 1, '', '', ' … ', 24) AS tool_output_snippet,
+            NULL AS content_snippet, NULL AS tool_output_snippet,
            s.project, s.provider, s.environment, s.cwd, s.git_repo, s.started_at,
            s.user_messages, s.assistant_messages, s.tool_calls, s.is_sidechain,
            s.origin_kind, s.indexed_through, s.event_count,
@@ -146,8 +146,7 @@ _ARCHIVE_BOUNDED_SEARCH_SQL = """
     SELECT t.search_event_id, e.session_id, e.generation_id, e.source_object_id,
            e.record_ordinal, e.event_id, e.order_time_us,
            e.role, e.tool_name,
-           snippet(events_fts, 0, '', '', ' … ', 24) AS content_snippet,
-           snippet(events_fts, 1, '', '', ' … ', 24) AS tool_output_snippet,
+            NULL AS content_snippet, NULL AS tool_output_snippet,
            s.project, s.provider, s.environment, s.cwd, s.git_repo, s.started_at,
            s.user_messages, s.assistant_messages, s.tool_calls, s.is_sidechain,
            s.origin_kind, s.indexed_through, s.event_count,
@@ -230,10 +229,10 @@ _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL = """
 # fix. Snippetting the final page instead keeps that cost flat.
 _SEARCHABLE_SEARCH_SQL = """
     WITH candidates AS (
-        SELECT e.source_event_id AS search_event_id, bm25(searchable_fts) AS rank
-        FROM searchable_fts
-        JOIN searchable_events e ON e.source_event_id = searchable_fts.rowid
-        WHERE searchable_fts MATCH ? AND e.owner_id = ?
+        SELECT e.source_event_id AS search_event_id, bm25(events_fts) AS rank
+        FROM events_fts
+        JOIN searchable_events e ON e.source_event_id = events_fts.rowid
+        WHERE events_fts MATCH ? AND e.owner_id = ?
           AND (? = 1 OR COALESCE(e.hidden_from_default_timeline, 0) = 0
                OR (? = 1 AND COALESCE(e.test_scope_visible, 0) = 1))
           AND COALESCE(e.user_hidden_from_timeline, 0) = 0
@@ -248,7 +247,7 @@ _SEARCHABLE_SEARCH_SQL = """
           AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
           AND (e.role != 'user' OR (e.title_eligible = 1
                AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
-        ORDER BY searchable_fts.rowid DESC
+        ORDER BY events_fts.rowid DESC
         LIMIT ?
     ), top AS (
         SELECT search_event_id, rank, (SELECT COUNT(*) FROM candidates) AS candidate_count
@@ -259,8 +258,7 @@ _SEARCHABLE_SEARCH_SQL = """
     SELECT t.search_event_id, e.session_id, e.generation_id, e.source_object_id,
            e.record_ordinal, e.event_id, e.order_time_us,
            e.role, e.tool_name,
-           snippet(searchable_fts, 0, '', '', ' … ', 24) AS content_snippet,
-           snippet(searchable_fts, 1, '', '', ' … ', 24) AS tool_output_snippet,
+            NULL AS content_snippet, NULL AS tool_output_snippet,
            s.project, s.provider, s.environment, s.cwd, s.git_repo, s.started_at,
            s.user_messages, s.assistant_messages, s.tool_calls, s.is_sidechain,
            s.origin_kind, s.indexed_through, s.event_count,
@@ -268,16 +266,12 @@ _SEARCHABLE_SEARCH_SQL = """
      FROM top t
      JOIN searchable_events e ON e.source_event_id = t.search_event_id
      JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
-     JOIN searchable_fts ON searchable_fts.rowid = t.search_event_id
-    WHERE searchable_fts MATCH ?
+      JOIN events_fts ON events_fts.rowid = t.search_event_id
+     WHERE events_fts MATCH ?
     ORDER BY t.rank ASC
 """
 
-_SEARCHABLE_SEARCH_WITHOUT_SNIPPETS_SQL = _SEARCHABLE_SEARCH_SQL.replace(
-    "snippet(searchable_fts, 0, '', '', ' … ', 24) AS content_snippet,\n"
-    "           snippet(searchable_fts, 1, '', '', ' … ', 24) AS tool_output_snippet,",
-    "NULL AS content_snippet,\n           NULL AS tool_output_snippet,",
-)
+_SEARCHABLE_SEARCH_WITHOUT_SNIPPETS_SQL = _SEARCHABLE_SEARCH_SQL
 
 # Most recent matching events considered before ranking. The old 50K window
 # looked cheap on a synthetic 5M-row corpus, but took 4.8s for the retained
@@ -299,7 +293,7 @@ _CANDIDATE_CEILING = 10_000
 _SEARCH_SQL = _ARCHIVE_SEARCH_SQL
 
 _CLEAN_RECALL_TURN_PREDICATE = """
-      e.role IN ('user', 'assistant') AND e.content_text IS NOT NULL
+       e.role IN ('user', 'assistant')
       AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
       AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
       AND (e.role != 'user' OR (e.title_eligible = 1
@@ -361,8 +355,8 @@ _CONTEXT_TARGET_BY_POSITION_SQL = f"""
 # `source_position` is stored zero-padded, which sorts identically to the
 # projector's integer compare.
 _CONTEXT_ROWS_SQL = f"""
-    SELECT e.id AS search_event_id, e.event_id, e.source_object_id, e.record_ordinal,
-           e.order_time_us, e.role, e.content_text, e.tool_name
+     SELECT e.id AS search_event_id, e.event_id, e.source_object_id, e.record_ordinal,
+            e.order_time_us, e.role, e.tool_name
     FROM events e
     JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
     JOIN projection_membership m
@@ -574,9 +568,7 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             source_position TEXT NOT NULL,
             event_subordinal INTEGER NOT NULL,
             role TEXT NOT NULL,
-            content_text TEXT,
             tool_name TEXT,
-            tool_output_text TEXT,
             tool_call_id TEXT,
             thread_id TEXT,
             branch_kind TEXT,
@@ -596,24 +588,10 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
         CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
             content_text,
             tool_output_text,
-            content='events',
-            content_rowid='id',
+            content='',
+            contentless_delete=1,
             tokenize='unicode61 remove_diacritics 2'
         );
-        CREATE TRIGGER IF NOT EXISTS events_ai AFTER INSERT ON events BEGIN
-            INSERT INTO events_fts(rowid, content_text, tool_output_text)
-            VALUES (new.id, new.content_text, new.tool_output_text);
-        END;
-        CREATE TRIGGER IF NOT EXISTS events_ad AFTER DELETE ON events BEGIN
-            INSERT INTO events_fts(events_fts, rowid, content_text, tool_output_text)
-            VALUES ('delete', old.id, old.content_text, old.tool_output_text);
-        END;
-        CREATE TRIGGER IF NOT EXISTS events_au AFTER UPDATE ON events BEGIN
-            INSERT INTO events_fts(events_fts, rowid, content_text, tool_output_text)
-            VALUES ('delete', old.id, old.content_text, old.tool_output_text);
-            INSERT INTO events_fts(rowid, content_text, tool_output_text)
-            VALUES (new.id, new.content_text, new.tool_output_text);
-        END;
         -- Metadata and text are separate tables on purpose.
         --
         -- The candidate walk reads owner/project/environment/time — about 20
@@ -649,42 +627,10 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             source_commit_seq INTEGER NOT NULL DEFAULT 0,
             tombstoned INTEGER NOT NULL DEFAULT 0
         );
-        CREATE TABLE IF NOT EXISTS searchable_text (
-            source_event_id INTEGER PRIMARY KEY,
-            content_text TEXT,
-            tool_output_text TEXT
-        );
         CREATE INDEX IF NOT EXISTS ix_searchable_events_session
             ON searchable_events(session_id, generation_id, source_object_id);
         CREATE INDEX IF NOT EXISTS ix_searchable_events_window
             ON searchable_events(order_time_us);
-        CREATE VIRTUAL TABLE IF NOT EXISTS searchable_fts USING fts5(
-            content_text,
-            tool_output_text,
-            content='searchable_text',
-            content_rowid='source_event_id',
-            tokenize='unicode61 remove_diacritics 2'
-        );
-        -- Dropping a metadata row retires its text, which retires its FTS entry.
-        -- Keeping the cascade in the schema means the four places that delete
-        -- from searchable_events stay correct without knowing about the split.
-        CREATE TRIGGER IF NOT EXISTS searchable_events_ad AFTER DELETE ON searchable_events BEGIN
-            DELETE FROM searchable_text WHERE source_event_id = old.source_event_id;
-        END;
-        CREATE TRIGGER IF NOT EXISTS searchable_text_ai AFTER INSERT ON searchable_text BEGIN
-            INSERT INTO searchable_fts(rowid, content_text, tool_output_text)
-            VALUES (new.source_event_id, new.content_text, new.tool_output_text);
-        END;
-        CREATE TRIGGER IF NOT EXISTS searchable_text_ad AFTER DELETE ON searchable_text BEGIN
-            INSERT INTO searchable_fts(searchable_fts, rowid, content_text, tool_output_text)
-            VALUES ('delete', old.source_event_id, old.content_text, old.tool_output_text);
-        END;
-        CREATE TRIGGER IF NOT EXISTS searchable_text_au AFTER UPDATE ON searchable_text BEGIN
-            INSERT INTO searchable_fts(searchable_fts, rowid, content_text, tool_output_text)
-            VALUES ('delete', old.source_event_id, old.content_text, old.tool_output_text);
-            INSERT INTO searchable_fts(rowid, content_text, tool_output_text)
-            VALUES (new.source_event_id, new.content_text, new.tool_output_text);
-        END;
         CREATE TABLE IF NOT EXISTS session_index (
             session_id TEXT PRIMARY KEY,
             generation_id TEXT NOT NULL,
@@ -772,6 +718,7 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
 class SearchStore:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self.connection = connection
+        self._hydrator = RenderHydrator()
         self._worklog_snapshots: dict[str, _WorklogSnapshot] = {}
         self._last_optimize_mono = 0.0
         self._fts_analyzed_pages = 0
@@ -791,7 +738,6 @@ class SearchStore:
         tables = (
             "session_index",
             "searchable_events",
-            "searchable_text",
             "projection_membership",
             "events",
             "indexed_objects",
@@ -982,11 +928,11 @@ class SearchStore:
                         event_key, session_id, generation_id, source_object_id,
                         record_ordinal, event_id, order_time_us, opaque_source_id,
                         source_epoch, source_position, event_subordinal,
-                        role, content_text, tool_name, tool_output_text,
+                        role, tool_name,
                         tool_call_id, thread_id, branch_kind,
                         provider, interaction_kind, title_eligible,
                         machine_id, project, environment, cwd, git_repo
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         event_key,
@@ -1001,9 +947,7 @@ class SearchStore:
                         f"{record['source_position']:020d}",
                         record["event_subordinal"],
                         record["role"],
-                        record.get("content_text"),
                         record.get("tool_name"),
-                        record.get("tool_output_text"),
                         record.get("tool_call_id"),
                         record.get("thread_id"),
                         record.get("branch_kind"),
@@ -1016,6 +960,11 @@ class SearchStore:
                         cwd,
                         git_repo,
                     ),
+                )
+                event_id = self.connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+                self.connection.execute(
+                    "INSERT INTO events_fts(rowid, content_text, tool_output_text) VALUES (?, ?, ?)",
+                    (event_id, record.get("content_text"), record.get("tool_output_text")),
                 )
             self.connection.execute(
                 """
@@ -1290,9 +1239,8 @@ class SearchStore:
             f"""
             SELECT e.order_time_us, e.machine_id, e.provider,
                    e.opaque_source_id, e.source_epoch, e.source_position,
-                   e.event_subordinal, e.record_ordinal, e.role,
-                   e.content_text, e.interaction_kind, e.tool_name,
-                   e.tool_output_text
+                    e.event_subordinal, e.record_ordinal, e.role,
+                    e.source_object_id, e.interaction_kind, e.tool_name
               FROM session_index s
               JOIN projection_membership m
                 ON m.session_id = s.session_id
@@ -1312,10 +1260,11 @@ class SearchStore:
             tuple(params),
         ).fetchall()
         total = int(published["event_count"])
+        hydrated_rows = self._hydrator.hydrate([dict(row) for row in rows[:limit]], byte_budget=_EMBEDDING_SOURCE_PAGE_BYTES)
         records: list[dict[str, object]] = []
         payload_bytes = 0
         returned_rows = []
-        for row in rows[:limit]:
+        for row in hydrated_rows:
             record: dict[str, object] = {
                 "timestamp": int(row["order_time_us"]),
                 "machine_id": str(row["machine_id"]),
@@ -1411,9 +1360,8 @@ class SearchStore:
         event_count = int(existing["event_count"])
         rows = self.connection.execute(
             """
-            SELECT event_id, record_ordinal, order_time_us, source_position,
-                   event_subordinal, role, content_text, tool_name,
-                   tool_output_text, tool_call_id, thread_id, branch_kind,
+            SELECT event_id, record_ordinal, order_time_us, source_position, source_object_id,
+                   event_subordinal, role, tool_name, tool_call_id, thread_id, branch_kind,
                    provider, interaction_kind, machine_id, opaque_source_id, source_epoch
             FROM events
             WHERE session_id = ? AND generation_id = ? AND source_object_id = ?
@@ -1423,6 +1371,7 @@ class SearchStore:
         ).fetchall()
         if len(rows) != event_count:
             return None
+        rows = self._hydrator.hydrate([dict(row) for row in rows], byte_budget=64 * 1024 * 1024)
         if not rows:
             return None
         first = rows[0]
@@ -1665,13 +1614,8 @@ class SearchStore:
                 """,
                 (session_id, generation_id, desired_revision),
             )
-            self.connection.execute(
-                """
-                DELETE FROM events
-                WHERE session_id = ? AND source_object_id NOT IN (
-                    SELECT object_id FROM projection_membership WHERE session_id = ?
-                )
-                """,
+            self._delete_events(
+                "session_id = ? AND source_object_id NOT IN (SELECT object_id FROM projection_membership WHERE session_id = ?)",
                 (session_id, session_id),
             )
             self.connection.execute(
@@ -1782,18 +1726,6 @@ class SearchStore:
                 _searchable_cutoff_us(),
             ),
         )
-        # Text follows the metadata it belongs to, in the same transaction. The
-        # insert trigger on searchable_text is what populates the FTS index.
-        self.connection.execute(
-            """
-            INSERT INTO searchable_text(source_event_id, content_text, tool_output_text)
-            SELECT e.id, e.content_text, e.tool_output_text
-            FROM events e
-            JOIN searchable_events s ON s.source_event_id = e.id
-            WHERE s.session_id = ? AND e.session_id = ?
-            """,
-            (session_id, session_id),
-        )
         self.connection.execute("DELETE FROM searchable_events WHERE order_time_us < ?", (_searchable_cutoff_us(),))
 
     def search(
@@ -1850,8 +1782,14 @@ class SearchStore:
         if candidate_ceiling is not None and rows:
             if int(rows[0]["candidate_count"]) >= candidate_ceiling:
                 ranking_scope = "recent_bounded"
+        result_rows = [dict(row) for row in rows]
+        if include_snippets:
+            result_rows = self._hydrator.hydrate(result_rows, byte_budget=4 * 1024 * 1024)
+            for row in result_rows:
+                row["content_snippet"] = _query_excerpt(row.pop("content_text", None), query)
+                row["tool_output_snippet"] = _query_excerpt(row.pop("tool_output_text", None), query)
         return {
-            "results": [{k: v for k, v in dict(row).items() if k != "candidate_count"} for row in rows],
+            "results": [{k: v for k, v in row.items() if k != "candidate_count"} for row in result_rows],
             "query_token_count": query_token_count,
             "compiled_token_count": compiled_token_count,
             "search_scope": "published_recent" if use_searchable_corpus else "published_archive",
@@ -1913,8 +1851,12 @@ class SearchStore:
         position = (int(target["order_time_us"]), int(target["order_time_us"]), str(target["event_key"]))
         before = self.connection.execute(before_sql, (session_id, generation_id, owner_id, *position, before_turns + 1)).fetchall()
         after = self.connection.execute(after_sql, (session_id, generation_id, owner_id, *position, after_turns)).fetchall()
-        context, truncated, anchor_seen = _bounded_recall_context(
+        context_rows = self._hydrator.hydrate(
             [dict(row) for row in reversed(before)] + [dict(row) for row in after],
+            byte_budget=max_content_bytes * (before_turns + after_turns + 1),
+        )
+        context, truncated, anchor_seen = _bounded_recall_context(
+            context_rows,
             max_content_bytes=max_content_bytes,
             anchor_event_id=int(target["search_event_id"]),
         )
@@ -2088,7 +2030,7 @@ class SearchStore:
                        MIN(e.order_time_us) AS first_event_us,
                        MAX(e.order_time_us) AS last_event_us,
                        MIN(CASE
-                           WHEN e.role IN ('user', 'assistant') AND e.content_text IS NOT NULL
+                            WHEN e.role IN ('user', 'assistant')
                                 AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
                                 AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
                                 AND (e.role != 'user' OR (e.title_eligible = 1
@@ -2096,7 +2038,7 @@ class SearchStore:
                            THEN e.order_time_us
                        END) AS first_message_us,
                        SUM(CASE
-                           WHEN e.role IN ('user', 'assistant') AND e.content_text IS NOT NULL
+                            WHEN e.role IN ('user', 'assistant')
                                 AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
                                 AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
                                 AND (e.role != 'user' OR (e.title_eligible = 1
@@ -2162,7 +2104,7 @@ class SearchStore:
         cursor_values = _event_cursor_values(cursor)
         rows = self.connection.execute(
             """
-            SELECT e.session_id, e.role, e.content_text, e.order_time_us,
+            SELECT e.session_id, e.role, e.source_object_id, e.record_ordinal, e.order_time_us,
                    e.machine_id, e.provider, e.opaque_source_id, e.source_epoch,
                    e.source_position, e.event_subordinal, e.event_key,
                    s.indexed_through, s.generation_id
@@ -2176,7 +2118,6 @@ class SearchStore:
             WHERE s.owner_id = ?
               AND e.order_time_us >= ? AND e.order_time_us < ?
               AND e.role IN ('user', 'assistant')
-              AND e.content_text IS NOT NULL
               AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
               AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
               AND (e.role != 'user' OR (e.title_eligible = 1
@@ -2209,8 +2150,7 @@ class SearchStore:
             ),
         ).fetchall()
         normalized_rows = []
-        for row in rows:
-            item = dict(row)
+        for item in self._hydrator.hydrate([dict(row) for row in rows], byte_budget=_WORKLOG_PAGE_BYTES * 2):
             item["content_text"] = _bounded_worklog_content(str(item["content_text"]))
             normalized_rows.append(item)
         return _bounded_worklog_page(normalized_rows, limit=limit, cursor_builder=_event_cursor)
@@ -2223,18 +2163,28 @@ class SearchStore:
                 "session_index",
                 "searchable_events",
                 "projection_membership",
-                "events",
                 "indexed_objects",
                 "episode_embeddings",
                 "embedding_publications",
             ):
                 cursor = self.connection.execute(f"DELETE FROM {table} WHERE session_id = ?", (session_id,))
                 changed = changed or cursor.rowcount > 0
+            changed = self._delete_events("session_id = ?", (session_id,)) > 0 or changed
             self.connection.execute("COMMIT")
         except BaseException:
             self.connection.execute("ROLLBACK")
             raise
         return {"deleted": True, "changed": changed}
+
+    def _delete_events(self, predicate: str, params: tuple[object, ...]) -> int:
+        """Keep contentless FTS postings in lockstep with event deletion."""
+
+        event_ids = [int(row[0]) for row in self.connection.execute(f"SELECT id FROM events WHERE {predicate}", params)]
+        for event_id in event_ids:
+            self.connection.execute("DELETE FROM events_fts WHERE rowid = ?", (event_id,))
+        if event_ids:
+            self.connection.execute(f"DELETE FROM events WHERE {predicate}", params)
+        return len(event_ids)
 
     def reclassify_session_origin(
         self,
@@ -2404,6 +2354,15 @@ def _fts_query(raw: str) -> str:
     if len(tokens) > 1 and (explicitly_quoted or compact_identifier):
         return f'"{normalized}"'
     return normalized
+
+
+def _query_excerpt(value: object, query: str, *, limit: int = 240) -> str | None:
+    if not isinstance(value, str):
+        return None
+    match = re.search(re.escape(query.strip()), value, flags=re.IGNORECASE)
+    start = max(0, (match.start() if match else 0) - limit // 2)
+    end = min(len(value), start + limit)
+    return ("… " if start else "") + value[start:end] + (" …" if end < len(value) else "")
 
 
 def _bounded_worklog_content(value: str) -> str:

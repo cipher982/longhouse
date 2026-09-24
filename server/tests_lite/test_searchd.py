@@ -360,6 +360,22 @@ def test_searchd_rebuilds_an_incompatible_disposable_store(tmp_path):
         rebuilt.close()
 
 
+def test_contentless_delete_fts_round_trips_phrase_near_and_bm25(tmp_path):
+    """The bootstrapped SQLite used by the image must support contentless-delete."""
+
+    connection = open_search_database(tmp_path / "search.db")
+    try:
+        connection.execute("INSERT INTO events_fts(rowid, content_text, tool_output_text) VALUES (1, 'alpha beta gamma', 'delta')")
+        connection.execute("INSERT INTO events_fts(rowid, content_text, tool_output_text) VALUES (2, 'alpha unrelated beta', 'epsilon')")
+        assert [tuple(row) for row in connection.execute("SELECT rowid FROM events_fts WHERE events_fts MATCH '\"alpha beta\"'")] == [(1,)]
+        assert connection.execute("SELECT rowid, bm25(events_fts) FROM events_fts WHERE events_fts MATCH 'NEAR(alpha beta, 1)'").fetchall()[0][0] == 1
+        connection.execute("DELETE FROM events_fts WHERE rowid = 1")
+        assert list(connection.execute("SELECT rowid FROM events_fts WHERE events_fts MATCH 'gamma'")) == []
+        assert [tuple(row) for row in connection.execute("SELECT rowid FROM events_fts WHERE events_fts MATCH 'epsilon'")] == [(2,)]
+    finally:
+        connection.close()
+
+
 def test_nullable_episode_column_is_added_without_discarding_the_store(tmp_path):
     """Adding a nullable locator must not cost a full re-index and re-embed.
 
