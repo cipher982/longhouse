@@ -219,7 +219,9 @@ jobs:
           # verify after the fact -- hosted live QA is dispatched below -- and
           # must not hold a deploy: on 2026-09-24 an unrelated E2E red stalled
           # this gate for 30m41s and then failed it with no runtime mutation.
-          required_jobs: Backend tests,Engine tests,Frontend + runner tests
+          # If path detection fails, filtered suites can be skipped. That is
+          # unknown coverage, never a qualified image.
+          required_jobs: Changed paths,Backend tests,Engine tests,Frontend + runner tests
           ignored_failure_jobs: Core E2E tests,Accessibility E2E tests,Model smoke tests,OSS onboarding smoke
 
       - name: Wait for full CI gate (temporary opt-in)
@@ -229,7 +231,7 @@ jobs:
           head_sha: ${{ steps.meta.outputs.runtime_image_tag }}
           github_token: ${{ github.token }}
           event: ""
-          required_jobs: Backend tests,Engine tests,Core E2E tests,Accessibility E2E tests,CLI wheel packaging
+          required_jobs: Changed paths,Backend tests,Engine tests,Core E2E tests,Accessibility E2E tests,CLI wheel packaging
           ignored_failure_jobs: OSS onboarding smoke
 
       - name: Wait for exact runtime image publication
