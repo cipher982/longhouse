@@ -22,6 +22,7 @@ os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
 
 import zerg.dependencies.agents_auth as agents_auth_deps
 import zerg.dependencies.auth as auth_deps
+import zerg.routers.timeline as timeline_router
 from tests_lite.live_catalog_harness import LiveCatalog
 from tests_lite.live_catalog_harness import live_catalog  # noqa: F401
 from tests_lite.live_catalog_harness import live_catalog_client  # noqa: F401
@@ -198,6 +199,51 @@ def test_timeline_sessions_accept_browser_session_cookie(live_catalog, live_cata
     assert payload["sessions"][0]["head"]["project"] == "timeline-auth"
     assert payload["sessions"][0]["detail"]["project"] == "timeline-auth"
     assert "catalog_list;dur=" in response.headers["server-timing"]
+
+
+def test_timeline_sessions_include_active_history_import(live_catalog, live_catalog_client, monkeypatch):  # noqa: F811
+    owner = live_catalog.create_user(OWNER_EMAIL)
+    live_catalog.commit_session(owner_id=owner, device_id="cinder", project="timeline-auth")
+    _set_browser_cookie(live_catalog_client, live_catalog, owner_id=owner)
+    monkeypatch.setattr(
+        timeline_router,
+        "machine_heartbeats",
+        lambda **_kwargs: {
+            "heartbeats": [
+                {
+                    "device_id": "cinder",
+                    "received_at": "2026-09-24T12:00:00Z",
+                    "raw_json": '{"history_import":{"state":"importing","inventory":{"schema_version":1,"generation":1,"content_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","observed_at":"2026-09-24T12:00:00Z","scan_duration_ms":0,"scan_error_count":0,"source_count":0,"source_bytes":0,"wal_bytes":0,"footprint_bytes":0,"providers":[]}}}',
+                }
+            ]
+        },
+    )
+
+    response = live_catalog_client.get("/timeline/sessions")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["history_imports"] == [
+        {
+            "device_id": "cinder",
+            "history_import": {
+                "state": "importing",
+                "inventory": {
+                    "schema_version": 1,
+                    "generation": 1,
+                    "content_sha256": "a" * 64,
+                    "observed_at": "2026-09-24T12:00:00Z",
+                    "scan_duration_ms": 0,
+                    "scan_error_count": 0,
+                    "source_count": 0,
+                    "source_bytes": 0,
+                    "wal_bytes": 0,
+                    "footprint_bytes": 0,
+                    "providers": [],
+                },
+                "progress": None,
+            },
+        }
+    ]
 
 
 def test_timeline_session_events_anchor_tail_accepts_browser_session_cookie(live_catalog, live_catalog_client):  # noqa: F811

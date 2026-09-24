@@ -44,8 +44,10 @@ from zerg.schemas.machines import MachineDirectoryEntry
 from zerg.schemas.machines import MachineDirectoryResponse
 from zerg.schemas.machines import WorkspaceSuggestion
 from zerg.schemas.machines import WorkspaceSuggestionsResponse
+from zerg.services.agent_heartbeat_health import machine_transport_health_from_catalog_rows
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import enrolled_machines
+from zerg.services.catalog_read_gateway import machine_heartbeats
 from zerg.services.catalog_read_gateway import machine_workspaces
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.live_catalog_timeline import list_live_catalog_sessions
@@ -81,6 +83,7 @@ from zerg.services.session_views import SessionTimelineVisibilityResponse
 from zerg.services.session_workspace_revision import load_session_workspace_revision
 from zerg.services.storage_v2_export import build_storage_v2_raw_export
 from zerg.services.storage_v2_workspace import build_storage_v2_workspace
+from zerg.services.timeline_session_listing import TimelineHistoryImportResponse
 from zerg.services.timeline_session_listing import TimelineSessionCardResponse
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.timeline_session_listing import TimelineSessionsListResponse
@@ -101,6 +104,27 @@ timeline_stream_router = APIRouter(
 )
 
 _SEARCH_RESULT_HYDRATION_BATCH_SIZE = 20
+_ACTIVE_HISTORY_IMPORT_STATES = frozenset({"importing", "paused", "backpressured", "blocked_source", "offline"})
+
+
+def _active_history_imports(*, owner_id: int, device_id: str | None) -> list[TimelineHistoryImportResponse]:
+    # The import notice is optional: a heartbeat read failure must not fail the timeline.
+    try:
+        payload = machine_heartbeats(
+            owner_id=owner_id,
+            device_id=device_id,
+            recent_after=None,
+            limit=100,
+        )
+    except CatalogReadError as exc:
+        logger.warning("timeline history import notice unavailable: %s", exc.code)
+        return []
+    summaries, _total = machine_transport_health_from_catalog_rows(payload.get("heartbeats", []), limit=100)
+    return [
+        TimelineHistoryImportResponse(device_id=summary.device_id, history_import=summary.history_import)
+        for summary in summaries
+        if summary.history_import.state in _ACTIVE_HISTORY_IMPORT_STATES
+    ]
 
 
 async def _search_storage_v2_timeline(
@@ -402,6 +426,15 @@ async def list_timeline_sessions(
                     params=params,
                     owner_id=int(current_user.owner_id),
                 )
+            result = result.model_copy(
+                update={
+                    "history_imports": await asyncio.to_thread(
+                        _active_history_imports,
+                        owner_id=int(current_user.owner_id),
+                        device_id=device_id,
+                    )
+                }
+            )
         timing.apply(response)
         return result
     except CatalogReadError as exc:

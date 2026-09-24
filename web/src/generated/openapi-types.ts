@@ -9945,6 +9945,12 @@ export interface components {
              */
             border_tone: string;
         };
+        /** TimelineHistoryImportResponse */
+        TimelineHistoryImportResponse: {
+            /** Device Id */
+            device_id: string;
+            history_import: components["schemas"]["HistoryImportSnapshot-Output"];
+        };
         /** TimelineSessionCardResponse */
         TimelineSessionCardResponse: {
             /**
@@ -9991,6 +9997,8 @@ export interface components {
             lanes?: ("lexical" | "dense")[];
             /** Degraded */
             degraded?: components["schemas"]["MachineSearchLaneFailure"][];
+            /** History Imports */
+            history_imports?: components["schemas"]["TimelineHistoryImportResponse"][];
         };
         /** TimelineStatusPresentationResponse */
         TimelineStatusPresentationResponse: {

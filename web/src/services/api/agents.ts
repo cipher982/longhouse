@@ -318,6 +318,24 @@ export interface TimelineSessionsListResponse {
   query_grouping_mode?: "grouped_results";
   query_grouping_has_more?: boolean;
   query_grouping_source_count?: number;
+  /** Machines whose first history import is still running. */
+  history_imports?: TimelineHistoryImport[];
+}
+
+export interface TimelineHistoryImport {
+  device_id: string;
+  history_import: {
+    state: string;
+    progress?: {
+      providers: Array<{
+        unit: "bytes" | "records" | "unknown";
+        observed_units: number;
+        acknowledged_units: number;
+        exact_total: boolean;
+        inventory_coverage_complete: boolean;
+      }>;
+    } | null;
+  };
 }
 
 export interface AgentSessionThreadResponse {

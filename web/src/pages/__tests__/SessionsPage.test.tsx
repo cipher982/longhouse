@@ -382,6 +382,62 @@ describe("SessionsPage", () => {
     });
   });
 
+  it("shows import progress only with an exact byte denominator", () => {
+    const importing = (exact: boolean) => ({
+      device_id: "laptop",
+      history_import: {
+        state: "importing",
+        progress: {
+          providers: [
+            {
+              unit: "bytes" as const,
+              observed_units: 800,
+              acknowledged_units: 344,
+              exact_total: exact,
+              inventory_coverage_complete: true,
+            },
+          ],
+        },
+      },
+    });
+    mockUseAgentSessions.mockReturnValue({
+      data: { ...makeSessionsResponse(), history_imports: [importing(true)] },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    const { unmount } = renderSessionsPage();
+    expect(screen.getByText(/Importing history/)).toHaveTextContent(
+      "Importing history (43%) · sessions appear as they arrive",
+    );
+    unmount();
+
+    mockUseAgentSessions.mockReturnValue({
+      data: { ...makeSessionsResponse(), history_imports: [importing(false)] },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    renderSessionsPage();
+    expect(screen.getByText(/Importing history/)).toHaveTextContent(
+      "Importing history · sessions appear as they arrive",
+    );
+  });
+
+  it("does not show import progress without an active import", () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        ...makeSessionsResponse(),
+        history_imports: [{ device_id: "laptop", history_import: { state: "current" } }],
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    renderSessionsPage();
+    expect(screen.queryByText(/Importing history/)).not.toBeInTheDocument();
+  });
+
   it("passes active provider filters into recall search", async () => {
     const user = userEvent.setup();
     renderSessionsPage("/timeline?project=zerg&provider=codex");

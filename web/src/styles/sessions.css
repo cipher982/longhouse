@@ -90,6 +90,11 @@
     text-decoration: underline;
   }
 
+  .sessions-history-import {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+  }
+
   /* ---------------------------------------------------------------------------
    * Hero Empty State (first-run, viewport-centered)
    * ---------------------------------------------------------------------------*/

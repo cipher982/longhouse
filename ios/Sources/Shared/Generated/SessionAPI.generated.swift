@@ -14,6 +14,68 @@ struct APIMachineSearchLaneFailure: Codable, Hashable, Sendable {
     let reason: String?
 }
 
+struct APIProviderHistoryProgress: Codable, Hashable, Sendable {
+    let provider: String
+    let unit: String
+    let inventorySourceCount: Int
+    let inventorySourceBytes: Int
+    let trackedSourceCount: Int
+    let completeSourceCount: Int
+    let observedUnits: Int
+    let acknowledgedUnits: Int
+    let remainingUnits: Int
+    let exactTotal: Bool
+    let inventoryCoverageComplete: Bool
+}
+
+struct APIHistoryImportProgress: Codable, Hashable, Sendable {
+    let acknowledgedSourceBytes: Int
+    let remainingSourceBytes: Int
+    let acknowledgedRecords: Int
+    let remainingRecords: Int
+    let pendingOutboxCount: Int
+    let pendingOutboxBytes: Int
+    let blockedSourceCount: Int
+    let blockedBytes: Int
+    let latestBlockKind: String?
+    let providers: [APIProviderHistoryProgress]?
+}
+
+struct APIProviderSourceInventory: Codable, Hashable, Sendable {
+    let provider: String
+    let sourceCount: Int
+    let sourceBytes: Int
+    let walBytes: Int
+    let footprintBytes: Int
+    let oldestModifiedAtMs: Int?
+    let newestModifiedAtMs: Int?
+}
+
+struct APISourceInventory: Codable, Hashable, Sendable {
+    let schemaVersion: Int
+    let generation: Int
+    let contentSha256: String
+    let observedAt: String
+    let scanDurationMs: Int
+    let scanErrorCount: Int
+    let sourceCount: Int
+    let sourceBytes: Int
+    let walBytes: Int
+    let footprintBytes: Int
+    let providers: [APIProviderSourceInventory]?
+}
+
+struct APIHistoryImportSnapshot-Output: Codable, Hashable, Sendable {
+    let state: String
+    let inventory: APISourceInventory?
+    let progress: APIHistoryImportProgress?
+}
+
+struct APITimelineHistoryImportResponse: Codable, Hashable, Sendable {
+    let deviceId: String
+    let historyImport: APIHistoryImportSnapshot-Output
+}
+
 struct APILastTurnResponse: Codable, Hashable, Sendable {
     let durationMs: Int
     let endedAt: String
@@ -462,6 +524,7 @@ struct APITimelineSessionsListResponse: Codable, Hashable, Sendable {
     let hasRealSessions: Bool?
     let lanes: [String]?
     let degraded: [APIMachineSearchLaneFailure]?
+    let historyImports: [APITimelineHistoryImportResponse]?
 }
 
 struct APISessionThreadResponse: Codable, Hashable, Sendable {

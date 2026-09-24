@@ -153,6 +153,21 @@ type TimelineSessionsListResponse = {
   sessions: TimelineSessionCard[];
   total: number;
   has_real_sessions: boolean;
+  history_imports?: Array<{
+    device_id: string;
+    history_import: {
+      state: string;
+      progress?: {
+        providers: Array<{
+          unit: "bytes" | "records" | "unknown";
+          observed_units: number;
+          acknowledged_units: number;
+          exact_total: boolean;
+          inventory_coverage_complete: boolean;
+        }>;
+      };
+    };
+  }>;
 };
 
 type AgentFiltersResponse = {
@@ -1060,6 +1075,25 @@ export function buildTimelineCardStressFixture(): {
       sessions,
       total: sessions.length,
       has_real_sessions: true,
+      history_imports: [
+        {
+          device_id: "device-cinder",
+          history_import: {
+            state: "importing",
+            progress: {
+              providers: [
+                {
+                  unit: "bytes",
+                  observed_units: 800,
+                  acknowledged_units: 344,
+                  exact_total: true,
+                  inventory_coverage_complete: true,
+                },
+              ],
+            },
+          },
+        },
+      ],
     },
     filters: {
       projects: ["zerg", "demo-vpn", "project", "longhouse-mobile", "photo-restore-lab"],

@@ -23,6 +23,7 @@ import { useReadinessFlag } from "../lib/readiness-contract";
 import {
   type AgentSessionFilters,
   fetchAgentSessionWorkspace,
+  type TimelineHistoryImport,
   type TimelineSessionCard,
 } from "../services/api/agents";
 import {
@@ -98,6 +99,27 @@ function useRelativeTimeClock(enabled: boolean): number {
   }, [enabled]);
 
   return nowMs;
+}
+
+/**
+ * A machine's first history import is still running. Show a percentage only
+ * when every provider reports an exact, fully inventoried byte total.
+ */
+function HistoryImportNotice({ imports }: { imports: TimelineHistoryImport[] | undefined }) {
+  const active = imports?.find((item) => item.history_import.state === "importing");
+  if (!active) return null;
+  const providers = active.history_import.progress?.providers ?? [];
+  const exact =
+    providers.length > 0 &&
+    providers.every((p) => p.unit === "bytes" && p.exact_total && p.inventory_coverage_complete);
+  const total = providers.reduce((sum, p) => sum + p.observed_units, 0);
+  const done = providers.reduce((sum, p) => sum + p.acknowledged_units, 0);
+  const percent = exact && total > 0 ? Math.floor((done / total) * 100) : null;
+  return (
+    <div className="sessions-history-import" role="status">
+      Importing history{percent !== null ? ` (${percent}%)` : ""} · sessions appear as they arrive
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -535,6 +557,8 @@ export default function SessionsPage() {
             Meaning search is unavailable, so these results are keyword matches.
           </div>
         )}
+
+        <HistoryImportNotice imports={data?.history_imports} />
 
         {/* Compact Toolbar */}
         <div className="sessions-toolbar">

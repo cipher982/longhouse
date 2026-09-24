@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import Field
 
+from zerg.schemas.history_import import HistoryImportSnapshot
 from zerg.services.session_views import MachineSearchLaneFailure
 from zerg.services.session_views import SessionResponse
 from zerg.utils.time import UTCBaseModel
@@ -22,6 +23,11 @@ class TimelineSessionCardResponse(UTCBaseModel):
     head_origin_label: str | None = Field(None, description="Origin label for the current writable head")
 
 
+class TimelineHistoryImportResponse(UTCBaseModel):
+    device_id: str
+    history_import: HistoryImportSnapshot
+
+
 class TimelineSessionsListResponse(UTCBaseModel):
     sessions: list[TimelineSessionCardResponse]
     total: int
@@ -32,6 +38,7 @@ class TimelineSessionsListResponse(UTCBaseModel):
     # meaning" label keeps making a promise the response did not keep.
     lanes: list[Literal["lexical", "dense"]] = Field(default_factory=list)
     degraded: list[MachineSearchLaneFailure] = Field(default_factory=list)
+    history_imports: list[TimelineHistoryImportResponse] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)
