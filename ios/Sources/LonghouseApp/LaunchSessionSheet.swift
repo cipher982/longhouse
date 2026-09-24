@@ -585,6 +585,8 @@ private struct ProviderSignInRow: View {
     let refreshMachines: () async -> Void
 
     @State private var attempt: ProviderSignInStart?
+    /// Previews only: render a row with a sign-in already in progress.
+    var previewAttempt: ProviderSignInStart?
     @State private var busy = false
     @State private var errorText: String?
     @State private var code = ""
@@ -658,6 +660,7 @@ private struct ProviderSignInRow: View {
         .padding(.horizontal, 16)
         .padding(.bottom, 10)
         .accessibilityIdentifier("launch-unavailable-provider-\(item.provider)")
+        .onAppear { if attempt == nil, let previewAttempt { attempt = previewAttempt } }
         .task(id: attempt?.attemptId) {
             guard attempt != nil else { return }
             // Poll until the machine reports the provider ready (this row then
@@ -1097,6 +1100,40 @@ private func previewMachine(
             unavailableProviders: unavailableProviders
         )
     )
+}
+
+#Preview("Sign-in relay · device code and paste-back") {
+    ScrollView {
+        VStack(spacing: 16) {
+            ProviderSignInRow(
+                deviceId: "workbench",
+                machineName: "workbench",
+                item: MachineLaunchUnavailableProvider(provider: "codex", reason: "not_authenticated", remediation: "Sign in to codex on this machine"),
+                displayName: "Codex",
+                canRelay: true,
+                makeAPI: { nil },
+                refreshMachines: {},
+                previewAttempt: try? JSONDecoder().decode(ProviderSignInStart.self, from: Data("""
+                {"attempt_id":"a","provider":"codex","flow":"device_code","verification_url":"https://auth.openai.com/codex/device","user_code":"VWSN-8F9KZ","prerequisite":"Enable device code authorization in ChatGPT > Settings > Security first.","expires_in_secs":900}
+                """.utf8))
+            )
+            ProviderSignInRow(
+                deviceId: "workbench",
+                machineName: "workbench",
+                item: MachineLaunchUnavailableProvider(provider: "claude", reason: "not_authenticated", remediation: "Sign in to claude on this machine"),
+                displayName: "Claude",
+                canRelay: true,
+                makeAPI: { nil },
+                refreshMachines: {},
+                previewAttempt: try? JSONDecoder().decode(ProviderSignInStart.self, from: Data("""
+                {"attempt_id":"b","provider":"claude","flow":"paste_code","verification_url":"https://claude.com/cai/oauth/authorize","user_code":null,"prerequisite":null,"expires_in_secs":900}
+                """.utf8))
+            )
+        }
+        .padding(.vertical, 20)
+    }
+    .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Launch session · sign-in required") {
