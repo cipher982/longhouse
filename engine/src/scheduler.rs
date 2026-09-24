@@ -19,6 +19,7 @@ pub enum WorkPriority {
 
 const FAIR_SEQUENCE: [WorkPriority; 3] =
     [WorkPriority::Live, WorkPriority::Retry, WorkPriority::Scan];
+const RECENT_SCAN_WINDOW_MS: i64 = 7 * 24 * 60 * 60 * 1_000;
 
 /// Per-priority concurrency cap for Live work. Live can always burst up to
 /// this number even when backlog work is hot.
@@ -344,9 +345,7 @@ struct InFlightJob {
 }
 
 /// FIFO within each provider, round-robin across whichever providers currently
-/// have work. Discovery already supplies each provider's paths newest-first;
-/// this queue preserves that order without letting a large provider hide a
-/// smaller one behind thousands of files.
+/// have work.
 #[derive(Default)]
 struct ProviderFairQueue {
     queues: BTreeMap<&'static str, VecDeque<PathBuf>>,
@@ -417,7 +416,8 @@ pub struct PathScheduler {
     fairness_cursor: usize,
     ready_live: VecDeque<PathBuf>,
     ready_retry: ProviderFairQueue,
-    ready_scan: ProviderFairQueue,
+    ready_scan_recent: ProviderFairQueue,
+    ready_scan_old: ProviderFairQueue,
     ready_jobs: HashMap<PathBuf, ReadyJob>,
     in_flight: HashMap<PathBuf, InFlightJob>,
     limiter: Arc<AdaptiveLimiter>,
@@ -435,7 +435,8 @@ impl PathScheduler {
             fairness_cursor: 0,
             ready_live: VecDeque::new(),
             ready_retry: ProviderFairQueue::default(),
-            ready_scan: ProviderFairQueue::default(),
+            ready_scan_recent: ProviderFairQueue::default(),
+            ready_scan_old: ProviderFairQueue::default(),
             ready_jobs: HashMap::new(),
             in_flight: HashMap::new(),
             limiter,
@@ -661,7 +662,7 @@ impl PathScheduler {
                 estimated_bytes,
             );
             if prioritize_opencode_scan_continuation {
-                self.ready_scan
+                self.scan_queue_for(path)
                     .prioritize_within_provider(in_flight.provider, path);
             }
         }
@@ -742,7 +743,10 @@ impl PathScheduler {
             let path = match expected_priority {
                 WorkPriority::Live => self.ready_live.pop_front(),
                 WorkPriority::Retry => self.ready_retry.pop_front(),
-                WorkPriority::Scan => self.ready_scan.pop_front(),
+                WorkPriority::Scan => self
+                    .ready_scan_recent
+                    .pop_front()
+                    .or_else(|| self.ready_scan_old.pop_front()),
             }?;
             let Some(ready) = self.ready_jobs.get(&path).cloned() else {
                 continue;
@@ -793,7 +797,7 @@ impl PathScheduler {
             }
             WorkPriority::Scan => {
                 let provider = self.ready_jobs[&path].provider;
-                self.ready_scan.push_back(provider, path);
+                self.scan_queue_for(&path).push_back(provider, path);
             }
         }
     }
@@ -802,7 +806,10 @@ impl PathScheduler {
         match priority {
             WorkPriority::Live => self.ready_live.retain(|candidate| candidate != path),
             WorkPriority::Retry => self.ready_retry.remove(provider, path),
-            WorkPriority::Scan => self.ready_scan.remove(provider, path),
+            WorkPriority::Scan => {
+                self.ready_scan_recent.remove(provider, path);
+                self.ready_scan_old.remove(provider, path);
+            }
         }
     }
 
@@ -860,6 +867,15 @@ impl PathScheduler {
             .values()
             .filter(|job| job.priority == priority)
             .count()
+    }
+
+    fn scan_queue_for(&mut self, path: &Path) -> &mut ProviderFairQueue {
+        let observed_at_ms = self.ready_jobs[path].observation.observed_at_ms;
+        if observed_at_ms >= now_ms().saturating_sub(RECENT_SCAN_WINDOW_MS) {
+            &mut self.ready_scan_recent
+        } else {
+            &mut self.ready_scan_old
+        }
     }
 }
 
@@ -1413,6 +1429,143 @@ mod tests {
             assert_eq!(job.path, expected);
             scheduler.complete(&job.path, None);
         }
+    }
+
+    #[test]
+    fn recent_scan_work_across_providers_precedes_old_scan_work() {
+        let mut scheduler = PathScheduler::new(16);
+        let old = now_ms() - RECENT_SCAN_WINDOW_MS - 1;
+        let recent_a = PathBuf::from("/tmp/recent-a.jsonl");
+        let recent_b = PathBuf::from("/tmp/recent-b.jsonl");
+        let old_a = PathBuf::from("/tmp/old-a.jsonl");
+
+        scheduler.enqueue_observed(old_a.clone(), "claude", WorkPriority::Scan, "scan", old);
+        scheduler.enqueue_observed(
+            recent_a.clone(),
+            "codex",
+            WorkPriority::Scan,
+            "scan",
+            now_ms(),
+        );
+        scheduler.enqueue_observed(
+            recent_b.clone(),
+            "codex",
+            WorkPriority::Scan,
+            "scan",
+            now_ms(),
+        );
+
+        for expected in [recent_a, recent_b, old_a] {
+            let job = scheduler.pop_launchable().unwrap();
+            assert_eq!(job.path, expected);
+            scheduler.complete(&job.path, None);
+        }
+    }
+
+    #[test]
+    fn recent_scan_work_round_robins_providers() {
+        let mut scheduler = PathScheduler::new(16);
+        let claude_a = PathBuf::from("/tmp/claude-a.jsonl");
+        let claude_b = PathBuf::from("/tmp/claude-b.jsonl");
+        let codex_a = PathBuf::from("/tmp/codex-a.jsonl");
+        let codex_b = PathBuf::from("/tmp/codex-b.jsonl");
+
+        for (path, provider) in [
+            (claude_a.clone(), "claude"),
+            (claude_b.clone(), "claude"),
+            (codex_a.clone(), "codex"),
+            (codex_b.clone(), "codex"),
+        ] {
+            scheduler.enqueue_observed(path, provider, WorkPriority::Scan, "scan", now_ms());
+        }
+
+        for expected in [claude_a, codex_a, claude_b, codex_b] {
+            let job = scheduler.pop_launchable().unwrap();
+            assert_eq!(job.path, expected);
+            scheduler.complete(&job.path, None);
+        }
+    }
+
+    #[test]
+    fn old_scan_work_drains_after_recent_work_is_empty() {
+        let mut scheduler = PathScheduler::new(16);
+        let old = PathBuf::from("/tmp/old.jsonl");
+        let recent = PathBuf::from("/tmp/recent.jsonl");
+
+        scheduler.enqueue_observed(
+            old.clone(),
+            "claude",
+            WorkPriority::Scan,
+            "scan",
+            now_ms() - RECENT_SCAN_WINDOW_MS - 1,
+        );
+        scheduler.enqueue_observed(
+            recent.clone(),
+            "codex",
+            WorkPriority::Scan,
+            "scan",
+            now_ms(),
+        );
+
+        let first = scheduler.pop_launchable().unwrap();
+        assert_eq!(first.path, recent);
+        scheduler.complete(&first.path, None);
+        assert_eq!(scheduler.pop_launchable().unwrap().path, old);
+    }
+
+    #[test]
+    fn live_work_preempts_recent_and_old_scan_work() {
+        let mut scheduler = PathScheduler::new(16);
+        scheduler.enqueue_observed(
+            PathBuf::from("/tmp/old.jsonl"),
+            "claude",
+            WorkPriority::Scan,
+            "scan",
+            now_ms() - RECENT_SCAN_WINDOW_MS - 1,
+        );
+        scheduler.enqueue_observed(
+            PathBuf::from("/tmp/recent.jsonl"),
+            "codex",
+            WorkPriority::Scan,
+            "scan",
+            now_ms(),
+        );
+        let live = PathBuf::from("/tmp/live.jsonl");
+        scheduler.enqueue(live.clone(), "claude", WorkPriority::Live);
+
+        let job = scheduler.pop_launchable().unwrap();
+        assert_eq!(job.path, live);
+        assert_eq!(job.priority, WorkPriority::Live);
+    }
+
+    #[test]
+    fn old_opencode_continuation_does_not_preempt_recent_scan_work() {
+        let mut scheduler = PathScheduler::new(16);
+        let old = PathBuf::from("/tmp/opencode.db");
+        let recent = PathBuf::from("/tmp/recent.jsonl");
+        let old_timestamp = now_ms() - RECENT_SCAN_WINDOW_MS - 1;
+
+        scheduler.enqueue_observed(
+            old.clone(),
+            "opencode",
+            WorkPriority::Scan,
+            "scan",
+            old_timestamp,
+        );
+        assert_eq!(scheduler.pop_launchable().unwrap().path, old);
+        scheduler.enqueue_observed(
+            recent.clone(),
+            "codex",
+            WorkPriority::Scan,
+            "scan",
+            now_ms(),
+        );
+        scheduler.complete(&old, Some(WorkPriority::Scan));
+
+        let first = scheduler.pop_launchable().unwrap();
+        assert_eq!(first.path, recent);
+        scheduler.complete(&first.path, None);
+        assert_eq!(scheduler.pop_launchable().unwrap().path, old);
     }
 
     #[test]

@@ -632,14 +632,11 @@ fn discover_recent_transcripts(
     }
 
     let mut transcripts: Vec<(PathBuf, &'static str)> = Vec::new();
-    for (path, provider_name) in discovery_scan.files {
-        if let Ok(meta) = path.metadata() {
-            if let Ok(mtime) = meta.modified() {
-                let mtime_utc = DateTime::<Utc>::from(mtime);
-                if now.signed_duration_since(mtime_utc) <= TRANSCRIPT_MTIME_WINDOW {
-                    transcripts.push((path, provider_name));
-                }
-            }
+    for file in discovery_scan.files {
+        let mtime_utc = DateTime::<Utc>::from_timestamp_millis(file.modified_at_ms)
+            .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
+        if now.signed_duration_since(mtime_utc) <= TRANSCRIPT_MTIME_WINDOW {
+            transcripts.push((file.path, file.provider));
         }
     }
     Ok(transcripts)

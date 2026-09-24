@@ -403,7 +403,7 @@ struct TranscriptWakeSignal {
 }
 
 struct DiscoveryTaskResult {
-    files: Vec<(PathBuf, &'static str)>,
+    files: Vec<discovery::DiscoveredFile>,
     inventory: crate::state::source_inventory::SourceInventoryObservation,
     enqueue_files: bool,
     priority: WorkPriority,
@@ -1460,7 +1460,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     Some(Ok(result)) => {
                         let reconciliation_paths = result
                             .enqueue_files
-                            .then(|| result.files.iter().map(|(path, _)| path.clone()).collect());
+                            .then(|| result.files.iter().map(|file| file.path.clone()).collect());
                         let previous_inventory_generation =
                             crate::state::source_inventory::load_inventory(&conn)
                                 .ok()
@@ -4003,15 +4003,20 @@ fn storage_v2_backpressure_retry_delay(priority: WorkPriority, retry_after: Dura
 
 fn enqueue_discovered_files(
     scheduler: &mut PathScheduler,
-    all_files: Vec<(PathBuf, &'static str)>,
+    all_files: Vec<discovery::DiscoveredFile>,
     priority: WorkPriority,
     deferred_retries: &mut HashMap<PathBuf, DeferredRetry>,
 ) -> usize {
     let source = discovery_observation_source(priority);
     let mut count = 0;
-    for (path, provider) in all_files {
-        if retry_admission_open(&path, deferred_retries) {
-            scheduler.enqueue_observed(path, provider, priority, source, now_ms());
+    for file in all_files {
+        if retry_admission_open(&file.path, deferred_retries) {
+            let observed_at_ms = if priority == WorkPriority::Scan {
+                file.modified_at_ms
+            } else {
+                now_ms()
+            };
+            scheduler.enqueue_observed(file.path, file.provider, priority, source, observed_at_ms);
             count += 1;
         }
     }
@@ -8217,7 +8222,11 @@ mod tests {
 
         let queued = enqueue_discovered_files(
             &mut scheduler,
-            vec![(path.clone(), "claude")],
+            vec![discovery::DiscoveredFile {
+                path: path.clone(),
+                provider: "claude",
+                modified_at_ms: now_ms(),
+            }],
             WorkPriority::Scan,
             &mut HashMap::new(),
         );

@@ -174,11 +174,22 @@ fn provider_candidates(
 ///
 /// Returns `(path, provider_name)` tuples sorted by modification time (newest first).
 pub fn discover_all_files(providers: &[ProviderConfig]) -> Vec<(PathBuf, &'static str)> {
-    discover_all_files_with_inventory(providers).files
+    discover_all_files_with_inventory(providers)
+        .files
+        .into_iter()
+        .map(|file| (file.path, file.provider))
+        .collect()
+}
+
+#[derive(Clone, Debug)]
+pub struct DiscoveredFile {
+    pub path: PathBuf,
+    pub provider: &'static str,
+    pub modified_at_ms: i64,
 }
 
 pub struct DiscoveryScan {
-    pub files: Vec<(PathBuf, &'static str)>,
+    pub files: Vec<DiscoveredFile>,
     pub inventory: SourceInventoryObservation,
 }
 
@@ -286,9 +297,9 @@ pub fn discover_all_files_with_inventory(providers: &[ProviderConfig]) -> Discov
         .cloned()
         .collect();
     let mut seen = BTreeSet::new();
-    let files = files
+    let mut files = files
         .into_iter()
-        .filter_map(|(path, provider, _modified)| {
+        .filter_map(|(path, provider, modified)| {
             let physical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
             if ambiguous_provider_paths.contains(&physical_path)
                 || ambiguous_provider_path(&path, providers)
@@ -297,9 +308,19 @@ pub fn discover_all_files_with_inventory(providers: &[ProviderConfig]) -> Discov
                 return None;
             }
             seen.insert((path.clone(), provider))
-                .then_some((path, provider))
+                .then_some(DiscoveredFile {
+                    path,
+                    provider,
+                    modified_at_ms: system_time_ms(modified),
+                })
         })
         .collect::<Vec<_>>();
+    files.sort_by(|left, right| {
+        right
+            .modified_at_ms
+            .cmp(&left.modified_at_ms)
+            .then_with(|| left.path.cmp(&right.path))
+    });
     let providers = inventory.into_values().collect::<Vec<_>>();
     let source_count = providers.iter().map(|item| item.source_count).sum();
     let source_bytes = providers.iter().map(|item| item.source_bytes).sum();
