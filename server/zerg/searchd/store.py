@@ -433,12 +433,19 @@ def open_search_read_database(path: Path) -> sqlite3.Connection:
     return connection
 
 
+# SQLite never shrinks a WAL on its own: after one reindex burst the dogfood
+# search.db-wal sat at 2.36 GB while holding 396 live frames (0.1%). With a
+# limit, the file is truncated back to it each time a checkpoint rewinds the log.
+WAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024
+
+
 def _connect(path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(path, timeout=5.0, isolation_level=None, check_same_thread=False)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA journal_mode=WAL")
     connection.execute("PRAGMA synchronous=NORMAL")
     connection.execute("PRAGMA busy_timeout=5000")
+    connection.execute(f"PRAGMA journal_size_limit={WAL_SIZE_LIMIT_BYTES}")
     return connection
 
 
