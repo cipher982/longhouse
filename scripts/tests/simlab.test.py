@@ -15,6 +15,11 @@ from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
+def _args(*argv: str) -> argparse.Namespace:
+    """Args from the real CLI, so a new option cannot break a test that predates it."""
+
+    return simlab.build_parser().parse_args(list(argv))
+
 spec = importlib.util.spec_from_file_location("simlab", ROOT / "scripts/qa/simlab.py")
 assert spec is not None and spec.loader is not None
 simlab = importlib.util.module_from_spec(spec)
@@ -144,7 +149,7 @@ class FailureArtifactTests(unittest.TestCase):
              patch.object(simlab, "app_log_text", return_value=raw_log), \
              patch.object(simlab, "server_projection", return_value=workspace()):
             with self.assertRaises(SystemExit) as exit_context:
-                simlab.cmd_run(argparse.Namespace(scenario=["timeout-case"], deploy=False))
+                simlab.cmd_run(_args("run", "timeout-case"))
         self.assertEqual(exit_context.exception.code, 2)
         summary = json.loads((scratch / "artifacts/summary.json").read_text())
         self.assertEqual(summary["status"], "fail")
@@ -198,11 +203,11 @@ class FailureArtifactTests(unittest.TestCase):
             state = {"scratch": str(self.root), "server_pid": child.pid,
                      "process_identities": {"server_pid": "different process start and command"}}
             simlab.save_state(state)
-            simlab.cmd_down(argparse.Namespace())
+            simlab.cmd_down(_args("down"))
             self.assertIsNone(child.poll(), "down signalled a process that did not belong to this run")
             state["process_identities"]["server_pid"] = identity
             simlab.save_state(state)
-            simlab.cmd_down(argparse.Namespace())
+            simlab.cmd_down(_args("down"))
             self.assertIsNotNone(child.wait(timeout=3), "down left its owned process running")
         finally:
             if child.poll() is None:
@@ -228,7 +233,7 @@ class FailureArtifactTests(unittest.TestCase):
             with patch.object(simlab, "Popen", side_effect=spawn_service), \
                  patch.object(simlab, "wait_for", side_effect=TimeoutError("runtime host health failed")):
                 with self.assertRaises(TimeoutError):
-                    simlab.cmd_up(argparse.Namespace(build=False, port=12345))
+                    simlab.cmd_up(_args("up", "--port", "12345"))
             self.assertEqual(len(children), 1)
             self.assertIsNotNone(children[0].poll(), "startup left its service running")
             summary = json.loads((self.run_dir / "summary.json").read_text())

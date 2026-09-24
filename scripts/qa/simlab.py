@@ -1453,7 +1453,14 @@ def cmd_run(args: argparse.Namespace) -> None:
 # --------------------------------------------------------------------------
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    """The CLI, exposed so tests can derive their args from it.
+
+    Building `argparse.Namespace(...)` by hand in a test passes only the options
+    that existed the day it was written: `--seed-corpus` landed on `up` and the
+    hand-rolled namespace then failed with an AttributeError inside cmd_up.
+    """
+
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -1489,8 +1496,11 @@ def main() -> None:
     run_parser.add_argument("scenario", nargs="*", metavar="SCENARIO", help=f"default: all; choices: {', '.join(SCENARIOS)}")
     run_parser.add_argument("--deploy", action="store_true", help="build and install the app before the first scenario")
     run_parser.set_defaults(func=cmd_run)
+    return parser
 
-    args = parser.parse_args()
+
+def main() -> None:
+    args = build_parser().parse_args()
     try:
         args.func(args)
     except Exception:
