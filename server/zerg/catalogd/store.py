@@ -6334,7 +6334,6 @@ class CatalogStore:
                 .select_from(storage_joined)
                 .where(*storage_where),
             ).subquery()
-            total = int(connection.execute(select(func.count()).select_from(candidates)).scalar_one())
             # Unread first, then current work, then transcript recency. A
             # session the served state calls open, or whose Console result
             # nobody has read, must never be paged out of the first window.
@@ -6342,20 +6341,26 @@ class CatalogStore:
             # that clock moves while the session does not, which is what made
             # the page rotate under a watcher. Clients keep doing their own
             # visual sort.
-            session_ids = [
-                str(value)
-                for value in connection.execute(
-                    select(candidates.c.session_id)
-                    .order_by(
-                        candidates.c.unread.desc(),
-                        candidates.c.open_now.desc(),
-                        candidates.c.order_at.desc(),
-                        candidates.c.session_id.desc(),
-                    )
-                    .limit(limit)
-                    .offset(offset)
-                ).scalars()
-            ]
+            # The total rides on the page query as a window over the whole
+            # candidate set. Counting separately evaluated every candidate's
+            # correlated predicates a second time: half the statement's cost on
+            # a real catalog. An empty page (offset past the end) still counts.
+            page = connection.execute(
+                select(candidates.c.session_id, func.count().over().label("total"))
+                .order_by(
+                    candidates.c.unread.desc(),
+                    candidates.c.open_now.desc(),
+                    candidates.c.order_at.desc(),
+                    candidates.c.session_id.desc(),
+                )
+                .limit(limit)
+                .offset(offset)
+            ).all()
+            session_ids = [str(row.session_id) for row in page]
+            if page:
+                total = int(page[0].total)
+            else:
+                total = int(connection.execute(select(func.count()).select_from(candidates)).scalar_one())
             facts = _assemble_session_facts(
                 connection,
                 session_ids=session_ids,
