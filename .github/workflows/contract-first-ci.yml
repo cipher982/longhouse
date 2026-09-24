@@ -41,7 +41,7 @@ jobs:
   # -----------------------------------------------------------------------
   changes:
     timeout-minutes: 10
-    runs-on: cube
+    runs-on: cube-fast
     name: "Changed paths"
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
