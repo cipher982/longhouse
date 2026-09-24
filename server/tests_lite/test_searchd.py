@@ -1232,6 +1232,103 @@ async def test_dense_refresh_coalesces_concurrent_writer_mutations(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_dense_refresh_applies_session_writes_without_full_reloads(tmp_path):
+    socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
+    socket_parent.mkdir(mode=0o700)
+    daemon = SearchDaemon(database_path=tmp_path / "search.db", socket_path=socket_parent / "s")
+    await daemon.start()
+    assert daemon._dense_index is not None
+    full_loads = 0
+    original_load = daemon._dense_index.load
+
+    def counted_load(connection):
+        nonlocal full_loads
+        full_loads += 1
+        original_load(connection)
+
+    daemon._dense_index.load = counted_load
+    try:
+        for session_id in (str(uuid4()) for _ in range(3)):
+            assert daemon._connection is not None
+            daemon._connection.execute(
+                """
+                INSERT INTO session_index(session_id, generation_id, owner_id, desired_revision, indexed_through,
+                    object_count, object_set_hash, event_count, user_messages, assistant_messages, tool_calls,
+                    is_sidechain, project, provider, environment, cwd, git_repo, started_at, published_at)
+                VALUES (?, 'generation', '42', 1, 1, 1, 'hash', 1, 1, 0, 0, 0,
+                    'longhouse', 'codex', 'local', NULL, NULL, '2026-08-01T00:00:00+00:00', '2026-08-01T00:00:00+00:00')
+                """,
+                (session_id,),
+            )
+            daemon._connection.execute(
+                "INSERT INTO embedding_publications VALUES (?, ?, ?, 'generation', 1, 1, '2026-08-01T00:00:00+00:00')",
+                (session_id, ACTIVE_EMBEDDING_MODEL, ACTIVE_EMBEDDING_DIMS),
+            )
+            daemon._connection.execute(
+                """INSERT INTO episode_embeddings(session_id, owner_id, generation_id, revision, episode_ordinal,
+                    event_index_start, event_index_end, start_order_time_us, model, dims, content_hash, embedding, updated_at)
+                    VALUES (?, '42', 'generation', 1, 0, 0, 1, 1, ?, ?, ?, ?, '2026-08-01T00:00:00+00:00')""",
+                (
+                    session_id,
+                    ACTIVE_EMBEDDING_MODEL,
+                    ACTIVE_EMBEDDING_DIMS,
+                    hashlib.sha256(session_id.encode()).hexdigest(),
+                    np.eye(1, ACTIVE_EMBEDDING_DIMS, 0, dtype=np.float32).tobytes(),
+                ),
+            )
+            daemon._connection.commit()
+            await daemon._run_with_dense_refresh(lambda session_id=session_id: {"written": 1}, session_id=session_id)
+
+        assert full_loads == 0
+        assert daemon._dense_index.size == 3
+    finally:
+        await daemon.close()
+        socket_parent.rmdir()
+
+
+@pytest.mark.asyncio
+async def test_failed_incremental_apply_stays_stale_until_one_full_reload_completes(tmp_path):
+    socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
+    socket_parent.mkdir(mode=0o700)
+    daemon = SearchDaemon(database_path=tmp_path / "search.db", socket_path=socket_parent / "s")
+    await daemon.start()
+    assert daemon._dense_index is not None
+    original_apply = daemon._dense_index.refresh_session
+    original_load = daemon._dense_index.load
+    entered_load = threading.Event()
+    release_load = threading.Event()
+    full_loads = 0
+
+    def failed_apply(*_args, **_kwargs):
+        raise RuntimeError("forced incremental failure")
+
+    def blocked_load(connection):
+        nonlocal full_loads
+        full_loads += 1
+        entered_load.set()
+        assert release_load.wait(timeout=2)
+        original_load(connection)
+
+    daemon._dense_index.refresh_session = failed_apply
+    daemon._dense_index.load = blocked_load
+    mutation = asyncio.create_task(daemon._run_with_dense_refresh(lambda: {"written": 1}, session_id="session"))
+    try:
+        assert await asyncio.to_thread(entered_load.wait, 1)
+        assert daemon._dense_index.coverage.stale is True
+        assert full_loads == 1
+        release_load.set()
+        assert await mutation == {"written": 1}
+        assert full_loads == 1
+        assert daemon._dense_index.coverage.stale is False
+    finally:
+        release_load.set()
+        daemon._dense_index.refresh_session = original_apply
+        await asyncio.gather(mutation, return_exceptions=True)
+        await daemon.close()
+        socket_parent.rmdir()
+
+
+@pytest.mark.asyncio
 async def test_dense_refresh_skips_partial_embedding_batches(tmp_path):
     socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
     socket_parent.mkdir(mode=0o700)

@@ -592,6 +592,7 @@ class SearchDaemon:
                 target_generation = self._dense_refresh_generation
                 assert self._dense_index is not None and self._connection is not None
                 retry_seconds = 0.05
+                full_reload_required = False
                 while True:
                     try:
                         sessions = {
@@ -602,7 +603,7 @@ class SearchDaemon:
                         # A prior integrity failure has no trustworthy counters
                         # to carry forward; recovery must validate the complete
                         # SQLite state before reopening the dense gate.
-                        if sessions and not self._dense_known_unservable:
+                        if sessions and not self._dense_known_unservable and not full_reload_required:
                             for session_id in sessions:
                                 await asyncio.get_running_loop().run_in_executor(
                                     self._executor,
@@ -623,6 +624,10 @@ class SearchDaemon:
                         # read/allocation failure cannot disable dense recall
                         # until an unrelated future mutation happens to arrive.
                         logger.exception("searchd dense snapshot refresh failed; retrying")
+                        # A session apply can have changed a mutable slab before
+                        # failing. Rebuild from SQLite rather than retrying a
+                        # partial delta against unknown in-memory state.
+                        full_reload_required = True
                         await asyncio.sleep(retry_seconds)
                         retry_seconds = min(1.0, retry_seconds * 2)
                 self._dense_refreshed_generation = target_generation

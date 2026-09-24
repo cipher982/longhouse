@@ -10,6 +10,7 @@ pin equivalence, not plausibility.
 from __future__ import annotations
 
 import os
+import threading
 
 import numpy as np
 import pytest
@@ -487,3 +488,114 @@ def test_identical_episode_text_collapses_to_one_result(tmp_path):
         assert hits[1]["session_id"] == "distinct"
     finally:
         connection.close()
+
+
+def _assert_same_resident_results(incremental, full, queries):
+    assert incremental.coverage == full.coverage
+    assert incremental.size == full.size
+    for query in queries:
+        incremental_hits = incremental.search(query, owner_id="42", limit=5)
+        full_hits = full.search(query, owner_id="42", limit=5)
+        assert [(hit["session_id"], hit["episode_ordinal"], hit["score"]) for hit in incremental_hits] == [
+            (hit["session_id"], hit["episode_ordinal"], hit["score"]) for hit in full_hits
+        ]
+
+
+def test_incremental_refresh_matches_full_load_after_mutations_and_restart(tmp_path):
+    index, connection = _index(
+        tmp_path,
+        [
+            ("keep", 0, [1, 0, 0, 0], "42", "zerg", "claude", "local", "2026-07-01"),
+            ("hidden", 0, [0, 1, 0, 0], "42", "zerg", "claude", "local", "2026-07-02"),
+            ("deleted", 0, [0, 0, 1, 0], "42", "zerg", "claude", "local", "2026-07-03"),
+        ],
+    )
+    queries = [_unit([1, 0, 0, 0]), _unit([0, 1, 0, 0]), _unit([0, 0, 1, 0])]
+    try:
+        # Append a published session, then re-embed an existing key.
+        _seed(connection, [("appended", 0, [0, 0, 0, 1], "42", "zerg", "claude", "local", "2026-07-04")])
+        index.refresh_session(connection, "appended")
+        connection.execute(
+            "UPDATE episode_embeddings SET embedding = ? WHERE session_id = 'keep'",
+            (_unit([0, 1, 0, 0]).tobytes(),),
+        )
+        connection.commit()
+        index.refresh_session(connection, "keep")
+
+        # Both filtering-only mutations must replace the session metadata.
+        connection.execute("UPDATE session_index SET user_hidden_from_timeline = 1 WHERE session_id = 'hidden'")
+        connection.execute("UPDATE session_index SET tombstoned = 1 WHERE session_id = 'appended'")
+        connection.execute("DELETE FROM episode_embeddings WHERE session_id = 'deleted'")
+        connection.execute("DELETE FROM embedding_publications WHERE session_id = 'deleted'")
+        connection.execute("DELETE FROM session_index WHERE session_id = 'deleted'")
+        connection.commit()
+        for session_id in ("hidden", "appended", "deleted"):
+            index.refresh_session(connection, session_id)
+
+        full = ResidentEpisodeIndex(model=MODEL, dims=DIMS)
+        full.load(connection)
+        _assert_same_resident_results(index, full, queries)
+        assert [hit["session_id"] for hit in index.search(queries[1], owner_id="42", limit=5)] == ["keep"]
+
+        connection.close()
+        connection = open_search_database(tmp_path / "search.db")
+        restarted = ResidentEpisodeIndex(model=MODEL, dims=DIMS)
+        restarted.load(connection)
+        _assert_same_resident_results(index, restarted, queries)
+    finally:
+        connection.close()
+
+
+def test_slot_reuse_after_delete_never_returns_the_old_session(tmp_path):
+    index, connection = _index(
+        tmp_path,
+        [("old", 0, [1, 0, 0, 0], "42", "zerg", "claude", "local", "2026-07-01")],
+    )
+    try:
+        connection.execute("DELETE FROM episode_embeddings WHERE session_id = 'old'")
+        connection.execute("DELETE FROM embedding_publications WHERE session_id = 'old'")
+        connection.execute("DELETE FROM session_index WHERE session_id = 'old'")
+        connection.commit()
+        index.refresh_session(connection, "old")
+        _seed(connection, [("new", 0, [1, 0, 0, 0], "42", "zerg", "claude", "local", "2026-07-02")])
+        index.refresh_session(connection, "new")
+
+        hits = index.search(_unit([1, 0, 0, 0]), owner_id="42", limit=5)
+        assert [hit["session_id"] for hit in hits] == ["new"]
+    finally:
+        connection.close()
+
+
+def test_concurrent_queries_only_observe_complete_before_or_after_slots(tmp_path):
+    index, connection = _index(
+        tmp_path,
+        [("old", 0, [1, 0, 0, 0], "42", "zerg", "claude", "local", "2026-07-01")],
+    )
+    query = _unit([1, 0, 0, 0])
+    observed: list[tuple[str, float]] = []
+    stop = threading.Event()
+
+    def reader() -> None:
+        while not stop.is_set():
+            for hit in index.search(query, owner_id="42", limit=1):
+                observed.append((str(hit["session_id"]), float(hit["score"])))
+
+    thread = threading.Thread(target=reader)
+    thread.start()
+    try:
+        connection.execute("DELETE FROM episode_embeddings WHERE session_id = 'old'")
+        connection.execute("DELETE FROM embedding_publications WHERE session_id = 'old'")
+        connection.execute("DELETE FROM session_index WHERE session_id = 'old'")
+        connection.commit()
+        index.refresh_session(connection, "old")
+        _seed(connection, [("new", 0, [0, 1, 0, 0], "42", "zerg", "claude", "local", "2026-07-02")])
+        index.refresh_session(connection, "new")
+    finally:
+        stop.set()
+        thread.join(timeout=1)
+        connection.close()
+
+    # Every returned pair belongs to a complete snapshot, never old metadata
+    # paired with a reused slot's vector.
+    assert observed
+    assert set(observed) <= {("old", 1.0), ("new", 0.0)}
