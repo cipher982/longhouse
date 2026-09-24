@@ -101,4 +101,7 @@ connection recovery are separate proof obligations.
 ## Flake Policy
 - Keep core E2E at retries=0. If a CI failure passes on rerun with no code
   diff, quarantine or move that test out of the blocking lane the same day and
-  leave a tracking issue; do not normalize red-but-ignored CI.
+  leave a tracking issue; do not normalize red-but-ignored CI. Core E2E no longer
+  gates a *runtime deploy* (a deploy waits on backend, engine and frontend+runner,
+  and the deploy gate warns about E2E instead), but a red E2E is still a red CI run
+  and still owes that same-day decision.
