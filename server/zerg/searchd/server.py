@@ -27,6 +27,7 @@ from zerg.catalogd.protocol import write_frame
 from zerg.embedding_space import ACTIVE_EMBEDDING_DIMS
 from zerg.embedding_space import ACTIVE_EMBEDDING_MODEL
 from zerg.searchd.dense_index import ResidentEpisodeIndex
+from zerg.searchd.dense_index import ResidentIndexIntegrityError
 from zerg.searchd.store import SearchStore
 from zerg.searchd.store import WorklogPageTooLarge
 from zerg.searchd.store import WorklogSnapshotError
@@ -360,7 +361,7 @@ class SearchDaemon:
                 return self._result(
                     request,
                     {
-                        "results": self._dense_index.search(query, **params),
+                        "results": self._dense_index.search(query, require_integrity=True, **params),
                         "coverage": self._dense_index.coverage.as_dict(),
                         **(self._store_identity or {}),
                     },
@@ -510,6 +511,14 @@ class SearchDaemon:
                 "the active embedding corpus is incomplete",
                 details=details,
             )
+        except ResidentIndexIntegrityError:
+            details = self._dense_index.coverage.as_dict() if self._dense_index is not None else None
+            return self._error(
+                request,
+                "embedding_coverage_incomplete",
+                "the active embedding corpus is incomplete",
+                details=details,
+            )
         except Exception:
             # Log the method and traceback. Returning a bare "internal" with no
             # record meant every searchd fault looked identical from the outside
@@ -595,15 +604,14 @@ class SearchDaemon:
                 full_reload_required = False
                 while True:
                     try:
-                        sessions = {
-                            session_id
-                            for generation, session_id, _ in self._dense_refresh_waiters
-                            if generation <= target_generation and session_id is not None
-                        }
+                        batch_waiters = [
+                            session_id for generation, session_id, _ in self._dense_refresh_waiters if generation <= target_generation
+                        ]
+                        sessions = {session_id for session_id in batch_waiters if session_id is not None}
                         # A prior integrity failure has no trustworthy counters
                         # to carry forward; recovery must validate the complete
                         # SQLite state before reopening the dense gate.
-                        if sessions and not self._dense_known_unservable and not full_reload_required:
+                        if sessions and None not in batch_waiters and not self._dense_known_unservable and not full_reload_required:
                             for session_id in sessions:
                                 await asyncio.get_running_loop().run_in_executor(
                                     self._executor,

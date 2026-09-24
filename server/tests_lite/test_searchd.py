@@ -1232,6 +1232,37 @@ async def test_dense_refresh_coalesces_concurrent_writer_mutations(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_dense_refresh_coalesced_unscoped_mutation_uses_one_full_load(tmp_path):
+    socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
+    socket_parent.mkdir(mode=0o700)
+    daemon = SearchDaemon(database_path=tmp_path / "search.db", socket_path=socket_parent / "s")
+    await daemon.start()
+    assert daemon._dense_index is not None
+    original_load = daemon._dense_index.load
+    full_loads = 0
+
+    def counted_load(connection):
+        nonlocal full_loads
+        full_loads += 1
+        original_load(connection)
+
+    def unexpected_incremental(*_args, **_kwargs):
+        raise AssertionError("unscoped coalesced batch must not incrementally refresh sessions")
+
+    daemon._dense_index.load = counted_load
+    daemon._dense_index.refresh_session = unexpected_incremental
+    try:
+        await asyncio.gather(
+            daemon._run_with_dense_refresh(lambda **_kwargs: {"written": 1}, session_id=str(uuid4())),
+            daemon._run_with_dense_refresh(lambda: {"reset": True}),
+        )
+        assert full_loads == 1
+    finally:
+        await daemon.close()
+        socket_parent.rmdir()
+
+
+@pytest.mark.asyncio
 async def test_dense_refresh_applies_session_writes_without_full_reloads(tmp_path):
     socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
     socket_parent.mkdir(mode=0o700)

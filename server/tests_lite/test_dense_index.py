@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import threading
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -19,6 +20,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
 from zerg.searchd.dense_index import ResidentEpisodeIndex
+from zerg.searchd.dense_index import ResidentIndexIntegrityError
 from zerg.searchd.store import SearchStore
 from zerg.searchd.store import open_search_database
 
@@ -562,6 +564,85 @@ def test_slot_reuse_after_delete_never_returns_the_old_session(tmp_path):
 
         hits = index.search(_unit([1, 0, 0, 0]), owner_id="42", limit=5)
         assert [hit["session_id"] for hit in hits] == ["new"]
+    finally:
+        connection.close()
+
+
+def test_incremental_growth_from_a_packed_slab_matches_full_load(tmp_path):
+    index, connection = _index(tmp_path, [("grow", 0, [1, 0, 0, 0], "42", "zerg", "claude", "local", "2026-07-01")])
+    try:
+        # _build leaves eight rows in an eight-slot slab. Growing this existing
+        # session must allocate a larger slab before writing any replacement row.
+        _seed(
+            connection,
+            [("grow", ordinal, [1, 0, 0, 0], "42", "zerg", "claude", "local", "2026-07-01") for ordinal in range(1, 8)],
+        )
+        connection.execute("UPDATE embedding_publications SET expected_episode_count = 8 WHERE session_id = 'grow'")
+        connection.commit()
+        index.load(connection)
+        snapshot = index._snapshot
+        index._snapshot = replace(
+            snapshot,
+            **{name: value[: snapshot.count].copy() for name, value in vars(snapshot).items() if name != "count"},
+        )
+        assert index._snapshot.active.sum() == index._snapshot.active.size
+        connection.execute("UPDATE embedding_publications SET expected_episode_count = 9 WHERE session_id = 'grow'")
+        connection.execute(
+            """INSERT INTO episode_embeddings(session_id, owner_id, generation_id, revision, episode_ordinal,
+               event_index_start, event_index_end, start_order_time_us, model, dims, content_hash, embedding, updated_at)
+               VALUES ('grow', '42', 'g-grow', 1, 8, 0, 1, 1000, ?, ?, 'hgrow8', ?, '2026-08-01T00:00:00+00:00')""",
+            (MODEL, DIMS, _unit([0, 1, 0, 0]).tobytes()),
+        )
+        connection.commit()
+        index.refresh_session(connection, "grow")
+        full = ResidentEpisodeIndex(model=MODEL, dims=DIMS)
+        full.load(connection)
+        _assert_same_resident_results(index, full, [_unit([1, 0, 0, 0]), _unit([0, 1, 0, 0])])
+    finally:
+        connection.close()
+
+
+def test_failed_incremental_apply_closes_the_dense_gate_without_publishing_slots(tmp_path, monkeypatch):
+    index, connection = _index(tmp_path, [("grow", 0, [1, 0, 0, 0], "42", "zerg", "claude", "local", "2026-07-01")])
+    try:
+        _seed(connection, [("grow", 1, [0, 1, 0, 0], "42", "zerg", "claude", "local", "2026-07-01")])
+        connection.execute("UPDATE embedding_publications SET expected_episode_count = 2 WHERE session_id = 'grow'")
+        connection.commit()
+        original_write_slot = index._write_slot
+        writes = 0
+
+        def fail_after_first_slot(snapshot, slot, row):
+            nonlocal writes
+            original_write_slot(snapshot, slot, row)
+            writes += 1
+            if writes == 1:
+                raise RuntimeError("forced after first slot write")
+
+        monkeypatch.setattr(index, "_write_slot", fail_after_first_slot)
+        with pytest.raises(RuntimeError, match="forced after first slot write"):
+            index.refresh_session(connection, "grow")
+        assert index.coverage.integrity_ready is False
+        with pytest.raises(ResidentIndexIntegrityError):
+            index.search(_unit([0, 1, 0, 0]), owner_id="42", limit=5, require_integrity=True)
+        assert index._snapshot.count == 1
+        assert index._snapshot.session_ids[0] == "grow"
+    finally:
+        connection.close()
+
+
+def test_incremental_refresh_keeps_missing_session_ids(tmp_path):
+    index, connection = _index(tmp_path, [("ready", 0, [1, 0, 0, 0], "42", "zerg", "claude", "local", "2026-07-01")])
+    try:
+        connection.execute(
+            """INSERT INTO session_index(session_id, generation_id, owner_id, desired_revision, indexed_through, object_count,
+               object_set_hash, event_count, user_messages, assistant_messages, tool_calls, is_sidechain, project, provider,
+               environment, started_at, published_at)
+               VALUES ('missing', 'g-missing', '42', 1, 1, 1, 'h', 1, 1, 1, 0, 0, 'zerg', 'claude', 'local', '2026-07-02', '2026-07-02')"""
+        )
+        connection.commit()
+        index.load(connection)
+        index.refresh_session(connection, "ready")
+        assert index.coverage.missing_session_ids == ("missing",)
     finally:
         connection.close()
 

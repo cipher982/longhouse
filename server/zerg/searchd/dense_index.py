@@ -41,6 +41,10 @@ import numpy as np
 _DEDUPE_OVERFETCH = 4
 
 
+class ResidentIndexIntegrityError(RuntimeError):
+    """A failed update left the resident snapshot unsafe to serve."""
+
+
 @dataclass(frozen=True)
 class _Snapshot:
     """One consistent view. Never mutated after publication."""
@@ -331,56 +335,73 @@ class ResidentEpisodeIndex:
         valid_rows, session_coverage, _, _ = self._validate_coverage(publications, rows)
         if not session_coverage.integrity_ready:
             raise ValueError("committed session has invalid resident embedding rows")
-        with self._write_lock:
-            snapshot = self._snapshot
-            old_slots = self._session_slots.pop(session_id, set())
-            for slot in old_slots:
-                snapshot.active[slot] = False
-                self._slots.pop((str(snapshot.session_ids[slot]), int(snapshot.episode_ordinals[slot])), None)
-            needed = len(valid_rows) - len(old_slots)
-            if needed > int((~snapshot.active).sum()):
-                snapshot = self._grow(snapshot, needed)
-                self._snapshot = snapshot
-            free_slots = iter(np.flatnonzero(~snapshot.active).tolist())
-            new_slots: set[int] = set()
-            for row in valid_rows:
-                slot = next(free_slots)
-                self._write_slot(snapshot, slot, row)
-                snapshot.active[slot] = True
-                self._slots[(str(row["session_id"]), int(row["episode_ordinal"]))] = slot
-                new_slots.add(slot)
-            if new_slots:
-                self._session_slots[session_id] = new_slots
-            snapshot = replace(snapshot, count=snapshot.count + len(valid_rows) - len(old_slots))
-            self._snapshot = snapshot
-            # The expensive integrity scan is only needed at cold start/recovery.
-            # Publication/expected counts are a tiny session table query.
-            summary = connection.execute(
-                """SELECT COUNT(*) AS sessions, COUNT(p.session_id) AS published,
-                          COALESCE(SUM(p.expected_episode_count), 0) AS expected
-                     FROM session_index s LEFT JOIN embedding_publications p
+        summary = connection.execute(
+            """SELECT COUNT(*) AS sessions, COUNT(p.session_id) AS published,
+                      COALESCE(SUM(p.expected_episode_count), 0) AS expected
+                 FROM session_index s LEFT JOIN embedding_publications p
+                   ON p.session_id=s.session_id AND p.model=? AND p.dims=?
+                  AND p.generation_id=s.generation_id AND p.revision=s.indexed_through""",
+            (self._model, self._dims),
+        ).fetchone()
+        missing_session_ids = tuple(
+            str(row["session_id"])
+            for row in connection.execute(
+                """SELECT s.session_id FROM session_index s
+                     LEFT JOIN embedding_publications p
                        ON p.session_id=s.session_id AND p.model=? AND p.dims=?
-                      AND p.generation_id=s.generation_id AND p.revision=s.indexed_through""",
+                      AND p.generation_id=s.generation_id AND p.revision=s.indexed_through
+                    WHERE p.session_id IS NULL ORDER BY s.session_id ASC LIMIT 20""",
                 (self._model, self._dims),
-            ).fetchone()
-            expected = int(summary["expected"])
-            current = snapshot.count
-            self._coverage = EmbeddingCoverage(
-                integrity_ready=True,
-                complete=int(summary["sessions"]) == int(summary["published"]) and current == expected,
-                expected_sessions=int(summary["sessions"]),
-                published_sessions=int(summary["published"]),
-                expected_episodes=expected,
-                current_episodes=current,
-                invalid_vectors=0,
-                unnormalized_vectors=0,
-                unlocatable_episodes=0,
-                episode_count_mismatches=0,
-                missing_session_ids=(),
-            )
+            ).fetchall()
+        )
+        with self._write_lock:
+            try:
+                snapshot = self._copy_snapshot(self._snapshot)
+                slots = self._slots.copy()
+                session_slots = {key: value.copy() for key, value in self._session_slots.items()}
+                old_slots = session_slots.pop(session_id, set())
+                for slot in old_slots:
+                    snapshot.active[slot] = False
+                    slots.pop((str(snapshot.session_ids[slot]), int(snapshot.episode_ordinals[slot])), None)
+                post_update_count = snapshot.count + len(valid_rows) - len(old_slots)
+                if len(valid_rows) > int((~snapshot.active).sum()):
+                    snapshot = self._grow(snapshot, post_update_count)
+                free_slots = iter(np.flatnonzero(~snapshot.active).tolist())
+                new_slots: set[int] = set()
+                for row in valid_rows:
+                    slot = next(free_slots)
+                    self._write_slot(snapshot, slot, row)
+                    snapshot.active[slot] = True
+                    slots[(str(row["session_id"]), int(row["episode_ordinal"]))] = slot
+                    new_slots.add(slot)
+                if new_slots:
+                    session_slots[session_id] = new_slots
+                snapshot = replace(snapshot, count=post_update_count)
+                expected = int(summary["expected"])
+                coverage = replace(
+                    self._coverage,
+                    complete=int(summary["sessions"]) == int(summary["published"]) and snapshot.count == expected,
+                    expected_sessions=int(summary["sessions"]),
+                    published_sessions=int(summary["published"]),
+                    expected_episodes=expected,
+                    current_episodes=snapshot.count,
+                    missing_session_ids=missing_session_ids,
+                    stale=False,
+                )
+                self._snapshot = snapshot
+                self._slots = slots
+                self._session_slots = session_slots
+                self._coverage = coverage
+            except BaseException:
+                self._coverage = replace(self._coverage, integrity_ready=False, stale=True)
+                raise
 
-    def _grow(self, snapshot: _Snapshot, needed: int) -> _Snapshot:
-        capacity = max(snapshot.vectors.shape[0] * 2, snapshot.count + needed, 8)
+    @staticmethod
+    def _copy_snapshot(snapshot: _Snapshot) -> _Snapshot:
+        return _Snapshot(**{name: value.copy() if isinstance(value, np.ndarray) else value for name, value in vars(snapshot).items()})
+
+    def _grow(self, snapshot: _Snapshot, minimum_count: int) -> _Snapshot:
+        capacity = max(snapshot.vectors.shape[0] * 2, minimum_count, 8)
         vectors = np.empty((capacity, self._dims), dtype="float32")
         if snapshot.vectors.shape[1] == self._dims:
             vectors[: snapshot.vectors.shape[0]] = snapshot.vectors
@@ -544,11 +565,14 @@ class ResidentEpisodeIndex:
         since_iso: str | None = None,
         include_origin_hidden: bool = False,
         include_test: bool = False,
+        require_integrity: bool = False,
     ) -> list[dict[str, object]]:
         with self._write_lock:
             snapshot = self._snapshot
             if not self._loaded:
                 raise RuntimeError("resident episode index is not loaded")
+            if require_integrity and not self._coverage.integrity_ready:
+                raise ResidentIndexIntegrityError("resident episode index is not integrity-ready")
             if snapshot.size == 0:
                 return []
 
