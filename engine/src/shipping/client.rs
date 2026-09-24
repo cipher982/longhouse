@@ -8,9 +8,9 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use reqwest::header::{CONTENT_ENCODING, CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT};
-use serde::Deserialize;
+use reqwest::header::{HeaderMap, HeaderValue, CONTENT_ENCODING, CONTENT_TYPE, USER_AGENT};
 use serde::de::DeserializeOwned;
+use serde::Deserialize;
 
 use crate::config::ShipperConfig;
 use crate::scheduler::SHIPPING_IN_FLIGHT_CAP;
@@ -25,13 +25,13 @@ use crate::scheduler::SHIPPING_IN_FLIGHT_CAP;
 pub(crate) const STARTUP_NEGOTIATION_ATTEMPTS: usize = 4;
 pub(crate) const STARTUP_NEGOTIATION_BACKOFF: Duration = Duration::from_secs(5);
 pub(crate) const STARTUP_NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(5);
-use crate::pipeline::compressor::{CompressionAlgo, content_encoding};
-use crate::shipping::storage_v2::{
-    STORAGE_V2_CAPABILITIES_PATH, STORAGE_V2_LANE_HEADER, STORAGE_V2_SOURCE_EPOCHS_PATH,
-};
+use crate::pipeline::compressor::{content_encoding, CompressionAlgo};
 use crate::shipping::storage_v2::{
     StorageV2BodyEncoding, StorageV2Capabilities, StorageV2Envelope, StorageV2Receipt,
     StorageV2SourceManifest,
+};
+use crate::shipping::storage_v2::{
+    STORAGE_V2_CAPABILITIES_PATH, STORAGE_V2_LANE_HEADER, STORAGE_V2_SOURCE_EPOCHS_PATH,
 };
 
 const WRITE_BACKPRESSURE_HEADER: &str = "X-Longhouse-Write-Backpressure";
