@@ -60,6 +60,9 @@ const COMMAND_RUN_ONCE: &str = "session.run_once";
 const COMMAND_TURN_START: &str = "session.turn.start";
 const COMMAND_TURN_INTERRUPT: &str = "session.turn.interrupt";
 const COMMAND_PROVIDER_LIVE_PROOF: &str = "provider.live_proof";
+const COMMAND_PROVIDER_SIGN_IN_START: &str = "provider.sign_in.start";
+const COMMAND_PROVIDER_SIGN_IN_CODE: &str = "provider.sign_in.code";
+const COMMAND_PROVIDER_SIGN_IN_CANCEL: &str = "provider.sign_in.cancel";
 // A command frame that omits `provider` is routed here. This was five
 // unexplained copies of the literal "codex", which silently sent an unknown or
 // missing provider into the Codex bridge and contradicts the repo's
@@ -583,6 +586,12 @@ fn control_supports_for_path_with_env(
                 }
             }
         }
+        // The CLI is present (checked above), so its own login can be relayed.
+        if crate::sign_in::declared_sign_in(contract).is_some() {
+            if let Some(provider) = contract.get("provider").and_then(Value::as_str) {
+                supports.push(format!("{provider}.sign_in"));
+            }
+        }
     }
     supports
 }
@@ -880,7 +889,12 @@ async fn run_once(
 
     loop {
         tokio::select! {
-            _ = readiness_refresh.tick(), if !capabilities_probe_in_flight => {
+            _ = async {
+                tokio::select! {
+                    _ = readiness_refresh.tick() => {}
+                    _ = crate::sign_in::readiness_refresh_now().notified() => {}
+                }
+            }, if !capabilities_probe_in_flight => {
                 capabilities_probe_in_flight = true;
                 let tx = capabilities_tx.clone();
                 tokio::spawn(async move {
@@ -1163,6 +1177,12 @@ async fn execute_command(
 
     if command_type == COMMAND_PROVIDER_LIVE_PROOF {
         return run_provider_live_proof_command(&payload).await;
+    }
+    if command_type == COMMAND_PROVIDER_SIGN_IN_START
+        || command_type == COMMAND_PROVIDER_SIGN_IN_CODE
+        || command_type == COMMAND_PROVIDER_SIGN_IN_CANCEL
+    {
+        return run_provider_sign_in_command(&command_type, &payload).await;
     }
     if command_type == COMMAND_ARCHIVE_BACKLOG_CONTROL
         || command_type == COMMAND_ARCHIVE_BACKLOG_CONTROL_V2
@@ -2897,6 +2917,53 @@ async fn run_antigravity_channel_command(
         });
     }
     Ok(output)
+}
+
+async fn run_provider_sign_in_command(
+    command_type: &str,
+    payload: &Value,
+) -> std::result::Result<Value, CommandError> {
+    let to_command_error = |error: crate::sign_in::SignInError| CommandError {
+        code: error.code.to_string(),
+        message: error.message,
+    };
+    match command_type {
+        COMMAND_PROVIDER_SIGN_IN_START => {
+            let provider = required_string(payload, "provider")?;
+            let contract = managed_provider_contract_items()
+                .iter()
+                .find(|item| {
+                    item.get("provider").and_then(Value::as_str) == Some(provider.as_str())
+                })
+                .ok_or_else(|| CommandError {
+                    code: "sign_in_unsupported".to_string(),
+                    message: format!("unknown provider {provider}"),
+                })?;
+            let path_value = std::env::var_os("PATH");
+            let binary = provider_binary_value(contract, &|name| std::env::var_os(name))
+                .filter(|binary| {
+                    command_value_exists_in_path(binary.as_os_str(), path_value.as_deref())
+                })
+                .ok_or_else(|| CommandError {
+                    code: "sign_in_cli_missing".to_string(),
+                    message: format!("{provider} CLI is not installed on this machine"),
+                })?;
+            crate::sign_in::start(contract, binary)
+                .await
+                .map_err(to_command_error)
+        }
+        COMMAND_PROVIDER_SIGN_IN_CODE => {
+            let attempt_id = required_string(payload, "attempt_id")?;
+            let code = required_string(payload, "code")?;
+            crate::sign_in::submit_code(&attempt_id, &code)
+                .await
+                .map_err(to_command_error)
+        }
+        _ => {
+            let attempt_id = required_string(payload, "attempt_id")?;
+            Ok(crate::sign_in::cancel(&attempt_id))
+        }
+    }
 }
 
 async fn run_provider_live_proof_command(
@@ -4748,8 +4815,13 @@ mod tests {
             if provider_live_proof_supported_provider(provider) {
                 expected.push(format!("{provider}.live_proof"));
             }
+            if crate::sign_in::declared_sign_in(contract).is_some() {
+                expected.push(format!("{provider}.sign_in"));
+            }
         }
         assert_eq!(supports, expected);
+        assert!(supports.contains(&"claude.sign_in".to_string()));
+        assert!(supports.contains(&"codex.sign_in".to_string()));
         assert!(!supports.contains(&"codex.launch".to_string()));
         assert!(!supports.contains(&"codex.continue".to_string()));
         assert!(supports.contains(&"codex.run_once".to_string()));

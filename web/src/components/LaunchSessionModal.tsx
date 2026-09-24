@@ -10,6 +10,7 @@ import {
 } from "../services/api";
 import { Button, Spinner } from "./ui";
 import { getProviderLabel } from "../lib/providers";
+import ProviderSignInList from "./ProviderSignInList";
 
 interface LaunchSessionModalProps {
   isOpen: boolean;
@@ -270,6 +271,7 @@ export default function LaunchSessionModal({
                             <span className={`launch-machine-status ${machineStatusClass(machine)}`} aria-hidden="true" />
                             <span className="launch-machine-copy"><strong>{machine.machine_name}</strong><small>{launchBlockedLabel(machine)}</small></span>
                             <span />
+                            {machine.launch.blocked_by === "providers_not_ready" && <ProviderSignInList machine={machine} />}
                           </div>
                         ))}
                       </div>
@@ -298,16 +300,7 @@ export default function LaunchSessionModal({
                 ) : (
                   <div className="launch-static-choice"><strong>{getProviderLabel(provider)}</strong><small>Coding agent</small></div>
                 )}
-                {selectedMachine && (selectedMachine.launch.unavailable_providers ?? []).length > 0 && (
-                  <ul className="launch-unavailable-providers" data-testid="launch-unavailable-providers">
-                    {(selectedMachine.launch.unavailable_providers ?? []).map((item) => (
-                      <li key={item.provider}>
-                        <strong>{getProviderLabel(item.provider)}</strong>
-                        <small>{item.remediation ?? (item.reason === "cli_missing" ? "Not installed on this machine" : "Sign in required on this machine")}</small>
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                {selectedMachine && <ProviderSignInList machine={selectedMachine} />}
 
                 <details ref={workspacePickerRef} className="launch-choice launch-choice--nested">
                   <summary><span className="launch-choice-copy"><strong>{workspaceTitle(cwd, workspaces)}</strong><small>Workspace · {cwd ? compactPath(cwd) : "Choose a workspace"}</small></span></summary>
@@ -390,6 +383,7 @@ function EmptyState({ machines }: { machines: MachineDirectoryEntry[] }) {
             <span className={`launch-machine-status ${machineStatusClass(machine)}`} aria-hidden="true" />
             <span className="launch-machine-copy"><strong>{machine.machine_name}</strong><small>{launchBlockedLabel(machine)}</small></span>
             <span />
+            {machine.launch.blocked_by === "providers_not_ready" && <ProviderSignInList machine={machine} />}
           </div>
         ))}
       </div>

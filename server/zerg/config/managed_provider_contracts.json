@@ -15,6 +15,15 @@
         ],
         "format": "exit_code"
       },
+      "sign_in": {
+        "disposition": "implemented",
+        "argv": [
+          "login",
+          "--device-auth"
+        ],
+        "flow": "device_code",
+        "prerequisite": "Enable device code authorization in ChatGPT > Settings > Security first."
+      },
       "requires_longhouse_cli": false,
       "managed_transport": "codex_app_server",
       "console_adapter": "codex_exec",
@@ -841,6 +850,15 @@
         "logged_in_field": "loggedIn",
         "plan_field": "subscriptionType",
         "credential_override_field": "apiKeySource"
+      },
+      "sign_in": {
+        "disposition": "implemented",
+        "argv": [
+          "auth",
+          "login",
+          "--claudeai"
+        ],
+        "flow": "paste_code"
       },
       "requires_longhouse_cli": false,
       "managed_transport": "claude_channel_bridge",

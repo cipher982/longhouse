@@ -138,7 +138,7 @@ struct LaunchSessionSheet: View {
                     errorView(loadError)
                 } else if machines.isEmpty {
                     emptyView
-                } else if launchableMachines.isEmpty {
+                } else if launchableMachines.isEmpty && !machines.contains(where: Self.needsProviderSignIn) {
                     MachineSelectionView(
                         machines: machines,
                         selectedDeviceId: selectedDeviceId,
@@ -218,19 +218,16 @@ struct LaunchSessionSheet: View {
                     // Signed-out or missing providers are never offered, but a
                     // user who expected Claude here needs to know why it is not.
                     ForEach(selectedMachine?.launch.unavailableProviders ?? [], id: \.provider) { item in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(providerDisplayName(item.provider))
-                                .font(.body)
-                                .foregroundStyle(Ember.textSecondary)
-                            Text(item.remediation ?? (item.reason == "cli_missing" ? "Not installed on this machine" : "Sign in required on this machine"))
-                                .font(.subheadline)
-                                .foregroundStyle(Ember.textMuted)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 10)
-                        .accessibilityElement(children: .combine)
-                        .accessibilityIdentifier("launch-unavailable-provider-\(item.provider)")
+                        ProviderSignInRow(
+                            deviceId: selectedDeviceId,
+                            machineName: selectedMachine?.machineName ?? selectedDeviceId,
+                            item: item,
+                            displayName: providerDisplayName(item.provider),
+                            canRelay: item.reason == "not_authenticated"
+                                && (selectedMachine?.supports.contains("\(item.provider).sign_in") ?? false),
+                            makeAPI: { LonghouseAPI(host: appState.serverURL) },
+                            refreshMachines: refreshMachinesQuietly
+                        )
                     }
 
                     Divider().padding(.leading, 16)
@@ -350,7 +347,9 @@ struct LaunchSessionSheet: View {
             machines = result
             let selectedStillExists = result.contains { $0.deviceId == selectedDeviceId }
             if (selectedDeviceId.isEmpty || !selectedStillExists),
-               let first = result.first(where: { Self.canStartInteractiveSession($0) }) ?? result.first {
+               let first = result.first(where: { Self.canStartInteractiveSession($0) })
+                ?? result.first(where: Self.needsProviderSignIn)
+                ?? result.first {
                 selectedDeviceId = first.deviceId
                 selectedProvider = first.defaultProvider ?? ""
                 cwd = ""
@@ -473,6 +472,23 @@ struct LaunchSessionSheet: View {
         machine?.isLaunchable ?? false
     }
 
+    /// Online, and blocked only because its providers are signed out: the
+    /// launch form stays reachable so the user can sign in from here.
+    private static func needsProviderSignIn(_ machine: MachineDirectoryEntry) -> Bool {
+        machine.launch.blockedBy == "providers_not_ready"
+    }
+
+    /// Re-read machines without the full-screen loading state, so an
+    /// in-progress sign-in row stays on screen while the machine confirms.
+    private func refreshMachinesQuietly() async {
+        guard !usesPreviewData, let api = LonghouseAPI(host: appState.serverURL),
+              let result = try? await api.listMachines() else { return }
+        machines = result
+        if let machine = selectedMachine, !machine.consoleLaunchProviders.contains(selectedProvider) {
+            selectedProvider = machine.defaultProvider ?? ""
+        }
+    }
+
     private func launchBlockedLabel(_ machine: MachineDirectoryEntry) -> String {
         switch machine.launch.blockedBy {
         case "control_down":
@@ -551,6 +567,145 @@ private struct LaunchCard<Content: View>: View {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .strokeBorder(Ember.hairline, lineWidth: 0.75)
             }
+    }
+}
+
+/// A provider the machine can drive but cannot run yet. When the engine can
+/// relay the provider's own login, "Sign in" runs it on the machine and shows
+/// its URL/code here; the credential stays on that machine. While an attempt
+/// is open the sheet re-reads machines, so a confirmed sign-in moves the
+/// provider into the launchable list and this row disappears.
+private struct ProviderSignInRow: View {
+    let deviceId: String
+    let machineName: String
+    let item: MachineLaunchUnavailableProvider
+    let displayName: String
+    let canRelay: Bool
+    let makeAPI: () -> LonghouseAPI?
+    let refreshMachines: () async -> Void
+
+    @State private var attempt: ProviderSignInStart?
+    @State private var busy = false
+    @State private var errorText: String?
+    @State private var code = ""
+    @State private var codeSent = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(displayName)
+                        .font(.body)
+                        .foregroundStyle(Ember.textSecondary)
+                    Text(item.remediation ?? (item.reason == "cli_missing" ? "Not installed on this machine" : "Sign in required on this machine"))
+                        .font(.subheadline)
+                        .foregroundStyle(Ember.textMuted)
+                }
+                Spacer(minLength: 8)
+                if canRelay && attempt == nil {
+                    Button(busy ? "Starting…" : "Sign in") { Task { await start() } }
+                        .buttonStyle(.bordered)
+                        .disabled(busy)
+                        .accessibilityIdentifier("launch-signin-\(item.provider)")
+                }
+            }
+            if let attempt {
+                if let prerequisite = attempt.prerequisite {
+                    Text(prerequisite).font(.footnote).foregroundStyle(Ember.textSecondary)
+                }
+                if let url = URL(string: attempt.verificationUrl) {
+                    Link("Open \(displayName) sign-in", destination: url)
+                        .font(.body.weight(.semibold))
+                }
+                if attempt.flow == "device_code", let userCode = attempt.userCode {
+                    HStack(spacing: 10) {
+                        Text("Code").foregroundStyle(Ember.textSecondary)
+                        Text(userCode)
+                            .font(.system(.title3, design: .monospaced))
+                            .foregroundStyle(Ember.text)
+                            .textSelection(.enabled)
+                        Button {
+                            UIPasteboard.general.string = userCode
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                        }
+                        .accessibilityLabel("Copy code")
+                    }
+                }
+                if attempt.flow == "paste_code" && !codeSent {
+                    HStack(spacing: 8) {
+                        TextField("Paste the code shown after signing in", text: $code)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .textFieldStyle(.roundedBorder)
+                        Button("Submit") { Task { await sendCode() } }
+                            .disabled(busy || code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+                Text(codeSent || attempt.flow == "device_code"
+                     ? "Waiting for \(machineName) to confirm the sign-in…"
+                     : "The code appears on the page after you approve.")
+                    .font(.footnote)
+                    .foregroundStyle(Ember.textMuted)
+                Button("Cancel", role: .cancel) { Task { await cancel() } }
+                    .font(.footnote)
+            }
+            if let errorText {
+                Text(errorText).font(.footnote).foregroundStyle(Ember.ember)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 10)
+        .accessibilityIdentifier("launch-unavailable-provider-\(item.provider)")
+        .task(id: attempt?.attemptId) {
+            guard attempt != nil else { return }
+            // Poll until the machine reports the provider ready (this row then
+            // disappears) or the attempt's own lifetime runs out.
+            let deadline = Date().addingTimeInterval(TimeInterval(attempt?.expiresInSecs ?? 900))
+            while !Task.isCancelled, Date() < deadline {
+                try? await Task.sleep(for: .seconds(3))
+                await refreshMachines()
+            }
+        }
+    }
+
+    private func start() async {
+        guard let api = makeAPI() else { return }
+        busy = true
+        errorText = nil
+        defer { busy = false }
+        do {
+            attempt = try await api.startProviderSignIn(deviceId: deviceId, provider: item.provider)
+        } catch {
+            errorText = (error as? LocalizedError)?.errorDescription ?? "Could not start sign-in."
+        }
+    }
+
+    private func sendCode() async {
+        guard let api = makeAPI(), let attempt else { return }
+        busy = true
+        errorText = nil
+        defer { busy = false }
+        do {
+            try await api.submitProviderSignInCode(
+                deviceId: deviceId,
+                attemptId: attempt.attemptId,
+                code: code.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+            codeSent = true
+        } catch {
+            errorText = (error as? LocalizedError)?.errorDescription ?? "Could not send the code."
+        }
+    }
+
+    private func cancel() async {
+        if let api = makeAPI(), let attempt {
+            try? await api.cancelProviderSignIn(deviceId: deviceId, attemptId: attempt.attemptId)
+        }
+        attempt = nil
+        code = ""
+        codeSent = false
     }
 }
 

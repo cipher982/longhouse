@@ -591,6 +591,23 @@ async function installSceneMocks(
       return;
     }
 
+    if (scene === "launch-unavailable" && pathname.endsWith("/providers/codex/sign-in")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          attempt_id: "fixture-attempt",
+          provider: "codex",
+          flow: "device_code",
+          verification_url: "https://auth.openai.com/codex/device",
+          user_code: "VWSN-8F9KZ",
+          prerequisite: "Enable device code authorization in ChatGPT > Settings > Security first.",
+          expires_in_secs: 900,
+        }),
+      });
+      return;
+    }
+
     if (scene === "launch-unavailable" && pathname === "/api/timeline/machines") {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(LAUNCH_UNAVAILABLE_MACHINES) });
       return;
@@ -621,7 +638,7 @@ const LAUNCH_UNAVAILABLE_MACHINES = {
       machine_name: "workbench",
       online: true,
       control_channel_status: "connected",
-      supports: ["claude.turn_start", "codex.turn_start", "omp.turn_start"],
+      supports: ["claude.turn_start", "codex.turn_start", "omp.turn_start", "claude.sign_in", "codex.sign_in"],
       control_operations_by_provider: { claude: ["turn_start"], codex: ["turn_start"], omp: ["turn_start"] },
       last_seen_at: "2026-04-15T16:11:00Z",
       connected_since: "2026-04-15T12:00:00Z",
@@ -740,6 +757,8 @@ async function captureBundle(
   if (scene === "launch-unavailable") {
     await page.click("[data-testid='sessions-start-session']");
     await page.waitForSelector("[data-testid='launch-unavailable-providers']", { timeout: 5000 });
+    await page.click("[data-testid='launch-signin-codex']");
+    await page.waitForSelector("[data-testid='launch-signin-panel-codex']", { timeout: 5000 });
   }
 
   // Inject CSS to kill animations for deterministic screenshots

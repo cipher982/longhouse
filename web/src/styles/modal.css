@@ -176,6 +176,93 @@
     font-size: var(--font-size-sm);
   }
 
+  .launch-machine-row > .launch-unavailable-providers {
+    grid-column: 1 / -1;
+    padding: 0.2rem 0 0 1.4rem;
+  }
+
+  .launch-signin-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .launch-signin-copy {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+
+  .launch-signin-button,
+  .launch-signin-form button,
+  .launch-signin-cancel {
+    flex: none;
+    padding: 0.3rem 0.7rem;
+    border: 1px solid var(--color-border-primary);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-secondary);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+  }
+
+  .launch-signin-cancel {
+    align-self: flex-start;
+    border-color: transparent;
+    background: transparent;
+    color: var(--color-text-muted);
+  }
+
+  .launch-signin-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    margin-top: 0.45rem;
+    padding: 0.6rem 0.7rem;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-secondary);
+    color: var(--color-text-secondary);
+  }
+
+  .launch-signin-panel a {
+    color: var(--color-brand-primary);
+    font-weight: 600;
+  }
+
+  .launch-signin-code code {
+    padding: 0.1rem 0.4rem;
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-elevated);
+    color: var(--color-text-primary);
+    font-size: 1.05rem;
+    letter-spacing: 0.08em;
+  }
+
+  .launch-signin-form {
+    display: flex;
+    gap: 0.4rem;
+  }
+
+  .launch-signin-form input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .launch-signin-note,
+  .launch-signin-code {
+    margin: 0;
+    font-size: var(--font-size-sm);
+  }
+
+  .launch-signin-error {
+    margin: 0.3rem 0 0;
+    color: var(--color-intent-error);
+    font-size: var(--font-size-sm);
+  }
+
   .launch-choice-copy small .launch-machine-status {
     display: inline-block;
     margin-right: 0.4rem;

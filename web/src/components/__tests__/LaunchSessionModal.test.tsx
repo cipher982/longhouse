@@ -9,6 +9,9 @@ const apiMocks = vi.hoisted(() => ({
   createConsoleSession: vi.fn(),
   fetchWorkspaceSuggestions: vi.fn(),
   listMachines: vi.fn(),
+  startProviderSignIn: vi.fn(),
+  submitProviderSignInCode: vi.fn(),
+  cancelProviderSignIn: vi.fn(),
 }));
 
 vi.mock("../../services/api", async (importOriginal) => {
@@ -349,6 +352,63 @@ describe("LaunchSessionModal", () => {
     const note = await screen.findByTestId("launch-unavailable-providers");
     expect(note).toHaveTextContent("Sign in to claude on this machine");
     expect(screen.queryByTestId("launch-provider-select")).toBeNull();
+  });
+
+  it("relays a provider sign-in from the launcher: device code and paste-back", async () => {
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({
+          device_id: "workbench",
+          machine_name: "workbench",
+          control_operations_by_provider: { claude: ["turn_start"], codex: ["turn_start"], omp: ["turn_start"] },
+          supports: ["claude.turn_start", "codex.turn_start", "omp.turn_start", "claude.sign_in", "codex.sign_in"],
+          launch: {
+            blocked_by: null,
+            providers: [{ provider: "omp" }],
+            default_provider: "omp",
+            unavailable_providers: [
+              { provider: "claude", reason: "not_authenticated", remediation: "Sign in to claude on this machine" },
+              { provider: "codex", reason: "not_authenticated", remediation: "Sign in to codex on this machine" },
+            ],
+          },
+        }),
+      ],
+    });
+    apiMocks.startProviderSignIn.mockImplementation(async (_device: string, provider: string) =>
+      provider === "codex"
+        ? {
+            attempt_id: "a-codex",
+            provider: "codex",
+            flow: "device_code",
+            verification_url: "https://auth.openai.com/codex/device",
+            user_code: "VWSN-8F9KZ",
+            prerequisite: "Enable device code authorization in ChatGPT > Settings > Security first.",
+            expires_in_secs: 900,
+          }
+        : {
+            attempt_id: "a-claude",
+            provider: "claude",
+            flow: "paste_code",
+            verification_url: "https://claude.com/cai/oauth/authorize?x=1",
+            user_code: null,
+            prerequisite: null,
+            expires_in_secs: 900,
+          },
+    );
+    apiMocks.submitProviderSignInCode.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.click(await screen.findByTestId("launch-signin-codex"));
+    const codexPanel = await screen.findByTestId("launch-signin-panel-codex");
+    expect(codexPanel).toHaveTextContent("VWSN-8F9KZ");
+    expect(codexPanel).toHaveTextContent("Enable device code authorization");
+    expect(apiMocks.startProviderSignIn).toHaveBeenCalledWith("workbench", "codex");
+
+    await user.click(screen.getByTestId("launch-signin-claude"));
+    await user.type(await screen.findByLabelText("Claude sign-in code"), "abc#def");
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+    await waitFor(() => expect(apiMocks.submitProviderSignInCode).toHaveBeenCalledWith("workbench", "a-claude", "abc#def"));
   });
 
   it("prefills the top-ranked workspace and lets you pick another by label", async () => {

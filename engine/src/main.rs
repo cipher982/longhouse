@@ -84,6 +84,7 @@ mod report_bundle;
 mod scheduler;
 mod shipping;
 mod shipping_stats;
+mod sign_in;
 mod state;
 mod status_slot;
 mod storage_v2_contract;

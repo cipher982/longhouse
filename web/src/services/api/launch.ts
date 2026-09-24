@@ -78,3 +78,27 @@ export async function createConsoleSession(
     body: JSON.stringify(body),
   });
 }
+
+export type ProviderSignInStartResponse = components["schemas"]["ProviderSignInStartResponse"];
+
+/** Start the provider's own login on a machine; returns its URL (and device code). */
+export async function startProviderSignIn(deviceId: string, provider: string): Promise<ProviderSignInStartResponse> {
+  return request<ProviderSignInStartResponse>(
+    `/timeline/machines/${encodeURIComponent(deviceId)}/providers/${encodeURIComponent(provider)}/sign-in`,
+    { method: "POST" },
+  );
+}
+
+/** Paste-back flows: hand the code from the provider's page to the waiting CLI. */
+export async function submitProviderSignInCode(deviceId: string, attemptId: string, code: string): Promise<void> {
+  await request(`/timeline/machines/${encodeURIComponent(deviceId)}/sign-in/${encodeURIComponent(attemptId)}/code`, {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  });
+}
+
+export async function cancelProviderSignIn(deviceId: string, attemptId: string): Promise<void> {
+  await request(`/timeline/machines/${encodeURIComponent(deviceId)}/sign-in/${encodeURIComponent(attemptId)}`, {
+    method: "DELETE",
+  });
+}

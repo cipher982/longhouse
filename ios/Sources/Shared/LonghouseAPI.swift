@@ -1379,6 +1379,26 @@ public struct MachineLaunchUnavailableProvider: Decodable, Sendable, Hashable {
     }
 }
 
+/// A provider login the Machine Agent started on a machine: open the URL,
+/// enter `userCode` (device_code) or paste back the page's code (paste_code).
+public struct ProviderSignInStart: Decodable, Sendable, Hashable {
+    public let attemptId: String
+    public let provider: String
+    public let flow: String
+    public let verificationUrl: String
+    public let userCode: String?
+    public let prerequisite: String?
+    public let expiresInSecs: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case attemptId = "attempt_id"
+        case provider, flow, prerequisite
+        case verificationUrl = "verification_url"
+        case userCode = "user_code"
+        case expiresInSecs = "expires_in_secs"
+    }
+}
+
 public struct MachineLaunchProjection: Decodable, Sendable, Hashable {
     public let blockedBy: String?
     public let providers: [MachineLaunchProviderOption]
@@ -1626,6 +1646,44 @@ extension LonghouseAPI {
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
         return try JSONDecoder.snakeCase.decode(ConsoleSessionCreateResponse.self, from: data)
+    }
+
+    /// Start the provider's own login on a machine; returns its URL (and
+    /// device code). The credential stays on that machine.
+    func startProviderSignIn(deviceId: String, provider: String) async throws -> ProviderSignInStart {
+        let path = "/api/timeline/machines/\(deviceId)/providers/\(provider)/sign-in"
+        var request = URLRequest(url: baseURL.appendingPathComponent(path))
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, httpResponse) = try await data(for: request)
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            if let structured = Self.parseStructuredError(statusCode: httpResponse.statusCode, data: data) {
+                throw structured
+            }
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        return try JSONDecoder().decode(ProviderSignInStart.self, from: data)
+    }
+
+    /// Paste-back flows: hand the code from the provider's page to the waiting CLI.
+    func submitProviderSignInCode(deviceId: String, attemptId: String, code: String) async throws {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/timeline/machines/\(deviceId)/sign-in/\(attemptId)/code"))
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["code": code])
+        let (data, httpResponse) = try await data(for: request)
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            if let structured = Self.parseStructuredError(statusCode: httpResponse.statusCode, data: data) {
+                throw structured
+            }
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+    }
+
+    func cancelProviderSignIn(deviceId: String, attemptId: String) async throws {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/timeline/machines/\(deviceId)/sign-in/\(attemptId)"))
+        request.httpMethod = "DELETE"
+        _ = try await data(for: request)
     }
 
     static func parseLaunchError(statusCode: Int, data: Data) -> LonghouseAPIError? {

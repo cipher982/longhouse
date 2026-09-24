@@ -126,6 +126,7 @@ from zerg.routers.device_tokens import router as device_tokens_router
 from zerg.routers.health import router as health_router
 from zerg.routers.heartbeat import router as heartbeat_router
 from zerg.routers.internal_deployments import router as internal_deployments_router
+from zerg.routers.machine_sign_in import router as machine_sign_in_router
 from zerg.routers.metrics import router as metrics_router
 from zerg.routers.models import router as models_router
 from zerg.routers.observability import agents_router as agents_observability_router
@@ -325,6 +326,7 @@ api_app.include_router(session_inputs_attachments_router)
 api_app.include_router(agents_session_inputs_attachments_router)
 api_app.include_router(timeline_stream_router)
 api_app.include_router(timeline_router)
+api_app.include_router(machine_sign_in_router)
 api_app.include_router(agents_control_router)
 api_app.include_router(agents_machine_presence_router)
 api_app.include_router(agents_machines_router)

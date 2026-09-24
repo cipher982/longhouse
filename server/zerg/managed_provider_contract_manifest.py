@@ -376,6 +376,40 @@ def _validate_auth_probe(item: dict[str, Any]) -> None:
                 raise ValueError(f"managed provider contract {provider}: auth_probe.{unexpected} requires format json")
 
 
+_SIGN_IN_FLOWS = frozenset({"device_code", "paste_code"})
+
+
+def _validate_sign_in(item: dict[str, Any]) -> None:
+    """A declared sign-in relay must name exactly what the engine will run.
+
+    The Machine Agent runs only this argv against the provider CLI and relays
+    the URL/code it prints; nothing else is ever executed for sign-in.
+    """
+
+    provider = str(item.get("provider") or "<unknown>")
+    block = item.get("sign_in")
+    if block is None:
+        return
+    if not isinstance(block, dict):
+        raise ValueError(f"managed provider contract {provider}: sign_in must be an object")
+    disposition = block.get("disposition")
+    if disposition not in _AUTH_PROBE_DISPOSITIONS:
+        raise ValueError(f"managed provider contract {provider}: sign_in.disposition must be one of {sorted(_AUTH_PROBE_DISPOSITIONS)}")
+    if disposition != "implemented":
+        required = "owner_action" if disposition == "not_implemented" else "reason"
+        if not str(block.get(required) or "").strip():
+            raise ValueError(f"managed provider contract {provider}: sign_in.{required} is required for disposition {disposition}")
+        return
+    argv = block.get("argv")
+    if not isinstance(argv, list) or not argv or not all(isinstance(arg, str) and arg for arg in argv):
+        raise ValueError(f"managed provider contract {provider}: sign_in.argv must be a non-empty list of strings")
+    if block.get("flow") not in _SIGN_IN_FLOWS:
+        raise ValueError(f"managed provider contract {provider}: sign_in.flow must be one of {sorted(_SIGN_IN_FLOWS)}")
+    unknown = set(block) - {"disposition", "argv", "flow", "prerequisite"}
+    if unknown:
+        raise ValueError(f"managed provider contract {provider}: sign_in has unknown keys {', '.join(sorted(unknown))}")
+
+
 def _validate_machine_control_supports(item: dict[str, Any]) -> None:
     provider = str(item.get("provider") or "<unknown>")
     for support in item.get("machine_control_supports") or ():
@@ -739,6 +773,7 @@ def _validated_contract_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
             _validate_string_list_field(item, field)
         _validate_operation_evidence(item)
         _validate_machine_control_supports(item)
+        _validate_sign_in(item)
         _validate_auth_probe(item)
         _validate_capabilities(item)
         _validate_transcript_signals(item)

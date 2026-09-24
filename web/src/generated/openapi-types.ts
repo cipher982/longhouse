@@ -2205,6 +2205,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/timeline/machines/{device_id}/providers/{provider}/sign-in": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Sign In
+         * @description Start the provider's own login on the machine and return its URL/code.
+         */
+        post: operations["start_sign_in_timeline_machines__device_id__providers__provider__sign_in_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/machines/{device_id}/sign-in/{attempt_id}/code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Sign In Code
+         * @description Pass the code from the provider's callback page back to the waiting CLI.
+         */
+        post: operations["submit_sign_in_code_timeline_machines__device_id__sign_in__attempt_id__code_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/machines/{device_id}/sign-in/{attempt_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Cancel Sign In */
+        delete: operations["cancel_sign_in_timeline_machines__device_id__sign_in__attempt_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/machine-presence/policy": {
         parameters: {
             query?: never;
@@ -6185,6 +6242,52 @@ export interface components {
              * @description Optional timeout for the live-token contract portion of the proof.
              */
             live_token_timeout_secs?: number | null;
+        };
+        /** ProviderSignInAckResponse */
+        ProviderSignInAckResponse: {
+            /** Attempt Id */
+            attempt_id: string;
+            /** Accepted */
+            accepted?: boolean | null;
+            /** Cancelled */
+            cancelled?: boolean | null;
+        };
+        /** ProviderSignInCodeRequest */
+        ProviderSignInCodeRequest: {
+            /**
+             * Code
+             * @description Code shown after signing in (paste_code flow).
+             */
+            code: string;
+        };
+        /** ProviderSignInStartResponse */
+        ProviderSignInStartResponse: {
+            /** Attempt Id */
+            attempt_id: string;
+            /** Provider */
+            provider: string;
+            /**
+             * Flow
+             * @enum {string}
+             */
+            flow: "device_code" | "paste_code";
+            /**
+             * Verification Url
+             * @description Open this to sign in with the provider.
+             */
+            verification_url: string;
+            /**
+             * User Code
+             * @description Device code to enter on the verification page (device_code flow).
+             */
+            user_code?: string | null;
+            /**
+             * Prerequisite
+             * @description Provider account setting required before the flow works.
+             */
+            prerequisite?: string | null;
+            /** Expires In Secs */
+            expires_in_secs: number;
         };
         /** ProviderSourceInventory */
         ProviderSourceInventory: {
@@ -14551,6 +14654,106 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_sign_in_timeline_machines__device_id__providers__provider__sign_in_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+                provider: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderSignInStartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_sign_in_code_timeline_machines__device_id__sign_in__attempt_id__code_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderSignInCodeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderSignInAckResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_sign_in_timeline_machines__device_id__sign_in__attempt_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderSignInAckResponse"];
                 };
             };
             /** @description Validation Error */
