@@ -118,9 +118,12 @@ jobs:
             echo "manifest_sha=$manifest_sha"
             echo "started_at=$(date +%s)"
           } >> "$GITHUB_OUTPUT"
-          if docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' | jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))' > /dev/null; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Fixture dependency image already published: $image"
+          if digest="$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' | jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))')"; then
+            {
+              echo "exists=true"
+              echo "existing_digest=$digest"
+            } >> "$GITHUB_OUTPUT"
+            echo "Fixture dependency image already published: $image@$digest"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
             echo "Fixture dependency image absent; building once for this manifest hash"
@@ -144,27 +147,28 @@ jobs:
         env:
           IMAGE: ${{ steps.key.outputs.image }}
           EXISTED: ${{ steps.key.outputs.exists }}
+          EXISTING_DIGEST: ${{ steps.key.outputs.existing_digest }}
           BUILD_DIGEST: ${{ steps.build.outputs.digest }}
           STARTED_AT: ${{ steps.key.outputs.started_at }}
         run: |
           set -euo pipefail
+          digest="$BUILD_DIGEST"
           if [[ "$EXISTED" == "true" ]]; then
-            digest="$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest}}' | jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))')"
-          else
-            # A concurrent run may move the tag; this run consumes its own
-            # published digest, never a mutable tag read after publication.
-            digest="$BUILD_DIGEST"
-            [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || {
-              echo "Build returned no immutable fixture image digest" >&2
-              exit 1
-            }
+            digest="$EXISTING_DIGEST"
           fi
+          # Both paths pin a manifest digest returned by their own registry
+          # operation. A concurrent tag update cannot change this run's input.
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || {
+            echo "Fixture image publisher returned no immutable digest" >&2
+            exit 1
+          }
+          elapsed=$(($(date +%s) - STARTED_AT))
           {
             echo "image_ref=${IMAGE%:*}@${digest}"
             echo "cache_hit=$EXISTED"
-            echo "preparation_seconds=$(($(date +%s) - STARTED_AT))"
+            echo "preparation_seconds=$elapsed"
           } >> "$GITHUB_OUTPUT"
-          echo "Fixture image ${IMAGE%:*}@${digest}, existing=$EXISTED"
+          echo "Fixture image ${IMAGE%:*}@${digest}, existing=$EXISTED preparation=${elapsed}s"
 
   validate:
     # No path gate for `make validate` itself: it is cross-cutting by
@@ -194,40 +198,9 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Restore Bun download cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ~/.bun/install/cache
-          key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            longhouse-bun-${{ runner.os }}-
-
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.12"
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: "1.2.20"
-
-      - name: Ensure make available
-        run: ./scripts/ci/ensure-make.sh
-
       - name: Validate contracts
-        # make validate builds its isolated image and then runs every contract
-        # check; on 2026-09-17 it reached its last check at 9m45s under normal
-        # runner load, so 10 minutes failed healthy runs.
-        #
-        # Runner pods are ephemeral, so the image build starts from a cold
-        # layer cache every time: bun install plus the cargo fetch took 16m
-        # alone in run 35289932123 (00:12:58 -> 00:29:00), leaving the checks
-        # no room inside 20. The step was building the whole time -- nothing
-        # hung -- so the budget has to cover a cold build plus the checks.
+        # The producer above passes an exact digest; this runs from the offline
+        # fixture image instead of rebuilding apt/Bun/uv/Cargo in each pod.
         timeout-minutes: 30
         # One step, because two lists drift. This job used to enumerate a subset
         # of `make validate` by hand, and twelve of its members -- including
@@ -304,22 +277,6 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.12"
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: "1.2.20"
-
-      - name: Ensure make available
-        run: ./scripts/ci/ensure-make.sh
-
       - name: Run Python Backend Tests
         run: make test
 
@@ -347,17 +304,6 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.12"
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
-
-      - name: Ensure make available
-        run: ./scripts/ci/ensure-make.sh
-
       - name: Run exact-SHA provider contract assertions
         run: make test-provider-contract
 
@@ -376,15 +322,6 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
-
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.12"
-
-
-      - name: Ensure make available
-        run: ./scripts/ci/ensure-make.sh
 
       - name: Run engine and shipper suite in one isolated container
         if: ${{ needs.changes.outputs.engine == 'true' || github.event_name == 'workflow_dispatch' }}
@@ -409,30 +346,6 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
-
-      - name: Restore Bun download cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ~/.bun/install/cache
-          key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            longhouse-bun-${{ runner.os }}-
-
-      - name: Setup Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: "20"
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: "1.2.20"
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Ensure make available
-        run: ./scripts/ci/ensure-make.sh
 
       - name: Run Frontend Tests
         run: make test-frontend
@@ -485,22 +398,6 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Setup Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: "20"
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: "1.2.20"
-
-      - name: Setup uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
-
-      - name: Ensure make available
-        run: ./scripts/ci/ensure-make.sh
-
       - name: Verify CLI wheel packaging
         run: make test-wheel-package
 
@@ -519,9 +416,6 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
-
-      - name: Ensure make available
-        run: ./scripts/ci/ensure-make.sh
 
       - name: Run Core E2E Tests in the portable isolation boundary
         run: make test-e2e-core
@@ -549,9 +443,6 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 1
-
-      - name: Ensure make available
-        run: ./scripts/ci/ensure-make.sh
 
       - name: Run Accessibility E2E Tests in the portable isolation boundary
         run: make test-e2e-a11y

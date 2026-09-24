@@ -33,6 +33,7 @@ on:
         type: string
 permissions:
   contents: read
+  packages: read
 concurrency:
   group: hosted-live-qa-${{ github.repository }}-${{ inputs.source_sha || github.sha }}-${{ github.run_id }}
   cancel-in-progress: false
@@ -40,7 +41,7 @@ concurrency:
 jobs:
   hosted-live-qa:
     name: "hosted-live-qa"
-    runs-on: cube-deploy
+    runs-on: cube-browser
     if: github.repository == 'cipher982/longhouse'
     timeout-minutes: 25
     env:
@@ -48,6 +49,7 @@ jobs:
       CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.HOSTED_CANARY_CONTROL_PLANE_ADMIN_TOKEN }}
       SMOKE_RUNTIME_TOKEN: ${{ secrets.HOSTED_CANARY_RUNTIME_TOKEN }}
       LONGHOUSE_MACHINE_TOKEN: ${{ secrets.HOSTED_CANARY_RUNTIME_TOKEN }}
+      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
       QA_INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
     steps:
@@ -78,12 +80,22 @@ jobs:
           . scripts/lib/hosted-instance.sh
           lh_hosted_wait_for_deployment "${{ inputs.deployment_id }}" 60
 
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+      - name: Authenticate to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
-          python-version: "3.12"
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
 
-      - name: Prepare credential-free isolation image
+      - name: Resolve exact published fixture image
+        run: |
+          set -euo pipefail
+          key="$(python3 scripts/qa/test-isolation.py --print-image-key | jq -r '.tag')"
+          image="ghcr.io/${{ github.repository_owner }}/longhouse-test:${key}"
+          digest="$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' | jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))')"
+          echo "LONGHOUSE_TEST_IMAGE_REF=${image%:*}@${digest}" >> "$GITHUB_ENV"
+
+      - name: Pull credential-free isolation image by digest
         id: prepare
         run: |
           set -euo pipefail

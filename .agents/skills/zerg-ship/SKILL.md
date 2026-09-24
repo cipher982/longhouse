@@ -128,10 +128,12 @@ Before pushing, run `make affected-check BASE=<base-sha>` to see which CI
 filters match the committed and local diff. Run focused tests for the changed
 behavior, not `make test-ci` for every edit; a CSS change needs a web proof,
 not backend or engine integration. The affected command does not replace
-judgment about dependencies or the exact-SHA CI verdict. After pushing, use
-`make ship SHA=<full-sha> ARGS=--json` for the single blocking verdict;
-`make ship-watch SHA=<full-sha> ARGS=--json` observes an already-pushed SHA.
-Do not foreground-babysit branch-latest CI.
+judgment about dependencies or the exact-SHA CI verdict. On `main`, use
+`make ship SHA=<full-sha> ARGS=--json` for the single blocking verdict.
+From a topic worktree, first rebase onto current `origin/main` and use
+`make ship SHA=<full-sha> ARGS="--branch main --json"`; otherwise `ship`
+pushes the topic branch and does not deploy. `make ship-watch SHA=<full-sha>
+ARGS=--json` observes an already-pushed SHA. Do not babysit branch-latest CI.
 
 If `make ship` returns non-zero for the target SHA, ship failed. You may explain why you think it failed, including suspected pre-existing drift, but do not relabel that outcome as success.
 

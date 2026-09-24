@@ -120,9 +120,9 @@ observability-down: ## Stop the god-view observability stack
 #  make test-ios-session-open iOS tap-to-paint benchmark
 #  make test-mobile-chat  mobile chat focused path
 #  make test-ios-helper   iOS helper scripts         ~1s
-#  make test-frontend     frontend (web/)            ~15s
+#  make test-frontend     frontend (web/)            ~2min
 #  make test-engine       engine (engine/)           ~20s
-#  make test-runner       runner (runner/)           ~5s
+#  make test-runner       runner (runner/)           ~20s
 #  make test-e2e          browser E2E                ~2min
 #  make test-ci           broad cutover, not default pre-push ~20min
 #  make test-full         everything                 >10min
@@ -384,7 +384,7 @@ ios-unit: ## Hermetic iOS unit tests on this machine (~35s) — iteration only, 
 		-only-testing:LonghouseIOSTests \
 		test
 
-test-frontend: ## Frontend unit tests + type-check (~15s)
+test-frontend: ## Frontend unit tests + type-check (~2min)
 	@cd web && bun run validate:types && bun run test -- --run --runInBand
 
 test-engine: test-engine-projection-failure test-engine-omp-helm ## Rust engine tests (~20s)

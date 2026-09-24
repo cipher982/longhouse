@@ -87,13 +87,16 @@ its local selection can be broader than CI's committed diff. Unmatched paths
 require explicit review; they are not treated as a green test. Full `make
 test-ci` is an intentional broad cutover check, not the default pre-push tax.
 
-Trusted CI publishes the manifest-keyed dependency image once to GHCR and
-passes an immutable digest to each disposable fixture job. Pull credentials
-stay in the supervisor's temporary Docker config and never enter the fixture
-container. A missing or mismatched image fails the job instead of falling
-back to a cold local build. Local runs without that explicit image reference
-still build from the manifests. Fork PRs cannot run repository code on the
-self-hosted runner's writable cache; replay on a trusted branch to qualify.
+Trusted push CI publishes a manifest-keyed dependency image to GHCR and
+hands its fixture jobs an immutable digest. Pull credentials stay in the
+supervisor's temporary Docker config and never enter the fixture container.
+A missing or mismatched requested digest fails instead of falling back to a
+cold build. Local runs and standalone manual/weekly fresh-clone workflows
+without an explicit digest keep their original manifest-only local
+preparation; those proofs are not claims about the push CI warm path.
+Hosted post-deploy QA resolves the published digest for its exact source
+SHA. Fork PRs cannot execute repository code on the self-hosted runner's
+writable cache; replay on a trusted branch to qualify.
 
 For an already-pushed maintainer SHA, `make ship-watch SHA=<full-sha>
 ARGS=--json` waits for the exact workflow/deployment disposition and returns
