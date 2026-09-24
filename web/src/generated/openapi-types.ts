@@ -9964,8 +9964,6 @@ export interface components {
              */
             timeline_anchor_at?: string | null;
             head: components["schemas"]["SessionResponse"];
-            detail: components["schemas"]["SessionResponse"];
-            root: components["schemas"]["SessionResponse"];
             /**
              * Continuation Count
              * @description Concrete continuation count in this logical thread

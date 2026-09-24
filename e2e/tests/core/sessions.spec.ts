@@ -206,10 +206,10 @@ async function waitForLexicalSearch(
         if (!response.ok()) return null;
         const body = await response.json();
         const card = body.sessions?.find(
-          (candidate: { detail?: { id?: string } }) =>
-            candidate.detail?.id === sessionId,
+          (candidate: { head?: { id?: string } }) =>
+            candidate.head?.id === sessionId,
         );
-        return card?.detail?.match_event_id ?? null;
+        return card?.head?.match_event_id ?? null;
       },
       { timeout: 30_000 },
     )
@@ -400,7 +400,7 @@ test.describe("Sessions Page", () => {
     const searchResponse = await searchResponsePromise;
     const searchPayload = await searchResponse.json();
     expect(
-      searchPayload.sessions?.[0]?.detail?.match_event_id ??
+      searchPayload.sessions?.[0]?.head?.match_event_id ??
         searchPayload.sessions?.[0]?.match_event_id,
     ).toBeTruthy();
     await expect(page.getByText("1 results", { exact: true })).toBeVisible();

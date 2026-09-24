@@ -659,8 +659,6 @@ def project_catalog_timeline_snapshot(snapshot: dict[str, Any]) -> TimelineSessi
                 thread_id=thread_id,
                 timeline_anchor_at=projected.timeline_anchor_at,
                 head=projected,
-                detail=projected,
-                root=projected,
                 continuation_count=1,
                 started_origin_label=projected.origin_label or projected.environment,
                 head_origin_label=projected.origin_label or projected.environment,
@@ -684,10 +682,8 @@ def _timeline_card_signature(card: TimelineSessionCardResponse) -> str:
     """
 
     payload = card.model_dump(mode="json")
-    for projection_key in ("head", "detail", "root"):
-        projection = payload.get(projection_key)
-        if not isinstance(projection, dict):
-            continue
+    projection = payload.get("head")
+    if isinstance(projection, dict):
         projection.pop("runtime_version", None)
         state = projection.get("session_state")
         if isinstance(state, dict):

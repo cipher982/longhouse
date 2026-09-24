@@ -79,20 +79,6 @@ def test_timeline_card_signature_ignores_global_commit_coordinates():
                 "activity": {"state": "idle"},
             },
         },
-        "detail": {
-            "runtime_version": 41,
-            "session_state": {
-                "commit_seq": 41,
-                "activity": {"state": "idle"},
-            },
-        },
-        "root": {
-            "runtime_version": 41,
-            "session_state": {
-                "commit_seq": 41,
-                "activity": {"state": "idle"},
-            },
-        },
     }
 
     def card(value):
@@ -100,9 +86,8 @@ def test_timeline_card_signature_ignores_global_commit_coordinates():
 
     baseline = _timeline_card_signature(card(payload))
     advanced = deepcopy(payload)
-    for projection in (advanced["head"], advanced["detail"], advanced["root"]):
-        projection["runtime_version"] = 42
-        projection["session_state"]["commit_seq"] = 42
+    advanced["head"]["runtime_version"] = 42
+    advanced["head"]["session_state"]["commit_seq"] = 42
     assert _timeline_card_signature(card(advanced)) == baseline
 
     changed = deepcopy(advanced)

@@ -511,8 +511,6 @@ struct APITimelineSessionCardResponse: Codable, Hashable, Sendable {
     let threadId: String
     let timelineAnchorAt: String?
     let head: APISessionResponse
-    let detail: APISessionResponse
-    let root: APISessionResponse
     let continuationCount: Int
     let startedOriginLabel: String?
     let headOriginLabel: String?

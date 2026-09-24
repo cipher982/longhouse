@@ -142,8 +142,6 @@ type TimelineSessionCard = {
   thread_id: string;
   timeline_anchor_at: string | null;
   head: AgentSession;
-  detail: AgentSession;
-  root: AgentSession;
   continuation_count: number;
   started_origin_label: string | null;
   head_origin_label: string | null;
@@ -407,28 +405,14 @@ export function makeTimelineCard(
   overrides: Partial<AgentSession> = {},
   cardOverrides: Partial<TimelineSessionCard> = {},
 ): TimelineSessionCard {
-  const detail = makeSession(overrides);
-  const head =
-    cardOverrides.head ??
-    makeSession({
-      ...overrides,
-      id: detail.thread_head_session_id || detail.id,
-    });
-  const root =
-    cardOverrides.root ??
-    makeSession({
-      ...overrides,
-      id: detail.thread_root_session_id || detail.id,
-    });
+  const head = cardOverrides.head ?? makeSession(overrides);
 
   return {
-    thread_id: detail.thread_root_session_id,
-    timeline_anchor_at: detail.timeline_anchor_at || detail.last_activity_at || detail.started_at,
+    thread_id: head.thread_root_session_id,
+    timeline_anchor_at: head.timeline_anchor_at || head.last_activity_at || head.started_at,
     head,
-    detail,
-    root,
-    continuation_count: detail.thread_continuation_count,
-    started_origin_label: root.origin_label || root.environment,
+    continuation_count: head.thread_continuation_count,
+    started_origin_label: head.origin_label || head.environment,
     head_origin_label: head.origin_label || head.environment,
     ...cardOverrides,
   };
@@ -841,27 +825,6 @@ export function buildTimelineCardStressFixture(): {
       attach_command: "longhouse codex --attach continuation-head",
     },
   });
-  const continuationRoot = makeSession({
-    id: "continuation-root",
-    provider: "codex",
-    project: "longhouse-mobile",
-    git_branch: "feature/mobile-card-alignment-pass-with-very-long-branch-name",
-    started_at: "2026-04-15T14:20:00Z",
-    last_activity_at: "2026-04-15T14:50:00Z",
-    timeline_anchor_at: "2026-04-15T14:50:00Z",
-    user_messages: 3,
-    assistant_messages: 3,
-    tool_calls: 8,
-    summary_title: "Root pass",
-    summary: "Original structure exploration.",
-    status: "completed",
-    thread_root_session_id: "thread-mobile-layout",
-    thread_head_session_id: "continuation-head",
-    thread_continuation_count: 3,
-    origin_label: "This machine",
-    home_label: "On this Mac",
-    capabilities: makeCapabilities(),
-  });
   const continuationCard = makeTimelineCard(
     {
       ...continuationDetail,
@@ -869,9 +832,7 @@ export function buildTimelineCardStressFixture(): {
     {
       thread_id: "thread-mobile-layout",
       timeline_anchor_at: "2026-04-15T16:04:00Z",
-      detail: continuationDetail,
       head: continuationHead,
-      root: continuationRoot,
       continuation_count: 3,
       started_origin_label: "This machine",
       head_origin_label: "Cloud",
@@ -988,8 +949,6 @@ export function buildTimelineCardStressFixture(): {
   const unreadConsole: TimelineSessionCard = {
     ...unreadBase,
     head: stampUnread(unreadBase.head, "completed", "2026-04-15T16:05:00Z"),
-    detail: stampUnread(unreadBase.detail, "completed", "2026-04-15T16:05:00Z"),
-    root: stampUnread(unreadBase.root, "completed", "2026-04-15T16:05:00Z"),
   };
   const unreadFailedBase = makeTimelineCard(
     {
@@ -1018,8 +977,6 @@ export function buildTimelineCardStressFixture(): {
   const unreadConsoleFailed: TimelineSessionCard = {
     ...unreadFailedBase,
     head: stampUnread(unreadFailedBase.head, "failed", "2026-04-15T15:32:00Z"),
-    detail: stampUnread(unreadFailedBase.detail, "failed", "2026-04-15T15:32:00Z"),
-    root: stampUnread(unreadFailedBase.root, "failed", "2026-04-15T15:32:00Z"),
   };
 
   // Approval age is deliberately old while canonical session activity is fresh.

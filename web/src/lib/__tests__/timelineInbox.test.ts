@@ -112,8 +112,6 @@ function makeCard(args: {
     thread_id: args.id,
     timeline_anchor_at: args.startedAt,
     head: session,
-    detail: session,
-    root: session,
     continuation_count: 1,
     started_origin_label: null,
     head_origin_label: null,

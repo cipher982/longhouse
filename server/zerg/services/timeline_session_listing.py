@@ -15,9 +15,9 @@ from zerg.utils.time import UTCBaseModel
 class TimelineSessionCardResponse(UTCBaseModel):
     thread_id: str = Field(..., description="Logical thread/task root UUID")
     timeline_anchor_at: datetime | None = Field(None, description="Anchor used for timeline ordering and grouping")
+    # One session per card. `detail` and `root` were identical copies of
+    # `head` and tripled the timeline payload; they are gone.
     head: SessionResponse
-    detail: SessionResponse
-    root: SessionResponse
     continuation_count: int = Field(..., description="Concrete continuation count in this logical thread")
     started_origin_label: str | None = Field(None, description="Origin label for where the thread started")
     head_origin_label: str | None = Field(None, description="Origin label for the current writable head")

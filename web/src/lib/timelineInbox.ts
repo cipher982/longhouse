@@ -33,7 +33,7 @@ function parseMs(value: string | null | undefined): number {
 }
 
 export function startedAtMs(card: TimelineSessionCard): number {
-  return parseMs(card.root?.started_at || card.head?.started_at);
+  return parseMs(card.head?.started_at);
 }
 
 /**

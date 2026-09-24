@@ -59,7 +59,7 @@ def test_list_sessions_includes_summary(live_catalog, live_catalog_client):
     assert resp.status_code == 200, resp.text
     data = resp.json()
     assert len(data["sessions"]) >= 1
-    session = data["sessions"][0]["detail"]
+    session = data["sessions"][0]["head"]
     assert session["id"] == str(seeded.session_id)
     assert session["summary_title"] == "Auth and Rate Limiting"
     assert session["anchor_title"] == "Auth and Rate Limiting"
