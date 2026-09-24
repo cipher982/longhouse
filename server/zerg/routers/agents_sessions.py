@@ -53,7 +53,7 @@ from zerg.services.live_catalog_timeline import list_live_catalog_sessions
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.live_catalog_timeline import stream_live_catalog_machine_sessions
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
-from zerg.services.machines_directory import UNLAUNCHABLE_READINESS_STATES
+from zerg.services.machines_directory import provider_not_ready_detail
 from zerg.services.raw_object_workers import RawObjectWorkerError
 from zerg.services.raw_object_workers import get_raw_object_worker_pool
 from zerg.services.searchd_supervisor import get_searchd_client
@@ -892,18 +892,9 @@ async def create_console_session(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": "adapter_unavailable", "message": f"Machine Agent does not advertise {capability}"},
         )
-    readiness = registry.provider_readiness_state(owner_id=owner_id, device_id=body.device_id, provider=provider) or {}
-    if readiness.get("state") in UNLAUNCHABLE_READINESS_STATES:
-        # Refuse up front: the first turn would fail before the provider did
-        # any work, after the user had already typed their message.
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "code": "provider_not_ready",
-                "reason": readiness.get("state"),
-                "message": readiness.get("remediation") or f"{provider} is not ready on {body.device_id}",
-            },
-        )
+    not_ready = provider_not_ready_detail(registry, owner_id=owner_id, device_id=body.device_id, provider=provider)
+    if not_ready is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=not_ready)
     try:
         created = await create_empty_console_session(
             db,

@@ -34,6 +34,23 @@ LAUNCH_BLOCKED_PROVIDERS_NOT_READY = "providers_not_ready"
 UNLAUNCHABLE_READINESS_STATES = frozenset({"not_authenticated", "cli_missing"})
 
 
+def provider_not_ready_detail(registry: Any, *, owner_id: int, device_id: str, provider: str) -> dict[str, str] | None:
+    """Why a Console launch for ``provider`` on ``device_id`` would fail now, or None.
+
+    Shared by every Console create route: the first turn would fail before the
+    provider did any work, after the user had already typed their message.
+    """
+    readiness = registry.provider_readiness_state(owner_id=owner_id, device_id=device_id, provider=provider) or {}
+    state = readiness.get("state")
+    if state not in UNLAUNCHABLE_READINESS_STATES:
+        return None
+    return {
+        "code": "provider_not_ready",
+        "reason": str(state),
+        "message": str(readiness.get("remediation") or f"{provider} is not ready on {device_id}"),
+    }
+
+
 @dataclass(frozen=True)
 class MachineLaunchProviderOption:
     provider: str

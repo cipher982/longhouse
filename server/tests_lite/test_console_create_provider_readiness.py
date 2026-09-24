@@ -74,3 +74,33 @@ def test_unknown_or_unreported_readiness_still_launches(monkeypatch):
         response = _post(monkeypatch, readiness, calls)
         assert response.status_code == 201, response.text
         assert len(calls) == 1
+
+
+def test_browser_console_route_refuses_signed_out_provider_too(monkeypatch):
+    # Web and iOS create through /sessions/console, not /agents/sessions.
+    from zerg.dependencies.browser_route_auth import get_current_browser_route_caller
+    from zerg.routers import session_chat
+
+    calls: list[dict] = []
+
+    async def _fake_create(db, **kwargs):
+        calls.append(kwargs)
+        raise AssertionError("must not create a thread for a signed-out provider")
+
+    monkeypatch.setattr(
+        session_chat,
+        "get_machine_control_channel_registry",
+        lambda: _Registry({"codex": {"state": "not_authenticated", "remediation": "Sign in to codex on this machine"}}),
+    )
+    monkeypatch.setattr(session_chat, "create_empty_console_session", _fake_create)
+    api_app.dependency_overrides[get_current_browser_route_caller] = lambda: SimpleNamespace(id=1)
+    api_app.dependency_overrides[session_chat._catalog_control_db_dependency] = lambda: None
+    try:
+        with TestClient(api_app, raise_server_exceptions=False) as client:
+            response = client.post("/sessions/console", json={"provider": "codex", "device_id": "workbench", "cwd": "/tmp"})
+    finally:
+        api_app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "provider_not_ready"
+    assert calls == []
