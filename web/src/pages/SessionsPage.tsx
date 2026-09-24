@@ -305,6 +305,8 @@ export default function SessionsPage() {
   // A partial answer is a fact about the result, not a detail: without this the
   // AI toggle keeps claiming meaning search while showing keyword matches.
   const denseLaneDegraded = aiSearch && (data?.degraded ?? []).some((failure) => failure.lane === "dense");
+  const searchCoverage = data?.coverage;
+  const searchIndexRebuilding = searchCoverage?.complete === false;
   // Non-grouped browse is capped at MAX_SESSION_LIMIT by the API; once we've
   // loaded that many, hide "Load More" rather than dead-ending (the click would
   // clamp back to the same limit and fetch nothing new).
@@ -558,6 +560,12 @@ export default function SessionsPage() {
           </div>
         )}
 
+        {searchIndexRebuilding && (
+          <div className="sessions-llm-hint" role="status">
+            Search index rebuilding — {searchCoverage.indexed_sessions} of {searchCoverage.expected_sessions} sessions indexed
+          </div>
+        )}
+
         <HistoryImportNotice imports={data?.history_imports} />
 
         {/* Compact Toolbar */}
@@ -745,7 +753,7 @@ export default function SessionsPage() {
         {/* Timeline Inbox */}
         {threadCards.length === 0 ? (
           <EmptyState
-            title="No timeline sessions found"
+            title={searchIndexRebuilding ? `No matches yet — search index is rebuilding (${searchCoverage.indexed_sessions} of ${searchCoverage.expected_sessions} sessions)` : "No timeline sessions found"}
             description={
               hasFilters
                 ? "Try adjusting your filters or search query."

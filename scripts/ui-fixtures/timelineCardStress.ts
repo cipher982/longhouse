@@ -151,6 +151,12 @@ type TimelineSessionsListResponse = {
   sessions: TimelineSessionCard[];
   total: number;
   has_real_sessions: boolean;
+  coverage?: {
+    indexed_sessions: number;
+    expected_sessions: number;
+    complete: boolean;
+    lagging_sessions: number;
+  };
   history_imports?: Array<{
     device_id: string;
     history_import: {
@@ -1032,6 +1038,12 @@ export function buildTimelineCardStressFixture(): {
       sessions,
       total: sessions.length,
       has_real_sessions: true,
+      coverage: {
+        indexed_sessions: 8,
+        expected_sessions: 10,
+        complete: false,
+        lagging_sessions: 2,
+      },
       history_imports: [
         {
           device_id: "device-cinder",

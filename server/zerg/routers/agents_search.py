@@ -1471,6 +1471,25 @@ def _projector_coverage_summary(coverage: _ProjectorCoveragePayload) -> RecallCo
     )
 
 
+def _lexical_coverage_summary(coverage: dict[str, object]) -> RecallCoverageSummary | None:
+    indexed_sessions = coverage.get("indexed_sessions")
+    expected_sessions = coverage.get("expected_sessions")
+    complete = coverage.get("complete")
+    lagging_sessions = coverage.get("lagging_sessions")
+    if not isinstance(indexed_sessions, int) or not isinstance(expected_sessions, int):
+        return None
+    if not isinstance(complete, bool) or not isinstance(lagging_sessions, int):
+        return None
+    return RecallCoverageSummary(
+        complete=complete,
+        indexed_sessions=indexed_sessions,
+        expected_sessions=expected_sessions,
+        lagging_sessions=lagging_sessions,
+        unpublished_sessions=lagging_sessions,
+        oldest_lag_seconds=None if complete else 0,
+    )
+
+
 def _rrf_merge_recall_matches(
     lexical: list[RecallMatch],
     semantic: list[RecallMatch],
@@ -1921,10 +1940,10 @@ async def recall_sessions(
         )
     # A lexical index rebuild is asynchronous. Carry its lag even with hits so a
     # caller never reads a partial result as proof that history lacks the query.
-    lexical_coverage = await _read_projection_coverage(projector="search-v2", timeout_seconds=max(0.05, remaining_budget()))
+    lexical_coverage = await read_search_coverage(owner_id=owner_id)
     return _fit_recall_search_response(
         results=results,
         lanes=list(lanes),
         degraded=degraded,
-        coverage=_projector_coverage_summary(lexical_coverage) if lexical_coverage is not None else None,
+        coverage=_lexical_coverage_summary(lexical_coverage) if lexical_coverage is not None else None,
     )

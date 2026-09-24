@@ -81,7 +81,7 @@ describe("RecallPanel", () => {
     expect(screen.queryByText("The full migration context.")).not.toBeInTheDocument();
   });
 
-  it("labels a bounded live head as a snapshot instead of a complete corpus", () => {
+  it("shows lexical rebuild coverage for recall hits", () => {
     const current = hookMocks.useRecall();
     hookMocks.useRecall.mockReturnValue({
       ...current,
@@ -91,6 +91,8 @@ describe("RecallPanel", () => {
           ...current.data.coverage,
           complete: false,
           lagging_sessions: 1,
+          indexed_sessions: 8,
+          expected_sessions: 9,
           oldest_lag_seconds: 1,
         },
       },
@@ -102,8 +104,57 @@ describe("RecallPanel", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByText(/Corpus snapshot · 1 session updating/)).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Search index rebuilding — 8 of 9 sessions indexed");
     expect(screen.queryByText(/Corpus current/)).not.toBeInTheDocument();
+  });
+
+  it("shows lexical rebuild coverage for recall misses and hides it when complete", () => {
+    const current = hookMocks.useRecall();
+    hookMocks.useRecall.mockReturnValue({
+      ...current,
+      data: {
+        ...current.data,
+        total: 0,
+        results: [],
+        coverage: {
+          ...current.data.coverage,
+          complete: false,
+          lagging_sessions: 2,
+          indexed_sessions: 8,
+          expected_sessions: 10,
+          oldest_lag_seconds: 1,
+        },
+      },
+    });
+
+    const { unmount } = render(
+      <MemoryRouter>
+        <RecallPanel />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("No matches yet — search index is rebuilding (8 of 10 sessions)")).toBeInTheDocument();
+    unmount();
+
+    hookMocks.useRecall.mockReturnValue({
+      ...current,
+      data: {
+        ...current.data,
+        coverage: {
+          ...current.data.coverage,
+          complete: true,
+          lagging_sessions: 0,
+          indexed_sessions: 10,
+          expected_sessions: 10,
+          oldest_lag_seconds: null,
+        },
+      },
+    });
+    render(
+      <MemoryRouter>
+        <RecallPanel />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByText(/Search index rebuilding —/)).not.toBeInTheDocument();
   });
 
   it("opens context for only the selected result", async () => {

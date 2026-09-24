@@ -2102,12 +2102,14 @@ class RecallLaneFailure(BaseModel):
 
 
 class RecallCoverageSummary(BaseModel):
-    """Only the dense-corpus facts needed to judge a search result or miss."""
+    """Coverage facts needed to judge a search result or miss."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
     complete: bool
     lagging_sessions: int = Field(ge=0)
+    indexed_sessions: Optional[int] = Field(default=None, ge=0)
+    expected_sessions: Optional[int] = Field(default=None, ge=0)
     unpublished_sessions: int = Field(ge=0)
     oldest_lag_seconds: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
 
@@ -2117,6 +2119,10 @@ class RecallCoverageSummary(BaseModel):
             raise ValueError("recall coverage completeness must match lagging_sessions")
         if (self.lagging_sessions == 0) != (self.oldest_lag_seconds is None):
             raise ValueError("recall coverage lag age must appear exactly when sessions lag")
+        if (self.indexed_sessions is None) != (self.expected_sessions is None):
+            raise ValueError("recall coverage counts must appear together")
+        if self.expected_sessions is not None and self.expected_sessions != self.indexed_sessions + self.lagging_sessions:
+            raise ValueError("recall coverage counts must include projector lag")
         return self
 
 

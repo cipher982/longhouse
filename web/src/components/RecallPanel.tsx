@@ -125,11 +125,13 @@ export function RecallPanel({ project, provider }: RecallPanelProps) {
   const { data, isLoading, error } = useRecall(filters);
   const matches = data?.results ?? [];
   const total = data?.total ?? 0;
-  const coverageSummary = data?.coverage
-    ? data.coverage.complete
+  const coverage = data?.coverage;
+  const searchIndexRebuilding = coverage?.complete === false && coverage.indexed_sessions !== undefined && coverage.expected_sessions !== undefined;
+  const coverageSummary = searchIndexRebuilding
+    ? `Search index rebuilding — ${coverage.indexed_sessions} of ${coverage.expected_sessions} sessions indexed`
+    : coverage?.complete
       ? "Corpus current"
-      : `Corpus snapshot · ${data.coverage.lagging_sessions} session${data.coverage.lagging_sessions === 1 ? "" : "s"} updating`
-    : null;
+      : null;
 
   return (
     <div className="recall-panel" data-testid="recall-panel">
@@ -181,8 +183,8 @@ export function RecallPanel({ project, provider }: RecallPanelProps) {
 
         {!isLoading && !error && debouncedQuery && matches.length === 0 && (
           <EmptyState
-            title="No matches found"
-            description={`No conversation turns matched "${debouncedQuery}".`}
+            title={searchIndexRebuilding ? `No matches yet — search index is rebuilding (${coverage.indexed_sessions} of ${coverage.expected_sessions} sessions)` : "No matches found"}
+            description={searchIndexRebuilding ? undefined : `No conversation turns matched "${debouncedQuery}".`}
           />
         )}
 

@@ -5300,11 +5300,17 @@ export interface components {
         };
         /**
          * MachineSearchCoverage
-         * @description What the index holds, reported alongside a search that found nothing.
+         * @description What the lexical index holds and whether its projector is caught up.
          */
         MachineSearchCoverage: {
             /** Indexed Sessions */
             indexed_sessions: number;
+            /** Expected Sessions */
+            expected_sessions: number;
+            /** Complete */
+            complete: boolean;
+            /** Lagging Sessions */
+            lagging_sessions: number;
             /** Providers */
             providers?: string[];
             /** Oldest Session At */
@@ -5539,7 +5545,7 @@ export interface components {
             lanes?: ("lexical" | "dense" | "catalog")[];
             /** Degraded */
             degraded?: components["schemas"]["MachineSearchLaneFailure"][];
-            /** @description Scope of the index that was searched. Populated when a search returns no results, so that zero hits can be read as absence from a known corpus rather than as evidence the corpus lacks that provider or period. */
+            /** @description Scope and freshness of the lexical index that was searched. A false `complete` means the projector has not finished, so hits and misses are not exhaustive. */
             coverage?: components["schemas"]["MachineSearchCoverage"] | null;
         };
         /**
@@ -6688,13 +6694,17 @@ export interface components {
         };
         /**
          * RecallCoverageSummary
-         * @description Only the dense-corpus facts needed to judge a search result or miss.
+         * @description Coverage facts needed to judge a search result or miss.
          */
         RecallCoverageSummary: {
             /** Complete */
             complete: boolean;
             /** Lagging Sessions */
             lagging_sessions: number;
+            /** Indexed Sessions */
+            indexed_sessions?: number | null;
+            /** Expected Sessions */
+            expected_sessions?: number | null;
             /** Unpublished Sessions */
             unpublished_sessions: number;
             /** Oldest Lag Seconds */

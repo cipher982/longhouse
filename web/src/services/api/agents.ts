@@ -315,11 +315,20 @@ export interface TimelineSessionsListResponse {
   lanes?: ("lexical" | "dense")[];
   /** Lanes that were requested and could not run; their results are missing. */
   degraded?: SearchLaneFailure[];
+  /** Scope and freshness of the lexical index that was searched. */
+  coverage?: MachineSearchCoverage | null;
   query_grouping_mode?: "grouped_results";
   query_grouping_has_more?: boolean;
   query_grouping_source_count?: number;
   /** Machines whose first history import is still running. */
   history_imports?: TimelineHistoryImport[];
+}
+
+export interface MachineSearchCoverage {
+  indexed_sessions: number;
+  expected_sessions: number;
+  complete: boolean;
+  lagging_sessions: number;
 }
 
 export interface TimelineHistoryImport {

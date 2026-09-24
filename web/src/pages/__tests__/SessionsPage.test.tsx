@@ -422,6 +422,52 @@ describe("SessionsPage", () => {
     expect(screen.queryByText(/Importing history/)).not.toBeInTheDocument();
   });
 
+  it("shows lexical rebuild coverage for search hits and misses only while incomplete", () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        ...makeSessionsResponse(),
+        coverage: { indexed_sessions: 8, expected_sessions: 10, complete: false, lagging_sessions: 2 },
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    const { unmount } = renderSessionsPage("/timeline?query=needle");
+    expect(screen.getByText("Search index rebuilding — 8 of 10 sessions indexed")).toBeInTheDocument();
+    unmount();
+
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [],
+        total: 0,
+        has_real_sessions: true,
+        coverage: { indexed_sessions: 8, expected_sessions: 10, complete: false, lagging_sessions: 2 },
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+    renderSessionsPage("/timeline?query=needle");
+    expect(screen.getByText("No matches yet — search index is rebuilding (8 of 10 sessions)")).toBeInTheDocument();
+
+    expect(screen.queryByText(/Search index rebuilding —/)).toBeInTheDocument();
+  });
+
+  it("hides lexical rebuild coverage when the search index is complete", () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        ...makeSessionsResponse(),
+        coverage: { indexed_sessions: 10, expected_sessions: 10, complete: true, lagging_sessions: 0 },
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline?query=needle");
+    expect(screen.queryByText(/Search index rebuilding —/)).not.toBeInTheDocument();
+  });
+
   it("passes active provider filters into recall search", async () => {
     const user = userEvent.setup();
     renderSessionsPage("/timeline?project=zerg&provider=codex");
