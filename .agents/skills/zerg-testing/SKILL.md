@@ -53,6 +53,26 @@ make test-e2e-errors     # show last E2E errors
 make test-e2e-verbose    # full output for debugging
 ```
 
+## The iOS lane is a dispatch, not a local run
+
+`make test-ios`, `make ios-previews`, and `make simlab-run` submit the work to a
+fresh GitHub-hosted macOS VM. They need an **authenticated `gh` on the machine
+that runs them** (repo visibility, pushed-SHA proof, submission, run
+reconciliation) and a **clean, pushed revision**; an uncommitted worktree is
+refused by design, and there is no local native fallback for fixtures.
+
+- Run dispatched targets from the laptop, which holds the `gh` auth. The bench
+  (`bench.sh`) has none, so it is for the lanes that build and boot locally:
+  `sim.sh`, `simlab.py up/run`, `phone.sh`.
+- A dispatched run's own `head_sha` is `main` while the VM checks out your
+  `source_sha`. Read the `source=<sha>` line the dispatcher prints, not the run's
+  SHA, when asking what was tested.
+- Hermetic unit tests do not need the VM: `make ios-project` then
+  `xcodebuild -project ios/XcodeHarness/LonghouseIOS.xcodeproj -scheme Longhouse
+  -destination 'platform=iOS Simulator,name=iPhone 17'
+  -only-testing:LonghouseIOSTests test` runs them locally in ~35s. That is an
+  iteration loop, not the gate; fixtures and the merge gate stay dispatched.
+
 ## Real-client recovery, without a phone
 
 For transcript delivery, stale client content, app reopen, or network recovery,
