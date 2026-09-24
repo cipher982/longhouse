@@ -2484,17 +2484,23 @@ def _query_excerpt(value: object, query: str, *, limit: int = 24) -> str | None:
     if not isinstance(value, str):
         return None
     query_tokens = {_fold_token(token) for token in re.findall(r"\w+", query, flags=re.UNICODE)}
-    tokens = re.findall(r"\w+", value, flags=re.UNICODE)
+    spans = [match.span() for match in re.finditer(r"\w+", value, flags=re.UNICODE)]
+    if not spans:
+        return None
+    tokens = [value[start:end] for start, end in spans]
     matches = [index for index, token in enumerate(tokens) if _fold_token(token) in query_tokens]
-    if not matches:
-        return " ".join(tokens[:limit]) + (" …" if len(tokens) > limit else "")
-    starts = {max(0, min(len(tokens) - limit, match - limit // 2)) for match in matches}
-    start = max(
-        starts,
-        key=lambda candidate: len({_fold_token(token) for token in tokens[candidate : candidate + limit]} & query_tokens),
-    )
+    start = 0
+    if matches:
+        starts = {max(0, min(len(tokens) - limit, match - limit // 2)) for match in matches}
+        start = max(
+            starts,
+            key=lambda candidate: len({_fold_token(token) for token in tokens[candidate : candidate + limit]} & query_tokens),
+        )
     end = min(len(tokens), start + limit)
-    return ("… " if start else "") + " ".join(tokens[start:end]) + (" …" if end < len(tokens) else "")
+    # Slice the original text so punctuation (paths, hyphenated names, code)
+    # survives; only whitespace runs collapse.
+    excerpt = " ".join(value[spans[start][0] : spans[end - 1][1]].split())
+    return ("… " if start else "") + excerpt + (" …" if end < len(tokens) else "")
 
 
 def _fold_token(value: str) -> str:

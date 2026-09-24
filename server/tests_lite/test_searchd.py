@@ -150,6 +150,12 @@ def test_query_excerpt_matches_non_adjacent_and_diacritic_folded_tokens():
     assert "later" in excerpt
 
 
+def test_query_excerpt_keeps_original_punctuation():
+    excerpt = _query_excerpt("Find krypton-needle in\n  src/app.py:12 now", "krypton-needle")
+
+    assert excerpt == "Find krypton-needle in src/app.py:12 now"
+
+
 def _records(text: str) -> list[dict]:
     return [
         {
