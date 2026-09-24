@@ -111,8 +111,12 @@ async def test_admission_wait_is_part_of_call_deadline(socket_path):
         await first_started.wait()
         started = time.monotonic()
         with pytest.raises(CatalogUnavailable, match="deadline exceeded"):
-            await client.call("ping.v2", timeout_seconds=0.04)
-        assert time.monotonic() - started < 0.1
+            await client.call("ping.v2", timeout_seconds=0.001)
+        # Behaviour, not a stopwatch: a call that had waited for the admission
+        # slot would have seen `first` complete. The old `< 0.1s` bound measured
+        # the event loop's scheduling on a loaded machine, so it failed for
+        # machines rather than for the change.
+        assert not first.done()
         assert await first == {"ready": True}
     finally:
         if not first.done():
@@ -201,18 +205,33 @@ async def test_client_maps_missing_socket_to_catalog_unavailable(socket_path):
 
 @pytest.mark.asyncio
 async def test_safe_retry_shares_one_total_deadline(socket_path):
+    """Transport retries spend one budget, not one each.
+
+    The numbers are deliberately coarse: the invariant is "elapsed stays inside
+    one budget", and a 40ms budget against a 1s sleep made the distinction
+    between one budget and two a scheduling artefact on any busy machine.
+    """
+
+    release = asyncio.Event()
+
     async def handle(_reader, writer):
-        await asyncio.sleep(1)
+        # Hold the connection until the test is done with it: a sleep long
+        # enough to outlast the budget is also a sleep the teardown waits for.
+        await release.wait()
         writer.close()
 
     server = await asyncio.start_unix_server(handle, path=socket_path)
-    client = CatalogClient(socket_path, default_timeout_seconds=0.04)
+    client = CatalogClient(socket_path, default_timeout_seconds=0.5)
     started = time.monotonic()
     try:
         with pytest.raises(CatalogUnavailable):
             await client.call("ping.v2")
-        assert time.monotonic() - started < 0.08
+        # One budget, not one per attempt: two fresh budgets would land at 2x,
+        # so anything under 1.5x is one budget. Coarse numbers on purpose -- a
+        # 40ms budget against a 1s sleep made the two cases scheduling noise.
+        assert time.monotonic() - started < client.default_timeout_seconds * 1.5
     finally:
+        release.set()
         await client.close()
         server.close()
         await server.wait_closed()
