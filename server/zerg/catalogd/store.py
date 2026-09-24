@@ -16794,11 +16794,16 @@ _PROJECTOR_ROWS_BY_CLAIM_TOKEN = text(
 
 # The same eligibility as claim_projector_lag's predicates for search-v2 (no
 # tombstone filter for that projector). CROSS JOIN pins sessions as the outer
-# loop, so SQLite walks ix_sessions_last_activity_at instead of sorting.
+# loop, so SQLite walks ix_sessions_last_activity_at instead of sorting. The
+# select list is named, not p.*: .columns() maps by position, and a long-lived
+# database's physical column order differs from the model's once startup has
+# auto-added columns.
+_PROJECTOR_STATE_SELECT_LIST = ", ".join(f"p.{column.name}" for column in ProjectorState.__table__.c)
 _SEARCH_CLAIM_NEWEST_FIRST_WALK = (
     text(
-        """
-        SELECT p.* FROM sessions AS s CROSS JOIN projector_state AS p
+        f"""
+        SELECT {_PROJECTOR_STATE_SELECT_LIST}
+        FROM sessions AS s CROSS JOIN projector_state AS p
           ON p.projector = 'search-v2' AND p.session_id = s.session_id
         WHERE p.desired_revision > p.completed_revision
           AND (p.claim_expires_at IS NULL OR p.claim_expires_at <= :now)

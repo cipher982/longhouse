@@ -217,6 +217,11 @@ def test_search_projector_claims_newest_session_activity_first(
             )
     _seed_row(store, projector="search-v2", session_id=older)
     _seed_row(store, projector="search-v2", session_id=newer)
+    # A long-lived catalog's physical column order drifts from the model's as
+    # startup auto-adds columns; claims must not depend on it.
+    with store.engine.begin() as connection:
+        connection.exec_driver_sql("ALTER TABLE projector_state DROP COLUMN desired_at")
+        connection.exec_driver_sql("ALTER TABLE projector_state ADD COLUMN desired_at DATETIME")
 
     claimed = store.claim_projector_lag(
         projector="search-v2", worker_id="worker", claim_token=str(uuid4()), now=now, lease_seconds=60, limit=2
