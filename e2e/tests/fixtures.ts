@@ -1,4 +1,5 @@
 import { test as base, expect, BrowserContext, type Page } from '@playwright/test';
+import { postRetryingUnavailable } from './retryable-post';
 
 export type { Page };
 
@@ -82,7 +83,7 @@ async function mintDeviceToken(
   let response: import('@playwright/test').APIResponse | undefined;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      response = await request.post('/api/devices/tokens', {
+      response = await postRetryingUnavailable(request, '/api/devices/tokens', {
         data: { device_id: deviceId },
       });
       break;

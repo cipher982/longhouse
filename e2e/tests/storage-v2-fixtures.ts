@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "crypto";
 import type { APIRequestContext } from "@playwright/test";
+import { postRetryingUnavailable } from "./retryable-post";
 
 export type StorageV2Event = {
   role: string;
@@ -123,7 +124,7 @@ export async function ingestStorageV2Session(
     rangeEnd,
     records,
   });
-  const response = await request.post("/api/agents/storage/v2/envelopes", {
+  const response = await postRetryingUnavailable(request, "/api/agents/storage/v2/envelopes", {
     headers: {
       ...(headers ?? {}),
       "X-Longhouse-Storage-Lane": "live",
