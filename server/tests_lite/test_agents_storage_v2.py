@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import os
+import threading
 from contextlib import asynccontextmanager
 from datetime import UTC
 from datetime import datetime
@@ -1495,6 +1496,28 @@ async def test_storage_v2_releases_live_admission_before_catalog_wait(monkeypatc
             first_response = await asyncio.wait_for(first, timeout=2)
         assert first_response.status_code == 200, first_response.text
         assert first_response.json() == receipt
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_parses_envelopes_off_the_event_loop(monkeypatch):
+    parse_thread_ids = []
+    parse = storage_router._parse_envelope
+
+    def recording_parse(*args, **kwargs):
+        parse_thread_ids.append(threading.get_ident())
+        return parse(*args, **kwargs)
+
+    monkeypatch.setattr(storage_router, "_parse_envelope", recording_parse)
+    async with _storage_v2_stack(monkeypatch, render_pool_factory=_InlineRenderPool, prefix="lh2-parse-thread-") as stack:
+        payload = _payload(tenant_id=get_settings().archive_primary_tenant_id, machine_id="cinder", epoch=uuid4())
+        response = await stack.client.post(
+            "/agents/storage/v2/envelopes",
+            json=payload,
+            headers={"X-Longhouse-Storage-Lane": "live"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert parse_thread_ids[0] != threading.get_ident()
 
 
 @pytest.mark.asyncio

@@ -22,7 +22,7 @@ const FAIR_SEQUENCE: [WorkPriority; 3] =
 
 /// Per-priority concurrency cap for Live work. Live can always burst up to
 /// this number even when backlog work is hot.
-const LIVE_IN_FLIGHT_CAP: usize = 8;
+pub const LIVE_IN_FLIGHT_CAP: usize = 8;
 
 /// Number of `max_in_flight` slots reserved for Live work. Retry+Scan combined
 /// cannot take more than `max_in_flight - LIVE_RESERVED` slots, so a backlog
@@ -33,15 +33,20 @@ const LIVE_RESERVED: usize = LIVE_IN_FLIGHT_CAP;
 
 /// Concurrency budget shared by the Retry and Scan lanes.
 ///
-/// This used to be an AIMD controller driven by `X-Ingest-Queue-Wait-Ms` on
-/// each ship receipt. Storage-v2 receipts do not carry those headers, and no
-/// route in the Runtime Host sets them any more, so the only input that could
-/// raise the cap stopped arriving and it sat at its cold-start value of 1. A
-/// constant says that out loud. Raising it is a throughput decision to make
-/// against `bench.rs`, not something to infer from a signal that no longer
-/// exists.
-const BACKLOG_CAP: usize = 1;
-const SCAN_IN_FLIGHT_CAP: usize = 1;
+/// Retry and Scan share eight background slots. The Runtime Host's explicit
+/// backpressure and the live-latency guard still shrink archive request sizes,
+/// but do not reduce this concurrency budget.
+pub const BACKLOG_CAP: usize = 8;
+const SCAN_IN_FLIGHT_CAP: usize = BACKLOG_CAP;
+
+/// Live capacity plus the full backlog budget. CPU count remains useful for
+/// local worker pools, but must not prevent an ordinary laptop from holding
+/// both reservations in flight.
+pub const SHIPPING_IN_FLIGHT_CAP: usize = LIVE_IN_FLIGHT_CAP + BACKLOG_CAP;
+
+pub fn shipping_max_in_flight(workers: usize) -> usize {
+    workers.max(SHIPPING_IN_FLIGHT_CAP)
+}
 const LIVE_LATENCY_WARN_MS: u64 = 5_000;
 const LIVE_LATENCY_SLA_MS: u64 = 10_000;
 const LIVE_ENQUEUE_WARN_MS: u64 = 1_000;
@@ -806,8 +811,8 @@ impl PathScheduler {
         match priority {
             WorkPriority::Live => self.in_flight_count(WorkPriority::Live) < LIVE_IN_FLIGHT_CAP,
             WorkPriority::Retry => backlog_has_room,
-            // Scan shares the adaptive backlog budget with Retry and keeps a
-            // one-job subcap so reconciliation cannot crowd out spool replay.
+            // Scan shares the backlog budget with Retry and is bounded by the
+            // same cap, so reconciliation cannot exceed all archive capacity.
             WorkPriority::Scan => {
                 backlog_has_room && self.in_flight_count(WorkPriority::Scan) < SCAN_IN_FLIGHT_CAP
             }
@@ -900,36 +905,33 @@ mod tests {
     }
 
     #[test]
-    fn test_retry_and_reconciliation_share_the_adaptive_backlog_cap() {
+    fn test_retry_and_reconciliation_share_the_backlog_cap() {
         let mut scheduler = PathScheduler::new(32);
 
-        scheduler.enqueue(
-            PathBuf::from("/tmp/retry-a.jsonl"),
-            "codex",
-            WorkPriority::Retry,
-        );
-        scheduler.enqueue(
-            PathBuf::from("/tmp/retry-b.jsonl"),
-            "codex",
-            WorkPriority::Retry,
-        );
-        scheduler.enqueue(
-            PathBuf::from("/tmp/scan-c.jsonl"),
-            "codex",
-            WorkPriority::Scan,
-        );
+        for index in 0..=BACKLOG_CAP {
+            scheduler.enqueue(
+                PathBuf::from(format!("/tmp/backlog-{index}.jsonl")),
+                "codex",
+                if index % 2 == 0 {
+                    WorkPriority::Retry
+                } else {
+                    WorkPriority::Scan
+                },
+            );
+        }
 
         let first = scheduler.pop_launchable().unwrap();
-        assert_eq!(first.priority, WorkPriority::Retry);
+        for _ in 1..BACKLOG_CAP {
+            assert!(scheduler.pop_launchable().is_some());
+        }
         assert!(
             scheduler.pop_launchable().is_none(),
-            "the floor cap of one must bound Retry+Scan together"
+            "Retry+Scan share one backlog budget"
         );
 
         scheduler.complete(&first.path, None);
-        let second = scheduler.pop_launchable().unwrap();
-        assert_eq!(second.priority, WorkPriority::Scan);
-        assert_eq!(scheduler.snapshot().in_flight_backlog, 1);
+        assert!(scheduler.pop_launchable().is_some());
+        assert_eq!(scheduler.snapshot().in_flight_backlog, BACKLOG_CAP);
     }
 
     #[test]
@@ -1464,23 +1466,15 @@ mod tests {
     /// smaller of the live reservation's leftovers and `BACKLOG_CAP`.
     #[test]
     fn test_snapshot_backlog_cap_is_the_actual_combined_launch_limit() {
-        let mut scheduler = PathScheduler::new(10);
+        let mut scheduler = PathScheduler::new(SHIPPING_IN_FLIGHT_CAP);
 
-        scheduler.enqueue(
-            PathBuf::from("/tmp/retry-a.jsonl"),
-            "codex",
-            WorkPriority::Retry,
-        );
-        scheduler.enqueue(
-            PathBuf::from("/tmp/retry-b.jsonl"),
-            "claude",
-            WorkPriority::Retry,
-        );
-        scheduler.enqueue(
-            PathBuf::from("/tmp/scan.jsonl"),
-            "cursor",
-            WorkPriority::Scan,
-        );
+        for index in 0..BACKLOG_CAP {
+            scheduler.enqueue(
+                PathBuf::from(format!("/tmp/retry-{index}.jsonl")),
+                "codex",
+                WorkPriority::Retry,
+            );
+        }
 
         for _ in 0..BACKLOG_CAP {
             assert!(scheduler.pop_launchable().is_some());
@@ -1494,17 +1488,25 @@ mod tests {
 
     #[test]
     fn test_background_scan_is_capped_even_with_capacity_available() {
-        let mut scheduler = PathScheduler::new(4);
-        let scan_a = PathBuf::from("/tmp/scan-a.jsonl");
-        let scan_b = PathBuf::from("/tmp/scan-b.jsonl");
+        let mut scheduler = PathScheduler::new(SHIPPING_IN_FLIGHT_CAP);
         let live = PathBuf::from("/tmp/live.jsonl");
 
-        scheduler.enqueue(scan_a.clone(), "codex", WorkPriority::Scan);
-        scheduler.enqueue(scan_b.clone(), "codex", WorkPriority::Scan);
+        for index in 0..=SCAN_IN_FLIGHT_CAP {
+            scheduler.enqueue(
+                PathBuf::from(format!("/tmp/scan-{index}.jsonl")),
+                "codex",
+                WorkPriority::Scan,
+            );
+        }
 
         let first = scheduler.pop_launchable().unwrap();
-        assert_eq!(first.path, scan_a);
         assert_eq!(first.priority, WorkPriority::Scan);
+        for _ in 1..SCAN_IN_FLIGHT_CAP {
+            assert_eq!(
+                scheduler.pop_launchable().unwrap().priority,
+                WorkPriority::Scan
+            );
+        }
         assert!(scheduler.pop_launchable().is_none());
 
         scheduler.enqueue(live.clone(), "codex", WorkPriority::Live);
@@ -1512,10 +1514,20 @@ mod tests {
         assert_eq!(urgent.path, live);
         assert_eq!(urgent.priority, WorkPriority::Live);
 
-        scheduler.complete(&scan_a, None);
+        scheduler.complete(&first.path, None);
         let second_scan = scheduler.pop_launchable().unwrap();
-        assert_eq!(second_scan.path, scan_b);
         assert_eq!(second_scan.priority, WorkPriority::Scan);
+    }
+
+    #[test]
+    fn ordinary_cpu_counts_keep_eight_backlog_slots_and_live_reserve() {
+        for workers in [4, 8] {
+            let scheduler = PathScheduler::new(shipping_max_in_flight(workers));
+            let snapshot = scheduler.snapshot();
+            assert_eq!(snapshot.max_in_flight, SHIPPING_IN_FLIGHT_CAP);
+            assert_eq!(snapshot.live_reserved, LIVE_RESERVED);
+            assert_eq!(snapshot.backlog_cap, BACKLOG_CAP);
+        }
     }
 
     #[test]
@@ -1681,8 +1693,6 @@ mod tests {
             scheduler.pop_launchable().unwrap().priority,
             WorkPriority::Retry
         );
-        assert!(scheduler.pop_launchable().is_none());
-        scheduler.complete(Path::new("/tmp/retry.jsonl"), None);
         assert_eq!(
             scheduler.pop_launchable().unwrap().priority,
             WorkPriority::Scan

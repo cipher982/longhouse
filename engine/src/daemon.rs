@@ -42,7 +42,9 @@ use crate::managed_pi_helm_scan;
 use crate::managed_resume_scan;
 use crate::outbox;
 use crate::pipeline::compressor::CompressionAlgo;
-use crate::scheduler::{AdaptiveLimiter, ObservationTrace, PathJob, PathScheduler, WorkPriority};
+use crate::scheduler::{
+    shipping_max_in_flight, AdaptiveLimiter, ObservationTrace, PathJob, PathScheduler, WorkPriority,
+};
 use crate::shipping::client::ShipperClient;
 use crate::shipping::storage_v2::{require_storage_v2_cutover, StorageV2Capabilities};
 use crate::shipping_stats::{RecentShipStatsTracker, ShipAttemptOutcome, ShipLane};
@@ -997,10 +999,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     };
 
     // 7. Build bounded per-path scheduler and queue startup work.
-    // Total breadth comes from `config.workers` (num_cpus by default); the
-    // scheduler enforces per-priority caps (LIVE_IN_FLIGHT_CAP=8 in scheduler.rs)
-    // and a Live reservation so backlog work can't drain Live slots.
-    let max_in_flight = config.shipper_config.workers.max(1);
+    // CPU count sizes local worker pools; shipping always reserves enough slots
+    // for live work plus the configured backlog budget.
+    let max_in_flight = shipping_max_in_flight(config.shipper_config.workers);
     let mut scheduler =
         PathScheduler::with_limiter(max_in_flight, std::sync::Arc::clone(&adaptive_limiter));
     let mut in_flight = JoinSet::new();

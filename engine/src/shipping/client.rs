@@ -8,11 +8,12 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use reqwest::header::{HeaderMap, HeaderValue, CONTENT_ENCODING, CONTENT_TYPE, USER_AGENT};
-use serde::de::DeserializeOwned;
+use reqwest::header::{CONTENT_ENCODING, CONTENT_TYPE, HeaderMap, HeaderValue, USER_AGENT};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 use crate::config::ShipperConfig;
+use crate::scheduler::SHIPPING_IN_FLIGHT_CAP;
 
 /// Attempts and spacing for the startup capability negotiation.
 ///
@@ -24,13 +25,13 @@ use crate::config::ShipperConfig;
 pub(crate) const STARTUP_NEGOTIATION_ATTEMPTS: usize = 4;
 pub(crate) const STARTUP_NEGOTIATION_BACKOFF: Duration = Duration::from_secs(5);
 pub(crate) const STARTUP_NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(5);
-use crate::pipeline::compressor::{content_encoding, CompressionAlgo};
+use crate::pipeline::compressor::{CompressionAlgo, content_encoding};
+use crate::shipping::storage_v2::{
+    STORAGE_V2_CAPABILITIES_PATH, STORAGE_V2_LANE_HEADER, STORAGE_V2_SOURCE_EPOCHS_PATH,
+};
 use crate::shipping::storage_v2::{
     StorageV2BodyEncoding, StorageV2Capabilities, StorageV2Envelope, StorageV2Receipt,
     StorageV2SourceManifest,
-};
-use crate::shipping::storage_v2::{
-    STORAGE_V2_CAPABILITIES_PATH, STORAGE_V2_LANE_HEADER, STORAGE_V2_SOURCE_EPOCHS_PATH,
 };
 
 const WRITE_BACKPRESSURE_HEADER: &str = "X-Longhouse-Write-Backpressure";
@@ -235,7 +236,7 @@ impl ShipperClient {
             .timeout(Duration::from_secs(config.timeout_seconds))
             .connect_timeout(Duration::from_secs(5))
             .pool_idle_timeout(Duration::from_secs(120))
-            .pool_max_idle_per_host(4)
+            .pool_max_idle_per_host(SHIPPING_IN_FLIGHT_CAP)
             .tcp_keepalive(Duration::from_secs(30))
             .build()
             .context("building HTTP client")?;
@@ -658,6 +659,14 @@ fn parse_storage_v2_backpressure(
             || (response.detail.code == "resource_exhausted"
                 && response.detail.message.contains("catalog"))
     });
+    if status_code == 429 {
+        return Some(StorageV2Backpressure {
+            lane: lane.to_string(),
+            retry_after: parse_retry_after_seconds(headers)
+                .map(Duration::from_secs_f64)
+                .unwrap_or(Duration::from_secs(5)),
+        });
+    }
     if status_code != 503
         || (!typed_busy && !body.contains("storage_lane_busy") && !catalog_backpressure)
     {
@@ -813,6 +822,17 @@ mod tests {
         assert_eq!(detail.lane, "repair");
         assert_eq!(detail.retry_after, Duration::from_secs(7));
         assert!(parse_storage_v2_backpressure(500, &headers, "{}", "repair").is_none());
+    }
+
+    #[test]
+    fn storage_v2_ingest_limiter_429_is_typed_backpressure_with_retry_after() {
+        let mut headers = HeaderMap::new();
+        headers.insert("Retry-After", HeaderValue::from_static("7"));
+
+        let detail = parse_storage_v2_backpressure(429, &headers, "too many requests", "live")
+            .expect("the device ingest limiter must preserve the envelope for retry");
+        assert_eq!(detail.lane, "live");
+        assert_eq!(detail.retry_after, Duration::from_secs(7));
     }
 
     /// A catalogd deadline expiry is transient, and storage-v2 writes are keyed
