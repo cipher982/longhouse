@@ -11,6 +11,9 @@
  * prints load timings, long tasks, and the hottest source functions.
  * playwright and source-map resolve from the workspace's root node_modules
  * (bun install at the repo root).
+ *
+ * Run by hand: a throttled profile of a real payload is a measurement to read,
+ * not a pass/fail gate, and CI has no real timeline to feed it.
  */
 import { readFileSync, existsSync } from "node:fs";
 import { createServer } from "node:http";

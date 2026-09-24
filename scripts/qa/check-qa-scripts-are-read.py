@@ -133,7 +133,8 @@ def _declares_hand_run(path: pathlib.Path) -> bool:
     the exemption is worth less than no check.
     """
     for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        if line.lstrip().lstrip("#").lstrip().startswith(DECLARATION):
+        # Comment leaders for shell/Python (#) and TypeScript (//, *).
+        if line.lstrip().lstrip("#/*").lstrip().startswith(DECLARATION):
             return True
     return False
 
