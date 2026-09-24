@@ -148,9 +148,20 @@ if git -C "$ROOT" merge-base --is-ancestor "$BUMP_SHA" origin/main; then
 # Race-safe: only push if origin/main hasn't moved since the clean check above.
 # If another agent pushed in between, bail out so they can land and we retry.
 elif echo "Pushing versioned candidate to main..." && ! git -C "$ROOT" push origin "$BUMP_SHA:refs/heads/main"; then
-  echo "Push failed — another commit likely landed on origin/main. Rewind and retry:" >&2
-  echo "  reconcile local main with origin/main, then rerun make release VERSION=$VERSION" >&2
-  exit 1
+  # Other agents land on main during the ~20 min validation. When the bump
+  # commit is the only local commit, replay it onto origin/main: that only
+  # adds already-pushed work, and the exact-SHA CI and deploy gates below run
+  # on the rebased candidate before any release is created.
+  git -C "$ROOT" fetch --quiet origin main
+  if [[ "$(git -C "$ROOT" rev-list --count origin/main..HEAD)" != "1" ]] \
+    || ! git -C "$ROOT" rebase --quiet origin/main \
+    || ! BUMP_SHA="$(git -C "$ROOT" rev-parse HEAD)" \
+    || ! git -C "$ROOT" push origin "$BUMP_SHA:refs/heads/main"; then
+    echo "Push failed — another commit likely landed on origin/main. Rewind and retry:" >&2
+    echo "  reconcile local main with origin/main, then rerun make release VERSION=$VERSION" >&2
+    exit 1
+  fi
+  echo "Rebased versioned candidate onto origin/main: ${BUMP_SHA:0:10}"
 fi
 
 # GitHub path filters may omit required release gates when the final candidate
