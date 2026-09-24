@@ -99,7 +99,7 @@ jobs:
 
   no_runtime_change:
     name: "No runtime mutation required"
-    runs-on: cube-deploy
+    runs-on: cube-gate
     needs: changes
     if: ${{ needs.changes.outputs.no_runtime_change == 'true' }}
     steps:
@@ -122,9 +122,10 @@ jobs:
     # below the waits inside it is how the gate kills itself mid-wait.
     timeout-minutes: 120
     name: "Resolve exact-SHA deploy metadata"
-    # Waiting on cube CI and image jobs must not consume their runner pool.
-    # cube-deploy is downstream of those prerequisites, never required by them.
-    runs-on: cube-deploy
+    # Waiting on CI and image publication must not occupy the two runners
+    # reserved for actual canary/demo mutation. This gate still needs Docker
+    # once the prerequisites finish to inspect the immutable image identity.
+    runs-on: cube-gate
     needs: changes
     if: ${{ needs.changes.outputs.deploy_verify == 'true' }}
     outputs:

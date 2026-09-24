@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [cube-fast, cube-browser, cube-maint, cube-deploy]
+        lane: [cube-fast, cube-browser, cube-maint, cube-gate, cube-deploy]
     runs-on: ${{ matrix.lane }}
     timeout-minutes: 10
     if: ${{ github.event_name != 'schedule' || vars.CUBE_RUNNER_CANARY_ENABLED != 'false' }}

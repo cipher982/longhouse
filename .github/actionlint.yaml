@@ -5,3 +5,4 @@ self-hosted-runner:
     - cube-fast
     - cube-browser
     - cube-maint
+    - cube-gate
