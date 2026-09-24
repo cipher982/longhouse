@@ -16,6 +16,7 @@ on:
 permissions:
   contents: read
   packages: read
+  pull-requests: read
 
 concurrency:
   # A new commit has a different identity and must not cancel the gates for an
@@ -62,6 +63,9 @@ jobs:
         id: filter
         with:
           filters: .github/path-filters.yml
+          # A branch push qualifies that push, not every commit since main.
+          # PRs still use GitHub's changed-file API against their base branch.
+          base: ${{ github.ref_name }}
 
   fork-qualification:
     name: "Fork PR requires trusted replay"
