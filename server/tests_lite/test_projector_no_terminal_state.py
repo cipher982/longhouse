@@ -191,7 +191,11 @@ def test_idle_claim_poll_does_not_take_a_write_transaction(store: CatalogStore, 
     assert result["exact_replay"] is False
 
 
-def test_search_projector_claims_newest_session_activity_first(store: CatalogStore) -> None:
+@pytest.mark.parametrize("walk_backlog", [catalog_store.SEARCH_CLAIM_WALK_BACKLOG, 1], ids=["sorted", "walked"])
+def test_search_projector_claims_newest_session_activity_first(
+    store: CatalogStore, monkeypatch: pytest.MonkeyPatch, walk_backlog: int
+) -> None:
+    monkeypatch.setattr(catalog_store, "SEARCH_CLAIM_WALK_BACKLOG", walk_backlog)
     older, newer = str(uuid4()), str(uuid4())
     now = datetime.now(UTC)
     with store.engine.begin() as connection:
@@ -219,6 +223,11 @@ def test_search_projector_claims_newest_session_activity_first(store: CatalogSto
     )
 
     assert [row["session_id"] for row in claimed["claimed"]] == [newer, older]
+    # The walked rows go through the same lease write as sorted ones.
+    replay = store.claim_projector_lag(
+        projector="search-v2", worker_id="worker", claim_token=str(uuid4()), now=now, lease_seconds=60, limit=2
+    )
+    assert replay["claimed"] == []
 
 
 def test_claim_replay_token_probes_use_indexes(store: CatalogStore) -> None:

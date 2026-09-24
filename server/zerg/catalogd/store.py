@@ -21,10 +21,12 @@ from uuid import uuid4
 from uuid import uuid5
 
 from sqlalchemy import Connection
+from sqlalchemy import DateTime
 from sqlalchemy import Engine
 from sqlalchemy import Float
 from sqlalchemy import MetaData
 from sqlalchemy import and_
+from sqlalchemy import bindparam
 from sqlalchemy import case
 from sqlalchemy import cast
 from sqlalchemy import delete
@@ -137,6 +139,12 @@ _STAGE_TIMER_SLOW_MS = float(os.getenv("CATALOGD_STAGE_SLOW_MS", "250"))
 
 DEVICE_TOKEN_LIMIT_PER_OWNER = 1_000
 SESSION_READ_LIMIT = 100
+# search-v2 claims newest sessions first. Sorting every eligible row costs
+# ~86 ms per claim at a 40k-session rebuild backlog, held in the single writer;
+# walking sessions by ix_sessions_last_activity_at stops at the first eligible
+# rows (0.2 ms) but steps over every completed newer session. Walk when the
+# backlog is large, sort when it is small (steady state, idle polls).
+SEARCH_CLAIM_WALK_BACKLOG = 2_000
 MACHINE_ENROLLMENT_LIMIT = 1_000
 MACHINE_HEALTH_LIMIT = 100
 # The capability projector consumes only its highest-ranked connection.  The
@@ -12704,6 +12712,13 @@ class CatalogStore:
                 )
             statement = select(table).where(*eligible_predicates)
             if projector == "search-v2":
+                backlog = connection.execute(
+                    select(func.count()).select_from(
+                        select(table.c.session_id).where(*eligible_predicates).limit(SEARCH_CLAIM_WALK_BACKLOG).subquery()
+                    )
+                ).scalar_one()
+                if backlog >= SEARCH_CLAIM_WALK_BACKLOG:
+                    return connection.execute(_SEARCH_CLAIM_NEWEST_FIRST_WALK, {"now": now, "row_limit": row_limit}).mappings().all()
                 sessions = StorageSession.__table__
                 # Rebuilds should make recent history playable first. The
                 # activity tie-break preserves deterministic progress among
@@ -16775,3 +16790,23 @@ _PROJECTOR_ROWS_BY_CLAIM_TOKEN = text(
     ORDER BY session_id
     """
 ).columns(*ProjectorState.__table__.c)
+
+
+# The same eligibility as claim_projector_lag's predicates for search-v2 (no
+# tombstone filter for that projector). CROSS JOIN pins sessions as the outer
+# loop, so SQLite walks ix_sessions_last_activity_at instead of sorting.
+_SEARCH_CLAIM_NEWEST_FIRST_WALK = (
+    text(
+        """
+        SELECT p.* FROM sessions AS s CROSS JOIN projector_state AS p
+          ON p.projector = 'search-v2' AND p.session_id = s.session_id
+        WHERE p.desired_revision > p.completed_revision
+          AND (p.claim_expires_at IS NULL OR p.claim_expires_at <= :now)
+          AND (p.retry_at IS NULL OR p.retry_at <= :now)
+        ORDER BY s.last_activity_at DESC
+        LIMIT :row_limit
+        """
+    )
+    .bindparams(bindparam("now", type_=DateTime()))
+    .columns(*ProjectorState.__table__.c)
+)
