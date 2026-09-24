@@ -140,10 +140,14 @@ if ! git -C "$ROOT" diff --quiet || ! git -C "$ROOT" diff --cached --quiet; then
   exit 1
 fi
 
-echo "Pushing versioned candidate to main..."
+# A candidate that needed no bump commit is already on origin/main; other
+# agents landing on top of it during validation must not fail the release.
+git -C "$ROOT" fetch --quiet origin main
+if git -C "$ROOT" merge-base --is-ancestor "$BUMP_SHA" origin/main; then
+  echo "Candidate ${BUMP_SHA:0:10} is already on origin/main; nothing to push."
 # Race-safe: only push if origin/main hasn't moved since the clean check above.
 # If another agent pushed in between, bail out so they can land and we retry.
-if ! git -C "$ROOT" push origin "$BUMP_SHA:refs/heads/main"; then
+elif echo "Pushing versioned candidate to main..." && ! git -C "$ROOT" push origin "$BUMP_SHA:refs/heads/main"; then
   echo "Push failed — another commit likely landed on origin/main. Rewind and retry:" >&2
   echo "  reconcile local main with origin/main, then rerun make release VERSION=$VERSION" >&2
   exit 1
