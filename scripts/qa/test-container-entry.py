@@ -10,7 +10,7 @@ from test_boundary import create_boundary
 
 
 def main() -> None:
-    config = Path("/tmp/test-env.json")
+    config = Path("/opt/test-env.json")
     environment = json.loads(config.read_text())
     config.unlink()
     os.environ.clear()
@@ -40,12 +40,12 @@ def main() -> None:
             "--literal-pathspecs",
             "add",
             "--force",
-            "--pathspec-from-file=/tmp/test-source-files",
+            "--pathspec-from-file=/opt/test-source-files",
             "--pathspec-file-nul",
         ],
         check=True,
     )
-    Path("/tmp/test-source-files").unlink()
+    Path("/opt/test-source-files").unlink()
     subprocess.run(
         [
             "git",
