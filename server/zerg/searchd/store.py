@@ -22,7 +22,7 @@ from zerg.searchd.hydration import RenderHydrator
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
 
 SCHEMA_VERSION = 1
-SCHEMA_GENERATION = "searchd-v5-render-references-dual-contentless-fts"
+SCHEMA_GENERATION = "searchd-v6-render-references-time-ordered-fast-fts"
 SEARCHABLE_RETENTION_DAYS = 91
 SEARCHABLE_FAST_WINDOW_DAYS = 90
 SEARCHABLE_FAST_WINDOW_MARGIN_SECONDS = 300
@@ -37,6 +37,9 @@ _WORKLOG_SNAPSHOT_LIMIT = 8
 _EMBEDDING_SOURCE_PAGE_BYTES = 6 * 1024 * 1024
 _RECALL_TRUNCATION_MARKER = " …[truncated]"
 _TRUTHY_ENV = frozenset({"1", "true", "yes", "on"})
+_FAST_KEY_TIE_BITS = 11
+_FAST_KEY_TIE_LIMIT = 1 << _FAST_KEY_TIE_BITS
+_FAST_KEY_MAX_ORDER_TIME_US = 1 << 52
 
 _PUBLISH_AGGREGATES_SQL = """
     SELECT
@@ -230,10 +233,17 @@ _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL = """
 # fix. Snippetting the final page instead keeps that cost flat.
 _SEARCHABLE_SEARCH_SQL = """
     WITH candidates AS (
-        SELECT e.source_event_id AS search_event_id, bm25(searchable_fts) AS rank
+        SELECT rowid AS fast_key, bm25(searchable_fts) AS rank
         FROM searchable_fts
-         JOIN searchable_events e ON e.source_event_id = searchable_fts.rowid
-          WHERE searchable_fts MATCH ? AND e.owner_id = ?
+        WHERE searchable_fts MATCH ?
+        ORDER BY rowid DESC
+        LIMIT ?
+    ), top AS (
+        SELECT e.source_event_id AS search_event_id, c.rank,
+               (SELECT COUNT(*) FROM candidates) AS candidate_count
+        FROM candidates c
+        JOIN searchable_events e ON e.fast_key = c.fast_key
+        WHERE e.owner_id = ?
           AND (? = 1 OR COALESCE(e.hidden_from_default_timeline, 0) = 0
                OR (? = 1 AND COALESCE(e.test_scope_visible, 0) = 1))
           AND COALESCE(e.user_hidden_from_timeline, 0) = 0
@@ -248,12 +258,7 @@ _SEARCHABLE_SEARCH_SQL = """
           AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
           AND (e.role != 'user' OR (e.title_eligible = 1
                AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
-        ORDER BY e.order_time_us DESC, e.source_event_id DESC
-        LIMIT ?
-    ), top AS (
-        SELECT search_event_id, rank, (SELECT COUNT(*) FROM candidates) AS candidate_count
-        FROM candidates
-        ORDER BY rank ASC
+        ORDER BY rank ASC, e.source_event_id DESC
         LIMIT ?
     )
     SELECT t.search_event_id, e.session_id, e.generation_id, e.source_object_id,
@@ -267,8 +272,6 @@ _SEARCHABLE_SEARCH_SQL = """
      FROM top t
      JOIN searchable_events e ON e.source_event_id = t.search_event_id
      JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
-       JOIN searchable_fts ON searchable_fts.rowid = t.search_event_id
-      WHERE searchable_fts MATCH ?
     ORDER BY t.rank ASC
 """
 
@@ -609,6 +612,7 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
         -- the page actually returned, through the FTS index that now owns it.
         CREATE TABLE IF NOT EXISTS searchable_events (
             source_event_id INTEGER PRIMARY KEY,
+            fast_key INTEGER NOT NULL UNIQUE,
             owner_id TEXT NOT NULL,
             project TEXT,
             provider TEXT NOT NULL,
@@ -733,7 +737,7 @@ class SearchStore:
 
         cutoff = _searchable_cutoff_us()
         self.connection.execute(
-            "DELETE FROM searchable_fts WHERE rowid IN (SELECT source_event_id FROM searchable_events WHERE order_time_us < ?)",
+            "DELETE FROM searchable_fts WHERE rowid IN (SELECT fast_key FROM searchable_events WHERE order_time_us < ?)",
             (cutoff,),
         )
         self.connection.execute("DELETE FROM searchable_events WHERE order_time_us < ?", (cutoff,))
@@ -989,11 +993,6 @@ class SearchStore:
                     "INSERT INTO events_fts(rowid, content_text, tool_output_text) VALUES (?, ?, ?)",
                     (event_id, record.get("content_text"), record.get("tool_output_text")),
                 )
-                if int(record["order_time_us"]) >= _searchable_cutoff_us():
-                    self.connection.execute(
-                        "INSERT INTO searchable_fts(rowid, content_text, tool_output_text) VALUES (?, ?, ?)",
-                        (event_id, record.get("content_text"), record.get("tool_output_text")),
-                    )
             self.connection.execute(
                 """
                 INSERT INTO indexed_objects(
@@ -1715,73 +1714,88 @@ class SearchStore:
     ) -> None:
         """Atomically replace one session's published, recent discovery corpus."""
 
-        # Retain postings shared by the incoming published projection; staging
-        # inserted those at index time. Retire only superseded fast postings.
         self.connection.execute(
-            """
-            DELETE FROM searchable_fts
-            WHERE rowid IN (
-                SELECT source_event_id FROM searchable_events
-                WHERE session_id = ?
-                  AND source_event_id NOT IN (
-                      SELECT e.id FROM events e
-                      JOIN projection_membership m ON m.object_id = e.source_object_id
-                      WHERE m.session_id = ? AND m.generation_id = ? AND m.desired_revision = ?
-                        AND e.session_id = ? AND e.generation_id = ? AND e.order_time_us >= ?
-                  )
-            )
-            """,
-            (session_id, session_id, generation_id, desired_revision, session_id, generation_id, _searchable_cutoff_us()),
+            "DELETE FROM searchable_fts WHERE rowid IN (SELECT fast_key FROM searchable_events WHERE session_id = ?)",
+            (session_id,),
         )
         self.connection.execute("DELETE FROM searchable_events WHERE session_id = ?", (session_id,))
-        self.connection.execute(
+        rows = self.connection.execute(
             """
-            INSERT INTO searchable_events(
-                source_event_id, owner_id, project, provider, environment,
-                order_time_us, session_id, generation_id, source_object_id,
-                record_ordinal, event_id, role, tool_name,
-                interaction_kind, title_eligible,
-                indexed_through, event_count, hidden_from_default_timeline, test_scope_visible,
-                user_hidden_from_timeline, user_state, source_commit_seq, tombstoned
-            )
-            SELECT e.id, ?, ?, ?, ?,
-                   e.order_time_us, e.session_id, e.generation_id, e.source_object_id,
-                   e.record_ordinal, e.event_id, e.role, e.tool_name,
-                   e.interaction_kind, e.title_eligible,
-                   ?, ?, ?, ?, ?, ?, ?, ?
+            SELECT e.id AS source_event_id, e.order_time_us, e.session_id, e.generation_id,
+                   e.source_object_id, e.record_ordinal, e.event_id, e.role, e.tool_name,
+                   e.interaction_kind, e.title_eligible
             FROM events e
             JOIN projection_membership m ON m.object_id = e.source_object_id
             WHERE m.session_id = ? AND m.generation_id = ? AND m.desired_revision = ?
               AND e.session_id = ? AND e.generation_id = ?
               AND e.order_time_us >= ?
             """,
-            (
-                owner_id,
-                project,
-                provider,
-                environment,
-                desired_revision,
-                event_count,
-                1 if hidden_from_default_timeline else 0,
-                1 if test_scope_visible else 0,
-                1 if user_hidden_from_timeline else 0,
-                user_state,
-                source_commit_seq,
-                1 if tombstoned else 0,
-                session_id,
-                generation_id,
-                desired_revision,
-                session_id,
-                generation_id,
-                _searchable_cutoff_us(),
-            ),
-        )
+            (session_id, generation_id, desired_revision, session_id, generation_id, _searchable_cutoff_us()),
+        ).fetchall()
+        for row in rows:
+            fast_key = self._allocate_fast_key(int(row["order_time_us"]))
+            self.connection.execute(
+                "INSERT INTO searchable_events(source_event_id, fast_key, owner_id, project, provider, environment, order_time_us, session_id, generation_id, source_object_id, record_ordinal, event_id, role, tool_name, interaction_kind, title_eligible, indexed_through, event_count, hidden_from_default_timeline, test_scope_visible, user_hidden_from_timeline, user_state, source_commit_seq, tombstoned) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row["source_event_id"],
+                    fast_key,
+                    owner_id,
+                    project,
+                    provider,
+                    environment,
+                    row["order_time_us"],
+                    row["session_id"],
+                    row["generation_id"],
+                    row["source_object_id"],
+                    row["record_ordinal"],
+                    row["event_id"],
+                    row["role"],
+                    row["tool_name"],
+                    row["interaction_kind"],
+                    row["title_eligible"],
+                    desired_revision,
+                    event_count,
+                    1 if hidden_from_default_timeline else 0,
+                    1 if test_scope_visible else 0,
+                    1 if user_hidden_from_timeline else 0,
+                    user_state,
+                    source_commit_seq,
+                    1 if tombstoned else 0,
+                ),
+            )
+            hydrated = self._hydrator.hydrate([dict(row)], byte_budget=1 << 60).rows
+            if hydrated:
+                self.connection.execute(
+                    "INSERT INTO searchable_fts(rowid, content_text, tool_output_text) VALUES (?, ?, ?)",
+                    (fast_key, hydrated[0].get("content_text"), hydrated[0].get("tool_output_text")),
+                )
         cutoff = _searchable_cutoff_us()
         self.connection.execute(
-            "DELETE FROM searchable_fts WHERE rowid IN (SELECT source_event_id FROM searchable_events WHERE order_time_us < ?)",
+            "DELETE FROM searchable_fts WHERE rowid IN (SELECT fast_key FROM searchable_events WHERE order_time_us < ?)",
             (cutoff,),
         )
         self.connection.execute("DELETE FROM searchable_events WHERE order_time_us < ?", (cutoff,))
+
+    def _allocate_fast_key(self, order_time_us: int) -> int:
+        if order_time_us >= _FAST_KEY_MAX_ORDER_TIME_US:
+            raise ValueError("fast search order_time_us must be less than 2**52 (valid through approximately 2112)")
+        candidate_time = order_time_us
+        while True:
+            if candidate_time >= _FAST_KEY_MAX_ORDER_TIME_US:
+                raise ValueError("fast search order_time_us ran out of rowid key space before 2**52")
+            base = candidate_time << _FAST_KEY_TIE_BITS
+            used = {
+                int(row[0]) - base
+                for row in self.connection.execute(
+                    "SELECT fast_key FROM searchable_events WHERE fast_key >= ? AND fast_key < ?", (base, base + _FAST_KEY_TIE_LIMIT)
+                )
+            }
+            for tie in range(_FAST_KEY_TIE_LIMIT):
+                if tie not in used:
+                    return base | tie
+            # More than 2,048 events at a microsecond share the next microsecond's
+            # key space; this preserves uniqueness and recency ordering.
+            candidate_time += 1
 
     def search(
         self,
@@ -1823,7 +1837,7 @@ class SearchStore:
         candidate_ceiling = max(limit, _CANDIDATE_CEILING)
         if use_searchable_corpus:
             sql = _SEARCHABLE_SEARCH_SQL if include_snippets else _SEARCHABLE_SEARCH_WITHOUT_SNIPPETS_SQL
-            params = filter_params + (candidate_ceiling, limit, fts_query)
+            params = (fts_query, candidate_ceiling) + filter_params[1:] + (limit,)
         else:
             sql = _ARCHIVE_BOUNDED_SEARCH_SQL if include_snippets else _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL
             params = filter_params + (candidate_ceiling, limit) + ((fts_query,) if include_snippets else ())
@@ -2256,6 +2270,10 @@ class SearchStore:
         changed = False
         self.connection.execute("BEGIN IMMEDIATE")
         try:
+            self.connection.execute(
+                "DELETE FROM searchable_fts WHERE rowid IN (SELECT fast_key FROM searchable_events WHERE session_id = ?)",
+                (session_id,),
+            )
             for table in (
                 "session_index",
                 "searchable_events",
@@ -2279,7 +2297,12 @@ class SearchStore:
         count = int(self.connection.execute(f"SELECT COUNT(*) FROM events WHERE {predicate}", params).fetchone()[0])
         if count:
             self.connection.execute(f"DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE {predicate})", params)
-            self.connection.execute(f"DELETE FROM searchable_fts WHERE rowid IN (SELECT id FROM events WHERE {predicate})", params)
+            self.connection.execute(
+                f"DELETE FROM searchable_fts WHERE rowid IN ("
+                f"SELECT fast_key FROM searchable_events WHERE source_event_id IN (SELECT id FROM events WHERE {predicate})"
+                f")",
+                params,
+            )
             self.connection.execute(f"DELETE FROM events WHERE {predicate}", params)
         return count
 

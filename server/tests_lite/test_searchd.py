@@ -1241,13 +1241,8 @@ def test_archive_search_uses_fts_rank_top_k_without_temp_sort(tmp_path):
         connection.close()
 
 
-def test_searchable_search_walks_event_time_descending_and_sorts_only_candidates(tmp_path):
-    """The interactive lane must select its bounded candidates by event time.
-
-    FTS rowids reflect projector insertion order, which reverses recency after
-    a newest-first rebuild. The bounded candidate selection must instead order
-    metadata by its actual event timestamp.
-    """
+def test_searchable_search_uses_time_ordered_fts_rowids_for_early_exit(tmp_path):
+    """The fast FTS walk must stop at its rowid-descending candidate limit."""
 
     connection = open_search_database(tmp_path / "search.db")
     try:
@@ -1255,6 +1250,7 @@ def test_searchable_search_walks_event_time_descending_and_sorts_only_candidates
             f"EXPLAIN QUERY PLAN {_SEARCHABLE_SEARCH_SQL}",
             (
                 "search db",
+                _CANDIDATE_CEILING,
                 "42",
                 0,
                 0,
@@ -1268,17 +1264,14 @@ def test_searchable_search_walks_event_time_descending_and_sorts_only_candidates
                 None,
                 None,
                 None,
-                _CANDIDATE_CEILING,
                 10,
-                "search db",
             ),
         ).fetchall()
         details = [str(row[3]) for row in plan]
-        assert any("searchable_fts" in detail and "VIRTUAL TABLE" in detail for detail in details)
-        assert any("USE TEMP B-TREE FOR ORDER BY" in detail for detail in details)
-        # The owner/project/window predicates must be evaluated inside the walk.
-        # Applied afterwards they made narrow windows slower, not faster.
-        assert any("SEARCH e USING INTEGER PRIMARY KEY" in detail for detail in details)
+        assert any("searchable_fts" in detail and "VIRTUAL TABLE INDEX 192:" in detail for detail in details)
+        # The remaining sorts rank/browse only the bounded CTE and final page;
+        # the FTS match scan itself is a rowid-descending early-exit walk.
+        assert sum("USE TEMP B-TREE FOR ORDER BY" in detail for detail in details) == 2
     finally:
         connection.close()
 
@@ -1286,18 +1279,19 @@ def test_searchable_search_walks_event_time_descending_and_sorts_only_candidates
 def test_searchable_candidate_order_uses_event_time_after_newest_first_rebuild(tmp_path):
     connection = open_search_database(tmp_path / "search.db")
     try:
-        # A newest-first projector inserts the newer event first, making its FTS
-        # rowid lower than the older event's rowid.
+        # A newest-first projector may insert the newer event first. Its explicit
+        # fast key, rather than insertion order, keeps the FTS walk newest-first.
         for event_id, order_time_us in ((1, 2_000), (2, 1_000)):
+            fast_key = order_time_us << 11
             connection.execute(
-                "INSERT INTO searchable_events(source_event_id, owner_id, project, provider, environment, order_time_us, session_id, generation_id, source_object_id, record_ordinal, event_id, role, tool_name, indexed_through, event_count) "
-                "VALUES (?, '42', NULL, 'codex', 'local', ?, ?, 'g', 'o', 0, ?, 'assistant', NULL, 1, 1)",
-                (event_id, order_time_us, f"session-{event_id}", str(event_id)),
+                "INSERT INTO searchable_events(source_event_id, fast_key, owner_id, project, provider, environment, order_time_us, session_id, generation_id, source_object_id, record_ordinal, event_id, role, tool_name, indexed_through, event_count) "
+                "VALUES (?, ?, '42', NULL, 'codex', 'local', ?, ?, 'g', 'o', 0, ?, 'assistant', NULL, 1, 1)",
+                (event_id, fast_key, order_time_us, f"session-{event_id}", str(event_id)),
             )
-            connection.execute("INSERT INTO searchable_fts(rowid, content_text) VALUES (?, 'needle')", (event_id,))
+            connection.execute("INSERT INTO searchable_fts(rowid, content_text) VALUES (?, 'needle')", (fast_key,))
         rows = connection.execute(
-            "SELECT e.session_id FROM searchable_fts JOIN searchable_events e ON e.source_event_id = searchable_fts.rowid "
-            "WHERE searchable_fts MATCH 'needle' AND e.owner_id = '42' ORDER BY e.order_time_us DESC, e.source_event_id DESC LIMIT 2"
+            "SELECT e.session_id FROM searchable_fts JOIN searchable_events e ON e.fast_key = searchable_fts.rowid "
+            "WHERE searchable_fts MATCH 'needle' AND e.owner_id = '42' ORDER BY searchable_fts.rowid DESC LIMIT 2"
         ).fetchall()
         assert [row[0] for row in rows] == ["session-1", "session-2"]
     finally:
@@ -1326,10 +1320,10 @@ def test_candidate_walk_never_touches_event_text(tmp_path):
         # the four call sites that delete from searchable_events stay correct
         # without knowing the tables were split.
         connection.execute(
-            "INSERT INTO searchable_events(source_event_id, owner_id, project, provider, environment,"
+            "INSERT INTO searchable_events(source_event_id, fast_key, owner_id, project, provider, environment,"
             " order_time_us, session_id, generation_id, source_object_id, record_ordinal, event_id,"
             " role, tool_name, indexed_through, event_count)"
-            " VALUES (1, '42', NULL, 'codex', 'local', 1, 's', 'g', 'o', 0, 'e', 'user', NULL, 1, 1)"
+            " VALUES (1, 2048, '42', NULL, 'codex', 'local', 1, 's', 'g', 'o', 0, 'e', 'user', NULL, 1, 1)"
         )
         connection.execute("DELETE FROM searchable_events WHERE source_event_id = 1")
         assert connection.execute("SELECT COUNT(*) FROM searchable_events").fetchone()[0] == 0
