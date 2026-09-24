@@ -392,6 +392,81 @@ struct SessionStreamResumeTests {
     }
 
     @Test
+    func initialSnapshotCoveredByTheJoinedTailDoesNotRefetch() async throws {
+        // Opening a session starts the stream beside the first tail fetch, so
+        // the stream's initial snapshot frame (no pubsub wake behind it) joins
+        // that fetch. Once the fetch has shown the snapshot's latest event, a
+        // follow-up would only re-read identical content: a second round trip
+        // and render on every open.
+        let workspace = try TestWorkspaceFactory.make(eventId: 10, content: "Open", revisionLatestEventId: 10)
+        let api = FakeStreamResumeClient(workspaces: [workspace])
+        await api.delayTailResponses(nanoseconds: 300_000_000)
+        let recorder = StreamFactoryRecorder()
+        let model = Self.realtimeModel(api: api, recorder: recorder)
+
+        let opening = Task { await model.start(sessionId: "session-1", appState: self.appState()) }
+        await waitForStreamStart(recorder)
+        recorder.emitConnected()
+        recorder.emitChanged(latestEventId: 10, pubsubSeq: nil)
+        await opening.value
+        await waitForItemIds(model, ["user:10"])
+        await waitForTailHandleRelease(model)
+        try? await Task.sleep(nanoseconds: 600_000_000)
+
+        #expect(await api.tailRequestCount() == 1, "a covered snapshot must not force a second tail read")
+        model.stop()
+    }
+
+    @Test
+    func initialSnapshotNewerThanTheJoinedTailStillFollowsUp() async throws {
+        // The guard stays for the race it exists for: the snapshot saw an event
+        // the in-flight fetch did not, so one more read is required.
+        let before = try TestWorkspaceFactory.make(eventId: 10, content: "Before", revisionLatestEventId: 10)
+        let after = try TestWorkspaceFactory.make(eventId: 11, content: "After", revisionLatestEventId: 11)
+        let api = FakeStreamResumeClient(workspaces: [before, after])
+        await api.delayTailResponses(nanoseconds: 300_000_000)
+        let recorder = StreamFactoryRecorder()
+        let model = Self.realtimeModel(api: api, recorder: recorder)
+
+        let opening = Task { await model.start(sessionId: "session-1", appState: self.appState()) }
+        await waitForStreamStart(recorder)
+        recorder.emitConnected()
+        recorder.emitChanged(latestEventId: 11, pubsubSeq: nil)
+        await opening.value
+        await waitForItemIds(model, ["user:11"])
+
+        #expect(model.items.map(\.id) == ["user:11"])
+        #expect(await api.tailRequestCount() == 2)
+        model.stop()
+    }
+
+    private func appState() -> AppState {
+        let appState = AppState()
+        appState.serverURL = serverURL
+        return appState
+    }
+
+    private static func realtimeModel(api: FakeStreamResumeClient, recorder: StreamFactoryRecorder) -> SessionViewModel {
+        SessionViewModel(
+            apiFactory: { _ in api },
+            streamFactory: { _, _, sinceSeq, fingerprint in
+                recorder.make(sinceSeq: sinceSeq, knownWorkspaceFingerprint: fingerprint)
+            },
+            enableRealtime: true,
+            snapshotStore: isolatedSnapshotStore()
+        )
+    }
+
+    private func waitForStreamStart(_ recorder: StreamFactoryRecorder) async {
+        let deadline = Date().addingTimeInterval(5)
+        while recorder.startCount == 0, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        // The stream task subscribes asynchronously after the factory call.
+        try? await Task.sleep(nanoseconds: 30_000_000)
+    }
+
+    @Test
     func healthyPreviewBurstRendersWithoutTailRequestAmplification() async throws {
         let workspace = try TestWorkspaceFactory.make(eventId: 10, content: "Before live preview")
         let api = FakeStreamResumeClient(workspaces: [workspace])

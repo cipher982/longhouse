@@ -159,6 +159,14 @@ final class SessionViewModel: ObservableObject {
     private var realtimeRefreshTask: Task<Void, Never>?
     private var realtimeRefreshRequestToken = 0
     private var realtimeRefreshPending = false
+    /// Wakes gathered for the next pass of the realtime loop. Only the
+    /// stream's initial snapshot frame carries a watermark here; any other
+    /// wake demands the conservative follow-up.
+    private var realtimeWakeSnapshotEventId: Int?
+    private var realtimeWakeNeedsFollowUp = false
+    /// The newest durable event any tail response has shown, whether or not
+    /// it was applied: what a joined refresh actually observed.
+    private var tailObservedEventId: Int?
     private var historyFillStalledAtLoadedCount: Int?
     /// WebKit can measure a short document in the same callback that reports
     /// its first frame. Remember that request until MainActor records the frame.
@@ -343,6 +351,9 @@ final class SessionViewModel: ObservableObject {
             lastWorkspaceRevisionFingerprint = nil
             streamEpoch = nil
             streamAuthRefreshAttempted = false
+            realtimeWakeSnapshotEventId = nil
+            realtimeWakeNeedsFollowUp = false
+            tailObservedEventId = nil
             transcriptRevisionFloor = transcriptRevision
             refreshErrorMessage = nil
             pauseResponseErrorMessage = nil
@@ -1783,7 +1794,13 @@ final class SessionViewModel: ObservableObject {
                 // mobile-tail/timeline/WebKit path untouched.
                 loadPrimaryDetail(api: api, sessionId: sessionId)
             default:
-                requestRealtimeRefresh(api: api, sessionId: sessionId)
+                // The initial snapshot on connect has no pubsub wake behind it.
+                let isInitialSnapshot = change.change_kind == nil && (change.pubsub_seq ?? 0) == 0
+                requestRealtimeRefresh(
+                    api: api,
+                    sessionId: sessionId,
+                    initialSnapshotEventId: isInitialSnapshot ? change.latest_event_id : nil
+                )
             }
         }
     }
@@ -1829,7 +1846,16 @@ final class SessionViewModel: ObservableObject {
     /// burst of N into N sequential tail reads and N WebKit renders. While a
     /// refresh is in flight the newest wake only marks it dirty, and at most
     /// one follow-up runs when it lands.
-    private func requestRealtimeRefresh(api: SessionWorkspaceClient, sessionId: String) {
+    private func requestRealtimeRefresh(
+        api: SessionWorkspaceClient,
+        sessionId: String,
+        initialSnapshotEventId: Int? = nil
+    ) {
+        if let initialSnapshotEventId {
+            realtimeWakeSnapshotEventId = max(realtimeWakeSnapshotEventId ?? initialSnapshotEventId, initialSnapshotEventId)
+        } else {
+            realtimeWakeNeedsFollowUp = true
+        }
         if realtimeRefreshTask != nil {
             realtimeRefreshPending = true
             return
@@ -1848,8 +1874,19 @@ final class SessionViewModel: ObservableObject {
             var forcedFollowUp = false
             repeat {
                 self.realtimeRefreshPending = false
+                let passSnapshotEventId = self.realtimeWakeSnapshotEventId
+                let passNeedsFollowUp = self.realtimeWakeNeedsFollowUp
+                self.realtimeWakeSnapshotEventId = nil
+                self.realtimeWakeNeedsFollowUp = false
                 let joined = await self.refreshTailAfterRealtimeWake(api: api, sessionId: sessionId)
-                if joined, !forcedFollowUp {
+                // Opening a session starts the stream beside the first tail
+                // fetch, so the stream's initial snapshot frame joins that
+                // fetch. When the fetch already showed the snapshot's latest
+                // event, a follow-up re-reads identical content: a second
+                // round trip and render on every open.
+                let snapshotCovered = !passNeedsFollowUp
+                    && passSnapshotEventId.map { $0 <= (self.tailObservedEventId ?? Int.min) } == true
+                if joined, !forcedFollowUp, !snapshotCovered {
                     forcedFollowUp = true
                     self.realtimeRefreshPending = true
                 } else if !joined {
@@ -2280,6 +2317,9 @@ final class SessionViewModel: ObservableObject {
                 "request_finished",
                 "elapsed_ms=\(requestMs) events=\(tail.events.count) total=\(tail.projection.total)"
             )
+            if let observed = tail.workspaceRevision?.latestEventId.flatMap(Int.init) {
+                tailObservedEventId = max(tailObservedEventId ?? observed, observed)
+            }
             // Native metadata is the primary lane. Publish it as soon as the
             // compact tail arrives; TimelineBuilder must never delay the
             // title, runtime dock, or composer.

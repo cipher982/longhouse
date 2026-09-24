@@ -9,9 +9,13 @@ enum TestWorkspaceFactory {
         eventId: Int,
         content: String,
         total: Int = 1,
-        pageOffset: Int = 0
+        pageOffset: Int = 0,
+        revisionLatestEventId: Int? = nil
     ) throws -> SessionWorkspaceResponse {
         let encodedContent = try jsonString(content)
+        let revision = revisionLatestEventId.map {
+            #","workspace_revision": {"latest_event_id": "\#($0)", "fingerprint": "sha256:rev-\#($0)"}"#
+        } ?? ""
         let json = """
         {
           "session": {
@@ -77,7 +81,7 @@ enum TestWorkspaceFactory {
             "page_offset": \(pageOffset),
             "branch_mode": "head",
             "abandoned_events": 0
-          }
+          }\(revision)
         }
         """.data(using: .utf8)!
         return try JSONDecoder.snakeCase.decodeSessionFixture(SessionWorkspaceResponse.self, from: json)
