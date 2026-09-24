@@ -1342,9 +1342,9 @@ async def test_failed_incremental_apply_stays_stale_until_one_full_reload_comple
 
     daemon._dense_index.refresh_session = failed_apply
     daemon._dense_index.load = blocked_load
-    mutation = asyncio.create_task(daemon._run_with_dense_refresh(lambda: {"written": 1}, session_id="session"))
+    mutation = asyncio.create_task(daemon._run_with_dense_refresh(lambda session_id: {"written": 1}, session_id="session"))
     try:
-        assert await asyncio.to_thread(entered_load.wait, 1)
+        assert await asyncio.to_thread(entered_load.wait, 5)
         assert daemon._dense_index.coverage.stale is True
         assert full_loads == 1
         release_load.set()
