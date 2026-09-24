@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import http.client as http_client
 import json
 import os
 import secrets
@@ -37,6 +38,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRATCH_PARENT = Path("/tmp/agents/w1-bench")
+RESULTS_PARENT = Path("/tmp/agents/w1-bench-results")
 TOXIPROXY_IMAGE = "ghcr.io/shopify/toxiproxy:2.12.0"
 DEVICE_ID = "8e447278-31b2-42e2-9518-3713dc9ef6cc"
 
@@ -77,6 +79,9 @@ def http(method: str, url: str, payload: dict[str, Any] | None = None, *, bearer
         except json.JSONDecodeError:
             value = {"raw": raw.decode("utf-8", "replace")}
         return exc.code, value, dict(exc.headers.items())
+    except (OSError, http_client.HTTPException) as exc:
+        # Connection refused/reset while a container starts is "not ready", not a crash.
+        return 0, {"transport_error": f"{type(exc).__name__}: {exc}"}, {}
 
 
 def wait_for_health(base_url: str) -> None:
@@ -157,37 +162,47 @@ def container_rss_bytes(container: str) -> int:
     return int(float(number) * scale)
 
 
-def engine_pending(db_path: Path) -> int | None:
+def engine_backlog(db_path: Path) -> dict[str, int] | None:
     if not db_path.exists():
         return None
     try:
         with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as connection:
             tables = {row[0] for row in connection.execute("select name from sqlite_master where type='table'")}
-            if "pending_source_envelopes" not in tables:
+            if not {"pending_source_envelope", "spool_queue"}.issubset(tables):
                 return None
-            return int(connection.execute("select count(*) from pending_source_envelopes").fetchone()[0])
+            pending_envelopes = int(connection.execute("select count(*) from pending_source_envelope").fetchone()[0])
+            spool_pending = int(connection.execute("select count(*) from spool_queue where status = 'pending'").fetchone()[0])
+            spool_dead = int(connection.execute("select count(*) from spool_queue where status = 'dead'").fetchone()[0])
+            return {"pending_envelopes": pending_envelopes, "spool_pending": spool_pending, "spool_dead": spool_dead}
     except sqlite3.Error:
         return None
 
 
 def all_readable(base_url: str, token: str, session_ids: set[str]) -> bool:
+    """A user can open a session only when its workspace has transcript events."""
     for session_id in session_ids:
         status, _session, _headers = http("GET", f"{base_url}/api/agents/sessions/{session_id}", token=token)
         if status != 200:
             return False
         status, workspace, _headers = http("GET", f"{base_url}/api/agents/sessions/{session_id}/workspace", token=token)
-        if status != 200 or not workspace.get("projection", {}).get("items"):
+        items = workspace.get("projection", {}).get("items", []) if status == 200 else []
+        if not isinstance(items, list) or not any(
+            isinstance(item, dict) and item.get("kind") == "event" and isinstance(item.get("event"), dict)
+            for item in items
+        ):
             return False
     return True
 
 
-def visible_sessions(base_url: str, token: str, status_counts: dict[int, int]) -> set[str]:
+def visible_sessions(base_url: str, token: str, status_counts: dict[int, int]) -> dict[str, str]:
     """Paginate because the machine timeline intentionally caps a page at 100."""
-    visible: set[str] = set()
+    visible: dict[str, str] = {}
     offset = 0
     while True:
         status, listing, _headers = http(
-            "GET", f"{base_url}/api/agents/sessions?days_back=90&limit=100&offset={offset}", token=token, timeout=30
+            "GET", f"{base_url}/api/agents/sessions?days_back=90&limit=100&offset={offset}&include_test=true&include_automation=true&hide_autonomous=false",
+            token=token,
+            timeout=30,
         )
         if status in status_counts:
             status_counts[status] += 1
@@ -195,8 +210,19 @@ def visible_sessions(base_url: str, token: str, status_counts: dict[int, int]) -
             return set()
         sessions = listing.get("sessions", [])
         if not isinstance(sessions, list):
-            return set()
-        visible.update(str(item.get("id")) for item in sessions if isinstance(item, dict))
+            return {}
+        for item in sessions:
+            if not isinstance(item, dict):
+                continue
+            provider_session_id = item.get("provider_session_id")
+            session_id = item.get("id")
+            if not isinstance(session_id, str) or not session_id:
+                continue
+            # Imported unmanaged Claude transcripts retain their native UUID as
+            # the Longhouse ID, so the provider alias is intentionally null.
+            visible[session_id] = session_id
+            if isinstance(provider_session_id, str) and provider_session_id:
+                visible[provider_session_id] = session_id
         offset += len(sessions)
         if offset >= int(listing.get("total", 0)) or not sessions:
             return visible
@@ -222,6 +248,7 @@ def main() -> int:
     parser.add_argument("--corpus-root", type=Path, default=Path.home() / ".claude" / "projects")
     parser.add_argument("--corpus-bytes", type=int, default=1_500_000_000)
     parser.add_argument("--timeout-secs", type=int, default=3_600)
+    parser.add_argument("--keep-logs", action="store_true", help="copy the engine log to /tmp/agents/w1-bench-results")
     args = parser.parse_args()
 
     if not args.corpus_root.is_dir():
@@ -261,6 +288,14 @@ def main() -> int:
         token = minted.get("token")
         if status != 201 or not isinstance(token, str) or not token.startswith("zdt_"):
             raise RuntimeError(f"device-token mint failed: HTTP {status} {minted}")
+        status, capabilities, _headers = http("GET", f"{base_url}/api/agents/storage/v2/capabilities", token=token)
+        if status != 200:
+            raise RuntimeError(f"storage-v2 capability negotiation failed: HTTP {status} {capabilities}")
+        advertised_encodings = capabilities.get("envelope_content_encodings", [])
+        if not isinstance(advertised_encodings, list) or not all(isinstance(value, str) for value in advertised_encodings):
+            raise RuntimeError(f"invalid envelope encoding capability: {advertised_encodings!r}")
+        result["storage_v2_advertised_encodings"] = advertised_encodings
+        result["negotiated_envelope_encoding"] = "zstd" if "zstd" in advertised_encodings else "identity"
         docker("run", "-d", "--name", proxy, "--network", network, "-p", f"127.0.0.1:{proxy_port}:8666", "-p", f"127.0.0.1:{admin_port}:8474", TOXIPROXY_IMAGE)
         proxy_api = f"http://127.0.0.1:{admin_port}"
         deadline = time.monotonic() + 30
@@ -289,9 +324,10 @@ def main() -> int:
         engine_bin = command(sys.executable, "scripts/build/cargo.py", "artifact", "--profile", "release", "--bin", "longhouse-engine").stdout.strip()
         if not Path(engine_bin).is_file():
             raise RuntimeError("release longhouse-engine is not built; run the documented build first")
-        wire_start = interface_rx_bytes(proxy)
+        wire_start = interface_rx_bytes(runtime)
         engine = subprocess.Popen([engine_bin, "connect", "--url", f"http://127.0.0.1:{proxy_port}", "--token", token, "--db", str(engine_db),
-                                   "--machine-name", DEVICE_ID, "--fallback-scan-secs", "1", "--spool-replay-secs", "1"], env=engine_env,
+                                    "--compression", "zstd",
+                                    "--machine-name", DEVICE_ID, "--fallback-scan-secs", "1", "--spool-replay-secs", "1"], env=engine_env,
                                   stdout=engine_log, stderr=subprocess.STDOUT, start_new_session=True)
         import_started = time.monotonic()
         first, recent, complete = None, None, None
@@ -304,16 +340,18 @@ def main() -> int:
             elapsed = round(time.monotonic() - import_started, 3)
             if first is None and visible:
                 first = elapsed
-            if recent is None and recent_ids and recent_ids.issubset(visible) and all_readable(base_url, token, recent_ids):
+            recent_session_ids = {visible[provider_id] for provider_id in recent_ids if provider_id in visible}
+            all_session_ids = {visible[provider_id] for provider_id in all_ids if provider_id in visible}
+            if recent is None and recent_ids and len(recent_session_ids) == len(recent_ids) and all_readable(base_url, token, recent_session_ids):
                 recent = elapsed
-            pending = engine_pending(engine_db)
-            if complete is None and all_ids.issubset(visible) and pending == 0:
+            backlog = engine_backlog(engine_db)
+            if complete is None and len(all_session_ids) == len(all_ids) and backlog == {"pending_envelopes": 0, "spool_pending": 0, "spool_dead": 0}:
                 complete = elapsed
                 break
             time.sleep(1)
-        result.update({"status": "ok" if complete is not None else "timeout", "wire_bytes_client_to_server": interface_rx_bytes(proxy) - wire_start,
+        result.update({"status": "ok" if complete is not None else "timeout", "wire_bytes_client_to_server": interface_rx_bytes(runtime) - wire_start,
                        "time_to_first_timeline_s": first, "time_to_recent_readable_s": recent, "time_to_fully_imported_s": complete,
-                       "http_status_counts": {str(key): value for key, value in counts.items()}, "engine_pending_envelopes": engine_pending(engine_db),
+                       "http_status_counts": {str(key): value for key, value in counts.items()}, "engine_backlog": engine_backlog(engine_db),
                        "server_rss_bytes": container_rss_bytes(runtime),
                        "elapsed_s": round(time.monotonic() - started, 3), "import_elapsed_s": round(time.monotonic() - import_started, 3)})
     except Exception as exc:
@@ -325,6 +363,17 @@ def main() -> int:
             log_text = (scratch / "engine.log").read_text(errors="replace") if (scratch / "engine.log").exists() else ""
             engine_counts = {"429": len(re.findall(r"(?:HTTP|returned) 429", log_text)), "503": len(re.findall(r"(?:HTTP|returned) 503", log_text))}
             result.setdefault("engine_http_status_counts", engine_counts)
+            if args.keep_logs and (scratch / "engine.log").exists():
+                RESULTS_PARENT.mkdir(mode=0o700, parents=True, exist_ok=True)
+                log_path = RESULTS_PARENT / f"{args.name}.engine.log"
+                shutil.copy2(scratch / "engine.log", log_path)
+                result["engine_log"] = str(log_path)
+            status_path = home / ".longhouse" / "agent" / "engine-status.json"
+            if status_path.exists():
+                try:
+                    result["engine_local_health"] = json.loads(status_path.read_text())
+                except json.JSONDecodeError:
+                    result["engine_local_health"] = {"error": "invalid engine-status.json"}
         for container in (proxy, runtime):
             subprocess.run(["docker", "rm", "-f", container], capture_output=True, text=True, check=False)
         subprocess.run(["docker", "network", "rm", network], capture_output=True, text=True, check=False)
