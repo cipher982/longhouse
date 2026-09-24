@@ -355,7 +355,9 @@ struct TimelineView: View {
             }
             .task {
                 await viewModel.load(using: appState)
-                WebTranscriptWebViewPool.prewarm()
+                // No prewarm here: WebView creation is ~0.5 s of main thread
+                // and ran before the cached timeline's first frame, ahead of
+                // the stream and a tapped push. The idle task below warms it.
                 if scenePhase == .active {
                     viewModel.startStream(using: appState)
                 }
