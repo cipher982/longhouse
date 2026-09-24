@@ -233,17 +233,15 @@ _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL = """
 # fix. Snippetting the final page instead keeps that cost flat.
 _SEARCHABLE_SEARCH_SQL = """
     WITH candidates AS (
-        SELECT rowid AS fast_key, bm25(searchable_fts) AS rank
+        -- Eligibility filters sit inside the capped walk: filtering after the
+        -- LIMIT let newer matches from other projects crowd out every eligible
+        -- hit. ORDER BY rowid DESC on time-ordered fast_key rowids keeps the
+        -- early-exit plan and makes the walk newest-first.
+        SELECT e.source_event_id AS search_event_id, bm25(searchable_fts) AS rank
         FROM searchable_fts
+        JOIN searchable_events e ON e.fast_key = searchable_fts.rowid
         WHERE searchable_fts MATCH ?
-        ORDER BY rowid DESC
-        LIMIT ?
-    ), top AS (
-        SELECT e.source_event_id AS search_event_id, c.rank,
-               (SELECT COUNT(*) FROM candidates) AS candidate_count
-        FROM candidates c
-        JOIN searchable_events e ON e.fast_key = c.fast_key
-        WHERE e.owner_id = ?
+          AND e.owner_id = ?
           AND (? = 1 OR COALESCE(e.hidden_from_default_timeline, 0) = 0
                OR (? = 1 AND COALESCE(e.test_scope_visible, 0) = 1))
           AND COALESCE(e.user_hidden_from_timeline, 0) = 0
@@ -258,7 +256,13 @@ _SEARCHABLE_SEARCH_SQL = """
           AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
           AND (e.role != 'user' OR (e.title_eligible = 1
                AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
-        ORDER BY rank ASC, e.source_event_id DESC
+        ORDER BY searchable_fts.rowid DESC
+        LIMIT ?
+    ), top AS (
+        SELECT c.search_event_id, c.rank,
+               (SELECT COUNT(*) FROM candidates) AS candidate_count
+        FROM candidates c
+        ORDER BY c.rank ASC, c.search_event_id DESC
         LIMIT ?
     )
     SELECT t.search_event_id, e.session_id, e.generation_id, e.source_object_id,
@@ -1837,7 +1841,7 @@ class SearchStore:
         candidate_ceiling = max(limit, _CANDIDATE_CEILING)
         if use_searchable_corpus:
             sql = _SEARCHABLE_SEARCH_SQL if include_snippets else _SEARCHABLE_SEARCH_WITHOUT_SNIPPETS_SQL
-            params = (fts_query, candidate_ceiling) + filter_params[1:] + (limit,)
+            params = filter_params + (candidate_ceiling, limit)
         else:
             sql = _ARCHIVE_BOUNDED_SEARCH_SQL if include_snippets else _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL
             params = filter_params + (candidate_ceiling, limit) + ((fts_query,) if include_snippets else ())

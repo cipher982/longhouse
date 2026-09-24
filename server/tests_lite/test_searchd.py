@@ -21,10 +21,10 @@ from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.embedding_space import ACTIVE_EMBEDDING_DIMS
 from zerg.embedding_space import ACTIVE_EMBEDDING_MODEL
+from zerg.searchd.hydration import HydrationResult
+from zerg.searchd.hydration import RenderHydrator
 from zerg.searchd.server import SearchDaemon
 from zerg.searchd.server import _embedding_write_params
-from zerg.searchd.hydration import RenderHydrator
-from zerg.searchd.hydration import HydrationResult
 from zerg.searchd.store import _CANDIDATE_CEILING
 from zerg.searchd.store import _PUBLISH_AGGREGATES_SQL
 from zerg.searchd.store import _SEARCH_SQL
@@ -37,9 +37,9 @@ from zerg.searchd.store import _fts_query
 from zerg.searchd.store import _query_excerpt
 from zerg.searchd.store import object_set_hash
 from zerg.searchd.store import open_search_database
+from zerg.storage_v2.render_objects import DecodedRenderObject
 from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import RenderRecord
-from zerg.storage_v2.render_objects import DecodedRenderObject
 from zerg.storage_v2.render_objects import seal_render_object
 
 
@@ -1250,7 +1250,6 @@ def test_searchable_search_uses_time_ordered_fts_rowids_for_early_exit(tmp_path)
             f"EXPLAIN QUERY PLAN {_SEARCHABLE_SEARCH_SQL}",
             (
                 "search db",
-                _CANDIDATE_CEILING,
                 "42",
                 0,
                 0,
@@ -1264,14 +1263,62 @@ def test_searchable_search_uses_time_ordered_fts_rowids_for_early_exit(tmp_path)
                 None,
                 None,
                 None,
+                _CANDIDATE_CEILING,
                 10,
             ),
         ).fetchall()
         details = [str(row[3]) for row in plan]
         assert any("searchable_fts" in detail and "VIRTUAL TABLE INDEX 192:" in detail for detail in details)
-        # The remaining sorts rank/browse only the bounded CTE and final page;
-        # the FTS match scan itself is a rowid-descending early-exit walk.
-        assert sum("USE TEMP B-TREE FOR ORDER BY" in detail for detail in details) == 2
+        # The FTS match scan is a rowid-descending early-exit walk with the
+        # eligibility join inside it; any remaining sorts only rank the bounded
+        # candidate set (their count varies across SQLite versions).
+        assert any("fast_key=?" in detail for detail in details)
+    finally:
+        connection.close()
+
+
+def test_fast_search_filters_before_the_candidate_cap(tmp_path, monkeypatch):
+    # Newer matches from another project must not crowd every eligible hit out
+    # of the capped walk and leave an "exact" empty page.
+    from zerg.searchd import store as store_module
+
+    monkeypatch.setattr(store_module, "_CANDIDATE_CEILING", 5)
+    connection = open_search_database(tmp_path / "search.db")
+    try:
+        now_us = 1_800_000_000_000_000
+        sessions = [("zerg-old", "zerg", now_us - 1_000)] + [(f"other-{index}", "other", now_us + index) for index in range(30)]
+        for event_id, (session_id, project, order_time_us) in enumerate(sessions, start=1):
+            fast_key = order_time_us << 11
+            connection.execute(
+                "INSERT INTO session_index(session_id, generation_id, owner_id, desired_revision, indexed_through, "
+                "object_count, object_set_hash, event_count, user_messages, assistant_messages, tool_calls, "
+                "is_sidechain, project, provider, environment, started_at, published_at) "
+                "VALUES (?, 'g', '42', 1, 1, 1, 'h', 1, 0, 1, 0, 0, ?, 'codex', 'local', '2026-09-24', '2026-09-24')",
+                (session_id, project),
+            )
+            connection.execute(
+                "INSERT INTO searchable_events(source_event_id, fast_key, owner_id, project, provider, environment, "
+                "order_time_us, session_id, generation_id, source_object_id, record_ordinal, event_id, role, "
+                "tool_name, indexed_through, event_count) "
+                "VALUES (?, ?, '42', ?, 'codex', 'local', ?, ?, 'g', 'o', 0, ?, 'assistant', NULL, 1, 1)",
+                (event_id, fast_key, project, order_time_us, session_id, str(event_id)),
+            )
+            connection.execute("INSERT INTO searchable_fts(rowid, content_text) VALUES (?, 'needle')", (fast_key,))
+        connection.commit()
+        store = SearchStore(connection)
+        result = store.search(
+            query="needle",
+            owner_id="42",
+            project="zerg",
+            provider=None,
+            environment=None,
+            window_start_us=now_us - 10_000_000,
+            window_end_us=None,
+            limit=5,
+            include_snippets=False,
+        )
+        assert [row["session_id"] for row in result["results"]] == ["zerg-old"]
+        assert result["ranking_scope"] == "exact"
     finally:
         connection.close()
 
