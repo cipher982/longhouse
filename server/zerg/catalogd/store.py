@@ -312,16 +312,25 @@ def _console_turn_is_in_flight(*, session_id, observed_at: datetime, prefix: str
     )
 
 
-def _empty_human_helm_is_open(*, session_id, thread_id, observed_at: datetime) -> Any:
+def _empty_human_helm_is_open(
+    *,
+    session_id,
+    thread_id,
+    observed_at: datetime,
+    possibly_open_ids: list[str] | None = None,
+) -> Any:
     """Admit an empty human Helm only on canonical current-work evidence.
 
     Empty shells are not history. A human terminal launch enters the timeline
     only while a run-bound activity head says it is executing or an exact,
     fresh control head says its terminal is attached. The served projector
     still owns the final working-set classification from these same heads.
+
+    These are two of the open predicate's branches, so its superset of
+    possibly-open ids, when the caller has read it, prefilters them exactly.
     """
 
-    return or_(
+    live = or_(
         _run_bound_activity_is_live(
             session_id=session_id,
             thread_id=thread_id,
@@ -335,9 +344,18 @@ def _empty_human_helm_is_open(*, session_id, thread_id, observed_at: datetime) -
             prefix="timeline_empty",
         ),
     )
+    if possibly_open_ids is None:
+        return live
+    return and_(session_id.in_(possibly_open_ids), live)
 
 
-def _timeline_current_work_is_open(*, session_id, thread_id, observed_at: datetime) -> Any:
+def _timeline_current_work_is_open(
+    *,
+    session_id,
+    thread_id,
+    observed_at: datetime,
+    possibly_open_ids: list[str] | None = None,
+) -> Any:
     """SQL superset of the served `open` working set, for page admission and rank.
 
     The page window decides which sessions a client is ever told about, and the
@@ -364,9 +382,12 @@ def _timeline_current_work_is_open(*, session_id, thread_id, observed_at: dateti
     # only spares the other tens of thousands of catalog rows five correlated
     # subqueries each. SQLite materializes the non-correlated IN set once per
     # statement. On the dogfood catalog (40k storage sessions, 24k cards) the
-    # correlated form cost ~260 ms of a 358 ms timeline read.
+    # correlated form cost ~260 ms of a 358 ms timeline read. A caller that
+    # reads the set once in its own snapshot passes the ids, sparing the four
+    # separate materializations one timeline statement would otherwise run.
+    possibly_open = possibly_open_ids if possibly_open_ids is not None else _timeline_possibly_open_session_ids(observed_at=observed_at)
     return and_(
-        session_id.in_(_timeline_possibly_open_session_ids(observed_at=observed_at)),
+        session_id.in_(possibly_open),
         or_(
             _run_bound_activity_is_live(
                 session_id=session_id,
@@ -6231,15 +6252,22 @@ class CatalogStore:
             # Current work is admitted by predicate, not by rank: a session the
             # served state calls open must survive the recency window and the
             # page cut no matter how quiet its transcript is.
+            # Read once in this snapshot; the open predicate appears four times
+            # in the candidate statement below.
+            possibly_open_ids = [
+                str(value) for value in connection.execute(_timeline_possibly_open_session_ids(observed_at=observed_at)).scalars()
+            ]
             legacy_open = _timeline_current_work_is_open(
                 session_id=card.c.session_id,
                 thread_id=catalog.c.primary_thread_id,
                 observed_at=observed_at,
+                possibly_open_ids=possibly_open_ids,
             )
             storage_open = _timeline_current_work_is_open(
                 session_id=storage.c.session_id,
                 thread_id=catalog.c.primary_thread_id,
                 observed_at=observed_at,
+                possibly_open_ids=possibly_open_ids,
             )
             legacy_where = [
                 or_(legacy_activity_at >= since, legacy_unread, legacy_open),
@@ -6272,6 +6300,7 @@ class CatalogStore:
                     session_id=card.c.session_id,
                     thread_id=catalog.c.primary_thread_id,
                     observed_at=observed_at,
+                    possibly_open_ids=possibly_open_ids,
                 ),
             )
             storage_empty_open = and_(
@@ -6281,6 +6310,7 @@ class CatalogStore:
                     session_id=storage.c.session_id,
                     thread_id=catalog.c.primary_thread_id,
                     observed_at=observed_at,
+                    possibly_open_ids=possibly_open_ids,
                 ),
             )
             # Policy visibility is independent from shell readiness. Content
