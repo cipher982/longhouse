@@ -34,6 +34,7 @@ from sqlalchemy import literal
 from sqlalchemy import or_
 from sqlalchemy import select
 from sqlalchemy import tuple_
+from sqlalchemy import union
 from sqlalchemy import union_all
 from sqlalchemy import update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -356,33 +357,92 @@ def _timeline_current_work_is_open(*, session_id, thread_id, observed_at: dateti
     under-inclusion would page a genuinely open session out of view.
     """
 
-    return or_(
-        _run_bound_activity_is_live(
-            session_id=session_id,
-            thread_id=thread_id,
-            observed_at=observed_at,
-            prefix="timeline_open_activity",
+    # Every branch below is an EXISTS over a driving table (fact heads,
+    # interaction requests, Console turns) joined back to this session. The
+    # session ids those tables admit under each branch's own-column conditions
+    # form an exact superset, so testing membership first changes no answer; it
+    # only spares the other tens of thousands of catalog rows five correlated
+    # subqueries each. SQLite materializes the non-correlated IN set once per
+    # statement. On the dogfood catalog (40k storage sessions, 24k cards) the
+    # correlated form cost ~260 ms of a 358 ms timeline read.
+    return and_(
+        session_id.in_(_timeline_possibly_open_session_ids(observed_at=observed_at)),
+        or_(
+            _run_bound_activity_is_live(
+                session_id=session_id,
+                thread_id=thread_id,
+                observed_at=observed_at,
+                prefix="timeline_open_activity",
+            ),
+            _attached_terminal_is_live(
+                session_id=session_id,
+                thread_id=thread_id,
+                observed_at=observed_at,
+                prefix="timeline_open_terminal",
+            ),
+            _pending_interaction_is_open(
+                session_id=session_id,
+                observed_at=observed_at,
+                prefix="timeline_open_interaction",
+            ),
+            _delegated_work_is_pending(
+                session_id=session_id,
+                observed_at=observed_at,
+                prefix="timeline_open_delegation",
+            ),
+            _console_turn_is_in_flight(
+                session_id=session_id,
+                observed_at=observed_at,
+                prefix="timeline_open_console",
+            ),
         ),
-        _attached_terminal_is_live(
-            session_id=session_id,
-            thread_id=thread_id,
-            observed_at=observed_at,
-            prefix="timeline_open_terminal",
+    )
+
+
+def _timeline_possibly_open_session_ids(*, observed_at: datetime) -> Any:
+    """Session ids that could satisfy `_timeline_current_work_is_open`.
+
+    One SELECT per branch over that branch's driving table, keeping only the
+    conditions on the driving table's own columns. A branch can be true for a
+    session only if its driving table has a qualifying row for it, so the union
+    is a superset of every branch; the exact predicate still decides within it.
+    """
+
+    activity = FactHead.__table__.alias("timeline_possibly_open_activity")
+    control = FactHead.__table__.alias("timeline_possibly_open_control")
+    delegation = FactHead.__table__.alias("timeline_possibly_open_delegation")
+    interaction = LiveInteractionRequest.__table__.alias("timeline_possibly_open_interaction")
+    turn = LiveConsoleTurn.__table__.alias("timeline_possibly_open_turn")
+    control_valid_until = func.julianday(control.c.observed_at) + (
+        cast(func.json_extract(control.c.value_json, "$.lease_ttl_ms"), Float) / 86_400_000.0
+    )
+    return union(
+        select(activity.c.session_id).where(
+            activity.c.family == "activity",
+            activity.c.valid_until > observed_at,
+            func.json_extract(activity.c.value_json, "$.authority_class") == "provider_runtime",
+            func.json_extract(activity.c.value_json, "$.kind").in_(("thinking", "running")),
         ),
-        _pending_interaction_is_open(
-            session_id=session_id,
-            observed_at=observed_at,
-            prefix="timeline_open_interaction",
+        select(control.c.session_id).where(
+            control.c.family == "control",
+            control.c.observed_at.is_not(None),
+            control_valid_until > func.julianday(observed_at),
+            func.json_extract(control.c.value_json, "$.authority_class") == "provider_control",
+            func.json_extract(control.c.value_json, "$.terminal_attached") == 1,
         ),
-        _delegated_work_is_pending(
-            session_id=session_id,
-            observed_at=observed_at,
-            prefix="timeline_open_delegation",
+        select(interaction.c.session_id).where(
+            interaction.c.status == "pending",
+            or_(interaction.c.expires_at.is_(None), interaction.c.expires_at > observed_at),
         ),
-        _console_turn_is_in_flight(
-            session_id=session_id,
-            observed_at=observed_at,
-            prefix="timeline_open_console",
+        select(delegation.c.session_id).where(
+            delegation.c.family == "delegation",
+            delegation.c.valid_until > observed_at,
+            cast(func.json_extract(delegation.c.value_json, "$.count"), Float) > 0,
+        ),
+        select(turn.c.session_id).where(
+            turn.c.state.in_(("queued", "starting", "active", "draining")),
+            turn.c.terminal_at.is_(None),
+            turn.c.updated_at > observed_at - _CONSOLE_TURN_FRESHNESS,
         ),
     )
 
