@@ -27,6 +27,7 @@ from sqlalchemy import update
 
 from zerg.catalogd import store as catalog_store
 from zerg.catalogd.models import ProjectorState
+from zerg.catalogd.models import StorageSession
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.store import ACTIVE_PROJECTORS
@@ -188,6 +189,36 @@ def test_idle_claim_poll_does_not_take_a_write_transaction(store: CatalogStore, 
 
     assert result["claimed"] == []
     assert result["exact_replay"] is False
+
+
+def test_search_projector_claims_newest_session_activity_first(store: CatalogStore) -> None:
+    older, newer = str(uuid4()), str(uuid4())
+    now = datetime.now(UTC)
+    with store.engine.begin() as connection:
+        for session_id, activity_at in ((older, now - timedelta(days=1)), (newer, now)):
+            connection.execute(
+                insert(StorageSession).values(
+                    session_id=session_id,
+                    tenant_id="tenant",
+                    owner_id="owner",
+                    provider="codex",
+                    environment="local",
+                    machine_id="machine",
+                    started_at=activity_at,
+                    last_activity_at=activity_at,
+                    commit_seq=1,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+    _seed_row(store, projector="search-v2", session_id=older)
+    _seed_row(store, projector="search-v2", session_id=newer)
+
+    claimed = store.claim_projector_lag(
+        projector="search-v2", worker_id="worker", claim_token=str(uuid4()), now=now, lease_seconds=60, limit=2
+    )
+
+    assert [row["session_id"] for row in claimed["claimed"]] == [newer, older]
 
 
 def test_claim_replay_token_probes_use_indexes(store: CatalogStore) -> None:

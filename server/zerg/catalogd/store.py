@@ -12702,13 +12702,18 @@ class CatalogStore:
                     .mappings()
                     .all()
                 )
-            return (
-                connection.execute(
-                    select(table).where(*eligible_predicates).order_by(table.c.updated_at.asc(), table.c.session_id.asc()).limit(row_limit)
+            statement = select(table).where(*eligible_predicates)
+            if projector == "search-v2":
+                sessions = StorageSession.__table__
+                # Rebuilds should make recent history playable first. The
+                # activity tie-break preserves deterministic progress among
+                # sessions with the same latest event time.
+                statement = statement.outerjoin(sessions, sessions.c.session_id == table.c.session_id).order_by(
+                    sessions.c.last_activity_at.desc(), table.c.updated_at.asc(), table.c.session_id.asc()
                 )
-                .mappings()
-                .all()
-            )
+            else:
+                statement = statement.order_by(table.c.updated_at.asc(), table.c.session_id.asc())
+            return connection.execute(statement.limit(row_limit)).mappings().all()
 
         # Idle pollers dominate the steady state. Do the exact eligibility and
         # replay checks on a read connection first so a poll with nothing to do

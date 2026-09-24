@@ -92,6 +92,9 @@ def test_store_payload_survives_the_response_model(tmp_path):
 
         projected = {
             "indexed_sessions": raw.get("indexed_sessions", 0),
+            "expected_sessions": raw.get("indexed_sessions", 0),
+            "complete": True,
+            "lagging_sessions": 0,
             "providers": raw.get("providers", []),
             "oldest_session_at": raw.get("oldest_session_at"),
             "newest_session_at": raw.get("newest_session_at"),

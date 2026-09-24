@@ -471,18 +471,15 @@ async def list_sessions(
             machine_sessions = [
                 session if isinstance(session, MachineSessionResponse) else project_machine_session(session) for session in page
             ]
-            # Only on zero hits. A result set speaks for itself; a bare
-            # "0 results" is the shape an agent misreads as "this provider
-            # is not indexed", so that case -- and only that case -- pays
-            # one extra read to say what was actually searched.
+            # Hits are not exhaustive while search-v2 is rebuilding, so report
+            # lexical coverage on every search page rather than only on misses.
             coverage_payload = None
-            if not sessions:
-                raw_coverage = await read_search_coverage(owner_id=int(owner_id))
-                if raw_coverage is not None:
-                    try:
-                        coverage_payload = MachineSearchCoverage.model_validate(raw_coverage)
-                    except ValidationError:
-                        coverage_payload = None
+            raw_coverage = await read_search_coverage(owner_id=int(owner_id))
+            if raw_coverage is not None:
+                try:
+                    coverage_payload = MachineSearchCoverage.model_validate(raw_coverage)
+                except ValidationError:
+                    coverage_payload = None
             return MachineSessionsListResponse(
                 sessions=machine_sessions,
                 total=len(sessions),

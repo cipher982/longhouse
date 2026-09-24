@@ -144,8 +144,8 @@ def test_recall_response_exposes_only_compact_coverage_and_consistent_lanes():
 
     with pytest.raises(ValueError, match="dense recall requires"):
         RecallResponse(results=[card], total=1, lanes=["dense"])
-    with pytest.raises(ValueError, match="lexical-only"):
-        RecallResponse(results=[card], total=1, lanes=["lexical"], coverage=coverage)
+    # Lexical coverage is required while its asynchronous projector is rebuilding.
+    assert RecallResponse(results=[card], total=1, lanes=["lexical"], coverage=coverage).coverage == coverage
     with pytest.raises(ValueError, match="lane attribution"):
         RecallResponse(results=[card.model_copy(update={"matched_by": ["dense"]})], total=1, lanes=["lexical"])
 

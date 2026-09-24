@@ -56,6 +56,19 @@ def _coverage() -> dict[str, object]:
     }
 
 
+def _projector_coverage(*, lag_count: int) -> agents_search._ProjectorCoveragePayload:
+    return agents_search._ProjectorCoveragePayload(
+        projector="search-v2",
+        store_binding=None,
+        lag_count=lag_count,
+        indexed_through="7" if lag_count else "10",
+        oldest_lag_at="2026-08-01T00:00:00+00:00" if lag_count else None,
+        oldest_lag_seconds=60.0 if lag_count else None,
+        commit_seq="10",
+        observed_at="2026-08-02T00:00:00+00:00",
+    )
+
+
 def test_recall_contract_caps_search_cards_and_exposes_one_result_expansion():
     app = FastAPI()
     app.include_router(agents_search.router)
@@ -260,6 +273,11 @@ def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):
 
     monkeypatch.setattr(agents_search, "search_storage_v2_rows", search_v2)
 
+    async def projector_coverage(**_kwargs):
+        return _projector_coverage(lag_count=2)
+
+    monkeypatch.setattr(agents_search, "_read_projection_coverage", projector_coverage)
+
     async def context_v2(**kwargs):
         assert kwargs["search_event_id"] == 9
         return {
@@ -303,7 +321,9 @@ def test_recall_machine_search_uses_searchd_without_legacy_db(monkeypatch):
     assert response.results[0].snippet == "the migration completed"
     assert response.results[0].matched_by == ["lexical"]
     assert response.results[0].ref.startswith("rr1_")
-    assert response.coverage is None
+    assert response.coverage is not None
+    assert response.coverage.complete is False
+    assert response.coverage.lagging_sessions == 2
     assert observed["include_snippets"] is False
 
 
@@ -458,6 +478,102 @@ def test_machine_session_list_query_uses_searchd_without_legacy_db(monkeypatch):
 
     assert response.total == 0
     assert observed["owner_id"] == 9
+
+
+def test_machine_search_reports_partial_lexical_coverage_on_hits_and_misses(monkeypatch):
+    async def search_v2(**_kwargs):
+        return []
+
+    async def coverage(**_kwargs):
+        return {
+            "indexed_sessions": 3,
+            "expected_sessions": 5,
+            "complete": False,
+            "lagging_sessions": 2,
+            "providers": ["codex"],
+            "oldest_session_at": "2026-08-01T00:00:00+00:00",
+            "newest_session_at": "2026-08-02T00:00:00+00:00",
+        }
+
+    monkeypatch.setattr(agents_sessions, "search_storage_v2_sessions", search_v2)
+    monkeypatch.setattr(agents_sessions, "read_search_coverage", coverage)
+
+    # Route coverage comes from the combined lexical scope/projector helper.
+    response = asyncio.run(
+        agents_sessions.list_sessions(
+            project=None,
+            provider=None,
+            environment=None,
+            include_test=False,
+            hide_autonomous=True,
+            include_automation=False,
+            device_id=None,
+            days_back=14,
+            query="missing",
+            limit=20,
+            offset=0,
+            sort=None,
+            mode="lexical",
+            context_mode="forensic",
+            db=None,
+            _auth=SimpleNamespace(owner_id=9),
+            _single=None,
+        )
+    )
+    assert response.coverage is not None
+    assert response.coverage.complete is False
+    assert response.coverage.indexed_sessions == 3
+    assert response.coverage.expected_sessions == 5
+
+
+def test_lexical_coverage_combines_index_scope_with_projector_lag(monkeypatch):
+    class Client:
+        async def call(self, method, _params, **_kwargs):
+            if method == "search.coverage.v2":
+                return {"indexed_sessions": 3, "providers": ["codex"], "oldest_session_at": None, "newest_session_at": None}
+            return _projector_coverage(lag_count=2).model_dump()
+
+    monkeypatch.setattr(agents_search, "get_searchd_client", lambda: Client())
+    import zerg.services.catalogd_supervisor as catalogd_supervisor
+
+    monkeypatch.setattr(catalogd_supervisor, "get_catalogd_client", lambda: Client())
+
+    coverage = asyncio.run(agents_search.read_search_coverage(owner_id=7))
+
+    assert coverage is not None
+    assert coverage["indexed_sessions"] == 3
+    assert coverage["expected_sessions"] == 5
+    assert coverage["complete"] is False
+
+
+def test_empty_lexical_recall_reports_projector_lag(monkeypatch):
+    async def search_v2(**_kwargs):
+        return []
+
+    async def projector_coverage(**_kwargs):
+        return _projector_coverage(lag_count=2)
+
+    monkeypatch.setattr(agents_search, "search_storage_v2_rows", search_v2)
+    monkeypatch.setattr(agents_search, "_read_projection_coverage", projector_coverage)
+    response = asyncio.run(
+        agents_search.recall_sessions(
+            request=_request("/api/agents/recall"),
+            query="missing",
+            project=None,
+            provider=None,
+            include_test=False,
+            since_days=90,
+            max_results=5,
+            include_automation=False,
+            mode="lexical",
+            _auth=SimpleNamespace(owner_id=7),
+            _single=None,
+        )
+    )
+    assert response.total == 0
+    assert response.coverage is not None
+    assert response.coverage.complete is False
+    assert response.coverage.lagging_sessions == 2
 
 
 def test_machine_search_hit_carries_the_matched_event_role(monkeypatch):

@@ -325,6 +325,25 @@ async def _require_projection_coverage(*, timeout_seconds: float) -> _ProjectorC
     return embedding_coverage
 
 
+async def _read_projection_coverage(*, projector: str, timeout_seconds: float) -> _ProjectorCoveragePayload | None:
+    """Best-effort projector freshness for a served lexical response."""
+
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+
+    catalog = get_catalogd_client()
+    if catalog is None:
+        return None
+    try:
+        result = await catalog.call(
+            "projector.coverage.read.v2",
+            {"projector": projector},
+            timeout_seconds=timeout_seconds,
+        )
+        return _ProjectorCoveragePayload.model_validate(result)
+    except (CatalogRemoteError, CatalogUnavailable, ValidationError):
+        return None
+
+
 @dataclass(frozen=True)
 class _DenseRecallResult:
     matches: list[RecallMatch]
@@ -449,7 +468,7 @@ async def search_storage_v2_context(
 
 
 async def read_search_coverage(*, owner_id: int) -> dict[str, object] | None:
-    """Best-effort scope of the searched index, for empty results only.
+    """Best-effort scope and freshness of the searched lexical index.
 
     Never raises: this exists to make a zero-hit answer honest, so failing to
     describe the corpus must not turn a successful empty search into an error.
@@ -471,8 +490,17 @@ async def read_search_coverage(*, owner_id: int) -> dict[str, object] | None:
     # Passing the raw payload through made every coverage block fail validation
     # and silently come back null -- the failure mode this whole change exists
     # to avoid, reproduced one layer down.
+    projector_coverage = await _read_projection_coverage(projector="search-v2", timeout_seconds=1.5)
+    if projector_coverage is None:
+        return None
+    indexed_sessions = payload.get("indexed_sessions", 0)
+    if not isinstance(indexed_sessions, int) or indexed_sessions < 0:
+        return None
     return {
-        "indexed_sessions": payload.get("indexed_sessions", 0),
+        "indexed_sessions": indexed_sessions,
+        "expected_sessions": indexed_sessions + projector_coverage.lag_count,
+        "complete": projector_coverage.lag_count == 0,
+        "lagging_sessions": projector_coverage.lag_count,
         "providers": payload.get("providers", []),
         "oldest_session_at": payload.get("oldest_session_at"),
         "newest_session_at": payload.get("newest_session_at"),
@@ -1434,6 +1462,15 @@ def _recall_coverage_summary(coverage: RecallCoverage) -> RecallCoverageSummary:
     )
 
 
+def _projector_coverage_summary(coverage: _ProjectorCoveragePayload) -> RecallCoverageSummary:
+    return RecallCoverageSummary(
+        complete=coverage.lag_count == 0,
+        lagging_sessions=coverage.lag_count,
+        unpublished_sessions=coverage.lag_count,
+        oldest_lag_seconds=coverage.oldest_lag_seconds,
+    )
+
+
 def _rrf_merge_recall_matches(
     lexical: list[RecallMatch],
     semantic: list[RecallMatch],
@@ -1874,7 +1911,7 @@ async def recall_sessions(
     results = _recall_search_results(matches)
     timing.apply(response)
     _apply_recall_diagnostic_headers(response, include_dense="dense" in lanes)
-    if "dense" in lanes:
+    if "dense" in lanes and mode == "semantic":
         assert dense_result is not None
         return _fit_recall_search_response(
             results=results,
@@ -1882,8 +1919,12 @@ async def recall_sessions(
             degraded=degraded,
             coverage=_recall_coverage_summary(dense_result.coverage),
         )
+    # A lexical index rebuild is asynchronous. Carry its lag even with hits so a
+    # caller never reads a partial result as proof that history lacks the query.
+    lexical_coverage = await _read_projection_coverage(projector="search-v2", timeout_seconds=max(0.05, remaining_budget()))
     return _fit_recall_search_response(
         results=results,
         lanes=list(lanes),
         degraded=degraded,
+        coverage=_projector_coverage_summary(lexical_coverage) if lexical_coverage is not None else None,
     )

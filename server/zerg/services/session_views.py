@@ -1197,14 +1197,25 @@ class MachineSearchLaneFailure(BaseModel):
 
 
 class MachineSearchCoverage(BaseModel):
-    """What the index holds, reported alongside a search that found nothing."""
+    """What the lexical index holds and whether its projector is caught up."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
     indexed_sessions: int = Field(ge=0)
+    expected_sessions: int = Field(ge=0)
+    complete: bool
+    lagging_sessions: int = Field(ge=0)
     providers: List[str] = Field(default_factory=list)
     oldest_session_at: Optional[str] = None
     newest_session_at: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_coverage_shape(self) -> "MachineSearchCoverage":
+        if self.expected_sessions != self.indexed_sessions + self.lagging_sessions:
+            raise ValueError("search coverage counts must include projector lag")
+        if self.complete != (self.lagging_sessions == 0):
+            raise ValueError("search coverage completeness must match projector lag")
+        return self
 
 
 class MachineSessionsListResponse(BaseModel):
@@ -1221,9 +1232,9 @@ class MachineSessionsListResponse(BaseModel):
     coverage: Optional[MachineSearchCoverage] = Field(
         None,
         description=(
-            "Scope of the index that was searched. Populated when a search returns no "
-            "results, so that zero hits can be read as absence from a known corpus "
-            "rather than as evidence the corpus lacks that provider or period."
+            "Scope and freshness of the lexical index that was searched. A false "
+            "`complete` means the projector has not finished, so hits and misses are "
+            "not exhaustive."
         ),
     )
 
@@ -2151,11 +2162,11 @@ class RecallResponse(BaseModel):
             raise ValueError("recall cannot report the same lane failing twice")
         if lane_set & set(degraded_lanes):
             raise ValueError("a lane cannot both serve results and be reported as degraded")
-        if "dense" in lane_set:
-            if self.coverage is None:
-                raise ValueError("dense recall requires a corpus-coverage summary")
-        elif self.coverage is not None:
-            raise ValueError("lexical-only recall must not claim dense corpus coverage")
+        if "dense" in lane_set and self.coverage is None:
+            raise ValueError("dense recall requires a corpus-coverage summary")
+        # Coverage describes the projector backing the served lane. Lexical
+        # rebuild lag must be exposed too, or an empty response reads as history
+        # absence while the disposable search store is still catching up.
 
         for result in self.results:
             if not set(result.matched_by).issubset(lane_set):
