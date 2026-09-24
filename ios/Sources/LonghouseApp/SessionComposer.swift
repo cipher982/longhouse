@@ -60,14 +60,25 @@ struct SessionComposerActionMenu: View {
             && !isProcessing
             && !isSending
 
-        return Menu {
-            if detail.attachImagesEnabled {
-                Button(action: onAttach) {
-                    Label("Attach images", systemImage: "paperclip")
-                }
-                .disabled(!canAttachImages)
-                .accessibilityIdentifier("session-chat-attach")
+        // A menu with no items opens nothing, which reads as a dead button.
+        // When images cannot be attached, keep the item and say why.
+        let unavailableReason: String? = {
+            if !detail.attachImagesEnabled {
+                return detail.provider == "codex" ? "Waiting for live control" : "Only Codex sessions accept images"
             }
+            if !attachmentInputEnabled { return "Available between turns" }
+            if attachmentSlotsLeft <= 0 { return "Attachment limit reached" }
+            return nil
+        }()
+
+        return Menu {
+            Button(action: onAttach) {
+                Text("Attach images")
+                if let unavailableReason { Text(unavailableReason) }
+                Image(systemName: "paperclip")
+            }
+            .disabled(!canAttachImages)
+            .accessibilityIdentifier(canAttachImages ? "session-chat-attach" : "session-chat-attach-unavailable")
         } label: {
             Group {
                 if isProcessing {
@@ -278,7 +289,6 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
         TextField(SessionComposerControlState.placeholder(for: detail, asOf: evidenceNow), text: $text, axis: .vertical)
             .lineLimit(1...(typeSize.isAccessibilitySize ? 3 : 6))
             .focused($focused)
-            .autocorrectionDisabled(true)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity)

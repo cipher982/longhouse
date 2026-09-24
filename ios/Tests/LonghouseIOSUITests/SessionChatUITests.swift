@@ -66,6 +66,27 @@ final class SessionChatUITests: XCTestCase {
         add(screenshot)
     }
 
+    func testComposeActionsExplainWhyImagesAreUnavailable() {
+        // A Claude Console session launched from the phone advertises no image
+        // attachments. The "+" control must still open a menu that says so;
+        // an empty menu reads as a button that does nothing.
+        let app = launchChatFixture(name: "basic", eventCount: 3)
+
+        let actions = app.buttons["session-chat-compose-actions"]
+        XCTAssertTrue(actions.waitForExistence(timeout: 8), "composer action menu did not load")
+        actions.tap()
+
+        let unavailable = app.buttons["session-chat-attach-unavailable"]
+        XCTAssertTrue(unavailable.waitForExistence(timeout: 5), "the + menu opened without an attach item")
+        XCTAssertFalse(unavailable.isEnabled, "attach must be disabled when the session cannot accept images")
+        XCTAssertFalse(app.buttons["session-chat-attach"].exists)
+
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "compose-actions-images-unavailable"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
     func testLongLoadingTitleStaysClearOfOverflowControl() {
         let app = launchChatFixture(
             name: "loading-long-title",
