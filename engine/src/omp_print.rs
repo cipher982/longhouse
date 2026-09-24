@@ -272,11 +272,18 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
     };
     let Some(provider_thread_id) = provider_thread_id else {
         let cleanup_verified = cleanup_live_claim(&config.run_id).await;
-        let error = if cleanup_verified {
+        let mut error = if cleanup_verified {
             "OMP native session identity was not confirmed before launch acknowledgment".to_string()
         } else {
             "OMP native session identity was not confirmed before launch acknowledgment; owned process-group cleanup was not verified".to_string()
         };
+        // The identity timeout is only the symptom. When OMP died at once the
+        // cause is in its stderr (on a fresh Linux machine it was
+        // "/usr/bin/env: bun: No such file or directory"), so say it here
+        // instead of leaving it in a file nobody opens.
+        if let Some(cause) = stderr_tail(&stderr_path) {
+            error.push_str(&format!("; omp stderr: {cause}"));
+        }
         let _ = crate::turn_claims::default_registry()?.mark_failed(&config.run_id, &error);
         anyhow::bail!(error);
     };
