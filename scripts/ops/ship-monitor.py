@@ -459,7 +459,15 @@ def describe_deploy_run_blocker(repo: str, sha: str, runs: list[RunInfo], deploy
         status = field(step, "status") or "unknown"
         started_at = field(step, "started_at", "startedAt")
 
-        if step_name in {"Wait for core E2E gate", "Wait for full CI gate"}:
+        # The first name is what the gate step was called until 2026-09-24 (kept
+        # so historical runs still read correctly); the second is its name now
+        # that it waits on the suites that can invalidate a deploy rather than on
+        # browser E2E.
+        if step_name in {
+            "Wait for core E2E gate",
+            "Wait for full CI gate",
+            "Wait for the suites that can invalidate this deploy",
+        }:
             blocker = describe_blocking_workflow(repo, CI_WORKFLOW, sha, runs)
             return f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / gate -> {blocker}"
 

@@ -61,9 +61,17 @@ cmd_sync() {
 # The remote half of run/start: a fresh output dir, then the command under
 # the bench lock with its output locations in the environment. Its exit code
 # lands in $out/exit so a detached job can be collected later.
+#
+# The bench loads its own dispatch credential when one is provisioned: the
+# native dispatcher needs an authenticated gh (repo visibility, pushed-SHA
+# proof, workflow submission, run reconciliation) and the bench has no
+# interactive login. Keeping it in a host-local file rather than the repo keeps
+# the source provider-agnostic; a host without the file still runs every lane
+# that does not dispatch.
 remote_job() {
   local out="$1"; shift
   printf '%s' "mkdir -p '$out' && cd '$REMOTE_DIR' && \
+    if [ -f \"\$HOME/.config/longhouse/bench.env\" ]; then . \"\$HOME/.config/longhouse/bench.env\"; fi; \
     BENCH_OUT='$out' SIM_OUT_DIR='$out' PHONE_OUT_DIR='$out' TOUR_OUT_DIR='$out' \
     lockf -k /tmp/longhouse-bench.lock zsh -lc $(printf '%q' "$*"); \
     code=\$?; echo \$code > '$out/exit'; exit \$code"

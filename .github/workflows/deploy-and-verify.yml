@@ -202,19 +202,25 @@ jobs:
             echo "runtime_image_tag=$IMAGE_TAG"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Wait for core E2E gate
+      - name: Wait for the suites that can invalidate this deploy
         if: ${{ needs.changes.outputs.runtime_image == 'true' && vars.DEPLOY_WAIT_FULL_CI != 'true' }}
         uses: ./.github/actions/wait-for-ci
         with:
           head_sha: ${{ steps.meta.outputs.runtime_image_tag }}
-          # The action's 20m default is shorter than a queued core-E2E run:
-          # on 2026-09-18 `Core E2E tests` took 15m of runtime but only
-          # started ~20m after the push, so the gate expired first and
-          # reported a timeout against a job that was still healthy.
+          # The action's 20m default is shorter than a queued run: on 2026-09-18
+          # `Core E2E tests` took 15m of runtime but only started ~20m after the
+          # push, so the gate expired first and reported a timeout against a job
+          # that was still healthy.
           timeout_seconds: "2700"
           github_token: ${{ github.token }}
           event: ""
-          required_jobs: Core E2E tests
+          # A deploy waits on the suites whose failure would make *this* image
+          # wrong. Browser E2E, accessibility, model smoke and onboarding smoke
+          # verify after the fact -- hosted live QA is dispatched below -- and
+          # must not hold a deploy: on 2026-09-24 an unrelated E2E red stalled
+          # this gate for 30m41s and then failed it with no runtime mutation.
+          required_jobs: Backend tests,Engine tests,Frontend + runner tests
+          ignored_failure_jobs: Core E2E tests,Accessibility E2E tests,Model smoke tests,OSS onboarding smoke
 
       - name: Wait for full CI gate (temporary opt-in)
         if: ${{ needs.changes.outputs.runtime_image == 'true' && vars.DEPLOY_WAIT_FULL_CI == 'true' }}

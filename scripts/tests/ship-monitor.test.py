@@ -367,7 +367,17 @@ def test_gate_heartbeat_names_blocking_ci_job_and_step() -> None:
     assert "Deploy and Verify #1 / gate -> CI #2 / iOS tests / Run iOS tests: in_progress" in summary
 
 
-def test_core_e2e_gate_heartbeat_names_blocking_ci_job_and_step() -> None:
+def test_deploy_gate_heartbeat_names_blocking_ci_job_and_step() -> None:
+    # Both the pre-2026-09-24 step name and the current one must resolve to the
+    # blocking CI job: historical runs still carry the old name.
+    for gate_step_name in (
+        "Wait for core E2E gate",
+        "Wait for the suites that can invalidate this deploy",
+    ):
+        _assert_gate_heartbeat_names_blocking_job(gate_step_name)
+
+
+def _assert_gate_heartbeat_names_blocking_job(gate_step_name: str) -> None:
     def fake_fetch_run_jobs(repo: str, run_id: int) -> list[dict[str, object]]:
         if run_id == 1:
             return [
@@ -375,7 +385,7 @@ def test_core_e2e_gate_heartbeat_names_blocking_ci_job_and_step() -> None:
                     "name": ship_monitor.DEPLOY_GATE_JOB,
                     "status": "in_progress",
                     "steps": [
-                        {"name": "Wait for core E2E gate", "status": "in_progress"},
+                        {"name": gate_step_name, "status": "in_progress"},
                     ],
                 }
             ]
@@ -461,7 +471,7 @@ if __name__ == "__main__":
     test_live_verify_retries_transient_canary_status_gap()
     test_no_runtime_change_reports_explicit_disposition_without_live_sha_requirement()
     test_gate_heartbeat_names_blocking_ci_job_and_step()
-    test_core_e2e_gate_heartbeat_names_blocking_ci_job_and_step()
+    test_deploy_gate_heartbeat_names_blocking_ci_job_and_step()
     test_deploy_heartbeat_names_active_deploy_step()
     test_manual_deploy_recovery_supersedes_failed_push_deploy()
     print("ship-monitor tests passed")

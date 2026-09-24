@@ -45,7 +45,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: test-engine-projection-failure test-engine-focused
 .PHONY: provider-interaction-probe
 .PHONY: test-cursor-console-product-e2e cursor-observed-install-qualification
-.PHONY: ios-project ios-project-check
+.PHONY: ios-project ios-project-check ios-unit
 
 .PHONY: profile-ios-live-console
 .PHONY: validate-native-device-entrypoints
@@ -355,6 +355,27 @@ test-ios-helper: ## iOS simulator and native-dispatch helper script tests
 	@python3 scripts/tests/simlab.test.py
 	@python3 scripts/tests/simlab-proxy.test.py
 	@python3 scripts/tests/native-test-isolation.test.py
+
+ios-unit: ## Hermetic iOS unit tests on this machine (~35s) — iteration only, never the gate
+	@# Host development goal on purpose, like sim-deploy and phone-deploy: the
+	@# `test-` prefix is reserved for goals that run inside the disposable
+	@# boundary or dispatch to a hosted VM (Makefile:ISOLATED_GOALS), and this
+	@# one drives Xcode on this machine. The dispatched lane (`test-ios`) owns
+	@# the merge -- smoke scheme plus fixtures in a disposable VM -- so this is
+	@# an iteration loop, one documented command instead of an xcodebuild
+	@# invocation each agent re-derives with its own destination and scheme.
+	@$(MAKE) ios-project
+	@DESTINATION="$${IOS_DESTINATION:-$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)}"; \
+	DERIVED_DATA_PATH="$${IOS_DERIVED_DATA_PATH:-$$HOME/Library/Developer/Xcode/DerivedData/LonghouseIOS-UnitLocal}"; \
+	mkdir -p "$$DERIVED_DATA_PATH"; \
+	xcodebuild \
+		-project ios/XcodeHarness/LonghouseIOS.xcodeproj \
+		-scheme Longhouse \
+		-configuration Debug \
+		-destination "$$DESTINATION" \
+		-derivedDataPath "$$DERIVED_DATA_PATH" \
+		-only-testing:LonghouseIOSTests \
+		test
 
 test-frontend: ## Frontend unit tests + type-check (~15s)
 	@cd web && bun run validate:types && bun run test -- --run --runInBand

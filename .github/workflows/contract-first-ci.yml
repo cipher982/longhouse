@@ -20,7 +20,11 @@ concurrency:
   # A new commit has a different identity and must not cancel the gates for an
   # older release candidate. Reruns of the same commit may still coalesce.
   group: ci-${{ github.repository }}-${{ github.event.pull_request.head.sha || github.sha }}
-  cancel-in-progress: true
+  # A main run is a deploy candidate: the gate that produces its deployment
+  # receipt must not disappear because a branch push of the same commit, or a
+  # rerun, arrived afterwards. Main runs therefore queue; branch and PR runs
+  # stay cancellable, where losing a superseded run costs nothing.
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/heads/main') }}
 
 env:
   # Self-hosted runners can have global pip config pointing at private indexes.
@@ -59,11 +63,13 @@ jobs:
           filters: .github/path-filters.yml
 
   validate:
-    # No path gate. `make validate` is cross-cutting by construction -- it checks
-    # the engine's generated provider contract, the web capability bundle, the
-    # iOS DTOs, the public surface, the runner, and E2E test patterns -- so any
-    # subset of paths is another list to drift out of date, which is exactly how
-    # twelve of its members went dark. The whole target runs in about a minute.
+    # No path gate for `make validate` itself: it is cross-cutting by
+    # construction -- it checks the engine's generated provider contract, the web
+    # capability bundle, the iOS DTOs, the public surface, the runner, and E2E
+    # test patterns -- so any subset of paths is another list to drift out of
+    # date, which is exactly how twelve of its members went dark. The live proof
+    # below is the one member with a real dependency boundary, and it is gated.
+    needs: changes
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: cube
     name: "Validation"
@@ -126,6 +132,12 @@ jobs:
         run: make validate
 
       - name: Managed launch lifecycle against a real Runtime Host
+        # Gated on the surfaces that can invalidate it. This proof starts a real
+        # Runtime Host, real SQLite, real device-token auth and scripted provider
+        # binaries, so only a change to those surfaces can fail it; a docs,
+        # iOS-only or web-only push cannot, and paid ~6 minutes for the privilege
+        # until 2026-09-24. `make validate` above stays ungated on purpose.
+        if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.schemas == 'true' || needs.changes.outputs.scripts == 'true' || needs.changes.outputs.ci_plumbing == 'true' }}
         timeout-minutes: 15
         # Real FastAPI server, real SQLite, real device-token auth, real request
         # validation, scripted provider binaries. The installer smoke's fake

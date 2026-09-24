@@ -99,11 +99,17 @@ Dispatching one of these lanes from a workstation (`make test-ios`,
 dispatching host**: the dispatcher reads the repository visibility, proves the
 revision is pushed, submits the workflow, and reconciles the run it owns. Run
 dispatched targets from the machine that holds that credential; a host without
-it (a bench, a fresh box) can still run the local container and simulator lanes.
+it (a fresh box) can still run the local container and simulator lanes, and the
+bench loads one from `~/.config/longhouse/bench.env` when that file exists.
 The workflow definition is always taken from `main` while the VM checks out your
 `source_sha`, so a dispatched run's own `head_sha` is `main` — read the
 `source=<sha>` line the dispatcher prints, not the run's SHA, when asking what
 was tested.
+
+For iterating on iOS unit tests, `make ios-unit` runs the hermetic unit target on
+a local simulator in about 35 seconds of tests (~80 s cold). It is a **host
+development goal**, not the gate: the dispatched lane above is, and it also runs
+the smoke scheme and the fixtures that need the disposable VM.
 
 Fixture lanes never use real provider credentials. Live proofs require an
 explicit image through
@@ -309,6 +315,23 @@ the backend/frontend/engine unit tests and quality/lint; the rest
 (deploy, hosted QA, image builds) are operational lanes that won't block your
 contribution. A red unit-test job is yours to fix; a red deploy/hosted lane
 usually isn't.
+
+Three shapes are deliberate, so a change that looks like a missing gate is not
+one:
+
+- **`make validate` runs on every push and PR, ungated.** It is cross-cutting by
+  construction, and gating it is how twelve of its members went dark. The live
+  Runtime-Host lifecycle proof that sits beside it *is* gated: it starts a real
+  Runtime Host, real SQLite and scripted provider binaries, so it runs when
+  `server/`, `engine/`, `schemas/`, `scripts/` or CI plumbing change (and always
+  on a manual dispatch).
+- **A runtime deploy waits on the suites that can invalidate it** — backend,
+  engine, frontend+runner. Browser E2E, accessibility, model smoke and onboarding
+  smoke verify after the fact, and hosted live QA is dispatched asynchronously;
+  an unrelated E2E red must not hold a deploy.
+- **Main runs queue; branch and PR runs cancel.** A main run is a deploy
+  candidate, and its receipt must not disappear because a branch push of the same
+  commit or a rerun arrived afterwards.
 
 ## Pull requests
 
