@@ -23,6 +23,7 @@ from zerg.embedding_space import ACTIVE_EMBEDDING_DIMS
 from zerg.embedding_space import ACTIVE_EMBEDDING_MODEL
 from zerg.searchd.server import SearchDaemon
 from zerg.searchd.server import _embedding_write_params
+from zerg.searchd.hydration import RenderHydrator
 from zerg.searchd.store import _CANDIDATE_CEILING
 from zerg.searchd.store import _PUBLISH_AGGREGATES_SQL
 from zerg.searchd.store import _SEARCH_SQL
@@ -36,6 +37,7 @@ from zerg.searchd.store import object_set_hash
 from zerg.searchd.store import open_search_database
 from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import RenderRecord
+from zerg.storage_v2.render_objects import DecodedRenderObject
 from zerg.storage_v2.render_objects import seal_render_object
 
 
@@ -62,6 +64,46 @@ def test_recall_context_applies_the_same_predictable_cap_to_every_turn():
     assert truncated is True
     assert anchor_seen is True
     assert all(len(row["content_text"].encode("utf-8")) <= 819 for row in bounded)
+
+
+def test_hydration_batches_cache_hits_and_reports_a_decoded_byte_budget(monkeypatch, tmp_path):
+    digest = "a" * 64
+    spec = RenderObjectSpec(
+        session_id=uuid4(),
+        render_generation=uuid4(),
+        parser_revision="test",
+        ordering_revision="test",
+        machine_id="cinder",
+        provider="codex",
+        opaque_source_id="session.jsonl",
+        source_epoch=uuid4(),
+        source_envelope_id="b" * 64,
+        records=(
+            RenderRecord("one", 1, 1, 0, "user", content_text="first"),
+            RenderRecord("two", 2, 2, 0, "assistant", content_text="second"),
+        ),
+    )
+    reads = 0
+
+    def read(*_args, **_kwargs):
+        nonlocal reads
+        reads += 1
+        return DecodedRenderObject(spec=spec, object_hash=digest, payload_hash="c" * 64)
+
+    monkeypatch.setattr("zerg.searchd.hydration.read_render_object", read)
+    hydrator = RenderHydrator(root=tmp_path)
+    rows = [{"source_object_id": digest, "record_ordinal": 0}, {"source_object_id": digest, "record_ordinal": 1}]
+
+    first = hydrator.hydrate(rows, byte_budget=64)
+    second = hydrator.hydrate(rows, byte_budget=64)
+    bounded = hydrator.hydrate(rows, byte_budget=4)
+
+    assert [row["content_text"] for row in first.rows] == ["first", "second"]
+    assert first.complete is True
+    assert [row["content_text"] for row in second.rows] == ["first", "second"]
+    assert reads == 1
+    assert [row["content_text"] for row in bounded.rows] == ["first"]
+    assert bounded.complete is False
 
 
 def _records(text: str) -> list[dict]:
@@ -136,6 +178,7 @@ def _seal_search_render_objects(tmp_path, monkeypatch):
                         tool_call_id=record.get("tool_call_id"),
                         thread_id=record.get("thread_id"),
                         branch_kind=record.get("branch_kind"),
+                        raw_record_ordinal=record["record_ordinal"],
                         # Searchd receives the original semantic fact. The
                         # fixture seal only needs the text-bearing object.
                         interaction_kind=None,
@@ -1851,8 +1894,8 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
 
         with sqlite3.connect(tmp_path / "search.db") as legacy:
             legacy.execute(
-                "UPDATE indexed_objects SET projection_hash = ? WHERE object_id = ?",
-                (hashlib.sha256(b"legacy-hash-including-session-metadata").hexdigest(), object_id),
+                "UPDATE indexed_objects SET projection_hash = ? WHERE session_id = ?",
+                (hashlib.sha256(b"legacy-hash-including-session-metadata").hexdigest(), session_id),
             )
         replay_at_new_revision = await client.call(
             "search.index.object.v2",

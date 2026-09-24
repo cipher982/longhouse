@@ -294,7 +294,8 @@ _SEARCH_SQL = _ARCHIVE_SEARCH_SQL
 
 _CLEAN_RECALL_TURN_PREDICATE = """
        e.role IN ('user', 'assistant')
-      AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
+       AND e.tool_name IS NULL
+       AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
       AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
       AND (e.role != 'user' OR (e.title_eligible = 1
            AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
@@ -1261,7 +1262,8 @@ class SearchStore:
             tuple(params),
         ).fetchall()
         total = int(published["event_count"])
-        hydrated_rows = self._hydrator.hydrate([dict(row) for row in rows[:limit]], byte_budget=_EMBEDDING_SOURCE_PAGE_BYTES)
+        hydration = self._hydrator.hydrate([dict(row) for row in rows[:limit]], byte_budget=_EMBEDDING_SOURCE_PAGE_BYTES)
+        hydrated_rows = hydration.rows
         records: list[dict[str, object]] = []
         payload_bytes = 0
         returned_rows = []
@@ -1313,7 +1315,7 @@ class SearchStore:
             "provider": str(published["provider"]),
             "event_count": total,
             "records": records,
-            "has_more": len(records) < len(rows),
+            "has_more": len(records) < len(rows) or not hydration.complete,
             "next_cursor": next_cursor,
         }
 
@@ -1372,7 +1374,10 @@ class SearchStore:
         ).fetchall()
         if len(rows) != event_count:
             return None
-        rows = self._hydrator.hydrate([dict(row) for row in rows], byte_budget=64 * 1024 * 1024)
+        hydration = self._hydrator.hydrate([dict(row) for row in rows], byte_budget=64 * 1024 * 1024)
+        rows = hydration.rows
+        if not hydration.complete:
+            return None
         if not rows:
             return None
         first = rows[0]
@@ -1785,7 +1790,8 @@ class SearchStore:
                 ranking_scope = "recent_bounded"
         result_rows = [dict(row) for row in rows]
         if include_snippets:
-            result_rows = self._hydrator.hydrate(result_rows, byte_budget=4 * 1024 * 1024)
+            hydration = self._hydrator.hydrate(result_rows, byte_budget=4 * 1024 * 1024)
+            result_rows = hydration.rows
             for row in result_rows:
                 row["content_snippet"] = _query_excerpt(row.pop("content_text", None), query)
                 row["tool_output_snippet"] = _query_excerpt(row.pop("tool_output_text", None), query)
@@ -1795,6 +1801,7 @@ class SearchStore:
             "compiled_token_count": compiled_token_count,
             "search_scope": "published_recent" if use_searchable_corpus else "published_archive",
             "ranking_scope": ranking_scope,
+            "hydration_complete": hydration.complete if include_snippets else True,
         }
 
     def recall_context(
@@ -1852,10 +1859,11 @@ class SearchStore:
         position = (int(target["order_time_us"]), int(target["order_time_us"]), str(target["event_key"]))
         before = self.connection.execute(before_sql, (session_id, generation_id, owner_id, *position, before_turns + 1)).fetchall()
         after = self.connection.execute(after_sql, (session_id, generation_id, owner_id, *position, after_turns)).fetchall()
-        context_rows = self._hydrator.hydrate(
+        hydration = self._hydrator.hydrate(
             [dict(row) for row in reversed(before)] + [dict(row) for row in after],
             byte_budget=max_content_bytes * (before_turns + after_turns + 1),
         )
+        context_rows = hydration.rows
         context, truncated, anchor_seen = _bounded_recall_context(
             context_rows,
             max_content_bytes=max_content_bytes,
@@ -1869,8 +1877,8 @@ class SearchStore:
                 "total_events": total_events,
             }
         return {
-            "evidence_status": "partial" if truncated else "complete",
-            "evidence_reason": "evidence_byte_budget_applied" if truncated else None,
+            "evidence_status": "partial" if truncated or not hydration.complete else "complete",
+            "evidence_reason": "evidence_byte_budget_applied" if truncated or not hydration.complete else None,
             "anchor_event_id": int(target["search_event_id"]),
             "context": context,
             "total_events": total_events,
@@ -2151,7 +2159,8 @@ class SearchStore:
             ),
         ).fetchall()
         normalized_rows = []
-        for item in self._hydrator.hydrate([dict(row) for row in rows], byte_budget=_WORKLOG_PAGE_BYTES * 2):
+        hydration = self._hydrator.hydrate([dict(row) for row in rows], byte_budget=_WORKLOG_PAGE_BYTES * 2)
+        for item in hydration.rows:
             item["content_text"] = _bounded_worklog_content(str(item["content_text"]))
             normalized_rows.append(item)
         return _bounded_worklog_page(normalized_rows, limit=limit, cursor_builder=_event_cursor)
