@@ -60,6 +60,20 @@ def test_a_bare_match_is_unavailable_not_complete():
     assert RecallMatch(session_id=str(uuid4()), chunk_index=0, score=0.62).evidence_status == "unavailable"
 
 
+def test_router_context_validation_rejects_hydrator_only_tool_output():
+    payload = {
+        "evidence_status": "complete",
+        "evidence_reason": None,
+        "anchor_event_id": 100,
+        "context": [{**_context_row("answer"), "tool_output_text": "must not reach the response"}],
+        "total_events": 1,
+        "timing": _timing(),
+    }
+
+    with pytest.raises(ValueError, match="tool_output_text"):
+        agents_search._RecallContextPayload.model_validate(payload)
+
+
 def test_result_ref_round_trips_without_exposing_storage_locators():
     match = _match()
     result_ref = agents_search._encode_recall_ref(match)

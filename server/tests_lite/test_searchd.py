@@ -24,6 +24,7 @@ from zerg.embedding_space import ACTIVE_EMBEDDING_MODEL
 from zerg.searchd.server import SearchDaemon
 from zerg.searchd.server import _embedding_write_params
 from zerg.searchd.hydration import RenderHydrator
+from zerg.searchd.hydration import HydrationResult
 from zerg.searchd.store import _CANDIDATE_CEILING
 from zerg.searchd.store import _PUBLISH_AGGREGATES_SQL
 from zerg.searchd.store import _SEARCH_SQL
@@ -110,8 +111,14 @@ def test_hydration_batches_cache_hits_and_reports_a_decoded_byte_budget(monkeypa
 def test_hydration_caps_each_turn_before_charging_and_keeps_a_typed_gap(monkeypatch, tmp_path):
     digest = "d" * 64
     spec = RenderObjectSpec(
-        session_id=uuid4(), render_generation=uuid4(), parser_revision="test", ordering_revision="test",
-        machine_id="cinder", provider="codex", opaque_source_id="session.jsonl", source_epoch=uuid4(),
+        session_id=uuid4(),
+        render_generation=uuid4(),
+        parser_revision="test",
+        ordering_revision="test",
+        machine_id="cinder",
+        provider="codex",
+        opaque_source_id="session.jsonl",
+        source_epoch=uuid4(),
         source_envelope_id="e" * 64,
         records=(RenderRecord("one", 1, 1, 0, "user", content_text="é" * 100),),
     )
@@ -405,6 +412,175 @@ def test_worklog_export_preserves_messages_within_the_boundary():
     assert _bounded_worklog_content("ordinary message") == "ordinary message"
 
 
+def test_recall_context_drops_tool_output_and_reports_pre_cap_truncation(tmp_path):
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    session_id = str(uuid4())
+    generation_id = str(uuid4())
+    object_id = hashlib.sha256(b"recall-truncation").hexdigest()
+    now_us = int(datetime.now(UTC).timestamp() * 1_000_000)
+    records = [{**_records("unused")[0], "order_time_us": now_us, "content_text": "é" * 100, "tool_output_text": "hidden output"}]
+    try:
+        store.index_object(
+            session_id=session_id,
+            generation_id=generation_id,
+            object_id=object_id,
+            desired_revision=1,
+            provider="codex",
+            machine_id="cinder",
+            project="longhouse",
+            environment="local",
+            cwd=None,
+            git_repo=None,
+            opaque_source_id="recall.jsonl",
+            source_epoch=str(uuid4()),
+            records=records,
+        )
+        store.publish_generation(
+            session_id=session_id,
+            generation_id=generation_id,
+            owner_id="42",
+            desired_revision=1,
+            object_count=1,
+            object_set_hash=object_set_hash([object_id]),
+            event_count=1,
+            project="longhouse",
+            provider="codex",
+            environment="local",
+            cwd=None,
+            git_repo=None,
+            started_at=datetime.now(UTC).isoformat(),
+        )
+        event_id = connection.execute("SELECT id FROM events WHERE session_id = ?", (session_id,)).fetchone()[0]
+        result = store.recall_context(
+            owner_id="42",
+            session_id=session_id,
+            generation_id=generation_id,
+            search_event_id=event_id,
+            before_turns=0,
+            after_turns=0,
+            max_content_bytes=40,
+        )
+        turn = result["context"][0]
+        assert result["evidence_status"] == "partial"
+        assert turn["content_text_truncated"] is True
+        assert turn["content_text_full_bytes"] == 200
+        assert turn["content_text"].endswith(" …[truncated]")
+        assert "tool_output_text" not in turn
+    finally:
+        connection.close()
+
+
+def test_worklog_day_skips_bad_rows_and_exports_oversized_turns(tmp_path, monkeypatch):
+    connection = open_search_database(tmp_path / "search.db")
+    store = SearchStore(connection)
+    session_id = str(uuid4())
+    generation_id = str(uuid4())
+    object_id = hashlib.sha256(b"worklog-gaps").hexdigest()
+    now_us = int(datetime.now(UTC).timestamp() * 1_000_000)
+    records = [
+        {
+            **_records("unused")[0],
+            "event_id": f"null-{index}",
+            "record_ordinal": index,
+            "order_time_us": now_us + index,
+            "content_text": None,
+        }
+        for index in range(500)
+    ] + [
+        {
+            **_records("unused")[1],
+            "event_id": "oversized",
+            "record_ordinal": 500,
+            "order_time_us": now_us + 500,
+            "content_text": "e" * (2 * 128 * 1024),
+        },
+        {
+            **_records("unused")[0],
+            "event_id": "after-gap",
+            "record_ordinal": 501,
+            "order_time_us": now_us + 501,
+            "content_text": "after gap",
+        },
+    ]
+    try:
+        store.index_object(
+            session_id=session_id,
+            generation_id=generation_id,
+            object_id=object_id,
+            desired_revision=1,
+            provider="codex",
+            machine_id="cinder",
+            project="longhouse",
+            environment="local",
+            cwd=None,
+            git_repo=None,
+            opaque_source_id="worklog.jsonl",
+            source_epoch=str(uuid4()),
+            records=records,
+        )
+        store.publish_generation(
+            session_id=session_id,
+            generation_id=generation_id,
+            owner_id="42",
+            desired_revision=1,
+            object_count=1,
+            object_set_hash=object_set_hash([object_id]),
+            event_count=len(records),
+            project="longhouse",
+            provider="codex",
+            environment="local",
+            cwd=None,
+            git_repo=None,
+            started_at=datetime.now(UTC).isoformat(),
+        )
+        page = store.worklog_day(
+            owner_id="42",
+            window_start_us=now_us - 1,
+            window_end_us=now_us + 1_000,
+            include_test=False,
+            section="events",
+            snapshot_id=None,
+            offset=0,
+            limit=10,
+        )
+        assert [item["content_text"] for item in store._worklog_snapshots[page["snapshot_id"]].events] == [
+            _bounded_worklog_content(records[500]["content_text"]),
+            "after gap",
+        ]
+
+        original_hydrate = store._hydrator.hydrate
+
+        def hydrate_with_mid_page_gap(rows, **_kwargs):
+            if not rows:
+                return HydrationResult(rows=[], complete=True)
+            hydrated = []
+            for row in rows:
+                ordinal = int(row["record_ordinal"])
+                if ordinal == 500:
+                    hydrated.append({**row, "content_text": None, "tool_output_text": None, "hydration_gap": "missing"})
+                else:
+                    hydrated.append({**row, "content_text": records[ordinal]["content_text"], "tool_output_text": None})
+            return HydrationResult(rows=hydrated, complete=False)
+
+        monkeypatch.setattr(store._hydrator, "hydrate", hydrate_with_mid_page_gap)
+        store._worklog_snapshots.clear()
+        gap_page = store.worklog_day(
+            owner_id="42",
+            window_start_us=now_us - 1,
+            window_end_us=now_us + 1_000,
+            include_test=False,
+            section="events",
+            snapshot_id=None,
+            offset=0,
+            limit=10,
+        )
+        assert [item["content_text"] for item in store._worklog_snapshots[gap_page["snapshot_id"]].events] == ["after gap"]
+        monkeypatch.setattr(store._hydrator, "hydrate", original_hydrate)
+    finally:
+        connection.close()
+
+
 def test_embedding_write_contract_accepts_full_desired_episode_set():
     vector = np.zeros(ACTIVE_EMBEDDING_DIMS, dtype=np.float32)
     vector[0] = 1.0
@@ -506,10 +682,29 @@ def test_contentless_delete_fts_round_trips_phrase_near_and_bm25(tmp_path):
         connection.execute("INSERT INTO events_fts(rowid, content_text, tool_output_text) VALUES (1, 'alpha beta gamma', 'delta')")
         connection.execute("INSERT INTO events_fts(rowid, content_text, tool_output_text) VALUES (2, 'alpha unrelated beta', 'epsilon')")
         assert [tuple(row) for row in connection.execute("SELECT rowid FROM events_fts WHERE events_fts MATCH '\"alpha beta\"'")] == [(1,)]
-        assert connection.execute("SELECT rowid, bm25(events_fts) FROM events_fts WHERE events_fts MATCH 'NEAR(alpha beta, 1)'").fetchall()[0][0] == 1
-        connection.execute("DELETE FROM events_fts WHERE rowid = 1")
-        assert list(connection.execute("SELECT rowid FROM events_fts WHERE events_fts MATCH 'gamma'")) == []
+        assert (
+            connection.execute("SELECT rowid, bm25(events_fts) FROM events_fts WHERE events_fts MATCH 'NEAR(alpha beta, 1)'").fetchall()[0][
+                0
+            ]
+            == 1
+        )
         assert [tuple(row) for row in connection.execute("SELECT rowid FROM events_fts WHERE events_fts MATCH 'epsilon'")] == [(2,)]
+
+        store = SearchStore(connection)
+        session_id = str(uuid4())
+        _publish_visibility_fixture(
+            store,
+            session_id=session_id,
+            environment="local",
+            hidden=False,
+            test_scope_visible=False,
+            order_time_us=int(datetime.now(UTC).timestamp() * 1_000_000),
+        )
+        assert connection.execute("SELECT COUNT(*) FROM events_fts WHERE events_fts MATCH 'scope'").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM searchable_fts WHERE searchable_fts MATCH 'scope'").fetchone()[0] == 1
+        store.delete_session(session_id=session_id)
+        assert connection.execute("SELECT COUNT(*) FROM events_fts WHERE events_fts MATCH 'scope'").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM searchable_fts WHERE searchable_fts MATCH 'scope'").fetchone()[0] == 0
     finally:
         connection.close()
 
@@ -1080,7 +1275,7 @@ def test_searchable_search_walks_rowid_descending_and_sorts_only_candidates(tmp_
             ),
         ).fetchall()
         details = [str(row[3]) for row in plan]
-        assert any("events_fts" in detail and "VIRTUAL TABLE INDEX 192:" in detail for detail in details)
+        assert any("searchable_fts" in detail and "VIRTUAL TABLE INDEX 192:" in detail for detail in details)
         assert not any("VIRTUAL TABLE INDEX 32:" in detail for detail in details)
         # The owner/project/window predicates must be evaluated inside the walk.
         # Applied afterwards they made narrow windows slower, not faster.
@@ -2543,7 +2738,7 @@ def test_searchd_replays_late_semantic_correction_without_identity_conflict(tmp_
         connection.close()
 
 
-def test_searchd_searches_only_published_recent_events_and_falls_back_for_archive(tmp_path):
+def test_searchd_searches_only_published_recent_events_and_falls_back_for_archive(tmp_path, monkeypatch):
     connection = open_search_database(tmp_path / "search.db")
     store = SearchStore(connection)
     now_us = int(datetime.now(UTC).timestamp() * 1_000_000)
@@ -2618,6 +2813,7 @@ def test_searchd_searches_only_published_recent_events_and_falls_back_for_archiv
     recent = search("published recent recall needle", window_start_us=now_us - 60_000_000)
     assert recent["search_scope"] == "published_recent"
     assert [row["session_id"] for row in recent["results"]] == [session_id]
+    assert connection.execute("SELECT COUNT(*) FROM searchable_fts WHERE searchable_fts MATCH 'published'").fetchone()[0] == 1
     normal_window = search(
         "published recent recall needle",
         window_start_us=int((datetime.now(UTC) - timedelta(days=90)).timestamp() * 1_000_000),
@@ -2669,6 +2865,8 @@ def test_searchd_searches_only_published_recent_events_and_falls_back_for_archiv
     assert {row["session_id"] for row in search("staged replacement needle", window_start_us=now_us - 60_000_000)["results"]} == {
         session_id
     }
+    assert connection.execute("SELECT COUNT(*) FROM searchable_fts WHERE searchable_fts MATCH 'published'").fetchone()[0] == 0
+    assert connection.execute("SELECT COUNT(*) FROM searchable_fts WHERE searchable_fts MATCH 'staged'").fetchone()[0] == 2
 
     archived_session = str(uuid4())
     archived_generation = str(uuid4())
@@ -2690,6 +2888,13 @@ def test_searchd_searches_only_published_recent_events_and_falls_back_for_archiv
     assert [row["session_id"] for row in archive["results"]] == [archived_session]
     assert connection.execute("SELECT COUNT(*) FROM searchable_events WHERE session_id = ?", (archived_session,)).fetchone()[0] == 0
     assert search("archived recall needle", window_start_us=now_us - 60_000_000)["results"] == []
+    assert connection.execute("SELECT COUNT(*) FROM searchable_fts WHERE searchable_fts MATCH 'archived'").fetchone()[0] == 0
+
+    monkeypatch.setattr("zerg.searchd.store._searchable_cutoff_us", lambda: now_us + 10)
+    store.startup_maintenance()
+    assert search("staged replacement needle", window_start_us=now_us - 60_000_000)["results"] == []
+    assert store.search(**_search_params("staged replacement needle"))["search_scope"] == "published_archive"
+    assert store.search(**_search_params("staged replacement needle"))["results"]
 
 
 def test_searchd_upgrades_legacy_empty_object_for_same_subject_only(tmp_path):

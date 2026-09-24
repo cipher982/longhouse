@@ -22,7 +22,7 @@ from zerg.searchd.hydration import RenderHydrator
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
 
 SCHEMA_VERSION = 1
-SCHEMA_GENERATION = "searchd-v4-render-references-contentless-fts"
+SCHEMA_GENERATION = "searchd-v5-render-references-dual-contentless-fts"
 SEARCHABLE_RETENTION_DAYS = 91
 SEARCHABLE_FAST_WINDOW_DAYS = 90
 SEARCHABLE_FAST_WINDOW_MARGIN_SECONDS = 300
@@ -230,14 +230,10 @@ _ARCHIVE_BOUNDED_SEARCH_WITHOUT_SNIPPETS_SQL = """
 # fix. Snippetting the final page instead keeps that cost flat.
 _SEARCHABLE_SEARCH_SQL = """
     WITH candidates AS (
-        SELECT e.source_event_id AS search_event_id, bm25(events_fts) AS rank
-        FROM events_fts
-         JOIN searchable_events e ON e.source_event_id = events_fts.rowid
-         WHERE events_fts MATCH ? AND e.owner_id = ?
-           AND events_fts.rowid >= COALESCE((
-               SELECT MIN(source_event_id) FROM searchable_events
-               WHERE order_time_us >= CAST(unixepoch('now', '-90 days', '-300 seconds') * 1000000 AS INTEGER)
-           ), 9223372036854775807)
+        SELECT e.source_event_id AS search_event_id, bm25(searchable_fts) AS rank
+        FROM searchable_fts
+         JOIN searchable_events e ON e.source_event_id = searchable_fts.rowid
+          WHERE searchable_fts MATCH ? AND e.owner_id = ?
           AND (? = 1 OR COALESCE(e.hidden_from_default_timeline, 0) = 0
                OR (? = 1 AND COALESCE(e.test_scope_visible, 0) = 1))
           AND COALESCE(e.user_hidden_from_timeline, 0) = 0
@@ -252,7 +248,7 @@ _SEARCHABLE_SEARCH_SQL = """
           AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
           AND (e.role != 'user' OR (e.title_eligible = 1
                AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
-        ORDER BY events_fts.rowid DESC
+        ORDER BY searchable_fts.rowid DESC
         LIMIT ?
     ), top AS (
         SELECT search_event_id, rank, (SELECT COUNT(*) FROM candidates) AS candidate_count
@@ -271,8 +267,8 @@ _SEARCHABLE_SEARCH_SQL = """
      FROM top t
      JOIN searchable_events e ON e.source_event_id = t.search_event_id
      JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
-      JOIN events_fts ON events_fts.rowid = t.search_event_id
-     WHERE events_fts MATCH ?
+       JOIN searchable_fts ON searchable_fts.rowid = t.search_event_id
+      WHERE searchable_fts MATCH ?
     ORDER BY t.rank ASC
 """
 
@@ -285,12 +281,8 @@ _SEARCHABLE_SEARCH_WITHOUT_SNIPPETS_SQL = _SEARCHABLE_SEARCH_SQL
 # terms honestly marked ``recent_bounded``; rare terms remain exact because the
 # walk still exhausts their whole match set.
 #
-# A broad term combined with a narrow window is the one shape that stays slow
-# (~2s, down from ~3.4s): the walk rejects nearly everything it visits, so it
-# never fills its quota and cannot exit early. Deriving a rowid floor from the
-# window was measured and rejected — MIN(source_event_id) over a time range is
-# not index-only, costing ~570ms on every search including the rare-term
-# queries that are otherwise sub-millisecond.
+# The fast lane has its own contentless FTS postings. It therefore never walks
+# archive postings just to reject them after a session-ordered rebuild.
 _CANDIDATE_CEILING = 10_000
 
 # Focused plan tests and diagnostic tooling use this name for the all-history
@@ -598,6 +590,13 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             contentless_delete=1,
             tokenize='unicode61 remove_diacritics 2'
         );
+        CREATE VIRTUAL TABLE IF NOT EXISTS searchable_fts USING fts5(
+            content_text,
+            tool_output_text,
+            content='',
+            contentless_delete=1,
+            tokenize='unicode61 remove_diacritics 2'
+        );
         -- Metadata and text are separate tables on purpose.
         --
         -- The candidate walk reads owner/project/environment/time — about 20
@@ -732,7 +731,12 @@ class SearchStore:
     def startup_maintenance(self) -> None:
         """Run SQLite's bounded planner refresh outside interactive requests."""
 
-        self.connection.execute("DELETE FROM searchable_events WHERE order_time_us < ?", (_searchable_cutoff_us(),))
+        cutoff = _searchable_cutoff_us()
+        self.connection.execute(
+            "DELETE FROM searchable_fts WHERE rowid IN (SELECT source_event_id FROM searchable_events WHERE order_time_us < ?)",
+            (cutoff,),
+        )
+        self.connection.execute("DELETE FROM searchable_events WHERE order_time_us < ?", (cutoff,))
         self.connection.execute("PRAGMA optimize=0x10002")
         self._last_optimize_mono = time.monotonic()
 
@@ -754,6 +758,7 @@ class SearchStore:
         self.connection.execute("BEGIN IMMEDIATE")
         try:
             self.connection.execute("DELETE FROM events_fts")
+            self.connection.execute("DELETE FROM searchable_fts")
             for table in tables:
                 cursor = self.connection.execute(f"DELETE FROM {table}")
                 cleared[table] = max(0, cursor.rowcount)
@@ -984,6 +989,11 @@ class SearchStore:
                     "INSERT INTO events_fts(rowid, content_text, tool_output_text) VALUES (?, ?, ?)",
                     (event_id, record.get("content_text"), record.get("tool_output_text")),
                 )
+                if int(record["order_time_us"]) >= _searchable_cutoff_us():
+                    self.connection.execute(
+                        "INSERT INTO searchable_fts(rowid, content_text, tool_output_text) VALUES (?, ?, ?)",
+                        (event_id, record.get("content_text"), record.get("tool_output_text")),
+                    )
             self.connection.execute(
                 """
                 INSERT INTO indexed_objects(
@@ -1705,6 +1715,24 @@ class SearchStore:
     ) -> None:
         """Atomically replace one session's published, recent discovery corpus."""
 
+        # Retain postings shared by the incoming published projection; staging
+        # inserted those at index time. Retire only superseded fast postings.
+        self.connection.execute(
+            """
+            DELETE FROM searchable_fts
+            WHERE rowid IN (
+                SELECT source_event_id FROM searchable_events
+                WHERE session_id = ?
+                  AND source_event_id NOT IN (
+                      SELECT e.id FROM events e
+                      JOIN projection_membership m ON m.object_id = e.source_object_id
+                      WHERE m.session_id = ? AND m.generation_id = ? AND m.desired_revision = ?
+                        AND e.session_id = ? AND e.generation_id = ? AND e.order_time_us >= ?
+                  )
+            )
+            """,
+            (session_id, session_id, generation_id, desired_revision, session_id, generation_id, _searchable_cutoff_us()),
+        )
         self.connection.execute("DELETE FROM searchable_events WHERE session_id = ?", (session_id,))
         self.connection.execute(
             """
@@ -1748,7 +1776,12 @@ class SearchStore:
                 _searchable_cutoff_us(),
             ),
         )
-        self.connection.execute("DELETE FROM searchable_events WHERE order_time_us < ?", (_searchable_cutoff_us(),))
+        cutoff = _searchable_cutoff_us()
+        self.connection.execute(
+            "DELETE FROM searchable_fts WHERE rowid IN (SELECT source_event_id FROM searchable_events WHERE order_time_us < ?)",
+            (cutoff,),
+        )
+        self.connection.execute("DELETE FROM searchable_events WHERE order_time_us < ?", (cutoff,))
 
     def search(
         self,
@@ -2048,7 +2081,7 @@ class SearchStore:
             if page["has_more"] is not True:
                 return items
             next_cursor = page["next_cursor"]
-            if not isinstance(next_cursor, dict) or not page_items:
+            if not isinstance(next_cursor, dict):
                 raise WorklogSnapshotError("invalid_snapshot", "worklog snapshot cursor did not advance")
             cursor = next_cursor
         raise WorklogSnapshotError("export_too_large", "worklog snapshot contains too many records")
@@ -2193,17 +2226,30 @@ class SearchStore:
                 limit + 1,
             ),
         ).fetchall()
+        # The final row is only a SQL probe. Never consume it into the cursor:
+        # it must become the first candidate on the next page.
+        considered_rows = [dict(row) for row in rows[:limit]]
         normalized_rows = []
-        hydration = self._hydrator.hydrate([dict(row) for row in rows], byte_budget=_WORKLOG_PAGE_BYTES * 2)
+        hydration = self._hydrator.hydrate(considered_rows, byte_budget=_WORKLOG_PAGE_BYTES * 2)
         for item in hydration.rows:
             if not isinstance(item.get("content_text"), str):
                 continue
             item["content_text"] = _bounded_worklog_content(item["content_text"])
             normalized_rows.append(item)
         page = _bounded_worklog_page(normalized_rows, limit=limit, cursor_builder=_event_cursor)
-        if not hydration.complete and page["items"]:
-            page["has_more"] = len(rows) > limit or len(normalized_rows) < len(rows)
-            page["next_cursor"] = _event_cursor(page["items"][-1]) if page["has_more"] else None
+        sql_has_more = len(rows) > limit
+        hydration_has_more = len(hydration.rows) < len(considered_rows)
+        page["has_more"] = bool(page["has_more"] or sql_has_more or hydration_has_more or not hydration.complete)
+        if page["has_more"]:
+            # Skipped/null rows still consume a SQL position. If all considered
+            # rows were skipped, advancing through the last hydrated row keeps
+            # the snapshot finite without dropping the next SQL page.
+            if page["items"]:
+                page["next_cursor"] = _event_cursor(page["items"][-1])
+            elif hydration.rows:
+                page["next_cursor"] = _event_cursor(hydration.rows[-1])
+            else:
+                page["next_cursor"] = None
         return page
 
     def delete_session(self, *, session_id: str) -> dict[str, object]:
@@ -2233,6 +2279,7 @@ class SearchStore:
         count = int(self.connection.execute(f"SELECT COUNT(*) FROM events WHERE {predicate}", params).fetchone()[0])
         if count:
             self.connection.execute(f"DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE {predicate})", params)
+            self.connection.execute(f"DELETE FROM searchable_fts WHERE rowid IN (SELECT id FROM events WHERE {predicate})", params)
             self.connection.execute(f"DELETE FROM events WHERE {predicate}", params)
         return count
 
@@ -2448,11 +2495,26 @@ def _bounded_recall_context(
     any_truncated = False
     anchor_seen = False
     for row in rows:
-        item = dict(row)
-        content = item.get("content_text")
+        content = row.get("content_text")
         if not isinstance(content, str):
             continue
-        returned, truncated, full_bytes = _truncate_utf8(content, max_bytes=max_content_bytes)
+        # Hydration caps before it charges the page budget. Keep the original
+        # byte count so the wire contract remains honest after that first cap.
+        full_bytes = row.get("content_text_full_bytes")
+        if isinstance(full_bytes, int) and full_bytes > len(content.encode("utf-8")):
+            marker = _RECALL_TRUNCATION_MARKER.encode("utf-8")
+            prefix = content.encode("utf-8")[: max(0, max_content_bytes - len(marker))].decode("utf-8", "ignore")
+            returned = prefix + (_RECALL_TRUNCATION_MARKER if max_content_bytes > len(marker) else "")
+            truncated = True
+        else:
+            returned, truncated, full_bytes = _truncate_utf8(content, max_bytes=max_content_bytes)
+        # RecallContextTurn deliberately has no tool-output field. Keep this
+        # whitelist aligned with its strict response model.
+        item = {
+            key: row[key]
+            for key in ("search_event_id", "event_id", "source_object_id", "record_ordinal", "order_time_us", "role", "tool_name")
+            if key in row
+        }
         item["content_text"] = returned
         anchor_seen |= item.get("search_event_id") == anchor_event_id
         if truncated:

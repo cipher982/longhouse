@@ -46,7 +46,9 @@ class RenderHydrator:
                 continue
             values = {"content_text": record.content_text, "tool_output_text": record.tool_output_text, "tool_name": record.tool_name}
             if per_row_byte_cap is not None:
-                values = _truncate_values(values, per_row_byte_cap)
+                values, full_bytes = _truncate_values(values, per_row_byte_cap)
+                if full_bytes is not None:
+                    values["content_text_full_bytes"] = full_bytes
             size = sum(len(value.encode()) for value in values.values() if isinstance(value, str))
             # A caller still needs a typed, inspectable result for one oversized
             # record; downstream response caps decide whether it can be emitted.
@@ -76,17 +78,20 @@ class RenderHydrator:
         return decoded
 
 
-def _truncate_values(values: dict[str, Any], limit: int) -> dict[str, Any]:
+def _truncate_values(values: dict[str, Any], limit: int) -> tuple[dict[str, Any], int | None]:
     """Cap one hydrated turn without splitting a UTF-8 character."""
 
     remaining = limit
     truncated = dict(values)
+    content_full_bytes: int | None = None
     for key in ("content_text", "tool_output_text"):
         value = truncated[key]
         if not isinstance(value, str):
             continue
         encoded = value.encode()
         if len(encoded) > remaining:
+            if key == "content_text":
+                content_full_bytes = len(encoded)
             truncated[key] = encoded[:remaining].decode("utf-8", "ignore")
         remaining -= min(len(encoded), remaining)
-    return truncated
+    return truncated, content_full_bytes
