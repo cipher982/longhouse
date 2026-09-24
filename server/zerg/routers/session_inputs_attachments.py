@@ -48,10 +48,10 @@ from zerg.routers.session_chat import _delivery_unknown_error
 from zerg.routers.session_chat import _live_receipt_outcome
 from zerg.routers.session_chat import _runtime_draining_error
 from zerg.routers.session_chat import _set_catalog_live_receipt_error
+from zerg.services.input_attachments_support import attachments_supported
 from zerg.services.live_session_inputs import LiveInputReceiptUnavailable
 from zerg.services.live_session_inputs import load_live_input_receipt_by_client_request
 from zerg.services.live_session_inputs import record_live_input_receipt_best_effort
-from zerg.services.managed_provider_contracts import managed_transport_for_control_plane
 from zerg.services.session_chat_impl import _assert_live_session_send_available
 from zerg.services.session_chat_impl import _build_managed_local_chat_response
 from zerg.services.session_chat_impl import _load_session_for_continuation
@@ -60,13 +60,13 @@ from zerg.services.session_input_attachments import ALLOWED_MIME_TYPES
 from zerg.services.session_input_attachments import MAX_ATTACHMENT_BYTES
 from zerg.services.session_input_attachments import MAX_ATTACHMENTS_PER_INPUT
 from zerg.services.session_input_attachments import StoredAttachment
+from zerg.services.session_input_attachments import delete_catalog_attachment_blobs
 from zerg.services.session_input_attachments import get_catalog_attachment
 from zerg.services.session_input_attachments import store_catalog_attachment_blob
 from zerg.services.session_inputs import INPUT_INTENT_AUTO
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
 from zerg.services.session_kernel_projection import session_lock_scope_id
 from zerg.services.session_locks import session_lock_manager
-from zerg.session_execution_home import ManagedSessionTransport
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +110,32 @@ def _validate_attachments(files: List[UploadFile]) -> None:
             )
 
 
+def _image_signature_matches(mime_type: str, data: bytes) -> bool:
+    """Reject a declared image type whose bytes are not that image family."""
+    if mime_type == "image/png":
+        return data.startswith(b"\x89PNG\r\n\x1a\n")
+    if mime_type == "image/jpeg":
+        return data.startswith(b"\xff\xd8\xff")
+    if mime_type == "image/gif":
+        return data.startswith((b"GIF87a", b"GIF89a"))
+    if mime_type == "image/webp":
+        return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    return False
+
+
+def _validate_attachment_bytes(mime_type: str | None, data: bytes) -> None:
+    if not mime_type or not data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="attachments must not be empty",
+        )
+    if not _image_signature_matches(mime_type, data):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"attachment bytes do not match declared type: {mime_type}",
+        )
+
+
 def _queued_summary_from_row(row) -> QueuedInputSummary:
     return QueuedInputSummary(
         id=int(row.id),
@@ -132,17 +158,161 @@ def _client_label_from_user_agent(user_agent: str | None) -> str:
     return "other"
 
 
-def _catalog_codex_transport_available(source_session) -> bool:
-    facts = getattr(source_session, "catalog_facts", None)
-    connections = facts.get("connections") if isinstance(facts, dict) else None
-    if not isinstance(connections, list):
-        return False
-    return any(
-        isinstance(connection, dict)
-        and connection.get("state") == "attached"
-        and connection.get("released_at") is None
-        and managed_transport_for_control_plane(connection.get("control_plane")) == ManagedSessionTransport.CODEX_APP_SERVER
-        for connection in connections
+def _console_attachments_digest(upload_payloads: list[tuple[UploadFile, bytes]]) -> str:
+    """Ordered (mime, sha256) digest a Console replay compares without re-reading blobs."""
+    hasher = hashlib.sha256()
+    hasher.update(b"longhouse-console-attachments-v1\0")
+    for upload, data in upload_payloads:
+        hasher.update((upload.content_type or "application/octet-stream").encode("utf-8"))
+        hasher.update(b"\0")
+        hasher.update(hashlib.sha256(data).hexdigest().encode("ascii"))
+        hasher.update(b"\0")
+    return hasher.hexdigest()
+
+
+async def _enqueue_console_input_with_attachments(
+    *,
+    source_session,
+    owner_id: int,
+    text: str,
+    client_request_id: str,
+    upload_payloads: list[tuple[UploadFile, bytes]],
+    record_outcome,
+) -> SessionInputResponse:
+    """Console path: store the blobs, then enqueue the turn with their refs.
+
+    The turn record carries the refs, so a FIFO or reconnect dispatch after a
+    restart still delivers them. A replay with the same ``client_request_id``
+    stores nothing and passes only the digest; catalogd compares it against
+    the stored turn and answers with the existing receipt or a conflict.
+    """
+    from zerg.routers.session_chat import ConsoleTurnReceiptResponse
+    from zerg.services.console_turns import ConsoleTurnConflict
+    from zerg.services.console_turns import ConsoleTurnUnavailable
+    from zerg.services.console_turns import enqueue_catalog_console_turn
+
+    if not attachments_supported(getattr(source_session, "provider", None), "console"):
+        record_outcome("rejected_capability")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This session's provider does not accept image attachments",
+        )
+    group_id: str | None = None
+
+    async def cleanup_stored_group() -> None:
+        if group_id is None:
+            return
+        try:
+            await delete_catalog_attachment_blobs(
+                owner_id=owner_id,
+                session_id=source_session.id,
+                input_receipt_id=group_id,
+            )
+        except Exception:
+            logger.exception("console attachment cleanup failed for session %s", source_session.id)
+
+    digest = _console_attachments_digest(upload_payloads)
+    try:
+        existing_receipt = await load_live_input_receipt_by_client_request(
+            owner_id=owner_id,
+            session_id=source_session.id,
+            client_request_id=client_request_id,
+        )
+    except LiveInputReceiptUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error_code": "input_receipt_unknown",
+                "message": "The server could not confirm this operation; retry with the same client_request_id.",
+            },
+        ) from exc
+    stored_refs: list[dict] = []
+    if existing_receipt is None:
+        group_id = str(uuid.uuid4())
+        try:
+            for upload, data in upload_payloads:
+                stored = await store_catalog_attachment_blob(
+                    input_receipt_id=group_id,
+                    owner_id=owner_id,
+                    session_id=source_session.id,
+                    mime_type=upload.content_type,
+                    data=data,
+                    original_filename=upload.filename,
+                    original_byte_size=len(data),
+                    allow_unbound=True,
+                )
+                stored_refs.append(_attachment_ref_for_engine(session_id=str(source_session.id), input_id=group_id, stored=stored))
+        except Exception as exc:
+            await cleanup_stored_group()
+            logger.exception("console attachment upload failed for session %s", source_session.id)
+            record_outcome("store_failed")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="failed to store attachments") from exc
+    try:
+        turn = await enqueue_catalog_console_turn(
+            owner_id=owner_id,
+            session_id=uuid.UUID(str(source_session.id)),
+            message=text,
+            client_request_id=client_request_id,
+            attachments=stored_refs,
+            attachments_digest=digest,
+            receipt_id=group_id,
+        )
+    except ConsoleTurnConflict as exc:
+        await cleanup_stored_group()
+        record_outcome("rejected_idempotency_conflict")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "idempotency_conflict", "message": str(exc)},
+        ) from exc
+    except ConsoleTurnUnavailable as exc:
+        await cleanup_stored_group()
+        record_outcome("rejected_unavailable")
+        error_status = status.HTTP_404_NOT_FOUND if exc.code == "report_not_found" else status.HTTP_409_CONFLICT
+        raise HTTPException(
+            status_code=error_status,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    # A transport/catalog error is ambiguous: catalogd may have committed the
+    # turn before the reply was lost. Keep the group until catalogd's retention
+    # reaper proves it is unbound; deleting it here would strand committed refs.
+    # Two identical requests can both upload before catalogd's idempotency
+    # check. If this request lost that race, its group is not the receipt
+    # returned by the catalog and must not remain as an orphan.
+    if group_id is not None and not turn.created:
+        await cleanup_stored_group()
+        group_id = None
+    if turn.error and turn.error_code not in {
+        "turn_start_ambiguous",
+        "turn_start_outcome_unknown",
+        "attachment_stage_outcome_unknown",
+    }:
+        # This request received a definite dispatch rejection. Only its newly
+        # created group is safe to remove; a replay has group_id=None, and an
+        # ambiguous catalog/transport outcome is handled above by retention.
+        if turn.created:
+            await cleanup_stored_group()
+            group_id = None
+        record_outcome("dispatch_failed")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"code": turn.error_code or "provider_launch_failed", "message": turn.error},
+        )
+    if turn.error:
+        record_outcome("dispatch_deferred")
+    else:
+        record_outcome("accepted_console")
+    return SessionInputResponse(
+        outcome="sent" if turn.state == "active" else "queued",
+        input_id=None,
+        live_input_id=str(turn.turn_id),
+        client_request_id=client_request_id,
+        turn=ConsoleTurnReceiptResponse(
+            turn_id=str(turn.turn_id),
+            run_id=str(turn.run_id) if getattr(turn, "run_id", None) is not None else None,
+            state=turn.state,
+        ),
+        intent=INPUT_INTENT_AUTO,
+        queued=[],
     )
 
 
@@ -225,6 +395,11 @@ async def create_session_input_with_attachments(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(f"attachment {upload.filename!r} exceeds {MAX_ATTACHMENT_BYTES // 1024 // 1024}MB"),
             )
+        try:
+            _validate_attachment_bytes(upload.content_type, data)
+        except HTTPException:
+            _record_outcome("rejected_signature")
+            raise
         upload_payloads.append((upload, data))
 
     payload_hasher = hashlib.sha256()
@@ -247,25 +422,34 @@ async def create_session_input_with_attachments(
     except HTTPException:
         _record_outcome("rejected_session")
         raise
+    request_id = client_request_id.strip()
+    if not request_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="client_request_id must not be blank",
+        )
+
+    if getattr(source_session, "command_family", None) == "console_turn":
+        return await _enqueue_console_input_with_attachments(
+            source_session=source_session,
+            owner_id=int(current_user.id),
+            text=text,
+            client_request_id=request_id,
+            upload_payloads=upload_payloads,
+            record_outcome=_record_outcome,
+        )
+
     try:
         _assert_live_session_send_available(db, source_session, owner_id=current_user.id)
     except HTTPException:
         _record_outcome("rejected_live_control")
         raise
 
-    codex_transport = _catalog_codex_transport_available(source_session)
-    if not codex_transport:
+    if not attachments_supported(getattr(source_session, "provider", None), "helm"):
         _record_outcome("rejected_capability")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="image attach is only supported on codex sessions",
-        )
-
-    request_id = client_request_id.strip()
-    if not request_id:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="client_request_id must not be blank",
+            detail="This session's provider does not accept image attachments",
         )
     try:
         existing_receipt = await load_live_input_receipt_by_client_request(

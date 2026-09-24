@@ -131,12 +131,10 @@ impl CursorVisibilityEvidence {
         let (generation_id, failed) = self.latest_terminal.as_ref()?;
         failed
             .then(|| {
-                self.failures
-                    .iter()
-                    .find(|failure| {
-                        &failure.generation_id == generation_id
-                            && failure.launch_id == self.current_launch_id
-                    })
+                self.failures.iter().find(|failure| {
+                    &failure.generation_id == generation_id
+                        && failure.launch_id == self.current_launch_id
+                })
             })
             .flatten()
     }
@@ -426,19 +424,25 @@ fn load_cursor_visibility_evidence_in(
     };
     // Resume replaces this claim before starting the provider. The last prompt
     // can still belong to the previous launch and is not lifecycle authority.
-    let claim = fs::read(root.join("binding-probes").join(format!("{session_id}.json")))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .filter(|claim| {
-            claim.get("session_id").and_then(Value::as_str) == Some(session_id)
-                && claim.get("conversation_uuid").and_then(Value::as_str) == Some(conversation_id)
-        });
-    let current_launch_id = claim.as_ref()
+    let claim = fs::read(
+        root.join("binding-probes")
+            .join(format!("{session_id}.json")),
+    )
+    .ok()
+    .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+    .filter(|claim| {
+        claim.get("session_id").and_then(Value::as_str) == Some(session_id)
+            && claim.get("conversation_uuid").and_then(Value::as_str) == Some(conversation_id)
+    });
+    let current_launch_id = claim
+        .as_ref()
         .and_then(|claim| claim.get("launch_id"))
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty());
-    let mut evidence = parse_cursor_visibility_evidence(&contents, conversation_id, current_launch_id)?;
-    evidence.session_ended |= session_lifecycle_ended(root, session_id, conversation_id, current_launch_id);
+    let mut evidence =
+        parse_cursor_visibility_evidence(&contents, conversation_id, current_launch_id)?;
+    evidence.session_ended |=
+        session_lifecycle_ended(root, session_id, conversation_id, current_launch_id);
     Ok(Some(evidence))
 }
 
@@ -534,8 +538,10 @@ pub(crate) fn parse_cursor_visibility_evidence(
             ) {
                 continue;
             }
-            if let Some(index) = indices.get(generation_id)
-                .and_then(|launches| launches.get(row_launch_id.unwrap_or_default())).copied()
+            if let Some(index) = indices
+                .get(generation_id)
+                .and_then(|launches| launches.get(row_launch_id.unwrap_or_default()))
+                .copied()
             {
                 ambiguous |= turns.get(index).is_some_and(|turn| turn.prompt != prompt);
                 continue;
@@ -544,7 +550,9 @@ pub(crate) fn parse_cursor_visibility_evidence(
                 session_ended_for_current_launch = false;
                 latest_terminal = None;
             }
-            indices.entry(generation_id.to_owned()).or_default()
+            indices
+                .entry(generation_id.to_owned())
+                .or_default()
                 .insert(row_launch_id.unwrap_or_default().to_owned(), turns.len());
             turns.push(CursorProviderTurn {
                 generation_id: generation_id.to_string(),
@@ -597,8 +605,10 @@ pub(crate) fn parse_cursor_visibility_evidence(
                 .map(str::trim)
                 .filter(|status| matches!(*status, "error" | "aborted"))
             {
-                match failure_indices.get(generation_id)
-                    .and_then(|launches| launches.get(row_launch_id.unwrap_or_default())).copied()
+                match failure_indices
+                    .get(generation_id)
+                    .and_then(|launches| launches.get(row_launch_id.unwrap_or_default()))
+                    .copied()
                 {
                     Some(index) => {
                         if let Some(existing) = failures.get_mut(index) {
@@ -607,7 +617,9 @@ pub(crate) fn parse_cursor_visibility_evidence(
                         }
                     }
                     None => {
-                        failure_indices.entry(generation_id.to_owned()).or_default()
+                        failure_indices
+                            .entry(generation_id.to_owned())
+                            .or_default()
                             .insert(row_launch_id.unwrap_or_default().to_owned(), failures.len());
                         failures.push(CursorTurnFailure {
                             generation_id: generation_id.to_string(),
@@ -620,8 +632,10 @@ pub(crate) fn parse_cursor_visibility_evidence(
             }
         }
         let latest_turn_index = turns.len().checked_sub(1);
-        let index = indices.get(generation_id)
-            .and_then(|launches| launches.get(row_launch_id.unwrap_or_default())).copied()
+        let index = indices
+            .get(generation_id)
+            .and_then(|launches| launches.get(row_launch_id.unwrap_or_default()))
+            .copied()
             .or_else(|| {
                 // Resume may continue the exact unanswered provider generation
                 // without a new prompt. Only provider work from the bound launch
@@ -634,11 +648,16 @@ pub(crate) fn parse_cursor_visibility_evidence(
                     && turn.generation_id == generation_id
                     && turn.response_text.is_none()
                     && turn.launch_id.is_some())
-                    .then_some(index)
+                .then_some(index)
             });
-        let Some(index) = index else { continue; };
+        let Some(index) = index else {
+            continue;
+        };
         let turn = turns.get_mut(index).with_context(|| {
-            format!("Cursor hook turn index was invalid at evidence line {}", line_index + 1)
+            format!(
+                "Cursor hook turn index was invalid at evidence line {}",
+                line_index + 1
+            )
         })?;
         // A missing launch id pairs with a missing launch id: this turn was
         // created by a row that had none, so its own receipt still applies.
@@ -646,15 +665,19 @@ pub(crate) fn parse_cursor_visibility_evidence(
         // receipts, adoption, session end) still requires the current binding.
         let turn_launch_matches = turn.launch_id.as_deref() == row_launch_id;
         if !turn_launch_matches {
-            if !is_current_launch || Some(index) != latest_turn_index
-                || turn.response_text.is_some() || turn.launch_id.is_none()
+            if !is_current_launch
+                || Some(index) != latest_turn_index
+                || turn.response_text.is_some()
+                || turn.launch_id.is_none()
             {
                 continue;
             }
             turn.launch_id = row_launch_id.map(str::to_owned);
             turn.stop_status = None;
             turn.stop_observed_at = None;
-            indices.entry(generation_id.to_owned()).or_default()
+            indices
+                .entry(generation_id.to_owned())
+                .or_default()
                 .insert(row_launch_id.unwrap_or_default().to_owned(), index);
         }
         // Only provider work belonging to an accepted prompt advances activity.
@@ -1127,10 +1150,7 @@ mod tests {
         )
         .unwrap();
         assert!(evidence.session_ended);
-        assert_eq!(
-            evidence.current_launch_id.as_deref(),
-            Some("new-launch")
-        );
+        assert_eq!(evidence.current_launch_id.as_deref(), Some("new-launch"));
         assert_eq!(evidence.unsettled_reason(), None);
     }
 

@@ -438,10 +438,33 @@ async def test_catalogd_attachment_metadata_is_receipt_scoped_and_bounded(daemon
                     "original_filename": "image.png",
                     "original_byte_size": 67,
                     "expires_at": expires_at.isoformat(),
-                }
+                },
+                "allow_unbound": False,
             },
         )
         assert created["created"] is True
+        missing_receipt = await client.call(
+            "session.input.attachment.create.v2",
+            {
+                "attachment": {
+                    "id": str(uuid4()),
+                    "input_receipt_id": str(uuid4()),
+                    "owner_id": 7,
+                    "session_id": str(session_id),
+                    "mime_type": "image/png",
+                    "byte_size": 67,
+                    "sha256": "b" * 64,
+                    "blob_path": f"{session_id}/missing.bin",
+                    "original_filename": "missing.png",
+                    "original_byte_size": 67,
+                    "expires_at": expires_at.isoformat(),
+                },
+                "allow_unbound": False,
+            },
+        )
+        assert missing_receipt["attachment"] is None
+        assert missing_receipt["reason"] == "input_receipt_not_found"
+
         assert created["attachment"]["input_receipt_id"] == receipt_id
 
         lookup = {

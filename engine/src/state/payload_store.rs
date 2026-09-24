@@ -100,7 +100,12 @@ pub fn seal_record(root: &Path, bytes: &[u8]) -> Result<SealedPayload> {
 /// The hash *is* the identity: a caller that knows only the hash — a drained row,
 /// a Cursor record — can find its payload without a stored path.
 pub fn relative_path_for(sha256: &str, extension: &str) -> String {
-    format!("{}/{}.{}", &sha256[..2.min(sha256.len())], sha256, extension)
+    format!(
+        "{}/{}.{}",
+        &sha256[..2.min(sha256.len())],
+        sha256,
+        extension
+    )
 }
 
 /// Seal with an extension that names the payload kind.
@@ -269,7 +274,10 @@ mod tests {
         let sealed = seal(root, &bytes).expect("seal");
 
         assert_eq!(sealed.len, 4096);
-        assert_eq!(read(root, &sealed.relative_path, &sealed.sha256).unwrap(), bytes);
+        assert_eq!(
+            read(root, &sealed.relative_path, &sealed.sha256).unwrap(),
+            bytes
+        );
     }
 
     #[test]

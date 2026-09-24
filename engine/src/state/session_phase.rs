@@ -241,7 +241,10 @@ mod tests {
             crate::state::source_epoch::SourceChangeHint::None,
         )
         .unwrap();
-        assert!(first.created, "the fixture's first observation creates the epoch");
+        assert!(
+            first.created,
+            "the fixture's first observation creates the epoch"
+        );
         let epoch = first.source_epoch;
         // The observation already wrote the lane; advance it to what has shipped.
         conn.execute(
@@ -281,7 +284,10 @@ mod tests {
             crate::state::source_epoch::SourceChangeHint::None,
         )
         .unwrap();
-        assert!(!resolution.created, "losing presentation must not rotate an epoch");
+        assert!(
+            !resolution.created,
+            "losing presentation must not rotate an epoch"
+        );
         assert_eq!(resolution.source_epoch, epoch);
         let cursor: i64 = conn
             .query_row(
@@ -318,7 +324,10 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(rebuilt.0, 1, "the projection is rebuilt from the next observation");
+        assert_eq!(
+            rebuilt.0, 1,
+            "the projection is rebuilt from the next observation"
+        );
         assert_eq!(
             rebuilt.1.as_deref(),
             Some("run-1"),

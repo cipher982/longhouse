@@ -43,7 +43,7 @@ PRIMARY_PRESENTATION_KEYS: tuple[str, ...] = (
     "executing",
     "delegated_work",
     "stalled",
-    "blocked",
+    "provider_auth_required",
     "idle",
     "ended",
     "ready",
@@ -399,6 +399,7 @@ def _run(
         return SessionRunFacts(lifecycle="starting", started_at=normalize_utc(getattr(session, "started_at", None)))
 
     terminal = _clean(runtime_view.terminal_state if runtime_view is not None else None)
+    terminal_reason = _clean(runtime_view.terminal_reason if runtime_view is not None else None)
     started_at = normalize_utc(capabilities.run_started_at) or normalize_utc(getattr(session, "started_at", None))
     ended_at = normalize_utc(capabilities.run_ended_at)
     run_id = _clean(capabilities.run_id)
@@ -408,7 +409,7 @@ def _run(
             lifecycle="ended",
             started_at=started_at,
             ended_at=ended_at,
-            end_reason=terminal or _clean(capabilities.run_end_reason) or "process_ended",
+            end_reason=terminal_reason or terminal or _clean(capabilities.run_end_reason) or "process_ended",
         )
     if mode == "console" and capabilities.turn_state in {"queued", "starting"}:
         return SessionRunFacts(
@@ -1009,10 +1010,26 @@ def _primary(
             tone="active",
             observed_at=delegation.observed_at,
         )
+    if run is not None and run.lifecycle == "ended" and run.end_reason == "provider_auth_required":
+        return SessionPresentationLabel(
+            key="provider_auth_required",
+            label="Provider authentication required",
+            tone="blocked",
+            observed_at=run.ended_at,
+        )
     if activity.state == "quiescent":
         return SessionPresentationLabel(key="idle", label="Idle", tone="idle", observed_at=activity.observed_at)
     if run is not None and run.lifecycle == "ended":
-        failed = run.end_reason in {"failed", "run_failed"}
+        failed = run.end_reason in {
+            "failed",
+            "run_failed",
+            "provider_auth_required",
+            "provider_launch_failed",
+            "turn_start_process_gone",
+            "turn_start_ambiguous",
+            "turn_start_outcome_unknown",
+            "adapter_unavailable",
+        }
         return SessionPresentationLabel(
             key="ended",
             label="Run failed" if failed else "Ended",

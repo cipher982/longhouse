@@ -1235,9 +1235,11 @@ async def _dispatch_catalog_managed_text(
 
     payload: dict[str, object] = {"text": message}
     if attachments:
-        if str(source_session.provider or "").strip().lower() != "codex":
+        from zerg.services.input_attachments_support import attachments_supported
+
+        if not attachments_supported(source_session.provider, "helm"):
             await session_lock_manager.release(lock_scope_id, request_id)
-            raise HTTPException(status_code=400, detail="Attachments are only supported on codex managed sessions")
+            raise HTTPException(status_code=400, detail="This session's provider does not accept image attachments")
         payload["attachments"] = list(attachments)
     dispatched_at = datetime.now(timezone.utc)
     result = await dispatch_managed_control_command(

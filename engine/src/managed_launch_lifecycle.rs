@@ -1574,14 +1574,7 @@ pub fn spawn_managed_registration_retry(
     agent_dir: PathBuf,
 ) -> ManagedRegistrationRetry {
     spawn_managed_registration_retry_with_hook(
-        url,
-        token,
-        provider,
-        payload,
-        session_id,
-        notices,
-        agent_dir,
-        None,
+        url, token, provider, payload, session_id, notices, agent_dir, None,
     )
 }
 

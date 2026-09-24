@@ -248,6 +248,20 @@ pub(crate) async fn dispatch(
     state_root: Option<&Path>,
     expected_grant: Option<&Value>,
 ) -> std::result::Result<PiHelmCommandSummary, PiHelmControlError> {
+    dispatch_with_attachments(session_id, kind, text, state_root, expected_grant, &[]).await
+}
+
+/// `dispatch` plus staged image files. Only their path and MIME type cross
+/// the socket; the extension reads and base64-encodes them inside the
+/// provider process, so the 512 KiB frame cap is never met by image bytes.
+pub(crate) async fn dispatch_with_attachments(
+    session_id: &str,
+    kind: CommandKind,
+    text: Option<&str>,
+    state_root: Option<&Path>,
+    expected_grant: Option<&Value>,
+    attachments: &[crate::input_attachments::StagedAttachment],
+) -> std::result::Result<PiHelmCommandSummary, PiHelmControlError> {
     let state = load_state(session_id, state_root)?;
     if let Some(grant) = expected_grant {
         for (field, expected) in [
@@ -274,6 +288,9 @@ pub(crate) async fn dispatch(
     });
     if let Some(text) = text {
         request["text"] = json!(text);
+    }
+    if !attachments.is_empty() {
+        request["attachments"] = Value::Array(attachments.iter().map(|a| a.to_json()).collect());
     }
     let mut bytes = serde_json::to_vec(&request).map_err(PiHelmControlError::failed)?;
     bytes.push(b'\n');

@@ -1,8 +1,73 @@
+use std::collections::HashMap;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
+
+/// In-process monitor ownership is separate from the durable claim. When a
+/// duplicate command proves the provider process is gone, it must also stop
+/// the old monitor so that its conversation lock is released before retry.
+static ACTIVE_MONITORS: LazyLock<Mutex<HashMap<String, Arc<AtomicBool>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+pub struct MonitorLease {
+    run_id: String,
+    cancel: Arc<AtomicBool>,
+}
+
+impl Drop for MonitorLease {
+    fn drop(&mut self) {
+        if let Ok(mut monitors) = ACTIVE_MONITORS.lock() {
+            if monitors
+                .get(&self.run_id)
+                .is_some_and(|current| Arc::ptr_eq(current, &self.cancel))
+            {
+                monitors.remove(&self.run_id);
+            }
+        }
+    }
+}
+
+pub fn register_monitor(run_id: &str) -> MonitorLease {
+    let cancel = Arc::new(AtomicBool::new(false));
+    if let Ok(mut monitors) = ACTIVE_MONITORS.lock() {
+        monitors.insert(run_id.to_string(), cancel.clone());
+    }
+    MonitorLease {
+        run_id: run_id.to_string(),
+        cancel,
+    }
+}
+
+pub fn cancel_monitor(run_id: &str) -> bool {
+    ACTIVE_MONITORS
+        .lock()
+        .ok()
+        .and_then(|monitors| monitors.get(run_id).cloned())
+        .map(|cancel| {
+            cancel.store(true, Ordering::Release);
+            true
+        })
+        .unwrap_or(false)
+}
+
+pub fn monitor_is_active(run_id: &str) -> bool {
+    ACTIVE_MONITORS
+        .lock()
+        .ok()
+        .is_some_and(|monitors| monitors.contains_key(run_id))
+}
+
+pub fn monitor_cancel_requested(run_id: &str) -> bool {
+    ACTIVE_MONITORS
+        .lock()
+        .ok()
+        .and_then(|monitors| monitors.get(run_id).cloned())
+        .is_some_and(|cancel| cancel.load(Ordering::Acquire))
+}
 
 use anyhow::Context;
 use anyhow::Result;
@@ -368,6 +433,9 @@ impl TurnClaimRegistry {
         error: Option<String>,
     ) -> Result<TurnClaim> {
         let mut claim = self.read(run_id)?;
+        if claim.state == "terminal" || claim.state == "failed" {
+            return Ok(claim);
+        }
         claim.state = "terminal".to_string();
         claim.error = error;
         claim.updated_at = Utc::now().to_rfc3339();
@@ -448,9 +516,7 @@ pub fn default_registry() -> Result<TurnClaimRegistry> {
 
 pub fn process_start_time_for_pid(pid: Option<u32>) -> Option<String> {
     let pid = pid?;
-    crate::process_identity::collect_process_facts_by_pid()
-        .get(&pid)
-        .map(|fact| fact.lstart.clone())
+    crate::process_identity::try_collect_process_fact(pid).map(|fact| fact.lstart)
 }
 
 pub fn mark_terminal(run_id: &str, terminal_state: &str, error: Option<String>) {
@@ -680,5 +746,34 @@ mod tests {
             Some("provider-thread-31")
         );
         assert_eq!(claim.source_path.as_deref(), Some("/tmp/rollout.jsonl"));
+    }
+    #[test]
+    fn late_terminal_signal_does_not_overwrite_failed_claim() {
+        let temp = tempfile::tempdir().unwrap();
+        let run_id = id(51);
+        let registry = TurnClaimRegistry::new(temp.path().to_path_buf());
+        registry
+            .claim(&run_id, &id(52), &id(53), None, None, "claude")
+            .unwrap();
+        registry
+            .mark_failed(&run_id, "provider disappeared")
+            .unwrap();
+        registry
+            .mark_terminal(&run_id, "run_completed", None)
+            .unwrap();
+        let claim = registry.read(&run_id).unwrap();
+        assert_eq!(claim.state, "failed");
+        assert_eq!(claim.error.as_deref(), Some("provider disappeared"));
+    }
+
+    #[test]
+    fn cancelled_monitor_registration_releases_execution_owner() {
+        let run_id = id(61);
+        let monitor = register_monitor(&run_id);
+        assert!(monitor_is_active(&run_id));
+        assert!(cancel_monitor(&run_id));
+        assert!(monitor_cancel_requested(&run_id));
+        drop(monitor);
+        assert!(!monitor_is_active(&run_id));
     }
 }

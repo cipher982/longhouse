@@ -37,6 +37,9 @@ pub struct OmpPrintRunConfig {
     pub cwd: PathBuf,
     pub omp_bin: String,
     pub prompt: String,
+    /// Staged image files, passed as `@<path>` messages after `--` so OMP
+    /// attaches them as image content natively.
+    pub image_paths: Vec<PathBuf>,
     pub model: Option<String>,
     pub profile: Option<String>,
     pub session_dir: Option<PathBuf>,
@@ -161,6 +164,7 @@ pub async fn start_omp_print_turn(config: OmpPrintRunConfig) -> Result<OmpPrintR
     let runtime_events_outbox_dir = crate::config::get_agent_runtime_events_outbox_dir()?;
     let args = build_omp_args(
         &config.prompt,
+        &config.image_paths,
         config.model.as_deref(),
         config.profile.as_deref(),
         &session_dir,
@@ -718,6 +722,7 @@ async fn settle_recovered_dead_claim(
 
 pub fn build_omp_args(
     prompt: &str,
+    image_paths: &[PathBuf],
     model: Option<&str>,
     profile: Option<&str>,
     session_dir: &Path,
@@ -743,7 +748,14 @@ pub fn build_omp_args(
     if let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) {
         args.extend(["--model".into(), model.into()]);
     }
-    args.extend(["-p".into(), "--".into(), prompt.into()]);
+    args.extend(["-p".into(), "--".into()]);
+    // `@<path>` messages are file attachments; images become image content.
+    for image in image_paths {
+        args.push(format!("@{}", image.to_string_lossy()));
+    }
+    if !prompt.trim().is_empty() {
+        args.push(prompt.into());
+    }
     args
 }
 
@@ -1496,9 +1508,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn image_attachments_are_at_file_messages_after_the_separator() {
+        let args = build_omp_args(
+            "what color",
+            &[PathBuf::from("/w/.longhouse/attachments/r/a.png")],
+            None,
+            None,
+            Path::new("/sessions"),
+            Path::new("/sessions/exact.jsonl"),
+        );
+        let tail = &args[args.len() - 4..];
+        assert_eq!(
+            tail,
+            [
+                "-p",
+                "--",
+                "@/w/.longhouse/attachments/r/a.png",
+                "what color"
+            ]
+        );
+        let image_only = build_omp_args(
+            "",
+            &[PathBuf::from("/w/.longhouse/attachments/r/a.png")],
+            None,
+            None,
+            Path::new("/sessions"),
+            Path::new("/sessions/exact.jsonl"),
+        );
+        assert_eq!(
+            &image_only[image_only.len() - 2..],
+            ["--", "@/w/.longhouse/attachments/r/a.png"]
+        );
+    }
+
+    #[test]
     fn stock_omp_args_keep_native_defaults_and_bind_exact_resume() {
         let args = build_omp_args(
             "reply",
+            &[],
             Some("gpt-5.2"),
             Some("work"),
             Path::new("/sessions"),
@@ -1533,7 +1580,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let session_file = temp.path().join("session.jsonl");
         std::fs::write(&session_file, b"{\"type\":\"session\"}\n").unwrap();
-        let args = build_omp_args("reply", None, None, temp.path(), &session_file);
+        let args = build_omp_args("reply", &[], None, None, temp.path(), &session_file);
         assert!(args.iter().any(|arg| arg == "--continue"));
     }
 
@@ -1541,6 +1588,7 @@ mod tests {
     fn leading_dash_console_prompt_is_after_literal_separator() {
         let args = build_omp_args(
             "--looks-like-an-option",
+            &[],
             None,
             None,
             Path::new("/sessions"),
@@ -1913,6 +1961,7 @@ for event in events:
             cwd: cwd.clone(),
             omp_bin: fake_omp.to_string_lossy().into_owned(),
             prompt: "--OMP_FIRST".into(),
+            image_paths: Vec::new(),
             model: Some("gpt-5.2".into()),
             profile: Some("work".into()),
             session_dir: Some(session_dir.clone()),
@@ -1957,6 +2006,7 @@ for event in events:
             cwd,
             omp_bin: fake_omp.to_string_lossy().into_owned(),
             prompt: "OMP_SECOND".into(),
+            image_paths: Vec::new(),
             model: Some("gpt-5.2".into()),
             profile: Some("work".into()),
             session_dir: Some(session_dir.clone()),

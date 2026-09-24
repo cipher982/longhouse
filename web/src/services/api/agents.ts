@@ -276,11 +276,11 @@ export interface SessionCapabilities {
   can_start_turn?: boolean;
   can_interrupt_active_turn?: boolean;
   /**
-   * True when this session accepts image attachments on input. Today this is
-   * codex_app_server + live_control_available; the server is the source of
-   * truth so the web client doesn't have to know the transport set.
+   * True when this session accepts image attachments on input. The server
+   * derives this from the provider/mode capability table.
    */
   attach_images?: boolean;
+
 }
 
 export interface SessionResumeIntent {

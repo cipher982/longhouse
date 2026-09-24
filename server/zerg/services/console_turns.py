@@ -16,15 +16,18 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentSession
 from zerg.services.bug_reports import read_manifest
 from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
+from zerg.services.session_turns import SESSION_TURN_STATE_CANCELLED
+from zerg.services.session_turns import SESSION_TURN_STATE_COMPLETED
 from zerg.services.session_turns import SESSION_TURN_STATE_FAILED
+from zerg.services.session_turns import SESSION_TURN_STATE_QUEUED
 from zerg.services.session_turns import SESSION_TURN_STATE_STARTING
 
 CONSOLE_TURN_START_COMMAND = "session.turn.start"
 CONSOLE_TURN_INTERRUPT_COMMAND = "session.turn.interrupt"
-# Leave enough room for the HTTP boundary to persist and return an ambiguous
-# command outcome instead of cancelling the request at the same instant as the
-# Machine Agent reply budget expires.
 CONSOLE_CONTROL_REPLY_TIMEOUT_SECONDS = 10
+# A starting turn is durable across a lost control reply, but it cannot remain
+# in FIFO limbo forever when the provider never reaches a settled launch state.
+CONSOLE_STARTING_TTL_SECONDS = 5 * 60
 logger = logging.getLogger("longhouse.console_latency")
 
 
@@ -195,9 +198,20 @@ async def enqueue_catalog_console_turn(
     message: str,
     client_request_id: str,
     report_id: UUID | None = None,
+    attachments: list[dict] | None = None,
+    attachments_digest: str | None = None,
+    receipt_id: str | None = None,
     registry=None,
 ) -> CatalogConsoleTurn:
-    """Live-catalog equivalent of enqueue + claim + machine dispatch."""
+    """Live-catalog equivalent of enqueue + claim + machine dispatch.
+
+    ``attachments`` are engine-facing blob refs stored on the turn so a FIFO
+    or reconnect dispatch after a restart still carries them;
+    ``attachments_digest`` is what an idempotent replay compares. A replay
+    passes the digest without refs: the stored turn already has them.
+    ``receipt_id`` lets the upload route persist attachment metadata against
+    the exact receipt before this operation dispatches the turn.
+    """
 
     if report_id is not None:
         try:
@@ -219,7 +233,10 @@ async def enqueue_catalog_console_turn(
                 "owner_id": owner_id,
                 "message": message,
                 "client_request_id": client_request_id,
+                "receipt_id": receipt_id,
                 "report_id": str(report_id) if report_id is not None else None,
+                "attachments": list(attachments or []),
+                "attachments_digest": attachments_digest,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
         },
@@ -227,7 +244,7 @@ async def enqueue_catalog_console_turn(
     if result.get("found") is not True:
         raise ConsoleTurnUnavailable("session_not_found", "Console session was not found")
     if result.get("idempotency_conflict") is True:
-        raise ConsoleTurnConflict("client_request_id was reused with different text")
+        raise ConsoleTurnConflict("client_request_id was reused with different text or attachments")
     if result.get("report_conflict") is True:
         raise ConsoleTurnUnavailable(
             "report_in_progress",
@@ -239,6 +256,31 @@ async def enqueue_catalog_console_turn(
     turn_id = UUID(str(turn["turn_id"]))
     run_id = UUID(str(turn["run_id"])) if turn.get("run_id") else None
     state = str(turn.get("state") or "queued")
+    if state == SESSION_TURN_STATE_QUEUED:
+        # A follow-up is the first reliable opportunity to recover a current
+        # starting turn while the Machine Agent remains connected. Rebuild the
+        # full dispatch payload from catalogd's receipt/thread projection and
+        # replay its stable run_id; the engine claim registry makes this safe.
+        try:
+            current_result = await client.call(
+                "session.console.turn.current.v2",
+                {"session_id": str(session_id), "owner_id": owner_id},
+            )
+            current_turn = current_result.get("turn")
+            if isinstance(current_turn, dict) and current_turn.get("state") == SESSION_TURN_STATE_STARTING and current_turn.get("run_id"):
+                await dispatch_catalog_claimed_turn(
+                    owner_id=owner_id,
+                    turn=current_turn,
+                    client=client,
+                    registry=registry,
+                )
+        except Exception:  # noqa: BLE001
+            # The queued turn is already durable. A failed best-effort replay
+            # must not turn a successful enqueue into a request error.
+            logger.exception(
+                "Failed to replay current starting Console turn after enqueue session=%s",
+                session_id,
+            )
     if state != SESSION_TURN_STATE_STARTING or run_id is None:
         # Replay surfaces a launch failure, which dispatch records with an
         # error_code. A run that launched and later ended cancelled or failed
@@ -255,7 +297,6 @@ async def enqueue_catalog_console_turn(
             error_code=error_code,
             error=(str(turn.get("error") or "") or None) if error_code else None,
         )
-
     control = registry or get_machine_control_channel_registry()
     provider = str(turn["provider"])
     device_id = str(turn["device_id"])
@@ -283,6 +324,8 @@ async def enqueue_catalog_console_turn(
         }
         if turn.get("report_id"):
             payload["report_id"] = str(turn["report_id"])
+        if turn.get("attachments"):
+            payload["attachments"] = list(turn["attachments"])
         if turn.get("resume_provider_thread_id"):
             payload["resume_provider_thread_id"] = turn["resume_provider_thread_id"]
         if turn.get("resume_session_file"):
@@ -336,6 +379,7 @@ async def enqueue_catalog_console_turn(
                 provider=provider,
                 device_id=device_id,
                 error=error,
+                updated_at=str(turn.get("updated_at") or ""),
             )
             persisted_turn = dict(update_result.get("turn") or {})
             persisted_state = str(persisted_turn.get("state") or SESSION_TURN_STATE_STARTING)
@@ -358,6 +402,34 @@ async def enqueue_catalog_console_turn(
         if response_message.get("ok") is not True:
             error_code = response_error_code or "provider_launch_failed"
             error = str(detail.get("message") or response.error or "Console turn dispatch failed")
+            if error_code in {
+                "turn_start_ambiguous",
+                "turn_start_outcome_unknown",
+                "attachment_stage_outcome_unknown",
+            }:
+                update_result = await _mark_catalog_start_outcome_unknown(
+                    client,
+                    owner_id=owner_id,
+                    turn_id=turn_id,
+                    run_id=run_id,
+                    session_id=UUID(str(turn["session_id"])),
+                    thread_id=UUID(str(turn["thread_id"])),
+                    provider=provider,
+                    device_id=device_id,
+                    error=error,
+                    error_code=error_code,
+                    updated_at=str(turn.get("updated_at") or ""),
+                )
+                persisted_turn = dict(update_result.get("turn") or {})
+                persisted_state = str(persisted_turn.get("state") or SESSION_TURN_STATE_STARTING)
+                return CatalogConsoleTurn(
+                    turn_id=turn_id,
+                    run_id=run_id,
+                    state=persisted_state,
+                    created=bool(result.get("created")),
+                    error_code=error_code,
+                    error=error,
+                )
         else:
             await _persist_native_binding_result(client, turn=turn, response_message=response_message)
 
@@ -525,6 +597,7 @@ async def dispatch_catalog_claimed_turn(
     capability = f"{provider}.turn_start"
     error_code = None
     error = None
+    replayed_terminal_state = None
     if not control.supports(owner_id=owner_id, device_id=device_id, capability=capability):
         error_code = "adapter_unavailable"
         error = f"Machine Agent does not advertise {capability}"
@@ -543,6 +616,8 @@ async def dispatch_catalog_claimed_turn(
         }
         if turn.get("report_id"):
             payload["report_id"] = str(turn["report_id"])
+        if turn.get("attachments"):
+            payload["attachments"] = list(turn["attachments"])
         if turn.get("resume_provider_thread_id"):
             payload["resume_provider_thread_id"] = turn["resume_provider_thread_id"]
         if turn.get("resume_session_file"):
@@ -571,6 +646,7 @@ async def dispatch_catalog_claimed_turn(
                 provider=provider,
                 device_id=device_id,
                 error=error,
+                updated_at=str(turn.get("updated_at") or ""),
             )
             persisted_turn = dict(update_result.get("turn") or {})
             persisted_state = str(persisted_turn.get("state") or SESSION_TURN_STATE_STARTING)
@@ -594,9 +670,48 @@ async def dispatch_catalog_claimed_turn(
             detail = message.get("error") if isinstance(message.get("error"), dict) else {}
             error_code = str(detail.get("code") or "provider_launch_failed")
             error = str(detail.get("message") or response.error or "Console turn dispatch failed")
+            if error_code in {
+                "turn_start_ambiguous",
+                "turn_start_outcome_unknown",
+                "attachment_stage_outcome_unknown",
+            }:
+                update_result = await _mark_catalog_start_outcome_unknown(
+                    catalog,
+                    owner_id=owner_id,
+                    turn_id=turn_id,
+                    run_id=run_id,
+                    session_id=session_id,
+                    thread_id=UUID(str(turn["thread_id"])),
+                    provider=provider,
+                    device_id=device_id,
+                    error=error,
+                    error_code=error_code,
+                    updated_at=str(turn.get("updated_at") or ""),
+                )
+                persisted_turn = dict(update_result.get("turn") or {})
+                persisted_state = str(persisted_turn.get("state") or SESSION_TURN_STATE_STARTING)
+                return CatalogConsoleTurn(
+                    turn_id=turn_id,
+                    run_id=run_id,
+                    state=persisted_state,
+                    created=True,
+                    error_code=error_code,
+                    error=error,
+                )
         else:
-            await _persist_native_binding_result(catalog, turn=turn, response_message=message)
-    state = SESSION_TURN_STATE_FAILED if error else SESSION_TURN_STATE_ACTIVE
+            result_payload = message.get("result") if isinstance(message.get("result"), dict) else {}
+            terminal_state = result_payload.get("terminal_state")
+            if terminal_state in {"run_completed", "run_failed", "run_cancelled"}:
+                replayed_terminal_state = {
+                    "run_completed": SESSION_TURN_STATE_COMPLETED,
+                    "run_failed": SESSION_TURN_STATE_FAILED,
+                    "run_cancelled": SESSION_TURN_STATE_CANCELLED,
+                }[terminal_state]
+                error_code = None
+                error = None if replayed_terminal_state == SESSION_TURN_STATE_COMPLETED else terminal_state
+            else:
+                await _persist_native_binding_result(catalog, turn=turn, response_message=message)
+    state = replayed_terminal_state or (SESSION_TURN_STATE_FAILED if error else SESSION_TURN_STATE_ACTIVE)
     update_result = await catalog.call(
         "session.console.turn.update.v2",
         {
@@ -644,6 +759,24 @@ async def dispatch_catalog_claimed_turn(
     )
 
 
+def _console_turn_is_expired(turn: dict[str, object], *, now: datetime | None = None) -> bool:
+    # `updated_at` is the start of the current lifecycle state. A queued turn
+    # can wait arbitrarily long before catalogd claims it; using `created_at`
+    # would expire a freshly claimed turn immediately after a long FIFO wait.
+    raw_started_at = turn.get("updated_at") or turn.get("created_at")
+    if isinstance(raw_started_at, datetime):
+        started_at = raw_started_at
+    else:
+        try:
+            started_at = datetime.fromisoformat(str(raw_started_at).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return False
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    current = now or datetime.now(timezone.utc)
+    return (current - started_at).total_seconds() > CONSOLE_STARTING_TTL_SECONDS
+
+
 async def reconcile_starting_console_turns_for_device(
     db: Session | None,
     *,
@@ -675,7 +808,40 @@ async def reconcile_starting_console_turns_for_device(
         if not isinstance(turn, dict):
             continue
         capability = f"{turn.get('provider')}.turn_start"
-        if not control.supports(owner_id=owner_id, device_id=device_id, capability=capability):
+        supports_turn_start = control.supports(
+            owner_id=owner_id,
+            device_id=device_id,
+            capability=capability,
+        )
+        # Ask a capable Machine Agent to replay the durable run before applying
+        # the timeout. A provider may already be running while the host's
+        # original response is still unknown.
+        if not supports_turn_start and _console_turn_is_expired(turn):
+            error = f"Console turn {turn['run_id']} stayed in starting state for {CONSOLE_STARTING_TTL_SECONDS}s without a proven launch"
+            update_result = await _mark_catalog_start_failed(
+                catalog,
+                owner_id=owner_id,
+                turn_id=UUID(str(turn["turn_id"])),
+                run_id=UUID(str(turn["run_id"])),
+                session_id=UUID(str(turn["session_id"])),
+                thread_id=UUID(str(turn["thread_id"])),
+                provider=str(turn["provider"]),
+                device_id=device_id,
+                error=error,
+            )
+            persisted_turn = dict(update_result.get("turn") or {})
+            reconciled.append(
+                CatalogConsoleTurn(
+                    turn_id=UUID(str(turn["turn_id"])),
+                    run_id=UUID(str(turn["run_id"])),
+                    state=str(persisted_turn.get("state") or SESSION_TURN_STATE_FAILED),
+                    created=False,
+                    error_code="turn_start_timeout",
+                    error=error,
+                )
+            )
+            continue
+        if not supports_turn_start:
             error = f"Machine Agent reconnected without advertising {capability}; launch outcome remains unknown"
             update_result = await _mark_catalog_start_outcome_unknown(
                 catalog,
@@ -685,8 +851,9 @@ async def reconcile_starting_console_turns_for_device(
                 session_id=UUID(str(turn["session_id"])),
                 thread_id=UUID(str(turn["thread_id"])),
                 provider=str(turn["provider"]),
-                device_id=str(turn["device_id"]),
+                device_id=device_id,
                 error=error,
+                updated_at=str(turn.get("updated_at") or ""),
             )
             persisted_turn = dict(update_result.get("turn") or {})
             applied = update_result.get("applied") is not False
@@ -723,6 +890,8 @@ async def _mark_catalog_start_outcome_unknown(
     provider: str,
     device_id: str,
     error: str,
+    error_code: str = "turn_start_outcome_unknown",
+    updated_at: str | None = None,
 ) -> dict[str, object]:
     return await catalog.call(
         "session.console.turn.update.v2",
@@ -737,7 +906,40 @@ async def _mark_catalog_start_outcome_unknown(
                 "device_id": device_id,
                 "state": SESSION_TURN_STATE_STARTING,
                 "expected_state": SESSION_TURN_STATE_STARTING,
-                "error_code": "turn_start_outcome_unknown",
+                "error_code": error_code,
+                "error": error,
+                "updated_at": updated_at or datetime.now(timezone.utc).isoformat(),
+            }
+        },
+    )
+
+
+async def _mark_catalog_start_failed(
+    catalog,
+    *,
+    owner_id: int,
+    turn_id: UUID,
+    run_id: UUID,
+    session_id: UUID,
+    thread_id: UUID,
+    provider: str,
+    device_id: str,
+    error: str,
+) -> dict[str, object]:
+    return await catalog.call(
+        "session.console.turn.update.v2",
+        {
+            "turn": {
+                "turn_id": str(turn_id),
+                "run_id": str(run_id),
+                "owner_id": owner_id,
+                "session_id": str(session_id),
+                "thread_id": str(thread_id),
+                "provider": provider,
+                "device_id": device_id,
+                "state": SESSION_TURN_STATE_FAILED,
+                "expected_state": SESSION_TURN_STATE_STARTING,
+                "error_code": "turn_start_timeout",
                 "error": error,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }

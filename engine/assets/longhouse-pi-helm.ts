@@ -1,5 +1,30 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
+
+type ImageContent = { type: "image"; data: string; mimeType: string };
+type TextContent = { type: "text"; text: string };
+
+/// Longhouse stages image attachments on disk and sends only their path and
+/// MIME type over the socket; the bytes are read here, inside the provider
+/// process, so the frame cap never applies to image data. Without
+/// attachments the message is the plain string pi has always received.
+const userContent = (text: string, attachments: unknown): string | (TextContent | ImageContent)[] => {
+  if (!Array.isArray(attachments) || attachments.length === 0) return text;
+  const images: ImageContent[] = [];
+  for (const item of attachments) {
+    if (!item || typeof item !== "object") continue;
+    const path = (item as { path?: unknown }).path;
+    const mimeType = (item as { mime_type?: unknown }).mime_type;
+    if (typeof path !== "string" || typeof mimeType !== "string") continue;
+    images.push({ type: "image", data: readFileSync(path).toString("base64"), mimeType });
+  }
+  if (images.length === 0) return text;
+  const parts: (TextContent | ImageContent)[] = [];
+  if (text.trim()) parts.push({ type: "text", text });
+  parts.push(...images);
+  return parts;
+};
 
 type Frame = Record<string, unknown>;
 
@@ -218,21 +243,22 @@ export default function (pi: ExtensionAPI) {
     let reply: Frame = { kind: "command_result", request_id: requestId, ok: false };
     try {
       const text = typeof command.text === "string" ? command.text : "";
-      if (["send", "steer"].includes(String(kind)) && !text.trim()) {
+      const content = userContent(text, command.attachments);
+      if (["send", "steer"].includes(String(kind)) && !text.trim() && typeof content === "string") {
         throw new Error("Pi Helm input text must not be empty");
       }
       if (kind === "send") {
         if (ctx.isIdle()) {
-          await Promise.resolve(pi.sendUserMessage(text, { expandPromptTemplates: false }));
+          await Promise.resolve(pi.sendUserMessage(content, { expandPromptTemplates: false }));
         } else {
-          await Promise.resolve(pi.sendUserMessage(text, {
+          await Promise.resolve(pi.sendUserMessage(content, {
             deliverAs: "followUp",
             expandPromptTemplates: false,
           }));
         }
       } else if (kind === "steer") {
         if (ctx.isIdle()) throw new Error("Pi provider has no active turn to steer");
-        await Promise.resolve(pi.sendUserMessage(text, { deliverAs: "steer", expandPromptTemplates: false }));
+        await Promise.resolve(pi.sendUserMessage(content, { deliverAs: "steer", expandPromptTemplates: false }));
       } else if (kind === "abort") {
         await Promise.resolve(ctx.abort());
       } else if (kind === "terminate") {

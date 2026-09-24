@@ -193,10 +193,12 @@ pub async fn start_claude_print_turn(
         let _ = child.kill().await;
         return Err(error).context("persisting Claude Console spawn identity");
     }
+    let monitor = crate::turn_claims::register_monitor(&config.run_id);
     let monitor_path = stdout_path.clone();
     let monitor_stderr = stderr_path.clone();
     tokio::spawn(async move {
         monitor_claude_print(&mut child, &monitor_path, &monitor_stderr, sink, lock).await;
+        drop(monitor);
     });
 
     Ok(ClaudePrintRunSummary {
@@ -266,8 +268,10 @@ pub async fn recover_claude_print_turns(
         match crate::console_adapter::claim_liveness(&claim, inventory.as_ref()) {
             ClaimLiveness::Live => {
                 let lock = acquire_conversation_lock(&claude_managed_root()?, &provider_thread_id)?;
+                let monitor = crate::turn_claims::register_monitor(&claim.run_id);
                 tokio::spawn(async move {
                     monitor_recovered_claim(claim, stdout_path, stderr_path, sink, lock).await;
+                    drop(monitor);
                 });
                 recovered += 1;
             }
@@ -349,6 +353,9 @@ async fn monitor_claude_print(
     let mut terminal_from_stream = None;
     let mut identity_confirmed = false;
     loop {
+        if crate::turn_claims::monitor_cancel_requested(&sink.run_id) {
+            return;
+        }
         match read_growth(stdout_path, &mut offset, &mut pending) {
             Ok(lines) => {
                 let had_lines = !lines.is_empty();
@@ -375,7 +382,11 @@ async fn monitor_claude_print(
                         Err(error) => sink.post_decode_gap(seq, &error.to_string(), &bytes).await,
                     }
                 }
-                if had_lines {
+                // Do not advance the durable projection past the provider's
+                // result until the terminal claim is posted. If the agent
+                // dies in that gap, recovery must replay the result instead
+                // of classifying an already-successful provider run failed.
+                if had_lines && terminal_from_stream.is_none() {
                     persist_projection_checkpoint(&sink.run_id, offset, pending.len(), seq);
                 }
             }
@@ -424,7 +435,7 @@ async fn monitor_claude_print(
                             }
                         }
                     }
-                    if had_lines {
+                    if had_lines && terminal_from_stream.is_none() {
                         persist_projection_checkpoint(&sink.run_id, offset, pending.len(), seq);
                     }
                 }
@@ -476,6 +487,9 @@ async fn monitor_recovered_claim(
     let mut terminal_from_stream = None;
     let mut identity_confirmed = claim.provider_identity_confirmed;
     loop {
+        if crate::turn_claims::monitor_cancel_requested(&sink.run_id) {
+            return;
+        }
         if let Ok(lines) = read_growth(&stdout_path, &mut offset, &mut pending) {
             let had_lines = !lines.is_empty();
             for bytes in lines {
@@ -501,7 +515,7 @@ async fn monitor_recovered_claim(
                     Err(error) => sink.post_decode_gap(seq, &error.to_string(), &bytes).await,
                 }
             }
-            if had_lines {
+            if had_lines && terminal_from_stream.is_none() {
                 persist_projection_checkpoint(&sink.run_id, offset, pending.len(), seq);
             }
         }
@@ -557,7 +571,7 @@ async fn settle_recovered_dead_claim(
                 Err(error) => sink.post_decode_gap(seq, &error.to_string(), &bytes).await,
             }
         }
-        if had_lines {
+        if had_lines && terminal.is_none() {
             persist_projection_checkpoint(&sink.run_id, offset, pending.len(), seq);
         }
     }
@@ -640,6 +654,21 @@ fn settle_terminal_state(
         "run_completed".to_string()
     } else {
         "run_failed".to_string()
+    }
+}
+
+fn terminal_reason<'a>(terminal_state: &'a str, stderr: Option<&str>) -> &'a str {
+    if terminal_state == "run_failed"
+        && stderr.is_some_and(|text| {
+            let lower = text.to_ascii_lowercase();
+            (lower.contains("not logged in") && lower.contains("login"))
+                || lower.contains("invalid authentication credentials")
+                || lower.contains("authentication_error")
+        })
+    {
+        "provider_auth_required"
+    } else {
+        terminal_state
     }
 }
 
@@ -783,7 +812,7 @@ impl ClaudePrintSink {
                 "managed_transport": CLAUDE_PRINT_ADAPTER,
                 "execution_lifetime": "one_shot",
                 "terminal_state": terminal_state,
-                "terminal_reason": terminal_state,
+                "terminal_reason": terminal_reason(terminal_state, stderr.as_deref()),
                 "terminal_source": CLAUDE_PRINT_ADAPTER,
                 "exit_code": exit_code,
                 "stderr_tail": stderr,
@@ -1086,6 +1115,25 @@ mod tests {
         assert_eq!(
             settle_terminal_state(true, false, false, None),
             "run_cancelled"
+        );
+    }
+
+    #[test]
+    fn provider_auth_failures_have_an_actionable_terminal_reason() {
+        assert_eq!(
+            terminal_reason(
+                "run_failed",
+                Some("Not logged in · Please run /login from the Claude CLI"),
+            ),
+            "provider_auth_required"
+        );
+        assert_eq!(
+            terminal_reason("run_failed", Some("network connection reset")),
+            "run_failed"
+        );
+        assert_eq!(
+            terminal_reason("run_completed", Some("Not logged in · Please run /login")),
+            "run_completed"
         );
     }
 

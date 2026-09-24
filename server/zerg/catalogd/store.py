@@ -639,6 +639,18 @@ def _receipt_error_code(receipt: LiveSessionInputReceipt | None) -> str | None:
     return str(code).strip() or None if code else None
 
 
+def _console_turn_attachments(turn: LiveConsoleTurn) -> dict[str, Any]:
+    """Decode `attachments_json`; an absent or malformed column is no attachments."""
+    raw = getattr(turn, "attachments_json", None)
+    if not raw:
+        return {}
+    try:
+        decoded = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
 def _live_console_turn_dto(
     turn: LiveConsoleTurn,
     *,
@@ -655,6 +667,7 @@ def _live_console_turn_dto(
         "run_id": turn.run_id,
         "state": turn.state,
         "report_id": turn.report_id,
+        "attachments": _console_turn_attachments(turn).get("refs") or [],
         "provider": turn.provider,
         "device_id": turn.device_id,
         "cwd": turn.cwd,
@@ -666,6 +679,11 @@ def _live_console_turn_dto(
         "fork_from_provider_thread_id": turn.fork_from_provider_thread_id,
         "error_code": error_code,
         "error": turn.error,
+        # Reconciliation uses updated_at as the start time of the current
+        # state. Keep both timestamps so a queued turn can wait in FIFO
+        # without consuming the starting-state TTL.
+        "created_at": _encode_datetime(turn.created_at),
+        "updated_at": _encode_datetime(turn.updated_at),
     }
 
 
@@ -4573,6 +4591,22 @@ class CatalogStore:
                 report_id = str(UUID(str(report_id)))
             except (TypeError, ValueError) as exc:
                 raise ValueError("invalid report_id") from exc
+        attachment_refs = data.get("attachments") or []
+        if not isinstance(attachment_refs, list) or not all(isinstance(ref, dict) for ref in attachment_refs):
+            raise ValueError("invalid attachments")
+        attachments_digest = data.get("attachments_digest")
+        attachments_digest = str(attachments_digest) if attachments_digest else None
+        requested_receipt_id = data.get("receipt_id")
+        if requested_receipt_id is not None:
+            try:
+                requested_receipt_id = str(UUID(str(requested_receipt_id)))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("invalid receipt_id") from exc
+        attachments_json = (
+            json.dumps({"digest": attachments_digest, "refs": attachment_refs}, sort_keys=True)
+            if attachment_refs or attachments_digest
+            else None
+        )
         with _write_transaction(self.engine) as connection:
             orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
             try:
@@ -4614,7 +4648,9 @@ class CatalogStore:
                 )
                 if existing_receipt is not None:
                     turn = orm.query(LiveConsoleTurn).filter(LiveConsoleTurn.receipt_id == existing_receipt.id).one()
-                    exact = existing_receipt.text == data["message"] and turn.report_id == report_id
+                    stored_digest = _console_turn_attachments(turn).get("digest") or None
+                    digest_matches = stored_digest == attachments_digest
+                    exact = existing_receipt.text == data["message"] and turn.report_id == report_id and digest_matches
                     replay_turn = _live_console_turn_dto(
                         turn,
                         message=existing_receipt.text,
@@ -4686,7 +4722,7 @@ class CatalogStore:
                 if execution_owner is not None:
                     orm.rollback()
                     return {"found": True, "unavailable": "execution_owner_conflict"}
-                receipt_id = str(uuid4())
+                receipt_id = requested_receipt_id or str(uuid4())
                 turn_id = str(uuid4())
                 resume_alias = (
                     orm.query(LiveSessionThreadAlias)
@@ -4724,6 +4760,7 @@ class CatalogStore:
                     receipt_id=receipt_id,
                     state="queued",
                     report_id=report_id,
+                    attachments_json=attachments_json,
                     provider=session.provider,
                     device_id=thread.device_id,
                     cwd=thread.cwd,
@@ -4930,6 +4967,22 @@ class CatalogStore:
                     if run is not None:
                         run.ended_at = now
                         run.exit_status = data.get("error_code") or next_state
+                        for connection_row in (
+                            orm.query(LiveSessionConnection)
+                            .filter(
+                                LiveSessionConnection.run_id == turn.run_id,
+                                LiveSessionConnection.released_at.is_(None),
+                            )
+                            .all()
+                        ):
+                            connection_row.state = "ended"
+                            connection_row.released_at = now
+                            connection_row.last_health_at = now
+                            connection_row.can_send_input = False
+                            connection_row.can_interrupt = False
+                            connection_row.can_terminate = False
+                            connection_row.can_tail_output = False
+                            connection_row.can_resume = False
                     next_turn = (
                         orm.query(LiveConsoleTurn)
                         .filter(LiveConsoleTurn.thread_id == turn.thread_id, LiveConsoleTurn.state == "queued")
@@ -5069,7 +5122,23 @@ class CatalogStore:
                     .order_by(LiveConsoleTurn.created_at.asc(), LiveConsoleTurn.id.asc())
                     .first()
                 )
-                return {"found": True, "turn": _live_console_turn_dto(turn) if turn is not None else None}
+                if turn is None:
+                    return {"found": True, "turn": None}
+                receipt = orm.get(LiveSessionInputReceipt, turn.receipt_id)
+                thread = orm.get(LiveSessionThread, turn.thread_id)
+                return {
+                    "found": True,
+                    "turn": _live_console_turn_dto(
+                        turn,
+                        message=receipt.text if receipt is not None else None,
+                        client_request_id=receipt.client_request_id if receipt is not None else None,
+                        provider_config=thread.provider_config_json if thread is not None else None,
+                        error_code=_receipt_error_code(receipt),
+                        resume_session_file=(
+                            _live_thread_source_path(orm, thread_id=thread.id, provider=turn.provider) if thread is not None else None
+                        ),
+                    ),
+                }
             finally:
                 orm.close()
 
@@ -5953,29 +6022,40 @@ class CatalogStore:
                 "commit_seq": str(commit_seq),
             }
 
-    def create_input_attachment(self, *, attachment: dict[str, Any]) -> dict[str, Any]:
-        """Create bounded attachment metadata under an existing live receipt."""
+    def create_input_attachment(
+        self,
+        *,
+        attachment: dict[str, Any],
+        allow_unbound: bool = False,
+    ) -> dict[str, Any]:
+        """Create bounded attachment metadata for an input receipt.
+
+        Helm attachments must name an existing owner/session-scoped receipt.
+        Console uploads explicitly set ``allow_unbound`` because their UUID
+        group is created before the live Console receipt in the same request.
+        """
 
         observed_at = datetime.now(UTC)
         table = LiveSessionInputAttachment.__table__
-        receipt_table = LiveSessionInputReceipt.__table__
         with _write_transaction(self.engine) as connection:
             pruned_blob_paths = list(connection.execute(select(table.c.blob_path).where(table.c.expires_at <= observed_at)).scalars())
             connection.execute(delete(table).where(table.c.expires_at <= observed_at))
-            receipt = connection.execute(
-                select(receipt_table.c.id).where(
-                    receipt_table.c.id == attachment["input_receipt_id"],
-                    receipt_table.c.owner_id == attachment["owner_id"],
-                    receipt_table.c.session_id == attachment["session_id"],
-                )
-            ).first()
-            if receipt is None:
-                return {
-                    "created": False,
-                    "reason": "input_receipt_not_found",
-                    "pruned_blob_paths": pruned_blob_paths,
-                    "commit_seq": str(_current_commit_seq(connection)),
-                }
+            if not allow_unbound:
+                receipt = connection.execute(
+                    select(LiveSessionInputReceipt.__table__.c.id).where(
+                        LiveSessionInputReceipt.__table__.c.id == attachment["input_receipt_id"],
+                        LiveSessionInputReceipt.__table__.c.owner_id == attachment["owner_id"],
+                        LiveSessionInputReceipt.__table__.c.session_id == attachment["session_id"],
+                    )
+                ).first()
+                if receipt is None:
+                    return {
+                        "created": False,
+                        "attachment": None,
+                        "reason": "input_receipt_not_found",
+                        "pruned_blob_paths": pruned_blob_paths,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
             existing = connection.execute(select(table).where(table.c.id == attachment["id"])).mappings().first()
             values = {**attachment, "created_at": observed_at}
             if existing is not None:
@@ -6000,6 +6080,46 @@ class CatalogStore:
                 "created": True,
                 "attachment": _input_attachment_dto(SimpleNamespace(**row)),
                 "pruned_blob_paths": pruned_blob_paths,
+                "commit_seq": str(commit_seq),
+            }
+
+    def delete_input_attachments(
+        self,
+        *,
+        owner_id: int,
+        session_id: str,
+        input_receipt_id: str,
+    ) -> dict[str, Any]:
+        """Delete one upload group and return its delivery-blob paths."""
+
+        observed_at = datetime.now(UTC)
+        table = LiveSessionInputAttachment.__table__
+        with _write_transaction(self.engine) as connection:
+            rows = (
+                connection.execute(
+                    select(table.c.blob_path).where(
+                        table.c.owner_id == owner_id,
+                        table.c.session_id == session_id,
+                        table.c.input_receipt_id == input_receipt_id,
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            deleted = (
+                connection.execute(
+                    delete(table).where(
+                        table.c.owner_id == owner_id,
+                        table.c.session_id == session_id,
+                        table.c.input_receipt_id == input_receipt_id,
+                    )
+                ).rowcount
+                or 0
+            )
+            commit_seq = _advance_commit_seq(connection, observed_at) if deleted else _current_commit_seq(connection)
+            return {
+                "deleted": int(deleted),
+                "blob_paths": list(rows),
                 "commit_seq": str(commit_seq),
             }
 

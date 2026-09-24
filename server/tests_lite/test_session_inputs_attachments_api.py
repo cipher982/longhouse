@@ -205,6 +205,345 @@ async def test_catalog_multipart_uses_live_receipt_without_legacy_db(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_console_multipart_stores_blobs_then_enqueues_turn_with_refs(monkeypatch, tmp_path):
+    """A Console session takes the Console enqueue path: blobs first, then
+    the turn carries their refs and a digest; no Helm lock, no live receipt."""
+    import zerg.routers.session_inputs_attachments as route
+    import zerg.services.console_turns as console_turns
+
+    _set_blob_root(monkeypatch, tmp_path)
+    session_id = uuid4()
+    attachment_id = uuid4()
+    turn_id = uuid4()
+    run_id = uuid4()
+    source_session = SimpleNamespace(
+        id=session_id,
+        provider="claude",
+        device_id="cinder",
+        primary_thread_id=uuid4(),
+        command_family="console_turn",
+        catalog_facts={},
+    )
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(route, "_load_session_for_continuation", lambda db, sid, *, owner_id: source_session)
+
+    async def load_receipt(**kwargs):
+        return None
+
+    async def store_blob(**kwargs):
+        calls["store"] = kwargs
+        return StoredAttachment(
+            id=attachment_id,
+            session_input_id=kwargs["input_receipt_id"],
+            session_id=session_id,
+            mime_type="image/png",
+            byte_size=len(_PNG_BYTES),
+            sha256=hashlib.sha256(_PNG_BYTES).hexdigest(),
+            blob_path=tmp_path / "blob.bin",
+            original_filename="a.png",
+            original_byte_size=len(_PNG_BYTES),
+        )
+
+    async def enqueue(**kwargs):
+        calls["enqueue"] = kwargs
+        return SimpleNamespace(turn_id=turn_id, run_id=run_id, state="active", created=True, error=None, error_code=None)
+
+    async def never_lock(**kwargs):
+        raise AssertionError("Console attachments must not take the Helm dispatch lock")
+
+    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_receipt)
+    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob)
+    monkeypatch.setattr(console_turns, "enqueue_catalog_console_turn", enqueue)
+    monkeypatch.setattr(route.session_lock_manager, "acquire", never_lock)
+
+    upload = UploadFile(file=io.BytesIO(_PNG_BYTES), filename="a.png", headers=Headers({"content-type": "image/png"}))
+    response = await route.create_session_input_with_attachments(
+        session_id=str(session_id),
+        request=SimpleNamespace(headers={}, url=SimpleNamespace(scheme="http", netloc="testserver")),
+        text="what color",
+        intent="auto",
+        client_request_id="console-attach-1",
+        attachments=[upload],
+        user_agent="Longhouse-iOS",
+        db=None,
+        current_user=SimpleNamespace(id=7),
+    )
+
+    assert response.outcome == "sent"
+    assert response.turn is not None and response.turn.turn_id == str(turn_id)
+    assert response.live_input_id == str(turn_id)
+    group_id = calls["store"]["input_receipt_id"]
+    UUID(group_id)
+    enqueue_call = calls["enqueue"]
+    assert enqueue_call["message"] == "what color"
+    assert enqueue_call["client_request_id"] == "console-attach-1"
+    assert enqueue_call["attachments"][0]["blob_url"] == (
+        f"/api/agents/sessions/{session_id}/inputs/{group_id}/attachments/{attachment_id}/blob"
+    )
+    assert enqueue_call["attachments_digest"]
+
+    # A replay with the same client_request_id stores nothing and passes the
+    # digest alone; catalogd compares it against the stored turn.
+    async def load_existing(**kwargs):
+        return SimpleNamespace(id=str(uuid4()))
+
+    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_existing)
+
+    async def store_blob_forbidden(**kwargs):
+        raise AssertionError("replay must not store blobs again")
+
+    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob_forbidden)
+    replay = await route.create_session_input_with_attachments(
+        session_id=str(session_id),
+        request=SimpleNamespace(headers={}, url=SimpleNamespace(scheme="http", netloc="testserver")),
+        text="what color",
+        intent="auto",
+        client_request_id="console-attach-1",
+        attachments=[UploadFile(file=io.BytesIO(_PNG_BYTES), filename="a.png", headers=Headers({"content-type": "image/png"}))],
+        user_agent="Longhouse-iOS",
+        db=None,
+        current_user=SimpleNamespace(id=7),
+    )
+    assert replay.turn is not None and replay.turn.turn_id == str(turn_id)
+    assert calls["enqueue"]["attachments"] == []
+    assert calls["enqueue"]["attachments_digest"] == enqueue_call["attachments_digest"]
+
+    # A concurrent identical upload can lose the catalog idempotency race
+    # after storing its own group. That losing group must be deleted.
+    losing_group: dict[str, str] = {}
+
+    async def load_racing(**kwargs):
+        del kwargs
+        return None
+
+    async def store_racing(**kwargs):
+        losing_group["id"] = kwargs["input_receipt_id"]
+        return StoredAttachment(
+            id=uuid4(),
+            session_input_id=kwargs["input_receipt_id"],
+            session_id=session_id,
+            mime_type="image/png",
+            byte_size=len(_PNG_BYTES),
+            sha256=hashlib.sha256(_PNG_BYTES).hexdigest(),
+            blob_path=tmp_path / "race.bin",
+            original_filename="a.png",
+            original_byte_size=len(_PNG_BYTES),
+        )
+
+    async def delete_racing(**kwargs):
+        calls["deleted_group"] = kwargs["input_receipt_id"]
+        return 1
+
+    async def enqueue_existing(**kwargs):
+        calls["racing_enqueue"] = kwargs
+        return SimpleNamespace(
+            turn_id=turn_id,
+            run_id=run_id,
+            state="active",
+            created=False,
+            error=None,
+            error_code=None,
+        )
+
+    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_racing)
+    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_racing)
+    monkeypatch.setattr(route, "delete_catalog_attachment_blobs", delete_racing)
+    monkeypatch.setattr(console_turns, "enqueue_catalog_console_turn", enqueue_existing)
+    await route.create_session_input_with_attachments(
+        session_id=str(session_id),
+        request=SimpleNamespace(headers={}, url=SimpleNamespace(scheme="http", netloc="testserver")),
+        text="what color",
+        intent="auto",
+        client_request_id="console-attach-race",
+        attachments=[UploadFile(file=io.BytesIO(_PNG_BYTES), filename="a.png", headers=Headers({"content-type": "image/png"}))],
+        user_agent="Longhouse-iOS",
+        db=None,
+        current_user=SimpleNamespace(id=7),
+    )
+    assert calls["deleted_group"] == losing_group["id"]
+
+
+@pytest.mark.asyncio
+async def test_console_multipart_keeps_group_when_catalog_reply_is_ambiguous(monkeypatch, tmp_path):
+    import zerg.routers.session_inputs_attachments as route
+    import zerg.services.console_turns as console_turns
+
+    _set_blob_root(monkeypatch, tmp_path)
+    session_id = uuid4()
+    source_session = SimpleNamespace(
+        id=session_id,
+        provider="claude",
+        device_id="cinder",
+        primary_thread_id=uuid4(),
+        command_family="console_turn",
+        catalog_facts={},
+    )
+    group_ids: list[str] = []
+    monkeypatch.setattr(route, "_load_session_for_continuation", lambda db, sid, *, owner_id: source_session)
+
+    async def load_receipt(**kwargs):
+        return None
+
+    async def store_blob(**kwargs):
+        group_ids.append(kwargs["input_receipt_id"])
+        return StoredAttachment(
+            id=uuid4(),
+            session_input_id=kwargs["input_receipt_id"],
+            session_id=session_id,
+            mime_type="image/png",
+            byte_size=len(_PNG_BYTES),
+            sha256=hashlib.sha256(_PNG_BYTES).hexdigest(),
+            blob_path=tmp_path / "blob.bin",
+            original_filename="a.png",
+            original_byte_size=len(_PNG_BYTES),
+        )
+
+    async def enqueue_ambiguous(**kwargs):
+        raise RuntimeError("catalog reply lost after commit")
+
+    async def delete_forbidden(**kwargs):
+        raise AssertionError("ambiguous catalog outcome must not delete committed refs")
+
+    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", load_receipt)
+    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob)
+    monkeypatch.setattr(route, "delete_catalog_attachment_blobs", delete_forbidden)
+    monkeypatch.setattr(console_turns, "enqueue_catalog_console_turn", enqueue_ambiguous)
+
+    with pytest.raises(RuntimeError, match="reply lost"):
+        await route.create_session_input_with_attachments(
+            session_id=str(session_id),
+            request=SimpleNamespace(headers={}, url=SimpleNamespace(scheme="http", netloc="testserver")),
+            text="what color",
+            intent="auto",
+            client_request_id="console-attach-ambiguous",
+            attachments=[
+                UploadFile(
+                    file=io.BytesIO(_PNG_BYTES),
+                    filename="a.png",
+                    headers=Headers({"content-type": "image/png"}),
+                )
+            ],
+            user_agent="Longhouse-iOS",
+            db=None,
+            current_user=SimpleNamespace(id=7),
+        )
+    assert len(group_ids) == 1
+
+
+@pytest.mark.asyncio
+async def test_console_multipart_cleans_group_after_definite_dispatch_rejection(monkeypatch, tmp_path):
+    import zerg.routers.session_inputs_attachments as route
+    import zerg.services.console_turns as console_turns
+
+    _set_blob_root(monkeypatch, tmp_path)
+    session_id = uuid4()
+    source_session = SimpleNamespace(
+        id=session_id,
+        provider="claude",
+        device_id="cinder",
+        primary_thread_id=uuid4(),
+        command_family="console_turn",
+        catalog_facts={},
+    )
+    calls: dict[str, object] = {}
+    monkeypatch.setattr(route, "_load_session_for_continuation", lambda db, sid, *, owner_id: source_session)
+
+    async def no_receipt(**kwargs):
+        return None
+
+    monkeypatch.setattr(route, "load_live_input_receipt_by_client_request", no_receipt)
+
+    async def store_blob(**kwargs):
+        calls["group_id"] = kwargs["input_receipt_id"]
+        return StoredAttachment(
+            id=uuid4(),
+            session_input_id=kwargs["input_receipt_id"],
+            session_id=session_id,
+            mime_type="image/png",
+            byte_size=len(_PNG_BYTES),
+            sha256=hashlib.sha256(_PNG_BYTES).hexdigest(),
+            blob_path=tmp_path / "reject.bin",
+            original_filename="a.png",
+            original_byte_size=len(_PNG_BYTES),
+        )
+
+    async def delete_group(**kwargs):
+        calls["deleted_group"] = kwargs["input_receipt_id"]
+        return 1
+
+    async def reject(**kwargs):
+        return SimpleNamespace(
+            turn_id=uuid4(),
+            run_id=uuid4(),
+            state="failed",
+            created=True,
+            error_code="provider_launch_failed",
+            error="provider refused to start",
+        )
+
+    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob)
+    monkeypatch.setattr(route, "delete_catalog_attachment_blobs", delete_group)
+    monkeypatch.setattr(console_turns, "enqueue_catalog_console_turn", reject)
+
+    with pytest.raises(HTTPException) as excinfo:
+        await route.create_session_input_with_attachments(
+            session_id=str(session_id),
+            request=SimpleNamespace(headers={}, url=SimpleNamespace(scheme="http", netloc="testserver")),
+            text="what color",
+            intent="auto",
+            client_request_id="console-attach-rejected",
+            attachments=[
+                UploadFile(
+                    file=io.BytesIO(_PNG_BYTES),
+                    filename="a.png",
+                    headers=Headers({"content-type": "image/png"}),
+                )
+            ],
+            user_agent="Longhouse-iOS",
+            db=None,
+            current_user=SimpleNamespace(id=7),
+        )
+
+    assert excinfo.value.status_code == 502
+    assert calls["deleted_group"] == calls["group_id"]
+
+
+@pytest.mark.asyncio
+async def test_console_multipart_rejects_unsupported_provider(monkeypatch, tmp_path):
+    import zerg.routers.session_inputs_attachments as route
+
+    _set_blob_root(monkeypatch, tmp_path)
+    source_session = SimpleNamespace(
+        id=uuid4(),
+        provider="madeup",
+        device_id="cinder",
+        primary_thread_id=uuid4(),
+        command_family="console_turn",
+        catalog_facts={},
+    )
+    monkeypatch.setattr(route, "_load_session_for_continuation", lambda db, sid, *, owner_id: source_session)
+
+    async def store_blob_forbidden(**kwargs):
+        raise AssertionError("unsupported provider must be refused before storing")
+
+    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob_forbidden)
+    with pytest.raises(HTTPException) as excinfo:
+        await route.create_session_input_with_attachments(
+            session_id=str(source_session.id),
+            request=SimpleNamespace(headers={}, url=SimpleNamespace(scheme="http", netloc="testserver")),
+            text="x",
+            intent="auto",
+            client_request_id="console-attach-2",
+            attachments=[UploadFile(file=io.BytesIO(_PNG_BYTES), filename="a.png", headers=Headers({"content-type": "image/png"}))],
+            user_agent="Longhouse-iOS",
+            db=None,
+            current_user=SimpleNamespace(id=7),
+        )
+    assert excinfo.value.status_code == 409
+
+
+@pytest.mark.asyncio
 async def test_catalog_multipart_runtime_draining_replays_same_receipt_and_bytes(monkeypatch, tmp_path):
     import zerg.routers.session_inputs_attachments as route
 
@@ -830,6 +1169,37 @@ def test_multipart_upload_succeeds_on_codex(live_catalog, live_catalog_client, m
         asyncio.run(_clear_machine_control_registry())
 
 
+def test_multipart_upload_succeeds_on_claude_helm(live_catalog, live_catalog_client, monkeypatch, tmp_path):  # noqa: F811
+    # The support table, not the transport, decides: a Claude Helm session
+    # takes the same refs the engine stages and names in the prompt.
+    _set_blob_root(monkeypatch, tmp_path)
+    email = "attach-claude@test.local"
+    owner_id = live_catalog.create_user(email)
+    cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, provider="claude")
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.send"]))
+
+    try:
+        resp = live_catalog_client.post(
+            f"/sessions/{session_id}/inputs-multipart",
+            data={"text": "what color is this", "intent": "auto", "client_request_id": "attach-claude-1"},
+            files=[("attachments", ("a.png", io.BytesIO(_PNG_BYTES), "image/png"))],
+            cookies=cookies,
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["outcome"] == "sent"
+        assert len(websocket.sent) == 1
+        payload = websocket.sent[0]["payload"]
+        assert websocket.sent[0]["command_type"] == "session.send_text"
+        assert payload["provider"] == "claude"
+        assert payload["text"] == "what color is this"
+        assert payload["attachments"][0]["sha256"] == hashlib.sha256(_PNG_BYTES).hexdigest()
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        asyncio.run(_clear_machine_control_registry())
+
+
 def test_multipart_accepts_attachment_only_input(live_catalog, live_catalog_client, monkeypatch, tmp_path):  # noqa: F811
     _set_blob_root(monkeypatch, tmp_path)
     email = "attach-only@test.local"
@@ -867,25 +1237,28 @@ def test_multipart_accepts_attachment_only_input(live_catalog, live_catalog_clie
         asyncio.run(_clear_machine_control_registry())
 
 
-def test_multipart_rejects_non_codex_transport(live_catalog, live_catalog_client, monkeypatch, tmp_path):  # noqa: F811
+def test_multipart_rejects_unsupported_helm_provider(live_catalog, live_catalog_client, monkeypatch, tmp_path):  # noqa: F811
+    # Antigravity Helm has no image delivery (its hook inbox carries a plain
+    # string), so the explicit support table refuses it before anything is
+    # persisted. Every other provider accepts; see the Claude test below.
     _set_blob_root(monkeypatch, tmp_path)
-    email = "attach-claude@test.local"
+    email = "attach-agy@test.local"
     owner_id = live_catalog.create_user(email)
     cookies = {"longhouse_session": live_catalog.browser_cookie(owner_id=owner_id, email=email)}
-    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, provider="claude")
+    session_id = _seed_live_catalog_session(live_catalog, owner_id=owner_id, provider="antigravity")
     # A control channel that would happily accept the send, so the rejection
-    # below is a fact about the transport gate, not about the machine.
-    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["claude.send"]))
+    # below is a fact about the support gate, not about the machine.
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=owner_id, supports=["antigravity.send"]))
 
     try:
         resp = live_catalog_client.post(
             f"/sessions/{session_id}/inputs-multipart",
-            data={"text": "blocked", "intent": "auto", "client_request_id": "attach-claude-1"},
+            data={"text": "blocked", "intent": "auto", "client_request_id": "attach-agy-1"},
             files=[("attachments", ("a.png", io.BytesIO(_PNG_BYTES), "image/png"))],
             cookies=cookies,
         )
         assert resp.status_code == 409, resp.text
-        assert "codex" in resp.json()["detail"].lower()
+        assert "attachments" in resp.json()["detail"].lower()
         assert websocket.sent == []
         # The gate runs before anything is persisted: no receipt, no blob.
         assert (
@@ -893,7 +1266,7 @@ def test_multipart_rejects_non_codex_transport(live_catalog, live_catalog_client
                 live_catalog,
                 owner_id=owner_id,
                 session_id=session_id,
-                client_request_id="attach-claude-1",
+                client_request_id="attach-agy-1",
             )
             is None
         )

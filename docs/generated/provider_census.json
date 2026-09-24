@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 287,
+  "file_count": 289,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -155,6 +155,18 @@
     },
     {
       "path": "engine/src/heartbeat.rs",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "omp",
+        "opencode",
+        "pi"
+      ]
+    },
+    {
+      "path": "engine/src/input_attachments.rs",
       "providers": [
         "antigravity",
         "claude",
@@ -391,6 +403,7 @@
     {
       "path": "engine/src/turn_claims.rs",
       "providers": [
+        "claude",
         "codex",
         "cursor",
         "opencode"
@@ -1090,6 +1103,18 @@
       ]
     },
     {
+      "path": "server/tests_lite/test_input_attachments_support.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "omp",
+        "opencode",
+        "pi"
+      ]
+    },
+    {
       "path": "server/tests_lite/test_internal_sessions.py",
       "providers": [
         "claude",
@@ -1586,6 +1611,7 @@
     {
       "path": "server/tests_lite/test_session_inputs_attachments_api.py",
       "providers": [
+        "antigravity",
         "claude",
         "codex"
       ]
@@ -2169,6 +2195,18 @@
       ]
     },
     {
+      "path": "server/zerg/services/input_attachments_support.py",
+      "providers": [
+        "antigravity",
+        "claude",
+        "codex",
+        "cursor",
+        "omp",
+        "opencode",
+        "pi"
+      ]
+    },
+    {
       "path": "server/zerg/services/live_catalog_launch.py",
       "providers": [
         "omp",
@@ -2256,13 +2294,6 @@
         "codex",
         "omp",
         "pi"
-      ]
-    },
-    {
-      "path": "server/zerg/services/session_chat_impl.py",
-      "providers": [
-        "claude",
-        "codex"
       ]
     },
     {

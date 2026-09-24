@@ -95,7 +95,8 @@ fn test_claims_dir() -> PathBuf {
     use std::sync::OnceLock;
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
-        let dir = std::env::temp_dir().join(format!("longhouse-test-claims-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("longhouse-test-claims-{}", std::process::id()));
         std::fs::create_dir_all(&dir).ok();
         dir
     })
@@ -228,7 +229,8 @@ pub fn confirm_identity(
             .as_ref()
             .map(|claim| claim.cwd.clone())
             .unwrap_or_else(|| String::new()),
-        provider_pid: provider_pid.or_else(|| existing.as_ref().and_then(|claim| claim.provider_pid)),
+        provider_pid: provider_pid
+            .or_else(|| existing.as_ref().and_then(|claim| claim.provider_pid)),
         provider_start_time: provider_start_time.or_else(|| {
             existing
                 .as_ref()
@@ -266,7 +268,8 @@ pub fn active_claims() -> Result<Vec<SourceClaim>> {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => {
-            return Err(error).with_context(|| format!("reading the claim directory {}", dir.display()))
+            return Err(error)
+                .with_context(|| format!("reading the claim directory {}", dir.display()))
         }
     };
     let now = now();
@@ -384,11 +387,10 @@ pub fn retire_released(conn: &rusqlite::Connection) -> Result<usize> {
         let binding = crate::state::session_binding::SessionBinding::new(conn);
         // The projection binds the normalized path, so retirement must look up
         // the same one (macOS `/tmp` is a symlink, and a raw comparison misses).
-        let projected_path = crate::storage_v2_shipper::stable_source_path(Path::new(
-            &claim.source_path,
-        ))
-        .to_string_lossy()
-        .into_owned();
+        let projected_path =
+            crate::storage_v2_shipper::stable_source_path(Path::new(&claim.source_path))
+                .to_string_lossy()
+                .into_owned();
         match binding.get_with_thread_for_provider(&projected_path, &claim.provider) {
             // Nobody owns it: nothing to retire.
             Ok(None) => {}
@@ -446,7 +448,10 @@ pub struct ProjectionReport {
 /// pass, and a session never becomes degraded because a projection was late.
 pub fn project_claims(db_path: &Path) -> Result<ProjectionReport> {
     let conn = crate::state::db::open_connection(db_path).with_context(|| {
-        format!("opening {} to project managed source claims", db_path.display())
+        format!(
+            "opening {} to project managed source claims",
+            db_path.display()
+        )
     })?;
     // Retire what ended before applying what is live, so a released path is not
     // re-bound in the same pass.
@@ -540,15 +545,7 @@ mod tests {
 
             // A reservation alone is enough to take the path out of discovery's
             // reach before the provider has written anything.
-            reserve(
-                &session_id,
-                "omp",
-                &source,
-                dir.path(),
-                Some(4242),
-                None,
-            )
-            .expect("reserve");
+            reserve(&session_id, "omp", &source, dir.path(), Some(4242), None).expect("reserve");
             let conn = crate::state::db::open_db(Some(&db_path)).expect("open agent db");
             let report = project_claims(&db_path).expect("project");
             assert_eq!(report.applied, 1);
@@ -588,14 +585,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         with_home(&dir.path().join("longhouse"), || {
             let source = Path::new("/tmp/session.jsonl");
-            let reserved = reserve("session-1", "omp", source, Path::new("/tmp"), Some(42), None)
-                .expect("reserve");
+            let reserved = reserve(
+                "session-1",
+                "omp",
+                source,
+                Path::new("/tmp"),
+                Some(42),
+                None,
+            )
+            .expect("reserve");
             assert_eq!(reserved.state, ClaimState::Reserved);
             assert_eq!(reserved.native_session_id, None);
             assert!(reserved.provider_pid.is_some(), "reserve keeps observation");
 
-            let bound =
-                confirm_identity("session-1", "omp", source, "native-1", None, None).expect("confirm");
+            let bound = confirm_identity("session-1", "omp", source, "native-1", None, None)
+                .expect("confirm");
             assert_eq!(bound.state, ClaimState::Bound);
             assert_eq!(bound.native_session_id.as_deref(), Some("native-1"));
             assert_eq!(bound.created_at, reserved.created_at);
@@ -627,8 +631,7 @@ mod tests {
             let conn = crate::state::db::open_db(Some(&db_path)).expect("open agent db");
 
             reserve(&session_id, "codex", &source, dir.path(), None, None).expect("claim");
-            confirm_identity(&session_id, "codex", &source, "native-1", None, None)
-                .expect("bind");
+            confirm_identity(&session_id, "codex", &source, "native-1", None, None).expect("bind");
             project_claims(&db_path).expect("project");
             let claimed_path: String = conn
                 .query_row(
@@ -640,7 +643,9 @@ mod tests {
 
             release(&session_id).expect("release");
             assert_eq!(
-                read_claim(&session_id).expect("read").map(|claim| claim.state),
+                read_claim(&session_id)
+                    .expect("read")
+                    .map(|claim| claim.state),
                 Some(ClaimState::Released),
                 "release leaves a tombstone the daemon can see"
             );
@@ -713,8 +718,15 @@ mod tests {
     fn an_expired_claim_is_ignored_rather_than_obeyed() {
         let dir = tempfile::tempdir().unwrap();
         with_home(&dir.path().join("longhouse"), || {
-            reserve("session-1", "omp", Path::new("/tmp/a.jsonl"), Path::new("/tmp"), None, None)
-                .expect("reserve");
+            reserve(
+                "session-1",
+                "omp",
+                Path::new("/tmp/a.jsonl"),
+                Path::new("/tmp"),
+                None,
+                None,
+            )
+            .expect("reserve");
             let mut claim = read_claim("session-1").expect("read").expect("claim");
             claim.expires_at = (now() - chrono::Duration::seconds(1)).to_rfc3339();
             write_claim(&claim).expect("rewrite");
@@ -730,8 +742,15 @@ mod tests {
     fn an_unreadable_claim_is_skipped_and_does_not_hide_the_others() {
         let dir = tempfile::tempdir().unwrap();
         with_home(&dir.path().join("longhouse"), || {
-            reserve("session-1", "omp", Path::new("/tmp/a.jsonl"), Path::new("/tmp"), None, None)
-                .expect("reserve");
+            reserve(
+                "session-1",
+                "omp",
+                Path::new("/tmp/a.jsonl"),
+                Path::new("/tmp"),
+                None,
+                None,
+            )
+            .expect("reserve");
             let broken = claims_dir().expect("dir").join("session-2.json");
             std::fs::write(&broken, b"{ not json").expect("write broken claim");
 
@@ -745,8 +764,15 @@ mod tests {
     fn a_released_claim_is_not_projected() {
         let dir = tempfile::tempdir().unwrap();
         with_home(&dir.path().join("longhouse"), || {
-            reserve("session-1", "omp", Path::new("/tmp/a.jsonl"), Path::new("/tmp"), None, None)
-                .expect("reserve");
+            reserve(
+                "session-1",
+                "omp",
+                Path::new("/tmp/a.jsonl"),
+                Path::new("/tmp"),
+                None,
+                None,
+            )
+            .expect("reserve");
             let mut claim = read_claim("session-1").expect("read").expect("claim");
             claim.state = ClaimState::Released;
             write_claim(&claim).expect("rewrite");

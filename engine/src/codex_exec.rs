@@ -318,6 +318,9 @@ pub struct CodexExecRunConfig {
     pub sandbox: Option<String>,
     pub model: Option<String>,
     pub prompt: String,
+    /// Staged image files for this turn, sent as `localImage` items ahead of
+    /// the prompt text (same shape the Helm bridge sends).
+    pub image_paths: Vec<PathBuf>,
     pub launch_actor: Option<String>,
     pub launch_surface: Option<String>,
     pub resume_thread_id: Option<String>,
@@ -507,6 +510,7 @@ async fn spawn_initialized_codex_worker(
         sandbox: sandbox.map(str::to_string),
         model: model.map(str::to_string),
         prompt: String::new(),
+        image_paths: Vec::new(),
         launch_actor: launch_actor.map(str::to_string),
         launch_surface: launch_surface.map(str::to_string),
         resume_thread_id: None,
@@ -708,6 +712,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
     let stderr_tail = worker.stderr_tail.clone();
 
     let prompt = config.prompt.clone();
+    let image_paths = config.image_paths.clone();
     let cwd = config.cwd.clone();
     let approval_policy = config.approval_policy.clone();
     let sandbox = config.sandbox.clone();
@@ -719,6 +724,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
             worker.rpc,
             &monitor_sink,
             &prompt,
+            &image_paths,
             &cwd,
             approval_policy.as_deref(),
             sandbox.as_deref(),
@@ -1015,6 +1021,7 @@ async fn run_app_server_turn(
     mut rpc: AppServerRpc,
     sink: &CodexExecRuntimeSink,
     prompt: &str,
+    image_paths: &[PathBuf],
     cwd: &std::path::Path,
     approval_policy: Option<&str>,
     sandbox: Option<&str>,
@@ -1060,7 +1067,7 @@ async fn run_app_server_turn(
             "turn/start",
             json!({
                 "threadId": provider_thread_id,
-                "input": [{"type": "text", "text": prompt}],
+                "input": crate::codex_attachments::build_user_input_items_from_paths(prompt, image_paths),
             }),
             sink,
             &mut projection,
@@ -2157,6 +2164,7 @@ mod tests {
             sandbox: Some(DEFAULT_CONSOLE_SANDBOX.to_string()),
             model: None,
             prompt: "Do one bounded turn".to_string(),
+            image_paths: Vec::new(),
             launch_actor: None,
             launch_surface: None,
             resume_thread_id: None,

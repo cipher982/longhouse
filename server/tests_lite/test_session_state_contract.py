@@ -50,6 +50,7 @@ def _runtime(
     phase: str | None,
     confidence: str | None = "live",
     terminal_state: str | None = None,
+    terminal_reason: str | None = None,
     tool: str | None = None,
     source: str = "codex_bridge",
 ):
@@ -61,7 +62,7 @@ def _runtime(
         last_progress_at=observed_at,
         runtime_source=source,
         terminal_state=terminal_state,
-        terminal_reason=terminal_state,
+        terminal_reason=terminal_reason or terminal_state,
         terminal_source=source if terminal_state else None,
         runtime_version=1,
         status="idle",
@@ -359,7 +360,11 @@ def test_current_archive_lags_when_source_is_newer_than_render():
     assert facts.convergence == "lagging"
 
 
-@pytest.mark.parametrize("end_reason", ["failed", "cancelled", None], ids=["failed", "cancelled", "running"])
+@pytest.mark.parametrize(
+    "end_reason",
+    ["failed", "provider_launch_failed", "cancelled", None],
+    ids=["failed", "provider_launch_failed", "cancelled", "running"],
+)
 @pytest.mark.parametrize(
     ("render_revision", "expected_convergence"),
     [(3543003, "current"), (3543002, "lagging")],
@@ -405,7 +410,7 @@ def test_no_reply_turn_convergence_is_independent_of_run_outcome(end_reason, ren
     if end_reason is not None:
         assert facts.presentation.primary is not None
         assert facts.presentation.primary.key == "ended"
-        assert (facts.presentation.primary.tone == "blocked") == (end_reason == "failed")
+        assert (facts.presentation.primary.tone == "blocked") == (end_reason in {"failed", "provider_launch_failed"})
 
 
 def _delegation_head(
@@ -818,6 +823,24 @@ def test_explicit_legacy_run_failure_is_not_presented_as_an_ordinary_end():
     assert facts.run is not None
     assert facts.run.lifecycle == "ended"
     assert facts.presentation.primary is not None
+    assert facts.presentation.primary.tone == "blocked"
+
+
+def test_provider_auth_failure_is_actionable_without_closing_the_session():
+    facts = _facts(
+        runtime=_runtime(
+            phase=None,
+            confidence="stale",
+            terminal_state="run_failed",
+            terminal_reason="provider_auth_required",
+        ),
+        session=_session(ended_at=NOW - timedelta(seconds=2)),
+    )
+
+    assert facts.disposition.state == "open"
+    assert facts.presentation.primary is not None
+    assert facts.presentation.primary.key == "provider_auth_required"
+    assert facts.presentation.primary.label == "Provider authentication required"
     assert facts.presentation.primary.tone == "blocked"
 
 

@@ -205,9 +205,7 @@ fn audit_epoch(
         source_epoch: epoch.source_epoch.clone(),
         provider: epoch.provider.clone(),
         opaque_source_id: epoch.opaque_source_id.clone(),
-        source_path: source_path
-            .as_ref()
-            .map(|path| path.display().to_string()),
+        source_path: source_path.as_ref().map(|path| path.display().to_string()),
         lane_cursor,
         host_accepted_through,
         source_len: None,
@@ -452,10 +450,20 @@ mod tests {
         seed_epoch(&conn, "epoch-1", &source, 8, 14);
         drop(conn);
 
-        let report = audit(&db, &HashMap::from([("epoch-1".to_string(), 8)]), None, None).unwrap();
+        let report = audit(
+            &db,
+            &HashMap::from([("epoch-1".to_string(), 8)]),
+            None,
+            None,
+        )
+        .unwrap();
         let epoch = &report.epochs[0];
         assert_eq!(epoch.status(), EpochStatus::Clean, "{:?}", epoch.alarms);
-        assert_eq!(epoch.records_in_prefix, Some(2), "the prefix is two records");
+        assert_eq!(
+            epoch.records_in_prefix,
+            Some(2),
+            "the prefix is two records"
+        );
         assert_eq!(epoch.source_len, Some(14));
     }
 
@@ -472,7 +480,9 @@ mod tests {
         let report = audit(&db, &HashMap::new(), None, None).unwrap();
         let alarms = &report.epochs[0].alarms;
         assert!(
-            alarms.iter().any(|alarm| alarm.starts_with("cursor_past_source_end")),
+            alarms
+                .iter()
+                .any(|alarm| alarm.starts_with("cursor_past_source_end")),
             "{alarms:?}"
         );
         assert!(!report.is_clean());
@@ -488,7 +498,13 @@ mod tests {
         seed_epoch(&conn, "epoch-1", &source, 8, 8);
         drop(conn);
 
-        let report = audit(&db, &HashMap::from([("epoch-1".to_string(), 4)]), None, None).unwrap();
+        let report = audit(
+            &db,
+            &HashMap::from([("epoch-1".to_string(), 4)]),
+            None,
+            None,
+        )
+        .unwrap();
         assert!(report.epochs[0]
             .alarms
             .iter()
@@ -514,12 +530,28 @@ mod tests {
         drop(conn);
 
         // A payload that matches is counted.
-        let report = audit(&db, &HashMap::from([("epoch-1".to_string(), 4)]), None, None).unwrap();
-        assert_eq!(report.epochs[0].payload_files, 1, "{:?}", report.epochs[0].alarms);
+        let report = audit(
+            &db,
+            &HashMap::from([("epoch-1".to_string(), 4)]),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            report.epochs[0].payload_files, 1,
+            "{:?}",
+            report.epochs[0].alarms
+        );
 
         // Rewriting the file under its recorded hash is the alarm.
         std::fs::write(root.join(&sealed.relative_path), b"{\"body\":false}").unwrap();
-        let report = audit(&db, &HashMap::from([("epoch-1".to_string(), 4)]), None, None).unwrap();
+        let report = audit(
+            &db,
+            &HashMap::from([("epoch-1".to_string(), 4)]),
+            None,
+            None,
+        )
+        .unwrap();
         assert!(
             report.epochs[0]
                 .alarms

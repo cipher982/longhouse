@@ -894,6 +894,34 @@ export function SessionChat({
           );
           return false;
         }
+        const consoleTurnAccepted =
+          result.turn &&
+          ["queued", "starting", "active", "draining"].includes(
+            result.turn.state,
+          ) &&
+          (result.outcome === "sent" || result.outcome === "queued");
+        if (consoleTurnAccepted) {
+          if (result.outcome === "queued") {
+            // The Console turn is durable, but it is not delivered until the
+            // provider claims it. Keep the outbox entry so an app restart can
+            // replay the same client_request_id instead of silently losing an
+            // image while the FIFO head is starting or ambiguous.
+            setPendingManagedLocalInputs((current) =>
+              current.map((pending) =>
+                pending.clientRequestId === clientRequestId
+                  ? {
+                      ...pending,
+                      phase: "queued",
+                    }
+                  : pending,
+              ),
+            );
+          } else {
+            markInputDelivered(clientRequestId, result.input_id);
+          }
+          void refreshCurrentSessionWorkspace();
+          return true;
+        }
         if (result.outcome === "unknown") {
           setPendingManagedLocalInputs((current) =>
             current.map((pending) =>

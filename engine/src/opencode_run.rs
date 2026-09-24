@@ -30,11 +30,49 @@ pub struct OpenCodeRunConfig {
     pub cwd: PathBuf,
     pub opencode_bin: String,
     pub prompt: String,
+    /// Staged image files, passed as `-f <path>` so `opencode run` attaches
+    /// them to the message natively.
+    pub image_paths: Vec<PathBuf>,
     pub resume_provider_thread_id: Option<String>,
     pub model: Option<String>,
     pub permission_mode: String,
     pub machine_name: String,
     pub local_db_path: Option<PathBuf>,
+}
+
+/// `opencode run` argv for one Console turn. Images ride as `-f <path>`
+/// before the `--` separator; the prompt is the trailing positional.
+pub fn build_opencode_run_args(
+    config: &OpenCodeRunConfig,
+    resume_provider_thread_id: Option<&str>,
+) -> Vec<String> {
+    let mut args = vec![
+        "run".to_string(),
+        "--format".to_string(),
+        "json".to_string(),
+        "--pure".to_string(),
+        "--auto".to_string(),
+        "--title".to_string(),
+        "Longhouse Console".to_string(),
+    ];
+    if let Some(provider_thread_id) = resume_provider_thread_id {
+        args.extend(["--session".to_string(), provider_thread_id.to_string()]);
+    }
+    if let Some(model) = normalized_optional(&config.model) {
+        args.extend(["--model".to_string(), model]);
+    }
+    for image in &config.image_paths {
+        args.extend(["-f".to_string(), image.to_string_lossy().to_string()]);
+    }
+    // End of options, so a message that opens with `--` lands in opencode's
+    // `message` positional instead of being parsed as flags. Attachment-only
+    // turns intentionally omit that positional rather than sending a blank
+    // user message.
+    args.push("--".to_string());
+    if !config.prompt.trim().is_empty() {
+        args.push(config.prompt.clone());
+    }
+    args
 }
 
 #[derive(Debug, Serialize)]
@@ -111,25 +149,7 @@ pub async fn start_opencode_run_turn(config: OpenCodeRunConfig) -> Result<OpenCo
     let stdout_file = private_output_file(&stdout_path)?;
     let stderr_file = private_output_file(&stderr_path)?;
 
-    let mut args = vec![
-        "run".to_string(),
-        "--format".to_string(),
-        "json".to_string(),
-        "--pure".to_string(),
-        "--auto".to_string(),
-        "--title".to_string(),
-        "Longhouse Console".to_string(),
-    ];
-    if let Some(provider_thread_id) = resume_provider_thread_id.as_deref() {
-        args.extend(["--session".to_string(), provider_thread_id.to_string()]);
-    }
-    if let Some(model) = normalized_optional(&config.model) {
-        args.extend(["--model".to_string(), model]);
-    }
-    // End of options, so a message that opens with `--` lands in opencode's
-    // `message` positional instead of being parsed as flags.
-    args.push("--".to_string());
-    args.push(config.prompt.clone());
+    let args = build_opencode_run_args(&config, resume_provider_thread_id.as_deref());
     validate_console_argv(&args)?;
     let argv = std::iter::once(config.opencode_bin.clone())
         .chain(args.iter().cloned())
@@ -1081,6 +1101,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn image_attachments_ride_as_file_flags_before_the_separator() {
+        let config = OpenCodeRunConfig {
+            session_id: "s".into(),
+            thread_id: "t".into(),
+            turn_id: None,
+            run_id: "r".into(),
+            client_request_id: None,
+            cwd: PathBuf::from("/w"),
+            opencode_bin: "opencode".into(),
+            prompt: "what color".into(),
+            image_paths: vec![PathBuf::from("/w/.longhouse/attachments/r/a.png")],
+            resume_provider_thread_id: None,
+            model: None,
+            permission_mode: "bypass".into(),
+            machine_name: "m".into(),
+            local_db_path: None,
+        };
+        let args = build_opencode_run_args(&config, Some("ses_1"));
+        let tail: Vec<&str> = args[args.len() - 4..].iter().map(String::as_str).collect();
+        assert_eq!(
+            tail,
+            [
+                "-f",
+                "/w/.longhouse/attachments/r/a.png",
+                "--",
+                "what color"
+            ]
+        );
+        let mut image_only = config;
+        image_only.prompt.clear();
+        let args = build_opencode_run_args(&image_only, Some("ses_1"));
+        assert_eq!(args.last().map(String::as_str), Some("--"));
+        assert!(!args.iter().any(|arg| arg.is_empty()));
+        assert!(args.windows(2).any(|w| w == ["--session", "ses_1"]));
+        assert!(validate_console_argv(&args).is_ok());
+    }
+
+    #[test]
     fn opencode_console_argv_requires_current_permission_and_explicit_resume_contract() {
         let valid = vec![
             "run".to_string(),
@@ -1237,6 +1295,7 @@ mod tests {
                 cwd: cwd.to_path_buf(),
                 opencode_bin: opencode_bin.to_string(),
                 prompt,
+                image_paths: Vec::new(),
                 resume_provider_thread_id: resume,
                 model: None,
                 permission_mode: "bypass".to_string(),
@@ -1332,6 +1391,7 @@ mod tests {
             opencode_bin: opencode_bin.clone(),
             prompt: "Use the bash tool to run exactly: sleep 30. Do not finish before the command finishes."
                 .to_string(),
+            image_paths: Vec::new(),
             resume_provider_thread_id: Some(provider_thread_id.clone()),
             model: None,
             permission_mode: "bypass".to_string(),

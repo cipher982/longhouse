@@ -149,8 +149,10 @@ def _codex_attachments_payload(
 ) -> dict[str, object]:
     if not attachments:
         return {}
-    if _provider_name(session) != "codex":
-        raise ValueError("Attachments are only supported on codex managed sessions")
+    from zerg.services.input_attachments_support import attachments_supported
+
+    if not attachments_supported(_provider_name(session), "helm"):
+        raise ValueError("This session's provider does not accept image attachments")
     return {"attachments": list(attachments)}
 
 

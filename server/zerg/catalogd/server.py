@@ -629,6 +629,8 @@ class CatalogDaemon:
             return await self._finish_queued_input(request)
         if request.method == "session.input.attachment.create.v2":
             return await self._create_input_attachment(request)
+        if request.method == "session.input.attachment.delete.v2":
+            return await self._delete_input_attachments(request)
         if request.method == "session.input.attachment.read.v2":
             return await self._read_input_attachment(request)
         if request.method == "session.input.receipt.upsert.v2":
@@ -2281,14 +2283,45 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _create_input_attachment(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"attachment"}:
-            return self._error(request, "invalid_request", "session.input.attachment.create.v2 requires attachment")
+        expected = {"attachment", "allow_unbound"}
+        if set(request.params) != expected:
+            return self._error(
+                request,
+                "invalid_request",
+                "session.input.attachment.create.v2 requires attachment and allow_unbound",
+            )
+        allow_unbound = request.params["allow_unbound"]
+        if type(allow_unbound) is not bool:
+            return self._error(request, "invalid_request", "allow_unbound must be a boolean")
         try:
             attachment = _validate_input_attachment(request.params["attachment"])
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
-        result = await self._run_store(self._store.create_input_attachment, attachment=attachment)
+        result = await self._run_store(
+            self._store.create_input_attachment,
+            attachment=attachment,
+            allow_unbound=allow_unbound,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _delete_input_attachments(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"owner_id", "session_id", "input_receipt_id"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "session.input.attachment.delete.v2 has invalid parameters")
+        owner_id = request.params["owner_id"]
+        if type(owner_id) is not int or owner_id <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        for field in ("session_id", "input_receipt_id"):
+            if not _is_canonical_uuid(request.params[field]):
+                return self._error(request, "invalid_request", f"{field} must be a canonical UUID")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.delete_input_attachments,
+            owner_id=owner_id,
+            session_id=request.params["session_id"],
+            input_receipt_id=request.params["input_receipt_id"],
+        )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_input_attachment(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

@@ -21,7 +21,6 @@ from zerg.models.live_store import LiveConsoleTurn
 from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
-
 from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSessionLaunchAttempt
 from zerg.models.live_store import LiveSessionRun
@@ -468,6 +467,9 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path, monkeypatch):
     current = store.read_current_console_turn(session_id=str(session_id), owner_id=1)
     assert current["found"] is True
     assert current["turn"]["turn_id"] == first["turn"]["turn_id"]
+    assert current["turn"]["message"] == "first"
+    assert current["turn"]["client_request_id"] == "request-1"
+    assert current["turn"]["provider_config"] == {"permission_mode": "bypass"}
     assert store.read_current_console_turn(session_id=str(session_id), owner_id=42) == {"found": False}
     facts = store.read_session(session_id=str(session_id), owner_id=1)["facts"]
     assert facts["latest_console_turn"]["state"] == "starting"
@@ -612,6 +614,22 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path, monkeypatch):
             )
         ]
     )
+    with Session(engine) as db:
+        db.add(
+            LiveSessionConnection(
+                run_id=first["turn"]["run_id"],
+                control_plane="machine",
+                acquisition_kind="spawned_control",
+                acquired_at=datetime.now(UTC),
+                state="attached",
+                can_send_input=True,
+                can_interrupt=True,
+                can_terminate=True,
+                can_tail_output=True,
+                can_resume=True,
+            )
+        )
+        db.commit()
     settled = store.update_console_turn(
         data={
             **turn_identity,
@@ -620,6 +638,12 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path, monkeypatch):
             "updated_at": datetime.now(UTC),
         }
     )
+    with Session(engine) as db:
+        connection_row = db.query(LiveSessionConnection).filter(LiveSessionConnection.run_id == first["turn"]["run_id"]).one()
+        assert connection_row.state == "ended"
+        assert connection_row.released_at is not None
+        assert connection_row.can_send_input == 0
+        assert connection_row.can_resume == 0
     assert settled["turn"]["state"] == "completed"
     assert settled["next_turn"]["turn_id"] == second["turn"]["turn_id"]
     assert settled["next_turn"]["state"] == "starting"
@@ -691,24 +715,25 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path, monkeypatch):
     assert stale_replay["stale"] is True
     assert stale_replay["turn"]["state"] == "completed"
 
-    failed = store.update_console_turn(
+    ambiguous = store.update_console_turn(
         data={
             **turn_identity,
             "turn_id": settled["next_turn"]["turn_id"],
             "run_id": settled["next_turn"]["run_id"],
-            "state": "failed",
+            "state": "starting",
+            "expected_state": "starting",
             "error_code": "turn_start_ambiguous",
             "error": "Machine Agent still has an unresolved turn claim",
             "updated_at": datetime.now(UTC),
         }
     )
-    assert failed["turn"]["state"] == "failed"
-    assert failed["turn"]["error_code"] == "turn_start_ambiguous"
+    assert ambiguous["turn"]["state"] == "starting"
+    assert ambiguous["turn"]["error_code"] == "turn_start_ambiguous"
     with Session(engine) as db:
-        failed_turn = db.get(LiveConsoleTurn, settled["next_turn"]["turn_id"])
-        failed_run = db.get(LiveSessionRun, settled["next_turn"]["run_id"])
-        receipt = db.get(LiveSessionInputReceipt, failed_turn.receipt_id)
-        assert failed_run.exit_status == "turn_start_ambiguous"
+        ambiguous_turn = db.get(LiveConsoleTurn, settled["next_turn"]["turn_id"])
+        ambiguous_run = db.get(LiveSessionRun, settled["next_turn"]["run_id"])
+        receipt = db.get(LiveSessionInputReceipt, ambiguous_turn.receipt_id)
+        assert ambiguous_run.ended_at is None
         assert json.loads(receipt.error_json) == {
             "code": "turn_start_ambiguous",
             "message": "Machine Agent still has an unresolved turn claim",

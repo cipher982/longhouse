@@ -540,7 +540,8 @@ impl PiHelmServer {
                 );
                 return json!({"kind": "command_result", "ok": true, "status": "active"});
             }
-            if kind == "terminate" && fault == Some(crate::qa_fault::HelmExtensionFault::TerminateNoop)
+            if kind == "terminate"
+                && fault == Some(crate::qa_fault::HelmExtensionFault::TerminateNoop)
             {
                 crate::qa_fault::record_fired_named(
                     "pi_terminate_noop",
@@ -561,7 +562,9 @@ impl PiHelmServer {
             guard.pending.insert(request_id.clone(), sender);
             let mut command = frame;
             command["request_id"] = json!(request_id);
-            if kind == "steer" && fault == Some(crate::qa_fault::HelmExtensionFault::SteerAsFollowUp) {
+            if kind == "steer"
+                && fault == Some(crate::qa_fault::HelmExtensionFault::SteerAsFollowUp)
+            {
                 crate::qa_fault::record_fired_named(
                     "pi_steer_as_follow_up",
                     &guard.state.session_id,

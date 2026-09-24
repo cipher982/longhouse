@@ -47,15 +47,40 @@ pub fn claim_liveness(
     let Some(inventory) = inventory else {
         return ClaimLiveness::Unknown;
     };
-    // A claim in `spawned` without a recorded pid or start time carries no
-    // identity to check and never will, so it settles rather than pinning a
-    // monitor forever. That is not the ambiguous case; the inventory is.
-    let Some((pid, expected)) = claim.pid.zip(claim.process_start_time.as_deref()) else {
+    let Some(pid) = claim.pid else {
+        // A spawned claim without a pid has no provider process to recover.
         return ClaimLiveness::Gone;
     };
-    match inventory.get(&pid) {
-        Some(fact) if fact.lstart == expected => ClaimLiveness::Live,
-        _ => ClaimLiveness::Gone,
+    if claim.owned_processes.iter().any(|owned| {
+        inventory
+            .get(&owned.pid)
+            .and_then(|fact| {
+                owned
+                    .process_start_time
+                    .as_deref()
+                    .map(|start| (fact, start))
+            })
+            .is_some_and(|(fact, start)| fact.lstart == start)
+    }) {
+        return ClaimLiveness::Live;
+    }
+    if !inventory.contains_key(&pid) {
+        // A readable full inventory proves that the recorded PID is gone even
+        // when the spawn-time birth probe was unavailable.
+        return ClaimLiveness::Gone;
+    }
+    let Some(expected) = claim.process_start_time.as_deref() else {
+        // The PID is present, but without its birth identity we cannot prove
+        // that it still belongs to this turn.
+        return ClaimLiveness::Unknown;
+    };
+    if inventory
+        .get(&pid)
+        .is_some_and(|fact| fact.lstart == expected)
+    {
+        ClaimLiveness::Live
+    } else {
+        ClaimLiveness::Gone
     }
 }
 
@@ -216,6 +241,23 @@ mod tests {
         assert_eq!(
             claim_liveness(&claim, Some(&inventory)),
             ClaimLiveness::Gone
+        );
+    }
+
+    #[test]
+    fn a_pid_without_birth_identity_is_gone_when_absent_and_unknown_when_present() {
+        let claim = spawned_claim(Some(4242), None);
+        let inventory = HashMap::new();
+        assert_eq!(
+            claim_liveness(&claim, Some(&inventory)),
+            ClaimLiveness::Gone
+        );
+
+        let mut inventory = HashMap::new();
+        inventory.insert(4242, fact("Mon Jan  1 00:00:00 2024"));
+        assert_eq!(
+            claim_liveness(&claim, Some(&inventory)),
+            ClaimLiveness::Unknown
         );
     }
 

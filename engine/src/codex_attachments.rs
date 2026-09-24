@@ -139,6 +139,20 @@ pub async fn fetch_one(
     session_id: &str,
     attachment: &AttachmentRef,
 ) -> Result<FetchedAttachment> {
+    let dir = session_tmpdir(session_id);
+    fetch_one_into(http, api_url, api_token, session_id, attachment, &dir).await
+}
+
+/// `fetch_one` into an explicit directory; `input_attachments` uses this for
+/// input- and run-scoped staging so one input's cleanup cannot touch another's.
+pub async fn fetch_one_into(
+    http: &reqwest::Client,
+    api_url: &str,
+    api_token: &str,
+    session_id: &str,
+    attachment: &AttachmentRef,
+    dir: &std::path::Path,
+) -> Result<FetchedAttachment> {
     if Uuid::parse_str(session_id).is_err() {
         bail!("session_id {session_id:?} is not a valid UUID");
     }
@@ -195,8 +209,7 @@ pub async fn fetch_one(
         );
     }
 
-    let dir = session_tmpdir(session_id);
-    create_dir_owner_only(&dir)
+    create_dir_owner_only(dir)
         .with_context(|| format!("creating attachment tmpdir {}", dir.display()))?;
     let path = dir.join(format!(
         "{}.{}",
@@ -224,7 +237,9 @@ pub async fn fetch_one(
 #[cfg(unix)]
 fn create_dir_owner_only(dir: &std::path::Path) -> Result<()> {
     use std::os::unix::fs::DirBuilderExt;
+    use std::os::unix::fs::PermissionsExt;
     if dir.exists() {
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
         return Ok(());
     }
     let mut builder = fs::DirBuilder::new();
@@ -367,20 +382,23 @@ pub fn cleanup_orphan_tmpdirs() {
 /// ordering. When `text` is empty and there are attachments, we still
 /// emit an empty Text element so app-server always has an anchor.
 pub fn build_user_input_items(text: &str, fetched: &[FetchedAttachment]) -> Vec<Value> {
-    let mut items: Vec<Value> = fetched
+    let paths: Vec<PathBuf> = fetched.iter().map(|item| item.path.clone()).collect();
+    build_user_input_items_from_paths(text, &paths)
+}
+
+/// Same `input` array from already-staged paths (Console turns stage under
+/// the run's cwd through `input_attachments`, not this module's tmpdir).
+pub fn build_user_input_items_from_paths(text: &str, paths: &[PathBuf]) -> Vec<Value> {
+    let mut items: Vec<Value> = paths
         .iter()
-        .map(|item| {
+        .map(|path| {
             json!({
                 "type": "localImage",
-                "path": item.path.to_string_lossy(),
+                "path": path.to_string_lossy(),
             })
         })
         .collect();
-    if !text.is_empty() || items.is_empty() {
-        items.push(json!({ "type": "text", "text": text }));
-    } else {
-        items.push(json!({ "type": "text", "text": "" }));
-    }
+    items.push(json!({ "type": "text", "text": text }));
     items
 }
 

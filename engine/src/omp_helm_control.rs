@@ -313,6 +313,30 @@ pub async fn dispatch(
     expected_grant: Option<&Value>,
     request_id: Option<&str>,
 ) -> std::result::Result<OmpHelmCommandSummary, OmpHelmControlError> {
+    dispatch_with_attachments(
+        session_id,
+        kind,
+        text,
+        state_root,
+        expected_grant,
+        request_id,
+        &[],
+    )
+    .await
+}
+
+/// `dispatch` plus staged image files. Only their path and MIME type cross
+/// the socket; the extension reads and base64-encodes them inside the
+/// provider process, so the 512 KiB frame cap is never met by image bytes.
+pub async fn dispatch_with_attachments(
+    session_id: &str,
+    kind: CommandKind,
+    text: Option<&str>,
+    state_root: Option<&Path>,
+    expected_grant: Option<&Value>,
+    request_id: Option<&str>,
+    attachments: &[crate::input_attachments::StagedAttachment],
+) -> std::result::Result<OmpHelmCommandSummary, OmpHelmControlError> {
     let state = match load_state(session_id, state_root) {
         Ok(state) => state,
         Err(error) if matches!(kind, CommandKind::Terminate) => {
@@ -348,6 +372,9 @@ pub async fn dispatch(
     }
     if let Some(text) = text {
         request["text"] = json!(text);
+    }
+    if !attachments.is_empty() {
+        request["attachments"] = Value::Array(attachments.iter().map(|a| a.to_json()).collect());
     }
     let mut bytes = serde_json::to_vec(&request).map_err(OmpHelmControlError::failed)?;
     bytes.push(b'\n');

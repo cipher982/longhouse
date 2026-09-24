@@ -31,7 +31,14 @@ export interface SessionInputResponse {
   live_input_id?: string | null;
   client_request_id?: string | null;
   intent: SessionInputIntent;
+  turn?: ConsoleTurnReceipt;
   queued: QueuedInputSummary[];
+}
+
+export interface ConsoleTurnReceipt {
+  turn_id: string;
+  run_id?: string | null;
+  state: string;
 }
 
 export interface SessionInterruptResponse {

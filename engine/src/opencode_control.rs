@@ -85,7 +85,11 @@ struct OpenCodeServerStateFile {
     owner_wrapper_start_time: Option<String>,
 }
 
-pub async fn send_text(session_id: &str, text: &str) -> Result<OpenCodeControlResult> {
+pub async fn send_text(
+    session_id: &str,
+    text: &str,
+    images: &[crate::input_attachments::StagedAttachment],
+) -> Result<OpenCodeControlResult> {
     let state = read_bridge_state(session_id, None)?;
     #[cfg(feature = "qa-fault-injection")]
     if qa_fault::active("opencode_send_noop") {
@@ -96,7 +100,7 @@ pub async fn send_text(session_id: &str, text: &str) -> Result<OpenCodeControlRe
             provider_session_id: state.provider_session_id,
         });
     }
-    post_prompt_async(&state, text).await?;
+    post_prompt_async(&state, text, images).await?;
     Ok(OpenCodeControlResult {
         provider_session_id: state.provider_session_id,
     })
@@ -105,14 +109,18 @@ pub async fn send_text(session_id: &str, text: &str) -> Result<OpenCodeControlRe
 /// Active-turn steer. The delivery is the same request as `send_text`; it is a
 /// separate entry point so a QA build can substitute the wrong semantic here
 /// and nowhere else.
-pub async fn steer_text(session_id: &str, text: &str) -> Result<OpenCodeControlResult> {
+pub async fn steer_text(
+    session_id: &str,
+    text: &str,
+    images: &[crate::input_attachments::StagedAttachment],
+) -> Result<OpenCodeControlResult> {
     let state = read_bridge_state(session_id, None)?;
     #[cfg(feature = "qa-fault-injection")]
     if qa_fault::active("opencode_steer_as_queued_follow_up") {
         qa_fault::wait_until_idle(&state).await?;
         qa_fault::record("opencode_steer_as_queued_follow_up", &state)?;
     }
-    post_prompt_async(&state, text).await?;
+    post_prompt_async(&state, text, images).await?;
     Ok(OpenCodeControlResult {
         provider_session_id: state.provider_session_id,
     })
@@ -520,16 +528,45 @@ fn terminate_pid(pid: u32) -> Result<()> {
 /// that turn at its next step boundary, and one posted to an idle session
 /// starts a turn. `noReply` must stay unset: with it, an idle session stores
 /// the message and never answers (verified live against 1.17.20).
-async fn post_prompt_async(state: &OpenCodeControlState, text: &str) -> Result<()> {
+async fn post_prompt_async(
+    state: &OpenCodeControlState,
+    text: &str,
+    images: &[crate::input_attachments::StagedAttachment],
+) -> Result<()> {
     request_opencode_json(
         state,
         Method::POST,
         "prompt_async",
-        Some(json!({
-            "parts": [{"type": "text", "text": text}],
-        })),
+        Some(json!({ "parts": prompt_parts(text, images)? })),
     )
     .await
+}
+
+/// OpenCode's message parts: the text (omitted when blank and images are
+/// present) followed by one inline `file` part per image, the same shape
+/// its own TUI writes for a pasted image.
+fn prompt_parts(
+    text: &str,
+    images: &[crate::input_attachments::StagedAttachment],
+) -> Result<Vec<Value>> {
+    let mut parts = Vec::with_capacity(images.len() + 1);
+    if !text.trim().is_empty() || images.is_empty() {
+        parts.push(json!({"type": "text", "text": text}));
+    }
+    for image in images {
+        let filename = image
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| "image".to_string());
+        parts.push(json!({
+            "type": "file",
+            "mime": image.mime_type,
+            "filename": filename,
+            "url": crate::input_attachments::data_url(image)?,
+        }));
+    }
+    Ok(parts)
 }
 
 async fn post_abort(state: &OpenCodeControlState) -> Result<()> {
@@ -670,6 +707,42 @@ mod tests {
 
     use base64::{engine::general_purpose, Engine as _};
     use tempfile::TempDir;
+
+    #[test]
+    fn prompt_parts_inline_staged_images_as_file_parts() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("a.png");
+        std::fs::write(&path, b"\x89PNG-bytes").unwrap();
+        let staged = crate::input_attachments::StagedAttachment {
+            path: path.clone(),
+            mime_type: "image/png".to_string(),
+        };
+        let parts = super::prompt_parts("what color", &[staged.clone()]).unwrap();
+        assert_eq!(
+            parts[0],
+            serde_json::json!({"type": "text", "text": "what color"})
+        );
+        assert_eq!(parts[1]["type"], "file");
+        assert_eq!(parts[1]["mime"], "image/png");
+        assert_eq!(parts[1]["filename"], "a.png");
+        assert_eq!(
+            parts[1]["url"],
+            format!(
+                "data:image/png;base64,{}",
+                general_purpose::STANDARD.encode(b"\x89PNG-bytes")
+            )
+        );
+        // Image-only input carries no empty text part.
+        let image_only = super::prompt_parts("  ", &[staged]).unwrap();
+        assert_eq!(image_only.len(), 1);
+        assert_eq!(image_only[0]["type"], "file");
+        // No images: the plain text part, as before.
+        let plain = super::prompt_parts("hi", &[]).unwrap();
+        assert_eq!(
+            plain,
+            vec![serde_json::json!({"type": "text", "text": "hi"})]
+        );
+    }
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::sync::oneshot;
@@ -1034,7 +1107,7 @@ mod tests {
         text: &str,
     ) -> Result<OpenCodeControlResult> {
         let state = read_bridge_state(session_id, Some(state_dir))?;
-        post_prompt_async(&state, text).await?;
+        post_prompt_async(&state, text, &[]).await?;
         Ok(OpenCodeControlResult {
             provider_session_id: state.provider_session_id,
         })

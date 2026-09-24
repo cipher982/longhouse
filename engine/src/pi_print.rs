@@ -37,6 +37,9 @@ pub struct PiPrintRunConfig {
     pub cwd: PathBuf,
     pub pi_bin: String,
     pub prompt: String,
+    /// Staged image files, passed as `@<path>` arguments ahead of the prompt
+    /// so pi attaches them as image content natively.
+    pub image_paths: Vec<PathBuf>,
     /// Pi's upstream provider id (e.g. `openrouter`), passed through only when
     /// the caller explicitly selected one.
     pub provider: Option<String>,
@@ -140,6 +143,7 @@ pub async fn start_pi_print_turn(config: PiPrintRunConfig) -> Result<PiPrintRunS
 
     let args = build_pi_args(
         &config.prompt,
+        &config.image_paths,
         config.provider.as_deref(),
         config.model.as_deref(),
         &target,
@@ -581,16 +585,22 @@ async fn settle_recovered_dead_claim(
 
 fn build_pi_args(
     prompt: &str,
+    image_paths: &[PathBuf],
     provider: Option<&str>,
     model: Option<&str>,
     target: &crate::pi_session::PiSessionTarget,
 ) -> Vec<String> {
-    let mut args = vec![
-        "-p".to_string(),
-        prompt.to_string(),
-        "--mode".to_string(),
-        "json".to_string(),
-    ];
+    // `pi [options] [--] [@files...] [messages...]`: files precede the
+    // message. Do not manufacture an empty positional message for an
+    // attachment-only turn; Pi treats that as a real blank user message.
+    let mut args = vec!["-p".to_string()];
+    for image in image_paths {
+        args.push(format!("@{}", image.to_string_lossy()));
+    }
+    if !prompt.trim().is_empty() {
+        args.push(prompt.to_string());
+    }
+    args.extend(["--mode".to_string(), "json".to_string()]);
     if let Some(provider) = provider.map(str::trim).filter(|value| !value.is_empty()) {
         args.extend(["--provider".to_string(), provider.to_string()]);
     }
@@ -1275,6 +1285,39 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
+    fn image_attachments_precede_the_prompt_as_at_files() {
+        let target = crate::pi_session::PiSessionTarget {
+            provider_thread_id: "thread-1".to_string(),
+            session_dir: PathBuf::from("/sessions"),
+            session_file: None,
+        };
+        let args = build_pi_args(
+            "what color",
+            &[
+                PathBuf::from("/w/.longhouse/attachments/r/a.png"),
+                PathBuf::from("/w/.longhouse/attachments/r/b.jpg"),
+            ],
+            None,
+            None,
+            &target,
+        );
+        assert_eq!(
+            &args[..4],
+            [
+                "-p",
+                "@/w/.longhouse/attachments/r/a.png",
+                "@/w/.longhouse/attachments/r/b.jpg",
+                "what color"
+            ]
+        );
+        let plain = build_pi_args("what color", &[], None, None, &target);
+        assert_eq!(&plain[..2], ["-p", "what color"]);
+        let image_only = build_pi_args("", &[PathBuf::from("/w/a.png")], None, None, &target);
+        assert_eq!(&image_only[..3], ["-p", "@/w/a.png", "--mode"]);
+        assert!(!image_only.iter().any(|arg| arg.is_empty()));
+    }
+
+    #[test]
     fn session_header_id_is_read_from_the_session_jsonl_header() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp
@@ -1512,6 +1555,7 @@ if "-p" in args:
             cwd: cwd.to_path_buf(),
             pi_bin: pi_bin.to_string(),
             prompt: prompt.to_string(),
+            image_paths: Vec::new(),
             provider: Some("openrouter".to_string()),
             model: Some("deepseek/deepseek-v4-flash-latest".to_string()),
             session_dir: Some(cwd.join("pi-sessions")),

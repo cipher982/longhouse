@@ -250,7 +250,11 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn launched_state(socket: &std::path::Path, status: &str, terminal_state: Option<&str>) -> serde_json::Value {
+    fn launched_state(
+        socket: &std::path::Path,
+        status: &str,
+        terminal_state: Option<&str>,
+    ) -> serde_json::Value {
         serde_json::json!({
             "session_id": "session",
             "native_session_id": "native",

@@ -85,6 +85,7 @@ async def store_catalog_attachment_blob(
     data: bytes,
     original_filename: str | None,
     original_byte_size: int | None,
+    allow_unbound: bool = False,
 ) -> StoredAttachment:
     """Write attachment bytes locally and persist bounded metadata via catalogd."""
 
@@ -114,6 +115,7 @@ async def store_catalog_attachment_blob(
         result = await catalogd.call(
             "session.input.attachment.create.v2",
             {
+                "allow_unbound": allow_unbound,
                 "attachment": {
                     "id": str(attach_id),
                     "input_receipt_id": str(receipt_uuid),
@@ -126,7 +128,7 @@ async def store_catalog_attachment_blob(
                     "original_filename": (original_filename or "")[:255] or None,
                     "original_byte_size": original_byte_size,
                     "expires_at": expires_at.isoformat(),
-                }
+                },
             },
             timeout_seconds=1.0,
         )
@@ -152,6 +154,36 @@ async def store_catalog_attachment_blob(
         original_filename=(original_filename or "")[:255] or None,
         original_byte_size=original_byte_size,
     )
+
+
+async def delete_catalog_attachment_blobs(
+    *,
+    owner_id: int,
+    session_id: UUID,
+    input_receipt_id: str,
+) -> int:
+    """Delete one upload group and its delivery-cache files."""
+
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise RuntimeError("catalogd is unavailable")
+    result = await catalogd.call(
+        "session.input.attachment.delete.v2",
+        {
+            "owner_id": int(owner_id),
+            "session_id": str(session_id),
+            "input_receipt_id": str(UUID(input_receipt_id)),
+        },
+        timeout_seconds=1.0,
+    )
+    root = attachment_blob_root().resolve()
+    for raw_path in result.get("blob_paths") or []:
+        candidate = (root / str(raw_path)).resolve()
+        if candidate.is_relative_to(root):
+            candidate.unlink(missing_ok=True)
+    return int(result.get("deleted") or 0)
 
 
 async def get_catalog_attachment(

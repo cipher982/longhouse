@@ -1038,8 +1038,8 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         return stateFacts.launchState == "pending" || stateFacts.launchState == "dispatched"
     }
 
-    /// Codex managed sessions advertise `attach_images=true` once both the
-    /// backend and the engine on this device support the attach pipeline.
+    /// Image support is derived from the provider/mode capability table on
+    /// the server and is only enabled when the current send action is ready.
     var attachImagesEnabled: Bool {
         canSendLive && (capabilities.attachImages ?? false)
     }

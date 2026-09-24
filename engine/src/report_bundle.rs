@@ -147,8 +147,8 @@ async fn read_bounded_response(
 }
 
 fn read_manifest(path: &Path, report_id: &str) -> Result<ReportManifest> {
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let metadata =
+        fs::symlink_metadata(path).with_context(|| format!("reading {}", path.display()))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         bail!("report_stage_failed: manifest is not a regular file")
     }
@@ -163,18 +163,24 @@ fn read_manifest(path: &Path, report_id: &str) -> Result<ReportManifest> {
 }
 
 fn verify_staged_file(path: &Path, file: &ReportFile) -> Result<()> {
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let metadata =
+        fs::symlink_metadata(path).with_context(|| format!("reading {}", path.display()))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         bail!("report_stage_failed: staged report file is not regular")
     }
     if metadata.len() != file.byte_size {
-        bail!("report_stage_failed: staged report size mismatch for {}", file.name)
+        bail!(
+            "report_stage_failed: staged report size mismatch for {}",
+            file.name
+        )
     }
     let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     let actual = format!("{:x}", Sha256::digest(&bytes));
     if actual != file.sha256.to_ascii_lowercase() {
-        bail!("report_stage_failed: staged report sha256 mismatch for {}", file.name)
+        bail!(
+            "report_stage_failed: staged report sha256 mismatch for {}",
+            file.name
+        )
     }
     Ok(())
 }
@@ -262,8 +268,7 @@ pub async fn stage_bug_report(
         .context("report_stage_failed: manifest request")?
         .error_for_status()
         .context("report_stage_failed: manifest response")?;
-    let manifest_bytes =
-        read_bounded_response(response, MAX_MANIFEST_BYTES, "manifest").await?;
+    let manifest_bytes = read_bounded_response(response, MAX_MANIFEST_BYTES, "manifest").await?;
     let manifest: ReportManifest = serde_json::from_slice(&manifest_bytes)
         .context("report_stage_failed: invalid manifest JSON")?;
     validate_manifest(&manifest, &normalized_report_id)?;
@@ -413,7 +418,6 @@ mod tests {
             }],
         };
         assert!(validate_manifest(&manifest_collision, "report-1").is_err());
-
 
         let oversized = ReportManifest {
             schema_version: 1,

@@ -37,6 +37,7 @@ mod fault_injection;
 mod flight;
 mod heartbeat;
 mod hook_outbox;
+mod input_attachments;
 mod machine_presence;
 mod managed_antigravity_scan;
 mod managed_bridge_scan;
@@ -1562,10 +1563,11 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let command_name = command_name(&cli.command);
 
-    // Drop any leftover image-attach blobs from a prior process before
-    // touching anything else. Cheap, best-effort, no-op when empty.
+    // Drop leftover image-attach blobs from prior processes before touching
+    // anything else. Cheap, best-effort, no-op when empty.
     if matches!(cli.command, Commands::Connect { .. }) {
         crate::codex_attachments::cleanup_orphan_tmpdirs();
+        crate::input_attachments::cleanup_orphan_console_staging();
     }
 
     // For Connect (daemon) mode: use rolling file appender.

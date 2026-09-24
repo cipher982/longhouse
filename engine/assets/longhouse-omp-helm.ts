@@ -1,5 +1,37 @@
+import { readFileSync } from "node:fs";
 import { connect, type Socket } from "node:net";
 import { resolve, sep } from "node:path";
+
+type ImageContent = { type: "image"; data: string; mimeType: string };
+type TextContent = { type: "text"; text: string };
+
+/// Longhouse stages image attachments on disk and sends only their path and
+/// MIME type over the socket; the bytes are read here, inside the provider
+/// process, so the frame cap never applies to image data. Without
+/// attachments the message is the plain string OMP has always received.
+const userContent = (
+  text: string,
+  attachments: unknown,
+): string | (TextContent | ImageContent)[] => {
+  if (!Array.isArray(attachments) || attachments.length === 0) return text;
+  const images: ImageContent[] = [];
+  for (const item of attachments) {
+    if (!item || typeof item !== "object") continue;
+    const path = (item as { path?: unknown }).path;
+    const mimeType = (item as { mime_type?: unknown }).mime_type;
+    if (typeof path !== "string" || typeof mimeType !== "string") continue;
+    images.push({
+      type: "image",
+      data: readFileSync(path).toString("base64"),
+      mimeType,
+    });
+  }
+  if (images.length === 0) return text;
+  const parts: (TextContent | ImageContent)[] = [];
+  if (text.trim()) parts.push({ type: "text", text });
+  parts.push(...images);
+  return parts;
+};
 
 type Frame = Record<string, unknown>;
 
@@ -928,19 +960,26 @@ export default function (pi: any) {
     try {
       if (!authorityMatches)
         throw new Error("OMP Helm command authority is stale");
-      if (["send", "steer"].includes(kind) && !text.trim())
+      const content = userContent(text, command.attachments);
+      if (
+        ["send", "steer"].includes(kind) &&
+        !text.trim() &&
+        typeof content === "string"
+      )
         throw new Error("OMP Helm input text must not be empty");
       if (kind === "send") {
         if (providerIsIdle(ctx))
-          await Promise.resolve(pi.sendUserMessage(text));
+          await Promise.resolve(pi.sendUserMessage(content));
         else
           await Promise.resolve(
-            pi.sendUserMessage(text, { deliverAs: "followUp" }),
+            pi.sendUserMessage(content, { deliverAs: "followUp" }),
           );
       } else if (kind === "steer") {
         if (providerIsIdle(ctx))
           throw new Error("OMP provider has no active turn to steer");
-        await Promise.resolve(pi.sendUserMessage(text, { deliverAs: "steer" }));
+        await Promise.resolve(
+          pi.sendUserMessage(content, { deliverAs: "steer" }),
+        );
       } else if (kind === "abort") {
         await Promise.resolve(ctx.abort());
       } else if (kind === "terminate") {

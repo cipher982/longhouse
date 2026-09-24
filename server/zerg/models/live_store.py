@@ -844,6 +844,11 @@ class LiveConsoleTurn(LiveBase):
     run_id = Column(String(36), nullable=True, unique=True, index=True)
     state = Column(String(20), nullable=False, index=True)
     report_id = Column(String(36), nullable=True, index=True)
+    # Image attachments for this turn, JSON `{"digest": sha256, "refs": [...]}`.
+    # Refs are the engine-facing AttachmentRef rows; the digest covers the
+    # ordered (mime, sha256) pairs so an idempotent replay can be compared
+    # without re-reading blobs. Nullable so it auto-adds at startup.
+    attachments_json = Column(Text, nullable=True)
     provider = Column(String(64), nullable=False)
     device_id = Column(String(255), nullable=False)
     cwd = Column(Text, nullable=False)

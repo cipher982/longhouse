@@ -30,6 +30,7 @@ router = APIRouter(prefix="/agents/control", tags=["agents"])
 
 CONTROL_HEARTBEAT_TIMEOUT_SECS = 90
 CONTROL_HELLO_TIMEOUT_SECS = 10
+CONSOLE_RECONCILE_MAX_ATTEMPTS = 3
 
 
 def _command_result_outcome_is_indeterminate(message: Mapping[str, Any]) -> bool:
@@ -122,27 +123,50 @@ async def _close_control_ws(websocket: WebSocket, *, code: int = 1008, reason: s
 
 
 async def _reconcile_console_turns_after_register(*, owner_id: int, device_id: str, registry) -> None:
-    try:
-        outcomes = await reconcile_starting_console_turns_for_device(
-            None,
-            owner_id=owner_id,
-            device_id=device_id,
-            registry=registry,
-        )
-        if outcomes:
-            logger.info(
-                "Reconciled %d starting Console turn(s) after control reconnect owner=%s device=%s states=%s",
-                len(outcomes),
+    """Retry durable starting turns while this control link remains alive.
+
+    A command reply can be ambiguous without making the provider unreachable.
+    Re-running the same run id is safe: the engine's turn claim registry makes
+    the start idempotent, and a terminal claim is replayed rather than spawned.
+    """
+    for attempt in range(CONSOLE_RECONCILE_MAX_ATTEMPTS):
+        try:
+            outcomes = await reconcile_starting_console_turns_for_device(
+                None,
+                owner_id=owner_id,
+                device_id=device_id,
+                registry=registry,
+            )
+            if outcomes:
+                logger.info(
+                    "Reconciled %d starting Console turn(s) owner=%s device=%s attempt=%d states=%s",
+                    len(outcomes),
+                    owner_id,
+                    device_id,
+                    attempt + 1,
+                    ",".join(outcome.state for outcome in outcomes),
+                )
+                if not any(outcome.state == "starting" for outcome in outcomes):
+                    return
+            else:
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Failed to reconcile starting Console turns owner=%s device=%s attempt=%d",
                 owner_id,
                 device_id,
-                ",".join(outcome.state for outcome in outcomes),
+                attempt + 1,
             )
-    except Exception:  # noqa: BLE001
-        logger.exception(
-            "Failed to reconcile starting Console turns after control reconnect owner=%s device=%s",
-            owner_id,
-            device_id,
-        )
+        if attempt + 1 < CONSOLE_RECONCILE_MAX_ATTEMPTS:
+            await asyncio.sleep(15)
+    logger.warning(
+        "Stopped reconciling Console turns after %d attempts owner=%s device=%s; starting turns remain durable for a later reconnect",
+        CONSOLE_RECONCILE_MAX_ATTEMPTS,
+        owner_id,
+        device_id,
+    )
 
 
 @router.websocket("/ws")

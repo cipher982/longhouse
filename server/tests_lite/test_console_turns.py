@@ -12,10 +12,13 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
 from zerg.services.console_sessions import create_empty_console_session
-from zerg.services.console_turns import dispatch_catalog_claimed_turn
+from zerg.services.console_turns import _console_turn_is_expired
 from zerg.services.console_turns import _persist_native_binding_result
+from zerg.services.console_turns import dispatch_catalog_claimed_turn
+from zerg.services.console_turns import enqueue_catalog_console_turn
 from zerg.services.console_turns import reconcile_starting_console_turns_for_device
 from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
+from zerg.services.session_turns import SESSION_TURN_STATE_COMPLETED
 from zerg.services.session_turns import SESSION_TURN_STATE_FAILED
 from zerg.services.session_turns import SESSION_TURN_STATE_STARTING
 
@@ -40,6 +43,19 @@ def _session(db):
     db.add(session)
     db.flush()
     return session
+
+
+def test_console_starting_turn_expiry_uses_state_start_time():
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+    assert _console_turn_is_expired(
+        {"created_at": "2026-01-01T11:00:00+00:00", "updated_at": "2026-01-01T11:54:59+00:00"},
+        now=now,
+    )
+    assert not _console_turn_is_expired(
+        {"created_at": "2026-01-01T11:00:00+00:00", "updated_at": "2026-01-01T11:55:01+00:00"},
+        now=now,
+    )
+    assert not _console_turn_is_expired({"created_at": "not-a-date"}, now=now)
 
 
 @pytest.mark.asyncio
@@ -144,6 +160,151 @@ async def test_native_console_binding_dedupe_key_is_bounded_without_truncating_i
 
 
 @pytest.mark.asyncio
+async def test_console_enqueue_persists_attachment_refs_and_compares_their_digest(live_catalog):
+    """Refs live on the turn row, so a replay returns them without re-storing
+    blobs, and a same-id retry with different images is a conflict."""
+    owner_id = live_catalog.create_user("console-attach@test.local")
+    created = await create_empty_console_session(
+        None,
+        owner_id=owner_id,
+        provider="claude",
+        device_id="cinder",
+        cwd="/tmp/longhouse",
+    )
+    ref = {
+        "id": str(uuid4()),
+        "mime_type": "image/png",
+        "sha256": "ab" * 32,
+        "blob_url": f"/api/agents/sessions/{created.session_id}/inputs/{uuid4()}/attachments/x/blob",
+    }
+    turn = {
+        "session_id": str(created.session_id),
+        "owner_id": owner_id,
+        "message": "what color",
+        "client_request_id": "console-attach-1",
+        "report_id": None,
+        "attachments": [ref],
+        "attachments_digest": "digest-1",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    first = live_catalog.rpc("session.console.turn.enqueue.v2", {"turn": turn})
+    assert first["found"] is True and first["created"] is True
+    assert first["turn"]["attachments"] == [ref]
+
+    # Replay: same request id, no refs, same digest -> the stored turn.
+    replay = live_catalog.rpc(
+        "session.console.turn.enqueue.v2",
+        {"turn": {**turn, "attachments": [], "attachments_digest": "digest-1"}},
+    )
+    assert replay["created"] is False
+    assert replay["idempotency_conflict"] is False
+    assert replay["turn"]["turn_id"] == first["turn"]["turn_id"]
+    assert replay["turn"]["attachments"] == [ref]
+
+    # A text-only retry must not silently drop the already accepted images.
+    # Missing digest means "no attachments", not "ignore the stored digest".
+    text_only_replay = live_catalog.rpc(
+        "session.console.turn.enqueue.v2",
+        {"turn": {**turn, "attachments": [], "attachments_digest": None}},
+    )
+    assert text_only_replay["created"] is False
+    assert text_only_replay["idempotency_conflict"] is True
+    assert text_only_replay["turn"] is None
+
+    # Same request id with different images is a different input.
+    conflict = live_catalog.rpc(
+        "session.console.turn.enqueue.v2",
+        {"turn": {**turn, "attachments": [], "attachments_digest": "digest-2"}},
+    )
+    assert conflict["idempotency_conflict"] is True
+
+
+@pytest.mark.asyncio
+async def test_follow_up_enqueue_replays_current_starting_turn_while_connected(monkeypatch):
+    session_id = uuid4()
+    current_turn_id = uuid4()
+    current_run_id = uuid4()
+    queued_turn_id = uuid4()
+    thread_id = uuid4()
+    calls = []
+    current_turn = {
+        "turn_id": str(current_turn_id),
+        "session_id": str(session_id),
+        "thread_id": str(thread_id),
+        "run_id": str(current_run_id),
+        "state": SESSION_TURN_STATE_STARTING,
+        "provider": "claude",
+        "device_id": "cinder",
+        "cwd": "/tmp/longhouse",
+        "message": "the first image turn",
+        "client_request_id": "first-request",
+        "provider_config": {"permission_mode": "bypass"},
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    class Catalog:
+        async def call(self, method, params, **_kwargs):
+            calls.append((method, params))
+            if method == "session.console.turn.enqueue.v2":
+                return {
+                    "found": True,
+                    "created": True,
+                    "turn": {
+                        "turn_id": str(queued_turn_id),
+                        "session_id": str(session_id),
+                        "thread_id": str(thread_id),
+                        "run_id": None,
+                        "state": "queued",
+                        "provider": "claude",
+                        "device_id": "cinder",
+                        "cwd": "/tmp/longhouse",
+                    },
+                }
+            if method == "session.console.turn.current.v2":
+                return {"found": True, "turn": current_turn}
+            assert method == "session.console.turn.update.v2"
+            return {
+                "found": True,
+                "applied": True,
+                "turn": {**current_turn, "state": SESSION_TURN_STATE_ACTIVE},
+                "next_turn": None,
+            }
+
+    class Registry:
+        command = None
+
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **kwargs):
+            self.command = kwargs
+            return SimpleNamespace(transport_ok=True, message={"ok": True, "result": {}}, error=None)
+
+    catalog = Catalog()
+    registry = Registry()
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: catalog)
+
+    outcome = await enqueue_catalog_console_turn(
+        owner_id=1,
+        session_id=session_id,
+        message="the follow-up",
+        client_request_id="follow-up-request",
+        registry=registry,
+    )
+
+    assert outcome.turn_id == queued_turn_id
+    assert outcome.state == "queued"
+    assert registry.command["command_id"] == str(current_run_id)
+    assert registry.command["payload"]["message"] == "the first image turn"
+    assert [method for method, _params in calls] == [
+        "session.console.turn.enqueue.v2",
+        "session.console.turn.current.v2",
+        "session.console.turn.update.v2",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_control_reconnect_replays_live_catalog_turn_with_same_run_id(monkeypatch):
     session_id = uuid4()
     thread_id = uuid4()
@@ -163,6 +324,9 @@ async def test_control_reconnect_replays_live_catalog_turn_with_same_run_id(monk
         "client_request_id": "catalog-reconnect-request",
         "provider_config": {"permission_mode": "bypass"},
         "resume_provider_thread_id": None,
+        # Refs persisted on the turn ride the replayed dispatch too; a
+        # reconnect after a restart must not deliver a text-only turn.
+        "attachments": [{"id": str(uuid4()), "mime_type": "image/png", "sha256": "ab" * 32, "blob_url": "/api/agents/x"}],
     }
 
     class Catalog:
@@ -206,10 +370,137 @@ async def test_control_reconnect_replays_live_catalog_turn_with_same_run_id(monk
     assert [outcome.state for outcome in outcomes] == [SESSION_TURN_STATE_ACTIVE]
     assert registry.command["command_id"] == str(run_id)
     assert registry.command["payload"]["run_id"] == str(run_id)
+    assert registry.command["payload"]["attachments"] == turn["attachments"]
     assert [method for method, _params in calls] == [
         "session.console.turn.starting_for_device.v2",
         "session.console.turn.update.v2",
     ]
+
+
+@pytest.mark.asyncio
+async def test_reconnect_replays_terminal_machine_claim_as_completed_turn():
+    session_id = uuid4()
+    thread_id = uuid4()
+    turn_id = uuid4()
+    run_id = uuid4()
+    turn = {
+        "turn_id": str(turn_id),
+        "session_id": str(session_id),
+        "thread_id": str(thread_id),
+        "run_id": str(run_id),
+        "state": SESSION_TURN_STATE_STARTING,
+        "provider": "claude",
+        "device_id": "cinder",
+        "cwd": "/tmp/longhouse",
+        "message": "replay the completed claim",
+        "client_request_id": "terminal-replay",
+        "provider_config": {"permission_mode": "bypass"},
+    }
+
+    class Catalog:
+        async def call(self, method, params):
+            assert method == "session.console.turn.update.v2"
+            assert params["turn"]["state"] == "completed"
+            return {
+                "found": True,
+                "applied": True,
+                "stale": False,
+                "turn": {**turn, "state": SESSION_TURN_STATE_COMPLETED},
+                "next_turn": None,
+                "commit_seq": "8",
+            }
+
+    class Registry:
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **_kwargs):
+            return SimpleNamespace(
+                transport_ok=True,
+                message={"ok": True, "result": {"terminal_state": "run_completed"}},
+                error=None,
+            )
+
+    outcome = await dispatch_catalog_claimed_turn(
+        owner_id=1,
+        turn=turn,
+        client=Catalog(),
+        registry=Registry(),
+    )
+
+    assert outcome.state == SESSION_TURN_STATE_COMPLETED
+    assert outcome.error is None
+
+
+@pytest.mark.asyncio
+async def test_reconcile_process_gone_completes_turn_as_failed(monkeypatch):
+    session_id = uuid4()
+    thread_id = uuid4()
+    turn_id = uuid4()
+    run_id = uuid4()
+    turn = {
+        "turn_id": str(turn_id),
+        "session_id": str(session_id),
+        "thread_id": str(thread_id),
+        "run_id": str(run_id),
+        "state": SESSION_TURN_STATE_STARTING,
+        "provider": "claude",
+        "device_id": "cube",
+        "cwd": "/tmp/longhouse",
+        "message": "recover this turn",
+        "client_request_id": "process-gone-recovery",
+        "provider_config": {"permission_mode": "bypass"},
+    }
+
+    class Catalog:
+        async def call(self, method, params):
+            if method == "session.console.turn.starting_for_device.v2":
+                return {"turns": [turn], "commit_seq": "7"}
+            assert method == "session.console.turn.update.v2"
+            assert params["turn"]["expected_state"] == SESSION_TURN_STATE_STARTING
+            assert params["turn"]["error_code"] == "turn_start_process_gone"
+            return {
+                "found": True,
+                "applied": True,
+                "stale": False,
+                "turn": {
+                    **turn,
+                    "state": SESSION_TURN_STATE_FAILED,
+                    "error_code": "turn_start_process_gone",
+                    "error": "spawned run is gone",
+                },
+                "next_turn": None,
+                "commit_seq": "8",
+            }
+
+    class Registry:
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **_kwargs):
+            return SimpleNamespace(
+                transport_ok=True,
+                message={
+                    "ok": False,
+                    "error": {
+                        "code": "turn_start_process_gone",
+                        "message": "spawned run is gone",
+                    },
+                },
+                error=None,
+            )
+
+    catalog = Catalog()
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: catalog)
+    outcomes = await reconcile_starting_console_turns_for_device(
+        None,
+        owner_id=1,
+        device_id="cube",
+        registry=Registry(),
+    )
+
+    assert [outcome.state for outcome in outcomes] == [SESSION_TURN_STATE_FAILED]
+    assert outcomes[0].error_code == "turn_start_process_gone"
 
 
 @pytest.mark.asyncio

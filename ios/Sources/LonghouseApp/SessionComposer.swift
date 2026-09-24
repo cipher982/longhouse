@@ -64,7 +64,7 @@ struct SessionComposerActionMenu: View {
         // When images cannot be attached, keep the item and say why.
         let unavailableReason: String? = {
             if !detail.attachImagesEnabled {
-                return detail.provider == "codex" ? "Waiting for live control" : "Only Codex sessions accept images"
+                return detail.canSendLive ? "Not available for this session" : "Waiting for live control"
             }
             if !attachmentInputEnabled { return "Available between turns" }
             if attachmentSlotsLeft <= 0 { return "Attachment limit reached" }

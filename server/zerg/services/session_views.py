@@ -33,6 +33,7 @@ from zerg.models.agents import SessionLaunchAttempt
 from zerg.models.agents import SessionTurn
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
+from zerg.services.input_attachments_support import attachments_supported
 from zerg.services.live_launch_readiness import LiveLaunchReadinessView
 from zerg.services.live_launch_readiness import project_live_launch_readiness
 from zerg.services.managed_local_transport import build_managed_local_attach_command
@@ -173,25 +174,36 @@ def build_session_capabilities_response(
         can_start_turn=(bool(kernel_capabilities.can_start_turn) if kernel_capabilities is not None else False),
         start_turn_blocked_by=(kernel_capabilities.start_turn_blocked_by if kernel_capabilities is not None else None),
         can_interrupt_active_turn=(bool(kernel_capabilities.can_interrupt_active_turn) if kernel_capabilities is not None else False),
-        attach_images=_attach_images_capability(capability_flags, live_control_available=effective_live_control),
+        attach_images=_attach_images_capability(
+            provider=str(getattr(session, "provider", "") or ""),
+            session_mode=session_mode,
+            live_control_available=effective_live_control,
+            can_start_turn=bool(kernel_capabilities.can_start_turn) if kernel_capabilities is not None else False,
+        ),
     )
 
 
-def _attach_images_capability(capability_flags, *, live_control_available: bool | None = None) -> bool:
-    """True when this session can accept image attachments.
+def _attach_images_capability(
+    *,
+    provider: str,
+    session_mode: str | None,
+    live_control_available: bool,
+    can_start_turn: bool,
+) -> bool:
+    """True when this session can accept image attachments right now.
 
-    Gated on (a) the session having live control and (b) the underlying
-    transport being codex_app_server. The engine-side LocalImage helper
-    only knows how to thread attachments into Codex turns today.
+    Support is the explicit (provider, mode) table in
+    ``input_attachments_support``; availability is the mode's own send
+    action: a Helm session needs live control, a Console session needs a
+    startable turn. Console never has live control, so the two are not
+    interchangeable.
     """
-    transport = getattr(capability_flags, "managed_transport", None)
-    if transport is None:
+    mode = str(session_mode or "").strip().lower()
+    if not attachments_supported(provider, mode):
         return False
-    transport_value = getattr(transport, "value", str(transport))
-    if transport_value != "codex_app_server":
-        return False
-    live = bool(capability_flags.live_control_available) if live_control_available is None else bool(live_control_available)
-    return live
+    if mode == "console":
+        return can_start_turn
+    return live_control_available
 
 
 def _provider_label(session: AgentSession | None) -> str | None:
@@ -728,7 +740,7 @@ class SessionCapabilitiesResponse(BaseModel):
     can_interrupt_active_turn: bool = Field(False, description="True when the active Console turn can be interrupted")
     attach_images: bool = Field(
         False,
-        description="True when the session can accept image attachments on input (codex_app_server only)",
+        description="True when this session's provider and mode accept image attachments on input",
     )
 
 

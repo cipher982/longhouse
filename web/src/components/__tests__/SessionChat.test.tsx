@@ -1892,5 +1892,45 @@ describe("SessionChat", () => {
         screen.queryByTestId("session-chat-queued"),
       ).not.toBeInTheDocument();
     });
+    it("keeps an ambiguous Console turn in the outbox until it is delivered", async () => {
+      const user = userEvent.setup();
+      const onOutboxChange = vi.fn();
+      requestMock.mockImplementation((path: string, init?: RequestInit) => {
+        if (String(path).endsWith("/lock")) {
+          return Promise.resolve({ locked: false, fork_available: false });
+        }
+        if (String(path).endsWith("/inputs") && !init) {
+          return Promise.resolve([]);
+        }
+        if (String(path).endsWith("/input") && init?.method === "POST") {
+          const payload = JSON.parse(String(init.body ?? "{}"));
+          return Promise.resolve({
+            outcome: "queued",
+            input_id: null,
+            intent: "auto",
+            client_request_id: payload.client_request_id,
+            turn: { turn_id: "turn-1", run_id: "run-1", state: "starting" },
+            queued: [],
+          });
+        }
+        return Promise.reject(new Error(`Unexpected request: ${path}`));
+      });
+
+      renderSessionChat({
+        chatMode: "managed_local",
+        timelineItems: [],
+        onOutboxChange,
+      });
+
+      await user.type(screen.getByRole("textbox"), "keep this Console turn");
+      await user.click(screen.getByRole("button", { name: /send/i }));
+
+      await waitFor(() =>
+        expect(lastOutbox(onOutboxChange)).toMatchObject([
+          { text: "keep this Console turn", state: "queued" },
+        ]),
+      );
+    });
+
   });
 });

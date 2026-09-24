@@ -18,10 +18,10 @@
 //! sends the newer value next tick. A daemon restart re-reads the slots and is
 //! immediately current.
 
+use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -162,7 +162,10 @@ pub const STATUS_ASSERTION_INTERVAL: std::time::Duration = std::time::Duration::
 /// only what the phase cannot: the machine is still here and still willing to
 /// report. Its identity is the assertion time, so a replay restates one the host
 /// has already accepted rather than renewing anything.
-pub fn assertion_runtime_event(slot: &StatusSlot, asserted_at: chrono::DateTime<chrono::Utc>) -> Value {
+pub fn assertion_runtime_event(
+    slot: &StatusSlot,
+    asserted_at: chrono::DateTime<chrono::Utc>,
+) -> Value {
     let run_id: Value = if slot.run_id.trim().is_empty() {
         Value::Null
     } else {
@@ -384,7 +387,12 @@ pub struct StatusUpdate<'a> {
 }
 
 impl<'a> StatusUpdate<'a> {
-    pub fn phase(session_id: &'a str, run_id: &'a str, observed_at: &'a str, phase: &'a str) -> Self {
+    pub fn phase(
+        session_id: &'a str,
+        run_id: &'a str,
+        observed_at: &'a str,
+        phase: &'a str,
+    ) -> Self {
         Self {
             session_id,
             run_id,
@@ -520,7 +528,9 @@ impl StatusPublisher {
         if guard.retired {
             return;
         }
-        let completes_turn = preview.as_ref().is_some_and(|preview| preview.turn_completed);
+        let completes_turn = preview
+            .as_ref()
+            .is_some_and(|preview| preview.turn_completed);
         if let Some(preview) = preview {
             guard.preview = Some(preview);
         }
@@ -844,7 +854,10 @@ mod tests {
         let dir = status_slot_dir(tmp.path());
         let publisher = StatusPublisher::new(dir.clone(), "pi", "pi_helm_channel");
 
-        publisher.publish(StatusUpdate::phase("s1", "run-1", "2026-09-17T15:00:01Z", "running").with_tool(Some("bash")));
+        publisher.publish(
+            StatusUpdate::phase("s1", "run-1", "2026-09-17T15:00:01Z", "running")
+                .with_tool(Some("bash")),
+        );
         let first = read_all(&dir).pop().expect("slot");
         assert_eq!(first.provider, "pi");
         assert_eq!(first.runtime_key, "pi:s1");
@@ -852,11 +865,19 @@ mod tests {
         assert_eq!(first.phase, "running");
 
         // The same statement again, inside the coalesce window.
-        publisher.publish(StatusUpdate::phase("s1", "run-1", "2026-09-17T15:00:02Z", "running").with_tool(Some("bash")));
+        publisher.publish(
+            StatusUpdate::phase("s1", "run-1", "2026-09-17T15:00:02Z", "running")
+                .with_tool(Some("bash")),
+        );
         assert_eq!(read_all(&dir).pop().expect("slot").seq, first.seq);
 
         // A transition is never coalesced.
-        publisher.publish(StatusUpdate::phase("s1", "run-1", "2026-09-17T15:00:03Z", "idle"));
+        publisher.publish(StatusUpdate::phase(
+            "s1",
+            "run-1",
+            "2026-09-17T15:00:03Z",
+            "idle",
+        ));
         let idle = read_all(&dir).pop().expect("slot");
         assert_eq!(idle.phase, "idle");
         assert!(idle.seq > first.seq);
@@ -864,14 +885,25 @@ mod tests {
         let events = runtime_events(&idle);
         assert_eq!(events[0]["provider"], "pi");
         assert!(
-            events[0]["dedupe_key"].as_str().expect("key").starts_with("pi-phase:"),
+            events[0]["dedupe_key"]
+                .as_str()
+                .expect("key")
+                .starts_with("pi-phase:"),
             "each provider's events carry its own identity"
         );
 
         publisher.retire("s1");
         assert!(read_all(&dir).is_empty());
-        publisher.publish(StatusUpdate::phase("s1", "run-1", "2026-09-17T15:00:04Z", "running"));
-        assert!(read_all(&dir).is_empty(), "a retired session states nothing further");
+        publisher.publish(StatusUpdate::phase(
+            "s1",
+            "run-1",
+            "2026-09-17T15:00:04Z",
+            "running",
+        ));
+        assert!(
+            read_all(&dir).is_empty(),
+            "a retired session states nothing further"
+        );
     }
 
     /// Codex carries `pause_request_still_pending` and stall evidence in its
@@ -900,7 +932,10 @@ mod tests {
         );
         let resolved = read_all(&dir).pop().expect("slot");
         assert_eq!(resolved.payload["pause_request_still_pending"], false);
-        assert!(resolved.seq > pending.seq, "the change was published, not coalesced");
+        assert!(
+            resolved.seq > pending.seq,
+            "the change was published, not coalesced"
+        );
     }
 
     #[test]
@@ -909,7 +944,10 @@ mod tests {
         let dir = status_slot_dir(tmp.path());
         publish(&dir, &slot("s1", "thinking", 1)).expect("publish");
 
-        assert_eq!(sweep_abandoned(&dir, std::time::Duration::from_secs(3600)), 0);
+        assert_eq!(
+            sweep_abandoned(&dir, std::time::Duration::from_secs(3600)),
+            0
+        );
         assert_eq!(read_all(&dir).len(), 1, "a fresh slot is current truth");
 
         // A launcher that crashed cannot retire its own slot, and nothing else
@@ -946,7 +984,10 @@ mod tests {
 
         let slots = read_all(&dir);
         assert_eq!(slots.len(), 1, "still one slot");
-        assert_eq!(slots[0].preview.as_ref().expect("preview").live_text.len(), 2048);
+        assert_eq!(
+            slots[0].preview.as_ref().expect("preview").live_text.len(),
+            2048
+        );
         let leftovers = std::fs::read_dir(&dir)
             .expect("read_dir")
             .flatten()

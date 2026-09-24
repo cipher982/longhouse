@@ -1823,7 +1823,11 @@ async def _create_catalog_session_input_response(
         except ConsoleTurnUnavailable as exc:
             error_status = status.HTTP_404_NOT_FOUND if exc.code == "report_not_found" else status.HTTP_409_CONFLICT
             raise HTTPException(status_code=error_status, detail={"code": exc.code, "message": str(exc)}) from exc
-        if turn.error:
+        if turn.error and turn.error_code not in {
+            "turn_start_ambiguous",
+            "turn_start_outcome_unknown",
+            "attachment_stage_outcome_unknown",
+        }:
             raise HTTPException(
                 status_code=502,
                 detail={"code": turn.error_code or "provider_launch_failed", "message": turn.error},

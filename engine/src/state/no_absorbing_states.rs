@@ -196,21 +196,30 @@ mod tests {
         // good. Launch authority is a local claim now; opening the database
         // again from any of these files is how the incident comes back.
         for (name, source) in [
-            ("omp_helm_launcher.rs", include_str!("../omp_helm_launcher.rs")),
+            (
+                "omp_helm_launcher.rs",
+                include_str!("../omp_helm_launcher.rs"),
+            ),
             ("omp_print.rs", include_str!("../omp_print.rs")),
             ("codex_exec.rs", include_str!("../codex_exec.rs")),
             ("pi_print.rs", include_str!("../pi_print.rs")),
-            ("pi_helm_launcher.rs", include_str!("../pi_helm_launcher.rs")),
-            ("antigravity_print.rs", include_str!("../antigravity_print.rs")),
-            ("cursor_helm_launcher.rs", include_str!("../cursor_helm_launcher.rs")),
+            (
+                "pi_helm_launcher.rs",
+                include_str!("../pi_helm_launcher.rs"),
+            ),
+            (
+                "antigravity_print.rs",
+                include_str!("../antigravity_print.rs"),
+            ),
+            (
+                "cursor_helm_launcher.rs",
+                include_str!("../cursor_helm_launcher.rs"),
+            ),
             ("cursor_print.rs", include_str!("../cursor_print.rs")),
         ] {
             // Only production code counts: a fixture may hold the database to
             // prove that a locked archive no longer blocks a launch.
-            let production = source
-                .split("#[cfg(test)]")
-                .next()
-                .unwrap_or_default();
+            let production = source.split("#[cfg(test)]").next().unwrap_or_default();
             assert!(
                 !production.contains("open_client_connection"),
                 "{name} opens the archive database from a launcher path; launch authority is a \

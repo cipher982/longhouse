@@ -641,6 +641,39 @@ def test_console_input_idempotency_conflict_is_structured_409(monkeypatch):
         "message": "client_request_id was reused with different text",
     }
 
+def test_console_input_preserves_ambiguous_start_as_queued(monkeypatch):
+    from zerg.routers.session_chat import SessionInputRequest
+    from zerg.routers.session_chat import _create_catalog_session_input_response
+    from zerg.services.console_turns import CatalogConsoleTurn
+
+    async def ambiguous(**_kwargs):
+        return CatalogConsoleTurn(
+            turn_id=uuid4(),
+            run_id=uuid4(),
+            state="starting",
+            created=True,
+            error_code="turn_start_ambiguous",
+            error="Machine Agent could not prove the provider start outcome",
+        )
+
+    monkeypatch.setattr("zerg.routers.session_chat.enqueue_catalog_console_turn", ambiguous)
+    response = asyncio.run(
+        _create_catalog_session_input_response(
+            source_session=SimpleNamespace(id=uuid4(), command_family="console_turn"),
+            owner_id=1,
+            body=SessionInputRequest(
+                text="attach this",
+                intent="auto",
+                client_request_id="console-ambiguous-1",
+            ),
+            db=None,
+        )
+    )
+
+    assert response.outcome == "queued"
+    assert response.turn.state == "starting"
+
+
 
 def test_report_id_is_rejected_for_non_console_input():
     from fastapi import HTTPException

@@ -305,12 +305,8 @@ mod tests {
     fn bindings_are_enumerable_with_their_lifecycle_state() {
         let (_tmp, conn) = setup();
         let binding = SessionBinding::new(&conn);
-        binding
-            .bind("/tmp/a.jsonl", "session-a", "omp")
-            .unwrap();
-        binding
-            .bind("/tmp/b.jsonl", "session-b", "pi")
-            .unwrap();
+        binding.bind("/tmp/a.jsonl", "session-a", "omp").unwrap();
+        binding.bind("/tmp/b.jsonl", "session-b", "pi").unwrap();
 
         let listed = binding.list_bindings().unwrap();
 

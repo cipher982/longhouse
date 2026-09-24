@@ -1260,6 +1260,7 @@ async fn execute_command(
                 sandbox: Some(REMOTE_CODEX_EXEC_SANDBOX.to_string()),
                 model: payload_optional_string(&payload, "model"),
                 prompt: provider_prompt,
+                image_paths: Vec::new(),
                 launch_actor,
                 launch_surface,
                 resume_thread_id: resume_target
@@ -1287,13 +1288,29 @@ async fn execute_command(
             }))
         }
         COMMAND_SEND_TEXT => {
-            let text = payload_required_string(&payload, "text")?;
             let provider = payload_optional_string(&payload, "provider")
                 .unwrap_or_else(|| DEFAULT_COMMAND_PROVIDER.to_string());
+            let attachments = crate::codex_attachments::parse_attachments(&payload)
+                .map_err(CommandError::command_failed)?;
+            let text =
+                crate::input_attachments::text_or_attachments(&payload, "text", &attachments)
+                    .map_err(|error| CommandError {
+                        code: "invalid_command".to_string(),
+                        message: error.to_string(),
+                    })?;
+            let staged = stage_helm_attachments(
+                config,
+                &session_id,
+                &provider,
+                durable_command_id,
+                &attachments,
+            )
+            .await?;
+            let path_text = crate::input_attachments::prompt_with_attachments(&text, &staged);
             if provider == "claude" {
                 let summary = claude_channel_send_text(ClaudeChannelSendConfig {
                     session_id: session_id.clone(),
-                    text,
+                    text: path_text,
                     meta: Vec::new(),
                     state_root: None,
                     wait_timeout: None,
@@ -1303,7 +1320,7 @@ async fn execute_command(
                 return Ok(claude_channel_control_result(summary.provider_session_id));
             }
             if provider == "opencode" {
-                let summary = crate::opencode_control::send_text(&session_id, &text)
+                let summary = crate::opencode_control::send_text(&session_id, &text, &staged)
                     .await
                     .map_err(CommandError::command_failed)?;
                 return Ok(json!({
@@ -1316,6 +1333,7 @@ async fn execute_command(
                 }));
             }
             if provider == "antigravity" {
+                // stage_helm_attachments already refused attachments here.
                 return run_antigravity_channel_command(
                     antigravity_channel_args(COMMAND_SEND_TEXT, &session_id, Some(text))?,
                     LAUNCH_START_TIMEOUT_SECS,
@@ -1324,7 +1342,7 @@ async fn execute_command(
                 .map(|output| cli_output_result(output, "antigravity", "antigravity_hook_inbox"));
             }
             if provider == "cursor" {
-                let summary = crate::cursor_helm_control::send_text(&session_id, &text, None)
+                let summary = crate::cursor_helm_control::send_text(&session_id, &path_text, None)
                     .await
                     .map_err(|err| CommandError {
                         code: err.code().to_string(),
@@ -1339,7 +1357,7 @@ async fn execute_command(
                 }));
             }
             if provider == "pi" {
-                let summary = crate::pi_helm_control::dispatch(
+                let summary = crate::pi_helm_control::dispatch_with_attachments(
                     &session_id,
                     crate::pi_helm_control::CommandKind::Send,
                     Some(&text),
@@ -1349,6 +1367,7 @@ async fn execute_command(
                             .get("longhouse_control_grant")
                             .unwrap_or(&Value::Null),
                     ),
+                    &staged,
                 )
                 .await
                 .map_err(|error| CommandError {
@@ -1366,7 +1385,7 @@ async fn execute_command(
                 }));
             }
             if provider == "omp" {
-                let summary = crate::omp_helm_control::dispatch(
+                let summary = crate::omp_helm_control::dispatch_with_attachments(
                     &session_id,
                     crate::omp_helm_control::CommandKind::Send,
                     Some(&text),
@@ -1377,6 +1396,7 @@ async fn execute_command(
                             .unwrap_or(&Value::Null),
                     ),
                     durable_command_id,
+                    &staged,
                 )
                 .await
                 .map_err(|error| CommandError {
@@ -1387,8 +1407,6 @@ async fn execute_command(
                     json!({"exit_code":0,"stdout":"","stderr":"","provider":"omp","transport":crate::omp_helm_control::OMP_HELM_TRANSPORT,"provider_session_id":summary.native_session_id,"status":summary.status}),
                 );
             }
-            let attachments = crate::codex_attachments::parse_attachments(&payload)
-                .map_err(CommandError::command_failed)?;
             validate_codex_bridge_attached(&session_id, None)
                 .map_err(CommandError::session_not_attached)?;
             let summary = cmd_codex_bridge_send(BridgeSendConfig {
@@ -1622,13 +1640,29 @@ async fn execute_command(
             })
         }
         COMMAND_STEER_TEXT => {
-            let text = payload_required_string(&payload, "text")?;
             let provider = payload_optional_string(&payload, "provider")
                 .unwrap_or_else(|| DEFAULT_COMMAND_PROVIDER.to_string());
+            let attachments = crate::codex_attachments::parse_attachments(&payload)
+                .map_err(CommandError::command_failed)?;
+            let text =
+                crate::input_attachments::text_or_attachments(&payload, "text", &attachments)
+                    .map_err(|error| CommandError {
+                        code: "invalid_command".to_string(),
+                        message: error.to_string(),
+                    })?;
+            let staged = stage_helm_attachments(
+                config,
+                &session_id,
+                &provider,
+                durable_command_id,
+                &attachments,
+            )
+            .await?;
+            let path_text = crate::input_attachments::prompt_with_attachments(&text, &staged);
             if provider == "claude" {
                 let summary = claude_channel_send_text(ClaudeChannelSendConfig {
                     session_id: session_id.clone(),
-                    text,
+                    text: path_text,
                     meta: vec![("intent".to_string(), "steer".to_string())],
                     state_root: None,
                     wait_timeout: None,
@@ -1640,7 +1674,7 @@ async fn execute_command(
             if provider == "opencode" {
                 // Same delivery as send: OpenCode picks a prompt posted into a
                 // running turn up at that turn's next step boundary.
-                let summary = crate::opencode_control::steer_text(&session_id, &text)
+                let summary = crate::opencode_control::steer_text(&session_id, &text, &staged)
                     .await
                     .map_err(CommandError::command_failed)?;
                 return Ok(json!({
@@ -1653,7 +1687,7 @@ async fn execute_command(
                 }));
             }
             if provider == "cursor" {
-                let summary = crate::cursor_helm_control::steer(&session_id, &text, None)
+                let summary = crate::cursor_helm_control::steer(&session_id, &path_text, None)
                     .await
                     .map_err(|error| CommandError {
                         code: error.code().to_string(),
@@ -1668,7 +1702,7 @@ async fn execute_command(
                 }));
             }
             if provider == "pi" {
-                let summary = crate::pi_helm_control::dispatch(
+                let summary = crate::pi_helm_control::dispatch_with_attachments(
                     &session_id,
                     crate::pi_helm_control::CommandKind::Steer,
                     Some(&text),
@@ -1678,6 +1712,7 @@ async fn execute_command(
                             .get("longhouse_control_grant")
                             .unwrap_or(&Value::Null),
                     ),
+                    &staged,
                 )
                 .await
                 .map_err(|error| CommandError {
@@ -1694,7 +1729,7 @@ async fn execute_command(
                 }));
             }
             if provider == "omp" {
-                let summary = crate::omp_helm_control::dispatch(
+                let summary = crate::omp_helm_control::dispatch_with_attachments(
                     &session_id,
                     crate::omp_helm_control::CommandKind::Steer,
                     Some(&text),
@@ -1705,6 +1740,7 @@ async fn execute_command(
                             .unwrap_or(&Value::Null),
                     ),
                     durable_command_id,
+                    &staged,
                 )
                 .await
                 .map_err(|error| CommandError {
@@ -1722,8 +1758,6 @@ async fn execute_command(
                         .to_string(),
                 });
             }
-            let attachments = crate::codex_attachments::parse_attachments(&payload)
-                .map_err(CommandError::command_failed)?;
             validate_codex_bridge_attached(&session_id, None)
                 .map_err(CommandError::session_not_attached)?;
             match cmd_codex_bridge_steer(BridgeSteerConfig {
@@ -1925,7 +1959,21 @@ async fn execute_turn_start(
             message: format!("cwd does not exist: {}", cwd.display()),
         });
     }
-    let message = payload_required_string(payload, "message")?;
+    let attachments = crate::codex_attachments::parse_attachments(payload)
+        .map_err(CommandError::command_failed)?;
+    if !attachments.is_empty()
+        && crate::input_attachments::attachment_delivery(&provider, "console").is_none()
+    {
+        return Err(CommandError {
+            code: "attachments_unsupported".to_string(),
+            message: format!("provider={provider} does not accept Console image attachments"),
+        });
+    }
+    let message = crate::input_attachments::text_or_attachments(payload, "message", &attachments)
+        .map_err(|error| CommandError {
+        code: "invalid_command".to_string(),
+        message: error.to_string(),
+    })?;
     let resume_provider_thread_id = payload_optional_string(payload, "resume_provider_thread_id");
     // A branch's first turn carries the parent thread to fork from. Only the
     // first: once the child owns a thread of its own, later turns resume it
@@ -1981,6 +2029,54 @@ async fn execute_turn_start(
     }
     let launch_actor = payload_optional_string(payload, "launch_actor");
     let launch_surface = payload_optional_string(payload, "launch_surface");
+    // Each invocation gets an opaque UUID-only scope. The run id remains the
+    // cleanup/claim key; embedding it here would exceed the path-component
+    // limit once the per-invocation UUID is appended.
+    let staging_scope_id = uuid::Uuid::new_v4().to_string();
+    // Stage before claiming the run. A fetch timeout must not leave a durable
+    // claim in "failed"; the server can keep the Console turn queued and retry
+    // it after the control link recovers.
+    let staging_dir = if attachments.is_empty() {
+        None
+    } else {
+        Some(
+            crate::input_attachments::console_staging_dir(&cwd, &staging_scope_id)
+                .map_err(|error| attachment_stage_command_error(error.to_string()))?,
+        )
+    };
+    let staged = if attachments.is_empty() {
+        Vec::new()
+    } else {
+        let api_token = config.api_token.as_deref().ok_or_else(|| {
+            attachment_stage_command_error(
+                "cannot fetch attachments without the Machine Agent token".to_string(),
+            )
+        })?;
+        let dir = staging_dir
+            .as_ref()
+            .expect("non-empty attachments have a staging directory");
+        let http = attachment_http_client()
+            .map_err(|error| attachment_stage_command_error(error.message))?;
+        tokio::time::timeout(
+            Duration::from_secs(REPORT_STAGE_DEADLINE_SECS),
+            crate::input_attachments::stage(
+                &http,
+                &config.api_url,
+                api_token,
+                session_id,
+                &attachments,
+                dir,
+            ),
+        )
+        .await
+        .map_err(|_| {
+            crate::input_attachments::cleanup_dir(dir);
+            attachment_stage_command_error(format!(
+                "attachment staging exceeded {REPORT_STAGE_DEADLINE_SECS}s"
+            ))
+        })?
+        .map_err(|error| attachment_stage_command_error(error.to_string()))?
+    };
     let registry = default_turn_claim_registry().map_err(CommandError::command_failed)?;
     let claim_started = std::time::Instant::now();
     match registry
@@ -1995,33 +2091,74 @@ async fn execute_turn_start(
         .map_err(CommandError::command_failed)?
     {
         ClaimOutcome::Existing(claim) if claim.state == "terminal" => {
+            if let Some(dir) = staging_dir.as_ref() {
+                crate::input_attachments::cleanup_dir(dir);
+            }
             return claim.result.ok_or_else(|| CommandError {
                 code: "turn_claim_invalid".to_string(),
                 message: format!("terminal run {run_id} has no stored result"),
             });
         }
         ClaimOutcome::Existing(claim) if claim.state == "spawned" => {
-            let process_is_same = claim
-                .pid
-                .zip(claim.process_start_time.as_deref())
-                .and_then(|(pid, started)| {
-                    crate::process_identity::collect_process_facts_by_pid()
-                        .get(&pid)
-                        .map(|fact| fact.lstart == started)
-                })
-                .unwrap_or(false);
-            if process_is_same {
-                return claim.result.ok_or_else(|| CommandError {
-                    code: "turn_claim_invalid".to_string(),
-                    message: format!("spawned run {run_id} has no stored result"),
-                });
+            let inventory = crate::process_identity::try_collect_process_facts_by_pid();
+            match crate::console_adapter::claim_liveness(&claim, inventory.as_ref()) {
+                crate::console_adapter::ClaimLiveness::Live => {
+                    if let Some(dir) = staging_dir.as_ref() {
+                        crate::input_attachments::cleanup_dir(dir);
+                    }
+                    return claim.result.ok_or_else(|| CommandError {
+                        code: "turn_claim_invalid".to_string(),
+                        message: format!("spawned run {run_id} has no stored result"),
+                    });
+                }
+                crate::console_adapter::ClaimLiveness::Unknown => {
+                    if let Some(dir) = staging_dir.as_ref() {
+                        crate::input_attachments::cleanup_dir(dir);
+                    }
+                    return Err(CommandError {
+                        code: "turn_start_outcome_unknown".to_string(),
+                        message: format!(
+                            "run {run_id} is spawned but the Machine Agent could not prove its process state"
+                        ),
+                    });
+                }
+                crate::console_adapter::ClaimLiveness::Gone => {
+                    if let Some(dir) = staging_dir.as_ref() {
+                        crate::input_attachments::cleanup_dir(dir);
+                    }
+                    let message = format!(
+                        "run {run_id} was spawned but its exact process is gone without a terminal claim"
+                    );
+                    if crate::turn_claims::cancel_monitor(&run_id) {
+                        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                        while crate::turn_claims::monitor_is_active(&run_id)
+                            && std::time::Instant::now() < deadline
+                        {
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                        if crate::turn_claims::monitor_is_active(&run_id) {
+                            return Err(CommandError {
+                                code: "turn_start_outcome_unknown".to_string(),
+                                message: format!(
+                                    "{message}; prior monitor has not released its execution owner"
+                                ),
+                            });
+                        }
+                    }
+                    registry
+                        .mark_failed(&run_id, &message)
+                        .map_err(CommandError::command_failed)?;
+                    return Err(CommandError {
+                        code: "turn_start_process_gone".to_string(),
+                        message,
+                    });
+                }
             }
-            return Err(CommandError {
-                code: "turn_start_ambiguous".to_string(),
-                message: format!("run {run_id} was spawned but its exact process is gone without a terminal claim"),
-            });
         }
         ClaimOutcome::Existing(claim) if claim.state == "failed" => {
+            if let Some(dir) = staging_dir.as_ref() {
+                crate::input_attachments::cleanup_dir(dir);
+            }
             return Err(CommandError {
                 code: "provider_launch_failed".to_string(),
                 message: claim
@@ -2030,6 +2167,9 @@ async fn execute_turn_start(
             });
         }
         ClaimOutcome::Existing(_) => {
+            if let Some(dir) = staging_dir.as_ref() {
+                crate::input_attachments::cleanup_dir(dir);
+            }
             return Err(CommandError {
                 code: "turn_start_ambiguous".to_string(),
                 message: format!("run {run_id} was claimed but its spawn outcome is not proven"),
@@ -2091,6 +2231,13 @@ async fn execute_turn_start(
     } else {
         message
     };
+    let image_paths: Vec<PathBuf> = staged.iter().map(|item| item.path.clone()).collect();
+    let message =
+        if crate::input_attachments::attachment_delivery(&provider, "console") == Some("path") {
+            crate::input_attachments::prompt_with_attachments(&message, &staged)
+        } else {
+            message
+        };
     let local_db_path = config
         .db_path
         .clone()
@@ -2173,6 +2320,7 @@ async fn execute_turn_start(
             opencode_bin: std::env::var("LONGHOUSE_OPENCODE_BIN")
                 .unwrap_or_else(|_| DEFAULT_OPENCODE_BIN.to_string()),
             prompt: message,
+            image_paths: image_paths.clone(),
             resume_provider_thread_id,
             model: payload_optional_string(payload, "model"),
             permission_mode,
@@ -2207,6 +2355,7 @@ async fn execute_turn_start(
             pi_bin: std::env::var("LONGHOUSE_PI_BIN")
                 .unwrap_or_else(|_| crate::pi_print::DEFAULT_PI_BIN.to_string()),
             prompt: message,
+            image_paths: image_paths.clone(),
             provider: payload_optional_string(payload, "pi_provider"),
             model: payload_optional_string(payload, "model"),
             session_dir: payload_optional_string(payload, "session_dir").map(PathBuf::from),
@@ -2246,6 +2395,7 @@ async fn execute_turn_start(
             cwd,
             omp_bin: console_provider_binary_with_env("omp", &|name| std::env::var_os(name)),
             prompt: message,
+            image_paths: image_paths.clone(),
             model: payload_optional_string(payload, "model"),
             profile: payload_optional_string(payload, "profile"),
             session_dir: payload_optional_string(payload, "session_dir").map(PathBuf::from),
@@ -2337,6 +2487,7 @@ async fn execute_turn_start(
                 sandbox: Some(REMOTE_CODEX_EXEC_SANDBOX.to_string()),
                 model: payload_optional_string(payload, "model"),
                 prompt: message,
+                image_paths: image_paths.clone(),
                 launch_actor,
                 launch_surface,
                 resume_thread_id: resume_provider_thread_id,
@@ -2365,6 +2516,9 @@ async fn execute_turn_start(
 
     match launch_result {
         Ok(result) => {
+            if let Some(dir) = staging_dir.clone() {
+                crate::input_attachments::schedule_console_cleanup(dir, run_id.clone());
+            }
             if matches!(
                 result.get("transport").and_then(Value::as_str),
                 Some(
@@ -2402,6 +2556,9 @@ async fn execute_turn_start(
             Ok(result)
         }
         Err(err) => {
+            if let Some(dir) = staging_dir.as_ref() {
+                crate::input_attachments::cleanup_dir(dir);
+            }
             let message = err.to_string();
             let _ = registry.mark_failed(&run_id, &message);
             Err(CommandError {
@@ -3272,6 +3429,95 @@ fn required_string(frame: &Value, key: &'static str) -> std::result::Result<Stri
             code: "invalid_command".to_string(),
             message: format!("{key} is required"),
         })
+}
+
+fn attachment_http_client() -> std::result::Result<reqwest::Client, CommandError> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(25))
+        .build()
+        .map_err(|error| CommandError {
+            code: "attachments_unavailable".to_string(),
+            message: format!("cannot create attachment client: {error}"),
+        })
+}
+
+fn attachment_stage_command_error(message: String) -> CommandError {
+    let lower = message.to_ascii_lowercase();
+    let retryable = lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("exceeded")
+        || lower.contains("fetching attachment")
+        || lower.contains("reading body for attachment")
+        || lower.contains("http 429")
+        || lower.contains("http 500")
+        || lower.contains("http 502")
+        || lower.contains("http 503")
+        || lower.contains("http 504");
+    CommandError {
+        code: if retryable {
+            "attachment_stage_outcome_unknown".to_string()
+        } else {
+            "attachment_stage_failed".to_string()
+        },
+        message,
+    }
+}
+
+/// Helm attachments for non-Codex providers: fetch the blobs into an
+/// input-scoped tmpdir the provider can read. Codex Helm fetches inside its
+/// own bridge, so this returns nothing for it. Antigravity Helm carries a
+/// plain string to its hook inbox (and that transport is itself broken), so
+/// an attachment there is an explicit error, never a silently text-only send.
+async fn stage_helm_attachments(
+    config: &ShipperConfig,
+    session_id: &str,
+    provider: &str,
+    input_id: Option<&str>,
+    attachments: &[crate::codex_attachments::AttachmentRef],
+) -> std::result::Result<Vec<crate::input_attachments::StagedAttachment>, CommandError> {
+    if attachments.is_empty() || provider.eq_ignore_ascii_case("codex") {
+        // Codex's app-server bridge fetches the durable refs itself. Staging
+        // here would fetch every blob twice and leave an unused input cache.
+        return Ok(Vec::new());
+    }
+    if crate::input_attachments::attachment_delivery(provider, "helm").is_none() {
+        return Err(CommandError {
+            code: "unsupported_command".to_string(),
+            message: format!("{provider} Helm does not accept image attachments"),
+        });
+    }
+    let api_token = config
+        .api_token
+        .as_deref()
+        .filter(|token| !token.trim().is_empty())
+        .ok_or_else(|| CommandError {
+            code: "attachments_unavailable".to_string(),
+            message: "cannot fetch attachments without the Machine Agent token".to_string(),
+        })?;
+    // The durable command id scopes the staging directory when it is a plain
+    // token; anything else gets a fresh UUID rather than a rejected path.
+    let dir = input_id
+        .filter(|value| !value.trim().is_empty())
+        .and_then(|value| crate::input_attachments::helm_staging_dir(session_id, value).ok())
+        .map(Ok)
+        .unwrap_or_else(|| {
+            crate::input_attachments::helm_staging_dir(
+                session_id,
+                &uuid::Uuid::new_v4().to_string(),
+            )
+        })
+        .map_err(CommandError::command_failed)?;
+    let http = attachment_http_client()?;
+    crate::input_attachments::stage(
+        &http,
+        &config.api_url,
+        api_token,
+        session_id,
+        attachments,
+        &dir,
+    )
+    .await
+    .map_err(CommandError::command_failed)
 }
 
 fn payload_required_string(
@@ -5985,6 +6231,18 @@ printf '{{"type":"result","subtype":"success","is_error":false}}\n'
             .unwrap_err()
             .code,
             "unsupported_command"
+        );
+    }
+
+    #[test]
+    fn attachment_stage_errors_keep_transient_fetches_queued() {
+        assert_eq!(
+            attachment_stage_command_error("attachment staging exceeded 8s".to_string()).code,
+            "attachment_stage_outcome_unknown"
+        );
+        assert_eq!(
+            attachment_stage_command_error("attachment_fetch_failed: HTTP 404".to_string()).code,
+            "attachment_stage_failed"
         );
     }
 }

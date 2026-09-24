@@ -1157,7 +1157,6 @@ pub fn prune_stale_quarantines(db_path: &Path) -> Result<QuarantinePruneReport> 
     })
 }
 
-
 /// How long a maintenance pass waits for a busy database before deferring.
 ///
 /// Compaction is the only thing that returns the interior free space the Cursor
@@ -1329,7 +1328,6 @@ pub fn run_daily_storage_maintenance(db_path: &Path) {
             tracing::warn!(error = %err, "Daily maintenance: quarantine prune error");
         }
     }
-
 
     if deferred {
         return;
@@ -2103,7 +2101,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("longhouse-shipper.db");
 
-        assert_eq!(daily_maintenance_delay(&db_path, Utc::now()), Duration::ZERO);
+        assert_eq!(
+            daily_maintenance_delay(&db_path, Utc::now()),
+            Duration::ZERO
+        );
     }
 
     #[test]
@@ -2143,7 +2144,10 @@ mod tests {
         let db_path = dir.path().join("longhouse-shipper.db");
         std::fs::write(daily_maintenance_marker_path(&db_path), b"{ not json").unwrap();
 
-        assert_eq!(daily_maintenance_delay(&db_path, Utc::now()), Duration::ZERO);
+        assert_eq!(
+            daily_maintenance_delay(&db_path, Utc::now()),
+            Duration::ZERO
+        );
     }
 
     #[test]
