@@ -20,6 +20,13 @@ from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveUser
 from zerg.services.live_session_inputs import upsert_live_input_receipt
 
+TEST_CATALOG_RPC_TIMEOUT_SECONDS = 15.0
+
+
+def _catalog_client(socket_path: Path) -> CatalogClient:
+    """Direct-daemon assertions must not inherit the production 1 s RPC budget."""
+    return CatalogClient(socket_path, default_timeout_seconds=TEST_CATALOG_RPC_TIMEOUT_SECONDS)
+
 
 @pytest.fixture
 def daemon_paths():
@@ -135,7 +142,7 @@ async def test_directed_input_enforces_owner_and_reply_direction(daemon_paths):
     source_id, target_id, foreign_id = _seed_owner_sessions(database_path)
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
-    client = CatalogClient(socket_path)
+    client = _catalog_client(socket_path)
     now = datetime.now(UTC).replace(microsecond=0).isoformat()
     try:
         with pytest.raises(CatalogRemoteError) as owner_error:

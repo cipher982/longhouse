@@ -40,6 +40,13 @@ from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import RenderRecord
 from zerg.storage_v2.render_objects import aggregate_render_object
 
+TEST_CATALOG_RPC_TIMEOUT_SECONDS = 15.0
+
+
+def _catalog_client(socket_path: Path) -> CatalogClient:
+    """Direct-daemon assertions must not inherit the production 1 s RPC budget."""
+    return CatalogClient(socket_path, default_timeout_seconds=TEST_CATALOG_RPC_TIMEOUT_SECONDS)
+
 
 @pytest.fixture
 def daemon_paths():
@@ -857,7 +864,7 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
     generation_id = uuid4()
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
-    client = CatalogClient(socket_path)
+    client = _catalog_client(socket_path)
     try:
         raw = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"hello\n",), sealed_at=now)
         raw.update(render_state="ready", render_manifest=_render_manifest(generation_id), projectors=["search-v2"])
