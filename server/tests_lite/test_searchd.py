@@ -33,6 +33,7 @@ from zerg.searchd.store import SearchStore
 from zerg.searchd.store import _bounded_recall_context
 from zerg.searchd.store import _bounded_worklog_content
 from zerg.searchd.store import _fts_query
+from zerg.searchd.store import _query_excerpt
 from zerg.searchd.store import object_set_hash
 from zerg.searchd.store import open_search_database
 from zerg.storage_v2.render_objects import RenderObjectSpec
@@ -104,6 +105,42 @@ def test_hydration_batches_cache_hits_and_reports_a_decoded_byte_budget(monkeypa
     assert reads == 1
     assert [row["content_text"] for row in bounded.rows] == ["first"]
     assert bounded.complete is False
+
+
+def test_hydration_caps_each_turn_before_charging_and_keeps_a_typed_gap(monkeypatch, tmp_path):
+    digest = "d" * 64
+    spec = RenderObjectSpec(
+        session_id=uuid4(), render_generation=uuid4(), parser_revision="test", ordering_revision="test",
+        machine_id="cinder", provider="codex", opaque_source_id="session.jsonl", source_epoch=uuid4(),
+        source_envelope_id="e" * 64,
+        records=(RenderRecord("one", 1, 1, 0, "user", content_text="é" * 100),),
+    )
+
+    def read(*_args, **_kwargs):
+        return DecodedRenderObject(spec=spec, object_hash=digest, payload_hash="f" * 64)
+
+    monkeypatch.setattr("zerg.searchd.hydration.read_render_object", read)
+    hydrated = RenderHydrator(root=tmp_path).hydrate(
+        [
+            {"search_event_id": 1, "source_object_id": digest, "record_ordinal": 0},
+            {"search_event_id": 2, "source_object_id": digest, "record_ordinal": 1},
+        ],
+        byte_budget=32,
+        per_row_byte_cap=32,
+    )
+
+    assert len(hydrated.rows[0]["content_text"].encode()) <= 32
+    assert hydrated.rows[1]["hydration_gap"] == "render_object_unavailable"
+    assert hydrated.complete is False
+
+
+def test_query_excerpt_matches_non_adjacent_and_diacritic_folded_tokens():
+    accented = "caf" + chr(0xE9)
+    excerpt = _query_excerpt(f"before {accented} middle separate later", "cafe later")
+
+    assert excerpt is not None
+    assert accented in excerpt
+    assert "later" in excerpt
 
 
 def _records(text: str) -> list[dict]:

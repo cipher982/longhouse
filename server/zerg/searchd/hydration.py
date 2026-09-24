@@ -9,6 +9,7 @@ from typing import Any
 
 from zerg.services.raw_object_workers import storage_v2_root
 from zerg.storage_v2.render_objects import DecodedRenderObject
+from zerg.storage_v2.render_objects import RenderObjectCorruptError
 from zerg.storage_v2.render_objects import read_render_object
 
 
@@ -25,13 +26,27 @@ class RenderHydrator:
         self._cache: OrderedDict[str, tuple[DecodedRenderObject, int]] = OrderedDict()
         self._cache_bytes = 0
 
-    def hydrate(self, rows: list[dict[str, Any]], *, byte_budget: int) -> HydrationResult:
+    def hydrate(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        byte_budget: int,
+        per_row_byte_cap: int | None = None,
+    ) -> HydrationResult:
         hydrated: list[dict[str, Any]] = []
         used = 0
+        complete = True
         for row in rows:
-            decoded = self._read(str(row["source_object_id"]))
-            record = decoded.spec.records[int(row["record_ordinal"])]
+            try:
+                decoded = self._read(str(row["source_object_id"]))
+                record = decoded.spec.records[int(row["record_ordinal"])]
+            except (RenderObjectCorruptError, OSError, IndexError, ValueError):
+                hydrated.append({**row, "content_text": None, "tool_output_text": None, "hydration_gap": "render_object_unavailable"})
+                complete = False
+                continue
             values = {"content_text": record.content_text, "tool_output_text": record.tool_output_text, "tool_name": record.tool_name}
+            if per_row_byte_cap is not None:
+                values = _truncate_values(values, per_row_byte_cap)
             size = sum(len(value.encode()) for value in values.values() if isinstance(value, str))
             # A caller still needs a typed, inspectable result for one oversized
             # record; downstream response caps decide whether it can be emitted.
@@ -39,7 +54,7 @@ class RenderHydrator:
                 return HydrationResult(rows=hydrated, complete=False)
             hydrated.append({**row, **values})
             used += size
-        return HydrationResult(rows=hydrated, complete=True)
+        return HydrationResult(rows=hydrated, complete=complete)
 
     def _read(self, digest: str) -> DecodedRenderObject:
         cached = self._cache.pop(digest, None)
@@ -59,3 +74,19 @@ class RenderHydrator:
             _, (_, removed) = self._cache.popitem(last=False)
             self._cache_bytes -= removed
         return decoded
+
+
+def _truncate_values(values: dict[str, Any], limit: int) -> dict[str, Any]:
+    """Cap one hydrated turn without splitting a UTF-8 character."""
+
+    remaining = limit
+    truncated = dict(values)
+    for key in ("content_text", "tool_output_text"):
+        value = truncated[key]
+        if not isinstance(value, str):
+            continue
+        encoded = value.encode()
+        if len(encoded) > remaining:
+            truncated[key] = encoded[:remaining].decode("utf-8", "ignore")
+        remaining -= min(len(encoded), remaining)
+    return truncated

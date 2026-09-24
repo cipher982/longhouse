@@ -8,6 +8,7 @@ import os
 import re
 import sqlite3
 import time
+import unicodedata
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
@@ -231,8 +232,12 @@ _SEARCHABLE_SEARCH_SQL = """
     WITH candidates AS (
         SELECT e.source_event_id AS search_event_id, bm25(events_fts) AS rank
         FROM events_fts
-        JOIN searchable_events e ON e.source_event_id = events_fts.rowid
-        WHERE events_fts MATCH ? AND e.owner_id = ?
+         JOIN searchable_events e ON e.source_event_id = events_fts.rowid
+         WHERE events_fts MATCH ? AND e.owner_id = ?
+           AND events_fts.rowid >= COALESCE((
+               SELECT MIN(source_event_id) FROM searchable_events
+               WHERE order_time_us >= CAST(unixepoch('now', '-90 days', '-300 seconds') * 1000000 AS INTEGER)
+           ), 9223372036854775807)
           AND (? = 1 OR COALESCE(e.hidden_from_default_timeline, 0) = 0
                OR (? = 1 AND COALESCE(e.test_scope_visible, 0) = 1))
           AND COALESCE(e.user_hidden_from_timeline, 0) = 0
@@ -850,6 +855,18 @@ class SearchStore:
             source_epoch=source_epoch,
             records=records,
         )
+        # Identity replays may need to inspect the render object, but never while
+        # holding the writer transaction open.
+        existing_before = self.connection.execute(
+            "SELECT session_id, generation_id, projection_hash, event_count FROM indexed_objects WHERE object_id = ?",
+            (object_id,),
+        ).fetchone()
+        stored_hash = (
+            self._stored_object_projection_hash(existing=existing_before, object_id=object_id)
+            if existing_before is not None
+            and (existing_before["projection_hash"] != projection_hash or int(existing_before["event_count"]) != len(records))
+            else None
+        )
         self.connection.execute("BEGIN IMMEDIATE")
         try:
             existing = self.connection.execute(
@@ -868,7 +885,6 @@ class SearchStore:
                         and existing["session_id"] == session_id
                         and existing["generation_id"] == generation_id
                     )
-                    stored_hash = self._stored_object_projection_hash(existing=existing, object_id=object_id)
                     if (not same_empty_object and stored_hash != projection_hash) or int(existing["event_count"]) != len(records):
                         raise ValueError("indexed object identity conflicts with existing derived rows")
                 # Semantic classification is recoverable from a later raw
@@ -1790,18 +1806,35 @@ class SearchStore:
                 ranking_scope = "recent_bounded"
         result_rows = [dict(row) for row in rows]
         if include_snippets:
-            hydration = self._hydrator.hydrate(result_rows, byte_budget=4 * 1024 * 1024)
-            result_rows = hydration.rows
+            # The page budget is for returned excerpts, not backing render
+            # objects. A large turn must not make its ranked hit disappear.
+            hydration = self._hydrator.hydrate(result_rows, byte_budget=1 << 60)
+            hydrated = {int(row["search_event_id"]): row for row in hydration.rows}
+            excerpt_bytes = 0
+            excerpts_complete = True
             for row in result_rows:
-                row["content_snippet"] = _query_excerpt(row.pop("content_text", None), query)
-                row["tool_output_snippet"] = _query_excerpt(row.pop("tool_output_text", None), query)
+                hydrated_row = hydrated.get(int(row["search_event_id"]))
+                if hydrated_row is None:
+                    row["content_snippet"] = None
+                    row["tool_output_snippet"] = None
+                    continue
+                content_snippet = _query_excerpt(hydrated_row.get("content_text"), query)
+                output_snippet = _query_excerpt(hydrated_row.get("tool_output_text"), query)
+                snippet_bytes = sum(len(value.encode()) for value in (content_snippet, output_snippet) if isinstance(value, str))
+                if excerpt_bytes + snippet_bytes > 4 * 1024 * 1024:
+                    content_snippet = output_snippet = None
+                    excerpts_complete = False
+                else:
+                    excerpt_bytes += snippet_bytes
+                row["content_snippet"] = content_snippet
+                row["tool_output_snippet"] = output_snippet
         return {
             "results": [{k: v for k, v in row.items() if k != "candidate_count"} for row in result_rows],
             "query_token_count": query_token_count,
             "compiled_token_count": compiled_token_count,
             "search_scope": "published_recent" if use_searchable_corpus else "published_archive",
             "ranking_scope": ranking_scope,
-            "hydration_complete": hydration.complete if include_snippets else True,
+            "hydration_complete": hydration.complete and excerpts_complete if include_snippets else True,
         }
 
     def recall_context(
@@ -1862,6 +1895,7 @@ class SearchStore:
         hydration = self._hydrator.hydrate(
             [dict(row) for row in reversed(before)] + [dict(row) for row in after],
             byte_budget=max_content_bytes * (before_turns + after_turns + 1),
+            per_row_byte_cap=max_content_bytes,
         )
         context_rows = hydration.rows
         context, truncated, anchor_seen = _bounded_recall_context(
@@ -2038,16 +2072,16 @@ class SearchStore:
                 SELECT e.session_id,
                        MIN(e.order_time_us) AS first_event_us,
                        MAX(e.order_time_us) AS last_event_us,
-                       MIN(CASE
-                            WHEN e.role IN ('user', 'assistant')
+                        MIN(CASE
+                             WHEN e.role IN ('user', 'assistant') AND e.tool_name IS NULL
                                 AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
                                 AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
                                 AND (e.role != 'user' OR (e.title_eligible = 1
                                      AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('local_control', 'local_control_output', 'conversation_boundary', 'provider_system', 'provider_reasoning', 'provider_notification'))))
                            THEN e.order_time_us
                        END) AS first_message_us,
-                       SUM(CASE
-                            WHEN e.role IN ('user', 'assistant')
+                        SUM(CASE
+                             WHEN e.role IN ('user', 'assistant') AND e.tool_name IS NULL
                                 AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
                                 AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
                                 AND (e.role != 'user' OR (e.title_eligible = 1
@@ -2126,7 +2160,8 @@ class SearchStore:
              AND m.object_id = e.source_object_id
             WHERE s.owner_id = ?
               AND e.order_time_us >= ? AND e.order_time_us < ?
-              AND e.role IN ('user', 'assistant')
+               AND e.role IN ('user', 'assistant')
+               AND e.tool_name IS NULL
               AND (e.interaction_kind IS NULL OR e.interaction_kind != 'provider_notification')
               AND (e.interaction_kind IS NULL OR e.interaction_kind NOT IN ('provider_system', 'provider_reasoning') OR e.role NOT IN ('user', 'system'))
               AND (e.role != 'user' OR (e.title_eligible = 1
@@ -2161,9 +2196,15 @@ class SearchStore:
         normalized_rows = []
         hydration = self._hydrator.hydrate([dict(row) for row in rows], byte_budget=_WORKLOG_PAGE_BYTES * 2)
         for item in hydration.rows:
-            item["content_text"] = _bounded_worklog_content(str(item["content_text"]))
+            if not isinstance(item.get("content_text"), str):
+                continue
+            item["content_text"] = _bounded_worklog_content(item["content_text"])
             normalized_rows.append(item)
-        return _bounded_worklog_page(normalized_rows, limit=limit, cursor_builder=_event_cursor)
+        page = _bounded_worklog_page(normalized_rows, limit=limit, cursor_builder=_event_cursor)
+        if not hydration.complete and page["items"]:
+            page["has_more"] = len(rows) > limit or len(normalized_rows) < len(rows)
+            page["next_cursor"] = _event_cursor(page["items"][-1]) if page["has_more"] else None
+        return page
 
     def delete_session(self, *, session_id: str) -> dict[str, object]:
         changed = False
@@ -2189,12 +2230,11 @@ class SearchStore:
     def _delete_events(self, predicate: str, params: tuple[object, ...]) -> int:
         """Keep contentless FTS postings in lockstep with event deletion."""
 
-        event_ids = [int(row[0]) for row in self.connection.execute(f"SELECT id FROM events WHERE {predicate}", params)]
-        for event_id in event_ids:
-            self.connection.execute("DELETE FROM events_fts WHERE rowid = ?", (event_id,))
-        if event_ids:
+        count = int(self.connection.execute(f"SELECT COUNT(*) FROM events WHERE {predicate}", params).fetchone()[0])
+        if count:
+            self.connection.execute(f"DELETE FROM events_fts WHERE rowid IN (SELECT id FROM events WHERE {predicate})", params)
             self.connection.execute(f"DELETE FROM events WHERE {predicate}", params)
-        return len(event_ids)
+        return count
 
     def reclassify_session_origin(
         self,
@@ -2366,13 +2406,25 @@ def _fts_query(raw: str) -> str:
     return normalized
 
 
-def _query_excerpt(value: object, query: str, *, limit: int = 240) -> str | None:
+def _query_excerpt(value: object, query: str, *, limit: int = 24) -> str | None:
     if not isinstance(value, str):
         return None
-    match = re.search(re.escape(query.strip()), value, flags=re.IGNORECASE)
-    start = max(0, (match.start() if match else 0) - limit // 2)
-    end = min(len(value), start + limit)
-    return ("… " if start else "") + value[start:end] + (" …" if end < len(value) else "")
+    query_tokens = {_fold_token(token) for token in re.findall(r"\w+", query, flags=re.UNICODE)}
+    tokens = re.findall(r"\w+", value, flags=re.UNICODE)
+    matches = [index for index, token in enumerate(tokens) if _fold_token(token) in query_tokens]
+    if not matches:
+        return " ".join(tokens[:limit]) + (" …" if len(tokens) > limit else "")
+    starts = {max(0, min(len(tokens) - limit, match - limit // 2)) for match in matches}
+    start = max(
+        starts,
+        key=lambda candidate: len({_fold_token(token) for token in tokens[candidate : candidate + limit]} & query_tokens),
+    )
+    end = min(len(tokens), start + limit)
+    return ("… " if start else "") + " ".join(tokens[start:end]) + (" …" if end < len(tokens) else "")
+
+
+def _fold_token(value: str) -> str:
+    return "".join(character for character in unicodedata.normalize("NFD", value.casefold()) if not unicodedata.combining(character))
 
 
 def _bounded_worklog_content(value: str) -> str:
@@ -2397,7 +2449,9 @@ def _bounded_recall_context(
     anchor_seen = False
     for row in rows:
         item = dict(row)
-        content = str(item["content_text"])
+        content = item.get("content_text")
+        if not isinstance(content, str):
+            continue
         returned, truncated, full_bytes = _truncate_utf8(content, max_bytes=max_content_bytes)
         item["content_text"] = returned
         anchor_seen |= item.get("search_event_id") == anchor_event_id
