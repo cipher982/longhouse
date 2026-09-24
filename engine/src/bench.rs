@@ -647,9 +647,11 @@ pub fn run_benchmark_ship(
     let capabilities =
         crate::shipping::storage_v2::require_storage_v2_cutover(capabilities, api_url)?;
 
+    let encoding = capabilities.envelope_body_encoding();
     eprintln!(
-        "Negotiated storage-v2 (cutover={}); preparing durable envelopes...",
-        capabilities.cutover
+        "Negotiated storage-v2 (cutover={}, envelope encoding={}); preparing durable envelopes...",
+        capabilities.cutover,
+        encoding.header_value()
     );
 
     let mut prepared: Vec<PreparedShipEnvelope> = Vec::with_capacity(files.len());
@@ -782,6 +784,7 @@ pub fn run_benchmark_ship(
                                 &ingest_path,
                                 item.lane,
                                 item.body.clone(),
+                                encoding,
                                 &item.expected_envelope_id,
                                 None,
                             )
@@ -839,6 +842,7 @@ pub fn run_benchmark_ship(
                                 &ingest_path,
                                 item.lane,
                                 item.body.clone(),
+                                encoding,
                                 &item.expected_envelope_id,
                                 None,
                             )

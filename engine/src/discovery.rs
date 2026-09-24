@@ -1123,6 +1123,7 @@ mod tests {
             range_kinds: vec!["byte_offset".to_string(), "record_ordinal".to_string()],
             lanes: vec!["live".to_string(), "repair".to_string()],
             lane_header: "X-Longhouse-Storage-Lane".to_string(),
+            envelope_content_encodings: Vec::new(),
         };
         let state_path = dir.path().join("engine/state.sqlite");
         let (first_body, first_prepared) = {

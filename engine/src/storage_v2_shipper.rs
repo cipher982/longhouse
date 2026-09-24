@@ -26,8 +26,8 @@ use crate::raw_records::{
 };
 use crate::shipping::client::ShipperClient;
 use crate::shipping::storage_v2::{
-    StorageV2Capabilities, StorageV2Envelope, StorageV2MediaRef, StorageV2ProviderFact,
-    StorageV2Record, StorageV2SourceManifest,
+    StorageV2BodyEncoding, StorageV2Capabilities, StorageV2Envelope, StorageV2MediaRef,
+    StorageV2ProviderFact, StorageV2Record, StorageV2SourceManifest,
 };
 use crate::shipping::storage_v2::{StorageV2Render, StorageV2RenderRecord, StorageV2SessionFacts};
 use crate::state::cursor_store_records;
@@ -885,7 +885,7 @@ pub(crate) fn prepare_next_envelope_body_for_lane(
     let pending = pending_source_envelope::load_for_epoch(conn, prepared.source_epoch)?
         .context("prepared storage-v2 envelope is not durable")?;
     validate_pending_matches_prepared(&pending, &prepared)?;
-    let body = decode_zstd(&pending.request_body_zstd, "storage-v2 request body")?;
+    let body = wire_body(&pending, capabilities)?;
     Ok(Some((body, prepared)))
 }
 
@@ -1061,7 +1061,8 @@ pub(crate) async fn ship_prepared_envelope(
         .ship_storage_v2_body(
             &capabilities.ingest_path,
             lane,
-            decode_zstd(&pending.request_body_zstd, "storage-v2 request body")?,
+            wire_body(&pending, capabilities)?,
+            capabilities.envelope_body_encoding(),
             &pending.envelope_id,
             Some(request_timeout),
         )
@@ -1424,7 +1425,8 @@ async fn reexamine_blocked_source(
             .ship_storage_v2_body(
                 &capabilities.ingest_path,
                 lane,
-                decode_zstd(&pending.request_body_zstd, "storage-v2 request body")?,
+                wire_body(&pending, capabilities)?,
+                capabilities.envelope_body_encoding(),
                 &pending.envelope_id,
                 Some(request_timeout),
             )
@@ -1483,7 +1485,8 @@ async fn reexamine_blocked_source(
             .ship_storage_v2_body(
                 &capabilities.ingest_path,
                 lane,
-                decode_zstd(&pending.request_body_zstd, "storage-v2 request body")?,
+                wire_body(&pending, capabilities)?,
+                capabilities.envelope_body_encoding(),
                 &pending.envelope_id,
                 Some(request_timeout),
             )
@@ -4478,6 +4481,22 @@ fn encode_zstd(bytes: &[u8], label: &str) -> Result<Vec<u8>> {
         .with_context(|| format!("compressing durable {label}"))
 }
 
+/// The request body to put on the wire for this host. Envelopes are stored as
+/// zstd; a host that accepts zstd gets those exact bytes, so ambiguous outcomes
+/// still retry byte-identical content. Only an identity-only host needs them
+/// decompressed.
+fn wire_body(
+    pending: &PendingSourceEnvelope,
+    capabilities: &StorageV2Capabilities,
+) -> Result<Vec<u8>> {
+    match capabilities.envelope_body_encoding() {
+        StorageV2BodyEncoding::Zstd => Ok(pending.request_body_zstd.clone()),
+        StorageV2BodyEncoding::Identity => {
+            decode_zstd(&pending.request_body_zstd, "storage-v2 request body")
+        }
+    }
+}
+
 fn decode_zstd(bytes: &[u8], label: &str) -> Result<Vec<u8>> {
     zstd::stream::decode_all(Cursor::new(bytes))
         .with_context(|| format!("decompressing durable {label}"))
@@ -5466,6 +5485,7 @@ mod tests {
             range_kinds: vec!["byte_offset".to_string(), "record_ordinal".to_string()],
             lanes: vec!["live".to_string(), "repair".to_string()],
             lane_header: "X-Longhouse-Storage-Lane".to_string(),
+            envelope_content_encodings: Vec::new(),
         }
     }
 
@@ -7715,6 +7735,59 @@ mod tests {
             source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
             0
         );
+    }
+
+    /// A host that accepts zstd receives the envelope bytes exactly as stored,
+    /// so the wire carries the compressed form and an ambiguous outcome still
+    /// retries identical bytes. An identity-only host gets them decompressed.
+    #[test]
+    fn zstd_host_receives_the_stored_envelope_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        fs::write(
+            &path,
+            b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n",
+        )
+        .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let identity_host = capabilities();
+        let mut zstd_host = capabilities();
+        zstd_host.envelope_content_encodings = vec!["zstd".to_string(), "identity".to_string()];
+        assert_eq!(
+            identity_host.envelope_body_encoding(),
+            StorageV2BodyEncoding::Identity
+        );
+        assert_eq!(
+            zstd_host.envelope_body_encoding(),
+            StorageV2BodyEncoding::Zstd
+        );
+
+        let (identity_body, prepared) = prepare_next_envelope_body_for_lane(
+            &mut conn,
+            &identity_host,
+            &path,
+            "claude",
+            "repair",
+        )
+        .unwrap()
+        .unwrap();
+        let (zstd_body, reloaded) =
+            prepare_next_envelope_body_for_lane(&mut conn, &zstd_host, &path, "claude", "repair")
+                .unwrap()
+                .unwrap();
+        let pending = pending_source_envelope::load_for_epoch(&conn, prepared.source_epoch)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            reloaded.envelope.expected_envelope_id,
+            prepared.envelope.expected_envelope_id
+        );
+        assert_eq!(zstd_body, pending.request_body_zstd);
+        assert_eq!(decode_zstd(&zstd_body, "test").unwrap(), identity_body);
+        serde_json::from_slice::<serde_json::Value>(&identity_body).unwrap();
     }
 
     #[test]

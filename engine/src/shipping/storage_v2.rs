@@ -25,6 +25,10 @@ pub struct StorageV2Capabilities {
     pub range_kinds: Vec<String>,
     pub lanes: Vec<String>,
     pub lane_header: String,
+    /// Envelope body encodings the Runtime Host accepts. Absent on older
+    /// hosts, which accept identity only.
+    #[serde(default)]
+    pub envelope_content_encodings: Vec<String>,
 }
 
 impl StorageV2Capabilities {
@@ -57,6 +61,36 @@ impl StorageV2Capabilities {
             bail!("Runtime Host returned an incompatible storage-v2 capability contract");
         }
         Ok(())
+    }
+
+    /// The encoding for envelope bodies on this host. The engine stores every
+    /// envelope as zstd, so a host that accepts zstd receives the stored bytes
+    /// as-is and the wire carries several times fewer bytes.
+    pub fn envelope_body_encoding(&self) -> StorageV2BodyEncoding {
+        if self
+            .envelope_content_encodings
+            .iter()
+            .any(|encoding| encoding == "zstd")
+        {
+            StorageV2BodyEncoding::Zstd
+        } else {
+            StorageV2BodyEncoding::Identity
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StorageV2BodyEncoding {
+    Identity,
+    Zstd,
+}
+
+impl StorageV2BodyEncoding {
+    pub fn header_value(self) -> &'static str {
+        match self {
+            Self::Identity => "identity",
+            Self::Zstd => "zstd",
+        }
     }
 }
 
@@ -352,6 +386,42 @@ pub fn require_storage_v2_cutover(
 mod tests {
     use super::*;
 
+    #[test]
+    fn hosts_without_envelope_encodings_negotiate_identity() {
+        let older_host: StorageV2Capabilities = serde_json::from_value(serde_json::json!({
+            "protocol_version": 2,
+            "cutover": true,
+            "tenant_id": "tenant-a",
+            "machine_id": "cinder",
+            "ingest_path": STORAGE_V2_ENVELOPES_PATH,
+            "max_wire_body_bytes": 12 * 1024 * 1024,
+            "max_raw_record_bytes": 4 * 1024 * 1024,
+            "max_records": 10_000,
+            "media_claim_path": "/api/agents/storage/v2/media/claims",
+            "media_upload_path_template": "/api/agents/storage/v2/media/{sha256}",
+            "max_media_bytes": 32 * 1024 * 1024,
+            "max_media_claims": 512,
+            "range_kinds": ["byte_offset", "record_ordinal"],
+            "lanes": ["live", "repair"],
+            "lane_header": STORAGE_V2_LANE_HEADER,
+        }))
+        .unwrap();
+        older_host.validate("cinder").unwrap();
+        assert_eq!(
+            older_host.envelope_body_encoding(),
+            StorageV2BodyEncoding::Identity
+        );
+
+        let current_host = StorageV2Capabilities {
+            envelope_content_encodings: vec!["zstd".to_string(), "identity".to_string()],
+            ..older_host
+        };
+        assert_eq!(
+            current_host.envelope_body_encoding(),
+            StorageV2BodyEncoding::Zstd
+        );
+    }
+
     fn capabilities(cutover: bool) -> StorageV2Capabilities {
         StorageV2Capabilities {
             protocol_version: 2,
@@ -369,6 +439,7 @@ mod tests {
             range_kinds: vec!["byte_offset".to_string(), "record_ordinal".to_string()],
             lanes: vec!["live".to_string(), "repair".to_string()],
             lane_header: STORAGE_V2_LANE_HEADER.to_string(),
+            envelope_content_encodings: Vec::new(),
         }
     }
 
@@ -446,6 +517,7 @@ mod tests {
             range_kinds: vec!["byte_offset".to_string(), "record_ordinal".to_string()],
             lanes: vec!["live".to_string(), "repair".to_string()],
             lane_header: STORAGE_V2_LANE_HEADER.to_string(),
+            envelope_content_encodings: Vec::new(),
         };
         valid.validate("cinder").unwrap();
         let mut drift = valid;

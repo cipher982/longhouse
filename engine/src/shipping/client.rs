@@ -26,7 +26,8 @@ pub(crate) const STARTUP_NEGOTIATION_BACKOFF: Duration = Duration::from_secs(5);
 pub(crate) const STARTUP_NEGOTIATION_TIMEOUT: Duration = Duration::from_secs(5);
 use crate::pipeline::compressor::{content_encoding, CompressionAlgo};
 use crate::shipping::storage_v2::{
-    StorageV2Capabilities, StorageV2Envelope, StorageV2Receipt, StorageV2SourceManifest,
+    StorageV2BodyEncoding, StorageV2Capabilities, StorageV2Envelope, StorageV2Receipt,
+    StorageV2SourceManifest,
 };
 use crate::shipping::storage_v2::{
     STORAGE_V2_CAPABILITIES_PATH, STORAGE_V2_LANE_HEADER, STORAGE_V2_SOURCE_EPOCHS_PATH,
@@ -495,6 +496,7 @@ impl ShipperClient {
             ingest_path,
             lane,
             body,
+            StorageV2BodyEncoding::Identity,
             &envelope.expected_envelope_id,
             request_timeout,
         )
@@ -508,6 +510,7 @@ impl ShipperClient {
         ingest_path: &str,
         lane: &str,
         body: Vec<u8>,
+        encoding: StorageV2BodyEncoding,
         expected_envelope_id: &str,
         request_timeout: Option<Duration>,
     ) -> Result<StorageV2Receipt> {
@@ -519,7 +522,7 @@ impl ShipperClient {
             .client
             .post(&url)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .header(reqwest::header::CONTENT_ENCODING, "identity")
+            .header(reqwest::header::CONTENT_ENCODING, encoding.header_value())
             .header(STORAGE_V2_LANE_HEADER, lane)
             .body(body);
         if let Some(request_timeout) = request_timeout {
@@ -749,6 +752,52 @@ mod tests {
 
         assert!(is_connect_error(&error));
         assert!(!is_connect_error(&anyhow::anyhow!("HTTP 409 conflict")));
+    }
+
+    /// The negotiated encoding is what goes on the wire.
+    #[tokio::test]
+    async fn storage_v2_envelope_post_declares_the_negotiated_encoding() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 4096];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = socket.read(&mut buffer).await.unwrap();
+                assert!(read > 0);
+                request.extend_from_slice(&buffer[..read]);
+            }
+            socket
+                .write_all(b"HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\n\r\n")
+                .await
+                .unwrap();
+            String::from_utf8_lossy(&request).to_ascii_lowercase()
+        });
+
+        let config = crate::config::ShipperConfig {
+            api_url: format!("http://{address}"),
+            ..Default::default()
+        };
+        let client = super::ShipperClient::with_compression(
+            &config,
+            crate::pipeline::compressor::CompressionAlgo::Gzip,
+        )
+        .unwrap();
+        let _ = client
+            .ship_storage_v2_body(
+                crate::shipping::storage_v2::STORAGE_V2_ENVELOPES_PATH,
+                "repair",
+                b"compressed".to_vec(),
+                crate::shipping::storage_v2::StorageV2BodyEncoding::Zstd,
+                "envelope",
+                Some(Duration::from_secs(5)),
+            )
+            .await;
+        let request = server.await.unwrap();
+        assert!(request.contains("content-encoding: zstd\r\n"), "{request}");
     }
 
     #[test]
