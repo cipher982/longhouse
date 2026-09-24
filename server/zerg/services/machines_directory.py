@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 from typing import Any
+from typing import Mapping
 
 from zerg.services.machine_control_channel import MachineControlChannelRegistry
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
@@ -26,6 +27,28 @@ CONTROL_CONNECTED = "connected"
 CONTROL_DISCONNECTED = "disconnected"
 LAUNCH_BLOCKED_CONTROL_DOWN = "control_down"
 LAUNCH_BLOCKED_NO_LAUNCH_SUPPORT = "no_launch_support"
+LAUNCH_BLOCKED_PROVIDERS_NOT_READY = "providers_not_ready"
+# Readiness states that mean a Console turn would fail before the provider
+# does any work. "unknown" stays launchable: a provider Longhouse cannot probe
+# is not evidence of a problem.
+UNLAUNCHABLE_READINESS_STATES = frozenset({"not_authenticated", "cli_missing"})
+
+
+def provider_not_ready_detail(registry: Any, *, owner_id: int, device_id: str, provider: str) -> dict[str, str] | None:
+    """Why a Console launch for ``provider`` on ``device_id`` would fail now, or None.
+
+    Shared by every Console create route: the first turn would fail before the
+    provider did any work, after the user had already typed their message.
+    """
+    readiness = registry.provider_readiness_state(owner_id=owner_id, device_id=device_id, provider=provider) or {}
+    state = readiness.get("state")
+    if state not in UNLAUNCHABLE_READINESS_STATES:
+        return None
+    return {
+        "code": "provider_not_ready",
+        "reason": str(state),
+        "message": str(readiness.get("remediation") or f"{provider} is not ready on {device_id}"),
+    }
 
 
 @dataclass(frozen=True)
@@ -34,16 +57,30 @@ class MachineLaunchProviderOption:
 
 
 @dataclass(frozen=True)
+class MachineLaunchUnavailableProvider:
+    provider: str
+    reason: str
+    remediation: str | None
+
+
+@dataclass(frozen=True)
 class MachineLaunchProjection:
     blocked_by: str | None
     providers: tuple[MachineLaunchProviderOption, ...]
     default_provider: str | None
+    # Providers this engine could drive but whose readiness says a turn would
+    # fail right now (for example, signed out). Listed separately so clients
+    # never offer them as launchable, yet can say what to fix.
+    unavailable_providers: tuple[MachineLaunchUnavailableProvider, ...] = ()
 
     def to_response(self) -> dict[str, object]:
         return {
             "blocked_by": self.blocked_by,
             "providers": [{"provider": option.provider} for option in self.providers],
             "default_provider": self.default_provider,
+            "unavailable_providers": [
+                {"provider": item.provider, "reason": item.reason, "remediation": item.remediation} for item in self.unavailable_providers
+            ],
         }
 
 
@@ -90,17 +127,38 @@ def _launch_projection(
     operations_by_provider: dict[str, tuple[str, ...]],
     *,
     connected: bool,
+    provider_readiness: Mapping[str, Mapping[str, str]] | None = None,
 ) -> MachineLaunchProjection:
+    readiness = provider_readiness or {}
     options: list[MachineLaunchProviderOption] = []
+    unavailable: list[MachineLaunchUnavailableProvider] = []
     for provider, operations in sorted(operations_by_provider.items()):
-        if "turn_start" in operations:
-            options.append(MachineLaunchProviderOption(provider=provider))
+        if "turn_start" not in operations:
+            continue
+        state = (readiness.get(provider) or {}).get("state")
+        if state in UNLAUNCHABLE_READINESS_STATES:
+            unavailable.append(
+                MachineLaunchUnavailableProvider(
+                    provider=provider,
+                    reason=state,
+                    remediation=(readiness.get(provider) or {}).get("remediation"),
+                )
+            )
+            continue
+        options.append(MachineLaunchProviderOption(provider=provider))
 
     if not options:
+        if not connected:
+            blocked_by = LAUNCH_BLOCKED_CONTROL_DOWN
+        elif unavailable:
+            blocked_by = LAUNCH_BLOCKED_PROVIDERS_NOT_READY
+        else:
+            blocked_by = LAUNCH_BLOCKED_NO_LAUNCH_SUPPORT
         return MachineLaunchProjection(
-            blocked_by=LAUNCH_BLOCKED_NO_LAUNCH_SUPPORT if connected else LAUNCH_BLOCKED_CONTROL_DOWN,
+            blocked_by=blocked_by,
             providers=(),
             default_provider=None,
+            unavailable_providers=tuple(unavailable),
         )
 
     candidates = [option.provider for option in options]
@@ -109,6 +167,7 @@ def _launch_projection(
         blocked_by=None,
         providers=tuple(options),
         default_provider=default_provider,
+        unavailable_providers=tuple(unavailable),
     )
 
 
@@ -157,7 +216,11 @@ def build_machines_directory(
             supports,
             connected=True,
         )
-        launch = _launch_projection(control_operations_by_provider, connected=True)
+        launch = _launch_projection(
+            control_operations_by_provider,
+            connected=True,
+            provider_readiness=conn_info.provider_readiness,
+        )
         entry = MachineEntry(
             device_id=conn_info.device_id,
             machine_name=enrolled.get(conn_info.device_id, (None, None))[1] or conn_info.machine_name or conn_info.device_id,

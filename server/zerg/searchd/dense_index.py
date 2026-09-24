@@ -41,6 +41,34 @@ import numpy as np
 _DEDUPE_OVERFETCH = 4
 
 
+class ResidentIndexIntegrityError(RuntimeError):
+    """A failed update left the resident snapshot unsafe to serve."""
+
+
+# Values `_build` writes into unused capacity; `_grow` must pad identically.
+_TAIL_DEFAULTS = {
+    "session_ids": None,
+    "episode_ordinals": -1,
+    "generation_ids": None,
+    "revisions": -1,
+    "start_order_times": -1,
+    "event_index_starts": -1,
+    "event_index_ends": -1,
+    "owner_ids": None,
+    "projects": "",
+    "providers": "",
+    "environments": "",
+    "hidden_from_default_timeline": False,
+    "test_scope_visible": False,
+    "user_hidden_from_timeline": False,
+    "user_states": "active",
+    "tombstoned": False,
+    "started_ats": "",
+    "content_hashes": None,
+    "active": False,
+}
+
+
 @dataclass(frozen=True)
 class _Snapshot:
     """One consistent view. Never mutated after publication."""
@@ -64,10 +92,12 @@ class _Snapshot:
     tombstoned: np.ndarray  # (N,) bool
     started_ats: np.ndarray  # (N,) object
     content_hashes: np.ndarray  # (N,) object
+    active: np.ndarray  # (capacity,) bool
+    count: int
 
     @property
     def size(self) -> int:
-        return int(self.vectors.shape[0])
+        return self.count
 
 
 @dataclass(frozen=True)
@@ -140,8 +170,10 @@ _EMPTY = _Snapshot(
             ("tombstoned", bool),
             ("started_ats", object),
             ("content_hashes", object),
+            ("active", bool),
         )
     },
+    count=0,
 )
 
 
@@ -174,7 +206,10 @@ class ResidentEpisodeIndex:
         )
         self._blocking_session_ids: frozenset[str] = frozenset()
         self._nonrelational_blocking_session_ids: frozenset[str] = frozenset()
-        self._write_lock = threading.Lock()
+        self._write_lock = threading.RLock()
+        self._slots: dict[tuple[str, int], int] = {}
+        self._session_slots: dict[str, set[int]] = {}
+        self._session_checks: dict[str, tuple[int, int, int, bool]] = {}
 
     @property
     def ready(self) -> bool:
@@ -279,10 +314,158 @@ class ResidentEpisodeIndex:
         valid_rows, coverage, blocking_session_ids, nonrelational_blocking_session_ids = self._validate_coverage(publications, rows)
         with self._write_lock:
             self._snapshot = self._build(valid_rows)
+            self._slots = {(str(row["session_id"]), int(row["episode_ordinal"])): slot for slot, row in enumerate(valid_rows)}
+            self._session_slots = {}
+            for slot, row in enumerate(valid_rows):
+                self._session_slots.setdefault(str(row["session_id"]), set()).add(slot)
+            self._session_checks = {}
             self._coverage = coverage
             self._blocking_session_ids = blocking_session_ids
             self._nonrelational_blocking_session_ids = nonrelational_blocking_session_ids
             self._loaded = True
+
+    def refresh_session(self, connection, session_id: str) -> None:
+        """Apply one committed session's vectors and filter metadata in place.
+
+        Queries hold ``_write_lock`` from filter construction through scoring and
+        result capture.  A writer therefore cannot replace a reused slot's
+        vector before its metadata (or vice versa) is observed by a reader.
+        The slab is intentionally mutable only behind that lock; the full load
+        path remains the recovery mechanism for any failed incremental apply.
+        """
+
+        rows = connection.execute(
+            """
+            SELECT e.session_id, e.episode_ordinal, e.generation_id, e.revision, e.embedding,
+                   e.start_order_time_us, e.event_index_start, e.event_index_end,
+                   e.owner_id, e.content_hash, s.project, s.provider, s.environment, s.started_at,
+                   s.hidden_from_default_timeline, s.test_scope_visible, s.user_hidden_from_timeline,
+                   s.user_state, s.tombstoned
+            FROM episode_embeddings e JOIN session_index s
+              ON s.session_id = e.session_id
+             AND s.generation_id = e.generation_id AND s.indexed_through = e.revision
+            WHERE e.model = ? AND e.dims = ? AND s.session_id = ?
+            ORDER BY e.episode_ordinal ASC
+            """,
+            (self._model, self._dims, session_id),
+        ).fetchall()
+        publications = connection.execute(
+            """SELECT s.session_id, p.expected_episode_count FROM session_index s
+                 LEFT JOIN embedding_publications p ON p.session_id=s.session_id
+                  AND p.model=? AND p.dims=? AND p.generation_id=s.generation_id
+                  AND p.revision=s.indexed_through WHERE s.session_id=?""",
+            (self._model, self._dims, session_id),
+        ).fetchall()
+        valid_rows, session_coverage, _, _ = self._validate_coverage(publications, rows)
+        if not session_coverage.integrity_ready:
+            raise ValueError("committed session has invalid resident embedding rows")
+        summary = connection.execute(
+            """SELECT COUNT(*) AS sessions, COUNT(p.session_id) AS published,
+                      COALESCE(SUM(p.expected_episode_count), 0) AS expected
+                 FROM session_index s LEFT JOIN embedding_publications p
+                   ON p.session_id=s.session_id AND p.model=? AND p.dims=?
+                  AND p.generation_id=s.generation_id AND p.revision=s.indexed_through""",
+            (self._model, self._dims),
+        ).fetchone()
+        missing_session_ids = tuple(
+            str(row["session_id"])
+            for row in connection.execute(
+                """SELECT s.session_id FROM session_index s
+                     LEFT JOIN embedding_publications p
+                       ON p.session_id=s.session_id AND p.model=? AND p.dims=?
+                      AND p.generation_id=s.generation_id AND p.revision=s.indexed_through
+                    WHERE p.session_id IS NULL ORDER BY s.session_id ASC LIMIT 20""",
+                (self._model, self._dims),
+            ).fetchall()
+        )
+        with self._write_lock:
+            try:
+                snapshot = self._copy_snapshot(self._snapshot)
+                slots = self._slots.copy()
+                session_slots = {key: value.copy() for key, value in self._session_slots.items()}
+                old_slots = session_slots.pop(session_id, set())
+                for slot in old_slots:
+                    snapshot.active[slot] = False
+                    slots.pop((str(snapshot.session_ids[slot]), int(snapshot.episode_ordinals[slot])), None)
+                post_update_count = snapshot.count + len(valid_rows) - len(old_slots)
+                if len(valid_rows) > int((~snapshot.active).sum()):
+                    snapshot = self._grow(snapshot, post_update_count)
+                free_slots = iter(np.flatnonzero(~snapshot.active).tolist())
+                new_slots: set[int] = set()
+                for row in valid_rows:
+                    slot = next(free_slots)
+                    self._write_slot(snapshot, slot, row)
+                    snapshot.active[slot] = True
+                    slots[(str(row["session_id"]), int(row["episode_ordinal"]))] = slot
+                    new_slots.add(slot)
+                if new_slots:
+                    session_slots[session_id] = new_slots
+                snapshot = replace(snapshot, count=post_update_count)
+                expected = int(summary["expected"])
+                coverage = replace(
+                    self._coverage,
+                    complete=int(summary["sessions"]) == int(summary["published"]) and snapshot.count == expected,
+                    expected_sessions=int(summary["sessions"]),
+                    published_sessions=int(summary["published"]),
+                    expected_episodes=expected,
+                    current_episodes=snapshot.count,
+                    missing_session_ids=missing_session_ids,
+                    stale=False,
+                )
+                self._snapshot = snapshot
+                self._slots = slots
+                self._session_slots = session_slots
+                self._coverage = coverage
+            except BaseException:
+                self._coverage = replace(self._coverage, integrity_ready=False, stale=True)
+                raise
+
+    @staticmethod
+    def _copy_snapshot(snapshot: _Snapshot) -> _Snapshot:
+        return _Snapshot(**{name: value.copy() if isinstance(value, np.ndarray) else value for name, value in vars(snapshot).items()})
+
+    def _grow(self, snapshot: _Snapshot, minimum_count: int) -> _Snapshot:
+        capacity = max(snapshot.vectors.shape[0] * 2, minimum_count, 8)
+        vectors = np.empty((capacity, self._dims), dtype="float32")
+        if snapshot.vectors.shape[1] == self._dims:
+            vectors[: snapshot.vectors.shape[0]] = snapshot.vectors
+        values = {"vectors": vectors, "count": snapshot.count}
+        for name in _Snapshot.__dataclass_fields__:
+            if name in values or name == "vectors":
+                continue
+            source = getattr(snapshot, name)
+            grown = np.empty(capacity, dtype=source.dtype)
+            grown[: source.shape[0]] = source
+            # Pad exactly like `_build`: filters compare the whole array, so an
+            # unset object slot (None) would break `started_ats >= since_iso`.
+            grown[source.shape[0] :] = _TAIL_DEFAULTS[name]
+            values[name] = grown
+        return _Snapshot(**values)
+
+    @staticmethod
+    def _write_slot(snapshot: _Snapshot, slot: int, row) -> None:
+        snapshot.vectors[slot] = np.frombuffer(row["embedding"], dtype="float32", count=snapshot.vectors.shape[1])
+        for field, key, missing in (
+            ("session_ids", "session_id", None),
+            ("episode_ordinals", "episode_ordinal", -1),
+            ("generation_ids", "generation_id", None),
+            ("revisions", "revision", -1),
+            ("start_order_times", "start_order_time_us", -1),
+            ("event_index_starts", "event_index_start", -1),
+            ("event_index_ends", "event_index_end", -1),
+            ("owner_ids", "owner_id", None),
+            ("projects", "project", ""),
+            ("providers", "provider", ""),
+            ("environments", "environment", ""),
+            ("hidden_from_default_timeline", "hidden_from_default_timeline", False),
+            ("test_scope_visible", "test_scope_visible", False),
+            ("user_hidden_from_timeline", "user_hidden_from_timeline", False),
+            ("user_states", "user_state", "active"),
+            ("tombstoned", "tombstoned", False),
+            ("started_ats", "started_at", ""),
+            ("content_hashes", "content_hash", None),
+        ):
+            getattr(snapshot, field)[slot] = row[key] if row[key] is not None else missing
 
     def _validate_coverage(self, publications, rows) -> tuple[list, EmbeddingCoverage, frozenset[str], frozenset[str]]:
         expected_by_session = {
@@ -353,7 +536,8 @@ class ResidentEpisodeIndex:
         count = len(rows)
         if count == 0:
             return _EMPTY
-        vectors = np.empty((count, self._dims), dtype="float32")
+        capacity = max(count + max(8, count // 2), 8)
+        vectors = np.empty((capacity, self._dims), dtype="float32")
         for index, row in enumerate(rows):
             vectors[index] = np.frombuffer(row["embedding"], dtype="float32", count=self._dims)
         # Coverage validation proved these are finite unit vectors. Do not
@@ -361,7 +545,13 @@ class ResidentEpisodeIndex:
         # hide a broken projector behind plausible scores.
 
         def column(key, dtype, missing=None):
-            return np.array([(row[key] if row[key] is not None else missing) for row in rows], dtype=dtype)
+            values = np.empty(capacity, dtype=dtype)
+            values[:count] = [(row[key] if row[key] is not None else missing) for row in rows]
+            if dtype is object:
+                values[count:] = missing
+            else:
+                values[count:] = missing
+            return values
 
         return _Snapshot(
             vectors=vectors,
@@ -383,6 +573,8 @@ class ResidentEpisodeIndex:
             tombstoned=column("tombstoned", bool, False),
             started_ats=column("started_at", object, ""),
             content_hashes=column("content_hash", object),
+            active=np.array([True] * count + [False] * (capacity - count), dtype=bool),
+            count=count,
         )
 
     def search(
@@ -398,84 +590,88 @@ class ResidentEpisodeIndex:
         since_iso: str | None = None,
         include_origin_hidden: bool = False,
         include_test: bool = False,
+        require_integrity: bool = False,
     ) -> list[dict[str, object]]:
-        snapshot = self._snapshot  # one atomic read; immutable thereafter
-        if not self._loaded:
-            raise RuntimeError("resident episode index is not loaded")
-        if snapshot.size == 0:
-            return []
+        with self._write_lock:
+            snapshot = self._snapshot
+            if not self._loaded:
+                raise RuntimeError("resident episode index is not loaded")
+            if require_integrity and not self._coverage.integrity_ready:
+                raise ResidentIndexIntegrityError("resident episode index is not integrity-ready")
+            if snapshot.size == 0:
+                return []
 
-        keep = snapshot.owner_ids == owner_id
-        if not include_origin_hidden:
-            keep &= ~snapshot.hidden_from_default_timeline | (include_test & snapshot.test_scope_visible)
-        keep &= ~snapshot.user_hidden_from_timeline
-        keep &= ~snapshot.tombstoned
-        keep &= ~np.isin(snapshot.user_states, ("archived", "snoozed", "deleted"))
-        if project:
-            keep &= snapshot.projects == project
-        if provider:
-            keep &= snapshot.providers == provider
-        if environment:
-            keep &= snapshot.environments == environment
-        if exclude_environments:
-            for environment in exclude_environments:
-                keep &= snapshot.environments != environment
-        if since_iso:
-            # started_at is an ISO-8601 string in a fixed format, so lexical
-            # comparison is chronological and avoids parsing 83k timestamps.
-            keep &= snapshot.started_ats >= since_iso
+            keep = snapshot.active & (snapshot.owner_ids == owner_id)
+            if not include_origin_hidden:
+                keep &= ~snapshot.hidden_from_default_timeline | (include_test & snapshot.test_scope_visible)
+            keep &= ~snapshot.user_hidden_from_timeline
+            keep &= ~snapshot.tombstoned
+            keep &= ~np.isin(snapshot.user_states, ("archived", "snoozed", "deleted"))
+            if project:
+                keep &= snapshot.projects == project
+            if provider:
+                keep &= snapshot.providers == provider
+            if environment:
+                keep &= snapshot.environments == environment
+            if exclude_environments:
+                for excluded_environment in exclude_environments:
+                    keep &= snapshot.environments != excluded_environment
+            if since_iso:
+                # started_at is an ISO-8601 string in a fixed format, so lexical
+                # comparison is chronological and avoids parsing 83k timestamps.
+                keep &= snapshot.started_ats >= since_iso
 
-        candidates = np.flatnonzero(keep)
-        if candidates.size == 0:
-            return []
+            candidates = np.flatnonzero(keep)
+            if candidates.size == 0:
+                return []
 
-        vector = np.asarray(query, dtype="float32").reshape(-1)
-        if vector.shape != (self._dims,) or not np.isfinite(vector).all():
-            raise ValueError(f"query vector must contain exactly {self._dims} finite dimensions")
-        norm = float(np.linalg.norm(vector))
-        if norm <= 1e-6:
-            raise ValueError("query vector must be nonzero")
-        vector = vector / norm
-        scores = snapshot.vectors[candidates] @ vector
+            vector = np.asarray(query, dtype="float32").reshape(-1)
+            if vector.shape != (self._dims,) or not np.isfinite(vector).all():
+                raise ValueError(f"query vector must contain exactly {self._dims} finite dimensions")
+            norm = float(np.linalg.norm(vector))
+            if norm <= 1e-6:
+                raise ValueError("query vector must be nonzero")
+            vector = vector / norm
+            scores = snapshot.vectors[candidates] @ vector
 
-        # Over-fetch, then collapse identical episode text. Agents share a lot of
-        # boilerplate -- injected instruction files, repeated preambles, the same
-        # generated scaffolding -- so one phrase can be byte-identical across
-        # dozens of unrelated sessions. Those episodes embed to the same vector
-        # and score identically, and a query that grazes them fills top-k with
-        # copies of one passage while the results that would actually answer it
-        # sit just below the cut.
-        take = min(limit * _DEDUPE_OVERFETCH, candidates.size)
-        # argpartition is O(n); a full sort of 83k scores to take 30 is waste.
-        top = np.argpartition(-scores, take - 1)[:take] if take < scores.size else np.arange(scores.size)
-        top = top[np.argsort(-scores[top])]
+            # Over-fetch, then collapse identical episode text. Agents share a lot of
+            # boilerplate -- injected instruction files, repeated preambles, the same
+            # generated scaffolding -- so one phrase can be byte-identical across
+            # dozens of unrelated sessions. Those episodes embed to the same vector
+            # and score identically, and a query that grazes them fills top-k with
+            # copies of one passage while the results that would actually answer it
+            # sit just below the cut.
+            take = min(limit * _DEDUPE_OVERFETCH, candidates.size)
+            # argpartition is O(n); a full sort of 83k scores to take 30 is waste.
+            top = np.argpartition(-scores, take - 1)[:take] if take < scores.size else np.arange(scores.size)
+            top = top[np.argsort(-scores[top])]
 
-        results = []
-        seen_content: set[str] = set()
-        for position in top:
-            index = candidates[position]
-            content_hash = snapshot.content_hashes[index]
-            # Keep the best-scoring occurrence. Ties break on the sort above, so
-            # a repeated query cannot reorder its own results.
-            if content_hash is not None:
-                if content_hash in seen_content:
-                    continue
-                seen_content.add(str(content_hash))
-            start = int(snapshot.start_order_times[index])
-            results.append(
-                {
-                    "session_id": str(snapshot.session_ids[index]),
-                    "episode_ordinal": int(snapshot.episode_ordinals[index]),
-                    "score": float(scores[position]),
-                    "event_index_start": int(snapshot.event_index_starts[index]),
-                    "event_index_end": int(snapshot.event_index_ends[index]),
-                    "generation_id": str(snapshot.generation_ids[index]),
-                    "start_order_time_us": None if start < 0 else start,
-                    "project": str(snapshot.projects[index]) or None,
-                    "provider": str(snapshot.providers[index]) or None,
-                    "started_at": str(snapshot.started_ats[index]) or None,
-                }
-            )
-            if len(results) >= limit:
-                break
-        return results
+            results = []
+            seen_content: set[str] = set()
+            for position in top:
+                index = candidates[position]
+                content_hash = snapshot.content_hashes[index]
+                # Keep the best-scoring occurrence. Ties break on the sort above, so
+                # a repeated query cannot reorder its own results.
+                if content_hash is not None:
+                    if content_hash in seen_content:
+                        continue
+                    seen_content.add(str(content_hash))
+                start = int(snapshot.start_order_times[index])
+                results.append(
+                    {
+                        "session_id": str(snapshot.session_ids[index]),
+                        "episode_ordinal": int(snapshot.episode_ordinals[index]),
+                        "score": float(scores[position]),
+                        "event_index_start": int(snapshot.event_index_starts[index]),
+                        "event_index_end": int(snapshot.event_index_ends[index]),
+                        "generation_id": str(snapshot.generation_ids[index]),
+                        "start_order_time_us": None if start < 0 else start,
+                        "project": str(snapshot.projects[index]) or None,
+                        "provider": str(snapshot.providers[index]) or None,
+                        "started_at": str(snapshot.started_ats[index]) or None,
+                    }
+                )
+                if len(results) >= limit:
+                    break
+            return results

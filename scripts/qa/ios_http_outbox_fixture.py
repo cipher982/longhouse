@@ -651,8 +651,6 @@ def timeline_card(session_id: str) -> dict[str, Any]:
         "thread_id": session_id,
         "timeline_anchor_at": NOW,
         "head": session,
-        "detail": session,
-        "root": session,
         "continuation_count": 0,
         "started_origin_label": "HTTP fixture",
         "head_origin_label": "HTTP fixture",

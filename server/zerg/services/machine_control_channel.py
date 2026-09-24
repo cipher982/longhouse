@@ -128,6 +128,48 @@ class MachineControlChannelRegistry:
             )
         logger.info("Registered machine control channel for owner=%s device=%s", owner_id, device_id)
 
+    async def update_capabilities(
+        self,
+        *,
+        owner_id: int,
+        device_id: str,
+        websocket: WebSocket,
+        supports: list[str] | tuple[str, ...] | set[str] | frozenset[str] | None,
+        provider_readiness: Mapping[str, Any] | None,
+    ) -> bool:
+        """Replace supports/readiness from a live ``readiness_update`` frame.
+
+        The hello frame is only a snapshot: a user who signs in to a provider
+        or installs its CLI after the engine connected would otherwise stay
+        "not ready" until the next reconnect. Only the connection that sent
+        the frame may update its own entry.
+        """
+        key = (owner_id, device_id)
+        async with self._lock:
+            connection = self._connections.get(key)
+            if connection is None or connection.websocket is not websocket:
+                return False
+            info = connection.info
+            connection.info = MachineControlConnectionInfo(
+                owner_id=info.owner_id,
+                device_id=info.device_id,
+                machine_name=info.machine_name,
+                engine_build=info.engine_build,
+                supports=(frozenset(str(item) for item in supports if str(item).strip()) if supports is not None else info.supports),
+                provider_readiness=(
+                    _normalized_readiness(provider_readiness) if provider_readiness is not None else info.provider_readiness
+                ),
+                connected_at=info.connected_at,
+                last_seen_at=_utc_now(),
+            )
+        return True
+
+    def provider_readiness_state(self, *, owner_id: int, device_id: str, provider: str) -> Mapping[str, Any] | None:
+        info = self.info(owner_id=owner_id, device_id=device_id)
+        if info is None:
+            return None
+        return info.provider_readiness.get(provider)
+
     async def unregister(self, *, owner_id: int, device_id: str, websocket: WebSocket) -> bool:
         key = (owner_id, device_id)
         async with self._lock:

@@ -27,6 +27,7 @@ from zerg.catalogd.protocol import write_frame
 from zerg.embedding_space import ACTIVE_EMBEDDING_DIMS
 from zerg.embedding_space import ACTIVE_EMBEDDING_MODEL
 from zerg.searchd.dense_index import ResidentEpisodeIndex
+from zerg.searchd.dense_index import ResidentIndexIntegrityError
 from zerg.searchd.store import SearchStore
 from zerg.searchd.store import WorklogPageTooLarge
 from zerg.searchd.store import WorklogSnapshotError
@@ -88,7 +89,7 @@ class SearchDaemon:
         self._dense_refresh_task: asyncio.Task[None] | None = None
         self._dense_refresh_generation = 0
         self._dense_refreshed_generation = 0
-        self._dense_refresh_waiters: list[tuple[int, asyncio.Future[None]]] = []
+        self._dense_refresh_waiters: list[tuple[int, str | None, asyncio.Future[None]]] = []
         self._dense_known_unservable = False
         self._closing = False
         self._executor: ThreadPoolExecutor | None = None
@@ -187,7 +188,7 @@ class SearchDaemon:
         # Every refresh waiter represents a mutation already committed to
         # SQLite. A closing daemon need not rebuild a snapshot it will never
         # serve; acknowledge those commits and let the next start load them.
-        for _, waiter in self._dense_refresh_waiters:
+        for _, _, waiter in self._dense_refresh_waiters:
             if not waiter.done():
                 waiter.set_result(None)
         self._dense_refresh_waiters.clear()
@@ -360,7 +361,7 @@ class SearchDaemon:
                 return self._result(
                     request,
                     {
-                        "results": self._dense_index.search(query, **params),
+                        "results": self._dense_index.search(query, require_integrity=True, **params),
                         "coverage": self._dense_index.coverage.as_dict(),
                         **(self._store_identity or {}),
                     },
@@ -435,7 +436,7 @@ class SearchDaemon:
                     raise ValueError("source_commit_seq is invalid")
                 return self._result(
                     request,
-                    await self._run(
+                    await self._run_with_dense_refresh(
                         self._store.reclassify_session_origin,
                         session_id=_uuid(params["session_id"], "session_id"),
                         origin_kind=params["origin_kind"],
@@ -465,7 +466,7 @@ class SearchDaemon:
                     raise ValueError("source_commit_seq is invalid")
                 return self._result(
                     request,
-                    await self._run(
+                    await self._run_with_dense_refresh(
                         self._store.reconcile_session_visibility,
                         session_id=_uuid(params["session_id"], "session_id"),
                         system_hidden=params["system_hidden"],
@@ -503,6 +504,14 @@ class SearchDaemon:
                 "the requested embedding model or dimensions do not match the resident index",
             )
         except _EmbeddingCoverageIncomplete:
+            details = self._dense_index.coverage.as_dict() if self._dense_index is not None else None
+            return self._error(
+                request,
+                "embedding_coverage_incomplete",
+                "the active embedding corpus is incomplete",
+                details=details,
+            )
+        except ResidentIndexIntegrityError:
             details = self._dense_index.coverage.as_dict() if self._dense_index is not None else None
             return self._error(
                 request,
@@ -576,7 +585,9 @@ class SearchDaemon:
         self._dense_refresh_generation += 1
         generation = self._dense_refresh_generation
         waiter = asyncio.get_running_loop().create_future()
-        self._dense_refresh_waiters.append((generation, waiter))
+        self._dense_refresh_waiters.append(
+            (generation, kwargs.get("session_id") if isinstance(kwargs.get("session_id"), str) else None, waiter)
+        )
         if self._dense_refresh_task is None or self._dense_refresh_task.done():
             self._dense_refresh_task = asyncio.create_task(self._refresh_dense_snapshots(), name="searchd-dense-refresh")
         await waiter
@@ -590,12 +601,27 @@ class SearchDaemon:
                 target_generation = self._dense_refresh_generation
                 assert self._dense_index is not None and self._connection is not None
                 retry_seconds = 0.05
+                full_reload_required = False
                 while True:
                     try:
-                        await asyncio.get_running_loop().run_in_executor(
-                            self._executor,
-                            lambda: self._dense_index.load(self._connection),
-                        )
+                        batch_waiters = [
+                            session_id for generation, session_id, _ in self._dense_refresh_waiters if generation <= target_generation
+                        ]
+                        sessions = {session_id for session_id in batch_waiters if session_id is not None}
+                        # A prior integrity failure has no trustworthy counters
+                        # to carry forward; recovery must validate the complete
+                        # SQLite state before reopening the dense gate.
+                        if sessions and None not in batch_waiters and not self._dense_known_unservable and not full_reload_required:
+                            for session_id in sessions:
+                                await asyncio.get_running_loop().run_in_executor(
+                                    self._executor,
+                                    lambda session_id=session_id: self._dense_index.refresh_session(self._connection, session_id),
+                                )
+                        else:
+                            await asyncio.get_running_loop().run_in_executor(
+                                self._executor,
+                                lambda: self._dense_index.load(self._connection),
+                            )
                         self._dense_known_unservable = not self._dense_index.coverage.integrity_ready
                         break
                     except asyncio.CancelledError:
@@ -606,19 +632,23 @@ class SearchDaemon:
                         # read/allocation failure cannot disable dense recall
                         # until an unrelated future mutation happens to arrive.
                         logger.exception("searchd dense snapshot refresh failed; retrying")
+                        # A session apply can have changed a mutable slab before
+                        # failing. Rebuild from SQLite rather than retrying a
+                        # partial delta against unknown in-memory state.
+                        full_reload_required = True
                         await asyncio.sleep(retry_seconds)
                         retry_seconds = min(1.0, retry_seconds * 2)
                 self._dense_refreshed_generation = target_generation
-                remaining: list[tuple[int, asyncio.Future[None]]] = []
-                for generation, waiter in self._dense_refresh_waiters:
+                remaining: list[tuple[int, str | None, asyncio.Future[None]]] = []
+                for generation, session_id, waiter in self._dense_refresh_waiters:
                     if generation <= target_generation:
                         if not waiter.done():
                             waiter.set_result(None)
                     else:
-                        remaining.append((generation, waiter))
+                        remaining.append((generation, session_id, waiter))
                 self._dense_refresh_waiters = remaining
         except BaseException as exc:
-            for _, waiter in self._dense_refresh_waiters:
+            for _, _, waiter in self._dense_refresh_waiters:
                 if not waiter.done():
                     if isinstance(exc, asyncio.CancelledError):
                         waiter.cancel()

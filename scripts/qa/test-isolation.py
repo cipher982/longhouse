@@ -361,6 +361,19 @@ def load_credentials(path: Path) -> dict[str, str]:
     return data
 
 
+# Backend unit tests put their catalogd databases under /tmp, and on cube that
+# is btrfs shared with every other CI job: fsync tails there reached the
+# catalog's 1 s RPC deadline and failed a few storage tests on most pushes.
+# These lanes test logic, not disk durability, and leave no artifacts in /tmp.
+MEMORY_TMP_TARGETS = frozenset({"test", "test-backend-single"})
+
+
+def memory_backed_tmp(target: str) -> list[str]:
+    if target not in MEMORY_TMP_TARGETS:
+        return []
+    return ["--tmpfs", "/tmp:rw,exec,nosuid,size=2g,mode=1777"]
+
+
 def collect_artifacts(name: str, scratch: Path, destination: Path) -> None:
     # Never let a guest-created symlink redirect a host receipt write.
     for index, source in enumerate(
@@ -598,6 +611,7 @@ def run_container(args: argparse.Namespace, options: dict[str, str]) -> int:
             "2",
             "--memory",
             "4g",
+            *memory_backed_tmp(args.target),
             "--workdir",
             "/work",
             "--entrypoint",
@@ -612,7 +626,8 @@ def run_container(args: argparse.Namespace, options: dict[str, str]) -> int:
         # No bind mounts: even symlinks or absolute writes remain in the container.
         with archive.open("rb") as source:
             docker("cp", "-", name + ":/work", stdin=source)
-        docker("cp", "-", name + ":/tmp", input=configuration.getvalue())
+        # Not /tmp: a tmpfs mounted there at start would hide it.
+        docker("cp", "-", name + ":/opt", input=configuration.getvalue())
         configuration.close()
         print(
             f"[test-isolation] {run_id} target={args.target} network={receipt['network']}",

@@ -293,7 +293,7 @@ export default function SessionsPage() {
   const activityBuckets = useMemo(
     () =>
       bucketTimestamps(
-        sessions.map((card) => card.head.last_activity_at ?? card.detail.last_activity_at),
+        sessions.map((card) => card.head.last_activity_at),
         { nowMs: relativeNowMs, windowMinutes: 60, bucketMinutes: 5 },
       ),
     [sessions, relativeNowMs],
@@ -359,7 +359,7 @@ export default function SessionsPage() {
   }, [queryClient]);
 
   const handleSessionPrefetch = useCallback((thread: TimelineSessionCard) => {
-    prefetchSessionWorkspace(thread.detail.id);
+    prefetchSessionWorkspace(thread.head.id);
   }, [prefetchSessionWorkspace]);
 
   const [launchModalOpen, setLaunchModalOpen] = useState(false);
@@ -383,8 +383,8 @@ export default function SessionsPage() {
 
   // Handle session click - preserve current filters in location state
   const handleSessionClick = useCallback((thread: TimelineSessionCard) => {
-    const detailSession = thread.detail;
-    navigate(buildSessionDetailPath(detailSession, detailSession.match_event_id), {
+    const session = thread.head;
+    navigate(buildSessionDetailPath(session, session.match_event_id), {
       state: { from: location.pathname + location.search },
     });
   }, [navigate, location]);

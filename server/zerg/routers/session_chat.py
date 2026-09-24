@@ -54,6 +54,7 @@ from zerg.services.live_session_inputs import list_recent_live_input_receipts_ca
 from zerg.services.live_session_inputs import load_live_input_receipt_by_client_request
 from zerg.services.live_session_inputs import record_live_input_receipt_best_effort
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.machines_directory import provider_not_ready_detail
 from zerg.services.managed_local_control import answer_pause_request_on_managed_local_session
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
@@ -1245,6 +1246,9 @@ async def create_console_session_endpoint(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": "adapter_unavailable", "message": f"Machine Agent does not advertise {capability}"},
         )
+    not_ready = provider_not_ready_detail(registry, owner_id=int(current_user.id), device_id=body.device_id, provider=provider)
+    if not_ready is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=not_ready)
     try:
         created = await create_empty_console_session(
             db,

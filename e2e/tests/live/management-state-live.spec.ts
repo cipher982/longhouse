@@ -87,7 +87,7 @@ async function openTimelinePage(page: Page, path: string): Promise<void> {
 
 async function findUnmanagedCard(page: Page): Promise<{ card: TimelineCard; path: string }> {
   const data = await fetchTimelinePage(page, { limit: PAGE_LIMIT });
-  const card = data.sessions.find((session) => !isManaged(session.detail));
+  const card = data.sessions.find((session) => !isManaged(session.head));
   expect(card, "Need at least one unmanaged thread in hosted timeline data").toBeTruthy();
   return { card: card!, path: DEFAULT_TIMELINE_PATH };
 }
@@ -96,7 +96,7 @@ async function findAnyManagedCard(page: Page): Promise<TimelineCard | null> {
   for (const provider of ["claude", "codex"]) {
     const firstPage = await fetchTimelinePage(page, { limit: PAGE_LIMIT, provider });
     const pageCount = Math.max(1, Math.ceil(firstPage.total / PAGE_LIMIT));
-    const firstHit = firstPage.sessions.find((session) => isManaged(session.detail));
+    const firstHit = firstPage.sessions.find((session) => isManaged(session.head));
     if (firstHit) {
       return firstHit;
     }
@@ -107,7 +107,7 @@ async function findAnyManagedCard(page: Page): Promise<TimelineCard | null> {
         provider,
         offset: pageIndex * PAGE_LIMIT,
       });
-      const hit = pageData.sessions.find((session) => isManaged(session.detail));
+      const hit = pageData.sessions.find((session) => isManaged(session.head));
       if (hit) {
         return hit;
       }
@@ -121,7 +121,7 @@ async function findManagedCardOnVisibleTimelinePage(
 ): Promise<{ card: TimelineCard; path: string } | null> {
   for (const provider of ["claude", "codex"]) {
     const data = await fetchTimelinePage(page, { limit: PAGE_LIMIT, provider });
-    const card = data.sessions.find((session) => isManaged(session.detail));
+    const card = data.sessions.find((session) => isManaged(session.head));
     if (card) {
       return {
         card,
@@ -143,16 +143,16 @@ test("unmanaged sessions stay honest on hosted timeline and detail", async ({ co
       await openTimelinePage(page, path);
     }
 
-    const unmanagedRow = page.locator(`[data-testid="session-row"][data-session-id="${card.detail.id}"]`);
+    const unmanagedRow = page.locator(`[data-testid="session-row"][data-session-id="${card.head.id}"]`);
     await expect(unmanagedRow, "unmanaged thread row should be rendered").toBeVisible();
     // Ownership chrome moved to the detail page; the inbox row no longer surfaces it.
 
-    await page.goto(`/timeline/${card.detail.id}`, { waitUntil: "domcontentloaded" });
+    await page.goto(`/timeline/${card.head.id}`, { waitUntil: "domcontentloaded" });
     await waitForPageReady(page, { timeout: 20_000 });
     await expect(page.getByTestId("session-management-badge")).toHaveText("Unmanaged");
     await expect(page.getByTestId("session-management-summary")).toContainText("Longhouse imported this");
     await expect(page.getByTestId("session-management-summary")).toContainText(
-      expectedUnmanagedHint(card.detail.provider),
+      expectedUnmanagedHint(card.head.provider),
     );
   } finally {
     await page.close();
@@ -178,13 +178,13 @@ test("managed sessions stay quiet on cards and explicit on detail when present",
       }
 
       const managedRow = page.locator(
-        `[data-testid="session-row"][data-session-id="${visibleManagedCard.card.detail.id}"]`,
+        `[data-testid="session-row"][data-session-id="${visibleManagedCard.card.head.id}"]`,
       );
       await expect(managedRow, "managed thread row should be rendered").toBeVisible();
       // Ownership chrome moved to the detail page; the inbox row no longer surfaces it.
     }
 
-    await page.goto(`/timeline/${anyManagedCard.detail.id}`, { waitUntil: "domcontentloaded" });
+    await page.goto(`/timeline/${anyManagedCard.head.id}`, { waitUntil: "domcontentloaded" });
     await waitForPageReady(page, { timeout: 20_000 });
     await expect(page.getByTestId("session-management-badge")).toHaveText("Managed");
     await expect(page.getByTestId("session-management-summary")).toContainText(

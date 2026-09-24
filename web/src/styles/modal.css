@@ -153,6 +153,29 @@
     font-weight: 400;
   }
 
+  /* Providers the machine can drive but cannot run right now (signed out,
+     CLI missing): never selectable, listed so the user knows what to fix. */
+  .launch-session-card > .launch-unavailable-providers {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin: 0;
+    padding: 0 0.85rem 0.7rem;
+    border-top: 0;
+    list-style: none;
+  }
+
+  .launch-unavailable-providers li {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    color: var(--color-text-muted);
+  }
+
+  .launch-unavailable-providers small {
+    font-size: var(--font-size-sm);
+  }
+
   .launch-choice-copy small .launch-machine-status {
     display: inline-block;
     margin-right: 0.4rem;

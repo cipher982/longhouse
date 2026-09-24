@@ -215,6 +215,24 @@ struct LaunchSessionSheet: View {
                         )
                     }
 
+                    // Signed-out or missing providers are never offered, but a
+                    // user who expected Claude here needs to know why it is not.
+                    ForEach(selectedMachine?.launch.unavailableProviders ?? [], id: \.provider) { item in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(providerDisplayName(item.provider))
+                                .font(.body)
+                                .foregroundStyle(Ember.textSecondary)
+                            Text(item.remediation ?? (item.reason == "cli_missing" ? "Not installed on this machine" : "Sign in required on this machine"))
+                                .font(.subheadline)
+                                .foregroundStyle(Ember.textMuted)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 10)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier("launch-unavailable-provider-\(item.provider)")
+                    }
+
                     Divider().padding(.leading, 16)
 
                     NavigationLink {
@@ -467,6 +485,10 @@ struct LaunchSessionSheet: View {
             return "Needs repair"
         case "runtime_unreachable":
             return "Needs repair"
+        case "providers_not_ready":
+            let items = machine.launch.unavailableProviders
+            if items.count == 1, let remediation = items[0].remediation { return remediation }
+            return "Sign in to \(items.map(\.provider).sorted().joined(separator: " or ")) on this machine"
         default:
             return machine.online ? "Console launch unavailable" : lastSeenLabel(machine)
         }
@@ -898,7 +920,8 @@ private func previewMachine(
     controlChannelStatus: String? = "connected",
     providers: [String] = ["claude", "codex", "opencode"],
     launchBlockedBy: String? = nil,
-    lastSeenAt: String? = nil
+    lastSeenAt: String? = nil,
+    unavailableProviders: [MachineLaunchUnavailableProvider] = []
 ) -> MachineDirectoryEntry {
     let launchProviders = online
         ? providers.map { MachineLaunchProviderOption(provider: $0) }
@@ -915,9 +938,30 @@ private func previewMachine(
         launch: MachineLaunchProjection(
             blockedBy: launchProviders.isEmpty ? (launchBlockedBy ?? (online ? "no_launch_support" : "control_down")) : nil,
             providers: launchProviders,
-            defaultProvider: launchProviders.isEmpty ? nil : (providers.contains("codex") ? "codex" : providers.first)
+            defaultProvider: launchProviders.isEmpty ? nil : (providers.contains("codex") ? "codex" : providers.first),
+            unavailableProviders: unavailableProviders
         )
     )
+}
+
+#Preview("Launch session · sign-in required") {
+    LaunchSessionSheet(
+        previewMachines: [
+            previewMachine(
+                deviceId: "workbench",
+                machineName: "workbench",
+                providers: ["omp"],
+                unavailableProviders: [
+                    MachineLaunchUnavailableProvider(provider: "claude", reason: "not_authenticated", remediation: "Sign in to claude on this machine"),
+                    MachineLaunchUnavailableProvider(provider: "codex", reason: "not_authenticated", remediation: "Sign in to codex on this machine"),
+                ]
+            ),
+        ],
+        previewWorkspaces: [WorkspaceSuggestion(path: "/Users/example/git/longhouse", label: "longhouse", score: 100, sessionCount: 3)]
+    ) { _ in }
+    .environmentObject(AppState())
+    .preferredColorScheme(.dark)
+    .emberChrome()
 }
 
 #Preview("Launch session") {

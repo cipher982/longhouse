@@ -30,9 +30,20 @@ const OUTCOME_RECOVERY_ACTIVE_GRACE: Duration = Duration::from_secs(10);
 const DEFAULT_COMPRESSION: &str = "zstd";
 const LAUNCHD_LABEL: &str = "com.longhouse.shipper";
 const SYSTEMD_UNIT: &str = "longhouse-shipper";
+// The service unit does not inherit a login shell, and the engine advertises a
+// provider only when its CLI resolves on this PATH. Provider vendor installers
+// put CLIs in their own directories (opencode, bun, npm user prefix, pnpm,
+// volta, cargo); without them a Linux machine with every provider installed
+// silently advertises almost none. Missing directories are harmless.
 const COMMON_SERVICE_PATH_SUFFIXES: &[&str] = &[
     ".local/bin",
     "bin",
+    ".opencode/bin",
+    ".bun/bin",
+    ".npm-global/bin",
+    ".local/share/pnpm",
+    ".volta/bin",
+    ".cargo/bin",
     "/opt/homebrew/bin",
     "/opt/homebrew/sbin",
     "/usr/local/bin",
@@ -5273,6 +5284,31 @@ mod tests {
     use std::collections::BTreeSet;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn service_path_includes_provider_vendor_install_dirs() {
+        // A Linux workbench with codex (npm user prefix), opencode, and a
+        // bun-installed CLI advertised none of them until they were symlinked
+        // into ~/.local/bin by hand.
+        let path = common_service_path(Path::new("/home/u"));
+        let entries: Vec<&str> = path.split(':').collect();
+        for expected in [
+            "/home/u/.local/bin",
+            "/home/u/.opencode/bin",
+            "/home/u/.bun/bin",
+            "/home/u/.npm-global/bin",
+            "/usr/bin",
+        ] {
+            assert!(
+                entries.contains(&expected),
+                "{expected} missing from {path}"
+            );
+        }
+        assert_eq!(
+            entries[0], "/home/u/.local/bin",
+            "~/.local/bin keeps precedence"
+        );
+    }
 
     #[test]
     fn service_repair_requires_configured_machine_and_positive_artifact_evidence() {

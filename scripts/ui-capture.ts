@@ -76,6 +76,7 @@ const SCENES = [
   "onboarding-modal",
   "missing-api-key",
   "timeline-card-stress",
+  "launch-unavailable",
   "session-detail-stress",
   "session-question",
   "session-attention",
@@ -233,6 +234,7 @@ function parseViewport(value: string | undefined): ViewportConfig {
 function sceneUsesMockApi(scene: SceneName): boolean {
   return (
     scene === "timeline-card-stress" ||
+    scene === "launch-unavailable" ||
     LANDING_TIMELINE_SCENES.includes(scene) ||
     scene === "landing-session" ||
     scene === "session-detail-stress" ||
@@ -589,9 +591,58 @@ async function installSceneMocks(
       return;
     }
 
+    if (scene === "launch-unavailable" && pathname === "/api/timeline/machines") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(LAUNCH_UNAVAILABLE_MACHINES) });
+      return;
+    }
+
+    if (scene === "launch-unavailable" && pathname.startsWith("/api/timeline/machines/") && pathname.endsWith("/workspaces")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          device_id: "workbench",
+          workspaces: [{ path: "/Users/you/git/longhouse", label: "longhouse", git_repo: null, last_used_at: null, session_count: 3 }],
+        }),
+      });
+      return;
+    }
+
     await sealOrFallback(route, scene, pathname);
   });
 }
+
+// A remote workbench where OMP can run but Claude and Codex are signed out:
+// the launcher must offer only OMP and say what to fix for the others.
+const LAUNCH_UNAVAILABLE_MACHINES = {
+  machines: [
+    {
+      device_id: "workbench",
+      machine_name: "workbench",
+      online: true,
+      control_channel_status: "connected",
+      supports: ["claude.turn_start", "codex.turn_start", "omp.turn_start"],
+      control_operations_by_provider: { claude: ["turn_start"], codex: ["turn_start"], omp: ["turn_start"] },
+      last_seen_at: "2026-04-15T16:11:00Z",
+      connected_since: "2026-04-15T12:00:00Z",
+      engine_build: "fixture",
+      launch: {
+        blocked_by: null,
+        providers: [{ provider: "omp" }],
+        default_provider: "omp",
+        unavailable_providers: [
+          { provider: "claude", reason: "not_authenticated", remediation: "Sign in to claude on this machine" },
+          { provider: "codex", reason: "not_authenticated", remediation: "Sign in to codex on this machine" },
+        ],
+      },
+      provider_readiness: {
+        claude: { state: "not_authenticated", remediation: "Sign in to claude on this machine" },
+        codex: { state: "not_authenticated", remediation: "Sign in to codex on this machine" },
+        omp: { state: "unknown" },
+      },
+    },
+  ],
+};
 
 /**
  * Landing scenes publish images, so no request may reach a real server: the
@@ -652,7 +703,7 @@ async function installScenePageOverrides(page: Page, scene: SceneName, pageName:
     Date.now = () => fixtureNow;
   }, fixtureNowIso);
 
-  if (scene === "timeline-card-stress" || LANDING_TIMELINE_SCENES.includes(scene)) {
+  if (scene === "timeline-card-stress" || scene === "launch-unavailable" || LANDING_TIMELINE_SCENES.includes(scene)) {
     await page.addInitScript(() => {
       Object.defineProperty(window, "EventSource", {
         configurable: true,
@@ -684,6 +735,11 @@ async function captureBundle(
     await page.waitForSelector("[data-screenshot-ready='true'], [data-ready='true']", { timeout: 5000 });
   } catch {
     await page.waitForLoadState("networkidle", { timeout: 10000 });
+  }
+
+  if (scene === "launch-unavailable") {
+    await page.click("[data-testid='sessions-start-session']");
+    await page.waitForSelector("[data-testid='launch-unavailable-providers']", { timeout: 5000 });
   }
 
   // Inject CSS to kill animations for deterministic screenshots

@@ -165,31 +165,15 @@ function makeTimelineCard(
   overrides: Partial<AgentSession> = {},
   cardOverrides: Partial<TimelineSessionCard> = {},
 ): TimelineSessionCard {
-  const detail = makeSession(overrides);
-  const headOverrides =
-    cardOverrides.head != null
-      ? cardOverrides.head
-      : makeSession({
-          ...overrides,
-          id: detail.thread_head_session_id || detail.id,
-        });
-  const rootOverrides =
-    cardOverrides.root != null
-      ? cardOverrides.root
-      : makeSession({
-          ...overrides,
-          id: detail.thread_root_session_id || detail.id,
-        });
+  const head = cardOverrides.head ?? makeSession(overrides);
 
   return {
-    thread_id: detail.thread_root_session_id,
-    timeline_anchor_at: detail.timeline_anchor_at || detail.last_activity_at || detail.started_at,
-    head: headOverrides,
-    detail,
-    root: rootOverrides,
-    continuation_count: detail.thread_continuation_count,
-    started_origin_label: rootOverrides.origin_label || rootOverrides.environment,
-    head_origin_label: headOverrides.origin_label || headOverrides.environment,
+    thread_id: head.thread_root_session_id,
+    timeline_anchor_at: head.timeline_anchor_at || head.last_activity_at || head.started_at,
+    head,
+    continuation_count: head.thread_continuation_count,
+    started_origin_label: head.origin_label || head.environment,
+    head_origin_label: head.origin_label || head.environment,
     ...cardOverrides,
   };
 }

@@ -300,8 +300,6 @@ export interface TimelineSessionCard {
   thread_id: string;
   timeline_anchor_at: string | null;
   head: AgentSession;
-  detail: AgentSession;
-  root: AgentSession;
   continuation_count: number;
   started_origin_label: string | null;
   head_origin_label: string | null;

@@ -41,8 +41,9 @@ from zerg.models.live_store import LiveUser
 from zerg.services import catalogd_supervisor
 
 # Factory correctness is not the catalog latency gate; a loaded CI host needs
-# room to finish a real transaction. Production clients keep the 1 s default.
-RPC_TIMEOUT_SECONDS = 5.0
+# room to finish a real transaction and its concurrent expiry writer. Production
+# clients keep the 1 s default.
+RPC_TIMEOUT_SECONDS = 15.0
 HARNESS_OWNER_ID = 7
 HARNESS_OWNER_EMAIL = "harness-catalog@longhouse.invalid"
 

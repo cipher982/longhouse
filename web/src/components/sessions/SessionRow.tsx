@@ -72,7 +72,6 @@ export function SessionRow({
   sortableListeners,
 }: SessionRowProps) {
   const session = thread.head;
-  const detailSession = thread.detail;
   const timelineStatus = session.session_state.presentation.primary;
   const isClosed = closed || isCardClosed(thread);
   const text = getSessionCardText(session, { titleMaxChars: 96, subheadingMaxChars: 200 });
@@ -85,7 +84,7 @@ export function SessionRow({
   // `control`, which is the finer-grained access capability (live control /
   // reattach / observe only / search only) used for the chip's a11y title.
   const modeChipLabel = getModeChipLabel(session.session_state.mode);
-  const startedAtIso = thread.root?.started_at || session.started_at;
+  const startedAtIso = session.started_at;
   // Unread rows label by result completion, not generic activity: the band is
   // "results waiting for you" and the row says what landed and when.
   const unreadOutcome = session.session_state.last_result_outcome;
@@ -110,7 +109,7 @@ export function SessionRow({
 
   // When the user is searching and the backend returned a match snippet,
   // show that as the row's secondary line with the query highlighted.
-  const matchSnippet = detailSession?.match_snippet ?? null;
+  const matchSnippet = session.match_snippet ?? null;
   const showSnippet = !!highlightQuery && !!matchSnippet;
   // B-lite drift line: while actively working, the live (drifting) summary title
   // is parked on the demoted secondary line as "now: …", where movement is

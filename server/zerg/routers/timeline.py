@@ -206,8 +206,6 @@ async def _search_storage_v2_timeline(
                 thread_id=session.id,
                 timeline_anchor_at=session.timeline_anchor_at,
                 head=session,
-                detail=session,
-                root=session,
                 continuation_count=1,
                 started_origin_label=session.origin_label or session.environment,
                 head_origin_label=session.origin_label or session.environment,

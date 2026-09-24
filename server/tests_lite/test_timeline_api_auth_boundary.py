@@ -197,7 +197,7 @@ def test_timeline_sessions_accept_browser_session_cookie(live_catalog, live_cata
     assert payload["total"] == 1
     assert payload["sessions"][0]["thread_id"] == str(seeded.session_id)
     assert payload["sessions"][0]["head"]["project"] == "timeline-auth"
-    assert payload["sessions"][0]["detail"]["project"] == "timeline-auth"
+    assert payload["sessions"][0]["head"]["project"] == "timeline-auth"
     assert "catalog_list;dur=" in response.headers["server-timing"]
 
 

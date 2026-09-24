@@ -87,9 +87,7 @@ function card(c: LandingCard) {
   const built = makeTimelineCard(overrides);
   // The inbox shelves a card as "Live now" from the server's working_set tier.
   const workingSet = c.closed ? "history" : "open";
-  for (const session of [built.head, built.detail, built.root]) {
-    (session.session_state as { working_set?: string }).working_set = workingSet;
-  }
+  (built.head.session_state as { working_set?: string }).working_set = workingSet;
   return built;
 }
 
