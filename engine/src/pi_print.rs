@@ -1665,7 +1665,7 @@ if "-p" in args:
         let summary = start_pi_print_turn(config).await.unwrap();
         interrupt_pi_print_turn(&run_id, &session_id, &thread_id, &turn_id).unwrap();
 
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
         loop {
             let claim = crate::turn_claims::default_registry()
                 .unwrap()

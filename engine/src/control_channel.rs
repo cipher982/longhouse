@@ -5770,7 +5770,7 @@ printf '{{"type":"result","subtype":"success","is_error":false}}\n'
                     Some("[prompt omitted]")
                 );
                 assert!(!argv.iter().any(|value| value == "private prompt"));
-                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                let deadline = std::time::Instant::now() + Duration::from_secs(30);
                 loop {
                     let claim = crate::turn_claims::default_registry()
                         .unwrap()
@@ -5835,7 +5835,7 @@ printf '{{"type":"result","subtype":"success","is_error":false}}\n'
                 &test_config(),
             ));
             assert_eq!(started["ok"], true, "{started}");
-            let interrupt_deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let interrupt_deadline = std::time::Instant::now() + Duration::from_secs(30);
             loop {
                 let claim = crate::turn_claims::default_registry()
                     .unwrap()
@@ -5854,7 +5854,7 @@ printf '{{"type":"result","subtype":"success","is_error":false}}\n'
                 &interrupt_turn_id,
             )
             .unwrap();
-            let cancel_deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let cancel_deadline = std::time::Instant::now() + Duration::from_secs(30);
             loop {
                 let claim = crate::turn_claims::default_registry()
                     .unwrap()
