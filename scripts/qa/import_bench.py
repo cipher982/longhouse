@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """Measure a real Claude-history import through a disposable Runtime Host.
 
-Each invocation owns one Runtime Host, one Toxiproxy, one scratch HOME, and one
-Machine Agent. Results are JSON only; the scratch tree is removed in ``finally``.
+Local invocations own one Runtime Host, one Toxiproxy, one scratch HOME, and one
+Machine Agent. Remote invocations use an existing disposable Runtime Host and a
+pre-minted device token. Results are JSON only; the scratch tree is removed in
+``finally``.
 
 Examples:
   python3 scripts/qa/import_bench.py --name baseline-shaped \
     --image ghcr.io/cipher982/longhouse-runtime:<baseline-sha> --shaped
   python3 scripts/qa/import_bench.py --name candidate-unshaped \
     --image ghcr.io/cipher982/longhouse-runtime:6b66fcddb
+  python3 scripts/qa/import_bench.py --name hosted-rehearsal \
+    --remote-url https://w22-rehearsal.longhouse.ai --token-file /tmp/token
 """
 
 from __future__ import annotations
@@ -242,8 +246,10 @@ def stop_process(process: subprocess.Popen[Any] | None) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--name", required=True, help="result label, e.g. candidate-shaped")
-    parser.add_argument("--image", required=True, help="immutable GHCR image reference for this Runtime Host")
+    parser.add_argument("--image", help="immutable GHCR image reference for a local Runtime Host")
     parser.add_argument("--image-commit", default=None, help="recorded Runtime Host source commit")
+    parser.add_argument("--remote-url", help="existing disposable Runtime Host URL; skips local Docker and Toxiproxy")
+    parser.add_argument("--token-file", type=Path, help="device token for --remote-url")
     parser.add_argument("--shaped", action="store_true", help="apply 25ms each-way latency and 2500 KB/s upload")
     parser.add_argument("--corpus-root", type=Path, default=Path.home() / ".claude" / "projects")
     parser.add_argument("--corpus-bytes", type=int, default=1_500_000_000)
@@ -251,9 +257,15 @@ def main() -> int:
     parser.add_argument("--keep-logs", action="store_true", help="copy the engine log to /tmp/agents/w1-bench-results")
     args = parser.parse_args()
 
+    if bool(args.remote_url) != bool(args.token_file):
+        raise SystemExit("--remote-url and --token-file must be supplied together")
+    if not args.remote_url and not args.image:
+        raise SystemExit("--image is required without --remote-url")
+    if args.remote_url and args.shaped:
+        raise SystemExit("--shaped cannot be used with --remote-url")
     if not args.corpus_root.is_dir():
         raise SystemExit(f"corpus root is not a directory: {args.corpus_root}")
-    if shutil.which("docker") is None:
+    if not args.remote_url and shutil.which("docker") is None:
         raise SystemExit("missing required executable: docker")
     SCRATCH_PARENT.mkdir(mode=0o700, parents=True, exist_ok=True)
     stamp = f"w1-{uuid.uuid4().hex[:12]}"
@@ -263,7 +275,8 @@ def main() -> int:
     engine_log = None
     started = time.monotonic()
     result: dict[str, Any] = {"schema": "longhouse.import_bench.v1", "name": args.name, "image": args.image,
-                              "image_commit": args.image_commit, "shaped": args.shaped, "status": "fail"}
+                              "image_commit": args.image_commit, "remote_url": args.remote_url,
+                              "shaped": args.shaped, "status": "fail"}
     try:
         home = scratch / "home"
         corpus = newest_corpus(args.corpus_root, home, args.corpus_bytes)
@@ -271,23 +284,29 @@ def main() -> int:
         if not all_ids:
             raise RuntimeError("corpus contains no Claude session IDs")
         result["corpus"] = {**corpus, "sessions": len(all_ids), "recent_sessions": len(recent_ids)}
-        host_port, proxy_port, admin_port = port(), port(), port()
-        password = secrets.token_urlsafe(24)
-        docker("network", "create", network)
-        docker("run", "-d", "--name", runtime, "--network", network, "--memory", "4g", "-p", f"127.0.0.1:{host_port}:8000",
-               "-e", "AUTH_DISABLED=0", "-e", "SINGLE_TENANT=1", "-e", f"LONGHOUSE_PASSWORD={password}",
-               "-e", "JWT_SECRET=import-bench-jwt-secret", "-e", f"FERNET_SECRET={base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()}",
-               "-e", "INTERNAL_API_SECRET=import-bench-internal-secret", "-e", "LLM_DISABLED=1",
-               "-e", "DATABASE_URL=sqlite:////data/longhouse.db", args.image)
-        base_url = f"http://127.0.0.1:{host_port}"
-        wait_for_health(base_url)
-        status, login, _headers = http("POST", f"{base_url}/api/auth/password", {"password": password})
-        if status != 200 or not isinstance(login.get("access_token"), str):
-            raise RuntimeError(f"password login failed: HTTP {status} {login}")
-        status, minted, _headers = http("POST", f"{base_url}/api/devices/tokens", {"device_id": DEVICE_ID, "name": stamp}, bearer=login["access_token"])
-        token = minted.get("token")
-        if status != 201 or not isinstance(token, str) or not token.startswith("zdt_"):
-            raise RuntimeError(f"device-token mint failed: HTTP {status} {minted}")
+        if args.remote_url:
+            base_url = args.remote_url.rstrip("/")
+            token = args.token_file.read_text(encoding="utf-8").strip()
+            if not token.startswith("zdt_"):
+                raise RuntimeError("token file does not contain a device token")
+        else:
+            host_port, proxy_port, admin_port = port(), port(), port()
+            password = secrets.token_urlsafe(24)
+            docker("network", "create", network)
+            docker("run", "-d", "--name", runtime, "--network", network, "--memory", "4g", "-p", f"127.0.0.1:{host_port}:8000",
+                   "-e", "AUTH_DISABLED=0", "-e", "SINGLE_TENANT=1", "-e", f"LONGHOUSE_PASSWORD={password}",
+                   "-e", "JWT_SECRET=import-bench-jwt-secret", "-e", f"FERNET_SECRET={base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()}",
+                   "-e", "INTERNAL_API_SECRET=import-bench-internal-secret", "-e", "LLM_DISABLED=1",
+                   "-e", "DATABASE_URL=sqlite:////data/longhouse.db", args.image)
+            base_url = f"http://127.0.0.1:{host_port}"
+            wait_for_health(base_url)
+            status, login, _headers = http("POST", f"{base_url}/api/auth/password", {"password": password})
+            if status != 200 or not isinstance(login.get("access_token"), str):
+                raise RuntimeError(f"password login failed: HTTP {status} {login}")
+            status, minted, _headers = http("POST", f"{base_url}/api/devices/tokens", {"device_id": DEVICE_ID, "name": stamp}, bearer=login["access_token"])
+            token = minted.get("token")
+            if status != 201 or not isinstance(token, str) or not token.startswith("zdt_"):
+                raise RuntimeError(f"device-token mint failed: HTTP {status} {minted}")
         status, capabilities, _headers = http("GET", f"{base_url}/api/agents/storage/v2/capabilities", token=token)
         if status != 200:
             raise RuntimeError(f"storage-v2 capability negotiation failed: HTTP {status} {capabilities}")
@@ -296,27 +315,28 @@ def main() -> int:
             raise RuntimeError(f"invalid envelope encoding capability: {advertised_encodings!r}")
         result["storage_v2_advertised_encodings"] = advertised_encodings
         result["negotiated_envelope_encoding"] = "zstd" if "zstd" in advertised_encodings else "identity"
-        docker("run", "-d", "--name", proxy, "--network", network, "-p", f"127.0.0.1:{proxy_port}:8666", "-p", f"127.0.0.1:{admin_port}:8474", TOXIPROXY_IMAGE)
-        proxy_api = f"http://127.0.0.1:{admin_port}"
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            status, _body, _headers = http("GET", f"{proxy_api}/version")
-            if status == 200:
-                break
-            time.sleep(0.2)
-        else:
-            raise TimeoutError("Toxiproxy did not become ready")
-        status, _body, _headers = http("POST", f"{proxy_api}/proxies", {"name": "runtime", "listen": "0.0.0.0:8666", "upstream": f"{runtime}:8000"})
-        if status not in (200, 201):
-            raise RuntimeError(f"Toxiproxy proxy create failed: HTTP {status}")
-        if args.shaped:
-            toxics = (("latency-down", "latency", "downstream", {"latency": 25, "jitter": 0}),
-                      ("latency-up", "latency", "upstream", {"latency": 25, "jitter": 0}),
-                      ("bandwidth-up", "bandwidth", "upstream", {"rate": 2500}))
-            for name, kind, stream, attributes in toxics:
-                status, _body, _headers = http("POST", f"{proxy_api}/proxies/runtime/toxics", {"name": name, "type": kind, "stream": stream, "attributes": attributes})
-                if status not in (200, 201):
-                    raise RuntimeError(f"Toxiproxy toxic create failed: HTTP {status}")
+        if not args.remote_url:
+            docker("run", "-d", "--name", proxy, "--network", network, "-p", f"127.0.0.1:{proxy_port}:8666", "-p", f"127.0.0.1:{admin_port}:8474", TOXIPROXY_IMAGE)
+            proxy_api = f"http://127.0.0.1:{admin_port}"
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                status, _body, _headers = http("GET", f"{proxy_api}/version")
+                if status == 200:
+                    break
+                time.sleep(0.2)
+            else:
+                raise TimeoutError("Toxiproxy did not become ready")
+            status, _body, _headers = http("POST", f"{proxy_api}/proxies", {"name": "runtime", "listen": "0.0.0.0:8666", "upstream": f"{runtime}:8000"})
+            if status not in (200, 201):
+                raise RuntimeError(f"Toxiproxy proxy create failed: HTTP {status}")
+            if args.shaped:
+                toxics = (("latency-down", "latency", "downstream", {"latency": 25, "jitter": 0}),
+                          ("latency-up", "latency", "upstream", {"latency": 25, "jitter": 0}),
+                          ("bandwidth-up", "bandwidth", "upstream", {"rate": 2500}))
+                for name, kind, stream, attributes in toxics:
+                    status, _body, _headers = http("POST", f"{proxy_api}/proxies/runtime/toxics", {"name": name, "type": kind, "stream": stream, "attributes": attributes})
+                    if status not in (200, 201):
+                        raise RuntimeError(f"Toxiproxy toxic create failed: HTTP {status}")
         engine_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home), "LONGHOUSE_HOME": str(home / ".longhouse"),
                       "XDG_CONFIG_HOME": str(home / ".config"), "XDG_DATA_HOME": str(home / ".local/share"), "CLAUDE_CONFIG_DIR": str(home / ".claude"), "RUST_LOG": "info"}
         engine_db = scratch / "engine.db"
@@ -324,8 +344,9 @@ def main() -> int:
         engine_bin = command(sys.executable, "scripts/build/cargo.py", "artifact", "--profile", "release", "--bin", "longhouse-engine").stdout.strip()
         if not Path(engine_bin).is_file():
             raise RuntimeError("release longhouse-engine is not built; run the documented build first")
-        wire_start = interface_rx_bytes(runtime)
-        engine = subprocess.Popen([engine_bin, "connect", "--url", f"http://127.0.0.1:{proxy_port}", "--token", token, "--db", str(engine_db),
+        wire_start = interface_rx_bytes(runtime) if not args.remote_url else None
+        engine_url = base_url if args.remote_url else f"http://127.0.0.1:{proxy_port}"
+        engine = subprocess.Popen([engine_bin, "connect", "--url", engine_url, "--token", token, "--db", str(engine_db),
                                     "--compression", "zstd",
                                     "--machine-name", DEVICE_ID, "--fallback-scan-secs", "1", "--spool-replay-secs", "1"], env=engine_env,
                                   stdout=engine_log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -349,10 +370,11 @@ def main() -> int:
                 complete = elapsed
                 break
             time.sleep(1)
-        result.update({"status": "ok" if complete is not None else "timeout", "wire_bytes_client_to_server": interface_rx_bytes(runtime) - wire_start,
+        result.update({"status": "ok" if complete is not None else "timeout", "wire_bytes_client_to_server": interface_rx_bytes(runtime) - wire_start if wire_start is not None else None,
+                       "wire_bytes_note": "remote Runtime Host cannot expose a client wire counter; engine logs and local health retained" if args.remote_url else None,
                        "time_to_first_timeline_s": first, "time_to_recent_readable_s": recent, "time_to_fully_imported_s": complete,
                        "http_status_counts": {str(key): value for key, value in counts.items()}, "engine_backlog": engine_backlog(engine_db),
-                       "server_rss_bytes": container_rss_bytes(runtime),
+                        "server_rss_bytes": container_rss_bytes(runtime) if not args.remote_url else None,
                        "elapsed_s": round(time.monotonic() - started, 3), "import_elapsed_s": round(time.monotonic() - import_started, 3)})
     except Exception as exc:
         result.update({"error": f"{type(exc).__name__}: {exc}", "elapsed_s": round(time.monotonic() - started, 3)})
