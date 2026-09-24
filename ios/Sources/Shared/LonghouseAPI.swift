@@ -1250,6 +1250,22 @@ struct LonghouseAPI: Sendable {
         SharedAuthStore.clearNativeRefreshToken(for: serverURL)
     }
 
+    /// An access token past its stored expiry is refreshed before the request
+    /// rather than discovered by a 401: that cost every cold launch a rejected
+    /// round trip and a refresh before the timeline could update. The expiry
+    /// is a defaults read; the Keychain is touched only once it has passed.
+    /// A failed refresh changes nothing here: the request goes out as before
+    /// and the 401 path owns recovery.
+    private func refreshExpiredRuntimeTokenIfNeeded(allowRetry: Bool) async {
+        let serverURL = baseURL.absoluteString
+        guard allowRetry, allowsAuthRefresh,
+              let expiresAt = SharedAuthStore.runtimeTokenExpiresAt(for: serverURL),
+              expiresAt.timeIntervalSinceNow < 5,
+              SharedAuthStore.nativeRefreshToken(for: serverURL) != nil
+        else { return }
+        try? await refreshHostedSession()
+    }
+
     private func isNativeRefreshRequest(_ request: URLRequest) -> Bool {
         request.url?.path == "/api/auth/refresh-native-session"
     }
@@ -1269,6 +1285,7 @@ struct LonghouseAPI: Sendable {
                 request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
             }
         } else {
+            await refreshExpiredRuntimeTokenIfNeeded(allowRetry: allowRetry)
             // Explicit cookie injection: widget extension runs in a separate
             // process without shared HTTPCookieStorage.
             let authorizationHeader = SharedAuthStore.authorizationHeader(for: baseURL.absoluteString)

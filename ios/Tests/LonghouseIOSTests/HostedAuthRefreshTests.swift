@@ -170,6 +170,57 @@ struct HostedAuthRefreshTests {
         clearTokens(serverURL)
     }
 
+    @Test
+    func expiredAccessTokenIsRefreshedBeforeTheRequestNotAfterA401() async throws {
+        guard SharedAuthStore.isAppGroupAvailable else {
+            return
+        }
+        let serverURL = "https://preflight-refresh-api-test.longhouse.ai"
+        clearTokens(serverURL)
+        SharedAuthStore.saveRuntimeToken("runtime-old", expiresAt: Date().addingTimeInterval(-60), for: serverURL)
+        SharedAuthStore.saveNativeRefreshToken("refresh-old", for: serverURL)
+        let recorder = RequestRecorder()
+        let api = makeAPI(serverURL: serverURL) { request in
+            recorder.record(request)
+            if request.url?.path == "/api/auth/refresh-native-session" {
+                return jsonResponse(for: request, statusCode: 200, body: [
+                    "runtime_token": "runtime-new",
+                    "expires_in": 900,
+                    "refresh_token": "refresh-new",
+                    "refresh_token_expires_at": "2027-07-08T12:34:56Z",
+                ])
+            }
+            let fresh = request.value(forHTTPHeaderField: "Authorization") == "Bearer runtime-new"
+            return jsonResponse(for: request, statusCode: fresh ? 200 : 401, body: fresh ? ["sessions": [], "total": 0] : ["detail": "expired"])
+        }
+
+        _ = try await api.recentSessions(limit: 1)
+
+        #expect(recorder.requests().map { $0.url?.path ?? "" } == ["/api/auth/refresh-native-session", "/api/timeline/sessions"])
+        clearTokens(serverURL)
+    }
+
+    @Test
+    func unexpiredAccessTokenGoesOutWithoutARefresh() async throws {
+        guard SharedAuthStore.isAppGroupAvailable else {
+            return
+        }
+        let serverURL = "https://preflight-fresh-api-test.longhouse.ai"
+        clearTokens(serverURL)
+        SharedAuthStore.saveRuntimeToken("runtime-live", expiresAt: Date().addingTimeInterval(600), for: serverURL)
+        SharedAuthStore.saveNativeRefreshToken("refresh-live", for: serverURL)
+        let recorder = RequestRecorder()
+        let api = makeAPI(serverURL: serverURL) { request in
+            recorder.record(request)
+            return jsonResponse(for: request, statusCode: 200, body: ["sessions": [], "total": 0])
+        }
+
+        _ = try await api.recentSessions(limit: 1)
+
+        #expect(recorder.requests().map { $0.url?.path ?? "" } == ["/api/timeline/sessions"])
+        clearTokens(serverURL)
+    }
+
     private func makeAPI(
         serverURL: String,
         allowsAuthRefresh: Bool = true,

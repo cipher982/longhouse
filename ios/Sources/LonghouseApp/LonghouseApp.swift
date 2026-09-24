@@ -818,6 +818,16 @@ final class AppState: ObservableObject {
             // restoreSession calls refreshHostedSessionProactively directly
             // and does not go through this task path.
             guard self?.isAuthenticated == true else { return }
+            // A request may already have refreshed (pre-flight or after a
+            // 401); then follow the new expiry instead of refreshing again.
+            // Scheduled against an expired token at launch, this fired 5 s
+            // after the request path had refreshed.
+            if let self,
+               let current = SharedAuthStore.runtimeTokenExpiresAt(for: self.serverURL),
+               current.timeIntervalSinceNow > leadTime {
+                self.scheduleRuntimeTokenRefresh()
+                return
+            }
             _ = await self?.refreshHostedSessionProactively()
         }
     }
