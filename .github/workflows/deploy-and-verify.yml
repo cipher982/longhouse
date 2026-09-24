@@ -53,7 +53,7 @@ concurrency:
 jobs:
   changes:
     timeout-minutes: 10
-    runs-on: cube
+    runs-on: cube-fast
     name: "Detect runtime deploy scope"
     outputs:
       deploy_verify: ${{ steps.decide.outputs.deploy_verify }}
@@ -99,7 +99,7 @@ jobs:
 
   no_runtime_change:
     name: "No runtime mutation required"
-    runs-on: cube
+    runs-on: cube-deploy
     needs: changes
     if: ${{ needs.changes.outputs.no_runtime_change == 'true' }}
     steps:
@@ -716,7 +716,7 @@ jobs:
   profile-deploy:
     timeout-minutes: 30
     name: "Profile deploy wall time"
-    runs-on: cube
+    runs-on: cube-fast
     needs: [changes, deploy_demo, reprovision_canary, fast_smoke]
     if: ${{ always() && needs.changes.outputs.deploy_verify == 'true' }}
     steps:

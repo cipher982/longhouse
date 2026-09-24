@@ -38,7 +38,7 @@ concurrency:
 jobs:
   console-served-state:
     name: "console-served-state"
-    runs-on: cube
+    runs-on: cube-browser
     if: github.repository == 'cipher982/longhouse'
     timeout-minutes: 60
     env:

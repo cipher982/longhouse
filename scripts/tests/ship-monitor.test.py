@@ -5,6 +5,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -494,7 +495,30 @@ def test_runs_on_a_topic_branch_do_not_speak_for_the_ship() -> None:
     assert [run.databaseId for run in runs] == [1]
 
 
+def test_runtime_schema_only_change_requires_new_runtime() -> None:
+    with tempfile.TemporaryDirectory(prefix="longhouse-runtime-paths-") as temp:
+        root = Path(temp)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        paths = (
+            root / "scripts" / "ops" / "runtime-schema.py",
+            root / "scripts" / "ops" / "release-artifacts.py",
+        )
+        for path in paths:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("before\n")
+        subprocess.run(["git", "add", "--", "scripts/ops/runtime-schema.py", "scripts/ops/release-artifacts.py"], cwd=root, check=True)
+        commit = ["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base"]
+        subprocess.run(commit, cwd=root, check=True)
+        for path in paths:
+            path.write_text("after\n")
+        subprocess.run(["git", "add", "--", "scripts/ops/runtime-schema.py", "scripts/ops/release-artifacts.py"], cwd=root, check=True)
+        subprocess.run(commit[:-1] + ["runtime inputs changed"], cwd=root, check=True)
+        target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        assert ship_monitor.latest_runtime_affecting_sha(root, target_sha) == target_sha
+
+
 if __name__ == "__main__":
+    test_runtime_schema_only_change_requires_new_runtime()
     test_no_runtime_change_does_not_require_exact_live_sha()
     test_no_runtime_change_accepts_deploy_stamped_target_sha()
     test_no_runtime_change_accepts_intermediate_deploy_sha()

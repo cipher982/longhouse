@@ -470,7 +470,7 @@ jobs:
 
   self-hosted-cube-linux-x64:
     if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_cube_self_hosted) }}
-    runs-on: cube
+    runs-on: cube-browser
     timeout-minutes: 30
     name: "launch-gate--self-hosted-onboarding--linux-x64--cube"
 

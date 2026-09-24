@@ -2,3 +2,6 @@ self-hosted-runner:
   labels:
     - cube
     - cube-deploy
+    - cube-fast
+    - cube-browser
+    - cube-maint

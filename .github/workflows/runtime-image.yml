@@ -51,7 +51,7 @@ jobs:
   changes:
     timeout-minutes: 10
     name: "Detect runtime image scope"
-    runs-on: cube
+    runs-on: cube-fast
     outputs:
       runtime_image: ${{ steps.decide.outputs.runtime_image }}
     steps:
@@ -75,7 +75,7 @@ jobs:
 
   build-and-push:
     timeout-minutes: 45
-    runs-on: cube
+    runs-on: cube-maint
     needs: changes
     if: ${{ needs.changes.outputs.runtime_image == 'true' }}
     steps:

@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   # A new commit has a different identity and must not cancel the gates for an
@@ -62,6 +63,109 @@ jobs:
         with:
           filters: .github/path-filters.yml
 
+  fork-qualification:
+    name: "Fork PR requires trusted replay"
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+    runs-on: cube-fast
+    steps:
+      - run: |
+          echo "::error::Portable CI has a writable self-hosted runner cache. Fork code cannot execute there; replay the patch on a trusted branch before merge."
+          exit 1
+
+  prepare-test-image:
+    name: "Prepare immutable fixture image"
+    needs: changes
+    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: cube-maint
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_ref: ${{ steps.resolve.outputs.image_ref }}
+      cache_hit: ${{ steps.resolve.outputs.cache_hit }}
+      preparation_seconds: ${{ steps.resolve.outputs.preparation_seconds }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Authenticate to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Identify dependency manifests and existing image
+        id: key
+        env:
+          IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/longhouse-test
+        run: |
+          set -euo pipefail
+          key="$(python3 scripts/qa/test-isolation.py --print-image-key)"
+          tag="$(jq -r '.tag' <<< "$key")"
+          manifest_sha="$(jq -r '.manifest_sha256' <<< "$key")"
+          context="$RUNNER_TEMP/longhouse-test-image-context"
+          while IFS= read -r path; do
+            mkdir -p "$context/$(dirname "$path")"
+            cp -- "$path" "$context/$path"
+          done < <(jq -r '.manifests[]' <<< "$key")
+          image="${IMAGE_NAME}:${tag}"
+          {
+            echo "context=$context"
+            echo "image=$image"
+            echo "manifest_sha=$manifest_sha"
+            echo "started_at=$(date +%s)"
+          } >> "$GITHUB_OUTPUT"
+          if docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' | jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))' > /dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Fixture dependency image already published: $image"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Fixture dependency image absent; building once for this manifest hash"
+          fi
+      - name: Build and publish fixture dependency image
+        if: ${{ steps.key.outputs.exists != 'true' }}
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: ${{ steps.key.outputs.context }}
+          file: ${{ steps.key.outputs.context }}/docker/test.dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.key.outputs.image }}
+          build-args: TEST_MANIFEST_SHA=${{ steps.key.outputs.manifest_sha }}
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha,scope=longhouse-test-deps
+          cache-to: type=gha,mode=max,scope=longhouse-test-deps
+      - name: Resolve exact image digest and preparation timing
+        id: resolve
+        env:
+          IMAGE: ${{ steps.key.outputs.image }}
+          EXISTED: ${{ steps.key.outputs.exists }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          STARTED_AT: ${{ steps.key.outputs.started_at }}
+        run: |
+          set -euo pipefail
+          if [[ "$EXISTED" == "true" ]]; then
+            digest="$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest}}' | jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))')"
+          else
+            # A concurrent run may move the tag; this run consumes its own
+            # published digest, never a mutable tag read after publication.
+            digest="$BUILD_DIGEST"
+            [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || {
+              echo "Build returned no immutable fixture image digest" >&2
+              exit 1
+            }
+          fi
+          {
+            echo "image_ref=${IMAGE%:*}@${digest}"
+            echo "cache_hit=$EXISTED"
+            echo "preparation_seconds=$(($(date +%s) - STARTED_AT))"
+          } >> "$GITHUB_OUTPUT"
+          echo "Fixture image ${IMAGE%:*}@${digest}, existing=$EXISTED"
+
   validate:
     # No path gate for `make validate` itself: it is cross-cutting by
     # construction -- it checks the engine's generated provider contract, the web
@@ -69,19 +173,22 @@ jobs:
     # test patterns -- so any subset of paths is another list to drift out of
     # date, which is exactly how twelve of its members went dark. The live proof
     # below is the one member with a real dependency boundary, and it is gated.
-    needs: changes
+    needs: [changes, prepare-test-image]
     # !cancelled() and not the default `success()`: `Changed paths` runs a git
     # fetch against GitHub, and a network timeout there used to fail it -- which
     # would now skip this whole job, because it needs that job's outputs. When the
     # filter cannot tell, the gated live proof below is skipped and everything
     # else still runs.
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube
+    if: ${{ !cancelled() && needs.prepare-test-image.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: cube-fast
     name: "Validation"
     # Must exceed the sum of the step budgets below, or the job kills a healthy
     # run before any step reaches its own limit.
     timeout-minutes: 50
 
+    env:
+      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
+      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -184,10 +291,13 @@ jobs:
 
   backend-tests:
     timeout-minutes: 30
-    needs: changes
-    if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch' }}
-    runs-on: cube
+    needs: [changes, prepare-test-image]
+    if: ${{ (needs.changes.outputs.backend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: cube-fast
     name: "Backend tests"
+    env:
+      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
+      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -224,8 +334,13 @@ jobs:
     # proves the source-only provider assertions that do not belong in the
     # provider-launch factory matrix.
     timeout-minutes: 15
-    runs-on: cube
+    needs: prepare-test-image
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: cube-fast
     name: "Provider contract tests"
+    env:
+      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
+      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -248,12 +363,14 @@ jobs:
 
   engine-tests:
     timeout-minutes: 45
-    needs: changes
-    if: ${{ needs.changes.outputs.engine == 'true' || needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch' }}
-    runs-on: cube
+    needs: [changes, prepare-test-image]
+    if: ${{ (needs.changes.outputs.engine == 'true' || needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: cube-fast
     name: "Engine tests"
     env:
       CARGO_PROFILE: ci
+      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
+      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -280,10 +397,13 @@ jobs:
 
   frontend-tests:
     timeout-minutes: 20
-    needs: changes
+    needs: [changes, prepare-test-image]
     if: ${{ (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.runner == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube
+    runs-on: cube-fast
     name: "Frontend + runner tests"
+    env:
+      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
+      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -352,10 +472,13 @@ jobs:
 
   wheel-package:
     timeout-minutes: 20
-    needs: changes
-    if: ${{ needs.changes.outputs.packaging == 'true' || github.event_name == 'workflow_dispatch' }}
-    runs-on: cube
+    needs: [changes, prepare-test-image]
+    if: ${{ (needs.changes.outputs.packaging == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: cube-fast
     name: "CLI wheel packaging"
+    env:
+      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
+      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -383,12 +506,14 @@ jobs:
 
   e2e-core:
     timeout-minutes: 30
-    needs: changes
+    needs: [changes, prepare-test-image]
     if: ${{ (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube
+    runs-on: cube-browser
     name: "Core E2E tests"
     env:
       CI: "1"
+      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
+      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -411,12 +536,14 @@ jobs:
 
   e2e-a11y:
     timeout-minutes: 30
-    needs: changes
+    needs: [changes, prepare-test-image]
     if: ${{ (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube
+    runs-on: cube-browser
     name: "Accessibility E2E tests"
     env:
       CI: "1"
+      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
+      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -440,8 +567,8 @@ jobs:
   model-smoke:
     timeout-minutes: 20
     needs: changes
-    if: ${{ needs.changes.outputs.models == 'true' || github.event_name == 'workflow_dispatch' }}
-    runs-on: cube
+    if: ${{ (needs.changes.outputs.models == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: cube-maint
     name: "Model smoke tests"
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -463,12 +590,14 @@ jobs:
 
   oss-qa:
     timeout-minutes: 30
-    needs: changes
-    if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch' }}
-    runs-on: cube
+    needs: [changes, prepare-test-image]
+    if: ${{ (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: cube-browser
     name: "OSS onboarding smoke"
     env:
       CI: "1"
+      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
+      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0

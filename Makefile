@@ -53,6 +53,9 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: validate-format validate-legacy-nouns
 .PHONY: provider-release-proof-universal-live-smoke provider-capability-coordination-proof
 .PHONY: test-provider-contract test-isolation
+.PHONY: affected-check
+.PHONY: validate-affected-check
+
 # ---------------------------------------------------------------------------
 # Help
 # ---------------------------------------------------------------------------
@@ -121,9 +124,13 @@ observability-down: ## Stop the god-view observability stack
 #  make test-engine       engine (engine/)           ~20s
 #  make test-runner       runner (runner/)           ~5s
 #  make test-e2e          browser E2E                ~2min
-#  make test-ci           pre-push                   ~20min
+#  make test-ci           broad cutover, not default pre-push ~20min
 #  make test-full         everything                 >10min
-# ---------------------------------------------------------------------------
+# Resolve committed BASE..HEAD plus staged, unstaged, and nonignored untracked files.
+# Set JSON=1 for machine-readable output; RUN=1 executes supported local make targets.
+affected-check: ## Show affected paths, CI lanes, and local commands (BASE=... HEAD=... JSON=1 RUN=1)
+	@uv run --no-project --with pyyaml python3 scripts/ci/affected.py $(if $(BASE),--base "$(BASE)",) $(if $(HEAD),--head "$(HEAD)",) $(if $(filter 1 true yes,$(JSON)),--json,) $(if $(filter 1 true yes,$(RUN)),--run,)
+
 test: ## Backend unit tests (tests_lite/, ~7.5min)
 	@cd server && ./run_backend_tests_lite.sh
 
@@ -566,7 +573,7 @@ test-hooks: ## Hook outbox pipeline E2E (requires daemon running)
 check-push-readiness: ## Detect stale duplicate commits on main before pushing (~1s)
 	@./scripts/ops/check-push-readiness.sh
 
-test-ci: ## Pre-push CI check (~20min)
+test-ci: ## Broad pre-release CI check (~20min; not required for every push)
 	$(MAKE) validate
 	$(MAKE) import-smoke
 	$(MAKE) test
@@ -675,6 +682,7 @@ validate: ## Run all contract checks
 	@$(MAKE) validate-no-python-device-path
 	@$(MAKE) validate-native-device-entrypoints
 	@$(MAKE) validate-provider-cli-canaries
+	@$(MAKE) validate-affected-check
 	@$(MAKE) validate-ship-monitor
 	@$(MAKE) validate-dogfood-runtime
 	@$(MAKE) validate-cohort-journey
@@ -694,6 +702,9 @@ validate-format: ## @internal Backend formatting is uniform tree-wide
 
 validate-legacy-nouns: ## @internal Guard against pre-pivot product nouns
 	@python3 scripts/qa/legacy-nouns-check
+
+validate-affected-check: ## @internal Affected-path glob and dirty-tree contract
+	@cd server && uv run --no-sync python ../scripts/tests/affected.test.py
 
 validate-ship-monitor: ## @internal Ship monitor regression tests
 	@python3 scripts/tests/ship-monitor.test.py

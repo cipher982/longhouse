@@ -124,11 +124,14 @@ remains an optional source gate (`DEPLOY_WAIT_FULL_CI=true`) rather than a
 post-deploy sleep/poll loop. Every rapid-push outcome is explicit: deployed,
 queued, superseded, rejected, or failed.
 
-Before pushing runtime/UI work, run the cheapest load-bearing local tier you can:
-usually `make test-e2e-core` for launch-surface changes plus the matching unit
-tier. After pushing, do not foreground-babysit branch-latest CI; use the
-exact-SHA ship/watch commands and consume their completion signal while moving
-on to the next useful task.
+Before pushing, run `make affected-check BASE=<base-sha>` to see which CI
+filters match the committed and local diff. Run focused tests for the changed
+behavior, not `make test-ci` for every edit; a CSS change needs a web proof,
+not backend or engine integration. The affected command does not replace
+judgment about dependencies or the exact-SHA CI verdict. After pushing, use
+`make ship SHA=<full-sha> ARGS=--json` for the single blocking verdict;
+`make ship-watch SHA=<full-sha> ARGS=--json` observes an already-pushed SHA.
+Do not foreground-babysit branch-latest CI.
 
 If `make ship` returns non-zero for the target SHA, ship failed. You may explain why you think it failed, including suspected pre-existing drift, but do not relabel that outcome as success.
 
@@ -235,23 +238,22 @@ does not apply to engine, hooks, connect, desktop app, or iOS.
 
 ### iOS
 
-If the change touched `ios/`, tell the maintainer explicitly at the end of
-the ship: iOS has no TestFlight/App Store path yet. He has to plug
-his phone in via USB and build via Xcode. Do not claim "shipped"
-for iOS changes without calling this out.
+If the change touched `ios/`, the agent builds, verifies a rendered simulator
+frame, then installs the finished build with `make phone-deploy` as the last
+step. Do not claim iOS shipped from a hosted deploy or ask the maintainer to
+build in Xcode; use the `zerg-ui` workflow and report a device-only blocker.
 
 ### End-of-ship prompt
 
-Always end a successful ship by reporting:
-- exact SHA now live on demo + canary
-- confirmation that fast smoke passed and hosted live QA was dispatched asynchronously
-- confirmation that `make dogfood-refresh` ran (or why you skipped it)
-- whether iOS needs a manual Xcode rebuild
+Report the exact task SHA, runtime disposition (`deployed` or
+`no_runtime_change`), the workflow/receipt IDs from the JSON verdict, and
+what local refresh or iOS device installation was required. If there was no
+runtime mutation, do not claim the demo or canary changed.
 
 ## Definition of Done
 
-- [ ] `make test-ci` passed before push
-- [ ] `make test-e2e` passed before push when UI/runtime changed
+- [ ] Affected-change selection and focused behavioral proof passed before push
+- [ ] Runtime/UI launch-surface changes had a matching client/fixture proof
 - [ ] Correct deploy lane(s) used
 - [ ] If local CLI/install behavior changed, a release/upgrade path was handled separately
 - [ ] Public demo runtime healthy if runtime lane changed
@@ -259,5 +261,5 @@ Always end a successful ship by reporting:
 - [ ] Hosted canary healthy if runtime lane changed
 - [ ] Fast deploy smoke passed after hosted runtime changes
 - [ ] Async hosted live QA was dispatched; if it fails, fix/re-run before release claims
-- [ ] `make dogfood-refresh` ran + menu bar restarted (always)
-- [ ] iOS rebuild prompt given if `ios/` changed
+- [ ] Local dogfood refreshed only if machine-side behavior changed
+- [ ] iOS device installed only if `ios/` changed

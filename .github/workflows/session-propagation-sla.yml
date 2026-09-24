@@ -35,7 +35,7 @@ concurrency:
 jobs:
   profiler:
     name: "${{ matrix.name }}"
-    runs-on: cube-deploy
+    runs-on: cube-browser
     timeout-minutes: 30
     if: ${{ github.repository == 'cipher982/longhouse' && (github.event_name != 'schedule' || vars.SESSION_PROPAGATION_SLA_ENABLED == 'true') }}
     strategy:

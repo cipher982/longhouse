@@ -67,7 +67,7 @@ Run the tier that matches your change — don't over-test:
 | `engine/` (Rust agent)   | `make test-engine`   |
 | `runner/`                | `make test-runner`   |
 | UI / runtime behavior    | `make test-e2e`      |
-| Before pushing           | `make test-ci`       |
+| Before pushing           | `make affected-check BASE=origin/main`; run focused matching proof |
 
 Ordinary `test-*`, `validate-*`, `qa-*`, and onboarding-funnel targets run
 through the disposable portable test boundary. Local runs require Docker; the
@@ -79,6 +79,27 @@ Receipts and collected evidence go under `artifacts/test-isolation/<run-id>/`.
 Each run has its own container and private home. The container deadline survives
 a killed supervisor; the next run removes expired resources owned by that
 checkout without touching active runs or another checkout's resources.
+
+Use `make affected-check BASE=<base-sha>` to list files, CI lanes, and
+local commands from `.github/path-filters.yml`; add `RUN=1` to run supported
+targets. The command includes staged, unstaged, and nonignored new files, so
+its local selection can be broader than CI's committed diff. Unmatched paths
+require explicit review; they are not treated as a green test. Full `make
+test-ci` is an intentional broad cutover check, not the default pre-push tax.
+
+Trusted CI publishes the manifest-keyed dependency image once to GHCR and
+passes an immutable digest to each disposable fixture job. Pull credentials
+stay in the supervisor's temporary Docker config and never enter the fixture
+container. A missing or mismatched image fails the job instead of falling
+back to a cold local build. Local runs without that explicit image reference
+still build from the manifests. Fork PRs cannot run repository code on the
+self-hosted runner's writable cache; replay on a trusted branch to qualify.
+
+For an already-pushed maintainer SHA, `make ship-watch SHA=<full-sha>
+ARGS=--json` waits for the exact workflow/deployment disposition and returns
+workflow URLs. `no_runtime_change` means no hosted mutation occurred, not
+that a different SHA was promoted.
+
 Do not provide provider credentials to fixture targets.
 
 Backend tests go in `server/tests_lite/` (per-test SQLite DBs, no shared

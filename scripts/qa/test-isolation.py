@@ -8,6 +8,7 @@ fixture mode. Dependency installation runs separately while building the image.
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import hashlib
 import io
 import json
@@ -131,7 +132,9 @@ MANIFESTS = (
 
 
 def command(args: list[str], **kwargs) -> subprocess.CompletedProcess:
-    return subprocess.run(args, check=True, **kwargs)
+    env = dict(kwargs.pop("env", os.environ))
+    env.pop("LONGHOUSE_TEST_PULL_TOKEN", None)
+    return subprocess.run(args, check=True, env=env, **kwargs)
 
 
 DOCKER_ENV: dict[str, str] | None = None
@@ -141,8 +144,11 @@ def configure_docker(scratch: Path) -> None:
     global DOCKER_ENV
     endpoint = os.environ.get("DOCKER_HOST")
     if not endpoint:
+        context_env = dict(os.environ)
+        context_env.pop("LONGHOUSE_TEST_PULL_TOKEN", None)
         endpoint = command(
             ["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
+            env=context_env,
             capture_output=True,
             text=True,
         ).stdout.strip()
@@ -151,8 +157,10 @@ def configure_docker(scratch: Path) -> None:
             "isolated tests require a local Docker Unix socket, not a remote daemon"
         )
     config = scratch / "docker-config"
-    config.mkdir()
-    (config / "config.json").write_text("{}\n")
+    config.mkdir(mode=0o700)
+    config_file = config / "config.json"
+    config_file.write_text("{}\n")
+    config_file.chmod(0o600)
     # Public image pulls must not invoke the developer's Keychain credential helper.
     DOCKER_ENV = {
         "PATH": os.environ["PATH"],
@@ -167,27 +175,176 @@ def docker(*args: str, check: bool = True, **kwargs) -> subprocess.CompletedProc
         raise RuntimeError("Docker supervisor configuration has not been isolated")
     return subprocess.run(["docker", *args], check=check, env=DOCKER_ENV, **kwargs)
 
+IMAGE_REF_PATTERN = re.compile(
+    r"^ghcr\.io/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+@sha256:[0-9a-f]{64}$"
+)
+MANIFEST_LABEL = LABEL + ".manifest-sha256"
 
-def image_tag() -> str:
+
+@dataclass(frozen=True)
+class ImageMetadata:
+    image_id: str
+    labels: dict[str, str]
+    repo_digests: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ImagePreparation:
+    ref: str
+    image_id: str
+    seconds: float
+    cache: str
+    source: str
+
+
+def manifest_sha256() -> str:
     digest = hashlib.sha256()
     for name in MANIFESTS:
         digest.update(name.encode())
         digest.update((ROOT / name).read_bytes())
-    return "longhouse-test:" + digest.hexdigest()[:20]
+    return digest.hexdigest()
 
 
-def prepare_image(scratch: Path) -> str:
-    image = image_tag()
-    exists = docker(
+def image_key() -> dict[str, str | list[str]]:
+    manifest = manifest_sha256()
+    # The producer uses this as the GHCR tag, while the consumer uses the
+    # separately supplied immutable digest reference.
+    return {"tag": manifest, "manifest_sha256": manifest, "manifests": list(MANIFESTS)}
+
+
+def image_tag() -> str:
+    return "longhouse-test:" + manifest_sha256()
+
+
+def inspect_image(ref: str) -> ImageMetadata | None:
+    inspected = docker(
         "image",
         "inspect",
-        image,
+        ref,
         check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
     )
-    if exists.returncode == 0:
-        return image
+    if inspected.returncode:
+        return None
+    try:
+        payload = json.loads(inspected.stdout)
+        image = payload[0]
+        config = image["Config"]
+        labels = config.get("Labels") or {}
+        repo_digests = image.get("RepoDigests") or []
+        if not isinstance(labels, dict) or not isinstance(repo_digests, list):
+            raise TypeError
+        image_id = image["Id"]
+        if not isinstance(image_id, str):
+            raise TypeError
+        return ImageMetadata(
+            image_id=image_id,
+            labels={str(key): str(value) for key, value in labels.items()},
+            repo_digests=tuple(str(value) for value in repo_digests),
+        )
+    except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Docker returned malformed metadata for image {ref}") from exc
+
+
+def validate_image_ref(ref: str) -> str:
+    if not IMAGE_REF_PATTERN.fullmatch(ref):
+        raise ValueError(
+            "LONGHOUSE_TEST_IMAGE_REF must be a GHCR image with an immutable sha256 digest"
+        )
+    return ref
+
+
+def validate_image(
+    ref: str, metadata: ImageMetadata, expected_manifest: str
+) -> str:
+    if metadata.labels.get(MANIFEST_LABEL) != expected_manifest:
+        raise RuntimeError(
+            f"image {ref} has the wrong {MANIFEST_LABEL} label; refusing to run it"
+        )
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", metadata.image_id):
+        raise RuntimeError(f"image {ref} has no valid local image ID")
+    if "@" in ref and metadata.repo_digests:
+        expected_digest = ref.rsplit("@", 1)[1]
+        if not any(value.rsplit("@", 1)[-1] == expected_digest for value in metadata.repo_digests):
+            raise RuntimeError(f"image {ref} resolved to a different local manifest")
+    return metadata.image_id
+
+
+def ghcr_login(token: str) -> None:
+    username = (
+        os.environ.get("LONGHOUSE_TEST_PULL_USER")
+        or os.environ.get("GITHUB_ACTOR")
+        or "github-actions"
+    )
+    result = docker(
+        "login",
+        "ghcr.io",
+        "--username",
+        username,
+        "--password-stdin",
+        check=False,
+        input=(token + "\n").encode(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode:
+        raise RuntimeError("GHCR authentication failed")
+
+
+def prepare_image(scratch: Path) -> ImagePreparation:
+    started = time.monotonic()
+    expected_manifest = manifest_sha256()
+    configured_ref = os.environ.get("LONGHOUSE_TEST_IMAGE_REF")
+    if configured_ref is not None:
+        ref = validate_image_ref(configured_ref)
+        existing = inspect_image(ref)
+        if existing is None:
+            token = os.environ.get("LONGHOUSE_TEST_PULL_TOKEN")
+            if token:
+                ghcr_login(token)
+            pulled = docker(
+                "pull",
+                ref,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            if pulled.returncode:
+                # Do not fall back to a local build: the digest is the
+                # producer-consumer contract for public fixture jobs.
+                raise RuntimeError("immutable GHCR image pull failed")
+            existing = inspect_image(ref)
+            if existing is None:
+                raise RuntimeError("pulled GHCR image is not available locally")
+            cache = "miss"
+            source = "ghcr-pull"
+        else:
+            cache = "hit"
+            source = "ghcr-cache"
+        image_id = validate_image(ref, existing, expected_manifest)
+        return ImagePreparation(
+            ref=ref,
+            image_id=image_id,
+            seconds=round(time.monotonic() - started, 3),
+            cache=cache,
+            source=source,
+        )
+
+    ref = image_tag()
+    existing = inspect_image(ref)
+    if existing is not None and existing.labels.get(MANIFEST_LABEL) == expected_manifest:
+        image_id = validate_image(ref, existing, expected_manifest)
+        return ImagePreparation(
+            ref=ref,
+            image_id=image_id,
+            seconds=round(time.monotonic() - started, 3),
+            cache="hit",
+            source="local-cache",
+        )
+    # A stale local tag is rebuilt, but an explicit GHCR digest above is
+    # always fail-closed on a provenance mismatch.
     context = scratch / "image"
     for name in MANIFESTS:
         dest = context / name
@@ -195,15 +352,27 @@ def prepare_image(scratch: Path) -> str:
         shutil.copyfile(ROOT / name, dest)
     docker(
         "build",
+        "--build-arg",
+        f"TEST_MANIFEST_SHA={expected_manifest}",
         "--label",
         f"{LABEL}.image=true",
         "-f",
         str(context / "docker/test.dockerfile"),
         "-t",
-        image,
+        ref,
         str(context),
     )
-    return image
+    existing = inspect_image(ref)
+    if existing is None:
+        raise RuntimeError("local dependency image build produced no image")
+    image_id = validate_image(ref, existing, expected_manifest)
+    return ImagePreparation(
+        ref=ref,
+        image_id=image_id,
+        seconds=round(time.monotonic() - started, 3),
+        cache="miss",
+        source="local-build",
+    )
 
 
 def source_archive(scratch: Path) -> Path:
@@ -528,6 +697,11 @@ def run_container(args: argparse.Namespace, options: dict[str, str]) -> int:
     deadline = time.time() + args.timeout + 20
     receipt_dir = ROOT / "artifacts" / "test-isolation" / run_id
     receipt_dir.mkdir(parents=True, mode=0o700)
+    configured_image_ref = os.environ.get("LONGHOUSE_TEST_IMAGE_REF")
+    image_hint = (
+        args.image
+        or (configured_image_ref if configured_image_ref is not None else image_tag())
+    )
     receipt = {
         "run_id": run_id,
         "container": name,
@@ -537,6 +711,20 @@ def run_container(args: argparse.Namespace, options: dict[str, str]) -> int:
         "lane": "live" if args.live else "fixture",
         "network": "bridge" if args.live else "none",
         "cleanup": False,
+        "image": image_hint,
+        "image_ref": image_hint,
+        "image_id": None,
+        "image_preparation_seconds": None,
+        "image_cache": "explicit" if args.image else "unknown",
+        "image_source": (
+            "explicit"
+            if args.image
+            else (
+                "ghcr"
+                if "LONGHOUSE_TEST_IMAGE_REF" in os.environ
+                else "local"
+            )
+        ),
     }
     options.setdefault("ARTIFACT", f"/work/artifacts/{args.target}.json")
     options.setdefault("EVIDENCE_ROOT", f"/work/artifacts/{args.target}")
@@ -555,10 +743,34 @@ def run_container(args: argparse.Namespace, options: dict[str, str]) -> int:
     for sig in (signal.SIGINT, signal.SIGTERM):
         previous_handlers[sig] = signal.signal(sig, interrupt)
     try:
-        configure_docker(scratch)
-        reap_stale_owned_containers()
-        image = args.image or prepare_image(scratch)
-        receipt["image"] = image
+        preparation_started = time.monotonic()
+        try:
+            configure_docker(scratch)
+            reap_stale_owned_containers()
+            preparation_started = time.monotonic()
+            if args.image:
+                image = args.image
+                metadata = inspect_image(image)
+                if metadata is None or not re.fullmatch(
+                    r"sha256:[0-9a-f]{64}", metadata.image_id
+                ):
+                    raise RuntimeError(f"image {image} has no valid local image ID")
+                receipt["image_id"] = metadata.image_id
+                receipt["image_cache"] = "explicit"
+                receipt["image_ref"] = image
+                receipt["image"] = image
+            else:
+                preparation = prepare_image(scratch)
+                image = preparation.ref
+                receipt["image"] = preparation.ref
+                receipt["image_ref"] = preparation.ref
+                receipt["image_id"] = preparation.image_id
+                receipt["image_cache"] = preparation.cache
+                receipt["image_source"] = preparation.source
+        finally:
+            receipt["image_preparation_seconds"] = round(
+                time.monotonic() - preparation_started, 3
+            )
         archive = source_archive(scratch)
         with archive.open("rb") as source:
             receipt["source_archive_sha256"] = hashlib.file_digest(
@@ -630,6 +842,12 @@ def run_container(args: argparse.Namespace, options: dict[str, str]) -> int:
         docker("cp", "-", name + ":/opt", input=configuration.getvalue())
         configuration.close()
         print(
+            f"[test-isolation] image={receipt['image_ref']} "
+            f"id={receipt['image_id']} preparation={receipt['image_preparation_seconds']:.3f}s "
+            f"cache={receipt['image_cache']} source={receipt['image_source']}",
+            flush=True,
+        )
+        print(
             f"[test-isolation] {run_id} target={args.target} network={receipt['network']}",
             flush=True,
         )
@@ -643,55 +861,64 @@ def run_container(args: argparse.Namespace, options: dict[str, str]) -> int:
         except subprocess.TimeoutExpired:
             receipt["error"] = "test timeout"
             code = 124
-        receipt["exit_code"] = code
-        return code
     except KeyboardInterrupt:
         receipt["exit_code"] = 128 + (interrupted or signal.SIGINT)
         return receipt["exit_code"]
+    except (
+        ValueError,
+        RuntimeError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+    ) as exc:
+        receipt["error"] = str(exc)
+        raise
     finally:
         # Exact generated container identity, never ports/process-name matches.
         for sig in previous_handlers:
             signal.signal(sig, signal.SIG_IGN)
         try:
-            exists = docker(
-                "inspect",
-                "--format",
-                "{{.Id}}",
-                name,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            if exists.returncode == 0:
-                docker(
-                    "stop",
-                    "--time",
-                    "5",
+            if DOCKER_ENV is not None:
+                exists = docker(
+                    "inspect",
+                    "--format",
+                    "{{.Id}}",
                     name,
                     check=False,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
                 )
-                try:
-                    collect_artifacts(name, scratch, receipt_dir / "files")
-                finally:
-                    docker("rm", "--force", name, stdout=subprocess.DEVNULL)
-            if child is not None:
-                try:
-                    child.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    os.killpg(child.pid, signal.SIGKILL)
-                    child.wait()
-            remaining = docker(
-                "ps",
-                "--all",
-                "--quiet",
-                "--filter",
-                f"label={LABEL}={run_id}",
-                capture_output=True,
-                text=True,
-            )
-            receipt["cleanup"] = not bool(remaining.stdout.strip())
+                if exists.returncode == 0:
+                    docker(
+                        "stop",
+                        "--time",
+                        "5",
+                        name,
+                        check=False,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    try:
+                        collect_artifacts(name, scratch, receipt_dir / "files")
+                    finally:
+                        docker("rm", "--force", name, stdout=subprocess.DEVNULL)
+                if child is not None:
+                    try:
+                        child.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(child.pid, signal.SIGKILL)
+                        child.wait()
+                remaining = docker(
+                    "ps",
+                    "--all",
+                    "--quiet",
+                    "--filter",
+                    f"label={LABEL}={run_id}",
+                    capture_output=True,
+                    text=True,
+                )
+                receipt["cleanup"] = not bool(remaining.stdout.strip())
+            else:
+                receipt["cleanup"] = True
         finally:
             shutil.rmtree(scratch)
             receipt["scratch_removed"] = not scratch.exists()
@@ -759,6 +986,11 @@ def main() -> int:
         help="prepare only the credential-free portable dependency image",
     )
     parser.add_argument("--timeout", type=int, default=3600)
+    parser.add_argument(
+        "--print-image-key",
+        action="store_true",
+        help="print the producer-consumer dependency image key as JSON",
+    )
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--image")
     parser.add_argument("--credentials", type=Path)
@@ -816,6 +1048,9 @@ def main() -> int:
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
     try:
+        if args.print_image_key:
+            print(json.dumps(image_key(), sort_keys=True))
+            return 0
         if args.target in PRIVATE_NATIVE:
             raise ValueError(
                 "private-input native proofs require a separately authorized disposable macOS worker; public fixture CI never imports personal transcripts or tokens"
@@ -824,7 +1059,15 @@ def main() -> int:
             with tempfile.TemporaryDirectory(prefix="longhouse-test-image-") as temp:
                 scratch = Path(temp)
                 configure_docker(scratch)
-                print(prepare_image(scratch))
+                prepared = prepare_image(scratch)
+                print(
+                    f"[test-isolation] image={prepared.ref} id={prepared.image_id} "
+                    f"preparation={prepared.seconds:.3f}s cache={prepared.cache} "
+                    f"source={prepared.source}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                print(prepared.ref)
                 return 0
         if args.target == "launch-gate-local":
             args.target = "test-install"

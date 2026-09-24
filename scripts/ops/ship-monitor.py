@@ -53,6 +53,8 @@ RUNTIME_IMAGE_PATHS = (
     "video/scripts",
     "video/package.json",
     ".github/workflows/runtime-image.yml",
+    "scripts/ops/runtime-schema.py",
+    "scripts/ops/release-artifacts.py",
 )
 
 
