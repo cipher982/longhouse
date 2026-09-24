@@ -747,6 +747,7 @@ class SearchStore:
         cleared: dict[str, int] = {}
         self.connection.execute("BEGIN IMMEDIATE")
         try:
+            self.connection.execute("DELETE FROM events_fts")
             for table in tables:
                 cursor = self.connection.execute(f"DELETE FROM {table}")
                 cleared[table] = max(0, cursor.rowcount)

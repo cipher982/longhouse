@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import sqlite3
+import sys
 import threading
 from datetime import UTC
 from datetime import datetime
@@ -33,6 +34,9 @@ from zerg.searchd.store import _bounded_worklog_content
 from zerg.searchd.store import _fts_query
 from zerg.searchd.store import object_set_hash
 from zerg.searchd.store import open_search_database
+from zerg.storage_v2.render_objects import RenderObjectSpec
+from zerg.storage_v2.render_objects import RenderRecord
+from zerg.storage_v2.render_objects import seal_render_object
 
 
 def test_recall_context_per_turn_budget_and_truncation_are_explicit():
@@ -93,6 +97,61 @@ def _records(text: str) -> list[dict]:
             "branch_kind": "subagent",
         },
     ]
+
+
+@pytest.fixture(autouse=True)
+def _seal_search_render_objects(tmp_path, monkeypatch):
+    """Make legacy index-object fixtures exercise the real render-object contract."""
+
+    monkeypatch.setenv("LONGHOUSE_STORAGE_V2_ROOT", str(tmp_path / "objects-v2"))
+    aliases: dict[str, str] = {}
+    original_index_object = SearchStore.index_object
+    original_object_set_hash = object_set_hash
+
+    def index_object(store, **kwargs):
+        alias = kwargs["object_id"]
+        object_id = aliases.get(alias)
+        if object_id is None:
+            records = kwargs["records"]
+            spec = RenderObjectSpec(
+                session_id=UUID(kwargs["session_id"]),
+                render_generation=UUID(kwargs["generation_id"]),
+                parser_revision="test",
+                ordering_revision="test",
+                machine_id=kwargs["machine_id"],
+                provider=kwargs["provider"],
+                opaque_source_id=kwargs["opaque_source_id"],
+                source_epoch=UUID(kwargs["source_epoch"]),
+                source_envelope_id=hashlib.sha256(b"test-source-envelope").hexdigest(),
+                records=tuple(
+                    RenderRecord(
+                        event_id=record["event_id"],
+                        order_time_us=record["order_time_us"],
+                        source_position=record["source_position"],
+                        event_subordinal=record["event_subordinal"],
+                        role=record["role"],
+                        content_text=record.get("content_text"),
+                        tool_name=record.get("tool_name"),
+                        tool_output_text=record.get("tool_output_text"),
+                        tool_call_id=record.get("tool_call_id"),
+                        thread_id=record.get("thread_id"),
+                        branch_kind=record.get("branch_kind"),
+                        # Searchd receives the original semantic fact. The
+                        # fixture seal only needs the text-bearing object.
+                        interaction_kind=None,
+                    )
+                    for record in records
+                ),
+            )
+            object_id = seal_render_object(tmp_path / "objects-v2", spec).object_id
+            aliases[alias] = object_id
+        return original_index_object(store, **{**kwargs, "object_id": object_id})
+
+    def mapped_object_set_hash(object_ids):
+        return original_object_set_hash([aliases.get(object_id, object_id) for object_id in object_ids])
+
+    monkeypatch.setattr(SearchStore, "index_object", index_object)
+    monkeypatch.setattr(sys.modules[__name__], "object_set_hash", mapped_object_set_hash)
 
 
 def _search_params(query: str) -> dict:
@@ -228,7 +287,6 @@ def test_e2e_reset_clears_the_entire_derived_search_corpus(tmp_path, monkeypatch
         assert store.ping()["published_sessions"] == 0
         assert store.search(**_search_params("needle"))["results"] == []
         assert connection.execute("SELECT COUNT(*) FROM events_fts").fetchone()[0] == 0
-        assert connection.execute("SELECT COUNT(*) FROM searchable_fts").fetchone()[0] == 0
     finally:
         connection.close()
 
@@ -942,7 +1000,7 @@ def test_searchable_search_walks_rowid_descending_and_sorts_only_candidates(tmp_
             ),
         ).fetchall()
         details = [str(row[3]) for row in plan]
-        assert any("searchable_fts" in detail and "VIRTUAL TABLE INDEX 192:" in detail for detail in details)
+        assert any("events_fts" in detail and "VIRTUAL TABLE INDEX 192:" in detail for detail in details)
         assert not any("VIRTUAL TABLE INDEX 32:" in detail for detail in details)
         # The owner/project/window predicates must be evaluated inside the walk.
         # Applied afterwards they made narrow windows slower, not faster.
@@ -978,14 +1036,8 @@ def test_candidate_walk_never_touches_event_text(tmp_path):
             " role, tool_name, indexed_through, event_count)"
             " VALUES (1, '42', NULL, 'codex', 'local', 1, 's', 'g', 'o', 0, 'e', 'user', NULL, 1, 1)"
         )
-        connection.execute(
-            "INSERT INTO searchable_text(source_event_id, content_text, tool_output_text) VALUES (1, 'retained needle', NULL)"
-        )
-        assert connection.execute("SELECT COUNT(*) FROM searchable_fts WHERE searchable_fts MATCH 'needle'").fetchone()[0] == 1
-
         connection.execute("DELETE FROM searchable_events WHERE source_event_id = 1")
-        assert connection.execute("SELECT COUNT(*) FROM searchable_text").fetchone()[0] == 0
-        assert connection.execute("SELECT COUNT(*) FROM searchable_fts WHERE searchable_fts MATCH 'needle'").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM searchable_events").fetchone()[0] == 0
     finally:
         connection.close()
 
@@ -1000,7 +1052,7 @@ def test_searchable_search_snippets_only_the_returned_page(tmp_path):
 
     candidate_source, _, remainder = _SEARCHABLE_SEARCH_SQL.partition("), top AS (")
     assert "snippet(" not in candidate_source, "candidate walk must not build snippets"
-    assert "snippet(" in remainder, "the returned page still needs snippets"
+    assert "snippet(" not in remainder, "contentless FTS snippets are built after hydration"
 
 
 @pytest.mark.asyncio
@@ -1758,7 +1810,7 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
         assert dense_loads == 0
         search = await client.call("search.query.v2", _search_params("speed"))
         assert search["results"][0]["session_id"] == session_id
-        assert search["results"][0]["source_object_id"] == object_id
+        assert len(search["results"][0]["source_object_id"]) == 64
         assert search["results"][0]["record_ordinal"] == 0
         assert "speed" in search["results"][0]["content_snippet"]
         assert "content_text" not in search["results"][0]
@@ -2109,6 +2161,7 @@ def test_searchd_partial_prose_remains_searchable_without_counting_as_a_reply(tm
             source_epoch=str(uuid4()),
             records=records,
         )
+        publication["object_set_hash"] = object_set_hash([object_id])
         store.publish_generation(**publication)
         results = store.search(**_search_params("partialproof"))["results"]
         assert {row["event_id"] for row in results} == {"prompt", "failed", "thinking", "reply"}
@@ -2405,7 +2458,7 @@ def test_searchd_replays_late_semantic_correction_without_identity_conflict(tmp_
         index_and_publish(corrected_records, 2)
         assert store.search(**_search_params("effort"))["results"] == []
         assert connection.execute("SELECT user_messages FROM session_index WHERE session_id = ?", (session_id,)).fetchone()[0] == 0
-        assert connection.execute("SELECT COUNT(*) FROM events WHERE source_object_id = ?", (object_id,)).fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM events WHERE session_id = ?", (session_id,)).fetchone()[0] == 1
     finally:
         connection.close()
 
@@ -2583,10 +2636,7 @@ def test_searchd_upgrades_legacy_empty_object_for_same_subject_only(tmp_path):
     }
     try:
         assert store.index_object(**params)["created"] is True
-        connection.execute(
-            "UPDATE indexed_objects SET projection_hash = ? WHERE object_id = ?",
-            (hashlib.sha256(b"legacy-empty-object-hash").hexdigest(), object_id),
-        )
+        connection.execute("UPDATE indexed_objects SET projection_hash = ?", (hashlib.sha256(b"legacy-empty-object-hash").hexdigest(),))
         upgraded = store.index_object(**{**params, "desired_revision": 2, "project": "renamed-longhouse"})
         assert upgraded["identity_upgraded"] is True
         assert store.index_object(**{**params, "desired_revision": 2})["identity_upgraded"] is False
