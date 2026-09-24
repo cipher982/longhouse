@@ -350,10 +350,11 @@ test-mobile-chat-replay: ## Replay a local SQLite transcript through the iOS mob
 	LONGHOUSE_UI_TEST_CHAT_REPLAY_PATH="$$REPLAY_PATH" \
 	IOS_TEST_SCHEMES="LonghouseChatStress" ./scripts/ci/run_ios_tests.sh "$$DESTINATION"
 
-test-ios-helper: ## iOS simulator helper script tests
+test-ios-helper: ## iOS simulator and native-dispatch helper script tests
 	@bash scripts/tests/select-ios-simulator.test.sh
 	@python3 scripts/tests/simlab.test.py
 	@python3 scripts/tests/simlab-proxy.test.py
+	@python3 scripts/tests/native-test-isolation.test.py
 
 test-frontend: ## Frontend unit tests + type-check (~15s)
 	@cd web && bun run validate:types && bun run test -- --run --runInBand

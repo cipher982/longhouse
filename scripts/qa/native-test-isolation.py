@@ -75,6 +75,32 @@ def owned_run_ids(repository: str, title: str) -> list[str]:
     return [str(row["databaseId"]) for row in runs if row.get("displayTitle") == title]
 
 
+def require_authenticated_gh() -> None:
+    """Fail with the missing credential, not with a failed command.
+
+    Everything a dispatch does needs an authenticated GitHub CLI: it reads the
+    repo visibility, proves the revision is pushed, submits the workflow, and
+    reconciles the run it owns. Without this preflight a host that has no gh (a
+    bench, a fresh machine) fails inside capture() with a bare
+    CalledProcessError that names a command instead of the missing credential.
+    """
+
+    try:
+        subprocess.run(
+            ["gh", "auth", "status"], capture_output=True, check=True, timeout=30
+        )
+    except FileNotFoundError as exc:
+        raise ValueError(
+            "native dispatch needs the GitHub CLI on the dispatching host: install gh and run `gh auth login`. "
+            "Simulator and container lanes do not need it; only dispatched ones (test-ios, ios-previews, simlab-run) do."
+        ) from exc
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise ValueError(
+            "native dispatch needs an authenticated gh on this host (`gh auth login`): it checks repo visibility, "
+            "proves the revision is pushed, dispatches the workflow, and reconciles its own run."
+        ) from exc
+
+
 def run(args: argparse.Namespace) -> int:
     if args.target not in TARGETS:
         raise ValueError(
@@ -111,25 +137,7 @@ def run(args: argparse.Namespace) -> int:
             "native CI needs a clean source revision; commit and push the worktree first"
         )
     sha = capture("git", "rev-parse", "HEAD")
-    # Everything below needs an authenticated GitHub CLI: it reads the repo
-    # visibility, proves the revision is pushed, dispatches the workflow, and
-    # reconciles the run it owns. Without this preflight a host that has no gh
-    # (the bench, a fresh machine) fails inside capture() with a bare
-    # CalledProcessError that names a command instead of the missing credential.
-    try:
-        subprocess.run(
-            ["gh", "auth", "status"], capture_output=True, check=True, timeout=30
-        )
-    except FileNotFoundError as exc:
-        raise ValueError(
-            "native dispatch needs the GitHub CLI on the dispatching host: install gh and run `gh auth login`. "
-            "Simulator and container lanes do not need it; only dispatched ones (test-ios, ios-previews, simlab-run) do."
-        ) from exc
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-        raise ValueError(
-            "native dispatch needs an authenticated gh on this host (`gh auth login`): it checks repo visibility, "
-            "proves the revision is pushed, dispatches the workflow, and reconciles its own run."
-        ) from exc
+    require_authenticated_gh()
     repo = json.loads(
         capture("gh", "repo", "view", "--json", "nameWithOwner,visibility")
     )
