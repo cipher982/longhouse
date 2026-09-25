@@ -96,7 +96,9 @@ const config = {
     viewport: { width: 1280, height: 800 },
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
-    video: "retain-on-failure",
+    // Recording every test and discarding the video on pass cost ~16% of the
+    // suite. Failures keep the trace (screenshots, DOM, network) instead.
+    video: "off",
     navigationTimeout: 30_000,
     actionTimeout: 10_000,
   },
