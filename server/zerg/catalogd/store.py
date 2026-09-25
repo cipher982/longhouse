@@ -1606,6 +1606,56 @@ class CatalogStore:
                     literal(now),
                 ).where(search_rows.c.projector == "search-v2")
             )
+            # search-v2 reads render objects frozen at its claimed revision. A
+            # re-render that committed a newer current generation without
+            # raising this target left the snapshot empty: the projector
+            # published zero objects and recorded the session complete. On the
+            # 2026-09-24 owner catalog 15,442 of 40,222 sessions were behind
+            # their generation, served only from a search.db built before the
+            # re-render, and a rebuild dropped them silently. Raise the target
+            # to the session's revision; embeddings follow via the alignment
+            # below.
+            current_generation_revision = (
+                select(RenderGeneration.__table__.c.commit_seq)
+                .where(RenderGeneration.__table__.c.generation_id == sessions.c.current_render_generation)
+                .scalar_subquery()
+            )
+            session_revision = (
+                select(sessions.c.commit_seq)
+                .where(
+                    sessions.c.session_id == states.c.session_id,
+                    *eligible_filter,
+                    current_generation_revision > states.c.desired_revision,
+                )
+                .scalar_subquery()
+            )
+            stale_render_filter = (
+                states.c.projector == "search-v2",
+                session_revision.is_not(None),
+            )
+            advanced_render_consumers = int(
+                connection.execute(select(func.count()).select_from(states).where(*stale_render_filter)).scalar_one()
+            )
+            if advanced_render_consumers:
+                connection.execute(
+                    update(states)
+                    .where(*stale_render_filter)
+                    .values(
+                        desired_revision=session_revision,
+                        desired_at=now,
+                        claimed_revision=None,
+                        claim_token=None,
+                        worker_id=None,
+                        claim_expires_at=None,
+                        status="idle",
+                        failure_count=0,
+                        last_error_code=None,
+                        last_error_message=None,
+                        retry_at=None,
+                        commit_seq=commit_seq,
+                        updated_at=now,
+                    )
+                )
             search_alignment = states.alias("search_alignment")
             search_revision = (
                 select(search_alignment.c.desired_revision)
@@ -1675,6 +1725,7 @@ class CatalogStore:
                 "reaped_irrelevant_semantic": irrelevant_semantic,
                 "aligned_embeddings": aligned_embeddings,
                 "advanced_retired": advanced_retired,
+                "advanced_render_consumers": advanced_render_consumers,
             }
 
     def retire_archive_outbox(self) -> dict[str, int | str]:

@@ -4650,3 +4650,55 @@ async def test_omp_parent_path_refuses_ambiguous_or_cross_scope_links(daemon_pat
         assert child_row.subagent_parent_provider_session_id == parent_path
         assert child_row.hidden_from_default_timeline == 1
     engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_startup_raises_search_targets_left_behind_by_a_rerender(daemon_paths):
+    """A generation newer than search's target made its frozen snapshot empty."""
+
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        params = _raw_params(epoch=uuid4(), session_id=session_id, start=0, end=6, records=(b"hello\n",), sealed_at=now)
+        params.update(
+            render_state="ready",
+            render_manifest=_render_manifest(uuid4(), seed=b"rerender"),
+            projectors=["search-v2", EMBEDDING_PROJECTOR_ID],
+        )
+        await client.call("storage.raw_object.commit.v2", params)
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    try:
+        with engine.begin() as connection:
+            target = connection.exec_driver_sql(
+                "SELECT desired_revision FROM projector_state WHERE projector = 'search-v2' AND session_id = ?", (str(session_id),)
+            ).scalar_one()
+            # The re-render: a newer current generation and session revision,
+            # search marked complete at its old target.
+            connection.exec_driver_sql("UPDATE render_generations SET commit_seq = ? WHERE session_id = ?", (target + 500, str(session_id)))
+            connection.exec_driver_sql("UPDATE sessions SET commit_seq = ? WHERE session_id = ?", (target + 600, str(session_id)))
+            connection.exec_driver_sql(
+                "UPDATE projector_state SET completed_revision = desired_revision, status = 'idle' WHERE session_id = ?",
+                (str(session_id),),
+            )
+
+        repaired = CatalogStore(engine).ensure_known_projector_states()
+        assert repaired["advanced_render_consumers"] == 1
+        with engine.connect() as connection:
+            rows = dict(
+                connection.exec_driver_sql(
+                    "SELECT projector, desired_revision FROM projector_state WHERE session_id = ?", (str(session_id),)
+                ).all()
+            )
+        assert rows["search-v2"] == target + 600
+        assert rows[EMBEDDING_PROJECTOR_ID] == target + 600
+        assert CatalogStore(engine).ensure_known_projector_states()["advanced_render_consumers"] == 0
+    finally:
+        engine.dispose()
