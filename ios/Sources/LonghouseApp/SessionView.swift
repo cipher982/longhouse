@@ -308,8 +308,7 @@ struct SessionView: View {
             if isSessionInteractionReady, let detail = viewModel.detail {
                 SessionSignalField(
                     detail: detail,
-                    activity: viewModel.activity,
-                    realtimeConnection: viewModel.realtimeConnection
+                    activity: viewModel.activity
                 ) {
                     VStack(alignment: .leading, spacing: 8) {
                         runtimeDock
