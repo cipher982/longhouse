@@ -98,12 +98,37 @@ struct SessionComposerActionMenu: View {
         .accessibilityIdentifier("session-chat-compose-actions")
     }
 }
+struct SessionModelChip: View {
+    let model: String?
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            Label(model ?? "Default", systemImage: "cpu")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Ember.textSecondary)
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Ember.well, in: Capsule())
+                .overlay {
+                    Capsule().strokeBorder(Ember.hairline, lineWidth: 0.75)
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Model \(model ?? "Default")")
+        .accessibilityIdentifier("session-chat-model-picker")
+    }
+}
+
 
 /// Production composer controls with injectable actions for previews. The
 /// pause card, draft/queue affordance, attachment tray, and send row all share
 /// the same visibility and capability decisions in every surface.
 struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
     let detail: SessionDetail
+    let model: String?
+    let onModelTap: () -> Void
     @Binding var text: String
     @FocusState.Binding var focused: Bool
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -135,6 +160,8 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
         detail: SessionDetail,
         text: Binding<String>,
         focused: FocusState<Bool>.Binding,
+        model: String? = nil,
+        onModelTap: @escaping () -> Void = {},
         failedInputCount: Int = 0,
         queuedInputCount: Int = 0,
         lastSendOutcome: SessionInputOutcome? = nil,
@@ -158,6 +185,8 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
         @ViewBuilder attachmentTray: () -> AttachmentTray
     ) {
         self.detail = detail
+        self.model = model
+        self.onModelTap = onModelTap
         _text = text
         _focused = focused
         self.failedInputCount = failedInputCount
@@ -181,6 +210,10 @@ struct SessionComposer<ActionMenu: View, AttachmentTray: View>: View {
     var body: some View {
         let attachmentInputEnabled = SessionComposerControlState.attachmentInputEnabled(for: detail, asOf: evidenceNow)
         VStack(alignment: .leading, spacing: 6) {
+            if detail.stateFacts.mode == "console" {
+                SessionModelChip(model: model, onTap: onModelTap)
+            }
+
             if failedInputCount > 0 {
                 Text(failedInputCount == 1
                      ? "1 queued message failed to send."

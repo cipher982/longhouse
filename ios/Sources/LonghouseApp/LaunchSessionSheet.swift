@@ -41,7 +41,7 @@ struct LaunchSessionSheet: View {
     let onLaunchSelection: ((ConsoleLaunchSelection) -> Void)?
     private let previewMachines: [MachineDirectoryEntry]?
     private let previewWorkspaces: [WorkspaceSuggestion]?
-
+    private let previewRecentModels: [RecentModel]?
     @State private var machines: [MachineDirectoryEntry]
     @State private var loadError: String?
     @State private var loading = false
@@ -50,11 +50,15 @@ struct LaunchSessionSheet: View {
 
     @State private var selectedDeviceId: String = ""
     @State private var selectedProvider: String = ""
+    @State private var selectedModel: String?
+    @State private var recentModels: [RecentModel]
+    @State private var loadingModels = false
+    @State private var modelError: String?
     @State private var workspaces: [WorkspaceSuggestion]
     @State private var loadingWorkspaces = false
     @State private var workspaceError: String?
-    @State private var cwd: String = ""
     @State private var workspaceSelectionSource: WorkspaceSelectionSource = .implicitDefault
+    @State private var cwd: String = ""
     @State private var displayName: String = ""
     @State private var sessionId = UUID().uuidString
     @State private var threadId = UUID().uuidString
@@ -63,14 +67,17 @@ struct LaunchSessionSheet: View {
     init(
         previewMachines: [MachineDirectoryEntry]? = nil,
         previewWorkspaces: [WorkspaceSuggestion]? = nil,
+        previewRecentModels: [RecentModel]? = nil,
         onLaunchSelection: ((ConsoleLaunchSelection) -> Void)? = nil,
         onLaunched: @escaping (String) -> Void
     ) {
         self.previewMachines = previewMachines
         self.previewWorkspaces = previewWorkspaces
+        self.previewRecentModels = previewRecentModels
         self.onLaunchSelection = onLaunchSelection
         self.onLaunched = onLaunched
         _machines = State(initialValue: previewMachines ?? [])
+        _recentModels = State(initialValue: previewRecentModels ?? [])
         _workspaces = State(initialValue: previewWorkspaces ?? [])
         if let first = previewMachines?.first(where: { Self.canStartInteractiveSession($0) }) {
             let provider = first.defaultProvider ?? ""
@@ -98,6 +105,16 @@ struct LaunchSessionSheet: View {
 
     private var normalizedCwd: String {
         cwd.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var normalizedModel: String? {
+        guard let selectedModel else { return nil }
+        let value = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
+
+    private var selectedModelTitle: String {
+        normalizedModel ?? "Default"
     }
 
     private var availableProviders: [String] {
@@ -161,6 +178,9 @@ struct LaunchSessionSheet: View {
         .task(id: selectedDeviceId) {
             await loadWorkspaceSuggestions(for: selectedDeviceId)
         }
+        .task(id: "\(selectedDeviceId)|\(selectedProvider)") {
+            await loadRecentModels(for: selectedDeviceId, provider: selectedProvider)
+        }
     }
 
     private var formView: some View {
@@ -197,6 +217,9 @@ struct LaunchSessionSheet: View {
                                 displayName: providerDisplayName
                             ) { provider in
                                 selectedProvider = provider
+                                selectedModel = nil
+                                recentModels = []
+                                modelError = nil
                                 submitError = nil
                             }
                         } label: {
@@ -229,6 +252,26 @@ struct LaunchSessionSheet: View {
                             refreshMachines: refreshMachinesQuietly
                         )
                     }
+
+                    NavigationLink {
+                        ModelSelectionView(
+                            models: recentModels,
+                            selectedModel: normalizedModel,
+                            loading: loadingModels,
+                            errorMessage: modelError
+                        ) { model in
+                            selectedModel = model
+                            submitError = nil
+                        }
+                    } label: {
+                        LaunchSummaryRow(
+                            title: selectedModelTitle,
+                            subtitle: "Coding model",
+                            showsChevron: true
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("launch-model-picker")
 
                     Divider().padding(.leading, 16)
 
@@ -352,9 +395,13 @@ struct LaunchSessionSheet: View {
                 ?? result.first {
                 selectedDeviceId = first.deviceId
                 selectedProvider = first.defaultProvider ?? ""
+                selectedModel = nil
+                recentModels = []
+                modelError = nil
                 cwd = ""
                 workspaceSelectionSource = .implicitDefault
             }
+
         } catch {
             loadError = (error as? LocalizedError)?.errorDescription ?? "Could not load machines."
         }
@@ -364,6 +411,9 @@ struct LaunchSessionSheet: View {
     private func selectMachine(_ machine: MachineDirectoryEntry) {
         selectedDeviceId = machine.deviceId
         selectedProvider = machine.defaultProvider ?? ""
+        selectedModel = nil
+        recentModels = []
+        modelError = nil
         cwd = ""
         workspaceSelectionSource = .implicitDefault
         workspaceError = nil
@@ -424,12 +474,37 @@ struct LaunchSessionSheet: View {
             logger.error("workspace suggestions load failed device=\(deviceId, privacy: .public) elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public) error=\(error.localizedDescription, privacy: .public)")
         }
     }
+    private func loadRecentModels(for deviceId: String, provider: String) async {
+        guard !usesPreviewData, !deviceId.isEmpty, !provider.isEmpty,
+              let api = LonghouseAPI(host: appState.serverURL)
+        else {
+            return
+        }
+        guard deviceId == selectedDeviceId, provider == selectedProvider else { return }
+        loadingModels = true
+        modelError = nil
+        defer {
+            if deviceId == selectedDeviceId, provider == selectedProvider {
+                loadingModels = false
+            }
+        }
+        do {
+            let models = try await api.recentModels(deviceId: deviceId, provider: provider)
+            guard !Task.isCancelled, deviceId == selectedDeviceId, provider == selectedProvider else { return }
+            recentModels = models
+        } catch {
+            guard deviceId == selectedDeviceId, provider == selectedProvider else { return }
+            recentModels = []
+            modelError = "Recent models unavailable."
+        }
+    }
+
     private func submit() async {
         guard canSubmit, let api = LonghouseAPI(host: appState.serverURL) else { return }
         submitting = true
         submitError = nil
         defer { submitting = false }
-        let identityKey = [selectedDeviceId, selectedProvider, normalizedCwd].joined(separator: "\u{1F}")
+        let identityKey = [selectedDeviceId, selectedProvider, normalizedCwd, normalizedModel ?? ""].joined(separator: "\u{1F}")
         let requestSessionID: String
         let requestThreadID: String
         if launchIdentityKey == identityKey {
@@ -448,6 +523,7 @@ struct LaunchSessionSheet: View {
                 deviceId: selectedDeviceId,
                 provider: selectedProvider,
                 cwd: normalizedCwd,
+                model: normalizedModel,
                 displayName: trimmedDisplayName.isEmpty ? nil : trimmedDisplayName,
                 sessionId: requestSessionID,
                 threadId: requestThreadID
@@ -486,6 +562,9 @@ struct LaunchSessionSheet: View {
         machines = result
         if let machine = selectedMachine, !machine.consoleLaunchProviders.contains(selectedProvider) {
             selectedProvider = machine.defaultProvider ?? ""
+            selectedModel = nil
+            recentModels = []
+            modelError = nil
         }
     }
 
@@ -889,6 +968,98 @@ private struct ProviderSelectionView: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 }
+struct ModelSelectionView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let models: [RecentModel]
+    let selectedModel: String?
+    let loading: Bool
+    let errorMessage: String?
+    let onSelect: (String?) -> Void
+
+    @State private var manualModel = ""
+
+    private var normalizedManualModel: String? {
+        let value = manualModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+    }
+
+    var body: some View {
+        List {
+            Button {
+                onSelect(nil)
+                dismiss()
+            } label: {
+                HStack {
+                    Text("Default").foregroundStyle(Ember.text)
+                    Spacer()
+                    if selectedModel == nil {
+                        Image(systemName: "checkmark")
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("launch-model-row-default")
+            .accessibilityAddTraits(selectedModel == nil ? .isSelected : [])
+            .listRowBackground(Ember.card)
+
+            if loading {
+                ProgressView("Loading recent models…")
+                    .listRowBackground(Ember.card)
+            }
+            if let errorMessage, models.isEmpty {
+                Text(errorMessage)
+                    .foregroundStyle(.secondary)
+                    .listRowBackground(Ember.card)
+            }
+            if !models.isEmpty {
+                Section("Recent") {
+                    ForEach(models) { recent in
+                        Button {
+                            onSelect(recent.model)
+                            dismiss()
+                        } label: {
+                            HStack {
+                                Text(recent.model)
+                                    .foregroundStyle(Ember.text)
+                                    .lineLimit(1)
+                                Spacer()
+                                if recent.model == selectedModel {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("launch-model-row-\(recent.model)")
+                        .accessibilityAddTraits(recent.model == selectedModel ? .isSelected : [])
+                    }
+                }
+                .listRowBackground(Ember.card)
+            }
+
+            Section("Other") {
+                TextField("Other model id…", text: $manualModel)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled(true)
+                Button("Use this model id") {
+                    onSelect(normalizedManualModel)
+                    dismiss()
+                }
+                .foregroundStyle(normalizedManualModel == nil ? Ember.textMuted : Ember.gold)
+                .accessibilityIdentifier("launch-model-row-other")
+            }
+            .listRowBackground(Ember.card)
+        }
+        .emberListGround()
+        .navigationTitle("Choose Model")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
 
 private struct WorkspaceSelectionView: View {
     @Environment(\.dismiss) private var dismiss
@@ -1179,6 +1350,10 @@ private func previewMachine(
                 score: 2890,
                 sessionCount: 31
             ),
+        ],
+        previewRecentModels: [
+            RecentModel(model: "gpt-5.6-luna", lastUsedAt: "2026-09-25T10:00:00Z"),
+            RecentModel(model: "gpt-5.5", lastUsedAt: "2026-09-24T10:00:00Z")
         ]
     ) { _ in }
     .environmentObject(AppState())

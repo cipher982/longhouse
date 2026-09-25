@@ -21,11 +21,11 @@ struct PendingInputIntent: Codable, Identifiable, Sendable, Equatable {
     let sessionId: String
     let text: String
     let intent: String
+    let model: String?
     let attachments: [Attachment]
     let createdAt: Date
 
     var id: String { clientRequestId }
-
     init(
         clientRequestId: String,
         serverURL: String,
@@ -33,6 +33,7 @@ struct PendingInputIntent: Codable, Identifiable, Sendable, Equatable {
         sessionId: String,
         text: String,
         intent: String,
+        model: String? = nil,
         attachments: [Attachment],
         createdAt: Date
     ) {
@@ -42,6 +43,7 @@ struct PendingInputIntent: Codable, Identifiable, Sendable, Equatable {
         self.sessionId = sessionId
         self.text = text
         self.intent = intent
+        self.model = model
         self.attachments = attachments
         self.createdAt = createdAt
     }

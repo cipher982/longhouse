@@ -986,6 +986,9 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     var recap: SessionRecap? = nil
     /// Model, effort and context size on the provider's last turn-ending response.
     var usageLatest: SessionUsageLatest? = nil
+    /// Selected model for new per-turn inputs. This is distinct from
+    /// ``usageLatest.model``, which describes the provider's last completed turn.
+    var selectedModel: String? = nil
 
     var displayTitle: String {
         if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
@@ -1294,6 +1297,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         copy.lastTurn = lastTurn ?? previous.lastTurn
         copy.recap = recap ?? previous.recap
         copy.usageLatest = usageLatest ?? previous.usageLatest
+        copy.selectedModel = selectedModel ?? previous.selectedModel
         return copy
     }
 

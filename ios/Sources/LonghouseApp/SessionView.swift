@@ -19,10 +19,16 @@ struct SessionView: View {
     @StateObject private var viewModel = SessionViewModel()
     @StateObject private var liveActivityManager = SessionLiveActivityManager()
     @State private var composerText: String = ""
+    @State private var composerModel: String?
+    @State private var composerModelSessionId: String?
+    @State private var recentComposerModels: [RecentModel] = []
+    @State private var loadingComposerModels = false
+    @State private var composerModelError: String?
     @FocusState private var composerFocused: Bool
     @StateObject private var attachmentStore = ComposerAttachmentStore()
     @State private var pickerSelection: [PhotosPickerItem] = []
     @State private var isShowingPhotoPicker: Bool = false
+    @State private var isShowingModelPicker: Bool = false
     @State private var isShowingBugReport = false
     @State private var bugReportAutoStartFix = false
     @State private var isShowingBugReportSavedAlert = false
@@ -103,6 +109,7 @@ struct SessionView: View {
             // primary request immediately; constructing WebKit here would
             // consume the same main-actor slice before the first network byte.
             await viewModel.start(sessionId: sessionId, appState: appState)
+            initializeComposerModelIfNeeded()
             await viewModel.acknowledgeUnreadIfNeeded(
                 sessionId: sessionId,
                 appState: appState,
@@ -194,6 +201,20 @@ struct SessionView: View {
                 )
             )
         }
+        .sheet(isPresented: $isShowingModelPicker) {
+            NavigationStack {
+                ModelSelectionView(
+                    models: recentComposerModels,
+                    selectedModel: composerModel,
+                    loading: loadingComposerModels,
+                    errorMessage: composerModelError
+                ) { model in
+                    composerModel = model
+                    isShowingModelPicker = false
+                }
+            }
+            .task { await loadRecentComposerModels() }
+        }
         .sheet(isPresented: $isShowingBugReport, onDismiss: finishBugReportDismissal) {
             BugReportSheet(
                 sourceSessionID: sessionId,
@@ -242,6 +263,38 @@ struct SessionView: View {
             isShowingBugReportSavedAlert = true
         }
     }
+    private func initializeComposerModelIfNeeded() {
+        guard composerModelSessionId != sessionId, let detail = viewModel.detail else { return }
+        composerModelSessionId = sessionId
+        let value = detail.selectedModel?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        composerModel = value.isEmpty ? nil : value
+    }
+
+    private func loadRecentComposerModels() async {
+        guard let detail = viewModel.detail,
+              detail.stateFacts.mode == "console",
+              let deviceId = detail.deviceId,
+              !deviceId.isEmpty,
+              !detail.provider.isEmpty,
+              let api = LonghouseAPI(host: appState.serverURL)
+        else {
+            recentComposerModels = []
+            return
+        }
+        loadingComposerModels = true
+        composerModelError = nil
+        defer { loadingComposerModels = false }
+        do {
+            recentComposerModels = try await api.recentModels(
+                deviceId: deviceId,
+                provider: detail.provider
+            )
+        } catch {
+            recentComposerModels = []
+            composerModelError = "Recent models unavailable."
+        }
+    }
+
 
 
     // The fused Balanced signal field: status and composer share one anchored
@@ -480,6 +533,12 @@ struct SessionView: View {
             detail: detail,
             text: $composerText,
             focused: $composerFocused,
+            model: composerModel,
+            onModelTap: {
+                recentComposerModels = []
+                composerModelError = nil
+                isShowingModelPicker = true
+            },
             failedInputCount: viewModel.failedInputCount,
             queuedInputCount: viewModel.queuedInputCount,
             lastSendOutcome: viewModel.lastSendOutcome,
@@ -489,7 +548,11 @@ struct SessionView: View {
             isLoadingPickerItems: isLoadingPickerItems,
             turnEndedDraft: viewModel.turnEndedDraft,
             onQueueInstead: {
-                _ = await viewModel.queueInsteadOfSteer(sessionId: sessionId, appState: appState)
+                _ = await viewModel.queueInsteadOfSteer(
+                    sessionId: sessionId,
+                    appState: appState,
+                    model: composerModel
+                )
             },
             onDismissTurnEnded: {
                 viewModel.turnEndedDraft = nil
@@ -717,6 +780,7 @@ struct SessionView: View {
             sessionId: sessionId,
             appState: appState,
             intent: requestedIntent,
+            model: composerModel,
             attachments: pendingAttachments,
         )
         if sent {

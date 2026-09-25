@@ -905,11 +905,17 @@ final class SessionViewModel: ObservableObject {
         sessionId: String,
         appState: AppState,
         intent: String = "auto",
+        model: String? = nil,
         attachments: [ComposerAttachment] = []
     ) async -> Bool {
         let clientRequestId = "ios-\(UUID().uuidString)"
         let serverURL = TranscriptSnapshot.normalizedServerURL(appState.serverURL)
         let authGeneration = SharedAuthStore.authGeneration(for: serverURL)
+        let normalizedModel: String? = {
+            guard let model else { return nil }
+            let value = model.trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
+        }()
         let pending = PendingInputIntent(
             clientRequestId: clientRequestId,
             serverURL: serverURL,
@@ -917,6 +923,7 @@ final class SessionViewModel: ObservableObject {
             sessionId: sessionId,
             text: text,
             intent: intent,
+            model: normalizedModel,
             attachments: attachments.map {
                 PendingInputIntent.Attachment(
                     id: $0.id,
@@ -1111,7 +1118,8 @@ final class SessionViewModel: ObservableObject {
                     id: sessionId,
                     text: pending.text,
                     intent: pending.intent,
-                    clientRequestId: pending.clientRequestId
+                    clientRequestId: pending.clientRequestId,
+                    model: pending.model
                 )
             } else {
                 response = try await api.sendInputMultipart(
@@ -1119,7 +1127,8 @@ final class SessionViewModel: ObservableObject {
                     text: pending.text,
                     intent: pending.intent,
                     attachments: pending.composerAttachments(),
-                    clientRequestId: pending.clientRequestId
+                    clientRequestId: pending.clientRequestId,
+                    model: pending.model
                 )
             }
             guard response.clientRequestId == nil
@@ -1236,19 +1245,28 @@ final class SessionViewModel: ObservableObject {
 
     /// Explicit user acceptance of the "Queue instead" prompt after a
     /// steer failed with turn_ended. Always maps to intent=queue.
-    func queueInsteadOfSteer(sessionId: String, appState: AppState) async -> Bool {
+    func queueInsteadOfSteer(
+        sessionId: String,
+        appState: AppState,
+        model: String? = nil
+    ) async -> Bool {
         guard let text = turnEndedDraft else { return false }
         let decisionIds = submittedInputs
             .filter { $0.phase == .needsUserDecision && $0.text == text }
             .map(\.id)
-        let queued = await send(text: text, sessionId: sessionId, appState: appState, intent: "queue")
+        let queued = await send(
+            text: text,
+            sessionId: sessionId,
+            appState: appState,
+            intent: "queue",
+            model: model
+        )
         if queued {
             turnEndedDraft = nil
             submittedInputs.removeAll { decisionIds.contains($0.id) }
         }
         return queued
     }
-
     /// Read-on-open acknowledgement for Console results
     /// (console-unread-acknowledgement spec): acknowledge exactly the result
     /// this client rendered. Fire-and-forget; the server is a max-write no-op

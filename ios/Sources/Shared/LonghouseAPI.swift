@@ -205,12 +205,27 @@ protocol SessionWorkspaceClient: Sendable {
         cursor: String?
     ) async throws -> SessionMobileTailResponse
     func sendInput(id: String, text: String, intent: String, clientRequestId: String) async throws -> SessionInputResponse
+    func sendInput(
+        id: String,
+        text: String,
+        intent: String,
+        clientRequestId: String,
+        model: String?
+    ) async throws -> SessionInputResponse
     func sendInputMultipart(
         id: String,
         text: String,
         intent: String,
         attachments: [ComposerAttachment],
         clientRequestId: String
+    ) async throws -> SessionInputResponse
+    func sendInputMultipart(
+        id: String,
+        text: String,
+        intent: String,
+        attachments: [ComposerAttachment],
+        clientRequestId: String,
+        model: String?
     ) async throws -> SessionInputResponse
     /// Reads the server-owned receipt for one client request identity. A nil
     /// result means the authority could not confirm a receipt; it is never
@@ -229,6 +244,37 @@ protocol SessionWorkspaceClient: Sendable {
     func createSessionBranch(id: String, message: String, clientRequestId: String) async throws -> SessionBranch
     func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async
     func postClientDiagnostics(_ payload: ClientDiagnosticsPayload) async
+}
+
+extension SessionWorkspaceClient {
+    func sendInput(
+        id: String,
+        text: String,
+        intent: String,
+        clientRequestId: String,
+        model: String?
+    ) async throws -> SessionInputResponse {
+        try await sendInput(id: id, text: text, intent: intent, clientRequestId: clientRequestId)
+    }
+
+    func sendInputMultipart(
+        id: String,
+        text: String,
+        intent: String,
+        attachments: [ComposerAttachment],
+        clientRequestId: String,
+        model: String?
+    ) async throws -> SessionInputResponse {
+        try await sendInputMultipart(
+            id: id,
+            text: text,
+            intent: intent,
+            attachments: attachments,
+            clientRequestId: clientRequestId
+        )
+    }
+
+
 }
 
 extension SessionWorkspaceClient {
@@ -281,6 +327,10 @@ extension SessionWorkspaceClient {
     ) async throws -> PauseRequestResponse {
         throw LonghouseAPIError.requestFailed
     }
+}
+
+private struct SelectedModelPayload: Decodable {
+    let selectedModel: String?
 }
 
 private struct APIPauseRequestResponsePayload: Decodable {
@@ -513,9 +563,13 @@ struct LonghouseAPI: Sendable {
             .sessionMobileTailResponse
     }
     static func decodeSessionDetail(_ data: Data) throws -> SessionDetail {
-        try JSONDecoder.snakeCase
+        var detail = try JSONDecoder.snakeCase
             .decode(APISessionResponse.self, from: data)
             .sessionDetail
+        if let payload = try? JSONDecoder.snakeCase.decode(SelectedModelPayload.self, from: data) {
+            detail.selectedModel = payload.selectedModel
+        }
+        return detail
     }
 
 
@@ -717,15 +771,37 @@ struct LonghouseAPI: Sendable {
         intent: String = "auto",
         clientRequestId: String
     ) async throws -> SessionInputResponse {
+        try await sendInput(
+            id: id,
+            text: text,
+            intent: intent,
+            clientRequestId: clientRequestId,
+            model: nil
+        )
+    }
+
+    func sendInput(
+        id: String,
+        text: String,
+        intent: String = "auto",
+        clientRequestId: String,
+        model: String?
+    ) async throws -> SessionInputResponse {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/sessions/\(id)/input"))
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
         request.addValue("application/json", forHTTPHeaderField: "Accept")
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "text": text,
             "intent": intent,
             "client_request_id": clientRequestId,
         ]
+        if let model {
+            let normalizedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !normalizedModel.isEmpty {
+                body["model"] = normalizedModel
+            }
+        }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, httpResponse) = try await data(for: request)
@@ -829,6 +905,24 @@ struct LonghouseAPI: Sendable {
         attachments: [ComposerAttachment],
         clientRequestId: String
     ) async throws -> SessionInputResponse {
+        try await sendInputMultipart(
+            id: id,
+            text: text,
+            intent: intent,
+            attachments: attachments,
+            clientRequestId: clientRequestId,
+            model: nil
+        )
+    }
+
+    func sendInputMultipart(
+        id: String,
+        text: String,
+        intent: String = "auto",
+        attachments: [ComposerAttachment],
+        clientRequestId: String,
+        model: String?
+    ) async throws -> SessionInputResponse {
         let boundary = "Boundary-\(UUID().uuidString)"
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/sessions/\(id)/inputs-multipart"))
         request.httpMethod = "POST"
@@ -840,6 +934,7 @@ struct LonghouseAPI: Sendable {
             text: text,
             intent: intent,
             clientRequestId: clientRequestId,
+            model: model,
             attachments: attachments
         )
         request.httpBody = body
@@ -915,6 +1010,7 @@ struct LonghouseAPI: Sendable {
         text: String,
         intent: String,
         clientRequestId: String,
+        model: String? = nil,
         attachments: [ComposerAttachment]
     ) -> Data {
         var body = Data()
@@ -931,11 +1027,17 @@ struct LonghouseAPI: Sendable {
         appendField(name: "text", value: text)
         appendField(name: "intent", value: intent)
         appendField(name: "client_request_id", value: clientRequestId)
+        if let model {
+            let normalizedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !normalizedModel.isEmpty {
+                appendField(name: "model", value: normalizedModel)
+            }
+        }
 
         for attachment in attachments {
             let safeFilename = sanitizeMultipartFilename(attachment.filename)
             body.append("\(dashes)\(boundary)\(crlf)".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"attachments\"; filename=\"\(safeFilename)\"\(crlf)".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"attachments\"; filename=\"\(safeFilename)\"\(crlf)\(crlf)".data(using: .utf8)!)
             body.append("Content-Type: \(attachment.mimeType)\(crlf)\(crlf)".data(using: .utf8)!)
             body.append(attachment.data)
             body.append(crlf.data(using: .utf8)!)
@@ -1545,6 +1647,25 @@ public struct WorkspaceSuggestionsResponse: Decodable, Sendable {
     public let deviceId: String
     public let workspaces: [WorkspaceSuggestion]
 }
+public struct RecentModel: Codable, Sendable, Hashable, Identifiable {
+    public let model: String
+    public let lastUsedAt: String?
+
+    public var id: String { model }
+
+    public init(model: String, lastUsedAt: String? = nil) {
+        self.model = model
+        self.lastUsedAt = lastUsedAt
+    }
+}
+
+public struct RecentModelsResponse: Decodable, Sendable {
+    public let deviceId: String
+    public let provider: String
+    public let daysBack: Int?
+    public let models: [RecentModel]
+}
+
 
 public enum RemoteLaunchState: String, Decodable, Sendable {
     case launching
@@ -1621,6 +1742,34 @@ extension LonghouseAPI {
         }
         return try JSONDecoder.snakeCase.decode(WorkspaceSuggestionsResponse.self, from: data).workspaces
     }
+    /// Server-owned recent model ids for the launch picker. The provider CLI
+    /// remains authoritative; this is only a usage-based history.
+    static func recentModelsURL(baseURL: URL, deviceId: String, provider: String, limit: Int = 12) -> URL {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("/api/timeline/machines/\(deviceId)/providers/\(provider)/models"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+        return components.url!
+    }
+
+    func recentModels(deviceId: String, provider: String, limit: Int = 12) async throws -> [RecentModel] {
+        var request = URLRequest(
+            url: Self.recentModelsURL(
+                baseURL: baseURL,
+                deviceId: deviceId,
+                provider: provider,
+                limit: limit
+            )
+        )
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, httpResponse) = try await data(for: request)
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        return try JSONDecoder.snakeCase.decode(RecentModelsResponse.self, from: data).models
+    }
+
 
     static func compactWorkspacePath(_ path: String) -> String {
         path.replacingOccurrences(of: #"^/Users/[^/]+"#, with: "~", options: .regularExpression)
@@ -1630,6 +1779,7 @@ extension LonghouseAPI {
         deviceId: String,
         provider: String,
         cwd: String,
+        model: String? = nil,
         displayName: String? = nil,
         sessionId: String? = nil,
         threadId: String? = nil
@@ -1644,6 +1794,10 @@ extension LonghouseAPI {
             "cwd": cwd,
             "launch_surface": "ios",
         ]
+        if let model {
+            let normalizedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !normalizedModel.isEmpty { body["model"] = normalizedModel }
+        }
         if let sessionId, !sessionId.isEmpty { body["session_id"] = sessionId }
         if let threadId, !threadId.isEmpty { body["thread_id"] = threadId }
         if let displayName, !displayName.isEmpty { body["display_name"] = displayName }
