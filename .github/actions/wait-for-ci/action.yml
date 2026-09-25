@@ -80,9 +80,9 @@ runs:
           const workflowEvent = (process.env.WORKFLOW_EVENT || '').trim();
           const requireSuccess = (process.env.REQUIRE_SUCCESS || 'true') === 'true';
           const allowMissing = (process.env.ALLOW_MISSING || 'false') === 'true';
-          const delayMs = 5000;
+          const delayMs = 15000;
           const timeoutSeconds = Number(process.env.TIMEOUT_SECONDS || '1200');
-          const maxAttempts = Math.max(1, Math.ceil((timeoutSeconds * 1000) / delayMs));
+          const deadline = Date.now() + timeoutSeconds * 1000;
           const missingGraceAttempts = 6;
           const ignoredFailureJobs = new Set(
             (process.env.IGNORED_FAILURE_JOBS || '')
@@ -221,7 +221,7 @@ runs:
           // full timeout on genuine failures.
           let sawFailure = false;
 
-          for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          for (let attempt = 1; attempt === 1 || Date.now() < deadline; attempt += 1) {
             const params = {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -281,10 +281,13 @@ runs:
                 core.warning(`No ${workflowId} run appeared for ${sha} after ${attempt} attempts; continuing because allow_missing=true`);
                 return;
               }
-              core.info(`No ${workflowId} run found yet for ${sha} on ${branch} (attempt ${attempt}/${maxAttempts})`);
+              core.info(`No ${workflowId} run found yet for ${sha} on ${branch} (attempt ${attempt})`);
             }
 
-            await new Promise((resolve) => setTimeout(resolve, delayMs));
+            const remainingMs = deadline - Date.now();
+            if (remainingMs > 0) {
+              await new Promise((resolve) => setTimeout(resolve, Math.min(delayMs, remainingMs)));
+            }
           }
 
           if (allowMissing) {
