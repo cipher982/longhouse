@@ -18,15 +18,72 @@ use serde_json::{json, Value};
 struct ManagedRegistrationHttpError {
     provider_name: String,
     status: reqwest::StatusCode,
+    /// The Runtime Host's own reason, when it gave one. A refusal it explains
+    /// ("managed session already has a current run") is diagnosable from the
+    /// CLI; the status alone is not, and cost a long investigation on
+    /// 2026-09-25 when every 409 read as a bare "Conflict".
+    detail: Option<String>,
+}
+
+/// Bound and sanitize a Runtime Host refusal body.
+///
+/// The body is another process's error text: it may be a FastAPI `detail`
+/// string, an object with `code`/`message`, or an HTML error page. Take the
+/// useful part, keep it to one bounded line, and never let control characters
+/// reach the terminal the user is reading.
+const REGISTRATION_ERROR_BODY_LIMIT: usize = 2048;
+
+fn registration_error_detail(body: &str) -> Option<String> {
+    if body.trim().is_empty() {
+        return None;
+    }
+    // Only the host's structured `detail` is surfaced. An arbitrary body may be
+    // a proxy's HTML page or a stack of unrelated text, and echoing it would put
+    // another process's words in the user's terminal on a single status line.
+    let extracted = serde_json::from_str::<Value>(body).ok().and_then(|value| {
+        let detail = value.get("detail")?;
+        match detail {
+            Value::String(text) => Some(text.clone()),
+            other => other
+                .get("message")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| Some(other.to_string())),
+        }
+    })?;
+    let sanitized = extracted
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    let collapsed = sanitized.split_whitespace().collect::<Vec<_>>().join(" ");
+    let bounded = collapsed
+        .chars()
+        .take(REGISTRATION_ERROR_BODY_LIMIT)
+        .collect::<String>();
+    let trimmed = bounded.trim().to_string();
+    (!trimmed.is_empty()).then_some(trimmed)
 }
 
 impl std::fmt::Display for ManagedRegistrationHttpError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "managed {} launch failed: Runtime Host returned HTTP {}",
-            self.provider_name, self.status
-        )
+        match self.detail.as_deref() {
+            Some(detail) => write!(
+                formatter,
+                "managed {} launch failed: Runtime Host returned HTTP {}: {}",
+                self.provider_name, self.status, detail
+            ),
+            None => write!(
+                formatter,
+                "managed {} launch failed: Runtime Host returned HTTP {}",
+                self.provider_name, self.status
+            ),
+        }
     }
 }
 
@@ -149,7 +206,13 @@ fn runtime_host_client() -> reqwest::Client {
 pub fn registration_failure_summary(error: &anyhow::Error, deadline: Duration) -> String {
     for cause in error.chain() {
         if let Some(http_error) = cause.downcast_ref::<ManagedRegistrationHttpError>() {
-            return format!("Runtime Host returned HTTP {}", http_error.status);
+            return match http_error.detail.as_deref() {
+                Some(detail) => format!(
+                    "Runtime Host returned HTTP {}: {}",
+                    http_error.status, detail
+                ),
+                None => format!("Runtime Host returned HTTP {}", http_error.status),
+            };
         }
         if let Some(request_error) = cause.downcast_ref::<reqwest::Error>() {
             if request_error.is_timeout() {
@@ -633,9 +696,17 @@ pub fn register_managed_launch_with_timeout(
             .with_context(|| format!("register managed {provider_name} launch"))?;
         let status = response.status();
         if !status.is_success() {
+            // The refusal reason is the whole diagnosis; read what the host
+            // sent before dropping the response.
+            let detail = response
+                .text()
+                .await
+                .ok()
+                .and_then(|body| registration_error_detail(&body));
             return Err(anyhow::Error::new(ManagedRegistrationHttpError {
                 provider_name: provider_name.to_string(),
                 status,
+                detail,
             }));
         }
         let body = response
@@ -1026,6 +1097,55 @@ mod tests {
             "Runtime Host did not answer within 45s",
             "a host that accepted the connection and kept working is not an outage"
         );
+    }
+
+    #[test]
+    fn http_failure_summary_carries_the_hosts_structured_detail() {
+        // A refusal the host explains must reach the user: a bare "Conflict" is
+        // what made the 2026-09-25 resume failure undiagnosable from the CLI.
+        let error = anyhow::Error::new(ManagedRegistrationHttpError {
+            provider_name: "Claude resume".to_string(),
+            status: reqwest::StatusCode::CONFLICT,
+            detail: registration_error_detail(
+                r#"{"detail":"managed session already has a current run"}"#,
+            ),
+        });
+        assert_eq!(
+            registration_failure_summary(&error, Duration::from_secs(45)),
+            "Runtime Host returned HTTP 409 Conflict: managed session already has a current run"
+        );
+        assert_eq!(
+            error.to_string(),
+            "managed Claude resume launch failed: Runtime Host returned HTTP 409 Conflict: managed session already has a current run"
+        );
+
+        let structured = registration_error_detail(
+            r#"{"detail":{"code":"conflict","message":"runner revoked"}}"#,
+        );
+        assert_eq!(structured.as_deref(), Some("runner revoked"));
+    }
+
+    #[test]
+    fn registration_error_detail_ignores_unstructured_or_dangerous_bodies() {
+        // No JSON `detail` means nothing is surfaced: proxy pages, HTML and
+        // unrelated text must never be echoed back to the user's terminal.
+        assert_eq!(
+            registration_error_detail("<!DOCTYPE html>\n<html>proxy</html>"),
+            None
+        );
+        assert_eq!(registration_error_detail(""), None);
+        assert_eq!(registration_error_detail("upstream connect error"), None);
+        assert_eq!(
+            registration_error_detail(r#"{"error":"no detail field"}"#),
+            None
+        );
+
+        // Control characters and unbounded length are stripped from a real detail.
+        let noisy = format!(r#"{{"detail":"line one\ntwo\u0000{}"}}"#, "x".repeat(4096));
+        let detail = registration_error_detail(&noisy).expect("detail extracted");
+        assert!(!detail.contains('\n'));
+        assert!(!detail.contains('\u{0}'));
+        assert!(detail.len() <= REGISTRATION_ERROR_BODY_LIMIT);
     }
 
     #[test]
