@@ -35,11 +35,12 @@ env:
   # Force public PyPI for CI so setup-python's pip step doesn't fail.
   PIP_INDEX_URL: https://pypi.org/simple
   PIP_EXTRA_INDEX_URL: ""
-  # Test jobs run on GitHub-hosted runners: free for this public repo, no queue,
-  # and a whole 4 vCPU / 16 GB VM per job, so the isolated guest gets all of it
-  # (test-isolation.py defaults to 2 CPU / 4 GiB for shared machines). Deploy,
-  # gate and image-publish work stays on cube. Profile of 2026-09-25: CI ~7 min
-  # here against a 27 min median on cube's contended pools.
+  # Test jobs run on GitHub-hosted arm64 runners (ubuntu-24.04-arm): free for
+  # this public repo, no queue, a whole 4-core VM per job, and measured ~2x
+  # the per-core speed of ubuntu-latest's x64 vCPUs on this suite. The
+  # isolated guest gets the whole VM (test-isolation.py defaults to 2 CPU /
+  # 4 GiB for shared machines). Deploy, gate and image-publish work stays on
+  # cube. Profile of 2026-09-25: Linux CI ~3 min from first job to last.
   LONGHOUSE_TEST_CPUS: "4"
   LONGHOUSE_TEST_MEMORY: "13g"
   # One Cargo profile for every engine build in this workflow (Engine tests and
