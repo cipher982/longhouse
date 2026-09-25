@@ -539,7 +539,21 @@ def load_credentials(path: Path) -> dict[str, str]:
 # pods keep the historical 2 CPU / 4 GiB default.
 CONTAINER_CPUS = os.environ.get("LONGHOUSE_TEST_CPUS", "2")
 CONTAINER_MEMORY = os.environ.get("LONGHOUSE_TEST_MEMORY", "4g")
-MEMORY_TMP_TARGETS = frozenset({"test", "test-backend-single"})
+# The engine lanes are the same shape: ~1700 Rust tests plus the shipper E2E
+# open SQLite databases in tempdirs under /tmp, and on a disk-backed /tmp the
+# unit suite ran ~6x slower than the same guest locally. Their tempdirs are
+# small; the cap only bounds a runaway, and unused tmpfs costs no memory.
+MEMORY_TMP_TARGETS = frozenset(
+    {
+        "test",
+        "test-backend-single",
+        "test-engine",
+        "test-engine-single",
+        "test-engine-projection-failure",
+        "test-shipper-e2e",
+        "test-shipper-premerge",
+    }
+)
 
 
 def memory_backed_tmp(target: str) -> list[str]:
