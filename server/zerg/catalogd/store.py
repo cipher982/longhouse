@@ -29,6 +29,7 @@ from sqlalchemy import and_
 from sqlalchemy import bindparam
 from sqlalchemy import case
 from sqlalchemy import cast
+from sqlalchemy import column
 from sqlalchemy import delete
 from sqlalchemy import func
 from sqlalchemy import insert
@@ -145,6 +146,12 @@ SESSION_READ_LIMIT = 100
 # rows (0.2 ms) but steps over every completed newer session. Walk when the
 # backlog is large, sort when it is small (steady state, idle polls).
 SEARCH_CLAIM_WALK_BACKLOG = 2_000
+# Everything newer than the first row a walk could claim was completed, leased
+# or waiting on retry, so the next walk starts there instead of re-stepping
+# over the finished head of a rebuild (which made the walk O(completed) per
+# claim, ~19k steps and catalogd at 100% midway through a 40k rebuild). New
+# activity above the floor, expired leases and retries wait at most this long.
+SEARCH_CLAIM_WALK_RESTART_SECONDS = 30.0
 MACHINE_ENROLLMENT_LIMIT = 1_000
 MACHINE_HEALTH_LIMIT = 100
 # The capability projector consumes only its highest-ranked connection.  The
@@ -1802,6 +1809,10 @@ class CatalogStore:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
         self._shadow_parity_delta_count: int | None = None
+        # Newest-first search claims resume their session walk below the
+        # newest row the previous walk could claim; see SEARCH_CLAIM_WALK_RESTART.
+        self._search_walk_floor: datetime | None = None
+        self._search_walk_started = 0.0
 
     def authenticate_device(self, *, token_hash: str) -> dict[str, Any]:
         """Validate one machine credential without turning auth into a write."""
@@ -12718,7 +12729,23 @@ class CatalogStore:
                     )
                 ).scalar_one()
                 if backlog >= SEARCH_CLAIM_WALK_BACKLOG:
-                    return connection.execute(_SEARCH_CLAIM_NEWEST_FIRST_WALK, {"now": now, "row_limit": row_limit}).mappings().all()
+                    if time.monotonic() - self._search_walk_started >= SEARCH_CLAIM_WALK_RESTART_SECONDS:
+                        self._search_walk_floor = None
+                        self._search_walk_started = time.monotonic()
+                    rows = (
+                        connection.execute(
+                            _SEARCH_CLAIM_NEWEST_FIRST_WALK,
+                            {"now": now, "row_limit": row_limit, "floor": self._search_walk_floor},
+                        )
+                        .mappings()
+                        .all()
+                    )
+                    if len(rows) < row_limit:
+                        # Fell off the bottom: rescan from the newest session next time.
+                        self._search_walk_started = 0.0
+                    elif rows:
+                        self._search_walk_floor = rows[0]["walk_activity_at"]
+                    return rows
                 sessions = StorageSession.__table__
                 # Rebuilds should make recent history playable first. The
                 # activity tie-break preserves deterministic progress among
@@ -16802,16 +16829,17 @@ _PROJECTOR_STATE_SELECT_LIST = ", ".join(f"p.{column.name}" for column in Projec
 _SEARCH_CLAIM_NEWEST_FIRST_WALK = (
     text(
         f"""
-        SELECT {_PROJECTOR_STATE_SELECT_LIST}
+        SELECT {_PROJECTOR_STATE_SELECT_LIST}, s.last_activity_at AS walk_activity_at
         FROM sessions AS s CROSS JOIN projector_state AS p
           ON p.projector = 'search-v2' AND p.session_id = s.session_id
         WHERE p.desired_revision > p.completed_revision
           AND (p.claim_expires_at IS NULL OR p.claim_expires_at <= :now)
           AND (p.retry_at IS NULL OR p.retry_at <= :now)
+          AND (:floor IS NULL OR s.last_activity_at <= :floor)
         ORDER BY s.last_activity_at DESC
         LIMIT :row_limit
         """
     )
-    .bindparams(bindparam("now", type_=DateTime()))
-    .columns(*ProjectorState.__table__.c)
+    .bindparams(bindparam("now", type_=DateTime()), bindparam("floor", type_=DateTime()))
+    .columns(*ProjectorState.__table__.c, column("walk_activity_at", DateTime()))
 )

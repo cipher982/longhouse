@@ -235,6 +235,55 @@ def test_search_projector_claims_newest_session_activity_first(
     assert replay["claimed"] == []
 
 
+def test_walked_search_claims_resume_below_the_head_and_restart_for_new_activity(
+    store: CatalogStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(catalog_store, "SEARCH_CLAIM_WALK_BACKLOG", 1)
+    now = datetime.now(UTC)
+    newest, middle, oldest = str(uuid4()), str(uuid4()), str(uuid4())
+    with store.engine.begin() as connection:
+        for session_id, age in ((newest, 0), (middle, 1), (oldest, 2)):
+            activity_at = now - timedelta(days=age)
+            connection.execute(
+                insert(StorageSession).values(
+                    session_id=session_id,
+                    tenant_id="tenant",
+                    owner_id="owner",
+                    provider="codex",
+                    environment="local",
+                    machine_id="machine",
+                    started_at=activity_at,
+                    last_activity_at=activity_at,
+                    commit_seq=1,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+    for session_id in (newest, middle, oldest):
+        _seed_row(store, projector="search-v2", session_id=session_id)
+
+    def claim_one() -> list[str]:
+        result = store.claim_projector_lag(
+            projector="search-v2", worker_id="worker", claim_token=str(uuid4()), now=now, lease_seconds=60, limit=1
+        )
+        return [row["session_id"] for row in result["claimed"]]
+
+    assert claim_one() == [newest]
+    assert claim_one() == [middle]
+    # The newest session gets new work while the walk sits below it: invisible
+    # until the periodic restart from the top.
+    table = ProjectorState.__table__
+    with store.engine.begin() as connection:
+        connection.execute(
+            update(table)
+            .where(table.c.projector == "search-v2", table.c.session_id == newest)
+            .values(claim_expires_at=None, claim_token=None, status="idle", desired_revision=20)
+        )
+    assert claim_one() == [oldest]
+    store._search_walk_started = 0.0
+    assert claim_one() == [newest]
+
+
 def test_claim_replay_token_probes_use_indexes(store: CatalogStore) -> None:
     """Idempotency checks must not scan every historical projector row."""
 
