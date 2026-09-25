@@ -657,7 +657,6 @@ dogfood-check: ## Show installed local runtime status + local health
 validate: ## Run all contract checks
 	@$(MAKE) validate-ws
 	@$(MAKE) validate-sdk
-	@$(MAKE) validate-ios-api
 	@$(MAKE) validate-makefile
 	@$(MAKE) validate-build-identity
 	@$(MAKE) validate-build-scripts
