@@ -7,6 +7,7 @@ import { AuthProvider } from "./lib/auth";
 import { ConfirmProvider } from "./components/confirm";
 import { SessionPickerProvider } from "./components/SessionPickerProvider";
 import config from "./lib/config";
+import { shouldRetryQuery } from "./lib/queryRetry";
 
 // Global stylesheet entrypoint
 import "./styles/app.css";
@@ -146,7 +147,9 @@ if (replayScenario) {
   document.body.classList.add("replay-mode");
 }
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: { queries: { retry: shouldRetryQuery } },
+});
 
 ReactDOM.createRoot(container).render(
   <React.StrictMode>
