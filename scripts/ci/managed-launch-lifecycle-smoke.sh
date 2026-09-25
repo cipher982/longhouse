@@ -168,17 +168,19 @@ mkdir -p "$HOME_DIR" "$BIN_DIR"
 # ---------------------------------------------------------------------------
 # Build the real facade + engine pair
 # ---------------------------------------------------------------------------
-# Dev profile on purpose: this proves lifecycle plumbing against a real Runtime
-# Host, not optimized codegen. The `ci` profile (opt-level 3) cost ~7.5 minutes
-# of a 2-CPU guest compiling from scratch; dev builds the same pair in about a
-# third of that, and debug assertions are, if anything, stricter here.
+# The `ci-test` profile, the same one the Engine tests job builds: the fixture
+# image (docker/test.dockerfile) ships its dependencies precompiled, so this
+# compiles only the longhouse-engine crate. This proves lifecycle plumbing
+# against a real Runtime Host, not optimized codegen; ci-test leaves the engine
+# crate unoptimized. CARGO_PROFILE still overrides it for a local rerun.
+LIFECYCLE_CARGO_PROFILE="${CARGO_PROFILE:-ci-test}"
 python3 "$ROOT_DIR/scripts/build/generate_build_identity.py" >/dev/null
 python3 "$ROOT_DIR/scripts/build/cargo.py" exec -- build \
-  --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile dev \
+  --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile "$LIFECYCLE_CARGO_PROFILE" \
   --bin longhouse --bin longhouse-engine >/dev/null
-cp "$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile dev --bin longhouse)" \
+cp "$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile "$LIFECYCLE_CARGO_PROFILE" --bin longhouse)" \
   "$BIN_DIR/longhouse"
-cp "$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile dev --bin longhouse-engine)" \
+cp "$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile "$LIFECYCLE_CARGO_PROFILE" --bin longhouse-engine)" \
   "$BIN_DIR/longhouse-engine"
 
 # Both Runtime Host and providers must use the disposable identity, even when
