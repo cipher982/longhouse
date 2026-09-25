@@ -1,0 +1,105 @@
+name: CI probe (experiment branch only)
+
+on:
+  push:
+    branches: [ci2-lab2]
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  IMAGE: ghcr.io/cipher982/longhouse-test@sha256:7f3fb268defae5d3a5b06cd9128eb9e5050aad08f65c381662d2cb7c05028584
+
+jobs:
+  pull:
+    name: "pull ${{ matrix.variant }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [mnt, root, mnt-snapshotter, mnt-conc16, tmpfs-probe]
+    steps:
+      - name: Machine
+        run: |
+          nproc; free -g; df -h / /mnt
+          lsblk -o NAME,SIZE,ROTA,MODEL || true
+          docker version --format '{{.Server.Version}}'
+          cat /etc/docker/daemon.json 2>/dev/null || true
+      - name: Raw disk and network
+        run: |
+          for d in / /mnt; do
+            f="$d/probe.bin"; [ "$d" = / ] && f=/tmp/probe.bin
+            sudo dd if=/dev/zero of=$f bs=1M count=3072 oflag=direct 2>&1 | tail -1 | sed "s#^#write $d: #"
+            sudo rm -f $f
+          done
+          echo "${{ github.token }}" | skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin
+          s=$(date +%s.%N); skopeo copy --quiet "docker://$IMAGE" "dir:/mnt/blobs"; e=$(date +%s.%N)
+          echo "download-only (skopeo, compressed blobs): $(echo "$e - $s" | bc) s, $(du -sh /mnt/blobs | cut -f1)"
+          # biggest layer unpack cost, isolated from docker
+          big=$(ls -S /mnt/blobs | head -1)
+          sudo mkdir -p /mnt/unpack /tmp/unpack
+          s=$(date +%s.%N); sudo tar -I zstd -xf /mnt/blobs/$big -C /mnt/unpack; e=$(date +%s.%N)
+          echo "unpack biggest layer to /mnt: $(echo "$e - $s" | bc) s ($(sudo du -sh /mnt/unpack | cut -f1), $(sudo find /mnt/unpack | wc -l) files)"
+          s=$(date +%s.%N); sudo tar -I zstd -xf /mnt/blobs/$big -C /tmp/unpack; e=$(date +%s.%N)
+          echo "unpack biggest layer to /: $(echo "$e - $s" | bc) s"
+          sudo rm -rf /mnt/blobs /mnt/unpack /tmp/unpack
+      - name: Configure docker (${{ matrix.variant }})
+        run: |
+          case "${{ matrix.variant }}" in
+            mnt|tmpfs-probe) cfg='{"data-root":"/mnt/docker"}' ;;
+            root) cfg='{}' ;;
+            mnt-snapshotter) cfg='{"data-root":"/mnt/docker","features":{"containerd-snapshotter":true}}' ;;
+            mnt-conc16) cfg='{"data-root":"/mnt/docker","max-concurrent-downloads":16}' ;;
+          esac
+          sudo systemctl stop docker docker.socket
+          echo "$cfg" | sudo tee /etc/docker/daemon.json
+          sudo mkdir -p /mnt/docker
+          sudo systemctl start docker
+          docker info --format '{{.DockerRootDir}} driver={{.Driver}}'
+      - name: Pull
+        run: |
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          s=$(date +%s.%N); docker pull -q "$IMAGE"; e=$(date +%s.%N)
+          echo "PULL ${{ matrix.variant }}: $(echo "$e - $s" | bc) s"
+          s=$(date +%s.%N); docker run --rm --entrypoint true "$IMAGE"; e=$(date +%s.%N)
+          echo "first container start: $(echo "$e - $s" | bc) s"
+          df -h / /mnt
+
+  arm:
+    name: "arm64 build + bench"
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
+      - name: Machine
+        run: nproc; free -g; df -h / /mnt; lscpu | head -20
+      - uses: ./.github/actions/hosted-docker-disk
+      - name: Build arm64 fixture image locally
+        run: |
+          s=$(date +%s); python3 scripts/qa/test-isolation.py --prepare; echo "BUILD $(( $(date +%s)-s )) s"
+          docker images
+      - name: Backend shard 0/3 at 4 workers
+        env:
+          LONGHOUSE_TEST_CPUS: "4"
+          LONGHOUSE_TEST_MEMORY: "13g"
+          LONGHOUSE_TEST_SHARD: "0/3"
+          PYTEST_XDIST_WORKERS: "4"
+        run: |
+          s=$(date +%s); make test || true; echo "BACKEND-SHARD0 $(( $(date +%s)-s )) s"
+      - name: Engine compile (ci-test) + shipper e2e
+        env:
+          LONGHOUSE_TEST_CPUS: "4"
+          LONGHOUSE_TEST_MEMORY: "13g"
+          CARGO_PROFILE: ci-test
+        run: |
+          s=$(date +%s); make test-shipper-e2e || true; echo "SHIPPER-E2E $(( $(date +%s)-s )) s"
+      - name: Backend serial full suite (per-core speed)
+        env:
+          LONGHOUSE_TEST_CPUS: "4"
+          LONGHOUSE_TEST_MEMORY: "13g"
+          PYTEST_XDIST_WORKERS: "0"
+        run: |
+          s=$(date +%s); make test || true; echo "BACKEND-SERIAL $(( $(date +%s)-s )) s"
