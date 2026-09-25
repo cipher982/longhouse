@@ -620,3 +620,23 @@ async def test_semantic_session_listing_fails_when_every_candidate_is_unreadable
         )
     assert unavailable.value.status_code == 503
     assert unavailable.value.detail["code"] == "session_projection_unavailable"
+
+
+def test_resident_coverage_with_stale_excess_episodes_is_lag_not_an_error():
+    coverage = agents_search._EmbeddingCoveragePayload(
+        integrity_ready=True,
+        complete=False,
+        unpublished_sessions=0,
+        expected_sessions=1,
+        published_sessions=1,
+        expected_episodes=3,
+        current_episodes=5,
+        invalid_vectors=0,
+        unnormalized_vectors=0,
+        unlocatable_episodes=0,
+        episode_count_mismatches=0,
+        missing_session_ids=[],
+        stale=True,
+    )
+
+    assert coverage.complete is False

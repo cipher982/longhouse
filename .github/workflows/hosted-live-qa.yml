@@ -49,6 +49,7 @@ jobs:
       CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.HOSTED_CANARY_CONTROL_PLANE_ADMIN_TOKEN }}
       SMOKE_RUNTIME_TOKEN: ${{ secrets.HOSTED_CANARY_RUNTIME_TOKEN }}
       LONGHOUSE_MACHINE_TOKEN: ${{ secrets.HOSTED_CANARY_RUNTIME_TOKEN }}
+      LONGHOUSE_CANARY_TOKEN: ${{ secrets.HOSTED_CANARY_TELEMETRY_TOKEN }}
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
       QA_INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN }}
@@ -213,15 +214,9 @@ jobs:
 
       - name: Run render-canary SLA check
         id: render_canary
-        if: always() && steps.qa_live.outcome == 'success' && env.SMOKE_RUNTIME_TOKEN != ''
-        env:
-          LONGHOUSE_CANARY_TOKEN: ${{ secrets.HOSTED_CANARY_TELEMETRY_TOKEN }}
+        if: always() && steps.qa_live.outcome == 'success' && env.SMOKE_RUNTIME_TOKEN != '' && env.LONGHOUSE_CANARY_TOKEN != ''
         run: |
           set -euo pipefail
-          if [[ -z "$LONGHOUSE_CANARY_TOKEN" ]]; then
-            echo "LONGHOUSE_CANARY_TOKEN secret not set; skipping render-canary." >&2
-            exit 0
-          fi
           credentials="$(mktemp "$RUNNER_TEMP/render-canary-credentials.XXXXXX.json")"
           trap 'rm -f "$credentials"' EXIT INT TERM
           chmod 600 "$credentials"

@@ -173,8 +173,11 @@ class _EmbeddingCoveragePayload(BaseModel):
     def validate_coverage_shape(self) -> "_EmbeddingCoveragePayload":
         if self.published_sessions > self.expected_sessions:
             raise ValueError("resident coverage published more sessions than it expects")
-        if self.current_episodes > self.expected_episodes:
-            raise ValueError("resident coverage holds more episodes than it expects")
+        # More resident episodes than expected is also lag, not corruption:
+        # after a session is re-projected with fewer or re-cut episodes, its
+        # old vectors stay resident until the embedding projector replaces
+        # them. Rejecting it turned every semantic query into a 500 while
+        # 27k re-projected sessions caught up on the frozen owner corpus.
         if self.unpublished_sessions != self.expected_sessions - self.published_sessions:
             raise ValueError("resident coverage shortfall is inconsistent")
         if self.complete != (self.unpublished_sessions == 0 and self.current_episodes == self.expected_episodes):

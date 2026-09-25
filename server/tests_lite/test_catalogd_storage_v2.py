@@ -4684,6 +4684,8 @@ async def test_startup_raises_search_targets_left_behind_by_a_rerender(daemon_pa
             # search marked complete at its old target.
             connection.exec_driver_sql("UPDATE render_generations SET commit_seq = ? WHERE session_id = ?", (target + 500, str(session_id)))
             connection.exec_driver_sql("UPDATE sessions SET commit_seq = ? WHERE session_id = ?", (target + 600, str(session_id)))
+            # Production also had the objects rewritten past both revisions.
+            connection.exec_driver_sql("UPDATE render_objects SET commit_seq = ? WHERE session_id = ?", (target + 900, str(session_id)))
             connection.exec_driver_sql(
                 "UPDATE projector_state SET completed_revision = desired_revision, status = 'idle' WHERE session_id = ?",
                 (str(session_id),),
@@ -4697,8 +4699,8 @@ async def test_startup_raises_search_targets_left_behind_by_a_rerender(daemon_pa
                     "SELECT projector, desired_revision FROM projector_state WHERE session_id = ?", (str(session_id),)
                 ).all()
             )
-        assert rows["search-v2"] == target + 600
-        assert rows[EMBEDDING_PROJECTOR_ID] == target + 600
+        assert rows["search-v2"] == target + 900
+        assert rows[EMBEDDING_PROJECTOR_ID] == target + 900
         assert CatalogStore(engine).ensure_known_projector_states()["advanced_render_consumers"] == 0
     finally:
         engine.dispose()
