@@ -727,7 +727,9 @@ validate-build-identity: ## @internal Build identity freshness check
 	@python3 scripts/build/check_build_identity_fresh.py
 
 validate-build-scripts: ## @internal Unit tests for the Rust build wrapper and build-identity generator
-	@uv run --no-project --with pytest pytest -q scripts/build/test_cargo.py scripts/build/test_generate_build_identity.py
+	@# The server venv already has pytest; `--no-project --with pytest` built a
+	@# throwaway environment first (~5s on cube) to run the same pytest.
+	@cd server && uv run --extra dev pytest -q ../scripts/build/test_cargo.py ../scripts/build/test_generate_build_identity.py
 
 validate-managed-codex-contract: ## @internal Guard against reintroducing packaged managed Codex runtimes
 	@bash scripts/qa/check-managed-codex-contract.sh
