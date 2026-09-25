@@ -34,8 +34,10 @@ An explicit empty registry clears the list. A missing registry leaves the last
 observation unchanged; expiry makes its state unknown, not completed. Delivery
 retries and unrelated activity never renew the registry's observation clock.
 Named task IDs are scoped to the provider session and run. The transport bounds
-registries to 256 entries and rejects oversized observations rather than
-presenting a partial count as complete.
+registries to 256 entries and 256 KiB of canonical fact JSON (including observed
+clocks). This collection budget is separate from the 4 KiB scalar fact budget.
+An over-budget observation is omitted without discarding parent activity or
+renewing previous registry evidence; no partial count is presented as complete.
 
 Task status and description come from the provider; raw command strings are not
 included. `first_observed_at` is not a task start time. Start and last-activity

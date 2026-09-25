@@ -46,6 +46,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from zerg.catalogd.fact_reducer import MAX_DELEGATION_VALUE_JSON_BYTES
 from zerg.catalogd.fact_reducer import MAX_HEADS_PER_FAMILY
 from zerg.catalogd.fact_reducer import MAX_REDUCER_FACTS
 from zerg.catalogd.fact_reducer import ReducerFact
@@ -78,6 +79,7 @@ from zerg.catalogd.schema import storage_telemetry_counters
 from zerg.embedding_space import EMBEDDING_PROJECTOR_ID
 from zerg.machine_evidence import MAX_MACHINE_EVIDENCE_BYTES
 from zerg.machine_evidence import canonical_evidence_hash
+from zerg.machine_evidence import canonical_value_json
 from zerg.machine_evidence import machine_evidence_bytes
 from zerg.models.live_store import LiveAPNSDeviceRegistration
 from zerg.models.live_store import LiveAPNSLiveActivityRegistration
@@ -16270,6 +16272,10 @@ def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerF
             "observed_at": occurred_at.isoformat(),
             "valid_until": valid_until.isoformat(),
         }
+        # An invalid registry must not poison the enclosing parent activity
+        # batch or renew the previous observation. Never truncate it to fit.
+        if len(canonical_value_json(value).encode()) > MAX_DELEGATION_VALUE_JSON_BYTES:
+            continue
         if not prior.get("observed_at") or occurred_at >= datetime.fromisoformat(prior["observed_at"].replace("Z", "+00:00")):
             prior_by_run[coordinate] = value
         dedupe_key = hashlib.sha256(f"runtime-delegation:{raw_source}:{event.dedupe_key}:{run_id}".encode()).hexdigest()

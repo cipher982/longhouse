@@ -46,6 +46,8 @@ from zerg.machine_evidence import validate_machine_evidence_identities
 MAX_REDUCER_FACTS = 256
 _REDUCER_SLOW_MS = float(os.getenv("CATALOGD_REDUCER_SLOW_MS", "100"))
 MAX_VALUE_JSON_BYTES = 4 * 1024
+# Named registries are collections, not scalar activity/control facts.
+MAX_DELEGATION_VALUE_JSON_BYTES = 256 * 1024
 MAX_RAW_LOCATOR_BYTES = 1024
 MAX_RECEIPTS_PER_CANDIDATE = 16
 MAX_CONFLICTS_PER_CANDIDATE = 8
@@ -457,7 +459,8 @@ def _validate_fact(fact: ReducerFact) -> ReducerFact:
         raise ValueError("fact evidence_hash must be lowercase sha256")
     if canonical_evidence_hash(fact.value) != fact.evidence_hash:
         raise ValueError("fact evidence_hash does not match canonical value")
-    if len(canonical_value_json(fact.value).encode()) > MAX_VALUE_JSON_BYTES:
+    value_limit = MAX_DELEGATION_VALUE_JSON_BYTES if fact.family == "delegation" else MAX_VALUE_JSON_BYTES
+    if len(canonical_value_json(fact.value).encode()) > value_limit:
         raise ValueError("fact value exceeds reducer bound")
     if fact.raw_locator is not None and len(fact.raw_locator.encode()) > MAX_RAW_LOCATOR_BYTES:
         raise ValueError("fact raw_locator exceeds reducer bound")

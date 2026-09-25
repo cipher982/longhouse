@@ -640,3 +640,68 @@ def test_expired_empty_registry_remains_unknown_without_background_attention(liv
     assert state["delegation"]["state"] == "unknown"
     assert state["delegation"]["items"] == []
     assert datetime.fromisoformat(state["delegation"]["observed_at"].replace("Z", "+00:00")) == observed
+
+
+def test_named_registry_larger_than_scalar_fact_budget_reaches_detail(live_catalog, live_catalog_client):
+    email = "delegation-large@example.test"
+    owner = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    session_id, thread_id, run_id = _seed_running_session(live_catalog, owner_id=owner)
+    observed = datetime.now(UTC) - timedelta(seconds=5)
+    items = [_task(f"agent-{index}", "subagent", "running", str(index) + "x" * 255) for index in range(20)]
+    _post_event(
+        live_catalog_client,
+        token=token,
+        event=_event(
+            session_id=session_id,
+            thread_id=thread_id,
+            run_id=run_id,
+            occurred_at=observed,
+            dedupe_key="large-named-registry",
+            items=items,
+        ),
+    )
+    state = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert state["delegation"]["state"] == "pending"
+    assert state["delegation"]["count"] == 20
+    assert state["delegation"]["kinds"] == {"subagent": 20}
+    assert {item["id"]: item["description"] for item in state["delegation"]["items"]} == {
+        item["id"]: item["description"] for item in items
+    }
+
+
+def test_over_budget_registry_preserves_prior_evidence_and_parent_activity(live_catalog, live_catalog_client):
+    email = "delegation-byte-bound@example.test"
+    owner = live_catalog.create_user(email)
+    token = live_catalog.create_device_token(owner_id=owner, device_id=DEVICE_ID)
+    session_id, thread_id, run_id = _seed_running_session(live_catalog, owner_id=owner)
+    observed = datetime.now(UTC) - timedelta(seconds=5)
+    _post_event(
+        live_catalog_client,
+        token=token,
+        event=_event(
+            session_id=session_id,
+            thread_id=thread_id,
+            run_id=run_id,
+            occurred_at=observed,
+            dedupe_key="within-budget",
+            items=[_task("agent-kept", "subagent", "running", "Keep original observation")],
+        ),
+    )
+    before = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    _post_event(
+        live_catalog_client,
+        token=token,
+        event=_event(
+            session_id=session_id,
+            thread_id=thread_id,
+            run_id=run_id,
+            occurred_at=observed + timedelta(seconds=1),
+            dedupe_key="over-byte-budget",
+            phase="thinking",
+            items=[_task(f"agent-{index}", "subagent", "running", "界" * 512) for index in range(256)],
+        ),
+    )
+    after = _workspace_state(live_catalog_client, live=live_catalog, owner_id=owner, email=email, session_id=session_id)
+    assert after["activity"]["state"] == "thinking"
+    assert after["delegation"] == before["delegation"]

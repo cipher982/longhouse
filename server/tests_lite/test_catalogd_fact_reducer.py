@@ -133,6 +133,19 @@ def test_extraction_rejects_subject_that_does_not_match_explicit_run_id():
         reducer_facts_from_machine_evidence(envelope)
 
 
+@pytest.mark.parametrize("family,payload_bytes", [("activity", 4 * 1024), ("delegation", 256 * 1024)])
+def test_fact_family_byte_bounds_reject_without_committing(tmp_path, family, payload_bytes):
+    engine = _engine(tmp_path)
+    value = {"description": "x" * payload_bytes}
+    fact = replace(_fact(), family=family, value=value, evidence_hash=canonical_evidence_hash(value))
+    with engine.begin() as connection:
+        with pytest.raises(ValueError, match="exceeds reducer bound"):
+            reduce_fact_batch(connection, [fact], received_at=NOW)
+        commit_seq, heads = read_fact_heads(connection, family=family, subject_key=fact.subject_key)
+        assert commit_seq == 0
+        assert heads == []
+
+
 def test_duplicate_is_zero_write_and_does_not_advance_commit(tmp_path):
     engine = _engine(tmp_path)
     fact = _fact()
