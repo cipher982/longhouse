@@ -248,14 +248,13 @@ jobs:
     # construction -- it checks the engine's generated provider contract, the web
     # capability bundle, the iOS DTOs, the public surface, the runner, and E2E
     # test patterns -- so any subset of paths is another list to drift out of
-    # date, which is exactly how twelve of its members went dark. The live proof
-    # below is the one member with a real dependency boundary, and it is gated.
+    # date, which is exactly how twelve of its members went dark. The live
+    # lifecycle proof has a real dependency boundary, so it is gated and runs as
+    # its own job ("Managed launch lifecycle") in parallel with this one.
     needs: [changes, prepare-test-image]
     # !cancelled() and not the default `success()`: `Changed paths` runs a git
     # fetch against GitHub, and a network timeout there used to fail it -- which
-    # would now skip this whole job, because it needs that job's outputs. When the
-    # filter cannot tell, the gated live proof below is skipped and everything
-    # else still runs.
+    # would now skip this whole job, because it needs that job's outputs.
     if: ${{ !cancelled() && (needs.changes.outputs.image_ref != '' || needs.prepare-test-image.result == 'success') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-24.04-arm
     name: "Validation"
@@ -306,20 +305,6 @@ jobs:
             exit 1
           fi
 
-      - name: Managed launch lifecycle against a real Runtime Host
-        # Gated on the surfaces that can invalidate it. This proof starts a real
-        # Runtime Host, real SQLite, real device-token auth and scripted provider
-        # binaries, so only a change to those surfaces can fail it; a docs,
-        # iOS-only or web-only push cannot, and paid ~6 minutes for the privilege
-        # until 2026-09-24. `make validate` above stays ungated on purpose.
-        if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.schemas == 'true' || needs.changes.outputs.scripts == 'true' || needs.changes.outputs.ci_plumbing == 'true' }}
-        timeout-minutes: 15
-        # Real FastAPI server, real SQLite, real device-token auth, real request
-        # validation, scripted provider binaries. The installer smoke's fake
-        # Runtime Host answers every request identically and therefore cannot
-        # catch a provider gate -- the exact hole the cursor outage fell through.
-        run: make test-managed-launch-lifecycle
-
       - name: Produce executable provider capability proof bundle
         timeout-minutes: 3
         run: |
@@ -346,9 +331,48 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: provider-release-proof-validation-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            artifacts/test-isolation/**/files/1/provider-release-proof-universal-smoke/**
-            artifacts/test-isolation/**/files/1/reliability-kernel/managed-launch-lifecycle-failure.*/**
+          path: artifacts/test-isolation/**/files/1/provider-release-proof-universal-smoke/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+  lifecycle:
+    # Split out of Validation, where it ran serially after `make validate` and
+    # was the longest single stretch of the CI critical path (~73 s of a 161 s
+    # job). As its own job it runs alongside Validation for one extra image pull.
+    needs: [changes, prepare-test-image]
+    # Gated on the surfaces that can invalidate it. This proof starts a real
+    # Runtime Host, real SQLite, real device-token auth and scripted provider
+    # binaries, so only a change to those surfaces can fail it; a docs,
+    # iOS-only or web-only push cannot, and paid ~6 minutes for the privilege
+    # until 2026-09-24.
+    if: ${{ !cancelled() && (needs.changes.outputs.image_ref != '' || needs.prepare-test-image.result == 'success') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.schemas == 'true' || needs.changes.outputs.scripts == 'true' || needs.changes.outputs.ci_plumbing == 'true') }}
+    runs-on: ubuntu-24.04-arm
+    name: "Managed launch lifecycle"
+    timeout-minutes: 20
+    env:
+      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref || needs.prepare-test-image.outputs.image_ref }}
+      LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
+
+      - uses: ./.github/actions/hosted-docker-disk
+
+      - name: Managed launch lifecycle against a real Runtime Host
+        timeout-minutes: 15
+        # Real FastAPI server, real SQLite, real device-token auth, real request
+        # validation, scripted provider binaries. The installer smoke's fake
+        # Runtime Host answers every request identically and therefore cannot
+        # catch a provider gate -- the exact hole the cursor outage fell through.
+        run: make test-managed-launch-lifecycle
+
+      - name: Upload lifecycle failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: managed-launch-lifecycle-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/test-isolation/**/files/1/reliability-kernel/managed-launch-lifecycle-failure.*/**
           if-no-files-found: ignore
           retention-days: 7
 
