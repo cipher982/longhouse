@@ -680,6 +680,57 @@ def test_searchd_rebuilds_an_incompatible_disposable_store(tmp_path):
         rebuilt.close()
 
 
+def _insert_embedding(connection, *, locator):
+    connection.execute(
+        """
+        INSERT INTO episode_embeddings(
+            session_id, owner_id, generation_id, revision, episode_ordinal, event_index_start, event_index_end,
+            start_order_time_us, model, dims, content_hash, embedding, updated_at
+        ) VALUES ('s', '42', 'g', 1, ?, 0, 1, ?, 'm', 2, ?, X'0000803F00000000', '2026-08-01T00:00:00+00:00')
+        """,
+        (0 if locator else 1, 1_000 if locator else None, "h0" if locator else "h1"),
+    )
+
+
+def test_schema_change_carries_embeddings_into_the_rebuilt_store(tmp_path):
+    """A generation bump must not recompute every vector in the corpus."""
+
+    path = tmp_path / "search.db"
+    connection = open_search_database(path)
+    _insert_embedding(connection, locator=True)
+    _insert_embedding(connection, locator=False)
+    connection.execute(
+        "INSERT INTO embedding_publications(session_id, model, dims, generation_id, revision, expected_episode_count, completed_at)"
+        " VALUES ('s', 'm', 2, 'g', 1, 2, '2026-08-01T00:00:00+00:00')"
+    )
+    connection.execute("UPDATE search_meta SET schema_generation = 'obsolete'")
+    connection.close()
+
+    rebuilt = open_search_database(path)
+    try:
+        assert rebuilt.execute("SELECT schema_generation FROM search_meta").fetchone()[0] == SCHEMA_GENERATION
+        rows = rebuilt.execute("SELECT session_id, episode_ordinal, content_hash, start_order_time_us FROM episode_embeddings").fetchall()
+        # Only locatable vectors carry; publications never do, so nothing is
+        # served until the projector confirms each session again.
+        assert [tuple(row) for row in rows] == [("s", 0, "h0", 1_000)]
+        assert rebuilt.execute("SELECT COUNT(*) FROM embedding_publications").fetchone()[0] == 0
+    finally:
+        rebuilt.close()
+    assert not any(tmp_path.glob("search.db.previous*"))
+
+
+def test_corrupt_store_is_discarded_without_carrying_anything(tmp_path):
+    path = tmp_path / "search.db"
+    path.write_bytes(b"not a database" * 100)
+
+    rebuilt = open_search_database(path)
+    try:
+        assert rebuilt.execute("SELECT COUNT(*) FROM episode_embeddings").fetchone()[0] == 0
+    finally:
+        rebuilt.close()
+    assert not any(tmp_path.glob("search.db.previous*"))
+
+
 def test_contentless_delete_fts_round_trips_phrase_near_and_bm25(tmp_path):
     """The bootstrapped SQLite used by the image must support contentless-delete."""
 

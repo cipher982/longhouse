@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -20,6 +21,8 @@ from uuid import uuid4
 
 from zerg.searchd.hydration import RenderHydrator
 from zerg.services.provider_interaction_semantics import classify_provider_interaction
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 SCHEMA_GENERATION = "searchd-v6-render-references-time-ordered-fast-fts"
@@ -359,6 +362,7 @@ def open_search_database(path: Path) -> sqlite3.Connection:
     if path.is_symlink():
         raise RuntimeError("searchd database path must not be a symlink")
     connection: sqlite3.Connection | None = None
+    corrupt = False
     try:
         connection = _connect(path)
         incompatible = _existing_store_is_incompatible(connection)
@@ -366,14 +370,85 @@ def open_search_database(path: Path) -> sqlite3.Connection:
         if connection is not None:
             connection.close()
         incompatible = True
+        corrupt = True
+    previous: Path | None = None
     if incompatible:
         if connection is not None:
             connection.close()
+        previous = None if corrupt else _set_aside_previous_store(path)
         _discard_derived_store(path)
         connection = _connect(path)
     assert connection is not None
     _initialize_schema(connection)
+    if previous is not None:
+        try:
+            _carry_over_embeddings(connection, previous)
+        finally:
+            _discard_derived_store(previous)
     return connection
+
+
+def _set_aside_previous_store(path: Path) -> Path | None:
+    """Keep a replaced store long enough to copy its embeddings out."""
+
+    if not path.exists():
+        return None
+    previous = path.with_name(f"{path.name}.previous")
+    _discard_derived_store(previous)
+    try:
+        path.rename(previous)
+        wal = Path(f"{path}-wal")
+        if wal.exists():
+            wal.rename(Path(f"{previous}-wal"))
+    except OSError:
+        logger.warning("searchd could not set aside the previous store; embeddings will be recomputed", exc_info=True)
+        _discard_derived_store(previous)
+        return None
+    return previous
+
+
+def _carry_over_embeddings(connection: sqlite3.Connection, previous: Path) -> int:
+    """Copy episode vectors from the store a schema change replaced.
+
+    Vectors depend on the episode text and the model, not on this store's
+    layout, and the embedding projector reuses a stored vector whenever its
+    episode's content hash still matches. Without this, every generation bump
+    recomputed the whole corpus: after hours of rebuild the T5 eval store had
+    re-embedded 5,950 of 31,223 sessions. Publications are not copied, and the
+    dense index serves a vector only once its generation and revision match
+    the session's current publication, so a carried vector waits for the
+    projector to confirm it. Anything unexpected here costs only a recompute.
+    """
+
+    try:
+        connection.execute("ATTACH DATABASE ? AS previous", (str(previous),))
+    except sqlite3.DatabaseError:
+        logger.warning("searchd could not open the previous store; embeddings will be recomputed", exc_info=True)
+        return 0
+    copied = 0
+    try:
+        old_columns = {str(row[1]) for row in connection.execute("PRAGMA previous.table_info(episode_embeddings)").fetchall()}
+        new_columns = connection.execute("PRAGMA main.table_info(episode_embeddings)").fetchall()
+        required = {str(row[1]) for row in new_columns if row[3] and row[4] is None and not row[5]}
+        if old_columns and required <= old_columns and "start_order_time_us" in old_columns:
+            shared = ", ".join(str(row[1]) for row in new_columns if str(row[1]) in old_columns and str(row[1]) != "id")
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                copied = connection.execute(
+                    f"INSERT OR IGNORE INTO main.episode_embeddings ({shared}) "
+                    f"SELECT {shared} FROM previous.episode_embeddings WHERE start_order_time_us IS NOT NULL"
+                ).rowcount
+                connection.execute("COMMIT")
+            except sqlite3.DatabaseError:
+                connection.execute("ROLLBACK")
+                raise
+    except sqlite3.DatabaseError:
+        logger.warning("searchd could not carry embeddings over; they will be recomputed", exc_info=True)
+        copied = 0
+    finally:
+        connection.execute("DETACH DATABASE previous")
+    logger.info("searchd carried %d episode embeddings into the new store", copied)
+    return copied
 
 
 def open_search_read_database(path: Path) -> sqlite3.Connection:
