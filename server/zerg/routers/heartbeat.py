@@ -55,8 +55,6 @@ from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
 from zerg.models.live_store import LiveHeartbeatStamp
-from zerg.observability import get_tracer
-from zerg.observability import set_span_attributes
 from zerg.schemas.history_import import HistoryImportSnapshot
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.catalogd_supervisor import get_catalogd_client
@@ -982,285 +980,244 @@ async def ingest_heartbeat(
     for 30 days; older rows are cleaned up by the stale agent detection job.
     """
     _token = caller_principal(_token)
-    tracer = get_tracer(__name__)
     auth_kind_label = "device_token" if _token is not None else "none"
     request_status_label = "internal_error"
-    with tracer.start_as_current_span("longhouse.heartbeat") as span:
-        set_span_attributes(
-            span,
-            {
-                "http.route": "/api/agents/heartbeat",
-                "longhouse.heartbeat.auth_kind": auth_kind_label,
-            },
+
+    try:
+        # Device-token identity is authoritative. In AUTH_DISABLED/dev mode,
+        # preserve the explicit machine identity used by storage and control
+        # WebSocket requests; only fall back to the peer address when absent.
+        explicit_machine_id = request.headers.get("X-Longhouse-Machine-Id")
+        fallback_machine_id = request.client.host if request.client else "unknown"
+        try:
+            device_id = resolve_machine_id(
+                _token,
+                explicit_machine_id=explicit_machine_id,
+                fallback_machine_id=fallback_machine_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+        last_ship_at: datetime | None = None
+        if payload.last_ship_at:
+            try:
+                last_ship_at = datetime.fromisoformat(payload.last_ship_at.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+        last_ship_attempt_at: datetime | None = None
+        if payload.last_ship_attempt_at:
+            try:
+                last_ship_attempt_at = datetime.fromisoformat(payload.last_ship_attempt_at.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+
+        wire_bytes = len(await request.body())
+        # The stamp's ``raw_json`` is a bounded forensic copy of the
+        # payload (catalogd caps it at 512 KiB). Machine evidence is
+        # bulk fact data -- hundreds of kilobytes on a busy machine --
+        # so it travels as its own catalogd parameter and never rides
+        # this size-capped forensic copy.
+        payload_for_retention = payload.model_dump(mode="json")
+        if "history_import" not in payload.model_fields_set:
+            payload_for_retention.pop("history_import", None)
+        payload_for_retention.pop("machine_evidence", None)
+        pre_catalog_evidence_disposition, machine_evidence = _accepted_machine_evidence(
+            payload.machine_evidence,
+            device_id=device_id,
+        )
+        payload_json = json.dumps(_retained_heartbeat_evidence(payload_for_retention))
+        agents_heartbeat_payload_bytes.observe(wire_bytes)
+
+        _device_id = device_id
+        _payload_json = payload_json
+        _now = datetime.now(timezone.utc)
+        _version = payload.version
+        _last_ship = last_ship_at
+        _last_ship_attempt = last_ship_attempt_at
+        _last_ship_result = payload.last_ship_result
+        _last_ship_latency_ms = payload.last_ship_latency_ms
+        _last_ship_http_status = payload.last_ship_http_status
+        _spool = payload.spool_pending_count
+        _spool_dead = payload.spool_dead_count
+        _parse_err = payload.parse_error_count_1h
+        _ship_attempts = payload.ship_attempts_1h
+        _ship_successes = payload.ship_successes_1h
+        _ship_rate_limited = payload.ship_rate_limited_1h
+        _ship_server_errors = payload.ship_server_errors_1h
+        _ship_payload_rejections = payload.ship_payload_rejections_1h
+        _ship_payload_too_large = payload.ship_payload_too_large_1h
+        _ship_retryable_client_errors = payload.ship_retryable_client_errors_1h
+        _ship_connect_errors = payload.ship_connect_errors_1h
+        _ship_latency_p50 = payload.ship_latency_p50_ms_1h
+        _ship_latency_p95 = payload.ship_latency_p95_ms_1h
+        _disk = payload.disk_free_bytes
+        _offline = 1 if payload.is_offline else 0
+        _resolved_sessions = payload.sessions
+        _resolved_sessions_present = "sessions" in payload.model_fields_set
+        _managed_leases = (
+            _managed_leases_from_resolved_sessions(
+                _resolved_sessions,
+                device_id=_device_id,
+                received_at=_now,
+                legacy_leases=payload.managed_sessions,
+            )
+            if _resolved_sessions_present
+            else payload.managed_sessions
+        )
+        # A partial scan can refresh observed owners, but omission is not
+        # evidence that an unobserved owner has lost control.
+        _managed_leases_present = (
+            _resolved_sessions_present or "managed_sessions" in payload.model_fields_set
+        ) and _machine_process_snapshot_complete(machine_evidence, "managed_state_files", received_at=_now)
+        _unmanaged_bindings = (
+            _unmanaged_bindings_from_resolved_sessions(
+                _resolved_sessions,
+                device_id=_device_id,
+                received_at=_now,
+            )
+            if _resolved_sessions_present
+            else payload.unmanaged_session_bindings
+        )
+        # Omission is authoritative only when the Machine Agent explicitly
+        # says it enumerated the complete process scope. Legacy field
+        # presence and partial/incremental scans fail open.
+        _unmanaged_bindings_present = _machine_process_snapshot_complete(
+            machine_evidence, "unmanaged_provider_processes", received_at=_now
         )
 
+        incoming_sessions_digest = str(payload.sessions_digest or "").strip() or None
+
+        heartbeat_stamp_kwargs = {
+            "device_id": _device_id,
+            "received_at": _now,
+            "version": _version,
+            "last_ship_at": _last_ship,
+            "last_ship_attempt_at": _last_ship_attempt,
+            "last_ship_result": _last_ship_result,
+            "last_ship_latency_ms": _last_ship_latency_ms,
+            "last_ship_http_status": _last_ship_http_status,
+            "spool_pending": _spool,
+            "spool_dead": _spool_dead,
+            "parse_errors_1h": _parse_err,
+            "ship_attempts_1h": _ship_attempts,
+            "ship_successes_1h": _ship_successes,
+            "ship_rate_limited_1h": _ship_rate_limited,
+            "ship_server_errors_1h": _ship_server_errors,
+            "ship_payload_rejections_1h": _ship_payload_rejections,
+            "ship_payload_too_large_1h": _ship_payload_too_large,
+            "ship_retryable_client_errors_1h": _ship_retryable_client_errors,
+            "ship_connect_errors_1h": _ship_connect_errors,
+            "ship_latency_p50_ms_1h": _ship_latency_p50,
+            "ship_latency_p95_ms_1h": _ship_latency_p95,
+            "disk_free_bytes": _disk,
+            "is_offline": _offline,
+            "raw_json": _payload_json,
+            "sessions_digest": incoming_sessions_digest,
+            "sessions_sequence": payload.sessions_sequence,
+        }
+
+        write_started = time.monotonic()
         try:
-            with tracer.start_as_current_span("longhouse.heartbeat.validate") as validate_span:
-                # Device-token identity is authoritative. In AUTH_DISABLED/dev mode,
-                # preserve the explicit machine identity used by storage and control
-                # WebSocket requests; only fall back to the peer address when absent.
-                explicit_machine_id = request.headers.get("X-Longhouse-Machine-Id")
-                fallback_machine_id = request.client.host if request.client else "unknown"
-                try:
-                    device_id = resolve_machine_id(
-                        _token,
-                        explicit_machine_id=explicit_machine_id,
-                        fallback_machine_id=fallback_machine_id,
-                    )
-                except ValueError as exc:
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
-                last_ship_at: datetime | None = None
-                if payload.last_ship_at:
-                    try:
-                        last_ship_at = datetime.fromisoformat(payload.last_ship_at.replace("Z", "+00:00"))
-                    except ValueError:
-                        pass
-                last_ship_attempt_at: datetime | None = None
-                if payload.last_ship_attempt_at:
-                    try:
-                        last_ship_attempt_at = datetime.fromisoformat(payload.last_ship_attempt_at.replace("Z", "+00:00"))
-                    except ValueError:
-                        pass
-
-                wire_bytes = len(await request.body())
-                # The stamp's ``raw_json`` is a bounded forensic copy of the
-                # payload (catalogd caps it at 512 KiB). Machine evidence is
-                # bulk fact data -- hundreds of kilobytes on a busy machine --
-                # so it travels as its own catalogd parameter and never rides
-                # this size-capped forensic copy.
-                payload_for_retention = payload.model_dump(mode="json")
-                if "history_import" not in payload.model_fields_set:
-                    payload_for_retention.pop("history_import", None)
-                payload_for_retention.pop("machine_evidence", None)
-                pre_catalog_evidence_disposition, machine_evidence = _accepted_machine_evidence(
-                    payload.machine_evidence,
-                    device_id=device_id,
-                )
-                payload_json = json.dumps(_retained_heartbeat_evidence(payload_for_retention))
-                agents_heartbeat_payload_bytes.observe(wire_bytes)
-                set_span_attributes(
-                    validate_span,
-                    {
-                        "longhouse.device.id": device_id,
-                        "longhouse.build.version": payload.version,
-                        "longhouse.heartbeat.last_ship_attempt_at": payload.last_ship_attempt_at,
-                        "longhouse.heartbeat.last_ship_result": payload.last_ship_result,
-                        "longhouse.heartbeat.last_ship_error_kind": payload.last_ship_error_kind,
-                        "longhouse.heartbeat.ship_attempts_1h": payload.ship_attempts_1h,
-                        "longhouse.heartbeat.spool_pending_count": payload.spool_pending_count,
-                        "longhouse.heartbeat.spool_dead_count": payload.spool_dead_count,
-                        "longhouse.heartbeat.payload_bytes_wire": wire_bytes,
-                        "longhouse.heartbeat.is_offline": payload.is_offline,
+            catalogd = get_catalogd_client()
+            if catalogd is None:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "code": "catalog_unavailable",
+                        "message": "Catalog mutation is temporarily unavailable.",
                     },
                 )
-                set_span_attributes(
-                    span,
-                    {
-                        "longhouse.device.id": device_id,
-                        "longhouse.build.version": payload.version,
-                        "longhouse.heartbeat.is_offline": payload.is_offline,
+            result = await catalogd.call(
+                "machine.heartbeat.apply.v2",
+                {
+                    "heartbeat": {
+                        key: (value.isoformat() if isinstance(value, datetime) else value)
+                        for key, value in heartbeat_stamp_kwargs.items()
+                    },
+                    "machine_evidence": machine_evidence,
+                    "managed_leases": [lease.model_dump(mode="json") for lease in _managed_leases],
+                    "managed_leases_present": _managed_leases_present,
+                    "owner_id": getattr(_token, "owner_id", None),
+                },
+                timeout_seconds=_HOT_HEARTBEAT_QUEUE_TIMEOUT_SECONDS,
+            )
+            previous_sessions_digest = result.get("previous_sessions_digest")
+            commit_seq = result.get("commit_seq")
+            exact_replay = result.get("exact_replay")
+            catalog_evidence_disposition = _catalog_machine_evidence_disposition(result)
+            evidence_disposition = pre_catalog_evidence_disposition or catalog_evidence_disposition
+            if (
+                (previous_sessions_digest is not None and not isinstance(previous_sessions_digest, str))
+                or not isinstance(commit_seq, str)
+                or not commit_seq.isdecimal()
+                or type(exact_replay) is not bool
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "code": "catalog_protocol_error",
+                        "message": "Catalog returned an invalid heartbeat result.",
                     },
                 )
-
-            _device_id = device_id
-            _payload_json = payload_json
-            _now = datetime.now(timezone.utc)
-            _version = payload.version
-            _last_ship = last_ship_at
-            _last_ship_attempt = last_ship_attempt_at
-            _last_ship_result = payload.last_ship_result
-            _last_ship_latency_ms = payload.last_ship_latency_ms
-            _last_ship_http_status = payload.last_ship_http_status
-            _spool = payload.spool_pending_count
-            _spool_dead = payload.spool_dead_count
-            _parse_err = payload.parse_error_count_1h
-            _ship_attempts = payload.ship_attempts_1h
-            _ship_successes = payload.ship_successes_1h
-            _ship_rate_limited = payload.ship_rate_limited_1h
-            _ship_server_errors = payload.ship_server_errors_1h
-            _ship_payload_rejections = payload.ship_payload_rejections_1h
-            _ship_payload_too_large = payload.ship_payload_too_large_1h
-            _ship_retryable_client_errors = payload.ship_retryable_client_errors_1h
-            _ship_connect_errors = payload.ship_connect_errors_1h
-            _ship_latency_p50 = payload.ship_latency_p50_ms_1h
-            _ship_latency_p95 = payload.ship_latency_p95_ms_1h
-            _disk = payload.disk_free_bytes
-            _offline = 1 if payload.is_offline else 0
-            _resolved_sessions = payload.sessions
-            _resolved_sessions_present = "sessions" in payload.model_fields_set
-            _managed_leases = (
-                _managed_leases_from_resolved_sessions(
-                    _resolved_sessions,
-                    device_id=_device_id,
-                    received_at=_now,
-                    legacy_leases=payload.managed_sessions,
-                )
-                if _resolved_sessions_present
-                else payload.managed_sessions
-            )
-            # A partial scan can refresh observed owners, but omission is not
-            # evidence that an unobserved owner has lost control.
-            _managed_leases_present = (
-                _resolved_sessions_present or "managed_sessions" in payload.model_fields_set
-            ) and _machine_process_snapshot_complete(machine_evidence, "managed_state_files", received_at=_now)
-            _unmanaged_bindings = (
-                _unmanaged_bindings_from_resolved_sessions(
-                    _resolved_sessions,
-                    device_id=_device_id,
-                    received_at=_now,
-                )
-                if _resolved_sessions_present
-                else payload.unmanaged_session_bindings
-            )
-            # Omission is authoritative only when the Machine Agent explicitly
-            # says it enumerated the complete process scope. Legacy field
-            # presence and partial/incremental scans fail open.
-            _unmanaged_bindings_present = _machine_process_snapshot_complete(
-                machine_evidence, "unmanaged_provider_processes", received_at=_now
-            )
-
-            incoming_sessions_digest = str(payload.sessions_digest or "").strip() or None
-
-            heartbeat_stamp_kwargs = {
-                "device_id": _device_id,
-                "received_at": _now,
-                "version": _version,
-                "last_ship_at": _last_ship,
-                "last_ship_attempt_at": _last_ship_attempt,
-                "last_ship_result": _last_ship_result,
-                "last_ship_latency_ms": _last_ship_latency_ms,
-                "last_ship_http_status": _last_ship_http_status,
-                "spool_pending": _spool,
-                "spool_dead": _spool_dead,
-                "parse_errors_1h": _parse_err,
-                "ship_attempts_1h": _ship_attempts,
-                "ship_successes_1h": _ship_successes,
-                "ship_rate_limited_1h": _ship_rate_limited,
-                "ship_server_errors_1h": _ship_server_errors,
-                "ship_payload_rejections_1h": _ship_payload_rejections,
-                "ship_payload_too_large_1h": _ship_payload_too_large,
-                "ship_retryable_client_errors_1h": _ship_retryable_client_errors,
-                "ship_connect_errors_1h": _ship_connect_errors,
-                "ship_latency_p50_ms_1h": _ship_latency_p50,
-                "ship_latency_p95_ms_1h": _ship_latency_p95,
-                "disk_free_bytes": _disk,
-                "is_offline": _offline,
-                "raw_json": _payload_json,
-                "sessions_digest": incoming_sessions_digest,
-                "sessions_sequence": payload.sessions_sequence,
-            }
-
-            with tracer.start_as_current_span("longhouse.heartbeat.write") as write_span:
-                write_started = time.monotonic()
-                try:
-                    catalogd = get_catalogd_client()
-                    if catalogd is None:
-                        raise HTTPException(
-                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                            detail={
-                                "code": "catalog_unavailable",
-                                "message": "Catalog mutation is temporarily unavailable.",
-                            },
-                        )
-                    result = await catalogd.call(
-                        "machine.heartbeat.apply.v2",
-                        {
-                            "heartbeat": {
-                                key: (value.isoformat() if isinstance(value, datetime) else value)
-                                for key, value in heartbeat_stamp_kwargs.items()
-                            },
-                            "machine_evidence": machine_evidence,
-                            "managed_leases": [lease.model_dump(mode="json") for lease in _managed_leases],
-                            "managed_leases_present": _managed_leases_present,
-                            "owner_id": getattr(_token, "owner_id", None),
-                        },
-                        timeout_seconds=_HOT_HEARTBEAT_QUEUE_TIMEOUT_SECONDS,
-                    )
-                    previous_sessions_digest = result.get("previous_sessions_digest")
-                    commit_seq = result.get("commit_seq")
-                    exact_replay = result.get("exact_replay")
-                    catalog_evidence_disposition = _catalog_machine_evidence_disposition(result)
-                    evidence_disposition = pre_catalog_evidence_disposition or catalog_evidence_disposition
-                    if (
-                        (previous_sessions_digest is not None and not isinstance(previous_sessions_digest, str))
-                        or not isinstance(commit_seq, str)
-                        or not commit_seq.isdecimal()
-                        or type(exact_replay) is not bool
-                    ):
-                        raise HTTPException(
-                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                            detail={
-                                "code": "catalog_protocol_error",
-                                "message": "Catalog returned an invalid heartbeat result.",
-                            },
-                        )
-                except WriteQueueTimeoutError:
-                    request_status_label = "write_backpressure"
-                    raise
-                except CatalogUnavailable as exc:
-                    request_status_label = "write_backpressure"
-                    raise HTTPException(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        detail={
-                            "code": "catalog_unavailable",
-                            "message": "Catalog mutation is temporarily unavailable.",
-                        },
-                    ) from exc
-                except CatalogRemoteError as exc:
-                    request_status_label = "write_backpressure" if exc.retryable else "internal_error"
-                    # A refused heartbeat is a machine that stops looking
-                    # alive, so the reason belongs in the log next to the
-                    # device it silenced rather than only in the response --
-                    # and in a counter, because the 2026-09-17 outage was a
-                    # refused heartbeat that nothing surfaced.
-                    agents_heartbeat_rejected_total.labels(
-                        code=str(exc.code),
-                        retryable=str(bool(exc.retryable)).lower(),
-                    ).inc()
-                    logger.warning(
-                        "Heartbeat rejected device=%s code=%s retryable=%s reason=%s",
-                        _device_id,
-                        exc.code,
-                        exc.retryable,
-                        exc,
-                    )
-                    raise HTTPException(
-                        status_code=(status.HTTP_503_SERVICE_UNAVAILABLE if exc.retryable else status.HTTP_500_INTERNAL_SERVER_ERROR),
-                        detail={
-                            "code": "catalog_unavailable" if exc.retryable else "catalog_operation_failed",
-                            "message": (
-                                "Catalog mutation is temporarily unavailable." if exc.retryable else "Catalog heartbeat mutation failed."
-                            ),
-                        },
-                    ) from exc
-                write_ms = round((time.monotonic() - write_started) * 1000, 1)
-                agents_heartbeat_write_seconds.observe(write_ms / 1000.0)
-                set_span_attributes(
-                    write_span,
-                    {
-                        "longhouse.device.id": _device_id,
-                        "longhouse.heartbeat.write_ms": write_ms,
-                    },
-                )
-
-            request_status_label = "ok"
-            return Response(
-                status_code=status.HTTP_204_NO_CONTENT,
-                headers={_MACHINE_EVIDENCE_ACK_HEADER: evidence_disposition},
-            )
-        except HTTPException:
-            # Preserve typed route errors such as hot-write backpressure instead
-            # of logging them as heartbeat ingest internals.
-            if request_status_label == "internal_error":
-                request_status_label = "http_error"
+        except WriteQueueTimeoutError:
+            request_status_label = "write_backpressure"
             raise
-        except Exception:
-            logger.exception("Failed to ingest heartbeat")
-            request_status_label = "internal_error"
-            raise
-        finally:
-            agents_heartbeat_requests_total.labels(
-                auth_kind=auth_kind_label,
-                status=request_status_label,
+        except CatalogUnavailable as exc:
+            request_status_label = "write_backpressure"
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "catalog_unavailable",
+                    "message": "Catalog mutation is temporarily unavailable.",
+                },
+            ) from exc
+        except CatalogRemoteError as exc:
+            request_status_label = "write_backpressure" if exc.retryable else "internal_error"
+            # A refused heartbeat is a machine that stops looking
+            # alive, so the reason belongs in the log next to the
+            # device it silenced rather than only in the response --
+            # and in a counter, because the 2026-09-17 outage was a
+            # refused heartbeat that nothing surfaced.
+            agents_heartbeat_rejected_total.labels(
+                code=str(exc.code),
+                retryable=str(bool(exc.retryable)).lower(),
             ).inc()
+            logger.warning(
+                "Heartbeat rejected device=%s code=%s retryable=%s reason=%s",
+                _device_id,
+                exc.code,
+                exc.retryable,
+                exc,
+            )
+            raise HTTPException(
+                status_code=(status.HTTP_503_SERVICE_UNAVAILABLE if exc.retryable else status.HTTP_500_INTERNAL_SERVER_ERROR),
+                detail={
+                    "code": "catalog_unavailable" if exc.retryable else "catalog_operation_failed",
+                    "message": (
+                        "Catalog mutation is temporarily unavailable." if exc.retryable else "Catalog heartbeat mutation failed."
+                    ),
+                },
+            ) from exc
+        write_ms = round((time.monotonic() - write_started) * 1000, 1)
+        agents_heartbeat_write_seconds.observe(write_ms / 1000.0)
+
+        request_status_label = "ok"
+        return Response(
+            status_code=status.HTTP_204_NO_CONTENT,
+            headers={_MACHINE_EVIDENCE_ACK_HEADER: evidence_disposition},
+        )
+    except HTTPException:
+        # Preserve typed route errors such as hot-write backpressure instead
+        # of logging them as heartbeat ingest internals.
+        if request_status_label == "internal_error":
+            request_status_label = "http_error"
+        raise
+    except Exception:
+        logger.exception("Failed to ingest heartbeat")
+        request_status_label = "internal_error"
+        raise
+    finally:
+        agents_heartbeat_requests_total.labels(
+            auth_kind=auth_kind_label,
+            status=request_status_label,
+        ).inc()

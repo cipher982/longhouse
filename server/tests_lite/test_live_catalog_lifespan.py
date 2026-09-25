@@ -25,8 +25,6 @@ async def test_live_catalog_lifespan_never_initializes_or_configures_archive(mon
     # the property this test guards is now structural rather than behavioural.
     assert not hasattr(lifespan_module, "initialize_database")
     monkeypatch.setattr(lifespan_module, "initialize_live_database", lambda: calls.append("live_init"))
-    monkeypatch.setattr(lifespan_module, "configure_observability", lambda: None)
-    monkeypatch.setattr(lifespan_module, "shutdown_observability", lambda: None)
     monkeypatch.setattr(lifespan_module, "_validate_models_config_startup", lambda: None)
     monkeypatch.setattr(lifespan_module._settings, "testing", True)
     monkeypatch.setattr(database_module, "configure_write_serializer", fail_archive)
@@ -116,8 +114,6 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
 
     monkeypatch.setattr(lifespan_module, "live_store_configured", lambda: True)
     monkeypatch.setattr(lifespan_module, "initialize_live_database", forbidden_direct_schema_init)
-    monkeypatch.setattr(lifespan_module, "configure_observability", lambda: None)
-    monkeypatch.setattr(lifespan_module, "shutdown_observability", lambda: None)
     monkeypatch.setattr(lifespan_module, "_validate_models_config_startup", lambda: None)
     monkeypatch.setattr(lifespan_module, "_enforce_single_tenant_startup", lambda _app: None)
     monkeypatch.setattr(lifespan_module._settings, "testing", False)
@@ -203,7 +199,6 @@ async def test_lifespan_stops_searchd_and_catalogd_when_later_startup_fails(monk
     async def stop_render():
         calls.append("render_stop")
 
-    monkeypatch.setattr(lifespan_module, "configure_observability", lambda: None)
     monkeypatch.setattr(lifespan_module._settings, "testing", False)
     monkeypatch.setattr(lifespan_module, "get_settings", lambda: lifespan_module._settings)
     monkeypatch.setattr("zerg.services.catalogd_supervisor.start_catalogd_supervisor", start_catalogd)
