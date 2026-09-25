@@ -1813,6 +1813,7 @@ class CatalogStore:
         # newest row the previous walk could claim; see SEARCH_CLAIM_WALK_RESTART.
         self._search_walk_floor: datetime | None = None
         self._search_walk_started = 0.0
+        self._search_claim_turn = 0
 
     def authenticate_device(self, *, token_hash: str) -> dict[str, Any]:
         """Validate one machine credential without turning auth into a write."""
@@ -12684,7 +12685,7 @@ class CatalogStore:
                 }
             return None
 
-        def eligible_rows(connection, row_limit: int):
+        def eligible_rows(connection, row_limit: int, newest_first: bool = False):
             if projector == EMBEDDING_PROJECTOR_ID:
                 # Embeddings read episode text from searchd's *published* render
                 # generation, so a session is only workable up to the revision
@@ -12722,7 +12723,7 @@ class CatalogStore:
                     .all()
                 )
             statement = select(table).where(*eligible_predicates)
-            if projector == "search-v2":
+            if newest_first:
                 backlog = connection.execute(
                     select(func.count()).select_from(
                         select(table.c.session_id).where(*eligible_predicates).limit(SEARCH_CLAIM_WALK_BACKLOG).subquery()
@@ -12778,7 +12779,14 @@ class CatalogStore:
             replay = replay_result(connection)
             if replay is not None:
                 return replay
-            eligible = eligible_rows(connection, limit)
+            # search-v2 alternates oldest-lag-first with newest-activity-first:
+            # recent history becomes playable early in a rebuild, and a session
+            # that keeps revising (live work during an import) takes at most
+            # every other claim instead of starving the backlog.
+            newest_first = projector == "search-v2" and self._search_claim_turn % 2 == 1
+            eligible = eligible_rows(connection, limit, newest_first)
+            if projector == "search-v2" and eligible:
+                self._search_claim_turn += 1
             if not eligible:
                 return {
                     "claimed": [],

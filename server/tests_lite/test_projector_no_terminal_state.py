@@ -223,6 +223,7 @@ def test_search_projector_claims_newest_session_activity_first(
         connection.exec_driver_sql("ALTER TABLE projector_state DROP COLUMN desired_at")
         connection.exec_driver_sql("ALTER TABLE projector_state ADD COLUMN desired_at DATETIME")
 
+    store._search_claim_turn = 1  # the newest-first half of the alternation
     claimed = store.claim_projector_lag(
         projector="search-v2", worker_id="worker", claim_token=str(uuid4()), now=now, lease_seconds=60, limit=2
     )
@@ -263,6 +264,7 @@ def test_walked_search_claims_resume_below_the_head_and_restart_for_new_activity
         _seed_row(store, projector="search-v2", session_id=session_id)
 
     def claim_one() -> list[str]:
+        store._search_claim_turn = 1  # exercise only the newest-first half
         result = store.claim_projector_lag(
             projector="search-v2", worker_id="worker", claim_token=str(uuid4()), now=now, lease_seconds=60, limit=1
         )
