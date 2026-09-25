@@ -1,4 +1,5 @@
 import type { AgentSession } from "../../services/api/agents";
+import { activityClaimIsStale } from "../../lib/activityEvidence";
 
 export type SessionHeaderStateTone = "live" | "attention" | "unknown" | "cool";
 
@@ -67,13 +68,20 @@ export function getSessionHeaderState(
   // still "quiescent" underneath, so activity.state alone under-detects.
   const primaryTone = facts.presentation.primary?.tone ?? null;
   const closed = facts.disposition.state === "closed";
+  // A served tone is a verdict about the moment it was minted. The reader's
+  // clock decides when that ended, so an expired window may not keep the
+  // composer saying "Using Bash for 50 minutes" -- the same claim the server
+  // would already have replaced with its last-seen label, if anything asked.
+  const staleClaim = activityClaimIsStale(facts.activity, nowMs);
   const pending =
     !closed &&
+    !staleClaim &&
     (facts.pending_interaction != null ||
       primaryTone === "blocked" ||
       primaryTone === "stalled");
   const working =
     !closed &&
+    !staleClaim &&
     (primaryTone === "running" ||
       primaryTone === "thinking" ||
       primaryTone === "active" ||
@@ -120,7 +128,7 @@ export function getSessionHeaderState(
     };
   }
 
-  if (!closed && facts.activity.state === "unknown") {
+  if (!closed && (staleClaim || facts.activity.state === "unknown")) {
     return { tone: "unknown", text: "Activity uncertain" };
   }
 

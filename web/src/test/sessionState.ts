@@ -16,6 +16,7 @@ type SessionStateOptions = {
   lastResultAt?: string | null;
   lastResultOutcome?: string | null;
   activityValidUntil?: string | null;
+  hostState?: string;
   launchState?: NonNullable<SessionStateFacts["launch"]>["state"] | null;
   launchErrorCode?: string | null;
   launchErrorMessage?: string | null;
@@ -122,7 +123,7 @@ export function makeSessionStateFacts(options: SessionStateOptions = {}): Sessio
       searchable: true,
       live_observation: access === "observe_only",
     },
-    host: { state: "unknown" },
+    host: { state: options.hostState ?? "unknown" },
     presentation: {
       primary,
       access: access ? { key: access, ...accessLabels[access] } : null,

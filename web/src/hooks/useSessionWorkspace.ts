@@ -12,6 +12,7 @@ import {
   recordServerClockSkew,
 } from "../lib/renderBeacon";
 import { isSessionClosed } from "../lib/sessionRuntime";
+import { activityClaimIsStale } from "../lib/activityEvidence";
 import {
   SessionActivityFeed,
   classifyWorkspaceChange,
@@ -202,6 +203,21 @@ export function useSessionWorkspace(
       }
       if (!shouldRefreshWorkspaceSession(currentSession)) {
         return false;
+      }
+
+      // An activity window is retired by the reader's clock, not by a server
+      // frame, so a quiet stream can still be rendering work the server has
+      // already stopped asserting. Re-ask so the server answers with its own
+      // last-seen label instead of leaving the client's stale claim on screen.
+      // `activityClaimIsStale` goes false once that answer lands, so a wedged
+      // session costs one refresh per cadence, not a permanent poll.
+      if (
+        activityClaimIsStale(
+          currentSession.session_state.activity,
+          Date.now(),
+        )
+      ) {
+        return WORKSPACE_FALLBACK_REFRESH_MS;
       }
 
       // Slow reconciliation: server flips unpaired tool calls to "dropped"

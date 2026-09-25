@@ -56,30 +56,39 @@ struct ActivityEvidenceExpiryTests {
             activityValidUntil: "2026-08-23T12:10:00Z"
         )
         #expect(
-            facts.ledgerEvidence(
-                connection: .connected,
-                asOf: at("2026-08-23T12:11:00Z")
-            ) == .uncertain
+            facts.ledgerEvidence(asOf: at("2026-08-23T12:11:00Z")) == .uncertain
         )
     }
 
     @Test
-    func connectingDoesNotClaimWorkingProviderActivity() {
+    func aLiveWindowKeepsItsClaimOnEveryViewerTransport() {
+        // The socket is not provider evidence. `connecting` is the ordinary
+        // first frame of every open and every return from the background, and
+        // `disconnected` says only that updates are not arriving -- neither is a
+        // statement about the provider, so neither may rewrite the claim.
         let facts = makeSessionStateFacts(
             activity: "executing",
             activityValidUntil: "2026-08-23T12:10:00Z"
         )
-        #expect(
-            facts.ledgerEvidence(
-                connection: .connecting,
-                asOf: at("2026-08-23T12:05:00Z")
-            ) == .uncertain
+        #expect(facts.ledgerEvidence(asOf: at("2026-08-23T12:05:00Z")) == .working)
+        #expect(facts.ledgerEvidence(asOf: at("2026-08-23T12:09:59Z")) == .working)
+    }
+
+    @Test
+    func anIdleSessionStaysQuietOnEveryViewerTransport() {
+        let facts = makeSessionStateFacts(activity: "quiescent", activityValidUntil: nil)
+        #expect(facts.ledgerEvidence(asOf: at("2026-08-23T12:05:00Z")) == .quiet)
+    }
+
+    @Test
+    func aPendingInteractionOutranksAnExpiredWindow() {
+        let facts = makeSessionStateFacts(
+            activity: "executing",
+            pendingInteractionKind: "approval",
+            activityValidUntil: "2026-08-23T12:10:00Z"
         )
         #expect(
-            facts.ledgerEvidence(
-                connection: .connected,
-                asOf: at("2026-08-23T12:05:00Z")
-            ) == .working
+            facts.ledgerEvidence(asOf: at("2026-08-23T12:11:00Z")) == .attention
         )
     }
 
@@ -98,18 +107,18 @@ struct ActivityEvidenceExpiryTests {
         let now = at("2026-08-23T12:05:00Z")
         let original = SessionProviderEvidenceIdentity(observedAt: "first", state: "executing", tool: "Read", source: "provider")
         let fresh = SessionProviderEvidenceIdentity(observedAt: "second", state: "executing", tool: "Read", source: "provider")
-        status.observe(state: .uncertain, evidence: nil, connection: .connecting, resultAt: nil, now: now)
-        status.observe(state: .working, evidence: original, connection: .connected, resultAt: nil, now: now)
+        status.observe(state: .uncertain, evidence: nil, resultAt: nil, now: now)
+        status.observe(state: .working, evidence: original, resultAt: nil, now: now)
         #expect(status.notice == nil)
-        status.observe(state: .uncertain, evidence: original, connection: .disconnected, resultAt: nil, now: now)
-        status.observe(state: .working, evidence: original, connection: .connected, resultAt: nil, now: now)
+        status.observe(state: .uncertain, evidence: original, resultAt: nil, now: now)
+        status.observe(state: .working, evidence: original, resultAt: nil, now: now)
         #expect(status.notice == nil)
-        status.observe(state: .working, evidence: fresh, connection: .connected, resultAt: nil, now: now)
+        status.observe(state: .working, evidence: fresh, resultAt: nil, now: now)
         #expect(status.notice == .restored)
         let deadline = status.until
-        status.observe(state: .working, evidence: fresh, connection: .connected, resultAt: nil, now: now.addingTimeInterval(1))
+        status.observe(state: .working, evidence: fresh, resultAt: nil, now: now.addingTimeInterval(1))
         #expect(status.until == deadline)
-        status.observe(state: .uncertain, evidence: fresh, connection: .disconnected, resultAt: nil, now: now)
+        status.observe(state: .uncertain, evidence: fresh, resultAt: nil, now: now)
         #expect(status.notice == nil)
     }
 
@@ -117,19 +126,19 @@ struct ActivityEvidenceExpiryTests {
     func newWorkOrApprovalSupersedesCompletionNotices() {
         var status = SessionLedgerNoticeState()
         let now = at("2026-08-23T12:05:00Z")
-        status.observe(state: .working, evidence: nil, connection: .connected, resultAt: nil, now: now)
-        status.observe(state: .quiet, evidence: nil, connection: .connected, resultAt: "result-1", now: now)
+        status.observe(state: .working, evidence: nil, resultAt: nil, now: now)
+        status.observe(state: .quiet, evidence: nil, resultAt: "result-1", now: now)
         #expect(status.notice == .finished)
-        status.observe(state: .working, evidence: nil, connection: .connected, resultAt: "result-1", now: now)
+        status.observe(state: .working, evidence: nil, resultAt: "result-1", now: now)
         #expect(status.notice == nil)
-        status.observe(state: .quiet, evidence: nil, connection: .connected, resultAt: "result-2", now: now)
-        status.observe(state: .attention, evidence: nil, connection: .connected, resultAt: "result-2", now: now)
+        status.observe(state: .quiet, evidence: nil, resultAt: "result-2", now: now)
+        status.observe(state: .attention, evidence: nil, resultAt: "result-2", now: now)
         #expect(status.notice == nil)
     }
 
 
     @Test
-    func pendingInteractionKeepsAttentionAboveTransportState() {
+    func pendingInteractionKeepsAttentionAboveAnExpiredWindow() {
         let facts = makeSessionStateFacts(
             activity: "executing",
             pendingInteractionKind: "approval",
@@ -137,7 +146,6 @@ struct ActivityEvidenceExpiryTests {
         )
         #expect(
             facts.ledgerEvidence(
-                connection: .disconnected,
                 asOf: at("2026-08-23T12:11:00Z")
             ) == .attention
         )

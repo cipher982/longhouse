@@ -52,12 +52,13 @@ const interaction = {
 };
 
 describe("SessionRuntimeStrip connection presentation", () => {
-  it("does not imply work or a connection fault during startup grace", () => {
+  it("keeps the work claim during startup grace and reports the socket separately", () => {
     const state = buildSessionLedgerState(
       session("open-work", {
         activity: "executing",
         terminalAttached: true,
         observedAt: "2026-09-09T19:00:00.000Z",
+        activityValidUntil: "2026-09-09T20:00:00.000Z",
       }),
       interaction,
       0,
@@ -66,9 +67,100 @@ describe("SessionRuntimeStrip connection presentation", () => {
       true,
     );
 
+    // The grace is about the viewer's socket, never about the provider: a live
+    // window keeps its claim, the connection line says "checking", and nothing
+    // animates while no frame is arriving.
     expect(state.connection).toBe("checking");
-    expect(state.tone).toBe("quiet");
+    expect(state.tone).toBe("working");
     expect(state.animateWork).toBe(false);
+  });
+
+  it("keeps a still-valid work claim when the viewer is disconnected", () => {
+    const state = buildSessionLedgerState(
+      session("open-work", {
+        activity: "executing",
+        terminalAttached: true,
+        observedAt: "2026-09-09T19:00:00.000Z",
+        activityValidUntil: "2026-09-09T20:00:00.000Z",
+      }),
+      interaction,
+      0,
+      false,
+    );
+
+    expect(state.tone).toBe("working");
+    expect(state.connection).toBe("reconnecting");
+    expect(state.animateWork).toBe(false);
+  });
+
+  it("demotes a work claim whose window has passed", () => {
+    const state = buildSessionLedgerState(
+      session("open-work", {
+        activity: "executing",
+        terminalAttached: true,
+        observedAt: "2026-09-09T19:00:00.000Z",
+        activityValidUntil: "2026-09-09T19:30:00.000Z",
+      }),
+      interaction,
+      Date.parse("2026-09-09T19:45:00.000Z"),
+      false,
+    );
+
+    expect(state.tone).toBe("unknown");
+    expect(state.headline).toBe("Activity uncertain");
+  });
+
+  it("demotes an expired stalled claim instead of presenting it as current", () => {
+    const state = buildSessionLedgerState(
+      session("open-stalled", {
+        activity: "stalled",
+        terminalAttached: true,
+        observedAt: "2026-09-09T19:00:00.000Z",
+        activityValidUntil: "2026-09-09T19:30:00.000Z",
+      }),
+      interaction,
+      Date.parse("2026-09-09T19:45:00.000Z"),
+      false,
+    );
+
+    expect(state.tone).toBe("unknown");
+  });
+
+  it("retracts a work claim for a host we observed offline", () => {
+    const state = buildSessionLedgerState(
+      session("open-host", {
+        activity: "executing",
+        terminalAttached: true,
+        observedAt: "2026-09-09T19:00:00.000Z",
+        activityValidUntil: "2026-09-09T20:00:00.000Z",
+        hostState: "offline",
+      }),
+      interaction,
+      0,
+      true,
+    );
+
+    expect(state.tone).toBe("unknown");
+    expect(state.detail).toBe(
+      "The host is offline; the agent may still be running.",
+    );
+  });
+
+  it("leaves an idle session idle when only the host lease is stale", () => {
+    const state = buildSessionLedgerState(
+      session("open-host", {
+        activity: "quiescent",
+        terminalAttached: true,
+        hostState: "stale",
+      }),
+      interaction,
+      0,
+      true,
+    );
+
+    // The host axis may retract a work claim; it may never invent an alarm
+    // about a session that is simply idle.
+    expect(state.tone).toBe("quiet");
   });
 
   it("keeps an open disconnected idle session as an exception, not a recording", () => {

@@ -14,7 +14,6 @@ struct SessionLedgerNoticeState {
     mutating func observe(
         state: SessionLedgerEvidence,
         evidence: SessionProviderEvidenceIdentity?,
-        connection: SessionRealtimeConnection,
         resultAt: String?,
         now: Date
     ) {
@@ -36,9 +35,10 @@ struct SessionLedgerNoticeState {
                 notice = .finished
                 until = now.addingTimeInterval(4)
             }
-        } else if connection == .connected,
-                  let interruptedEvidence, let evidence,
-                  evidence != interruptedEvidence {
+        } else if let interruptedEvidence, let evidence, evidence != interruptedEvidence {
+            // Recovery needs an interruption and a *new* provider observation.
+            // The viewer's socket deliberately does not participate: it is not
+            // provider evidence, so reconnecting must not announce a recovery.
             notice = .restored
             until = now.addingTimeInterval(4)
             self.interruptedEvidence = nil
@@ -89,12 +89,13 @@ struct SessionSignalField<Content: View>: View {
     }
 
     private var materialKind: SessionSignalMaterialKind {
-        switch detail.ledgerEvidence(connection: realtimeConnection, asOf: fieldNow) {
+        switch detail.ledgerEvidence(asOf: fieldNow) {
         case .working: return .working
-        // Exception material is reserved for a state the user owns: a question,
-        // an approval, a stalled turn, a control fault. "No current
-        // observation" is information, not an alarm, and the warm wash made it
-        // read as a fault the moment a session opened on a stale snapshot.
+        // Exception material is reserved for a state the user owns, and the only
+        // one the ledger raises that way is an unresolved interaction: a
+        // question or an approval. A stalled turn, an auth requirement and a
+        // control fault keep the served tone on the headline and dot instead, and
+        // "no current observation" is information rather than an alarm.
         case .attention: return .exception
         case .uncertain, .quiet: return .settled
         }
@@ -573,9 +574,7 @@ struct SessionRuntimeDock: View {
         transition.observe(
             state: ledger(asOf: evidenceNow),
             evidence: detail.stateFacts.providerEvidenceIdentity,
-            connection: realtimeConnection,
             resultAt: detail.stateFacts.lastResultAt,
-
             now: now
         )
         noticeNow = now
@@ -616,23 +615,11 @@ struct SessionRuntimeDock: View {
     private var isExecuting: Bool { isOpen && detail.isSessionExecuting }
     private func ledger(asOf now: Date) -> SessionLedgerEvidence {
         guard isOpen else { return .quiet }
-        // A screen that has never seen a connected stream ignores the transport
-        // for the same 2s window the connection subline already uses. The viewer
-        // socket is not provider evidence (`SessionRealtimeConnection`), so
-        // `connecting` is the ordinary first frame of every open and of every
-        // return from the background; scoring it as an exception opened each
-        // session with a red card and a claim ("no fresh provider evidence")
-        // that the served facts contradicted.
-        //
-        // Only the transport is suppressed. An expired window still degrades on
-        // its own evidence: the grace must not re-assert work the reader's clock
-        // has already retired.
-        if !hasObservedConnection,
-           !startupGraceExpired,
-           detail.stateFacts.activityEvidenceIsLive(asOf: now) {
-            return .quiet
-        }
-        return detail.ledgerEvidence(connection: realtimeConnection, asOf: now)
+        // No transport term here, and no grace: the viewer's socket is not
+        // provider evidence, so `connecting` and `disconnected` never rewrite
+        // the activity claim. They appear on the connection line below, which
+        // keeps its own startup grace.
+        return detail.ledgerEvidence(asOf: now)
     }
 
 
@@ -848,7 +835,10 @@ struct SessionRuntimeDock: View {
     private func headline(for state: SessionLedgerEvidence) -> String {
         switch state {
         case .uncertain:
-            return realtimeConnection == .disconnected ? "Updates interrupted" : "Activity uncertain"
+            // The socket never produces this state any more, so the headline
+            // names the fact that does: the window for the last work claim has
+            // passed and nothing has replaced it.
+            return "Activity uncertain"
         case .attention:
             if detail.activePauseRequest != nil { return "Permission needed" }
             if detail.stateFacts.primary?.key == "delegated_work",
@@ -942,12 +932,10 @@ struct SessionRuntimeDock: View {
     private func exceptionReason(_ state: SessionLedgerEvidence) -> String? {
         switch state {
         case .uncertain:
-            // Three different causes used to share one sentence, so a sleeping
-            // host and a stale observation read alike. Name the one that is
-            // actually true; none of them is a fault the user caused.
-            if realtimeConnection == .disconnected {
-                return "Updates are disconnected. The agent may still be working."
-            }
+            // The state now has exactly two causes -- a window the reader's
+            // clock retired, and a host we observed go quiet -- and each one
+            // names itself. The transport is not one of them; it is on the
+            // connection line.
             let hostState = detail.runtimeDisplay.hostState
             if hostState == "offline" || hostState == "stale" {
                 return "The host is \(hostState). The agent may still be working."
@@ -965,7 +953,7 @@ struct SessionRuntimeDock: View {
         switch realtimeConnection {
         case .connected:
             if state == .uncertain {
-                return "Viewer is connected, but provider activity is unconfirmed."
+                return "Viewer is connected; the provider has not reported since the last observation."
             }
             return "Provider evidence is valid."
         case .connecting:
@@ -975,7 +963,7 @@ struct SessionRuntimeDock: View {
                 return "Checking for updates…"
             }
             if state == .uncertain {
-                return "Viewer updates are unavailable; the agent may still be working."
+                return "Updates are unavailable; the agent may still be working."
             }
             return "Updates disconnected"
         }

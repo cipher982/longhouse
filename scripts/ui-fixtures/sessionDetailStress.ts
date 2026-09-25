@@ -124,6 +124,11 @@ function makeSessionState(overrides: JsonObject = {}): JsonObject {
     mode: "helm",
     disposition: { state: "open", closed_at: null, close_reason: null },
     run: { lifecycle: "running", started_at: "2026-04-15T15:15:00Z", ended_at: null },
+    // Every consumer that asks "is this session live?" -- the runtime strip's
+    // `openSession`, the composer's tone ladder -- keys off this tier. Leaving
+    // it out rendered every session-detail capture in the closed-tier quiet
+    // branch, which is why no frame could show a working or unknown tone.
+    working_set: "open",
     activity: {
       state: "executing",
       raw_kind: "running",
@@ -1272,12 +1277,6 @@ export function buildSessionToneFixture(tone: SessionTone): SessionDetailFixture
       // reader's clock can tell that the window has passed. Neither working nor
       // broken, just unobserved -- the frame the "Activity uncertain" alarm used
       // to be painted on.
-      //
-      // The stale host lease is what makes this tone reachable in a capture at
-      // all: the harness freezes `Date.now` at the fixture time, so the
-      // initial-connection grace (a 2s *duration*) never lifts and an
-      // expiry-only frame renders as `quiet`. Host concern bypasses that grace
-      // and lands on the same tone, the same headline and the same CSS.
       fixture.session.session_state = makeSessionState({
         // The session-detail fixtures never carried a `working_set`, so
         // `openSession` was false and every tone frame fell to the closed-tier
@@ -1291,7 +1290,6 @@ export function buildSessionToneFixture(tone: SessionTone): SessionDetailFixture
           observed_at: "2026-04-15T15:50:00Z",
           valid_until: "2026-04-15T16:02:00Z",
         },
-        host: { state: "stale", observed_at: "2026-04-15T15:41:00Z" },
         presentation: {
           primary: { key: "executing", label: "Using exec_command", tone: "running", observed_at: "2026-04-15T15:50:00Z" },
           access,

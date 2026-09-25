@@ -36,3 +36,25 @@ export function isActivityStalled(activity: ActivityEvidence | null | undefined,
   if (!activityEvidenceIsLive(activity, nowMs)) return false;
   return activity?.state === "stalled";
 }
+
+/**
+ * Is the client holding a work claim whose window has passed?
+ *
+ * This is the one predicate that says "the snapshot we are rendering is no
+ * longer allowed to claim work". It is deliberately narrower than a raw expiry
+ * check: once the server's re-mint lands, the served state is `unknown` with
+ * the same past `valid_until`, and the answer must go back to false, or every
+ * reconciler that keys on it polls a wedged session forever.
+ *
+ * Mirrors `heldActivityEvidenceIsStale` in the iOS view model.
+ */
+export function activityClaimIsStale(
+  activity: ActivityEvidence | null | undefined,
+  nowMs: number,
+): boolean {
+  if (!activity) return false;
+  const state = activity.state;
+  const claimsWork =
+    state === "thinking" || state === "executing" || state === "stalled";
+  return claimsWork && !activityEvidenceIsLive(activity, nowMs);
+}

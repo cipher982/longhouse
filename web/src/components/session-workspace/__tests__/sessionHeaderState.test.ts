@@ -13,6 +13,7 @@ function session(overrides: {
   activityState?: string;
   tool?: string | null;
   observedAt?: string | null;
+  validUntil?: string | null;
   primaryTone?: string | null;
   primaryLabel?: string | null;
   primaryKey?: string | null;
@@ -26,6 +27,7 @@ function session(overrides: {
         state: overrides.activityState ?? "quiescent",
         tool: overrides.tool ?? null,
         observed_at: overrides.observedAt ?? null,
+        valid_until: overrides.validUntil ?? null,
       },
       presentation: {
         primary:
@@ -124,6 +126,53 @@ describe("getSessionHeaderState", () => {
         activityState: "unknown",
         observedAt: "2026-04-15T16:29:00Z",
         lastResultAt: "2026-04-15T15:55:00Z",
+      }),
+      now,
+    );
+    expect(state).toEqual({ tone: "unknown", text: "Activity uncertain" });
+  });
+
+  it("stops claiming work when the served window has passed", () => {
+    const now = Date.parse("2026-04-15T16:30:00Z");
+    const state = getSessionHeaderState(
+      session({
+        activityState: "executing",
+        tool: "Bash",
+        observedAt: "2026-04-15T16:12:00Z",
+        validUntil: "2026-04-15T16:22:00Z",
+        primaryTone: "running",
+        primaryLabel: "Using Bash",
+      }),
+      now,
+    );
+    expect(state).toEqual({ tone: "unknown", text: "Activity uncertain" });
+  });
+
+  it("keeps claiming work while the served window is still valid", () => {
+    const now = Date.parse("2026-04-15T16:30:00Z");
+    const state = getSessionHeaderState(
+      session({
+        activityState: "executing",
+        tool: "Bash",
+        observedAt: "2026-04-15T16:29:00Z",
+        validUntil: "2026-04-15T16:40:00Z",
+        primaryTone: "running",
+        primaryLabel: "Using Bash",
+      }),
+      now,
+    );
+    expect(state.tone).toBe("live");
+  });
+
+  it("stops presenting an expired stall as an attention state", () => {
+    const now = Date.parse("2026-04-15T16:30:00Z");
+    const state = getSessionHeaderState(
+      session({
+        activityState: "stalled",
+        observedAt: "2026-04-15T16:00:00Z",
+        validUntil: "2026-04-15T16:10:00Z",
+        primaryTone: "stalled",
+        primaryLabel: "No progress for 31m",
       }),
       now,
     );

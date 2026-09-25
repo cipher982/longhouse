@@ -1641,15 +1641,18 @@ final class SessionViewModel: ObservableObject {
     }
 
     /// Is this viewer still rendering provider work from a window that has
-    /// passed? Mirrors `SessionStateFacts.activityEvidenceIsLive`, and
-    /// deliberately only asks about evidence the *served facts* claim is live
-    /// work: an unobserved session needs no reconciliation.
+    /// passed? Mirrors `activityClaimIsStale` in `web/src/lib/activityEvidence.ts`.
+    ///
+    /// It asks about states that make a *claim* -- work in flight, or an
+    /// explicit stall -- so the server's re-mint (which serves `unknown` with
+    /// the same past window) clears the predicate and the poll stops.
     private func heldActivityEvidenceIsStale(asOf now: Date) -> Bool {
         guard let facts = detail?.stateFacts else { return false }
-        guard facts.activityState == "thinking" || facts.activityState == "executing" else {
-            return false
-        }
-        return !facts.activityEvidenceIsLive(asOf: now)
+        let claimsWork =
+            facts.activityState == "thinking"
+            || facts.activityState == "executing"
+            || facts.activityState == "stalled"
+        return claimsWork && !facts.activityEvidenceIsLive(asOf: now)
     }
 
     static func visiblePollDelayNanoseconds(completedTicks: Int) -> UInt64 {

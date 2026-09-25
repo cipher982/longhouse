@@ -4,7 +4,7 @@ import type { SessionInteractionCapabilities } from "../../lib/sessionWorkspace"
 import { getToolInputRecord } from "../../lib/sessionWorkspace";
 import type { SessionActivityFeed } from "../../lib/sessionActivityFeed";
 import { useWallClock } from "../../hooks/useWallClock";
-import { activityEvidenceIsLive } from "../../lib/activityEvidence";
+import { activityClaimIsStale, activityEvidenceIsLive } from "../../lib/activityEvidence";
 import { resolveSessionRuntimeState } from "../../lib/sessionRuntime";
 import {
   getRuntimeDisplayCopy,
@@ -205,46 +205,42 @@ export function buildSessionLedgerState(
   const openSession = !closedSession && facts.working_set === "open";
   const pending = openSession && facts.pending_interaction != null;
   const inInitialConnectionGrace = initialConnectionGrace && openSession;
-  const evidenceLive =
-    !inInitialConnectionGrace && activityEvidenceIsLive(facts.activity, nowMs);
-  const hostConcern =
-    openSession &&
-    (facts.host.state === "offline" || facts.host.state === "stale");
+  const evidenceLive = activityEvidenceIsLive(facts.activity, nowMs);
+  // The viewer's socket is not provider evidence: a connected stream only means
+  // updates can arrive, so `connecting` and `disconnected` belong on the
+  // connection line, never on the activity claim. `valid_until` is what bounds
+  // a work claim, and it is the reader's clock that retires it.
+  const activityDemoted = activityClaimIsStale(facts.activity, nowMs);
+  // A host we positively observed offline can retract a work claim the same
+  // window has not expired yet, but it may never *add* an alarm: an idle
+  // session stays idle rather than reading "Activity uncertain" because the
+  // laptop is asleep. The warm escalation for an unreachable machine lives on
+  // the access/capability axis, which is the surface that owns the action.
+  const hostOffline = openSession && facts.host.state === "offline";
+  const hostStale = openSession && facts.host.state === "stale";
+  const hostRetractsClaim = rawProviderWorking && (hostOffline || hostStale);
   const transcriptConcern =
     openSession && facts.transcript.convergence === "lagging";
   const providerWorking = evidenceLive && rawProviderWorking;
   const viewerNeedsDisclosure =
     openSession &&
-    ((!streamConnected &&
-      (rawProviderWorking ||
-        pending ||
-        facts.activity.state === "blocked" ||
-        facts.activity.state === "stalled")) ||
-      hostConcern ||
-      transcriptConcern ||
-      (rawProviderWorking && !evidenceLive));
+    (hostRetractsClaim || transcriptConcern || activityDemoted);
   const tone: SessionLedgerState["tone"] = !openSession
     ? "quiet"
     : pending
       ? "attention"
-      : inInitialConnectionGrace && !hostConcern && !transcriptConcern
-        ? "quiet"
-        : viewerNeedsDisclosure
-          ? "unknown"
-          : evidenceLive &&
-              (runtime.tone === "blocked" || runtime.tone === "stalled")
-            ? "attention"
-            : providerWorking
-              ? "working"
-              : rawProviderWorking && !evidenceLive
-                ? "unknown"
-                : "quiet";
+      : viewerNeedsDisclosure
+        ? "unknown"
+        : evidenceLive &&
+            (runtime.tone === "blocked" || runtime.tone === "stalled")
+          ? "attention"
+          : providerWorking
+            ? "working"
+            : "quiet";
   const headline = pending
     ? "Needs your response"
     : tone === "unknown"
-      ? !streamConnected && !inInitialConnectionGrace
-        ? "Updates interrupted"
-        : "Activity uncertain"
+      ? "Activity uncertain"
       : interaction.isManagedLocalSession
         ? withObservationAge(
             display.headline,
@@ -272,15 +268,15 @@ export function buildSessionLedgerState(
     literalDetail ??
     (pending
       ? "A response is required before another message."
-      : tone === "unknown"
-        ? !streamConnected && !inInitialConnectionGrace
-          ? "Connection lost. The agent may still be working."
-          : hostConcern
-            ? `Host is ${facts.host.state}; the agent may still be running.`
+      : hostOffline
+        ? "The host is offline; the agent may still be running."
+        : tone === "unknown"
+          ? hostStale
+            ? "The host stopped reporting; the agent may still be running."
             : transcriptConcern
               ? "Transcript is lagging the observed session state."
-              : "Provider activity is unconfirmed."
-        : display.detail);
+              : "No fresh provider evidence. The agent may still be working."
+          : display.detail);
   const connection: SessionLedgerState["connection"] = !openSession
     ? "recorded"
     : streamConnected
@@ -295,7 +291,7 @@ export function buildSessionLedgerState(
       : streamConnected
         ? pending
           ? "Waiting for your response"
-          : hostConcern
+          : hostOffline || hostStale
             ? `Host is ${facts.host.state}`
             : transcriptConcern
               ? "Transcript is lagging"

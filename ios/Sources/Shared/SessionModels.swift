@@ -168,8 +168,15 @@ extension SessionStateFacts {
 }
 
 extension SessionStateFacts {
+    /// The ledger verdict for the activity axis.
+    ///
+    /// The viewer's socket is deliberately not an input. A connected stream only
+    /// means updates can arrive, so a `connecting` or `disconnected` socket is
+    /// not evidence that the provider stopped: it belongs on the connection
+    /// line. `valid_until` is what bounds a work claim, and the reader's clock
+    /// is what retires it -- an expired window becomes `uncertain` (neutral,
+    /// never idle and never ended), a live one keeps its claim.
     func ledgerEvidence(
-        connection: SessionRealtimeConnection,
         hasPendingInteraction: Bool = false,
         asOf now: Date = Date()
     ) -> SessionLedgerEvidence {
@@ -177,13 +184,7 @@ extension SessionStateFacts {
             return .attention
         }
         guard ["thinking", "executing"].contains(activityState) else { return .quiet }
-        guard activityEvidenceIsLive(asOf: now) else { return .uncertain }
-        switch connection {
-        case .connected:
-            return .working
-        case .connecting, .disconnected:
-            return .uncertain
-        }
+        return activityEvidenceIsLive(asOf: now) ? .working : .uncertain
     }
 }
 
@@ -1333,7 +1334,15 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         return placeholder
     }
 
-    var runtimeHeadline: String { stateFacts.primary?.label ?? "" }
+    /// The served primary label, or the neutral unknown label when the server
+    /// deliberately makes no runtime claim (a session with no run and no
+    /// applicable launch/ready/interaction state). An empty headline rendered a
+    /// blank status row, which is the one thing "unknown is information" cannot
+    /// mean.
+    var runtimeHeadline: String {
+        let label = stateFacts.primary?.label.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return label.isEmpty ? "Activity unknown" : label
+    }
 
     var runtimeDetail: String? {
         guard let detail = stateFacts.transcript?.label.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty else {
@@ -1399,18 +1408,21 @@ struct SessionDetail: Codable, Identifiable, Sendable {
 }
 
 extension SessionDetail {
-    func ledgerEvidence(
-        connection: SessionRealtimeConnection,
-        asOf now: Date = Date()
-    ) -> SessionLedgerEvidence {
+    /// The session-level verdict: the activity axis, plus a host observation
+    /// that may retract a claim the window has not expired yet.
+    ///
+    /// A host we positively observed offline or stale outranks a work claim, but
+    /// it may never *add* an alarm: an idle session stays idle rather than
+    /// reading "Activity uncertain" because the laptop is asleep. The warm
+    /// escalation for an unreachable machine belongs to the control/access
+    /// surface, which is the one that owns the action.
+    func ledgerEvidence(asOf now: Date = Date()) -> SessionLedgerEvidence {
         guard !isClosed else { return .quiet }
         let base = stateFacts.ledgerEvidence(
-            connection: connection,
             hasPendingInteraction: activePauseRequest != nil,
             asOf: now
         )
-        if base == .attention { return base }
-        if ["offline", "stale"].contains(runtimeDisplay.hostState) {
+        if base == .working, ["offline", "stale"].contains(runtimeDisplay.hostState) {
             return .uncertain
         }
         return base

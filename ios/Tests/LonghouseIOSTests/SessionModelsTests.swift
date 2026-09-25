@@ -1564,9 +1564,32 @@ struct SessionModelsTests {
                 runLifecycle: "ended",
                 sendInputAvailable: false
             ),
-            json: offlineHostDetailJSON
+            json: hostDetailJSON("offline")
         )
         #expect(offline.controlBlock == .machineOffline)
+    }
+
+    @Test
+    func anUnreachableHostRetractsAWorkClaimWithoutInventingAnAlarm() throws {
+        // The host axis may retract work the activity window has not retired
+        // yet. It may never turn a session that is simply idle into "Activity
+        // uncertain" because the machine stopped answering: the warm escalation
+        // for an unreachable machine belongs to the control axis, which is the
+        // one that owns the action (`controlBlock == .machineOffline` above).
+        let working = try makeDetail(
+            facts: makeSessionStateFacts(
+                activity: "executing",
+                activityValidUntil: "2030-01-01T00:00:00Z"
+            ),
+            json: hostDetailJSON("offline")
+        )
+        #expect(working.ledgerEvidence(asOf: Date()) == .uncertain)
+
+        let idle = try makeDetail(
+            facts: makeSessionStateFacts(activity: "quiescent", activityValidUntil: nil),
+            json: hostDetailJSON("stale")
+        )
+        #expect(idle.ledgerEvidence(asOf: Date()) == .quiet)
     }
 
     @Test
@@ -1865,9 +1888,9 @@ struct SessionModelsTests {
         return try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: data)
     }
 
-    private var offlineHostDetailJSON: Data {
+    private func hostDetailJSON(_ state: String) -> Data {
         let text = String(decoding: minimalDetailJSON, as: UTF8.self)
-            .replacingOccurrences(of: "\"host_state\": \"online\"", with: "\"host_state\": \"offline\"")
+            .replacingOccurrences(of: "\"host_state\": \"online\"", with: "\"host_state\": \"\(state)\"")
         return text.data(using: .utf8)!
     }
 
