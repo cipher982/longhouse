@@ -1478,6 +1478,94 @@ def _apply_delegation_lineage(
     return bound
 
 
+def _open_run_holds_live_ownership(orm: Session, *, run: LiveSessionRun, observed_at: datetime) -> bool:
+    """Whether an unended run still owns its provider thread right now.
+
+    `ended_at IS NULL` alone is not ownership. A wrapper killed before it could
+    ship its terminal fact (closed terminal, SIGKILL, machine sleep) leaves a
+    run row that nothing ever reconciles, and the run is then indistinguishable
+    from a live one to any reader that only looks at the column. The product's
+    own horizon is the control lease (`_CONTROL_LEASE_TTL`, the same one
+    `get_live_control_grant` fails closed on): an attachment whose health is
+    older than that is no longer current control, and a run that has published
+    no runtime signal inside it is an orphan, not a second execution owner.
+    Registration in flight is the remaining case that must still win: a pending,
+    unexpired launch attempt is a resume that has not reported yet.
+    """
+
+    lease_floor = observed_at - _CONTROL_LEASE_TTL
+    live_control = (
+        orm.query(LiveSessionConnection.id)
+        .filter(
+            LiveSessionConnection.run_id == str(run.id),
+            LiveSessionConnection.released_at.is_(None),
+            LiveSessionConnection.state.in_(("attached", "degraded")),
+            LiveSessionConnection.last_health_at.is_not(None),
+            LiveSessionConnection.last_health_at > lease_floor,
+        )
+        .first()
+    )
+    if live_control is not None:
+        return True
+    fresh_signal = (
+        orm.query(LiveRuntimeState.runtime_key)
+        .filter(
+            LiveRuntimeState.run_id == str(run.id),
+            LiveRuntimeState.terminal_state.is_(None),
+            or_(
+                LiveRuntimeState.freshness_expires_at > observed_at,
+                LiveRuntimeState.last_runtime_signal_at > lease_floor,
+                LiveRuntimeState.last_asserted_at > lease_floor,
+                LiveRuntimeState.updated_at > lease_floor,
+            ),
+        )
+        .first()
+    )
+    if fresh_signal is not None:
+        return True
+    pending_attempt = (
+        orm.query(LiveSessionLaunchAttempt.id)
+        .filter(
+            LiveSessionLaunchAttempt.run_id == str(run.id),
+            LiveSessionLaunchAttempt.state == "pending",
+            or_(
+                LiveSessionLaunchAttempt.expires_at.is_(None),
+                LiveSessionLaunchAttempt.expires_at > observed_at,
+            ),
+        )
+        .first()
+    )
+    return pending_attempt is not None
+
+
+def _retire_orphaned_open_run(orm: Session, *, run: LiveSessionRun, observed_at: datetime) -> None:
+    """End an unended run whose execution owner stopped reporting.
+
+    Mirrors the terminal-evidence path (`_apply_exact_run_terminal_evidence`):
+    the run ends and its control attachments close, so nothing is served as
+    open and no stale `can_*` capability outlives the owner.
+    """
+
+    run.ended_at = observed_at
+    run.exit_status = "stale_run_superseded"
+    for connection in (
+        orm.query(LiveSessionConnection)
+        .filter(
+            LiveSessionConnection.run_id == str(run.id),
+            LiveSessionConnection.released_at.is_(None),
+        )
+        .all()
+    ):
+        connection.state = "ended"
+        connection.released_at = observed_at
+        connection.last_health_at = observed_at
+        connection.can_send_input = 0
+        connection.can_interrupt = 0
+        connection.can_terminate = 0
+        connection.can_tail_output = 0
+        connection.can_resume = 0
+
+
 class CatalogStore:
     def reset_e2e_user_data(self) -> dict[str, object]:
         """Clear browser-test product state while retaining its authority.
@@ -5634,8 +5722,15 @@ class CatalogStore:
                     orm.query(LiveSessionRun).filter(LiveSessionRun.thread_id == thread_id, LiveSessionRun.ended_at.is_(None)).first()
                 )
                 if open_run is not None:
-                    orm.rollback()
-                    return {"conflict": "managed session already has a current run"}
+                    if _open_run_holds_live_ownership(orm, run=open_run, observed_at=observed_at):
+                        orm.rollback()
+                        return {"conflict": "managed session already has a current run"}
+                    # The run outlived its owner: the provider exited without a
+                    # wrapper to report it, so no terminal fact ever retired the
+                    # row and `ended_at IS NULL` misread as "still executing".
+                    # Resume is the recovery path for exactly this session, so
+                    # retire the orphan here rather than refusing it forever.
+                    _retire_orphaned_open_run(orm, run=open_run, observed_at=observed_at)
 
                 # A receipt claimed by the ended run may have reached the
                 # provider even when its acknowledgement did not. Settle that

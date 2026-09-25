@@ -9,14 +9,15 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.orm import Session
 
+from zerg.catalogd.client import MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
-from zerg.catalogd.client import MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveLaunchReadiness
+from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionInputReceipt
@@ -343,6 +344,207 @@ async def test_catalogd_resumes_ended_managed_thread_with_one_new_run(daemon_pat
         assert receipts[receipt_id].error_json is None
         assert receipts[delivering_receipt_id].status == "failed"
         assert '"code": "delivery_unknown"' in receipts[delivering_receipt_id].error_json
+    engine.dispose()
+
+
+async def _create_adopted_managed_launch(*, client, session_id, provider, managed_transport, attach_command):
+    """Create and confirm one managed launch, leaving its run open."""
+
+    provider_thread_id = str(uuid4())
+    launch = _local_launch_payload(
+        session_id=session_id,
+        provider=provider,
+        managed_transport=managed_transport,
+        attach_command=attach_command,
+        provider_session_id=provider_thread_id,
+    )
+    launch["plan"].update(launch_actor="human_shell", launch_surface="terminal")
+    created = await client.call("session.launch.local.create.v2", {"launch": launch})
+    await client.call(
+        "session.launch.local.finish.v2",
+        {
+            "outcome": {
+                "session_id": str(session_id),
+                "run_id": created["run_id"],
+                "owner_id": 7,
+                "device_id": "cinder",
+                "state": "adopted",
+                "error_code": None,
+                "error_message": None,
+                "observed_at": datetime.now(UTC).isoformat(),
+            }
+        },
+    )
+    return created, provider_thread_id
+
+
+def _resume_payload(*, session_id, provider_thread_id, provider="claude", cwd="/workspace/longhouse"):
+    now = datetime.now(UTC)
+    return {
+        "owner_id": 7,
+        "session_id": str(session_id),
+        "provider": provider,
+        "provider_thread_id": provider_thread_id,
+        "device_id": "cinder",
+        "cwd": cwd,
+        "launch_actor": "human_shell",
+        "launch_surface": "terminal",
+        "environment": "development",
+        "origin_kind": None,
+        "hidden_from_default_timeline": 0,
+        "resume_attempt_id": str(uuid4()),
+        "started_at": now.isoformat(),
+        "expires_at": (now + timedelta(minutes=5)).isoformat(),
+    }
+
+
+@pytest.mark.asyncio
+async def test_catalogd_resume_retires_run_whose_owner_vanished(daemon_paths):
+    """A provider exit nobody reported must not block resume forever.
+
+    A wrapper killed before it could ship its terminal fact leaves `ended_at`
+    NULL with no live control attachment, no fresh runtime signal and no
+    unexpired launch attempt. Closing a Claude Helm terminal produces exactly
+    that: the session is archived as ended while its run row still reads as
+    current, and resume answered it with an opaque 409.
+    """
+
+    database_path, socket_path = daemon_paths
+    session_id = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path, default_timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS)
+    try:
+        created, provider_thread_id = await _create_adopted_managed_launch(
+            client=client,
+            session_id=session_id,
+            provider="claude",
+            managed_transport="claude_channel",
+            attach_command=f"longhouse claude --resume {session_id}",
+        )
+        resume = _resume_payload(session_id=session_id, provider_thread_id=provider_thread_id)
+        resumed = await client.call("session.launch.local.resume.v2", {"resume": resume})
+        assert resumed["created"] is True
+        assert resumed["run_id"] != created["run_id"]
+        assert resumed["provider_session_id"] == provider_thread_id
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with Session(engine) as db:
+        runs = db.query(LiveSessionRun).order_by(LiveSessionRun.started_at).all()
+        assert [run.id for run in runs] == [created["run_id"], resumed["run_id"]]
+        assert runs[0].ended_at is not None
+        assert runs[0].exit_status == "stale_run_superseded"
+        assert runs[1].ended_at is None
+        assert runs[1].launch_origin == "longhouse_continued"
+        connections = db.query(LiveSessionConnection).order_by(LiveSessionConnection.id).all()
+        assert [row.run_id for row in connections] == [created["run_id"], resumed["run_id"]]
+        assert [row.state for row in connections] == ["ended", "detached"]
+        retired = connections[0]
+        assert retired.released_at is not None
+        assert (retired.can_send_input, retired.can_interrupt, retired.can_terminate) == (0, 0, 0)
+        assert (retired.can_tail_output, retired.can_resume) == (0, 0)
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("connection_state", "health_age_secs", "runtime_signal_age_secs", "expected_conflict"),
+    [
+        # Live control attachment: still the current owner.
+        ("attached", 0, None, True),
+        # Attachment lapsed, but the run is still publishing runtime signals.
+        ("attached", 3600, 0, True),
+        ("detached", 0, 0, True),
+        # Attachment lapsed past the control lease and no signal since: orphan.
+        ("attached", 3600, None, False),
+        ("detached", 3600, None, False),
+    ],
+)
+async def test_catalogd_resume_refuses_only_a_run_with_live_evidence(
+    daemon_paths,
+    connection_state,
+    health_age_secs,
+    runtime_signal_age_secs,
+    expected_conflict,
+):
+    database_path, socket_path = daemon_paths
+    session_id = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path, default_timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS)
+    try:
+        created, provider_thread_id = await _create_adopted_managed_launch(
+            client=client,
+            session_id=session_id,
+            provider="claude",
+            managed_transport="claude_channel",
+            attach_command=f"longhouse claude --resume {session_id}",
+        )
+    finally:
+        await client.close()
+        await daemon.close()
+
+    now = datetime.now(UTC)
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with Session(engine) as db:
+        connection = db.query(LiveSessionConnection).filter_by(run_id=created["run_id"]).one()
+        connection.state = connection_state
+        connection.released_at = None
+        connection.last_health_at = now - timedelta(seconds=health_age_secs)
+        if runtime_signal_age_secs is not None:
+            observed_at = now - timedelta(seconds=runtime_signal_age_secs)
+            db.add(
+                LiveRuntimeState(
+                    runtime_key=f"claude:{session_id}",
+                    session_id=session_id,
+                    thread_id=None,
+                    run_id=created["run_id"],
+                    provider="claude",
+                    device_id="cinder",
+                    phase="thinking",
+                    phase_source="hook",
+                    last_runtime_signal_at=observed_at,
+                    timeline_anchor_at=observed_at,
+                    updated_at=observed_at,
+                )
+            )
+        db.commit()
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path, default_timeout_seconds=MANAGED_LAUNCH_CATALOG_TIMEOUT_SECONDS)
+    try:
+        resume = _resume_payload(session_id=session_id, provider_thread_id=provider_thread_id)
+        if expected_conflict:
+            with pytest.raises(CatalogRemoteError) as exc_info:
+                await client.call("session.launch.local.resume.v2", {"resume": resume})
+            assert exc_info.value.code == "conflict"
+            assert "current run" in str(exc_info.value)
+        else:
+            resumed = await client.call("session.launch.local.resume.v2", {"resume": resume})
+            assert resumed["created"] is True
+            assert resumed["run_id"] != created["run_id"]
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with Session(engine) as db:
+        runs = db.query(LiveSessionRun).order_by(LiveSessionRun.started_at).all()
+        if expected_conflict:
+            assert [run.id for run in runs] == [created["run_id"]]
+            assert runs[0].ended_at is None
+        else:
+            assert len(runs) == 2
+            assert runs[0].exit_status == "stale_run_superseded"
+            assert runs[1].ended_at is None
     engine.dispose()
 
 
