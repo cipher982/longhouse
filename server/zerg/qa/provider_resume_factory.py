@@ -119,6 +119,7 @@ async def _run_catalog_scenario(provider: str, scenario: str) -> dict[str, Any]:
         resume_clock = now + timedelta(seconds=3)
         try:
             if scenario == "helm_live_reattach":
+                _mark_open_run_attached(database_path, session_id, resume_clock)
                 observation = await _live_reattach_observation(
                     client,
                     database_path,
@@ -879,6 +880,44 @@ async def _fail_attempt(client: CatalogClient, session_id: str, run_id: str, mac
             }
         },
     )
+
+
+def _mark_open_run_attached(database_path: Path, session_id: str, now: datetime) -> None:
+    """Give the fixture's open run the live control attachment the product reads.
+
+    ``helm_live_reattach`` asserts that a resume beside a live provider owner is
+    refused. Live ownership is deliberately not ``ended_at IS NULL``: catalogd
+    reads it from a control attachment inside the lease or a fresh runtime
+    signal (``_open_run_holds_live_ownership``, whose own matrix includes
+    ``("attached", 0, None, True)`` as "live control attachment: still the
+    current owner"). An adopted launch leaves its connection ``detached``, which
+    by that contract is not live control, so without this the scenario modelled
+    an orphan and correctly stopped being refused.
+    """
+
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    try:
+        with Session(engine) as db:
+            run = (
+                db.query(LiveSessionRun)
+                .join(LiveSessionLaunchAttempt, LiveSessionLaunchAttempt.run_id == LiveSessionRun.id)
+                .filter(
+                    LiveSessionLaunchAttempt.session_id == session_id,
+                    LiveSessionRun.ended_at.is_(None),
+                )
+                .first()
+            )
+            if run is None:
+                return
+            fresh_health_at = now - timedelta(minutes=1)
+            for connection in db.query(LiveSessionConnection).filter(LiveSessionConnection.run_id == str(run.id)).all():
+                connection.state = "attached"
+                connection.released_at = None
+                connection.last_health_at = fresh_health_at
+            db.commit()
+    finally:
+        engine.dispose()
 
 
 def _open_run_count(database_path: Path, session_id: str) -> int:
