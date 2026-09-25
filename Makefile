@@ -384,8 +384,11 @@ ios-unit: ## Hermetic iOS unit tests on this machine (~35s) — iteration only, 
 		-only-testing:LonghouseIOSTests \
 		test
 
-test-frontend: ## Frontend unit tests + type-check (~2min)
-	@cd web && bun run validate:types && bun run test -- --run --runInBand
+test-frontend: ## Frontend unit tests + type-check (~1min)
+	@# One vitest worker per CPU the guest actually has (Node's
+	@# availableParallelism honours the container's cgroup quota). --runInBand
+	@# pinned the suite to one worker: 44s against 15s on a 4-CPU guest.
+	@cd web && bun run validate:types && bun run test -- --run --maxWorkers=100%
 
 test-engine: test-engine-projection-failure test-engine-omp-helm ## Rust engine tests (~20s)
 	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release)
