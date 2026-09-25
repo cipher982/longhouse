@@ -318,6 +318,9 @@ class CatalogDaemon:
             stage_started = time.perf_counter()
             ensured = self._store.ensure_known_projector_states()
             log_stage("ensure_projector_states", stage_started, **ensured)
+            stage_started = time.perf_counter()
+            analyzed = self._store.refresh_projector_statistics()
+            log_stage("refresh_projector_statistics", stage_started, **analyzed)
             # A Runtime Host replacement cannot retain claim ownership, but a
             # child-only catalogd restart must preserve work still running in
             # the same host process. The shared boot id distinguishes them.

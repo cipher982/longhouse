@@ -33,6 +33,7 @@ from sqlalchemy import insert
 from sqlalchemy import literal
 from sqlalchemy import or_
 from sqlalchemy import select
+from sqlalchemy import text
 from sqlalchemy import tuple_
 from sqlalchemy import union
 from sqlalchemy import union_all
@@ -1486,6 +1487,20 @@ class CatalogStore:
         initialize_catalog_schema(self.engine)
         self._shadow_parity_delta_count = None
         return {"reset": True, "tables_cleared": sorted(cleared)}
+
+    def refresh_projector_statistics(self) -> dict[str, int]:
+        """Give the planner projector_state's real shape once per catalogd start.
+
+        Nothing else analyzes the catalog, and the production statistics were
+        taken at 196 rows: claim lookups scanned the projector (28 ms on the
+        frozen owner catalog, 0.14 ms after this). A full ANALYZE, because a
+        sampled one misjudges the mostly-NULL claim_token index the same way.
+        """
+
+        with _write_transaction(self.engine) as connection:
+            connection.exec_driver_sql("ANALYZE projector_state")
+            rows = connection.execute(select(func.count()).select_from(ProjectorState.__table__)).scalar_one()
+        return {"rows": int(rows)}
 
     def ensure_known_projector_states(self) -> dict[str, int]:
         """Backfill projector identities and preserve the search-derived chain.
@@ -12437,13 +12452,7 @@ class CatalogStore:
 
         def replay_result(connection) -> dict[str, Any] | None:
             replay_rows = (
-                connection.execute(
-                    select(table)
-                    .where(table.c.projector == projector, table.c.claim_token == claim_token)
-                    .order_by(table.c.session_id.asc())
-                )
-                .mappings()
-                .all()
+                connection.execute(_PROJECTOR_ROWS_BY_CLAIM_TOKEN, {"projector": projector, "claim_token": claim_token}).mappings().all()
             )
             if replay_rows:
                 if any(row["worker_id"] != worker_id for row in replay_rows):
@@ -12588,7 +12597,7 @@ class CatalogStore:
                     )
                 connection.execute(update(table).where(table.c.projector == projector, table.c.session_id == session_key).values(**values))
             claimed_rows = (
-                connection.execute(select(table).where(table.c.projector == projector, table.c.claim_token == claim_token)).mappings().all()
+                connection.execute(_PROJECTOR_ROWS_BY_CLAIM_TOKEN, {"projector": projector, "claim_token": claim_token}).mappings().all()
             )
             claimed_by_session = {str(row["session_id"]): row for row in claimed_rows}
             claimed = [claimed_by_session[str(row["session_id"])] for row in eligible]
@@ -16564,3 +16573,18 @@ def _encode_datetime(value: datetime | None) -> str | None:
 
 
 __all__ = ["CatalogStore", "DEVICE_TOKEN_LIMIT_PER_OWNER"]
+
+
+# Every claim poll looks its token up. The production catalog's planner
+# statistics predate most of its rows and say all 196 rows share one
+# claim_token value, so SQLite scanned the projector (28 ms on the frozen
+# owner catalog) instead of probing this index (0.01 ms). A capped ANALYZE
+# misjudges it the same way; INDEXED BY holds whatever the statistics say.
+_PROJECTOR_ROWS_BY_CLAIM_TOKEN = text(
+    f"""
+    SELECT {", ".join(column.name for column in ProjectorState.__table__.c)}
+    FROM projector_state INDEXED BY ix_projector_state_claim_token
+    WHERE claim_token = :claim_token AND projector = :projector
+    ORDER BY session_id
+    """
+).columns(*ProjectorState.__table__.c)
