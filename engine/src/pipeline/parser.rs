@@ -20,7 +20,6 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use memmap2::Mmap;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::{json, Value};
@@ -32,8 +31,8 @@ use crate::media_redaction::{
     provider_blob_root, redact_source_line_with_media, InlineImageRedaction,
 };
 
-/// Threshold for switching from buffered read to mmap (1 MB).
-const MMAP_THRESHOLD: u64 = 1_048_576;
+/// Files above this size go through the byte-oriented `parse_large_file` (1 MB).
+const LARGE_FILE_THRESHOLD: u64 = 1_048_576;
 const EMPTY_TOOL_RESULT_PLACEHOLDER: &str = "[empty tool result]";
 
 // ---------------------------------------------------------------------------
@@ -827,8 +826,8 @@ pub fn parse_session_file_bounded(
     let cursor_timestamps = crate::cursor_store::cursor_transcript_timestamps(path);
     let cursor_order_anchor = cursor_timestamps.map(|(started_at, _)| started_at);
     // JSONL: choose strategy based on file size
-    let mut result = if file_size > MMAP_THRESHOLD {
-        parse_mmap(
+    let mut result = if file_size > LARGE_FILE_THRESHOLD {
+        parse_large_file(
             path,
             offset,
             end_limit,
@@ -1679,10 +1678,15 @@ fn project_from_cwd_basename(cwd: &Path) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
-// mmap-based parser (large files)
+// Byte-oriented parser (large files)
 // ---------------------------------------------------------------------------
 
-fn parse_mmap(
+/// Read line by line from `offset` up to `end_limit` (or the file's length when
+/// opened). This used to memory-map the file, which turned a transcript that
+/// another process truncated mid-parse into a SIGBUS; a short read here just
+/// ends the batch at the last complete line. Lines are bytes, so a line that is
+/// not UTF-8 is still consumed rather than stopping the parse.
+fn parse_large_file(
     path: &Path,
     offset: u64,
     end_limit: Option<u64>,
@@ -1690,17 +1694,22 @@ fn parse_mmap(
     cursor_order_anchor: Option<DateTime<Utc>>,
     native_flavor: Option<NativeFlavor>,
 ) -> Result<ParseResult> {
-    let file =
-        std::fs::File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
+    use std::io::Seek;
 
-    let mmap = unsafe { Mmap::map(&file) }
-        .with_context(|| format!("Failed to mmap {}", path.display()))?;
+    let mut file =
+        std::fs::File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
+    let file_len = file
+        .metadata()
+        .with_context(|| format!("Failed to stat {}", path.display()))?
+        .len();
 
     let limit = end_limit
-        .map(|value| value.min(mmap.len() as u64) as usize)
-        .unwrap_or(mmap.len());
-    let data = if (offset as usize) < limit.min(mmap.len()) {
-        &mmap[offset as usize..limit]
+        .map(|value| value.min(file_len))
+        .unwrap_or(file_len);
+    let mut reader = if offset < limit {
+        file.seek(std::io::SeekFrom::Start(offset))
+            .with_context(|| format!("Failed to seek {}", path.display()))?;
+        BufReader::with_capacity(1024 * 1024, file.take(limit - offset))
     } else {
         return Ok(ParseResult {
             events: Vec::new(),
@@ -1740,23 +1749,27 @@ fn parse_mmap(
     .then(|| provider_blob_root(path))
     .flatten();
 
-    let mut pos: usize = 0;
-    while pos < data.len() {
-        // Find end of line
-        let line_start = pos;
-        let line_end = match data[pos..].iter().position(|&b| b == b'\n') {
-            Some(nl) => pos + nl,
-            None => {
-                // No newline — partial line at EOF, don't advance offset
-                break;
+    let mut line_buf: Vec<u8> = Vec::new();
+    let mut next_line_offset = offset;
+    loop {
+        line_buf.clear();
+        let bytes_read = match reader.read_until(b'\n', &mut line_buf) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(offset = next_line_offset, error = %e, "Failed to read line");
+                break; // IO error — stop processing
             }
         };
+        if bytes_read == 0 || line_buf.last() != Some(&b'\n') {
+            // No newline — partial line at EOF (or at end_limit), don't advance offset
+            break;
+        }
 
-        let line_offset = offset + line_start as u64;
-        let after_line = offset + line_end as u64 + 1; // past the \n
+        let line_offset = next_line_offset;
+        let after_line = line_offset + bytes_read as u64; // past the \n
+        next_line_offset = after_line;
 
-        let line_bytes = &data[line_start..line_end];
-        pos = line_end + 1;
+        let line_bytes = &line_buf[..bytes_read - 1];
 
         let redacted_line = if let Ok(line_str) = std::str::from_utf8(line_bytes) {
             let redacted = redact_source_line_with_media(line_str, blob_root.as_deref());
@@ -1874,11 +1887,11 @@ fn parse_buffered(
     let mut max_ts: Option<DateTime<Utc>> = None;
     let mut current_offset = offset;
     let mut candidate_lines: usize = 0;
-    // See parse_mmap: seed antigravity call/result pairing across the resume boundary.
+    // See parse_large_file: seed antigravity call/result pairing across the resume boundary.
     let mut antigravity_pending = seed_antigravity_pending(path, offset);
     let mut codex_pending = CodexPending::default();
     let mut codex_facts = codex_fact_state_for(path, offset);
-    // See parse_mmap: only the Pi lineage keeps a blob store beside its transcripts.
+    // See parse_large_file: only the Pi lineage keeps a blob store beside its transcripts.
     let blob_root = matches!(
         native_flavor,
         Some(NativeFlavor::Pi) | Some(NativeFlavor::Omp)
@@ -7210,11 +7223,52 @@ mod tests {
         }
 
         let result = parse_session_file(&path, 0).unwrap();
-        // mmap parser: only the complete line should be parsed
+        // large-file parser: only the complete line should be parsed
         // The partial line has no \n so it's treated as incomplete
         assert_eq!(result.events.len(), 1);
         assert_eq!(result.events[0].content_text.as_deref(), Some("complete"));
         assert_eq!(result.last_good_offset, (complete.len() + 1) as u64);
+    }
+
+    #[test]
+    fn test_large_file_reads_bytes_and_stops_at_partial_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("large.jsonl");
+        let first = r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"content":"first"}}"#;
+        let padding = format!(
+            r#"{{"type":"user","uuid":"u2","timestamp":"2026-01-01T00:00:01Z","message":{{"content":"{}"}}}}"#,
+            "p".repeat(LARGE_FILE_THRESHOLD as usize)
+        );
+        let last = r#"{"type":"user","uuid":"u3","timestamp":"2026-01-01T00:00:02Z","message":{"content":"last"}}"#;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(first.as_bytes());
+        bytes.push(b'\n');
+        // A line that is not UTF-8 is consumed, not a reason to stop.
+        bytes.extend_from_slice(b"\xff\xfe\n");
+        bytes.extend_from_slice(padding.as_bytes());
+        bytes.push(b'\n');
+        bytes.extend_from_slice(last.as_bytes());
+        bytes.push(b'\n');
+        let complete_len = bytes.len() as u64;
+        bytes.extend_from_slice(br#"{"type":"user","uuid":"u4""#);
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(complete_len > LARGE_FILE_THRESHOLD);
+
+        let result = parse_session_file(&path, 0).unwrap();
+        let texts: Vec<_> = result
+            .events
+            .iter()
+            .filter_map(|event| event.content_text.as_deref())
+            .filter(|text| text.len() < 16)
+            .collect();
+        assert_eq!(texts, vec!["first", "last"]);
+        assert_eq!(result.last_good_offset, complete_len);
+
+        // Resuming from an offset inside the file reads only what follows.
+        let resumed = parse_session_file(&path, complete_len - (last.len() as u64 + 1)).unwrap();
+        assert_eq!(resumed.events.len(), 1);
+        assert_eq!(resumed.events[0].content_text.as_deref(), Some("last"));
+        assert_eq!(resumed.last_good_offset, complete_len);
     }
 
     // -----------------------------------------------------------------------
@@ -8135,7 +8189,7 @@ mod tests {
     }
 
     #[test]
-    fn test_codex_offset_recovers_session_meta_id_mmap() {
+    fn test_codex_offset_recovers_session_meta_id_large_file() {
         let dir = tempfile::tempdir().unwrap();
         let canonical_id = "019c638d-ea04-7983-a845-d0b68a77fa62";
         let session_meta = format!(
@@ -8143,8 +8197,8 @@ mod tests {
             canonical_id
         );
 
-        // Force mmap path by making total file size > MMAP_THRESHOLD.
-        let big_text = "x".repeat((MMAP_THRESHOLD as usize) + 2048);
+        // Force the large-file path by making total file size > LARGE_FILE_THRESHOLD.
+        let big_text = "x".repeat((LARGE_FILE_THRESHOLD as usize) + 2048);
         let large_user_line = json!({
             "type": "response_item",
             "timestamp": "2026-02-15T17:06:11Z",

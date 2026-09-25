@@ -43,9 +43,6 @@ rusqlite = { version = "0.40", default-features = false, features = ["bundled", 
 # Filesystem watching
 notify = "8.2"
 
-# Memory-mapped I/O
-memmap2 = "0.9"
-
 # CLI
 clap = { version = "4", features = ["derive"] }
 
