@@ -1168,6 +1168,26 @@ async fn handle_command_frame(
     response
 }
 
+/// Steer text into a live session's current turn from inside the engine, over
+/// the same per-provider dispatch a server command uses. The disk guard uses
+/// this to reach sessions that are writing without a server round trip.
+pub(crate) async fn steer_local_session(
+    config: &ShipperConfig,
+    provider: &str,
+    session_id: &str,
+    text: &str,
+) -> std::result::Result<(), String> {
+    let frame = json!({
+        "command_type": COMMAND_STEER_TEXT,
+        "session_id": session_id,
+        "payload": {"provider": provider, "text": text},
+    });
+    execute_command(&frame, config)
+        .await
+        .map(|_| ())
+        .map_err(|error| format!("{}: {}", error.code, error.message))
+}
+
 async fn execute_command(
     frame: &Value,
     config: &ShipperConfig,

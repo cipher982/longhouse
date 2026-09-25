@@ -594,6 +594,75 @@ impl ManagedObservationSnapshot {
     }
 }
 
+/// Live Helm sessions as the disk guard sees them: the agent's own pids.
+/// Everything running under those pids is the session's command trees.
+fn disk_guard_sessions(
+    observations: &ManagedObservationSnapshot,
+) -> Vec<crate::disk_guard::SessionRoot> {
+    fn root(
+        session_id: &str,
+        provider: &str,
+        pids: impl IntoIterator<Item = Option<u32>>,
+    ) -> Option<crate::disk_guard::SessionRoot> {
+        let pids: Vec<u32> = pids.into_iter().flatten().filter(|pid| *pid > 1).collect();
+        (!pids.is_empty()).then(|| crate::disk_guard::SessionRoot {
+            session_id: session_id.to_string(),
+            provider: provider.to_string(),
+            pids,
+        })
+    }
+    let mut roots = Vec::new();
+    roots.extend(
+        observations
+            .omp
+            .iter()
+            .filter(|o| o.live)
+            .filter_map(|o| root(&o.session_id, "omp", [o.launcher_pid, o.provider_pid])),
+    );
+    roots.extend(
+        observations
+            .pi
+            .iter()
+            .filter(|o| o.live)
+            .filter_map(|o| root(&o.session_id, "pi", [o.launcher_pid, o.provider_pid])),
+    );
+    roots.extend(
+        observations
+            .claude
+            .iter()
+            .filter(|o| o.claude_alive)
+            .filter_map(|o| root(&o.session_id, "claude", [o.claude_pid, o.bridge_pid])),
+    );
+    roots.extend(
+        observations
+            .codex
+            .iter()
+            .filter(|o| o.app_server_alive)
+            .filter_map(|o| {
+                root(
+                    &o.session_id,
+                    "codex",
+                    [Some(o.bridge_pid), o.app_server_pid],
+                )
+            }),
+    );
+    roots.extend(
+        observations
+            .cursor
+            .iter()
+            .filter(|o| o.live)
+            .filter_map(|o| root(&o.session_id, "cursor", [o.launcher_pid, o.cursor_pid])),
+    );
+    roots.extend(
+        observations
+            .opencode
+            .iter()
+            .filter(|o| o.server_alive)
+            .filter_map(|o| root(&o.session_id, "opencode", [o.owner_wrapper_pid, o.pid])),
+    );
+    roots
+}
+
 fn managed_provider_state_dirs() -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = [
         managed_bridge_scan::default_codex_bridge_state_dir(),
@@ -1113,6 +1182,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         tokio::time::interval(Duration::from_secs(FLIGHT_SAMPLE_INTERVAL_SECS));
     flight_sample_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     flight_sample_timer.tick().await; // consume first immediate tick
+    let mut disk_guard_timer = tokio::time::interval(crate::disk_guard::TICK);
+    disk_guard_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut disk_guard = config::get_longhouse_home()
+        .ok()
+        .map(|home| crate::disk_guard::DiskGuard::new(home, crate::disk_guard::state_path()));
 
     let mut outbox_timer = tokio::time::interval(OUTBOX_DRAIN_INTERVAL);
     outbox_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -3089,6 +3163,35 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         deferred_retries.len(),
                         offline.is_offline,
                     );
+                }
+            }
+
+            _ = disk_guard_timer.tick(), if disk_guard.is_some() => {
+                if let Some(guard) = disk_guard.as_mut() {
+                    let outcome = guard.tick(&disk_guard_sessions(&last_managed_observations));
+                    if let Some((title, body)) = outcome.notify.as_ref() {
+                        crate::disk_guard::notify_desktop(title, body);
+                    }
+                    for steer in outcome.steers {
+                        let shipper_config = config.shipper_config.clone();
+                        tokio::spawn(async move {
+                            if let Err(error) = crate::control_channel::steer_local_session(
+                                &shipper_config,
+                                &steer.provider,
+                                &steer.session_id,
+                                &steer.text,
+                            )
+                            .await
+                            {
+                                tracing::info!(
+                                    session_id = %steer.session_id,
+                                    provider = %steer.provider,
+                                    %error,
+                                    "Disk guard could not steer session"
+                                );
+                            }
+                        });
+                    }
                 }
             }
 

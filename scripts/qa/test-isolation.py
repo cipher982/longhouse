@@ -368,6 +368,7 @@ def prepare_image(scratch: Path) -> ImagePreparation:
     if existing is None:
         raise RuntimeError("local dependency image build produced no image")
     image_id = validate_image(ref, existing, expected_manifest)
+    prune_local_images(keep=ref)
     return ImagePreparation(
         ref=ref,
         image_id=image_id,
@@ -375,6 +376,35 @@ def prepare_image(scratch: Path) -> ImagePreparation:
         cache="miss",
         source="local-build",
     )
+
+
+# Every lockfile change mints a new ~6.7 GB image and nothing removed the old
+# ones: a day of dependency work left twelve behind and helped fill a laptop
+# disk (2026-09-25). A few are kept so sibling worktrees on other branches
+# still hit their cache.
+LOCAL_IMAGES_KEPT = 3
+
+
+def prune_local_images(keep: str) -> None:
+    listed = docker(
+        "images",
+        "--filter",
+        f"label={LABEL}.image=true",
+        "--format",
+        "{{.Repository}}:{{.Tag}}",
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    if listed.returncode:
+        return
+    # `docker images` lists newest first.
+    refs = [line for line in listed.stdout.splitlines() if line and not line.endswith(":<none>")]
+    stale = [r for r in refs if r != keep][LOCAL_IMAGES_KEPT - 1 :]
+    for stale_ref in stale:
+        # No --force: an image a container still uses stays.
+        docker("image", "rm", stale_ref, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def source_archive(scratch: Path) -> Path:
