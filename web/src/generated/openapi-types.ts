@@ -4056,7 +4056,6 @@ export interface components {
         Body_upload_current_user_avatar_users_me_avatar_post: {
             /**
              * File
-             * Format: binary
              * @description Avatar image file (PNG/JPEG/WebP ≤2 MB)
              */
             file: string;
@@ -10735,6 +10734,10 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+            /** Input */
+            input?: unknown;
+            /** Context */
+            ctx?: Record<string, never>;
         };
         /**
          * WallResponse
