@@ -51,6 +51,37 @@ def test_greenfield_catalog_has_pragmas_live_schema_and_identity(tmp_path):
     }.issubset(tables)
 
 
+def _schema_rows(engine):
+    with engine.connect() as connection:
+        return connection.exec_driver_sql(
+            "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name != 'unrelated' ORDER BY type, name"
+        ).all()
+
+
+def test_empty_catalog_copied_from_template_matches_emitted_ddl(tmp_path):
+    # An empty database takes the page-copied template; one holding any other
+    # object runs the CREATE statements. Both must end in the same schema.
+    copied = create_catalog_engine(tmp_path / "copied.db")
+    emitted = create_catalog_engine(tmp_path / "emitted.db")
+    with emitted.begin() as connection:
+        connection.exec_driver_sql("CREATE TABLE unrelated (id INTEGER)")
+
+    copied_meta = initialize_catalog_schema(copied)
+    emitted_meta = initialize_catalog_schema(emitted)
+    second_copied = create_catalog_engine(tmp_path / "second.db")
+    second_meta = initialize_catalog_schema(second_copied)
+
+    assert _schema_rows(copied) == _schema_rows(emitted)
+    assert len(_schema_rows(copied)) > 100
+    assert len({copied_meta.catalog_id, emitted_meta.catalog_id, second_meta.catalog_id}) == 3
+    with copied.connect() as connection:
+        assert connection.exec_driver_sql("PRAGMA journal_mode").scalar_one() == "wal"
+        assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == CATALOG_SCHEMA_VERSION
+        assert connection.exec_driver_sql("PRAGMA integrity_check").scalar_one() == "ok"
+    for engine in (copied, emitted, second_copied):
+        engine.dispose()
+
+
 def test_initialize_is_idempotent_and_preserves_catalog_identity(tmp_path):
     database = tmp_path / "longhouse-live.db"
     first_engine = create_catalog_engine(database)
