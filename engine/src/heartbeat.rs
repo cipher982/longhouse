@@ -1793,6 +1793,15 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
 
     for obs in claude_observations {
         let at = observed_at(&obs.updated_at);
+        // A Claude exit fact needs the bridge gone too. `claude_pid` falls back
+        // to the MCP server's parent pid, and the identity check needs an argv
+        // token whose basename is exactly `claude`, so a live session launched
+        // through a wrapper (node, shell, npx) can read as dead while its bridge
+        // is still running. Emitting `process_gone` there would end a live run.
+        //
+        // The fact is stamped with the row's last update rather than the
+        // envelope time: the host records `ended_at` from it, and an unobserved
+        // exit is usually hours older than the heartbeat that notices it.
         if let Some(terminal) = exact_process_exit_evidence(
             "claude",
             &obs.session_id,
@@ -1802,9 +1811,9 @@ pub(crate) fn machine_evidence_from_observations_with_omp(
             Some(&obs.started_at),
             boot_id.as_deref(),
             managed_snapshot_complete,
-            obs.claude_alive,
+            obs.claude_alive || obs.bridge_alive,
             "claude_channel_scan",
-            &envelope_observed_at,
+            &at,
         ) {
             run.push(terminal);
         }
@@ -7044,6 +7053,87 @@ mod tests {
         assert!(evidence.activity.is_empty());
         assert!(!evidence.process.is_empty());
         assert!(!evidence.transcript.is_empty());
+    }
+
+    fn dead_claude_channel_observation(
+        session_id: &str,
+        claude_alive: bool,
+        bridge_alive: bool,
+    ) -> ClaudeChannelObservation {
+        ClaudeChannelObservation {
+            session_id: session_id.to_string(),
+            run_id: Some("11111111-2222-4333-8444-555555555555".to_string()),
+            connection_id: Some("connection".to_string()),
+            lease_generation: Some("generation".to_string()),
+            provider_session_id: Some("66666666-7777-4888-8999-000000000000".to_string()),
+            state_file: PathBuf::from("/tmp/channel.json"),
+            cwd: Some("/workspace/longhouse".to_string()),
+            claude_pid: Some(4242),
+            bridge_pid: Some(4243),
+            ready: true,
+            started_at: "2026-09-24T14:27:32Z".to_string(),
+            updated_at: "2026-09-24T14:27:35Z".to_string(),
+            claude_alive,
+            bridge_alive,
+            claude_foreground_tui: false,
+        }
+    }
+
+    #[test]
+    fn claude_exit_evidence_needs_the_bridge_dead_and_anchors_at_last_update() {
+        // The provider pid may be a wrapper's parent, so a live bridge rules the
+        // exit fact out even when `claude_pid` reads dead. That gate is what
+        // keeps a live session's run from being ended by its own heartbeat.
+        let now = DateTime::parse_from_rfc3339("2026-09-25T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let bridge_alive =
+            dead_claude_channel_observation("11111111-1111-4111-8111-111111111111", false, true);
+        let evidence = machine_evidence_from_observations(
+            "cinder",
+            &[],
+            &[],
+            &[bridge_alive],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            true,
+            true,
+            now,
+            Some(&[]),
+            0,
+        );
+        assert!(evidence.run.is_empty());
+
+        let fully_dead =
+            dead_claude_channel_observation("22222222-2222-4222-8222-222222222222", false, false);
+        let evidence = machine_evidence_from_observations(
+            "cinder",
+            &[],
+            &[],
+            &[fully_dead],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            true,
+            true,
+            now,
+            Some(&[]),
+            0,
+        );
+        assert_eq!(evidence.run.len(), 1);
+        let fact = &evidence.run[0];
+        assert_eq!(fact.provider, "claude");
+        assert_eq!(fact.end_reason, "process_gone");
+        assert_eq!(fact.state, "ended");
+        // Anchored where the run last showed life, not at the heartbeat that
+        // noticed the absence: the host records `ended_at` from this value.
+        assert_eq!(fact.observed_at, "2026-09-24T14:27:35Z");
+        assert_eq!(fact.pid, 4242);
     }
 
     #[test]

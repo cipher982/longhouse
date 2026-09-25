@@ -546,32 +546,42 @@ impl ManagedObservationSnapshot {
 
     fn current_only(&self) -> Self {
         Self {
+            // Every provider below keeps a dead row when it still names a run,
+            // for the reason spelled out for Cursor: an abrupt owner loss makes
+            // the observation non-live, and dropping the row here would also drop
+            // the only exact pid/start-time evidence that can close the run on
+            // the next complete process snapshot. Without it nothing retires the
+            // run, `live_session_runs.ended_at IS NULL` keeps reading as
+            // "executing", and resume refuses the session its own recovery path
+            // (5,472 such runs on the dogfood catalog on 2026-09-25).
+            //
+            // Retention is evidence-only. Lease projection filters liveness, so
+            // a retained row cannot make a dead session's control visible, and
+            // `resolved_sessions_from_observations` is built from those leases.
             codex: self
                 .codex
                 .iter()
-                .filter(|row| row.bridge_alive || row.app_server_alive || row.has_tui_attachment)
+                .filter(|row| {
+                    row.bridge_alive
+                        || row.app_server_alive
+                        || row.has_tui_attachment
+                        || row.run_id.is_some()
+                })
                 .cloned()
                 .collect(),
             antigravity: self.antigravity.clone(),
             claude: self
                 .claude
                 .iter()
-                .filter(|row| row.claude_alive || row.bridge_alive)
+                .filter(|row| row.claude_alive || row.bridge_alive || row.run_id.is_some())
                 .cloned()
                 .collect(),
             opencode: self
                 .opencode
                 .iter()
-                .filter(|row| row.server_alive || row.has_tui_attachment)
+                .filter(|row| row.server_alive || row.has_tui_attachment || row.run_id.is_some())
                 .cloned()
                 .collect(),
-            // Keep a dead Cursor row when it still names a run.  Cursor Helm's
-            // launcher is the process owner, so an abrupt owner loss makes the
-            // entire observation non-live.  Dropping that row here would also
-            // drop the only exact pid/start-time evidence that can close the
-            // run on the next full process snapshot.  Lease projection still
-            // filters `live`, so retaining this row is evidence-only and does
-            // not make a stale control lease visible.
             cursor: self
                 .cursor
                 .iter()
@@ -6653,6 +6663,121 @@ mod tests {
             ..ManagedObservationSnapshot::default()
         };
         assert!(without_run.current_only().cursor.is_empty());
+    }
+
+    fn dead_codex_row(session_id: &str) -> managed_bridge_scan::CodexBridgeObservation {
+        managed_bridge_scan::CodexBridgeObservation {
+            session_id: session_id.to_string(),
+            run_id: Some(format!("run-{session_id}")),
+            connection_id: Some(format!("connection-{session_id}")),
+            lease_generation: Some(format!("generation-{session_id}")),
+            state_file: PathBuf::from(format!("/tmp/{session_id}.json")),
+            schema_version: 2,
+            cwd: Some("/tmp/project".to_string()),
+            launch_mode: Some("tui".to_string()),
+            ws_url: Some(format!("ws://127.0.0.1/{session_id}")),
+            status: "ready".to_string(),
+            thread_id: Some("thread".to_string()),
+            thread_path: None,
+            active_turn_id: None,
+            last_turn_status: None,
+            last_error: None,
+            thread_subscription_status: None,
+            stopped_at: None,
+            terminal_state: None,
+            terminal_reason: None,
+            bridge_pid: 1234,
+            bridge_process_start_time: Some("Tue Jul  8 22:50:19 2026".to_string()),
+            app_server_pid: Some(1235),
+            app_server_process_start_time: Some("Tue Jul  8 22:50:20 2026".to_string()),
+            app_server_pgid: None,
+            updated_at: "2026-07-08T22:50:19Z".to_string(),
+            bridge_alive: false,
+            has_tui_attachment: false,
+            app_server_alive: false,
+        }
+    }
+
+    fn dead_opencode_row(session_id: &str) -> managed_opencode_scan::OpenCodeServerObservation {
+        managed_opencode_scan::OpenCodeServerObservation {
+            session_id: session_id.to_string(),
+            run_id: Some(format!("run-{session_id}")),
+            connection_id: Some(format!("connection-{session_id}")),
+            lease_generation: Some(format!("generation-{session_id}")),
+            provider_session_id: "opencode-thread".to_string(),
+            state_file: PathBuf::from(format!("/tmp/{session_id}.json")),
+            cwd: Some("/tmp/project".to_string()),
+            server_url: Some("http://127.0.0.1:4096".to_string()),
+            pid: Some(2468),
+            started_at: "2026-07-08T22:50:19Z".to_string(),
+            updated_at: "2026-07-08T22:50:19Z".to_string(),
+            server_alive: false,
+            health_ready: false,
+            has_tui_attachment: false,
+            launch_mode: "attached_tui".to_string(),
+            owner_wrapper_pid: Some(2469),
+            owner_wrapper_start_time: "Tue Jul  8 22:50:19 2026".to_string(),
+            process_start_time: "Tue Jul  8 22:50:20 2026".to_string(),
+        }
+    }
+
+    #[test]
+    fn current_only_retains_dead_provider_run_for_terminal_evidence() {
+        // A run whose owner died abruptly can only be closed by the exact
+        // pid/start-time evidence in its observation, so the projected snapshot
+        // must keep that row once it still names a run. A dead row that names no
+        // run is still dropped: it can close nothing and only adds noise.
+        let dead_claude = managed_claude_scan::ClaudeChannelObservation {
+            session_id: "dead-claude".to_string(),
+            run_id: Some("run-dead-claude".to_string()),
+            connection_id: Some("connection-dead-claude".to_string()),
+            lease_generation: Some("generation-dead-claude".to_string()),
+            provider_session_id: Some("claude-thread".to_string()),
+            state_file: PathBuf::from("/tmp/dead-claude.json"),
+            cwd: Some("/tmp/project".to_string()),
+            claude_pid: Some(4321),
+            bridge_pid: Some(4322),
+            ready: true,
+            started_at: "2026-09-24T14:27:32Z".to_string(),
+            updated_at: "2026-09-24T14:27:32Z".to_string(),
+            claude_alive: false,
+            bridge_alive: false,
+            claude_foreground_tui: false,
+        };
+        let dead_codex = dead_codex_row("dead-codex");
+        let dead_opencode = dead_opencode_row("dead-opencode");
+        let snapshot = ManagedObservationSnapshot {
+            codex: vec![dead_codex.clone()],
+            claude: vec![dead_claude.clone()],
+            opencode: vec![dead_opencode.clone()],
+            ..ManagedObservationSnapshot::default()
+        };
+
+        let without_runs = ManagedObservationSnapshot {
+            codex: vec![managed_bridge_scan::CodexBridgeObservation {
+                run_id: None,
+                ..dead_codex.clone()
+            }],
+            claude: vec![managed_claude_scan::ClaudeChannelObservation {
+                run_id: None,
+                ..dead_claude.clone()
+            }],
+            opencode: vec![managed_opencode_scan::OpenCodeServerObservation {
+                run_id: None,
+                ..dead_opencode.clone()
+            }],
+            ..ManagedObservationSnapshot::default()
+        };
+
+        let retained = snapshot.current_only();
+        assert_eq!(retained.claude, vec![dead_claude]);
+        assert_eq!(retained.codex, vec![dead_codex]);
+        assert_eq!(retained.opencode, vec![dead_opencode]);
+
+        let dropped = without_runs.current_only();
+        assert!(dropped.claude.is_empty());
+        assert!(dropped.codex.is_empty());
+        assert!(dropped.opencode.is_empty());
     }
 
     #[test]
