@@ -45,7 +45,7 @@ them. It is opt-in and separate from `make dev`, which stays lean.
 RUNTIME_METRICS_TARGET=host.docker.internal:47300 make observability-up
 ```
 
-## Traces (later)
+## Traces
 
 Neither the server nor the engine exports traces. The server's signal is the
 Prometheus `/metrics` endpoint above; the engine's telemetry path is the
