@@ -641,6 +641,7 @@ def test_console_input_idempotency_conflict_is_structured_409(monkeypatch):
         "message": "client_request_id was reused with different text",
     }
 
+
 def test_console_input_preserves_ambiguous_start_as_queued(monkeypatch):
     from zerg.routers.session_chat import SessionInputRequest
     from zerg.routers.session_chat import _create_catalog_session_input_response
@@ -672,7 +673,6 @@ def test_console_input_preserves_ambiguous_start_as_queued(monkeypatch):
 
     assert response.outcome == "queued"
     assert response.turn.state == "starting"
-
 
 
 def test_report_id_is_rejected_for_non_console_input():
