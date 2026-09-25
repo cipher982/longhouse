@@ -441,10 +441,13 @@ WAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024
 # events_fts_data as a 2-row table. With that statistic FTS5's segment-delete
 # range query scans the whole table after every merge, so each commit of a
 # rebuild read the index again (45 -> 230 MB per commit over 140 MB, quadratic)
-# until the next optimize, a day later. optimize re-analyzes only tables whose
-# size moved far from their statistic, so a short interval is a no-op when
-# nothing changed and keeps a rebuild at ~1 MB per commit.
-OPTIMIZE_INTERVAL_SECONDS = 300
+# until the next optimize, a day later. Publish maintenance therefore
+# re-analyzes the FTS data tables each time the database has doubled since
+# their last analysis: a few times over a rebuild, never in steady state, and
+# the same on every SQLite (PRAGMA optimize's all-tables flag needs 3.46, and
+# CI's stdlib is 3.45). One ANALYZE of a 96k-row events_fts_data took 130 ms.
+OPTIMIZE_INTERVAL_SECONDS = 86_400
+FTS_STATISTICS_GROWTH_FACTOR = 2
 
 
 def _connect(path: Path) -> sqlite3.Connection:
@@ -771,6 +774,7 @@ class SearchStore:
         self.connection = connection
         self._worklog_snapshots: dict[str, _WorklogSnapshot] = {}
         self._last_optimize_mono = 0.0
+        self._fts_analyzed_pages = 0
 
     def startup_maintenance(self) -> None:
         """Run SQLite's bounded planner refresh outside interactive requests."""
@@ -1941,6 +1945,11 @@ class SearchStore:
         if time.monotonic() - self._last_optimize_mono >= OPTIMIZE_INTERVAL_SECONDS:
             self.connection.execute("PRAGMA optimize=0x10002")
             self._last_optimize_mono = time.monotonic()
+        pages = int(self.connection.execute("PRAGMA page_count").fetchone()[0])
+        if pages >= FTS_STATISTICS_GROWTH_FACTOR * self._fts_analyzed_pages:
+            self.connection.execute("ANALYZE events_fts_data")
+            self.connection.execute("ANALYZE searchable_fts_data")
+            self._fts_analyzed_pages = pages
         return {
             "checkpoint_busy": int(checkpoint[0]),
             "checkpoint_log_pages": int(checkpoint[1]),

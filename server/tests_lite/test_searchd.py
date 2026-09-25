@@ -2902,9 +2902,6 @@ def test_publish_maintenance_refreshes_statistics_recorded_on_an_empty_store(tmp
             )
         connection.execute("COMMIT")
 
-    # A rebuild hours after startup: well past the refresh interval, well
-    # short of a day.
-    store._last_optimize_mono -= 3 * 3600
     store._maintain_after_publish()
 
     assert events_fts_data_rows() > 2
