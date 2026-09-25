@@ -52,8 +52,16 @@ const workerCount =
       ? defaultCIWorkerCount
       : defaultLocalWorkerCount;
 
+// Serve a production bundle, not the dev server. Dev mode made every page
+// load fetch ~1,400 unbundled modules through the per-request worker-header
+// route; the one-time build costs seconds and cut the core suite ~40%.
+// `vite preview` inherits server.proxy, so /api and /api/ws still reach the
+// test backend. The bundle lives in the run root, never web/dist.
+const frontendDist = path.join(runtime.root, "web-dist");
 const frontendServer = {
-  command: `bunx vite --host 127.0.0.1 --port ${frontendPort} --strictPort`,
+  command:
+    `bunx vite build --logLevel warn --outDir ${frontendDist} --emptyOutDir && ` +
+    `bunx vite preview --outDir ${frontendDist} --host 127.0.0.1 --port ${frontendPort} --strictPort`,
   port: frontendPort,
   reuseExistingServer: false,
   timeout: 180_000,
