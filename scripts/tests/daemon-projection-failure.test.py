@@ -228,6 +228,23 @@ def exercise(engine):
                     f"daemon did not converge: {status}; logs: {daemon_logs()}"
                 )
 
+            def request_full_reconciliation():
+                # Recovery is proven by `last_reconciled_at` advancing, which
+                # only a full reconciliation does, and the periodic one runs
+                # every 60 s: two of those waits were most of this test. A
+                # change to a path the daemon does not yet track in a managed
+                # provider state directory is the production discovery trigger:
+                # it queues one full pass for the next 5 s observation tick.
+                # The periodic pass remains the backstop inside each timeout.
+                probe = (
+                    longhouse
+                    / "managed-local"
+                    / "omp-helm"
+                    / f"discovery-probe-{uuid4()}.json"
+                )
+                probe.write_text("{}")
+                probe.unlink()
+
             startup_deadline = time.monotonic() + 60
             while 'reason="startup"' not in daemon_logs():
                 observe()
@@ -339,6 +356,7 @@ def exercise(engine):
             assert "engine_reconciliation_failed" in inventory_failure_health["reasons"]
             receipt["inventory_failure_native_health"] = inventory_failure_receipt
             fail_inventory.write_text("ok\n")
+            request_full_reconciliation()
             recovered = wait_for(
                 lambda projection: projection.get("generated_at") != frozen
                 and projection.get("reconciliation", {}).get("state") == "idle"
@@ -430,6 +448,7 @@ def exercise(engine):
                     ),
                 )
                 phase_connection.commit()
+                request_full_reconciliation()
                 projection_recovered = wait_for(
                     lambda projection: (
                         projection.get("generated_at") != projection_frozen
