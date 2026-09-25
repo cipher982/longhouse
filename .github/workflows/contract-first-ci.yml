@@ -346,7 +346,9 @@ jobs:
   backend-shards:
     timeout-minutes: 30
     needs: [changes, prepare-test-image]
-    if: ${{ (needs.changes.outputs.backend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    # !cancelled(): an image build skipped upstream (tag already published)
+    # must not skip this job; the prepare result is the real gate.
+    if: ${{ !cancelled() && needs.prepare-test-image.result == 'success' && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-24.04-arm
     name: "Backend tests shard ${{ matrix.shard }}/3"
     # A hosted runner's four vCPUs take ~5 min for the whole suite even under
@@ -402,7 +404,7 @@ jobs:
     # provider-launch factory matrix.
     timeout-minutes: 15
     needs: prepare-test-image
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    if: ${{ !cancelled() && needs.prepare-test-image.result == 'success' && github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-24.04-arm
     name: "Provider contract tests"
     env:
@@ -424,7 +426,7 @@ jobs:
   engine-tests:
     timeout-minutes: 45
     needs: [changes, prepare-test-image]
-    if: ${{ (needs.changes.outputs.engine == 'true' || needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ !cancelled() && needs.prepare-test-image.result == 'success' && (needs.changes.outputs.engine == 'true' || needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-24.04-arm
     name: "Engine tests"
     env:
@@ -450,7 +452,7 @@ jobs:
   frontend-tests:
     timeout-minutes: 20
     needs: [changes, prepare-test-image]
-    if: ${{ (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.runner == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ !cancelled() && needs.prepare-test-image.result == 'success' && (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.runner == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-24.04-arm
     name: "Frontend + runner tests"
     env:
@@ -501,7 +503,7 @@ jobs:
   wheel-package:
     timeout-minutes: 20
     needs: [changes, prepare-test-image]
-    if: ${{ (needs.changes.outputs.packaging == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ !cancelled() && needs.prepare-test-image.result == 'success' && (needs.changes.outputs.packaging == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-24.04-arm
     name: "CLI wheel packaging"
     env:
@@ -521,7 +523,7 @@ jobs:
   e2e-core:
     timeout-minutes: 30
     needs: [changes, prepare-test-image]
-    if: ${{ (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ !cancelled() && needs.prepare-test-image.result == 'success' && (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-24.04-arm
     name: "Core E2E tests"
     env:
@@ -575,7 +577,7 @@ jobs:
   oss-qa:
     timeout-minutes: 30
     needs: [changes, prepare-test-image]
-    if: ${{ (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ !cancelled() && needs.prepare-test-image.result == 'success' && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-24.04-arm
     name: "OSS onboarding smoke"
     env:
