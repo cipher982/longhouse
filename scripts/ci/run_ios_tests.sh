@@ -62,23 +62,6 @@ run_scheme() {
   fi
 }
 
-# IOS_SCHEME_SHARD=i/n runs every scheme whose position modulo n is i, so CI
-# can run schemes on parallel VMs without a second copy of the scheme list:
-# a scheme added to IOS_MERGE_TEST_SCHEMES always lands in some shard.
-if [[ -n "${IOS_SCHEME_SHARD:-}" ]]; then
-  shard_index="${IOS_SCHEME_SHARD%/*}"
-  shard_count="${IOS_SCHEME_SHARD#*/}"
-  selected=()
-  position=0
-  for scheme in ${IOS_TEST_SCHEMES}; do
-    if (( position % shard_count == shard_index )); then
-      selected+=("${scheme}")
-    fi
-    position=$((position + 1))
-  done
-  IOS_TEST_SCHEMES="${selected[*]:-}"
-fi
-
 # A cold hosted simulator takes minutes to boot, and xcodebuild otherwise boots
 # it only after the build. Boot it now, in parallel with the build.
 simulator_id=""
@@ -88,7 +71,7 @@ if [[ "${DESTINATION}" =~ id=([0-9A-Fa-f-]+) ]]; then
 fi
 
 started=${SECONDS}
-echo "Running iOS schemes: ${IOS_TEST_SCHEMES:-<none in this shard>}"
+echo "Running iOS schemes: ${IOS_TEST_SCHEMES}"
 for scheme in ${IOS_TEST_SCHEMES}; do
   scheme_started=${SECONDS}
   run_scheme "${scheme}"
