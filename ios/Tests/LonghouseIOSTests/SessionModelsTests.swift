@@ -1925,6 +1925,37 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
     }
+    @Test
+    func delegationRetentionIsFencedToTheProviderRun() throws {
+        let task = SessionDelegationTask(
+            id: "agent-1",
+            kind: "subagent",
+            status: "running",
+            description: "Retained only within the same run",
+            firstObservedAt: "2026-09-25T16:00:00Z",
+            startedAt: nil,
+            lastActivityAt: "2026-09-25T16:01:00Z",
+            sessionId: nil
+        )
+        let delegation = SessionDelegationFacts(
+            state: "pending",
+            count: 1,
+            kinds: ["subagent": 1],
+            source: "ui_test",
+            observedAt: "2026-09-25T16:01:00Z",
+            validUntil: "2026-09-25T16:30:00Z",
+            items: [task]
+        )
+        var previousFacts = makeSessionStateFacts(activity: "quiescent", runId: "run-a")
+        previousFacts.delegation = delegation
+        let previous = try makeDetail(facts: previousFacts)
+
+        let sameRun = try makeDetail(facts: makeSessionStateFacts(activity: "quiescent", runId: "run-a"))
+        #expect(sameRun.preservingOptionalEnrichment(from: previous).stateFacts.delegation == delegation)
+
+        let newRun = try makeDetail(facts: makeSessionStateFacts(activity: "quiescent", runId: "run-b"))
+        #expect(newRun.preservingOptionalEnrichment(from: previous).stateFacts.delegation == nil)
+    }
 }
 
 struct BranchAvailabilityTests {
@@ -1953,5 +1984,83 @@ struct BranchAvailabilityTests {
         let facts = makeSessionStateFacts(owned: true, resumeAvailable: true, branchAvailable: false)
         #expect(facts.resume.isAvailable)
         #expect(!facts.branch.isAvailable)
+    }
+}
+
+struct SessionDelegationFactsTests {
+    @Test
+    func namedItemsPreserveProviderStatusAndIdentity() {
+        let task = SessionDelegationTask(
+            id: "agent-1",
+            kind: "subagent",
+            status: "provider_waiting",
+            description: "Review the migration",
+            firstObservedAt: "2026-09-25T16:00:00Z",
+            startedAt: "2026-09-25T16:01:00Z",
+            lastActivityAt: "2026-09-25T16:02:00Z",
+            sessionId: "019fc50b-1111-4111-8111-111111111111"
+        )
+        let facts = SessionDelegationFacts(
+            state: "pending",
+            count: 1,
+            kinds: ["subagent": 1],
+            source: "claude_hook",
+            observedAt: "2026-09-25T16:02:00Z",
+            validUntil: "2026-09-25T16:30:00Z",
+            items: [task]
+        )
+
+        #expect(facts.items?.first?.status == "provider_waiting")
+        #expect(facts.items?.first?.sessionId == task.sessionId)
+        #expect(facts.items?.first?.startedAt == task.startedAt)
+    }
+
+    @Test
+    func nilAndEmptyItemsRemainDistinct() {
+        let aggregate = SessionDelegationFacts(
+            state: "pending",
+            count: 2,
+            kinds: ["shell": 2],
+            source: "claude_hook",
+            observedAt: nil,
+            validUntil: nil,
+            items: nil
+        )
+        let empty = SessionDelegationFacts(
+            state: "none",
+            count: 0,
+            kinds: [:],
+            source: "claude_hook",
+            observedAt: nil,
+            validUntil: nil,
+            items: []
+        )
+
+        #expect(aggregate.items == nil)
+        #expect(empty.items?.isEmpty == true)
+        #expect(aggregate.count == 2)
+        #expect(empty.count == 0)
+    }
+
+    @Test
+    func expiryIsLocalAndDoesNotRequireFreshNetworkData() {
+        let facts = SessionDelegationFacts(
+            state: "pending",
+            count: 1,
+            kinds: ["monitor": 1],
+            source: "claude_hook",
+            observedAt: "2026-09-25T15:00:00Z",
+            validUntil: "2026-09-25T16:00:00Z",
+            items: []
+        )
+        let afterExpiry = LonghouseDateParser.parse("2026-09-25T16:00:01Z")!
+        #expect(!facts.isValid(asOf: afterExpiry))
+    }
+    @Test
+    func categoryBucketsUseCanonicalTaskKinds() {
+        #expect(SessionDelegationCategory(kind: "subagent") == .agents)
+        #expect(SessionDelegationCategory(kind: "shell") == .commands)
+        #expect(SessionDelegationCategory(kind: "monitor") == .monitors)
+        #expect(SessionDelegationCategory(kind: "agentic-shell") == .other)
     }
 }

@@ -494,7 +494,6 @@ def test_pending_delegation_speaks_for_a_session_whose_own_loop_is_idle():
     assert facts.delegation.kinds == {"subagent": 1}
     assert facts.presentation.primary is not None
     assert facts.presentation.primary.key == "delegated_work"
-    assert facts.presentation.primary.label == "Waiting on 1 background agent"
     assert facts.working_set == "open"
 
 

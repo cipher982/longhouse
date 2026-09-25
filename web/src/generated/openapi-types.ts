@@ -4237,12 +4237,7 @@ export interface components {
         };
         /**
          * DelegationSnapshotIn
-         * @description An orchestration snapshot from the hook that observed it.
-         *
-         *     Claude publishes this on Stop and SubagentStop as `background_tasks[]` and
-         *     `session_crons[]`. Bounded here so a buggy or hostile producer cannot widen
-         *     the fact; `freshness_ms` lets the producer state how long its own
-         *     observation may speak for the session.
+         * @description A bounded provider registry with its original observation clock.
          */
         DelegationSnapshotIn: {
             /**
@@ -4254,8 +4249,25 @@ export interface components {
             kinds?: {
                 [key: string]: number;
             };
+            /** Items */
+            items?: components["schemas"]["DelegationTaskIn"][] | null;
+            /** Observed At */
+            observed_at?: string | null;
             /** Freshness Ms */
             freshness_ms?: number | null;
+        };
+        /** DelegationTaskIn */
+        DelegationTaskIn: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Status */
+            status: string;
+            /** Description */
+            description?: string | null;
+            /** Parent Tool Call Id */
+            parent_tool_call_id?: string | null;
         };
         /** DeploymentFenceRequest */
         DeploymentFenceRequest: {
@@ -8027,12 +8039,36 @@ export interface components {
             kinds?: {
                 [key: string]: number;
             };
+            /** Items */
+            items?: components["schemas"]["SessionDelegationTaskResponse"][] | null;
             /** Source */
             source?: string | null;
             /** Observed At */
             observed_at?: string | null;
             /** Valid Until */
             valid_until?: string | null;
+        };
+        /**
+         * SessionDelegationTaskResponse
+         * @description A provider task, with archive enrichment only through exact lineage.
+         */
+        SessionDelegationTaskResponse: {
+            /** Id */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Status */
+            status: string;
+            /** Description */
+            description?: string | null;
+            /** First Observed At */
+            first_observed_at?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Last Activity At */
+            last_activity_at?: string | null;
+            /** Session Id */
+            session_id?: string | null;
         };
         /** SessionDeletionResponse */
         SessionDeletionResponse: {
@@ -9263,12 +9299,12 @@ export interface components {
         SessionStateFacts: {
             /**
              * State Contract Version
-             * @default 3
+             * @default 4
              */
             state_contract_version: number;
             /**
              * Presentation Policy Version
-             * @default 2
+             * @default 3
              */
             presentation_policy_version: number;
             /**
@@ -9843,7 +9879,7 @@ export interface components {
         ShadowSessionStateProjection: {
             /**
              * State Contract Version
-             * @default 3
+             * @default 4
              */
             state_contract_version: number;
             /** Commit Seq */

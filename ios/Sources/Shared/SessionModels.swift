@@ -71,6 +71,86 @@ struct SessionProviderEvidenceIdentity: Equatable, Sendable {
     let tool: String?
     let source: String?
 }
+/// One named unit of provider-reported background work. The provider owns the
+/// vocabulary and lifecycle; the client deliberately keeps status raw instead
+/// of translating it into a guessed "running" or "done" state.
+struct SessionDelegationTask: Identifiable, Hashable, Codable, Sendable {
+    let id: String
+    let kind: String
+    let status: String
+    let description: String?
+    let firstObservedAt: String?
+    let startedAt: String?
+    let lastActivityAt: String?
+    /// The exact child session, when the provider and catalog established one.
+    /// A missing link is not inferred from the task id.
+    let sessionId: String?
+}
+
+/// Provider-owned evidence for delegated/background work. `items == nil`
+/// means the observation is aggregate-only; an empty array is authoritative
+/// named emptiness and must not be treated as missing evidence.
+struct SessionDelegationFacts: Hashable, Codable, Sendable {
+    let state: String
+    let count: Int?
+    let kinds: [String: Int]?
+    let source: String?
+    let observedAt: String?
+    let validUntil: String?
+    let items: [SessionDelegationTask]?
+}
+
+/// Stable presentation buckets for the provider's canonical task kinds.
+/// Unknown provider kinds stay visible under Other rather than being inferred
+/// from a substring.
+enum SessionDelegationCategory: String, CaseIterable, Hashable, Sendable {
+    case agents
+    case commands
+    case monitors
+    case other
+
+    init(kind: String) {
+        switch kind {
+        case "subagent": self = .agents
+        case "shell": self = .commands
+        case "monitor": self = .monitors
+        default: self = .other
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .agents: return "Agents"
+        case .commands: return "Commands"
+        case .monitors: return "Monitors"
+        case .other: return "Other background work"
+        }
+    }
+
+    func countLabel(_ count: Int) -> String {
+        let noun: String
+        switch self {
+        case .agents: noun = count == 1 ? "agent" : "agents"
+        case .commands: noun = count == 1 ? "command" : "commands"
+        case .monitors: noun = count == 1 ? "monitor" : "monitors"
+        case .other: noun = count == 1 ? "task" : "tasks"
+        }
+        return "\(count) \(noun)"
+    }
+}
+
+
+extension SessionDelegationFacts {
+    /// The server's TTL is a local clock boundary. No network event is needed
+    /// before an otherwise live snapshot becomes unknown on this device.
+    func isValid(asOf now: Date = Date()) -> Bool {
+        guard let validUntil, let deadline = LonghouseDateParser.parse(validUntil) else {
+            return true
+        }
+        return now < deadline
+    }
+}
+
 
 extension SessionStateFacts {
     var providerEvidenceIdentity: SessionProviderEvidenceIdentity? {
@@ -118,6 +198,9 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
     let dispositionCloseReason: String?
     let launchState: String?
     let runLifecycle: String?
+    /// Provider-owned run identity. It fences optional delegation retention
+    /// so a new run cannot inherit tasks from an earlier observation.
+    var runId: String? = nil
     let activityState: String
     let activityRawKind: String?
     let activityTool: String?
@@ -153,6 +236,10 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
     let transcript: SessionStateLabel?
     /// Monotonic catalog commit coordinate for state-render settlement.
     let commitSeq: Int?
+    /// Named background work, when the provider exposed this family on the
+    /// same observation. Missing means this server/cached payload predates the
+    /// family; it is not an empty registry.
+    var delegation: SessionDelegationFacts? = nil
 
     static let unknown = SessionStateFacts(
         contractVersion: 1,
@@ -1298,6 +1385,11 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         copy.recap = recap ?? previous.recap
         copy.usageLatest = usageLatest ?? previous.usageLatest
         copy.selectedModel = selectedModel ?? previous.selectedModel
+        if stateFacts.delegation == nil,
+           let runId = stateFacts.runId,
+           previous.stateFacts.runId == runId {
+            copy.stateFacts.delegation = previous.stateFacts.delegation
+        }
         return copy
     }
 
@@ -1493,7 +1585,7 @@ enum SessionInputAuthoredVia: Codable, Hashable, Sendable {
 }
 
 /// The provider's own accounting for the turn that ended on an event:
-/// "Worked for 2m 9s · done 9:15 AM". Served on the anchor event only.
+/// "Worked for 2m 9s · Turn finished 9:15 AM". Served on the anchor event only.
 struct SessionTurnEnd: Codable, Hashable, Sendable {
     let durationMs: Int
     let endedAt: String

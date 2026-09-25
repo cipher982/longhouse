@@ -9,6 +9,7 @@ struct ChatUITestFixtureView: View {
     private let client: ChatUITestWorkspaceClient
     @StateObject private var viewModel: SessionViewModel
     @State private var probe: ChatUITestProbe
+    @State private var navigationPath: [String] = []
     @State private var invalidationTick = 0
     @State private var benchmarkStartRequested = false
     @State private var benchmarkScrollCompleted = false
@@ -53,7 +54,7 @@ struct ChatUITestFixtureView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             SessionView(
                 sessionId: client.sessionID,
                 fallbackTitle: "Chat UI Fixture",
@@ -62,8 +63,25 @@ struct ChatUITestFixtureView: View {
                     Task { @MainActor in
                         probe.record(diagnostics)
                     }
-                }
+                },
+                onOpenSubagent: fixtureName.hasPrefix("background-tasks")
+                    ? { childSessionId in navigationPath.append(childSessionId) }
+                    : nil
             )
+            .navigationDestination(for: String.self) { childSessionId in
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Child transcript")
+                        .font(.headline)
+                    Text(childSessionId)
+                        .font(.body.monospaced())
+                        .accessibilityIdentifier("child-session-id")
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .background(Ember.page)
+                .navigationTitle("Subagent")
+                .navigationBarTitleDisplayMode(.inline)
+            }
         }
         .overlay(alignment: .topLeading) {
             VStack(spacing: 0) {
@@ -94,6 +112,12 @@ struct ChatUITestFixtureView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Continue transcript benchmark")
                     .accessibilityIdentifier("transcript-benchmark-continue")
+                }
+                if fixtureName == "background-tasks-transition" {
+                    Button("Clear background work fixture") {
+                        clearBackgroundDelegation()
+                    }
+                    .accessibilityIdentifier("background-tasks-clear")
                 }
             }
         }
@@ -187,6 +211,20 @@ struct ChatUITestFixtureView: View {
             await viewModel.reload(sessionId: client.sessionID, appState: appState)
         }
     }
+    private func clearBackgroundDelegation() {
+        guard var detail = viewModel.detail else { return }
+        detail.stateFacts.delegation = SessionDelegationFacts(
+            state: "none",
+            count: 0,
+            kinds: [:],
+            source: "ui_fixture",
+            observedAt: "2026-09-25T16:00:00Z",
+            validUntil: "2099-01-01T00:00:00Z",
+            items: []
+        )
+        viewModel.detail = detail
+    }
+
 
     private func waitForInitialWorkspaceLoad(waitForFrame: Bool = false) async {
         // Detail now arrives in a separate primary lane. Fixture updates must
@@ -1177,6 +1215,12 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             return "Wire up OAuth refresh flow"
         case "loading-long-title":
             return "A very long session title that must stay inside the navigation bar"
+        case "background-tasks":
+            return "Background Tasks"
+        case "background-tasks-transition":
+            return "Background Tasks"
+        case "background-tasks-stale":
+            return "Background Tasks (stale)"
         default:
             return "Chat UI Fixture"
         }
@@ -1195,7 +1239,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         let idleDetail = isMarketing ? "Waiting for input" : "Waiting for UI test input"
         let available = SessionStateAction(state: "available", reason: nil)
         let unavailable = SessionStateAction(state: "unavailable", reason: "fixture_not_granted")
-        let detail = SessionDetail(
+        var detail = SessionDetail(
             id: sessionID,
             title: title,
             provider: "codex",
@@ -1279,6 +1323,45 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 )
             )
         )
+        if title.hasPrefix("Background Tasks") {
+            let stale = title.contains("(stale)")
+            let empty = title.contains("(empty)")
+            let observedAt = Self.fixedTimestamp(offset: -20)
+            let validUntil = stale ? "2000-01-01T00:00:00Z" : "2099-01-01T00:00:00Z"
+            let tasks: [SessionDelegationTask] = empty
+                ? []
+                : [
+                    SessionDelegationTask(
+                        id: "agent-1",
+                        kind: "subagent",
+                        status: "running",
+                        description: "Review the exact child transcript",
+                        firstObservedAt: Self.fixedTimestamp(offset: -18),
+                        startedAt: Self.fixedTimestamp(offset: -16),
+                        lastActivityAt: Self.fixedTimestamp(offset: -2),
+                        sessionId: "019fc50b-1111-4111-8111-111111111111"
+                    ),
+                    SessionDelegationTask(
+                        id: "shell-1",
+                        kind: "shell",
+                        status: "queued",
+                        description: "Collect fixture metadata",
+                        firstObservedAt: Self.fixedTimestamp(offset: -15),
+                        startedAt: nil,
+                        lastActivityAt: Self.fixedTimestamp(offset: -5),
+                        sessionId: nil
+                    ),
+                ]
+            detail.stateFacts.delegation = SessionDelegationFacts(
+                state: stale ? "unknown" : (empty ? "none" : "pending"),
+                count: stale ? nil : tasks.count,
+                kinds: stale ? nil : (empty ? [:] : ["subagent": 1, "shell": 1]),
+                source: "ui_fixture",
+                observedAt: observedAt,
+                validUntil: validUntil,
+                items: stale ? nil : tasks
+            )
+        }
         return detail
     }
 

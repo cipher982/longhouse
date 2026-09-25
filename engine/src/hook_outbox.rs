@@ -16,7 +16,8 @@ use std::os::unix::fs::PermissionsExt;
 
 /// Enqueue one presence observation for the daemon without touching SQLite or
 /// the network. The rename is the publication boundary: the daemon only sees
-/// complete JSON files.
+/// complete JSON files. The payload is persisted as supplied: producer
+/// timestamps such as `occurred_at` are never replaced with delivery time.
 pub(crate) fn enqueue_presence(home: &Path, payload: &Value) -> std::io::Result<()> {
     enqueue_presence_in_outbox(&home.join("agent").join("outbox"), payload)
 }
@@ -102,7 +103,17 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         enqueue_presence(
             home.path(),
-            &serde_json::json!({"session_id":"session","state":"thinking"}),
+            &serde_json::json!({
+                "session_id": "session",
+                "state": "thinking",
+                "occurred_at": "2026-09-25T16:39:00Z",
+                "delegation": {
+                    "count": 0,
+                    "kinds": {},
+                    "items": [],
+                    "observed_at": "2026-09-25T16:39:00Z",
+                },
+            }),
         )
         .unwrap();
 
@@ -110,11 +121,11 @@ mod tests {
         let files: Vec<_> = std::fs::read_dir(outbox).unwrap().flatten().collect();
         assert_eq!(files.len(), 1);
         assert!(files[0].file_name().to_string_lossy().starts_with("prs."));
-        assert_eq!(
-            serde_json::from_slice::<Value>(&std::fs::read(files[0].path()).unwrap()).unwrap()
-                ["session_id"],
-            "session"
-        );
+        let written =
+            serde_json::from_slice::<Value>(&std::fs::read(files[0].path()).unwrap()).unwrap();
+        assert_eq!(written["session_id"], "session");
+        assert_eq!(written["occurred_at"], "2026-09-25T16:39:00Z");
+        assert_eq!(written["delegation"]["observed_at"], "2026-09-25T16:39:00Z");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

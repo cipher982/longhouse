@@ -55,6 +55,35 @@ extension APISessionCapabilitiesResponse {
     }
 }
 
+private extension APISessionDelegationTaskResponse {
+    var sessionDelegationTask: SessionDelegationTask {
+        SessionDelegationTask(
+            id: id,
+            kind: kind,
+            status: status,
+            description: description,
+            firstObservedAt: firstObservedAt,
+            startedAt: startedAt,
+            lastActivityAt: lastActivityAt,
+            sessionId: sessionId
+        )
+    }
+}
+
+private extension APISessionDelegationFacts {
+    var sessionDelegationFacts: SessionDelegationFacts {
+        SessionDelegationFacts(
+            state: state ?? "unknown",
+            count: count,
+            kinds: kinds,
+            source: source,
+            observedAt: observedAt,
+            validUntil: validUntil,
+            items: items?.map(\.sessionDelegationTask)
+        )
+    }
+}
+
 private extension APISessionActionAvailability {
     var sessionStateAction: SessionStateAction {
         SessionStateAction(state: state, reason: reason)
@@ -77,6 +106,7 @@ private extension APISessionStateFacts {
             dispositionCloseReason: disposition.closeReason,
             launchState: launch?.state,
             runLifecycle: run?.lifecycle,
+            runId: run?.id,
             activityState: activity.state,
             activityRawKind: activity.rawKind,
             activityTool: activity.tool,
@@ -105,7 +135,8 @@ private extension APISessionStateFacts {
             primary: presentation.primary?.sessionStateLabel,
             access: presentation.access?.sessionStateLabel,
             transcript: presentation.transcript?.sessionStateLabel,
-            commitSeq: commitSeq
+            commitSeq: commitSeq,
+            delegation: delegation?.sessionDelegationFacts
         )
     }
 }

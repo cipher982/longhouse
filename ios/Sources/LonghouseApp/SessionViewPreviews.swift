@@ -957,3 +957,134 @@ private struct ProviderChromePreview: View {
     .preferredColorScheme(.light)
     .emberChrome()
 }
+
+private func previewDetail(
+    with delegation: SessionDelegationFacts,
+    activity: String = "executing",
+    tool: String? = "Read"
+) -> SessionDetail {
+    let detail = SessionDetail.mock(
+        provider: "claude",
+        executing: activity == "executing",
+        stateFactsJSON: factsJSON(
+            activity: activity,
+            tool: tool,
+            observedAt: isoDate(secondsAgo: 4),
+            primaryKey: activity == "executing" ? "executing" : "idle",
+            primaryLabel: activity == "executing" ? "Working" : "Idle",
+            primaryTone: activity == "executing" ? "working" : "idle",
+            access: ("live_control", "Live control", "success")
+        )
+    )
+    var copy = detail
+    copy.stateFacts.delegation = delegation
+    return copy
+}
+
+private func previewTask(
+    id: String,
+    kind: String,
+    status: String,
+    description: String?,
+    sessionId: String? = nil,
+    startedSecondsAgo: TimeInterval? = nil,
+    firstObservedSecondsAgo: TimeInterval? = nil,
+    lastActivitySecondsAgo: TimeInterval? = nil
+) -> SessionDelegationTask {
+    SessionDelegationTask(
+        id: id,
+        kind: kind,
+        status: status,
+        description: description,
+        firstObservedAt: firstObservedSecondsAgo.map(isoDate),
+        startedAt: startedSecondsAgo.map(isoDate),
+        lastActivityAt: lastActivitySecondsAgo.map(isoDate),
+        sessionId: sessionId
+    )
+}
+
+#Preview("Background work · zero · Light") {
+    SessionScreenPreview(
+        detail: previewDetail(
+            with: SessionDelegationFacts(
+                state: "none",
+                count: 0,
+                kinds: [:],
+                source: "claude_hook",
+                observedAt: isoDate(secondsAgo: 3),
+                validUntil: isoDate(secondsAgo: -30),
+                items: []
+            ),
+            activity: "quiescent",
+            tool: nil
+        ),
+        activity: ActivityPulseStore(),
+        transcript: ["The parent turn is still the primary session activity."]
+    )
+    .preferredColorScheme(.light)
+    .emberChrome()
+}
+
+#Preview("Background work · mixed named tasks · Dark") {
+    let tasks = [
+        previewTask(
+            id: "agent-1",
+            kind: "subagent",
+            status: "running",
+            description: "Research the migration notes and compare the provider's latest API behavior.",
+            sessionId: "019fc50b-1111-4111-8111-111111111111",
+            startedSecondsAgo: 142,
+            lastActivitySecondsAgo: 6
+        ),
+        previewTask(
+            id: "shell-1",
+            kind: "shell",
+            status: "queued",
+            description: "Collect fixture metadata",
+            firstObservedSecondsAgo: 90,
+            lastActivitySecondsAgo: 42
+        ),
+        previewTask(
+            id: "monitor-1",
+            kind: "monitor",
+            status: "watching",
+            description: "Watch the integration environment for a fresh deployment",
+            firstObservedSecondsAgo: 66,
+            lastActivitySecondsAgo: 2
+        ),
+    ]
+    let facts = SessionDelegationFacts(
+        state: "pending",
+        count: tasks.count,
+        kinds: ["subagent": 1, "shell": 1, "monitor": 1],
+        source: "claude_hook",
+        observedAt: isoDate(secondsAgo: 2),
+        validUntil: isoDate(secondsAgo: -90),
+        items: tasks
+    )
+    SessionScreenPreview(
+        detail: previewDetail(with: facts),
+        activity: claudeSparse(),
+        transcript: ["The parent remains in control while named background work runs."]
+    )
+    .preferredColorScheme(.dark)
+    .dynamicTypeSize(.accessibility2)
+    .emberChrome()
+}
+
+#Preview("Background work · unknown after expiry") {
+    let facts = SessionDelegationFacts(
+        state: "pending",
+        count: 2,
+        kinds: ["subagent": 2],
+        source: "claude_hook",
+        observedAt: isoDate(secondsAgo: 300),
+        validUntil: isoDate(secondsAgo: 30),
+        items: [
+            previewTask(id: "expired-agent", kind: "subagent", status: "running", description: "Expired evidence")
+        ]
+    )
+    SessionDelegationTaskSheet(facts: facts, asOf: Date(), onOpenSubagent: { _ in })
+        .preferredColorScheme(.light)
+        .emberChrome()
+}

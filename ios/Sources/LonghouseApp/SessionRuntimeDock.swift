@@ -322,6 +322,9 @@ struct SessionRuntimeDock: View {
     let detail: SessionDetail
     @ObservedObject var activity: ActivityPulseStore
     var realtimeConnection: SessionRealtimeConnection = .disconnected
+    /// The enclosing navigation stack owns routes; the dock only supplies the
+    /// exact provider-linked child session id.
+    var onOpenSubagent: ((String) -> Void)? = nil
 
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -332,6 +335,7 @@ struct SessionRuntimeDock: View {
     @State private var elapsedAnchor: ElapsedAnchor?
     @State private var evidenceNow = Date()
     @State private var evidenceDisclosure = false
+    @State private var delegationSheetPresented = false
     @State private var startupGraceExpired = false
     @State private var hasObservedConnection = false
 
@@ -434,6 +438,29 @@ struct SessionRuntimeDock: View {
                 startupGraceExpired = true
             }
         }
+        .task(id: delegationDeadlineKey) {
+            evidenceNow = Date()
+            guard let deadline = detail.stateFacts.delegation?.validUntil.flatMap(LonghouseDateParser.parse) else {
+                return
+            }
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+            }
+            if !Task.isCancelled {
+                evidenceNow = Date()
+            }
+        }
+        .sheet(isPresented: $delegationSheetPresented) {
+            SessionDelegationTaskSheet(
+                facts: detail.stateFacts.delegation,
+                asOf: evidenceNow,
+                onOpenSubagent: { childSessionId in
+                    delegationSheetPresented = false
+                    onOpenSubagent?(childSessionId)
+                }
+            )
+        }
         .animation(
             reduceMotion ? nil : .timingCurve(0.2, 0.8, 0.2, 1, duration: 0.38),
             value: statusGeometrySignature
@@ -447,6 +474,39 @@ struct SessionRuntimeDock: View {
     private var elapsedAnchorKey: String {
         [detail.id, detail.stateFacts.primary?.key ?? "", detail.stateFacts.activityTool ?? "", detail.stateFacts.activityState]
             .joined(separator: ":")
+    }
+    private var delegationDeadlineKey: String {
+        "\(detail.id):\(detail.stateFacts.delegation?.validUntil ?? "")"
+    }
+
+    private enum DelegationPresentation {
+        case absent
+        case unknown
+        case known(SessionDelegationFacts)
+
+        var isUnknown: Bool {
+            if case .unknown = self { return true }
+            return false
+        }
+    }
+
+    private var delegationPresentation: DelegationPresentation {
+        guard let facts = detail.stateFacts.delegation else { return .absent }
+        guard facts.isValid(asOf: evidenceNow), facts.state.lowercased() != "unknown" else {
+            return .unknown
+        }
+        return .known(facts)
+    }
+
+    private var delegationSummaryLabel: String? {
+        switch delegationPresentation {
+        case .absent:
+            return nil
+        case .unknown:
+            return "Background work status unknown"
+        case .known(let facts):
+            return delegationSummary(for: facts)
+        }
     }
 
 
@@ -463,6 +523,9 @@ struct SessionRuntimeDock: View {
             detail.stateFacts.activityObservedAt ?? "",
             detail.stateFacts.activityValidUntil ?? "",
             detail.stateFacts.lastResultAt ?? "",
+            detail.stateFacts.delegation?.state ?? "",
+            detail.stateFacts.delegation?.observedAt ?? "",
+            detail.stateFacts.delegation?.validUntil ?? "",
             String(describing: ledger(asOf: evidenceNow)),
             String(describing: realtimeConnection),
             detail.runtimeDisplay.hostState,
@@ -507,7 +570,8 @@ struct SessionRuntimeDock: View {
         return [
             "\(shouldExpand)", "\(evidenceDisclosure)", "\(noticeIsVisible)",
             headline(for: state), operationLine(for: state) ?? "",
-            subline(for: state, asOf: evidenceNow) ?? "", exceptionReason(state) ?? ""
+            subline(for: state, asOf: evidenceNow) ?? "",
+            delegationSummaryLabel ?? "", exceptionReason(state) ?? ""
         ].joined(separator: "|")
     }
 
@@ -556,17 +620,83 @@ struct SessionRuntimeDock: View {
     }
 
 
+    private func delegationSummary(for facts: SessionDelegationFacts) -> String? {
+        if let items = facts.items {
+            guard !items.isEmpty else { return nil }
+            return categorySummary(
+                counts: items.reduce(into: [SessionDelegationCategory: Int]()) { counts, task in
+                    counts[SessionDelegationCategory(kind: task.kind), default: 0] += 1
+                },
+                total: items.count
+            )
+        }
+        if facts.state.lowercased() == "none" {
+            return nil
+        }
+        guard let count = facts.count, count > 0 else {
+            return "Background work reported"
+        }
+        let counts = (facts.kinds ?? [:]).reduce(into: [SessionDelegationCategory: Int]()) { result, pair in
+            guard pair.value > 0 else { return }
+            result[SessionDelegationCategory(kind: pair.key), default: 0] += pair.value
+        }
+        return categorySummary(counts: counts, total: count)
+    }
+
+    private func categorySummary(
+        counts: [SessionDelegationCategory: Int],
+        total: Int
+    ) -> String {
+        let order: [SessionDelegationCategory] = [.agents, .commands, .monitors, .other]
+        let parts = order.compactMap { category -> String? in
+            guard let count = counts[category], count > 0 else { return nil }
+            return category.countLabel(count)
+        }
+        if parts.isEmpty {
+            return "Background · \(total) \(total == 1 ? "task" : "tasks")"
+        }
+        return "Background · " + parts.joined(separator: " · ")
+    }
+
+    private func usesPrimaryDelegationHeadline(for state: SessionLedgerEvidence) -> Bool {
+        detail.stateFacts.primary?.key == "delegated_work" && state != .working
+    }
+
+    @ViewBuilder
+    private func primaryHeadline(for state: SessionLedgerEvidence) -> some View {
+        if usesPrimaryDelegationHeadline(for: state), let summary = delegationSummaryLabel {
+            Button {
+                delegationSheetPresented = true
+            } label: {
+                Text(summary)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(headlineColor(for: state))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .transaction { $0.animation = nil }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(summary)
+            .accessibilityHint("Show named background work")
+            .accessibilityIdentifier("session-runtime-background-summary")
+        } else {
+            Text(headline(for: state))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(headlineColor(for: state))
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .transaction { $0.animation = nil }
+        }
+    }
+
     private func statusLines(asOf now: Date) -> some View {
         let state = ledger(asOf: now)
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(headline(for: state))
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(headlineColor(for: state))
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .transaction { $0.animation = nil }
+                    primaryHeadline(for: state)
                     if let operationLine = operationLine(for: state) {
                         Text(operationLine)
                             .font(.caption.monospaced())
@@ -608,6 +738,30 @@ struct SessionRuntimeDock: View {
                     .accessibilityLabel(evidenceDisclosure ? "Hide status evidence" : "Show status evidence")
                     .accessibilityIdentifier("session-runtime-evidence-toggle")
                 }
+            }
+            if !usesPrimaryDelegationHeadline(for: state), let summary = delegationSummaryLabel {
+                Button {
+                    delegationSheetPresented = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: delegationPresentation.isUnknown ? "questionmark.circle" : "arrow.triangle.branch")
+                            .font(.caption2.weight(.semibold))
+                        Text(summary)
+                            .font(.caption.weight(.medium))
+                            .lineLimit(typeSize.isAccessibilitySize ? 3 : 1)
+                            .multilineTextAlignment(.leading)
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.caption2.weight(.semibold))
+                    }
+                    .foregroundStyle(delegationPresentation.isUnknown ? Ember.textSecondary : Ember.text)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(summary)
+                .accessibilityHint("Show named background work")
+                .accessibilityIdentifier("session-runtime-background-summary")
             }
             if shouldExpand || evidenceDisclosure || noticeIsVisible {
                 evidenceContext(state: state)
@@ -680,12 +834,20 @@ struct SessionRuntimeDock: View {
         case .uncertain:
             return realtimeConnection == .disconnected ? "Updates interrupted" : "Activity uncertain"
         case .attention:
-            return detail.activePauseRequest != nil ? "Permission needed" : detail.runtimeHeadline
+            if detail.activePauseRequest != nil { return "Permission needed" }
+            if detail.stateFacts.primary?.key == "delegated_work",
+               let summary = delegationSummaryLabel {
+                return summary
+            }
+            return detail.runtimeHeadline
         default:
+            if detail.stateFacts.primary?.key == "delegated_work",
+               let summary = delegationSummaryLabel {
+                return summary
+            }
             return detail.runtimeHeadline
         }
     }
-
 
     private func headlineColor(for state: SessionLedgerEvidence) -> Color {
         // Uncertainty reads as quiet text, not as the attention ember. The dot
@@ -896,6 +1058,7 @@ struct SessionRuntimeDock: View {
             parts.append(RuntimeElapsed.label(seconds: Double(lastTurn.durationMs) / 1000, precise: true))
         }
         if let detailLabel = operationLine(for: state) { parts.append(detailLabel) }
+        if let backgroundSummary = delegationSummaryLabel { parts.append(backgroundSummary) }
         if style.capability != .live, let label = detail.runtimeCapabilityLabel { parts.append(label) }
         if evidenceDisclosure || state == .uncertain || transportFailureVisible {
             parts.append(evidenceLabel(state))
@@ -904,5 +1067,264 @@ struct SessionRuntimeDock: View {
             parts.append(notice == .finished ? "Turn finished" : "Activity evidence restored")
         }
         return parts.joined(separator: ", ")
+    }
+}
+
+struct SessionDelegationTaskSheet: View {
+    let facts: SessionDelegationFacts?
+    let onOpenSubagent: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var sheetNow: Date
+
+    init(
+        facts: SessionDelegationFacts?,
+        asOf: Date,
+        onOpenSubagent: @escaping (String) -> Void
+    ) {
+        self.facts = facts
+        self.onOpenSubagent = onOpenSubagent
+        _sheetNow = State(initialValue: asOf)
+    }
+
+    private struct TaskGroup: Identifiable {
+        let key: String
+        let title: String
+        let tasks: [SessionDelegationTask]
+
+        var id: String { key }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 18) {
+                    if let observationLine {
+                        Text(observationLine)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("session-runtime-background-observed")
+                    }
+                    content
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 18)
+            }
+            .background(Ember.page)
+            .navigationTitle("Background work")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .task(id: freshnessTaskKey) {
+            while !Task.isCancelled {
+                let remaining = facts?.validUntil
+                    .flatMap(LonghouseDateParser.parse)?
+                    .timeIntervalSinceNow
+                    ?? 30
+                if remaining <= 0 {
+                    sheetNow = Date()
+                    return
+                }
+                let delay = min(30, max(1, remaining))
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                if !Task.isCancelled {
+                    sheetNow = Date()
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private var freshnessTaskKey: String {
+        "\(facts?.observedAt ?? ""):\(facts?.validUntil ?? "")"
+    }
+
+    private var observationLine: String? {
+        guard let observedAt = facts?.observedAt,
+              let date = LonghouseDateParser.parse(observedAt),
+              let age = RuntimeElapsed.ageLabel(from: date, to: sheetNow) else {
+            return nil
+        }
+        return "Observed \(age)"
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if let facts, facts.isValid(asOf: sheetNow), facts.state.lowercased() != "unknown" {
+            if let items = facts.items {
+                if items.isEmpty {
+                    emptyState
+                } else {
+                    taskGroups(items)
+                }
+            } else {
+                aggregateOnlyState(facts)
+            }
+        } else {
+            unknownState
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("No named background work", systemImage: "checkmark.circle")
+                .font(.headline)
+            Text("The provider reported an empty task list for this observation.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityIdentifier("session-runtime-background-empty")
+    }
+
+    private func aggregateOnlyState(_ facts: SessionDelegationFacts) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Named task details unavailable", systemImage: "list.bullet.rectangle")
+                .font(.headline)
+            if let count = facts.count, count > 0 {
+                Text("\(count) background \(count == 1 ? "task was" : "tasks were") reported, without provider task details.")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("This observation contains aggregate background-work evidence only.")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .accessibilityIdentifier("session-runtime-background-aggregate-only")
+    }
+
+    private var unknownState: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Background work status unknown", systemImage: "questionmark.circle")
+                .font(.headline)
+            Text("The provider's background-work evidence is missing or expired. No task is treated as completed.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityIdentifier("session-runtime-background-unknown")
+    }
+
+    private func taskGroups(_ tasks: [SessionDelegationTask]) -> some View {
+        ForEach(groups(for: tasks)) { group in
+            VStack(alignment: .leading, spacing: 8) {
+                Text(group.title)
+                    .font(.headline)
+                    .foregroundStyle(Ember.text)
+                ForEach(group.tasks) { task in
+                    taskRow(task)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func taskRow(_ task: SessionDelegationTask) -> some View {
+        let title = taskTitle(task)
+        let sessionId = task.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let row = VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(title)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(Ember.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                if sessionId != nil {
+                    Image(systemName: "arrow.up.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Text("Status: \(task.status)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let timing = timingLine(for: task) {
+                Text(timing)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Ember.card)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Ember.border, lineWidth: 0.75)
+        }
+        .accessibilityIdentifier("session-runtime-background-task-\(task.id)")
+        if let sessionId {
+            Button {
+                dismiss()
+                Task { @MainActor in
+                    await Task.yield()
+                    onOpenSubagent(sessionId)
+                }
+            } label: {
+                row
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("session-runtime-background-task-\(task.id)")
+            .accessibilityHint("Open the child transcript")
+        } else {
+            row
+        }
+    }
+
+    private func groups(for tasks: [SessionDelegationTask]) -> [TaskGroup] {
+        let order: [SessionDelegationCategory] = [.agents, .commands, .monitors, .other]
+        let grouped = Dictionary(grouping: tasks) {
+            SessionDelegationCategory(kind: $0.kind)
+        }
+        return order.compactMap { category in
+            guard let tasks = grouped[category], !tasks.isEmpty else { return nil }
+            return TaskGroup(key: category.rawValue, title: category.title, tasks: tasks)
+        }
+    }
+
+    private func taskTitle(_ task: SessionDelegationTask) -> String {
+        if let description = task.description {
+            let trimmed = description.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return readableKind(task.kind)
+    }
+
+    private func readableKind(_ rawKind: String) -> String {
+        let kind = rawKind.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !kind.isEmpty else { return "Background task" }
+        return kind.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
+    private func timingLine(for task: SessionDelegationTask) -> String? {
+        var parts: [String] = []
+        if let startedAt = task.startedAt,
+           let date = LonghouseDateParser.parse(startedAt),
+           let age = RuntimeElapsed.ageLabel(from: date, to: sheetNow) {
+            parts.append("Started \(age)")
+        } else if let firstObservedAt = task.firstObservedAt,
+                  let date = LonghouseDateParser.parse(firstObservedAt),
+                  let age = RuntimeElapsed.ageLabel(from: date, to: sheetNow) {
+            parts.append("First observed \(age)")
+        }
+        if let lastActivityAt = task.lastActivityAt,
+           let date = LonghouseDateParser.parse(lastActivityAt),
+           let age = RuntimeElapsed.ageLabel(from: date, to: sheetNow) {
+            parts.append("Last activity \(age)")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }

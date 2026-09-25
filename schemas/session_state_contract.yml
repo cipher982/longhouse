@@ -1,6 +1,6 @@
 schema_version: 1
-state_contract_version: 3
-presentation_policy_version: 2
+state_contract_version: 4
+presentation_policy_version: 3
 
 # Canonical state vocabulary. Provider adapters may retain raw evidence, but
 # every product surface projects only these values.
@@ -95,10 +95,9 @@ fact_families:
   launch: [state, 'error_code?', 'error_message?']
   run: ['id?', lifecycle, 'started_at?', 'ended_at?', 'end_reason?']
   activity: [state, 'raw_kind?', 'tool?', 'source?', 'observed_at?', 'valid_until?']
-  # Delegated work is its own axis: activity is per-tool and expires in 90-600s,
-  # while a background agent outlives turns. `unknown` means nothing was
-  # observed; `none` is a positive observation of an empty task registry.
-  delegation: [state, count, kinds, 'source?', 'observed_at?', 'valid_until?']
+  # Unknown is not completed. A missing item list is aggregate-only evidence.
+  delegation: [state, count, kinds, 'items?', 'source?', 'observed_at?', 'valid_until?']
+  delegation_task: [id, kind, status, 'description?', 'first_observed_at?', 'started_at?', 'last_activity_at?', 'session_id?']
   control: [ownership, connection, 'connection_id?', 'lease_generation?', 'control_plane?', 'observed_at?', 'valid_until?', actions]
   interaction: [id, kind, 'opened_at?', 'resolved_at?', 'provider_request_id?', can_respond]
   transcript: [convergence, 'source_revision?', 'durable_revision?', 'render_revision?', 'last_append_at?', searchable, live_observation]

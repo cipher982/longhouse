@@ -39,6 +39,7 @@ from zerg.services.session_state_contract import SessionActivityFacts
 from zerg.services.session_state_contract import SessionControlActions
 from zerg.services.session_state_contract import SessionControlFacts
 from zerg.services.session_state_contract import SessionDelegationFacts
+from zerg.services.session_state_contract import SessionDelegationTaskResponse
 from zerg.services.session_state_contract import SessionDispositionFacts
 from zerg.services.session_state_contract import SessionHostFacts
 from zerg.services.session_state_contract import SessionLaunchFacts
@@ -203,7 +204,7 @@ def project_shadow_session_state_facts(
         launch=launch,
         run=_project_run(catalog_facts, launch=launch),
         activity=_project_activity(activity_head, now=normalized_now),
-        delegation=_project_delegation(delegation_head, now=normalized_now),
+        delegation=_project_delegation(delegation_head, now=normalized_now, children=_mapping(catalog_facts.get("delegation_children"))),
         control=_project_control(control_head, supported_operations=set(supported_operations)),
         control_run_id=_control_run_id(control_head),
         fact_sources=fact_sources,
@@ -791,6 +792,7 @@ def _project_delegation(
     winner: tuple[Mapping[str, Any], dict[str, Any], datetime, datetime] | None,
     *,
     now: datetime,
+    children: Mapping[str, Any],
 ) -> SessionDelegationFacts:
     """Project the delegated-work axis, expired evidence included.
 
@@ -817,10 +819,29 @@ def _project_delegation(
                 kinds[kind] = count
     raw_count = value.get("count")
     count = raw_count if type(raw_count) is int and raw_count >= 0 else sum(kinds.values())
+    raw_items = value.get("items")
+    items = None
+    if isinstance(raw_items, list):
+        items = []
+        for item in raw_items:
+            child = _mapping(children.get(item.get("parent_tool_call_id")))
+            items.append(
+                SessionDelegationTaskResponse(
+                    id=item["id"],
+                    kind=item["kind"],
+                    status=item["status"],
+                    description=item.get("description"),
+                    first_observed_at=_optional_wire_datetime(item.get("first_observed_at"), "first_observed_at"),
+                    started_at=_optional_wire_datetime(child.get("started_at"), "started_at"),
+                    last_activity_at=_optional_wire_datetime(child.get("last_activity_at"), "last_activity_at"),
+                    session_id=_text(child.get("session_id")),
+                )
+            )
     return SessionDelegationFacts(
         state="pending" if count > 0 else "none",
         count=count,
         kinds=kinds,
+        items=items,
         source=source,
         observed_at=observed_at,
         valid_until=valid_until,

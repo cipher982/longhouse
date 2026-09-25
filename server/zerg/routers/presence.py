@@ -109,17 +109,21 @@ def _source_for_provider_hook(provider: str | None) -> str:
     return f"{normalized[:58]}_hook"
 
 
+class DelegationTaskIn(UTCBaseModel):
+    id: str = Field(min_length=1, max_length=256)
+    kind: str = Field(min_length=1, max_length=32)
+    status: str = Field(min_length=1, max_length=32)
+    description: str | None = Field(default=None, max_length=512)
+    parent_tool_call_id: str | None = Field(default=None, max_length=256)
+
+
 class DelegationSnapshotIn(UTCBaseModel):
-    """An orchestration snapshot from the hook that observed it.
+    """A bounded provider registry with its original observation clock."""
 
-    Claude publishes this on Stop and SubagentStop as `background_tasks[]` and
-    `session_crons[]`. Bounded here so a buggy or hostile producer cannot widen
-    the fact; `freshness_ms` lets the producer state how long its own
-    observation may speak for the session.
-    """
-
-    count: int = 0
+    count: int = Field(default=0, ge=0, le=256)
     kinds: dict[str, int] = Field(default_factory=dict)
+    items: list[DelegationTaskIn] | None = Field(default=None, max_length=256)
+    observed_at: datetime | None = None
     freshness_ms: Optional[int] = None
 
 

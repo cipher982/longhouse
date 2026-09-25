@@ -5,13 +5,16 @@
 //! allowing hooks to run as `async: false` without risking stalls.
 //!
 //! The daemon drains the outbox on a short tick: reads all ready files,
-//! coalesces by session_id (latest state wins), returns local phase signals for
-//! transcript catch-up, persists managed transcript bindings, POSTs to
+//! coalesces ordinary activity by session_id (latest state wins), while
+//! retaining the newest registry-bearing snapshot per session/run. It returns
+//! local phase signals, persists managed transcript bindings, POSTs to
 //! `/api/agents/presence`, and deletes files on success. Files are kept on
-//! failure and retried next tick. Durable local writes belong here rather than
-//! in the provider hook process, where SQLite contention can block the provider.
-//! Ordinary presence files older than `STALE_SECS` are deleted without posting;
-//! managed transcript-binding intents are retained until the daemon persists them.
+//! failure and retried next tick. Registry bytes retain their producer's
+//! original occurred_at/observed_at; a resend never renews that clock.
+//! Durable local writes belong here rather than in the provider hook process,
+//! where SQLite contention can block the provider. Ordinary presence files
+//! older than `STALE_SECS` are deleted without posting; registry snapshots and
+//! managed transcript-binding intents are retained until delivered/persisted.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
@@ -102,6 +105,10 @@ struct PresenceOutboxPayload {
     /// process. A drain-time PID lookup alone is unsafe after PID reuse.
     #[serde(default)]
     provider_process_start_time: Option<String>,
+    /// A provider task registry is a separate replaceable fact. Keep it
+    /// independent from latest activity so a newer phase cannot erase it.
+    #[serde(default)]
+    delegation: Option<Value>,
     #[serde(default)]
     occurred_at: Option<String>,
     /// Provider adapters use this for local-health-only phase evidence. It is
@@ -115,7 +122,7 @@ struct PresenceOutboxPayload {
     run_id: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct PendingPresenceFile {
     path: PathBuf,
     bytes: Vec<u8>,
@@ -305,6 +312,14 @@ fn collect_outbox_impl(
     let now = SystemTime::now();
     // session_id → latest ordinary presence observation — newest state wins
     let mut by_session: HashMap<String, PendingPresenceFile> = HashMap::new();
+    // Registry-bearing observations have a longer, independent lifetime.
+    // Keep one newest snapshot per provider/session/run so a run transition
+    // cannot make the reducer miss either side of its fence.
+    let mut delegation_by_session_run: HashMap<
+        (String, String, Option<String>),
+        PendingPresenceFile,
+    > = HashMap::new();
+    let mut delegation_paths = HashSet::new();
     // Local phase observations are durable evidence for the engine's own
     // health projection. Keep them separate: they must reach SQLite but never
     // become hosted presence traffic.
@@ -367,13 +382,18 @@ fn collect_outbox_impl(
         }
 
         let managed_binding_required = is_managed_binding_payload(&payload);
-        // Presence is ephemeral, but a managed transcript binding is a
-        // durable identity claim. Keep that intent through daemon outages so
-        // the first healthy collector can persist it before posting/deleting.
+        let delegation_required = has_delegation_snapshot(&payload);
+        // Presence is ephemeral, but a managed transcript binding and a
+        // registry snapshot are durable identity/state evidence. Keep either
+        // intent through daemon outages so the first healthy collector can
+        // persist or post it before deleting.
         if let Ok(meta) = entry.metadata() {
             if let Ok(modified) = meta.modified() {
                 if let Ok(age) = now.duration_since(modified) {
-                    if age > Duration::from_secs(STALE_SECS) && !managed_binding_required {
+                    if age > Duration::from_secs(STALE_SECS)
+                        && !managed_binding_required
+                        && !delegation_required
+                    {
                         let _ = std::fs::remove_file(&path);
                         continue;
                     }
@@ -385,7 +405,6 @@ fn collect_outbox_impl(
             managed_binding_paths.insert(path.clone());
             managed_binding_payloads.push((path.clone(), payload.clone()));
         }
-
         let observed_at = observed_at_for_payload(&payload, &entry, now);
         let next_file = PendingPresenceFile {
             path: path.clone(),
@@ -393,6 +412,23 @@ fn collect_outbox_impl(
             payload,
             observed_at,
         };
+
+        if delegation_required {
+            delegation_paths.insert(path.clone());
+            let delegation_key = (
+                normalize_provider(next_file.payload.provider.as_deref()).to_string(),
+                sid.clone(),
+                next_file.payload.run_id.clone(),
+            );
+            let next_registry_at = delegation_observed_at(&next_file);
+            let replace = delegation_by_session_run
+                .get(&delegation_key)
+                .map(|existing| next_registry_at > delegation_observed_at(existing))
+                .unwrap_or(true);
+            if replace {
+                delegation_by_session_run.insert(delegation_key, next_file.clone());
+            }
+        }
 
         if next_file.payload.local_only {
             match local_phase_by_session.get(&sid) {
@@ -414,12 +450,14 @@ fn collect_outbox_impl(
         match by_session.get(&sid) {
             Some(existing) => {
                 if next_file.observed_at > existing.observed_at {
-                    if !managed_binding_paths.contains(&existing.path) {
+                    if !managed_binding_paths.contains(&existing.path)
+                        && !has_delegation_snapshot(&existing.payload)
+                    {
                         let _ = std::fs::remove_file(&existing.path);
                     }
                     by_session.insert(sid, next_file);
                 } else {
-                    if !managed_binding_paths.contains(&path) {
+                    if !managed_binding_paths.contains(&path) && !delegation_required {
                         let _ = std::fs::remove_file(&path);
                     }
                 }
@@ -493,18 +531,40 @@ fn collect_outbox_impl(
         let _ = std::fs::remove_file(path);
     }
 
-    let selected_paths: HashSet<PathBuf> = by_session
+    let mut selected_paths: HashSet<PathBuf> = by_session
         .values()
         .map(|pending| pending.path.clone())
         .collect();
+    selected_paths.extend(
+        delegation_by_session_run
+            .values()
+            .map(|pending| pending.path.clone()),
+    );
     for path in persisted_binding_paths.difference(&selected_paths) {
         let _ = std::fs::remove_file(path);
+    }
+    // Keep only the newest registry snapshot per session/run. Its original
+    // observed_at remains in the bytes; retries never manufacture a new clock.
+    for path in delegation_paths.difference(&selected_paths) {
+        if !managed_binding_paths.contains(path) {
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     // One process inventory for the whole drain, collected only if a payload
     // actually needs a process lookup.
     let mut drain_process_facts: Option<HashMap<u32, crate::process_identity::ProcessFact>> = None;
-    for pending in by_session.into_values() {
+    let ordinary_paths: HashSet<PathBuf> = by_session
+        .values()
+        .map(|pending| pending.path.clone())
+        .collect();
+    let mut selected_presence: Vec<PendingPresenceFile> = by_session.into_values().collect();
+    for pending in delegation_by_session_run.into_values() {
+        if !ordinary_paths.contains(&pending.path) {
+            selected_presence.push(pending);
+        }
+    }
+    for pending in selected_presence {
         let PendingPresenceFile {
             path,
             bytes,
@@ -1459,6 +1519,20 @@ fn observed_at_for_payload(
 
     DateTime::<Utc>::from(now)
 }
+fn has_delegation_snapshot(payload: &PresenceOutboxPayload) -> bool {
+    payload.delegation.as_ref().is_some_and(Value::is_object)
+}
+
+fn delegation_observed_at(pending: &PendingPresenceFile) -> DateTime<Utc> {
+    pending
+        .payload
+        .delegation
+        .as_ref()
+        .and_then(|delegation| delegation.get("observed_at"))
+        .and_then(Value::as_str)
+        .and_then(parse_rfc3339_utc)
+        .unwrap_or_else(|| pending.observed_at.clone())
+}
 
 fn prune_stale_dot_file(entry: &std::fs::DirEntry, path: &Path, now: SystemTime) {
     if let Ok(meta) = entry.metadata() {
@@ -1664,6 +1738,33 @@ mod tests {
         path
     }
 
+    fn write_presence_payload(dir: &Path, name: &str, payload: Value) -> PathBuf {
+        let path = dir.join(name);
+        fs::write(&path, serde_json::to_vec(&payload).unwrap()).unwrap();
+        path
+    }
+
+    fn write_registry_presence(
+        dir: &Path,
+        name: &str,
+        session_id: &str,
+        state: &str,
+        occurred_at: &str,
+        delegation: Value,
+    ) -> PathBuf {
+        write_presence_payload(
+            dir,
+            name,
+            json!({
+                "session_id": session_id,
+                "state": state,
+                "provider": "claude",
+                "occurred_at": occurred_at,
+                "delegation": delegation,
+            }),
+        )
+    }
+
     fn write_runtime_event(dir: &Path, name: &str, session_id: &str) -> PathBuf {
         write_runtime_event_with_tool_name(dir, name, session_id, None).0
     }
@@ -1697,6 +1798,217 @@ mod tests {
         }
         fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
         (path, json)
+    }
+
+    fn posted_payloads(result: &OutboxLocalDrainResult) -> Vec<Value> {
+        result
+            .posts
+            .iter()
+            .map(|post| serde_json::from_slice(&post.bytes).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn registry_snapshot_survives_newer_activity_coalescing() {
+        let dir = make_outbox();
+        let snapshot_path = write_registry_presence(
+            dir.path(),
+            "prs.registry.json",
+            "sess-registry",
+            "idle",
+            "2026-09-25T16:39:00Z",
+            json!({
+                "count": 1,
+                "kinds": {"subagent": 1},
+                "items": [{
+                    "id": "task-1",
+                    "kind": "subagent",
+                    "status": "running",
+                    "description": "Explore",
+                }],
+                "observed_at": "2026-09-25T16:39:00Z",
+            }),
+        );
+        let activity_path = write_presence_payload(
+            dir.path(),
+            "prs.activity.json",
+            json!({
+                "session_id": "sess-registry",
+                "state": "thinking",
+                "provider": "claude",
+                "occurred_at": "2026-09-25T16:40:00Z",
+            }),
+        );
+
+        let result = collect_outbox_impl(dir.path(), None, false);
+        let payloads = posted_payloads(&result);
+        assert_eq!(payloads.len(), 2);
+        let registry = payloads
+            .iter()
+            .find(|payload| payload.get("delegation").is_some())
+            .expect("registry-bearing presence is independently retained");
+        assert_eq!(registry["occurred_at"], "2026-09-25T16:39:00Z");
+        assert_eq!(
+            registry["delegation"]["observed_at"],
+            "2026-09-25T16:39:00Z"
+        );
+        let retry_payloads = posted_payloads(&collect_outbox_impl(dir.path(), None, false));
+        let retry_registry = retry_payloads
+            .iter()
+            .find(|payload| payload.get("delegation").is_some())
+            .expect("retry retains the same registry observation");
+        assert_eq!(
+            retry_registry["delegation"]["observed_at"],
+            "2026-09-25T16:39:00Z"
+        );
+        assert!(snapshot_path.exists());
+        assert!(activity_path.exists());
+    }
+
+    #[test]
+    fn empty_registry_snapshot_survives_newer_activity_coalescing() {
+        let dir = make_outbox();
+        let snapshot_path = write_registry_presence(
+            dir.path(),
+            "prs.empty-registry.json",
+            "sess-empty",
+            "idle",
+            "2026-09-25T16:39:00Z",
+            json!({
+                "count": 0,
+                "kinds": {},
+                "items": [],
+                "observed_at": "2026-09-25T16:39:00Z",
+            }),
+        );
+        let activity_path = write_presence_payload(
+            dir.path(),
+            "prs.empty-activity.json",
+            json!({
+                "session_id": "sess-empty",
+                "state": "running",
+                "provider": "claude",
+                "occurred_at": "2026-09-25T16:40:00Z",
+            }),
+        );
+
+        let result = collect_outbox_impl(dir.path(), None, false);
+        let payloads = posted_payloads(&result);
+        assert_eq!(payloads.len(), 2);
+        let registry = payloads
+            .iter()
+            .find(|payload| payload["delegation"]["count"] == json!(0))
+            .expect("an explicit empty registry is retained");
+        assert_eq!(
+            registry["delegation"]["observed_at"],
+            "2026-09-25T16:39:00Z"
+        );
+        assert!(snapshot_path.exists());
+        assert!(activity_path.exists());
+    }
+
+    #[test]
+    fn registry_snapshots_are_retained_per_run_when_clocks_arrive_out_of_order() {
+        let dir = make_outbox();
+        let old_run = write_presence_payload(
+            dir.path(),
+            "prs.old-run.json",
+            json!({
+                "session_id": "sess-runs",
+                "state": "idle",
+                "provider": "claude",
+                "run_id": "run-old",
+                "occurred_at": "2026-09-25T16:40:00Z",
+                "delegation": {
+                    "count": 1,
+                    "kinds": {"subagent": 1},
+                    "items": [{
+                        "id": "task-old",
+                        "kind": "subagent",
+                        "status": "running",
+                        "description": null,
+                    }],
+                    "observed_at": "2026-09-25T16:40:00Z",
+                },
+            }),
+        );
+        let new_run = write_presence_payload(
+            dir.path(),
+            "prs.new-run.json",
+            json!({
+                "session_id": "sess-runs",
+                "state": "idle",
+                "provider": "claude",
+                "run_id": "run-new",
+                "occurred_at": "2026-09-25T16:39:00Z",
+                "delegation": {
+                    "count": 0,
+                    "kinds": {},
+                    "items": [],
+                    "observed_at": "2026-09-25T16:39:00Z",
+                },
+            }),
+        );
+        let new_run_stale = write_presence_payload(
+            dir.path(),
+            "prs.new-run-stale.json",
+            json!({
+                "session_id": "sess-runs",
+                "state": "idle",
+                "provider": "claude",
+                "run_id": "run-new",
+                "occurred_at": "2026-09-25T16:38:00Z",
+                "delegation": {
+                    "count": 1,
+                    "kinds": {"subagent": 1},
+                    "items": [{
+                        "id": "task-stale",
+                        "kind": "subagent",
+                        "status": "running",
+                        "description": null,
+                    }],
+                    "observed_at": "2026-09-25T16:38:00Z",
+                },
+            }),
+        );
+        let activity = write_presence_payload(
+            dir.path(),
+            "prs.new-activity.json",
+            json!({
+                "session_id": "sess-runs",
+                "state": "thinking",
+                "provider": "claude",
+                "run_id": "run-new",
+                "occurred_at": "2026-09-25T16:41:00Z",
+            }),
+        );
+
+        let result = collect_outbox_impl(dir.path(), None, false);
+        let payloads = posted_payloads(&result);
+        assert_eq!(payloads.len(), 3);
+        let registry_runs: HashSet<String> = payloads
+            .iter()
+            .filter_map(|payload| {
+                payload
+                    .get("delegation")
+                    .map(|_| payload["run_id"].as_str().unwrap().to_owned())
+            })
+            .collect();
+        assert_eq!(
+            registry_runs,
+            HashSet::from(["run-old".to_string(), "run-new".to_string()])
+        );
+        let new_run_registry = payloads
+            .iter()
+            .find(|payload| {
+                payload["run_id"] == json!("run-new") && payload.get("delegation").is_some()
+            })
+            .expect("newer same-run snapshot is retained");
+        assert_eq!(new_run_registry["delegation"]["count"], json!(0));
+        assert!(!new_run_stale.exists());
+        assert!(old_run.exists());
+        assert!(new_run.exists());
+        assert!(activity.exists());
     }
 
     // ShipperClient can't be easily constructed without a real config, so

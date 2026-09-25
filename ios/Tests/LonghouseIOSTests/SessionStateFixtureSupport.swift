@@ -12,6 +12,7 @@ func makeSessionStateFacts(
     /// ends the run without closing the session, and that combination is what
     /// the ended-Helm presentation has to get right.
     runLifecycle overrideRunLifecycle: String? = nil,
+    runId: String? = nil,
     resumeAvailable: Bool = false,
     branchAvailable: Bool? = nil,
     reattachAvailable: Bool = false,
@@ -51,6 +52,7 @@ func makeSessionStateFacts(
         dispositionCloseReason: closed ? "user_closed" : nil,
         launchState: launchState,
         runLifecycle: overrideRunLifecycle ?? (closed ? "ended" : "running"),
+        runId: runId,
         activityState: activity,
         activityRawKind: nil,
         activityTool: tool,

@@ -402,7 +402,8 @@ struct SessionView: View {
             SessionRuntimeDock(
                 detail: detail,
                 activity: viewModel.activity,
-                realtimeConnection: viewModel.realtimeConnection
+                realtimeConnection: viewModel.realtimeConnection,
+                onOpenSubagent: onOpenSubagent
             )
         }
     }

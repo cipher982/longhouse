@@ -190,14 +190,56 @@ final class SessionChatUITests: XCTestCase {
         )
         let footer = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Worked for 2m 9s")).firstMatch
         XCTAssertTrue(footer.waitForExistence(timeout: Self.webTranscriptTimeout), "the reply row carries the provider's turn footer")
-        XCTAssertTrue(footer.label.contains("done"), "the footer names when the turn finished")
-
+        XCTAssertTrue(footer.label.contains("Turn finished"), "the footer clearly identifies the completed parent turn")
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = "turn-footer"
         shot.lifetime = .keepAlways
         add(shot)
     }
 
+
+    func testBackgroundTaskSheetOpensExactChildTranscript() {
+        let app = launchChatFixture(name: "background-tasks", eventCount: 3)
+        let summary = app.buttons["session-runtime-background-summary"]
+        XCTAssertTrue(summary.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(summary.label.contains("1 agent"))
+        XCTAssertTrue(summary.label.contains("1 command"))
+
+        summary.tap()
+        let childTask = app.buttons["session-runtime-background-task-agent-1"]
+        XCTAssertTrue(childTask.waitForExistence(timeout: 5))
+        childTask.tap()
+
+        let childID = "019fc50b-1111-4111-8111-111111111111"
+        XCTAssertTrue(app.staticTexts["Child transcript"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts[childID].exists)
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "background-task-child-route"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
+    func testBackgroundTaskEmptySnapshotRemovesSummaryLine() {
+        let app = launchChatFixture(name: "background-tasks-transition", eventCount: 0)
+        let summary = app.buttons["session-runtime-background-summary"]
+        XCTAssertTrue(summary.waitForExistence(timeout: Self.webTranscriptTimeout))
+        let clear = app.buttons["background-tasks-clear"]
+        XCTAssertTrue(clear.waitForExistence(timeout: 5))
+        clear.tap()
+        XCTAssertFalse(summary.waitForExistence(timeout: 2))
+    }
+
+    func testBackgroundTaskEvidenceExpiresLocallyAsUnknown() {
+        let app = launchChatFixture(name: "background-tasks-stale", eventCount: 0)
+        let summary = app.buttons["session-runtime-background-summary"]
+        XCTAssertTrue(summary.waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertTrue(summary.label.contains("unknown"))
+        summary.tap()
+        XCTAssertTrue(
+            app.staticTexts["Background work status unknown"].waitForExistence(timeout: 5)
+        )
+        XCTAssertTrue(app.descendants(matching: .any)["session-runtime-background-unknown"].exists)
+    }
     func testKeyboardFocusKeepsLatestTranscriptMessageVisible() {
         let app = launchChatFixture(eventCount: 40)
         let composer = app.textFields["session-chat-composer"]

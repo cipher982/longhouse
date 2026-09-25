@@ -30,8 +30,8 @@ from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime_display import compact_runtime_tool_label
 from zerg.utils.time import normalize_utc
 
-STATE_CONTRACT_VERSION = 3
-PRESENTATION_POLICY_VERSION = 2
+STATE_CONTRACT_VERSION = 4
+PRESENTATION_POLICY_VERSION = 3
 
 PRIMARY_PRESENTATION_KEYS: tuple[str, ...] = (
     "closed",
@@ -159,6 +159,19 @@ class SessionActivityFacts(_FrozenModel):
 DelegationState = Literal["pending", "none", "unknown"]
 
 
+class SessionDelegationTaskResponse(_FrozenModel):
+    """A provider task, with archive enrichment only through exact lineage."""
+
+    id: str
+    kind: str
+    status: str
+    description: str | None = None
+    first_observed_at: datetime | None = None
+    started_at: datetime | None = None
+    last_activity_at: datetime | None = None
+    session_id: str | None = None
+
+
 class SessionDelegationFacts(_FrozenModel):
     """Work this session handed to another worker, or that runs beside it.
 
@@ -177,6 +190,8 @@ class SessionDelegationFacts(_FrozenModel):
     count: int = 0
     #: Task-type label -> how many are in flight, e.g. {"subagent": 1}.
     kinds: dict[str, int] = Field(default_factory=dict)
+    #: None means aggregate-only evidence, not an empty named registry.
+    items: list[SessionDelegationTaskResponse] | None = None
     source: str | None = None
     observed_at: datetime | None = None
     valid_until: datetime | None = None
@@ -948,12 +963,14 @@ _DELEGATION_NOUNS: dict[str, str] = {
 
 
 def _delegation_label(delegation: SessionDelegationFacts) -> str:
-    """Name the work, not just the count, when the count is one of one kind."""
-    count = delegation.count
-    if count == 1 and len(delegation.kinds) == 1:
-        kind = next(iter(delegation.kinds))
-        return f"Waiting on 1 background {_DELEGATION_NOUNS.get(kind, 'task')}"
-    return f"Waiting on {count} background tasks"
+    """Registry membership describes background work, not a blocking wait."""
+    parts = []
+    for kind in ("subagent", "shell", "monitor", "workflow", "teammate", "cloud_session", "mcp_task", "other"):
+        count = delegation.kinds.get(kind, 0)
+        if count:
+            noun = "command" if kind == "shell" else _DELEGATION_NOUNS.get(kind, "task")
+            parts.append(f"{count} {noun}{'' if count == 1 else 's'}")
+    return "Background · " + (" · ".join(parts) if parts else f"{delegation.count} tasks")
 
 
 def _primary(

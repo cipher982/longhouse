@@ -3308,7 +3308,6 @@ class CatalogStore:
             delegation_facts = _runtime_delegation_facts(
                 connection,
                 events=events,
-                updated_runtime_keys=updated_runtime_keys,
             )
             all_facts = [*activity_facts, *delegation_facts]
             reduced_parts = [
@@ -6715,6 +6714,9 @@ class CatalogStore:
                     limit_per_session=SHADOW_STATE_FACT_HEAD_LIMIT,
                 )
                 heads_by_session = {session_id: (heads, session_id in truncated_sessions) for session_id, heads in grouped_heads.items()}
+                _attach_delegation_children(
+                    connection, facts=facts, heads_by_session={key: value[0] for key, value in heads_by_session.items()}
+                )
             has_real_sessions = total == 0 or any((item["catalog"].get("device_id") or "") != "demo-mac" for item in facts)
             return {
                 "commit_seq": str(_current_commit_seq(connection)),
@@ -6825,6 +6827,7 @@ class CatalogStore:
                 families=("activity", "control", "continuation", "delegation"),
                 limit=SHADOW_STATE_FACT_HEAD_LIMIT,
             )
+            _attach_delegation_children(connection, facts=session_facts, heads_by_session={session_id: heads})
             return {
                 "commit_seq": str(commit_seq),
                 "observed_at": observed_at.isoformat(),
@@ -6886,6 +6889,7 @@ class CatalogStore:
                 families=("activity", "control", "continuation", "delegation"),
                 limit_per_session=SHADOW_STATE_FACT_HEAD_LIMIT,
             )
+            _attach_delegation_children(connection, facts=facts, heads_by_session=heads_by_session)
             sessions = []
             for session_id in session_ids:
                 session_facts = facts_by_id.get(session_id)
@@ -16083,34 +16087,80 @@ _DELEGATION_KIND_LIMIT = 8
 _DELEGATION_COUNT_LIMIT = 256
 
 
-def _runtime_delegation_facts(
-    connection,
-    *,
-    events: list[Any],
-    updated_runtime_keys: set[str],
-) -> list[ReducerFact]:
-    """Promote an observed orchestration snapshot into its own fact family.
+def _attach_delegation_children(connection, *, facts: list[dict[str, Any]], heads_by_session: Mapping[str, Any]) -> None:
+    """Join named tasks to source-authored child lineage within this read snapshot."""
+    requested: dict[str, set[str]] = {}
+    by_session = {str(fact["catalog"]["session_id"]): fact for fact in facts}
+    for session_id, fact in by_session.items():
+        run_id = (fact.get("latest_run") or {}).get("id")
+        if not run_id or (fact.get("latest_run") or {}).get("ended_at") is not None:
+            continue
+        for head in heads_by_session.get(session_id, []):
+            if head["family"] != "delegation":
+                continue
+            value = json.loads(head["value_json"])
+            if value.get("run_id") != str(run_id):
+                continue
+            for item in value.get("items", []) or []:
+                tool_id = item.get("parent_tool_call_id")
+                if item.get("kind") == "subagent" and isinstance(tool_id, str) and tool_id:
+                    requested.setdefault(session_id, set()).add(tool_id)
+    if not requested:
+        return
+    child = StorageSession.__table__
+    parent = child.alias("delegation_parent")
+    tool_ids = {tool_id for values in requested.values() for tool_id in values}
+    rows = connection.execute(
+        select(
+            child.c.subagent_parent_session_id,
+            child.c.subagent_parent_tool_call_id,
+            child.c.session_id,
+            child.c.started_at,
+            child.c.last_activity_at,
+        )
+        .select_from(child.join(parent, parent.c.session_id == child.c.subagent_parent_session_id))
+        .where(
+            child.c.subagent_parent_session_id.in_(requested),
+            child.c.subagent_parent_tool_call_id.in_(tool_ids),
+            child.c.owner_id == parent.c.owner_id,
+            child.c.provider == parent.c.provider,
+            child.c.machine_id == parent.c.machine_id,
+            child.c.raw_state != "retired",
+            child.c.render_state != "retired",
+        )
+    ).mappings()
+    ambiguous: set[tuple[str, str]] = set()
+    for row in rows:
+        session_id, tool_id = str(row["subagent_parent_session_id"]), str(row["subagent_parent_tool_call_id"])
+        if tool_id not in requested[session_id]:
+            continue
+        children = by_session[session_id].setdefault("delegation_children", {})
+        coordinate = (session_id, tool_id)
+        if tool_id in children or coordinate in ambiguous:
+            children.pop(tool_id, None)
+            ambiguous.add(coordinate)
+            continue
+        children[tool_id] = {
+            "session_id": str(row["session_id"]),
+            "started_at": _encode_datetime(row["started_at"]),
+            "last_activity_at": _encode_datetime(row["last_activity_at"]),
+        }
 
-    The registry arrives on the provider hook that observes it — Claude's Stop
-    ``background_tasks[]`` and ``session_crons[]``. It cannot ride the activity
-    head: ``_runtime_activity_facts`` rebuilds that head closed from each phase
-    signal, so the next parent PreToolUse would erase the registry. See
-    ``control-plane/docs/specs/provider-orchestration-representation.md``.
-    """
 
+def _runtime_delegation_facts(connection, *, events: list[Any]) -> list[ReducerFact]:
+    """Reduce registry observations independently of the parent's activity clock."""
     run_table = LiveSessionRun.__table__
     thread_table = LiveSessionThread.__table__
+    head_table = FactHead.__table__
     facts: list[ReducerFact] = []
-    for event in events:
-        if event.runtime_key not in updated_runtime_keys or event.kind != "phase_signal":
-            continue
-        if event.session_id is None or event.run_id is None:
+    prior_by_run: dict[tuple[str, str], dict[str, Any]] = {}
+    for event in sorted(events, key=lambda item: item.occurred_at):
+        if event.kind != "phase_signal" or event.session_id is None or event.run_id is None:
             continue
         snapshot = (event.payload or {}).get("delegation")
         if not isinstance(snapshot, Mapping):
             continue
-        session_id = str(event.session_id)
-        run_id = str(event.run_id)
+        session_id, run_id = str(event.session_id), str(event.run_id)
         bound = connection.execute(
             select(run_table.c.id)
             .select_from(run_table.join(thread_table, thread_table.c.id == run_table.c.thread_id))
@@ -16118,24 +16168,96 @@ def _runtime_delegation_facts(
         ).scalar_one_or_none()
         if bound is None:
             continue
-        occurred_at = _as_aware_utc(event.occurred_at)
-        if occurred_at is None:
+        raw_observed = snapshot.get("observed_at")
+        try:
+            occurred_at = _as_aware_utc(
+                datetime.fromisoformat(raw_observed.replace("Z", "+00:00"))
+                if isinstance(raw_observed, str)
+                else raw_observed
+                if isinstance(raw_observed, datetime)
+                else event.occurred_at
+            )
+        except ValueError:
             continue
+        if occurred_at is None or occurred_at > _as_aware_utc(event.occurred_at):
+            continue
+        raw_source = str(event.source or "runtime_event").strip() or "runtime_event"
+        coordinate = (raw_source, run_id)
+        if coordinate not in prior_by_run:
+            previous = connection.execute(
+                select(head_table.c.value_json).where(
+                    head_table.c.family == "delegation",
+                    head_table.c.subject_key == f"run:{run_id}",
+                    head_table.c.source == raw_source,
+                    head_table.c.source_epoch == run_id,
+                )
+            ).scalar_one_or_none()
+            prior_by_run[coordinate] = json.loads(previous) if previous else {}
+        prior = prior_by_run[coordinate]
+        previous_items = {(item.get("kind"), item.get("id")): item for item in prior.get("items", []) or [] if isinstance(item, dict)}
         kinds: dict[str, int] = {}
-        raw_kinds = snapshot.get("kinds")
-        if isinstance(raw_kinds, Mapping):
-            for kind, count in list(raw_kinds.items())[:_DELEGATION_KIND_LIMIT]:
-                if isinstance(kind, str) and kind and type(count) is int and 0 < count <= _DELEGATION_COUNT_LIMIT:
-                    kinds[kind] = count
-        raw_count = snapshot.get("count")
-        count = raw_count if type(raw_count) is int and 0 <= raw_count <= _DELEGATION_COUNT_LIMIT else sum(kinds.values())
+        items: list[dict[str, Any]] | None = None
+        raw_items = snapshot.get("items")
+        if isinstance(raw_items, list):
+            # Reject an oversized or malformed registry rather than manufacture
+            # an authoritative empty observation from an invalid producer.
+            if len(raw_items) > _DELEGATION_COUNT_LIMIT:
+                continue
+            items = []
+            seen: set[str] = set()
+            invalid = False
+            for raw in raw_items:
+                if not isinstance(raw, Mapping):
+                    invalid = True
+                    break
+                task_id, kind, task_status = raw.get("id"), raw.get("kind"), raw.get("status")
+                if (
+                    not isinstance(task_id, str)
+                    or not task_id.strip()
+                    or len(task_id) > 256
+                    or not isinstance(kind, str)
+                    or not kind.strip()
+                    or len(kind) > 32
+                    or not isinstance(task_status, str)
+                    or not task_status.strip()
+                    or len(task_status) > 32
+                ):
+                    invalid = True
+                    break
+                if task_id in seen:
+                    continue
+                seen.add(task_id)
+                previous_item = previous_items.get((kind, task_id), {})
+                item = {
+                    "id": task_id,
+                    "kind": kind,
+                    "status": task_status,
+                    "description": raw["description"][:512] if isinstance(raw.get("description"), str) else None,
+                    "first_observed_at": previous_item.get("first_observed_at") or occurred_at.isoformat(),
+                }
+                tool_call_id = raw.get("parent_tool_call_id")
+                if isinstance(tool_call_id, str) and 0 < len(tool_call_id) <= 256:
+                    item["parent_tool_call_id"] = tool_call_id
+                items.append(item)
+                kinds[kind] = kinds.get(kind, 0) + 1
+            if invalid:
+                continue
+            count = len(items)
+        else:
+            raw_kinds = snapshot.get("kinds")
+            if isinstance(raw_kinds, Mapping):
+                for kind, amount in list(raw_kinds.items())[:_DELEGATION_KIND_LIMIT]:
+                    if isinstance(kind, str) and kind and type(amount) is int and 0 < amount <= _DELEGATION_COUNT_LIMIT:
+                        kinds[kind] = amount
+            raw_count = snapshot.get("count")
+            count = raw_count if type(raw_count) is int and 0 <= raw_count <= _DELEGATION_COUNT_LIMIT else sum(kinds.values())
         raw_freshness = snapshot.get("freshness_ms")
         freshness_ms = (
             raw_freshness
             if type(raw_freshness) is int and 0 < raw_freshness <= _DELEGATION_DEFAULT_FRESHNESS_MS
             else _DELEGATION_DEFAULT_FRESHNESS_MS
         )
-        raw_source = str(event.source or "runtime_event").strip() or "runtime_event"
+        valid_until = occurred_at + timedelta(milliseconds=freshness_ms)
         value = {
             "authority_class": "provider_runtime",
             "provider": str(event.provider),
@@ -16143,10 +16265,13 @@ def _runtime_delegation_facts(
             "run_id": run_id,
             "count": count,
             "kinds": kinds,
+            "items": items,
             "source": raw_source,
             "observed_at": occurred_at.isoformat(),
-            "valid_until": (occurred_at + timedelta(milliseconds=freshness_ms)).isoformat(),
+            "valid_until": valid_until.isoformat(),
         }
+        if not prior.get("observed_at") or occurred_at >= datetime.fromisoformat(prior["observed_at"].replace("Z", "+00:00")):
+            prior_by_run[coordinate] = value
         dedupe_key = hashlib.sha256(f"runtime-delegation:{raw_source}:{event.dedupe_key}:{run_id}".encode()).hexdigest()
         facts.append(
             ReducerFact(
@@ -16160,7 +16285,7 @@ def _runtime_delegation_facts(
                 value=value,
                 observed_at=occurred_at,
                 session_id=session_id,
-                valid_until=occurred_at + timedelta(milliseconds=freshness_ms),
+                valid_until=valid_until,
                 raw_locator=f"runtime:{raw_source}:{event.dedupe_key}"[:1024],
             )
         )

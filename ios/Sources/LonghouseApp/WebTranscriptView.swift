@@ -455,7 +455,7 @@ struct WebTranscriptView: UIViewRepresentable {
         let stopped = turnEnd.outcome == "aborted"
         return WebTranscriptTurnEnd(
             label: "\(stopped ? "Interrupted after" : "Worked for") \(TurnEndCopy.duration(milliseconds: turnEnd.durationMs))",
-            doneAt: TurnEndCopy.doneAt(turnEnd.endedAt, now: now, verb: stopped ? "stopped" : "done")
+            doneAt: TurnEndCopy.doneAt(turnEnd.endedAt, now: now, verb: stopped ? "stopped" : "Turn finished")
         )
     }
 
@@ -2142,7 +2142,7 @@ struct WebTranscriptPayloadItem: Encodable {
     var subagents: [WebTranscriptSubagent]? = nil
     /// "22 agents · 4m12s" — the shape of the work while still collapsed.
     var subagentSummary: String? = nil
-    /// "Worked for 2m 9s · done 9:15 AM" under the item a turn ended on.
+    /// "Worked for 2m 9s · Turn finished 9:15 AM" under the item a turn ended on.
     var turnEnd: WebTranscriptTurnEnd? = nil
 }
 
@@ -3529,7 +3529,8 @@ private extension WebTranscriptView {
 """#
 }
 
-/// Copy for the provider's turn accounting. Pure so tests pin the wording.
+/// Copy for the provider's turn accounting. Pure so row anchoring and duration
+/// behavior stay deterministic.
 enum TurnEndCopy {
     /// "2m 9s", "58s", "1h 2m": the terminal's own compaction of a duration.
     nonisolated static func duration(milliseconds: Int) -> String {
@@ -3542,9 +3543,14 @@ enum TurnEndCopy {
         return "\(seconds)s"
     }
 
-    /// "done 9:15 AM" today, "done Tue 9:15 AM" within a week, else with the date.
-    /// A stopped turn says "stopped" instead.
-    nonisolated static func doneAt(_ endedAt: String, now: Date = Date(), calendar: Calendar = .current, verb: String = "done") -> String {
+    /// "Turn finished 9:15 AM" today, "Turn finished Tue 9:15 AM" within a
+    /// week, else with the date. A stopped turn says "stopped" instead.
+    nonisolated static func doneAt(
+        _ endedAt: String,
+        now: Date = Date(),
+        calendar: Calendar = .current,
+        verb: String = "Turn finished"
+    ) -> String {
         guard let date = LonghouseDateParser.parse(endedAt) else { return verb }
         let time = DateFormatter()
         time.calendar = calendar

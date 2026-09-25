@@ -21,7 +21,27 @@ same backend-owned truth instead of reconstructing it differently.
 | Console turn lifecycle | Did a turn start, stream, finish, fail, or get interrupted? | durable Console turn/run facts projected through `session_state` and the turn APIs | Console session/turn route tests plus web/iOS composer fixtures | Extend the shared fixtures when a new turn outcome becomes user-visible. |
 | Provisional vs durable transcript | Is this text live preview, durable archive, stale preview, or superseded? | `SessionTranscriptPreview` and durable events | preview freshness tests plus shared web/iOS rendering fixtures | Keep stale/superseded render decisions backend-owned as bridge behavior changes. |
 | Clock and freshness | When does a signal expire, and which clock owns that decision? | backend freshness windows near runtime/provisional projections | `server/tests_lite/test_session_freshness_contract.py` pins backend-clock boundaries for runtime sync and provisional previews | Add cases here when a launch-critical projection introduces a new freshness window. |
+| Background work | What work continues beside the parent turn? | `session_state.delegation`: provider registry, category counts, named items and its own observation/expiry clock | `server/tests_lite/test_delegation_lifecycle.py` exercises hook ingress, replacement/empty snapshots, run fencing and exact child lineage | Provider-specific lifecycle captures establish which native updates carry the registry. |
 | Error taxonomy | Which failures are product states versus logs/debug details? | typed response fields on input/turn/runtime projections | input/send/turn/preview reason codes are typed at projection boundaries | Expand only when web, iOS, or agents branch on a new code. |
+
+## Background registry semantics
+
+Background work is independent of the parent's activity. A parent turn can
+finish while agents, commands, or monitors remain. Counts describe the latest
+provider registry, not lifetime launches or a dependency blocking the parent.
+
+An explicit empty registry clears the list. A missing registry leaves the last
+observation unchanged; expiry makes its state unknown, not completed. Delivery
+retries and unrelated activity never renew the registry's observation clock.
+Named task IDs are scoped to the provider session and run. The transport bounds
+registries to 256 entries and rejects oversized observations rather than
+presenting a partial count as complete.
+
+Task status and description come from the provider; raw command strings are not
+included. `first_observed_at` is not a task start time. Start and last-activity
+timestamps, and a navigable child session ID, are supplied only through exact,
+unambiguous child lineage. Historical child end times do not decide whether a
+background task is still active.
 
 ## Non-goals
 

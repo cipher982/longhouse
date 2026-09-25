@@ -107,6 +107,7 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
                 crate::claude_channel_server::update_managed_provider_session_id(managed, native);
         }
     }
+    let occurred_at = Utc::now().to_rfc3339();
     let mut payload = json!({
         "session_id": session_id,
         "state": observation.status,
@@ -115,6 +116,8 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
         "provider": "claude",
         "transcript_path": transcript_path,
         "control_path": if managed_session_id.is_some() { "managed" } else { "unmanaged" },
+        // This is the hook's observation time, not the daemon's delivery time.
+        "occurred_at": occurred_at,
     });
     // Managed launchers carry the exact durable run generation in the
     // environment. Preserve it on the hook event so Runtime Host can bind
@@ -128,9 +131,9 @@ fn handle_input(input: &Value) -> anyhow::Result<()> {
         }
     }
     // The in-flight registry rides every presence observation that carries it.
-    // The daemon re-posts the latest observation per session, so the snapshot
-    // stays asserted until Claude stops reporting it.
-    if let Some(snapshot) = delegation_snapshot(input) {
+    // The daemon retains this separately from latest activity, so a newer
+    // observation without a registry cannot erase it.
+    if let Some(snapshot) = delegation_snapshot(input, &occurred_at) {
         payload["delegation"] = snapshot;
     }
     attach_provider_session_id(
@@ -249,7 +252,7 @@ fn parse_process_row(row: &str) -> Option<(&str, u32)> {
     Some((command, parent))
 }
 
-/// Bounded in-flight registry from Claude's Stop and SubagentStop hooks.
+/// Bounded registry from Claude's parent Stop hook.
 ///
 /// `background_tasks[]` is how Claude distinguishes "session is done" from
 /// "session is paused waiting for background work to wake it back up", and it
@@ -260,35 +263,105 @@ fn parse_process_row(row: &str) -> Option<(&str, u32)> {
 /// `session_crons[]` is deliberately not folded in here: a scheduled wakeup is
 /// future work, not work in flight, and the two are separate signals
 /// (`delegation.background` and `delegation.scheduled`).
-fn delegation_snapshot(input: &Value) -> Option<Value> {
-    const KIND_LIMIT: usize = 8;
-    const COUNT_LIMIT: usize = 256;
+const DELEGATION_KIND_LIMIT: usize = 8;
+const DELEGATION_TASK_LIMIT: usize = 256;
+const DELEGATION_ID_MAX_CHARS: usize = 256;
+const DELEGATION_STATUS_MAX_CHARS: usize = 32;
+const DELEGATION_DESCRIPTION_MAX_CHARS: usize = 256;
+
+fn bounded_task_text(value: Option<&Value>, limit: usize) -> Option<String> {
+    let text = value?.as_str()?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    Some(text.chars().take(limit).collect())
+}
+
+fn bounded_required_task_text(value: Option<&Value>, limit: usize) -> Option<String> {
+    let text = value?.as_str()?.trim();
+    if text.is_empty() || text.chars().count() > limit {
+        return None;
+    }
+    Some(text.to_owned())
+}
+
+fn task_id(value: Option<&Value>) -> Option<String> {
+    let text = value?.as_str()?.trim();
+    if text.is_empty() || text.chars().count() > DELEGATION_ID_MAX_CHARS {
+        return None;
+    }
+    Some(text.to_owned())
+}
+
+fn delegation_kind(raw: &str) -> &'static str {
+    match raw.to_ascii_lowercase().replace([' ', '-'], "_").as_str() {
+        "shell" => "shell",
+        "subagent" => "subagent",
+        "monitor" => "monitor",
+        "workflow" => "workflow",
+        "teammate" => "teammate",
+        "cloud_session" => "cloud_session",
+        "mcp_task" => "mcp_task",
+        _ => "other",
+    }
+}
+
+fn delegation_snapshot(input: &Value, observed_at: &str) -> Option<Value> {
     let tasks = input.get("background_tasks").and_then(Value::as_array)?;
+    if tasks.len() > DELEGATION_TASK_LIMIT {
+        return None;
+    }
+    let mut seen_ids = HashSet::new();
+    let mut items = Vec::with_capacity(tasks.len().min(DELEGATION_TASK_LIMIT));
     let mut kinds: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+
     for task in tasks {
-        // Claude's labels are friendly strings ("shell", "subagent", "cloud
-        // session", "MCP task"); normalize the multi-word ones so a consumer
-        // can key on them without guessing.
-        let raw = task
+        // A nonempty registry is authoritative only when every entry needed
+        // to interpret it is well formed. Do not turn a malformed list into
+        // an authoritative empty/partial snapshot.
+        let Some(id) = task_id(task.get("id")) else {
+            return None;
+        };
+        let Some(status) =
+            bounded_required_task_text(task.get("status"), DELEGATION_STATUS_MAX_CHARS)
+        else {
+            return None;
+        };
+        let Some(raw_kind) = task
             .get("type")
             .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim();
-        let kind = match raw.to_ascii_lowercase().replace([' ', '-'], "_").as_str() {
-            "shell" => "shell",
-            "subagent" => "subagent",
-            "monitor" => "monitor",
-            "workflow" => "workflow",
-            "teammate" => "teammate",
-            "cloud_session" => "cloud_session",
-            "mcp_task" => "mcp_task",
-            _ => "other",
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return None;
         };
+        if raw_kind.chars().count() > DELEGATION_STATUS_MAX_CHARS {
+            return None;
+        }
+        if !seen_ids.insert(id.clone()) {
+            continue;
+        }
+
+        let kind = delegation_kind(raw_kind);
         *kinds.entry(kind.to_string()).or_insert(0) += 1;
+        // `description` and `name` are provider labels. Deliberately do not
+        // inspect `command`, which may contain credentials or user data.
+        let description =
+            bounded_task_text(task.get("description"), DELEGATION_DESCRIPTION_MAX_CHARS)
+                .or_else(|| bounded_task_text(task.get("name"), DELEGATION_DESCRIPTION_MAX_CHARS));
+        items.push(json!({
+            "id": id,
+            "kind": kind,
+            "status": status,
+            "description": description,
+        }));
     }
+
     Some(json!({
-        "count": tasks.len().min(COUNT_LIMIT),
-        "kinds": kinds.into_iter().take(KIND_LIMIT).collect::<std::collections::BTreeMap<_, _>>(),
+        "count": items.len(),
+        "kinds": kinds.into_iter().take(DELEGATION_KIND_LIMIT).collect::<std::collections::BTreeMap<_, _>>(),
+        "items": items,
+        "observed_at": observed_at,
     }))
 }
 
@@ -973,7 +1046,8 @@ mod tests {
             "session_crons": [{"id": "c1", "schedule": "0 9 * * 1-5", "recurring": true}],
         });
 
-        let snapshot = delegation_snapshot(&input).expect("a registry must be reported");
+        let snapshot = delegation_snapshot(&input, "2026-09-25T16:39:00Z")
+            .expect("a registry must be reported");
 
         // Multi-word labels normalize; crons are future work, not in flight,
         // and belong to a separate signal.
@@ -982,6 +1056,12 @@ mod tests {
         assert_eq!(snapshot["kinds"]["shell"], json!(1));
         assert_eq!(snapshot["kinds"]["cloud_session"], json!(1));
         assert_eq!(snapshot["kinds"]["mcp_task"], json!(1));
+        assert_eq!(snapshot["items"].as_array().unwrap().len(), 4);
+        assert_eq!(snapshot["items"][0]["id"], "t1");
+        assert_eq!(snapshot["items"][0]["kind"], "subagent");
+        assert_eq!(snapshot["items"][0]["status"], "running");
+        assert_eq!(snapshot["items"][0]["description"], Value::Null);
+        assert_eq!(snapshot["observed_at"], "2026-09-25T16:39:00Z");
         assert!(snapshot["kinds"].get("scheduled").is_none());
     }
 
@@ -990,11 +1070,69 @@ mod tests {
         // `count: 0` is a positive observation that the task registry was
         // reachable and empty; no array at all is the absence of a claim. The
         // server serves those as `none` and `unknown` respectively.
-        assert!(delegation_snapshot(&json!({"hook_event_name": "PreToolUse"})).is_none());
+        assert!(delegation_snapshot(
+            &json!({"hook_event_name": "PreToolUse"}),
+            "2026-09-25T16:39:00Z"
+        )
+        .is_none());
 
-        let empty = delegation_snapshot(&json!({"background_tasks": []})).unwrap();
+        let empty =
+            delegation_snapshot(&json!({"background_tasks": []}), "2026-09-25T16:39:00Z").unwrap();
         assert_eq!(empty["count"], json!(0));
         assert_eq!(empty["kinds"], json!({}));
+        assert_eq!(empty["items"], json!([]));
+        assert_eq!(empty["observed_at"], "2026-09-25T16:39:00Z");
+    }
+
+    #[test]
+    fn malformed_tasks_omit_the_authoritative_snapshot() {
+        let snapshot = delegation_snapshot(
+            &json!({
+                "background_tasks": [
+                    {"id": "dup", "type": "subagent", "status": "running", "description": "first"},
+                    {"id": "missing-status", "type": "shell"},
+                    {"id": "missing-type", "status": "running"},
+                    {"id": 42, "type": "monitor", "status": "running"},
+                ]
+            }),
+            "2026-09-25T16:39:00Z",
+        );
+        assert!(
+            snapshot.is_none(),
+            "malformed registry must not become authoritative zero/partial state"
+        );
+    }
+
+    #[test]
+    fn oversized_registry_does_not_claim_a_partial_count() {
+        let tasks: Vec<Value> = (0..=DELEGATION_TASK_LIMIT)
+            .map(|id| json!({"id": id.to_string(), "type": "shell", "status": "running"}))
+            .collect();
+        assert!(
+            delegation_snapshot(&json!({"background_tasks": tasks}), "2026-09-25T16:39:00Z",)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn valid_duplicate_tasks_are_counted_once() {
+        let snapshot = delegation_snapshot(
+            &json!({
+                "background_tasks": [
+                    {"id": "dup", "type": "subagent", "status": "running", "description": "first"},
+                    {"id": "dup", "type": "shell", "status": "completed", "description": "second"},
+                    {"id": "named", "type": "monitor", "status": "queued", "name": "Provider monitor", "command": "secret"},
+                ]
+            }),
+            "2026-09-25T16:39:00Z",
+        )
+        .unwrap();
+
+        assert_eq!(snapshot["count"], json!(2));
+        assert_eq!(snapshot["kinds"], json!({"monitor": 1, "subagent": 1}));
+        assert_eq!(snapshot["items"][0]["description"], "first");
+        assert_eq!(snapshot["items"][1]["description"], "Provider monitor");
+        assert!(snapshot["items"][1].get("command").is_none());
     }
 
     /// Serialize an environment mutation against the shared lock and restore it.
@@ -1036,6 +1174,40 @@ mod tests {
             }
         }
         payload
+    }
+
+    #[test]
+    fn registry_presence_uses_one_observation_clock() {
+        let home = tempfile::tempdir().unwrap();
+        let payload = with_home(home.path(), || {
+            handle_input(&json!({
+                "hook_event_name": "Stop",
+                "session_id": "sess-clock",
+                "background_tasks": [{
+                    "id": "task-clock",
+                    "type": "subagent",
+                    "status": "mystery",
+                    "description": "provider label",
+                }],
+            }))
+            .unwrap();
+            let file = home
+                .path()
+                .join("agent/outbox")
+                .read_dir()
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .path();
+            serde_json::from_slice::<Value>(&std::fs::read(file).unwrap()).unwrap()
+        });
+
+        assert_eq!(
+            payload["occurred_at"], payload["delegation"]["observed_at"],
+            "carrier and snapshot must share the hook observation clock"
+        );
+        assert_eq!(payload["delegation"]["items"][0]["status"], "mystery");
     }
 
     #[test]

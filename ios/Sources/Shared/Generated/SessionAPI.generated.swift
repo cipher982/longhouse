@@ -301,10 +301,22 @@ struct APISessionControlFacts: Codable, Hashable, Sendable {
     let actions: APISessionControlActions
 }
 
+struct APISessionDelegationTaskResponse: Codable, Hashable, Sendable {
+    let id: String
+    let kind: String
+    let status: String
+    let description: String?
+    let firstObservedAt: String?
+    let startedAt: String?
+    let lastActivityAt: String?
+    let sessionId: String?
+}
+
 struct APISessionDelegationFacts: Codable, Hashable, Sendable {
     let state: String?
     let count: Int?
     let kinds: [String: Int]?
+    let items: [APISessionDelegationTaskResponse]?
     let source: String?
     let observedAt: String?
     let validUntil: String?

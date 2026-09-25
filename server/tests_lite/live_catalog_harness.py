@@ -505,6 +505,8 @@ class LiveCatalog:
         texts: tuple[str, ...] = ("hello from the transcript",),
         project: str = "longhouse",
         device_id: str = "cinder",
+        provider: str = "codex",
+        session_facts_overrides: dict[str, Any] | None = None,
         now: datetime | None = None,
     ) -> SeededSession:
         """Seal a raw + render pair on disk and commit it to the live catalog."""
@@ -520,9 +522,9 @@ class LiveCatalog:
             self.object_root,
             RawObjectSpec(
                 tenant_id=self.tenant,
+                provider=provider,
                 machine_id=device_id,
                 session_id=session_id,
-                provider="codex",
                 opaque_source_id=opaque_source_id,
                 source_epoch=source_epoch,
                 range_kind="record_ordinal",
@@ -539,8 +541,8 @@ class LiveCatalog:
                 render_generation=generation_id,
                 parser_revision=PARSER_REVISION,
                 ordering_revision="semantic-order-v2",
+                provider=provider,
                 machine_id=device_id,
-                provider="codex",
                 opaque_source_id=opaque_source_id,
                 source_epoch=source_epoch,
                 source_envelope_id=sealed_raw.envelope_id,
@@ -552,10 +554,10 @@ class LiveCatalog:
             {
                 "protocol_version": 2,
                 "tenant_id": self.tenant,
-                "owner_id": str(owner_id),
                 "session_id": str(session_id),
+                "owner_id": str(owner_id),
+                "provider": provider,
                 "machine_id": device_id,
-                "provider": "codex",
                 "opaque_source_id": opaque_source_id,
                 "source_epoch": str(source_epoch),
                 "predecessor_source_epoch": None,
@@ -595,7 +597,10 @@ class LiveCatalog:
                     "first_user_message_preview": sealed_render.first_user_message_preview,
                     "last_visible_text_preview": sealed_render.last_visible_text_preview,
                 },
-                "session_facts": self._session_facts(project=project, now=now),
+                "session_facts": {
+                    **self._session_facts(project=project, now=now),
+                    **(session_facts_overrides or {}),
+                },
                 "sealed_at": now.isoformat(),
             },
         )
