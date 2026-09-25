@@ -1,4 +1,3 @@
-import GoogleSignIn
 import OSLog
 import SwiftUI
 import UIKit
@@ -23,9 +22,7 @@ struct LonghouseApp: App {
                 .emberChrome()
                 .applyUITestAppearanceOverride()
                 .onOpenURL { url in
-                    if !handleLonghouseURL(url) {
-                        GIDSignIn.sharedInstance.handle(url)
-                    }
+                    _ = handleLonghouseURL(url)
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .longhouseAPNSDeviceTokenUpdated).receive(on: DispatchQueue.main)) { _ in
                     Task {
@@ -192,7 +189,7 @@ final class AppState: ObservableObject {
 
     /// Headless sign-in for the simulator lane: a Debug launch can carry the
     /// server URL and a runtime token in its environment, so an agent gets an
-    /// authenticated app without tapping through Google. The credential is
+    /// authenticated app without tapping through sign-in. The credential is
     /// stored exactly where the hosted sign-in stores it; `restoreSession`
     /// then treats it like any other locally trusted token.
     static let headlessServerURLEnvironmentKey = "LONGHOUSE_HEADLESS_SERVER_URL"
@@ -932,7 +929,6 @@ final class AppState: ObservableObject {
         // Fence this generation and clear active credentials before any network
         // await. A new sign-in on the same server must not be erased by this
         // logout's late response.
-        GIDSignIn.sharedInstance.signOut()
         await clearLocalSession(
             clearNativeRefreshToken: false,
             preservePendingNativeRevocation: true

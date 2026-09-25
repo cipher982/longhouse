@@ -9,9 +9,6 @@ options:
 packages:
   LonghousePackage:
     path: ..
-  GoogleSignIn:
-    url: https://github.com/google/GoogleSignIn-iOS
-    from: "8.0.0"
   SnapshotPreviews:
     url: https://github.com/EmergeTools/SnapshotPreviews
     from: "0.14.0"
@@ -36,10 +33,6 @@ targets:
         buildPhase: resources
         createIntermediateGroups: true
     dependencies:
-      - package: GoogleSignIn
-        product: GoogleSignIn
-      - package: GoogleSignIn
-        product: GoogleSignInSwift
       - target: LonghouseWidgetExtension
         embed: true
     configFiles:
@@ -77,14 +70,11 @@ targets:
     info:
       path: Info.plist
       properties:
-        GIDClientID: 658453123272-8d0plghk6gbsgamhp66rn8gi2vbc65i2.apps.googleusercontent.com
         UIBackgroundModes:
           - remote-notification
         NSSupportsLiveActivities: true
         NSSupportsLiveActivitiesFrequentUpdates: true
         CFBundleURLTypes:
-          - CFBundleURLSchemes:
-              - com.googleusercontent.apps.658453123272-8d0plghk6gbsgamhp66rn8gi2vbc65i2
           - CFBundleURLSchemes:
               - ai.longhouse.ios
 

@@ -1,16 +1,15 @@
 import AuthenticationServices
-import GoogleSignIn
 import SwiftUI
 
+// `/api/auth/methods` also reports `google`; the iOS app has no Google
+// sign-in (hosted tenants use the control-plane web flow), so it is ignored.
 private struct AuthMethods: Decodable {
-    let google: Bool
     let password: Bool
     let sso: Bool
     let ssoURL: String?
     let ssoLoginURL: String?
 
     private enum CodingKeys: String, CodingKey {
-        case google
         case password
         case sso
         case ssoURL = "sso_url"
@@ -126,10 +125,8 @@ struct LoginView: View {
     private func authControls(for methods: AuthMethods) -> some View {
         // Hosted tenants: one button, one path. The CP /auth/start
         // route (or /auth/native/open-instance for the iOS deep-link
-        // flow) handles Google / GitHub / email. Local Google and
-        // password branches are removed for Phase 0; the
-        // /api/auth/methods response no longer advertises them on
-        // hosted tenants.
+        // flow) handles Google / GitHub / email. The /api/auth/methods
+        // response does not advertise password on hosted tenants.
         if methods.sso {
             Button(action: { startHostedSignIn(methods) }) {
                 HStack(spacing: 10) {
@@ -163,41 +160,15 @@ struct LoginView: View {
                 .accessibilityIdentifier("login.switchLonghouseAccount")
             }
         } else {
-            // Self-host fallback: legacy Google + password form, kept
-            // bit-for-bit unchanged. This path is exercised only on
-            // tenant installs with no CONTROL_PLANE_URL set.
+            // Self-host fallback: password form. This path is exercised
+            // only on installs with no CONTROL_PLANE_URL set.
             legacyAuthControls(for: methods)
         }
     }
 
     @ViewBuilder
     private func legacyAuthControls(for methods: AuthMethods) -> some View {
-        if methods.google {
-            Button(action: signInWithGoogle) {
-                HStack(spacing: 10) {
-                    Image(systemName: "g.circle.fill")
-                        .font(.system(size: 20))
-                    Text("Sign in with Google")
-                        .font(.system(size: 16, weight: .medium))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(LoginInk.gold.opacity(0.13))
-                .foregroundStyle(LoginInk.parchment)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(LoginInk.gold.opacity(0.5), lineWidth: 1)
-                )
-            }
-        }
-
         if methods.password {
-            if methods.google {
-                Divider()
-                    .background(LoginInk.gold.opacity(0.25))
-            }
-
             SecureField("Password", text: $password)
                 .textContentType(.password)
                 .autocorrectionDisabled()
@@ -229,7 +200,7 @@ struct LoginView: View {
             .opacity(password.isEmpty ? 0.6 : 1)
         }
 
-        if !methods.sso && !methods.google && !methods.password {
+        if !methods.sso && !methods.password {
             Text("This Longhouse server does not advertise a supported sign-in method.")
                 .font(.caption)
                 .foregroundStyle(LoginInk.muted)
@@ -545,82 +516,6 @@ struct LoginView: View {
         }
     }
 
-
-    private func signInWithGoogle() {
-        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let rootVC = windowScene.windows.first?.rootViewController else {
-            localErrorMessage = "Cannot find root view controller"
-            return
-        }
-
-        appState.clearAuthError()
-        isSigningIn = true
-        localErrorMessage = nil
-
-        GIDSignIn.sharedInstance.signIn(withPresenting: rootVC) { result, error in
-            if let error {
-                Task { @MainActor in
-                    isSigningIn = false
-                    if (error as NSError).code == GIDSignInError.canceled.rawValue {
-                        return
-                    }
-                    localErrorMessage = error.localizedDescription
-                }
-                return
-            }
-
-            guard let idToken = result?.user.idToken?.tokenString else {
-                Task { @MainActor in
-                    isSigningIn = false
-                    localErrorMessage = "No ID token received from Google"
-                }
-                return
-            }
-
-            Task {
-                await exchangeGoogleToken(idToken)
-            }
-        }
-    }
-
-    private func exchangeGoogleToken(_ idToken: String) async {
-        guard let url = URL(string: "\(appState.serverURL)/api/auth/google") else {
-            await MainActor.run { isSigningIn = false; localErrorMessage = "Invalid server URL" }
-            return
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: ["id_token": idToken])
-
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-                let message = Self.apiErrorMessage(from: data) ?? "Auth failed (\(statusCode))"
-                await MainActor.run {
-                    isSigningIn = false
-                    localErrorMessage = message
-                }
-                return
-            }
-
-            let sessionEstablished = await appState.finishLoginFromSharedCookies()
-
-            await MainActor.run {
-                if !sessionEstablished {
-                    localErrorMessage = appState.authError ?? "Signed in, but failed to restore the app session"
-                }
-                isSigningIn = false
-            }
-        } catch {
-            await MainActor.run {
-                isSigningIn = false
-                localErrorMessage = "Network error: \(error.localizedDescription)"
-            }
-        }
-    }
 
     private func signInWithPassword() {
         guard !password.isEmpty else {
