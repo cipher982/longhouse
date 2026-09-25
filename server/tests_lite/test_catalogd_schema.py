@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC
 from datetime import datetime
@@ -79,6 +80,48 @@ def test_empty_catalog_copied_from_template_matches_emitted_ddl(tmp_path):
         assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == CATALOG_SCHEMA_VERSION
         assert connection.exec_driver_sql("PRAGMA integrity_check").scalar_one() == "ok"
     for engine in (copied, emitted, second_copied):
+        engine.dispose()
+
+
+def test_greenfield_race_never_replaces_a_committed_catalog_identity(tmp_path):
+    # B decides the database is empty, then A creates the whole catalog and
+    # commits its identity before B writes any schema. B must not replace
+    # A's catalog; failing with the same error the create_all path raises
+    # (duplicate catalog_meta singleton) is acceptable.
+    database = tmp_path / "longhouse-live.db"
+    b_checked_empty = threading.Event()
+    a_committed = threading.Event()
+    b_engine = create_catalog_engine(database)
+
+    @event.listens_for(b_engine, "after_cursor_execute")
+    def pause_after_emptiness_check(conn, cursor, statement, parameters, context, executemany):
+        if "COUNT(*) FROM sqlite_master" in statement and not b_checked_empty.is_set():
+            b_checked_empty.set()
+            assert a_committed.wait(timeout=10)
+
+    b_outcome: list[object] = []
+
+    def initialize_b():
+        try:
+            b_outcome.append(initialize_catalog_schema(b_engine))
+        except Exception as exc:  # noqa: BLE001 - the outcome is asserted below
+            b_outcome.append(exc)
+
+    b_thread = threading.Thread(target=initialize_b)
+    b_thread.start()
+    assert b_checked_empty.wait(timeout=10)
+    a_engine = create_catalog_engine(database)
+    a_meta = initialize_catalog_schema(a_engine)
+    a_committed.set()
+    b_thread.join(timeout=20)
+    assert not b_thread.is_alive()
+
+    durable = catalog_schema.read_catalog_meta(a_engine)
+    assert durable.catalog_id == a_meta.catalog_id
+    (outcome,) = b_outcome
+    if not isinstance(outcome, Exception):
+        assert outcome.catalog_id == a_meta.catalog_id
+    for engine in (a_engine, b_engine):
         engine.dispose()
 
 

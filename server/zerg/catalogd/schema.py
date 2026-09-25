@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -915,47 +914,70 @@ def _database_is_empty(engine: Engine) -> bool:
         return connection.exec_driver_sql("SELECT COUNT(*) FROM sqlite_master").scalar_one() == 0
 
 
-_declared_schema_template: Engine | None = None
-_declared_schema_template_lock = threading.Lock()
+_declared_schema_ddl: tuple[str, ...] | None = None
 
 
-def _forget_declared_schema_template() -> None:
-    # A forked child must not share the parent's connection or a lock some
-    # other parent thread held at fork time.
-    global _declared_schema_template, _declared_schema_template_lock
-    _declared_schema_template = None
-    _declared_schema_template_lock = threading.Lock()
+def _declared_schema_statements() -> tuple[str, ...]:
+    """The CREATE statements ``_create_declared_schema`` emits, in order.
 
-
-os.register_at_fork(after_in_child=_forget_declared_schema_template)
-
-
-def _copy_declared_schema_into(engine: Engine) -> None:
-    """Give an empty database the declared tables and indexes by page copy.
-
-    Emitting the ~300 CREATE statements costs ~20 ms per catalog, almost all of
-    it SQLAlchemy DDL compilation, and a fresh catalog is created per test
-    many hundreds of times a suite. So the DDL runs once per process into an
-    in-memory database created by ``create_catalog_engine`` like any other,
-    and each empty database receives a copy through SQLite's backup API. The
-    template holds schema only -- identity and counter rows are still
-    written per catalog below -- and the backup keeps the destination's WAL
-    mode.
+    Compiled once per process from an in-memory catalog. Two threads racing
+    here both compute the same tuple, so no lock is needed.
     """
 
-    global _declared_schema_template
-    with _declared_schema_template_lock:
-        if _declared_schema_template is None:
-            template = create_catalog_engine("sqlite://")
-            _create_declared_schema(template)
-            _declared_schema_template = template
-        source = _declared_schema_template.raw_connection()
-        target = engine.raw_connection()
+    global _declared_schema_ddl
+    if _declared_schema_ddl is None:
+        template = create_catalog_engine("sqlite://")
         try:
-            source.driver_connection.backup(target.driver_connection)
+            _create_declared_schema(template)
+            with template.connect() as connection:
+                rows = connection.exec_driver_sql(
+                    "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY rowid"
+                ).all()
         finally:
-            target.close()
-            source.close()
+            template.dispose()
+        _declared_schema_ddl = tuple(row[0] for row in rows)
+    return _declared_schema_ddl
+
+
+def _replay_declared_schema_if_empty(engine: Engine) -> bool:
+    """Create the declared schema from cached DDL text if the database is empty.
+
+    Emitting the ~300 CREATE statements through SQLAlchemy costs ~20 ms per
+    catalog, almost all of it DDL compilation, and a fresh catalog is created
+    per test many hundreds of times a suite. The statement text is compiled
+    once per process and replayed here. The emptiness recheck and the replay
+    share one ``BEGIN IMMEDIATE`` transaction, so SQLite's write lock --
+    which spans threads and processes, in WAL mode too -- guarantees no
+    other writer created anything in between. Returns False, having written
+    nothing, when the database is not empty or the connection is busy.
+    """
+
+    statements = _declared_schema_statements()
+    raw = engine.raw_connection()
+    try:
+        driver = raw.driver_connection
+        if driver.in_transaction:
+            return False
+        cursor = driver.cursor()
+        try:
+            cursor.execute("BEGIN IMMEDIATE")
+            try:
+                empty = cursor.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()[0] == 0
+                if empty and cursor.execute("PRAGMA user_version").fetchone()[0] == 0:
+                    for statement in statements:
+                        cursor.execute(statement)
+                    cursor.execute("COMMIT")
+                    return True
+                cursor.execute("ROLLBACK")
+                return False
+            except BaseException:
+                if driver.in_transaction:
+                    cursor.execute("ROLLBACK")
+                raise
+        finally:
+            cursor.close()
+    finally:
+        raw.close()
 
 
 def initialize_catalog_schema(engine: Engine) -> CatalogMeta:
@@ -995,9 +1017,10 @@ def initialize_catalog_schema(engine: Engine) -> CatalogMeta:
     elif user_version != 0:
         raise CatalogSchemaMismatchError(f"PRAGMA user_version={user_version} is set but catalog_meta is missing")
 
-    if not table_names and user_version == 0 and _database_is_empty(engine):
-        _copy_declared_schema_into(engine)
-    else:
+    # The unlocked pre-check keeps existing catalogs off the write lock; the
+    # replay rechecks under it.
+    replayed = not table_names and user_version == 0 and _database_is_empty(engine) and _replay_declared_schema_if_empty(engine)
+    if not replayed:
         _create_declared_schema(engine)
         _safe_additive_columns(engine, LiveBase.metadata)
         _safe_additive_columns(engine, CatalogBase.metadata)
