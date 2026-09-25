@@ -55,11 +55,13 @@ model whenever a blocking wait yields, do not generate repeated status turns.
 Keep the durable run ID, report the pending operation once, and resume only when
 the wait becomes terminal or new user input requires judgment.
 
-Good:
+For a queued GitHub run, keep API traffic bounded. `gh run watch` defaults
+to a three-second interval (1,200 reads/hour per watcher); simultaneous
+long-running watches hit GitHub's 403 rate limit on 2026-09-24. Use:
 
 ```bash
-gh run watch <id> --exit-status
-make ship-watch SHA="<full-sha>"
+gh run watch <id> --interval 60 --compact --exit-status
+make ship-watch SHA="<full-sha>" ARGS="--poll 30"
 ```
 
 Bad:
