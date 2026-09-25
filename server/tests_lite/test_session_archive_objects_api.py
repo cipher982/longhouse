@@ -152,7 +152,9 @@ def test_object_fetch_rejects_unknown_and_malformed_ids(live_catalog, live_catal
 
 def test_object_routes_require_agents_token_dependency():
     for suffix in ("/agents/sessions/{session_id}/objects/manifest", "/agents/sessions/{session_id}/objects/{envelope_id}"):
-        route = next(candidate for candidate in iter_route_contexts(api_app.routes) if str(getattr(candidate, "path", "") or "").endswith(suffix))
+        route = next(
+            candidate for candidate in iter_route_contexts(api_app.routes) if str(getattr(candidate, "path", "") or "").endswith(suffix)
+        )
         dependency_calls = {dependency.call for dependency in route.dependant.dependencies}
         assert verify_agents_caller in dependency_calls
 
