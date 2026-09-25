@@ -705,8 +705,10 @@ VALIDATE_MEMBERS := \
 	validate-dogfood-runtime \
 	lint-test-patterns
 
-# The guest's CPU quota when one is set (docker --cpus), else the visible cores.
-VALIDATE_JOBS ?= $(shell awk '$$1 != "max" { n = int(($$1 + $$2 - 1) / $$2) } END { if (!n) exit 1; print n }' /sys/fs/cgroup/cpu.max 2>/dev/null || nproc 2>/dev/null || echo 2)
+# The guest's CPU count: test-isolation exports it as CARGO_BUILD_JOBS; else the
+# cgroup v2 quota (docker --cpus); else the visible cores. nproc alone ignores a
+# CPU quota, which would be -j24 in cube's 2-CPU guests.
+VALIDATE_JOBS ?= $(or $(CARGO_BUILD_JOBS),$(shell awk '$$1 != "max" { n = int(($$1 + $$2 - 1) / $$2) } END { if (!n) exit 1; print n }' /sys/fs/cgroup/cpu.max 2>/dev/null || nproc 2>/dev/null || echo 2))
 
 validate: ## Run all contract checks
 	@$(MAKE) --no-print-directory -k -j$(VALIDATE_JOBS) -O $(VALIDATE_MEMBERS)
