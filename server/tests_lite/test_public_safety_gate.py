@@ -14,10 +14,10 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+from fastapi.routing import iter_route_contexts
 from typer.testing import CliRunner
 
 from zerg.cli.serve import app as serve_app
-
 
 # ---------------------------------------------------------------------------
 # B1 — serve public-bind gate
@@ -256,7 +256,7 @@ def test_system_destructive_routes_depend_on_require_admin():
 
     guarded = {"/system/reset-sessions", "/system/seed-demo-sessions"}
     seen = {}
-    for route in system_router_module.router.routes:
+    for route in iter_route_contexts(system_router_module.router.routes):
         if getattr(route, "path", None) in guarded:
             dep_calls = [d.call for d in route.dependant.dependencies]
             seen[route.path] = require_admin in dep_calls
@@ -279,6 +279,6 @@ def test_no_unauthenticated_destructive_demo_route_is_mounted():
 
     from zerg.main import api_app
 
-    mounted = {getattr(route, "path", "") for route in api_app.routes}
+    mounted = {getattr(route, "path", "") for route in iter_route_contexts(api_app.routes)}
     offenders = {path for path in mounted if path.endswith("/agents/demo") or path.endswith("/timeline/demo")}
     assert offenders == set(), f"destructive demo routes are mounted: {sorted(offenders)}"

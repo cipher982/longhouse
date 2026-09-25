@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
+from fastapi.routing import iter_route_contexts
 from starlette.requests import Request
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -23,7 +24,7 @@ from zerg.routers import timeline as timeline_router
 
 
 def _route_paths(router) -> set[str]:
-    return {route.path for route in router.routes}
+    return {route.path for route in iter_route_contexts(router.routes)}
 
 
 def test_auth_router_aggregates_browser_and_sso_routes():

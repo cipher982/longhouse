@@ -66,7 +66,7 @@ def test_onboard_imports_existing_sessions_first(monkeypatch, tmp_path):
     monkeypatch.setattr(onboard_cli.subprocess, "run", _fake_run)
     monkeypatch.setattr(onboard_cli, "_runtime_host_command", lambda: ["longhouse-server"])
 
-    result = runner.invoke(app, ["onboard"])
+    result = runner.invoke(app, ["onboard"], input="\n")
 
     assert result.exit_code == 0, result.output
     assert "Install Longhouse, open it, and find one prior session." in result.output
@@ -124,7 +124,7 @@ def test_onboard_without_cli_skips_initial_import(monkeypatch, tmp_path):
     monkeypatch.setattr(onboard_cli.subprocess, "run", _fake_run)
     monkeypatch.setattr(onboard_cli, "_runtime_host_command", lambda: ["longhouse-server"])
 
-    result = runner.invoke(app, ["onboard"])
+    result = runner.invoke(app, ["onboard"], input="\n")
 
     assert result.exit_code == 0, result.output
     assert "No supported AI CLI found" in result.output
@@ -169,7 +169,7 @@ def test_onboard_does_not_suggest_an_excluded_native_entrypoint(monkeypatch, tmp
         lambda args, **kwargs: SimpleNamespace(returncode=0, stderr="", stdout=""),
     )
 
-    result = runner.invoke(app, ["onboard"])
+    result = runner.invoke(app, ["onboard"], input="\n")
 
     assert result.exit_code == 0, result.output
     # Antigravity is still detected -- it imports into the timeline.
@@ -216,7 +216,7 @@ def test_onboard_in_ci_skips_service_manager_install(monkeypatch, tmp_path):
     monkeypatch.setattr(onboard_cli.subprocess, "run", _fake_run)
     monkeypatch.setattr(onboard_cli, "_runtime_host_command", lambda: ["longhouse-server"])
 
-    result = runner.invoke(app, ["onboard"])
+    result = runner.invoke(app, ["onboard"], input="\n")
 
     assert result.exit_code == 0, result.output
     assert "[--] Background machine-agent install is not available in this environment" in result.output
@@ -306,7 +306,7 @@ def test_onboard_in_ci_can_install_services_when_explicitly_enabled(monkeypatch,
     monkeypatch.setattr(onboard_cli.subprocess, "run", _fake_run)
     monkeypatch.setattr(onboard_cli, "_runtime_host_command", lambda: ["longhouse-server"])
 
-    result = runner.invoke(app, ["onboard"])
+    result = runner.invoke(app, ["onboard"], input="\n")
 
     assert result.exit_code == 0, result.output
     assert "[OK] Machine agent installed for automatic imports" in result.output
@@ -337,7 +337,7 @@ def test_onboard_no_longer_prompts_for_manual_mode(monkeypatch, tmp_path):
     monkeypatch.setattr(onboard_cli, "load_config", lambda config_path=None: config_file_cli.LonghouseConfig())
     monkeypatch.setattr(onboard_cli, "save_loaded_config", lambda config, config_path=None: None)
 
-    result = runner.invoke(app, ["onboard", "--no-server", "--no-shipper"])
+    result = runner.invoke(app, ["onboard", "--no-server", "--no-shipper"], input="\n")
 
     assert result.exit_code == 0, result.output
     assert "Manual Setup" not in result.output
@@ -375,7 +375,7 @@ def test_onboard_suggests_cursor_and_opencode_managed_launch(monkeypatch, tmp_pa
         lambda args, **kwargs: SimpleNamespace(returncode=0, stderr="", stdout=""),
     )
 
-    result = runner.invoke(app, ["onboard"])
+    result = runner.invoke(app, ["onboard"], input="\n")
 
     assert result.exit_code == 0, result.output
     assert "No supported AI CLI found" not in result.output
@@ -415,7 +415,7 @@ def test_onboard_never_advertises_a_verb_the_native_facade_dropped(monkeypatch, 
         lambda args, **kwargs: SimpleNamespace(returncode=0, stderr="", stdout=""),
     )
 
-    result = runner.invoke(app, ["onboard"])
+    result = runner.invoke(app, ["onboard"], input="\n")
 
     assert result.exit_code == 0, result.output
     for retired in ("longhouse doctor", "longhouse connect", "longhouse ship", "longhouse serve", "longhouse status"):

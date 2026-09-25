@@ -283,7 +283,11 @@ class RunnerJobDispatcher:
             }
 
         except asyncio.CancelledError:
-            self._drop_pending_job(job.id)
+            dropped = self._drop_pending_job(job.id)
+            if dropped is not None:
+                # Release the executor thread parked in event.wait(); otherwise
+                # it holds a default-executor slot for the full job timeout.
+                dropped.event.set()
             self.clear_active_job(runner_id, expected_job_id=job.id)
             try:
                 runner_crud.update_job_timeout(db, job.id)
