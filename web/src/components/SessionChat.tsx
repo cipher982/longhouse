@@ -1911,13 +1911,13 @@ export function SessionChat({
                     testId="session-model-select"
                   />
                 ) : null}
-                {composerHeaderAccessory ? (
-                  <span className="session-chat-composer__head-accessory">
-                    {composerHeaderAccessory}
-                  </span>
-                ) : null}
               </>
             )}
+            {composerHeaderAccessory ? (
+              <span className="session-chat-composer__head-accessory">
+                {composerHeaderAccessory}
+              </span>
+            ) : null}
           </div>
         ) : null}
         {isDock ? queuedBanner : null}

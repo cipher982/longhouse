@@ -578,6 +578,8 @@ def _response_from_catalog(
         presence_updated_at=canonical_aliases["presence_updated_at"],
         last_live_at=canonical_aliases["last_live_at"],
         display_phase=canonical_aliases["display_phase"],
+        active_tool=canonical_aliases["active_tool"],
+        confidence=canonical_aliases["confidence"],
         summary=session.summary,
         summary_title=card.summary_title or session.summary_title,
         anchor_title=session.anchor_title,
