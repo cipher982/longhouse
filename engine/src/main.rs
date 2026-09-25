@@ -707,7 +707,7 @@ enum Commands {
         command: UpdateCommands,
     },
 
-    /// Host disk guard: free-space pressure, recent writers, paused commands
+    /// Host disk guard: free-space pressure and recent writers
     DiskGuard {
         #[command(subcommand)]
         command: DiskGuardCommands,
@@ -721,8 +721,6 @@ enum DiskGuardCommands {
         #[arg(long)]
         json: bool,
     },
-    /// Resume every command the guard paused (SIGCONT)
-    Resume,
 }
 
 #[derive(Subcommand)]
@@ -1551,69 +1549,54 @@ fn main() -> anyhow::Result<()> {
     }
 
     match cli.command {
-        Commands::DiskGuard { command } => {
-            let path = disk_guard::state_path();
-            let state = path.as_deref().and_then(disk_guard::read_state);
-            match command {
-                DiskGuardCommands::Status { json } => {
-                    let live_free = config::get_longhouse_home()
-                        .ok()
-                        .and_then(|home| disk_guard::free_bytes(&home));
-                    if json {
+        Commands::DiskGuard {
+            command: DiskGuardCommands::Status { json },
+        } => {
+            let state = disk_guard::state_path()
+                .as_deref()
+                .and_then(disk_guard::read_state);
+            let live_free = config::get_longhouse_home()
+                .ok()
+                .and_then(|home| disk_guard::free_bytes(&home));
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "live_free_bytes": live_free,
+                        "guard": state,
+                    }))?
+                );
+            } else {
+                const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+                if let Some(free) = live_free {
+                    println!("free now: {:.1} GiB", free as f64 / GIB);
+                }
+                match state {
+                    None => println!("guard: no evaluation recorded (engine not running?)"),
+                    Some(state) => {
                         println!(
-                            "{}",
-                            serde_json::to_string_pretty(&serde_json::json!({
-                                "live_free_bytes": live_free,
-                                "guard": state,
-                            }))?
+                            "level: {}  burn: {:.2} GiB/min  eta: {}  (as of {})",
+                            state.level.as_str(),
+                            state.burn_gib_per_min,
+                            state
+                                .eta_minutes
+                                .map(|eta| format!("{eta:.0} min"))
+                                .unwrap_or_else(|| "-".to_string()),
+                            state
+                                .updated_at
+                                .map(|at| at.to_rfc3339())
+                                .unwrap_or_default(),
                         );
-                    } else {
-                        const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
-                        if let Some(free) = live_free {
-                            println!("free now: {:.1} GiB", free as f64 / GIB);
-                        }
-                        match state {
-                            None => println!("guard: no evaluation recorded (engine not running?)"),
-                            Some(state) => {
-                                println!(
-                                    "level: {}  burn: {:.2} GiB/min  eta: {}  (as of {})",
-                                    state.level.as_str(),
-                                    state.burn_gib_per_min,
-                                    state
-                                        .eta_minutes
-                                        .map(|eta| format!("{eta:.0} min"))
-                                        .unwrap_or_else(|| "-".to_string()),
-                                    state
-                                        .updated_at
-                                        .map(|at| at.to_rfc3339())
-                                        .unwrap_or_default(),
-                                );
-                                for writer in &state.writers {
-                                    println!(
-                                        "writer: {} {} {} MiB recently ({})",
-                                        writer.provider,
-                                        writer.session_id,
-                                        writer.bytes_written_recently / (1024 * 1024),
-                                        writer.top_command
-                                    );
-                                }
-                                for paused in &state.paused {
-                                    println!(
-                                        "paused: pid {} {} (session {})",
-                                        paused.pid, paused.name, paused.session_id
-                                    );
-                                }
-                            }
+                        for writer in &state.writers {
+                            println!(
+                                "writer: {} {} {} MiB recently ({})",
+                                writer.provider,
+                                writer.session_id,
+                                writer.bytes_written_recently / (1024 * 1024),
+                                writer.top_command
+                            );
                         }
                     }
-                }
-                DiskGuardCommands::Resume => {
-                    let paused = state.map(|state| state.paused).unwrap_or_default();
-                    let resumed = disk_guard::resume_processes(&paused);
-                    println!(
-                        "resumed {resumed} of {} paused processes; the running engine pauses again if the disk is still critical",
-                        paused.len()
-                    );
                 }
             }
         }

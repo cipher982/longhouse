@@ -156,7 +156,7 @@
     {
       "path": "engine/src/disk_guard.rs",
       "providers": [
-        "cursor",
+        "claude",
         "omp"
       ]
     },

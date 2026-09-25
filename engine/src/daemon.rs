@@ -594,96 +594,71 @@ impl ManagedObservationSnapshot {
     }
 }
 
-/// Live Helm sessions as the disk guard sees them: the agent's own pids.
-/// Everything running under those pids is the session's command trees, and
-/// may be paused, so only pids the provider scan verified (pid plus start
-/// time) are roots. A pid the scan only recorded is passed as dependent.
+/// Live Helm sessions as the disk guard sees them: the agent's own pids, as
+/// verified by each provider scan. Work running under them is the session's.
 fn disk_guard_sessions(
     observations: &ManagedObservationSnapshot,
 ) -> Vec<crate::disk_guard::SessionRoot> {
-    fn verified(pid: Option<u32>, alive: bool) -> Option<u32> {
+    fn live(pid: Option<u32>, alive: bool) -> Option<u32> {
         pid.filter(|pid| alive && *pid > 1)
     }
-    fn root(
+    fn root<const N: usize>(
         session_id: &str,
         provider: &str,
-        pids: impl IntoIterator<Item = Option<u32>>,
-        dependent: impl IntoIterator<Item = Option<u32>>,
+        pids: [Option<u32>; N],
     ) -> Option<crate::disk_guard::SessionRoot> {
         let pids: Vec<u32> = pids.into_iter().flatten().collect();
         (!pids.is_empty()).then(|| crate::disk_guard::SessionRoot {
             session_id: session_id.to_string(),
             provider: provider.to_string(),
             pids,
-            dependent_pids: dependent
-                .into_iter()
-                .flatten()
-                .filter(|pid| *pid > 1)
-                .collect(),
         })
     }
-    let mut roots = Vec::new();
-    roots.extend(observations.omp.iter().filter_map(|o| {
-        root(
-            &o.session_id,
-            "omp",
-            [
-                verified(o.launcher_pid, o.launcher_alive),
-                verified(o.provider_pid, o.provider_alive),
-            ],
-            [],
-        )
-    }));
-    roots.extend(observations.pi.iter().filter_map(|o| {
-        root(
-            &o.session_id,
-            "pi",
-            [
-                verified(o.launcher_pid, o.launcher_alive),
-                verified(o.provider_pid, o.provider_alive),
-            ],
-            [],
-        )
-    }));
-    roots.extend(observations.claude.iter().filter_map(|o| {
-        root(
-            &o.session_id,
-            "claude",
-            [
-                verified(o.claude_pid, o.claude_alive),
-                verified(o.bridge_pid, o.bridge_alive),
-            ],
-            [],
-        )
-    }));
-    roots.extend(observations.codex.iter().filter_map(|o| {
-        root(
-            &o.session_id,
-            "codex",
-            [
-                verified(Some(o.bridge_pid), o.bridge_alive),
-                verified(o.app_server_pid, o.app_server_alive),
-            ],
-            [],
-        )
-    }));
-    roots.extend(observations.cursor.iter().filter_map(|o| {
-        root(
-            &o.session_id,
-            "cursor",
-            [verified(o.launcher_pid, o.launcher_alive)],
-            [o.cursor_pid],
-        )
-    }));
-    roots.extend(observations.opencode.iter().filter_map(|o| {
-        root(
-            &o.session_id,
-            "opencode",
-            [verified(o.pid, o.server_alive)],
-            [],
-        )
-    }));
-    roots
+    let omp = observations.omp.iter().filter_map(|o| {
+        let pids = [
+            live(o.launcher_pid, o.launcher_alive),
+            live(o.provider_pid, o.provider_alive),
+        ];
+        root(&o.session_id, "omp", pids)
+    });
+    let pi = observations.pi.iter().filter_map(|o| {
+        let pids = [
+            live(o.launcher_pid, o.launcher_alive),
+            live(o.provider_pid, o.provider_alive),
+        ];
+        root(&o.session_id, "pi", pids)
+    });
+    let claude = observations.claude.iter().filter_map(|o| {
+        let pids = [
+            live(o.claude_pid, o.claude_alive),
+            live(o.bridge_pid, o.bridge_alive),
+        ];
+        root(&o.session_id, "claude", pids)
+    });
+    let codex = observations.codex.iter().filter_map(|o| {
+        let pids = [
+            live(Some(o.bridge_pid), o.bridge_alive),
+            live(o.app_server_pid, o.app_server_alive),
+        ];
+        root(&o.session_id, "codex", pids)
+    });
+    let cursor = observations.cursor.iter().filter_map(|o| {
+        let pids = [
+            live(o.launcher_pid, o.launcher_alive),
+            live(o.cursor_pid, o.launcher_alive),
+        ];
+        root(&o.session_id, "cursor", pids)
+    });
+    let opencode = observations
+        .opencode
+        .iter()
+        .filter_map(|o| root(&o.session_id, "opencode", [live(o.pid, o.server_alive)]));
+    omp.chain(pi)
+        .chain(claude)
+        .chain(codex)
+        .chain(cursor)
+        .chain(opencode)
+        .collect()
 }
 
 fn managed_provider_state_dirs() -> Vec<PathBuf> {
