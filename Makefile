@@ -654,38 +654,48 @@ dogfood-check: ## Show installed local runtime status + local health
 # ---------------------------------------------------------------------------
 # Validation (contract drift checks)
 # ---------------------------------------------------------------------------
+# Independent contract checks, run concurrently. Listed longest-first (as
+# measured on CI) so the critical path starts before the short checks; add new
+# members anywhere. -O keeps each member's output together, -k reports every
+# failing member instead of stopping at the first.
+VALIDATE_MEMBERS := \
+	validate-provider-cli-canaries \
+	validate-ops-scripts \
+	validate-sdk \
+	validate-build-scripts \
+	validate-cohort-journey \
+	validate-provider-factory-plan \
+	validate-legacy-nouns \
+	validate-managed-codex-contract \
+	validate-qa-scripts \
+	validate-provider-census \
+	validate-ws \
+	validate-makefile \
+	validate-build-identity \
+	validate-playwright-install \
+	validate-public-surface \
+	validate-format \
+	validate-provider-brands \
+	validate-managed-session-contract \
+	validate-session-state-contract \
+	validate-phase-contract \
+	validate-managed-identity \
+	validate-managed-provider-contracts \
+	validate-provider-capabilities \
+	validate-session-state-fault-matrix \
+	validate-session-state-deep-health \
+	validate-no-python-device-path \
+	validate-native-device-entrypoints \
+	validate-affected-check \
+	validate-ship-monitor \
+	validate-dogfood-runtime \
+	lint-test-patterns
+
+# The guest's CPU quota when one is set (docker --cpus), else the visible cores.
+VALIDATE_JOBS ?= $(shell awk '$$1 != "max" { n = int(($$1 + $$2 - 1) / $$2) } END { if (!n) exit 1; print n }' /sys/fs/cgroup/cpu.max 2>/dev/null || nproc 2>/dev/null || echo 2)
+
 validate: ## Run all contract checks
-	@$(MAKE) validate-ws
-	@$(MAKE) validate-sdk
-	@$(MAKE) validate-makefile
-	@$(MAKE) validate-build-identity
-	@$(MAKE) validate-build-scripts
-	@$(MAKE) validate-playwright-install
-	@$(MAKE) validate-public-surface
-	@$(MAKE) validate-format
-	@$(MAKE) validate-provider-brands
-	@$(MAKE) validate-legacy-nouns
-	@$(MAKE) validate-managed-codex-contract
-	@$(MAKE) validate-managed-session-contract
-	@$(MAKE) validate-session-state-contract
-	@$(MAKE) validate-phase-contract
-	@$(MAKE) validate-managed-identity
-	@$(MAKE) validate-qa-scripts
-	@$(MAKE) validate-ops-scripts
-	@$(MAKE) validate-managed-provider-contracts
-	@$(MAKE) validate-provider-capabilities
-	@$(MAKE) validate-provider-census
-	@$(MAKE) validate-provider-factory-plan
-	@$(MAKE) validate-session-state-fault-matrix
-	@$(MAKE) validate-session-state-deep-health
-	@$(MAKE) validate-no-python-device-path
-	@$(MAKE) validate-native-device-entrypoints
-	@$(MAKE) validate-provider-cli-canaries
-	@$(MAKE) validate-affected-check
-	@$(MAKE) validate-ship-monitor
-	@$(MAKE) validate-dogfood-runtime
-	@$(MAKE) validate-cohort-journey
-	@$(MAKE) lint-test-patterns
+	@$(MAKE) --no-print-directory -k -j$(VALIDATE_JOBS) -O $(VALIDATE_MEMBERS)
 
 validate-playwright-install: ## @internal Playwright installer wrapper regression tests
 	@python3 scripts/tests/playwright-install.test.py
@@ -786,18 +796,25 @@ validate-native-device-entrypoints: ## @internal Guard native replacements for P
 	@python3 scripts/qa/check-native-device-entrypoints.py
 	@python3 scripts/tests/native-device-entrypoints.test.py
 
-validate-provider-cli-canaries: ## @internal Provider release canary wrapper tests
-	@python3 scripts/tests/codex-provider-release-canary.test.py
-	@python3 scripts/tests/provider-release-profile-canary.test.py
-	@python3 scripts/tests/provider-release-proof.test.py
-	@python3 scripts/tests/provider-release-proof-baseline.test.py
-	@python3 scripts/tests/provider-release-proof-old-new.test.py
-	@python3 scripts/tests/provider-release-proof-maturity.test.py
-	@python3 scripts/tests/provider-release-proof-make.test.py
-	@python3 scripts/tests/provider-control-e2e-canary.test.py
-	@python3 scripts/tests/provider-live-canary.test.py
-	@python3 scripts/tests/provider-live-proof-publish.test.py
-	@python3 scripts/tests/provider-live-route-e2e.test.py
+# One prerequisite per test file so `make validate`'s -j pool interleaves them;
+# run alone, they still execute one after another. Longest first.
+PROVIDER_CLI_CANARY_TESTS := \
+	codex-provider-release-canary \
+	provider-live-canary \
+	provider-release-proof \
+	provider-release-proof-make \
+	provider-live-route-e2e \
+	provider-release-proof-baseline \
+	provider-control-e2e-canary \
+	provider-release-profile-canary \
+	provider-release-proof-old-new \
+	provider-release-proof-maturity \
+	provider-live-proof-publish
+
+provider-cli-canary-test-%:
+	@python3 scripts/tests/$*.test.py
+
+validate-provider-cli-canaries: $(PROVIDER_CLI_CANARY_TESTS:%=provider-cli-canary-test-%) ## @internal Provider release canary wrapper tests
 	@$(MAKE) provider-release-proof-universal-smoke UNIVERSAL_SCENARIO="adapter_conformance action_matrix control_surface old_new_release_diff"
 
 provider-interaction-probe: ## Run the explicit provider-native interaction probe
