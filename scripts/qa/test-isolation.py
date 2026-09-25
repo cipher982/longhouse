@@ -130,6 +130,7 @@ MANIFESTS = (
     "server/uv.lock",
     "engine/Cargo.toml",
     "engine/Cargo.lock",
+    ".cargo/config.toml",
 )
 
 

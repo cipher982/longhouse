@@ -1,0 +1,14 @@
+# Cargo settings for the Rust engine (engine/Cargo.toml).
+#
+# Cargo reads config from the current directory upward, not from the
+# manifest's directory, and every build entry point (Makefile, CI workflows,
+# release, docker/test.dockerfile) runs from the repository root with
+# --manifest-path. That is why this file lives here rather than in
+# engine/.cargo/. docker/test.dockerfile copies it into the dependency layer and
+# scripts/qa/test-isolation.py hashes it, so the prebuilt SQLite matches.
+
+[env]
+# Bundled SQLite extensions the engine never uses: no SQL in engine/ touches
+# FTS, R-tree, dbstat, or ANALYZE statistics. Dropping them removes ~0.5 MiB of
+# C from the binary and time from the build's critical path.
+LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -USQLITE_ENABLE_STAT4"

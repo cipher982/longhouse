@@ -43,11 +43,12 @@ COPY --from=rust /usr/local/rustup /usr/local/rustup
 ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
 ENV PATH=/usr/local/cargo/bin:$PATH
 COPY engine/Cargo.toml engine/Cargo.lock engine/
+COPY .cargo/config.toml .cargo/
 RUN mkdir -p engine/src && touch engine/src/main.rs engine/src/longhouse.rs \
     && cargo fetch --manifest-path engine/Cargo.toml --locked \
     && rm -rf engine/src
-# Self-contained: inputs are engine/Cargo.toml + Cargo.lock (already in the
-# image hash, MANIFESTS in scripts/qa/test-isolation.py), the toolchain, and the
+# Self-contained: inputs are engine/Cargo.toml + Cargo.lock + .cargo/config.toml
+# (already in the image hash, MANIFESTS in scripts/qa/test-isolation.py), the toolchain, and the
 # registry fetched above; the only output is /work/.build/cargo-target, the
 # directory scripts/build/cargo.py resolves for /work inside the guest.
 # Every CI engine build (Engine tests, the lifecycle proof) uses

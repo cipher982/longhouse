@@ -26,7 +26,9 @@ serde_json = { version = "1", features = ["raw_value"] }
 
 # Compression (zlib-rs backend is fastest per flate2 docs; default miniz_oxide is pure Rust but slower)
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
-zstd = "0.13"
+# Only level-1 frames the engine writes itself: no legacy (v0.1-0.7) decoders,
+# dictionary builder, or array helpers.
+zstd = { version = "0.13", default-features = false }
 
 # HTTP
 base64 = "0.23"
@@ -53,7 +55,8 @@ clap = { version = "4", features = ["derive"] }
 
 # Logging
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# RUST_LOG is parsed as `filter::Targets` (target=level); no env-filter/regex.
+tracing-subscriber = "0.3"
 tracing-appender = "0.2"
 
 # Random (jitter for 429 backoff)

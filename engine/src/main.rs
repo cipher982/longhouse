@@ -1459,17 +1459,48 @@ fn prune_old_logs(log_dir: &std::path::Path, keep_days: u64) {
     }
 }
 
+/// The log filter: `RUST_LOG` as comma-separated `target=level` / `level`
+/// directives, then `longhouse_engine=info` on top.
+///
+/// Matches what `EnvFilter::from_default_env().add_directive(..)` did for
+/// those directives: an unparseable directive is skipped, an empty or
+/// entirely invalid `RUST_LOG` means ERROR for everything, and the engine's
+/// own target is always INFO. Span and field directives are not supported.
+fn log_filter(rust_log: Option<&str>) -> tracing_subscriber::filter::Targets {
+    use tracing_subscriber::filter::{LevelFilter, Targets};
+
+    let mut filter = Targets::new();
+    let mut any_valid = false;
+    for directive in rust_log.unwrap_or("").split(',').map(str::trim) {
+        if directive.is_empty() {
+            continue;
+        }
+        let Ok(parsed) = directive.parse::<Targets>() else {
+            continue;
+        };
+        any_valid = true;
+        if let Some(level) = parsed.default_level() {
+            filter = filter.with_default(level);
+        }
+        for (target, level) in parsed.iter() {
+            filter = filter.with_target(target.to_string(), level);
+        }
+    }
+    if !any_valid {
+        filter = filter.with_default(LevelFilter::ERROR);
+    }
+    filter.with_target("longhouse_engine", LevelFilter::INFO)
+}
+
 fn init_tracing_subscriber<W>(writer: W, ansi: bool) -> anyhow::Result<()>
 where
     W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
 {
-    let env_filter = tracing_subscriber::EnvFilter::from_default_env()
-        .add_directive("longhouse_engine=info".parse()?);
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_writer(writer)
         .with_ansi(ansi);
     tracing_subscriber::registry()
-        .with(env_filter)
+        .with(log_filter(std::env::var("RUST_LOG").ok().as_deref()))
         .with(fmt_layer)
         .try_init()?;
     Ok(())
@@ -2698,6 +2729,34 @@ fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_filter_keeps_env_filter_semantics() {
+        use tracing::Level;
+
+        let unset = log_filter(None);
+        assert!(unset.would_enable("longhouse_engine::daemon", &Level::INFO));
+        assert!(!unset.would_enable("longhouse_engine::daemon", &Level::DEBUG));
+        assert!(unset.would_enable("hyper", &Level::ERROR));
+        assert!(!unset.would_enable("hyper", &Level::WARN));
+
+        let invalid = log_filter(Some("longhouse_engine=loud"));
+        assert!(invalid.would_enable("hyper", &Level::ERROR));
+        assert!(!invalid.would_enable("hyper", &Level::WARN));
+
+        let mixed = log_filter(Some("warn, longhouse_engine::daemon=trace,bogus=nope"));
+        assert!(mixed.would_enable("hyper", &Level::WARN));
+        assert!(!mixed.would_enable("hyper", &Level::INFO));
+        assert!(mixed.would_enable("longhouse_engine::daemon", &Level::TRACE));
+        assert!(mixed.would_enable("longhouse_engine::watcher", &Level::INFO));
+        assert!(!mixed.would_enable("longhouse_engine::watcher", &Level::DEBUG));
+
+        // Only the target named in RUST_LOG: everything else stays off, as
+        // with EnvFilter.
+        let targeted = log_filter(Some("reqwest=debug"));
+        assert!(targeted.would_enable("reqwest::connect", &Level::DEBUG));
+        assert!(!targeted.would_enable("hyper", &Level::ERROR));
+    }
 
     #[test]
     fn codex_bridge_isolation_root_sets_both_roots() {
