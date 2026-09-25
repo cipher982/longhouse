@@ -72,7 +72,7 @@ pub fn cmd_bench(
         .sum();
 
     let num_workers = if workers == 0 {
-        num_cpus::get()
+        crate::config::cpu_count()
     } else {
         workers
     };

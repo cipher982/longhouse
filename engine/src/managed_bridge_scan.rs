@@ -106,13 +106,13 @@ pub fn bridge_lock_is_held(state_file: &Path) -> bool {
     else {
         return false;
     };
-    let mut lock = fd_lock::RwLock::new(file);
-    let is_held = match lock.try_write() {
-        Ok(_guard) => false,
-        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => true,
-        Err(_) => false,
-    };
-    is_held
+    // Probe with a non-blocking exclusive flock; a lock taken here is
+    // released when `file` closes on return.
+    use std::os::fd::AsRawFd;
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return false;
+    }
+    std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock
 }
 
 /// Build observations from a specific state dir + injected process list.

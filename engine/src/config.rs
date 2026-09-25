@@ -28,13 +28,18 @@ struct MachineStateFile {
     machine_name: Option<String>,
 }
 
+/// Logical CPUs available to this process (honours cgroup quotas on Linux).
+pub fn cpu_count() -> usize {
+    std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+}
+
 impl Default for ShipperConfig {
     fn default() -> Self {
         Self {
             api_url: "http://localhost:8080".to_string(),
             api_token: None,
             db_path: None,
-            workers: num_cpus::get(),
+            workers: cpu_count(),
             max_batch_bytes: 50 * 1024 * 1024, // 50 MB
             timeout_seconds: 60,
             machine_name: default_machine_name(),

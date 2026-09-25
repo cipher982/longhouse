@@ -316,7 +316,7 @@ enum Commands {
         #[arg(long)]
         parallel: bool,
 
-        /// Number of worker threads (default: num_cpus)
+        /// Number of worker threads (default: CPU count)
         #[arg(long, default_value = "0")]
         workers: usize,
 
@@ -435,7 +435,7 @@ enum Commands {
         #[arg(long)]
         provider: Option<String>,
 
-        /// Number of parallel workers (default: num_cpus)
+        /// Number of parallel workers (default: CPU count)
         #[arg(long, default_value = "0")]
         workers: usize,
 
@@ -1588,7 +1588,7 @@ fn main() -> anyhow::Result<()> {
             // Keep LocalSet-based transcript jobs available while letting Send
             // tasks such as the control WebSocket heartbeat and HTTP egress
             // work run on worker threads if local file processing stalls.
-            let default_worker_threads = (num_cpus::get() / 2).max(4);
+            let default_worker_threads = (config::cpu_count() / 2).max(4);
             let worker_threads = std::env::var("LONGHOUSE_ENGINE_WORKER_THREADS")
                 .ok()
                 .and_then(|value| value.parse::<usize>().ok())

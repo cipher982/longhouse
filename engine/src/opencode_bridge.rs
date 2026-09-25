@@ -261,7 +261,8 @@ fn configure_opencode_environment(
     Ok(())
 }
 
-fn acquire_start_lock(lock_path: &Path) -> Result<fd_lock::RwLockWriteGuard<'static, fs::File>> {
+/// Hold an exclusive flock on `lock_path` until the returned file is dropped.
+fn acquire_start_lock(lock_path: &Path) -> Result<fs::File> {
     if let Some(parent) = lock_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -272,17 +273,18 @@ fn acquire_start_lock(lock_path: &Path) -> Result<fd_lock::RwLockWriteGuard<'sta
         .truncate(false)
         .open(lock_path)
         .with_context(|| format!("open OpenCode start lock {}", lock_path.display()))?;
-    let lock = Box::leak(Box::new(fd_lock::RwLock::new(file)));
-    lock.try_write().map_err(|err| {
-        if err.kind() == std::io::ErrorKind::WouldBlock {
-            anyhow::anyhow!(
-                "another OpenCode start is in progress for {}",
-                lock_path.display()
-            )
-        } else {
-            anyhow::Error::from(err).context(format!("lock OpenCode start {}", lock_path.display()))
-        }
-    })
+    use std::os::fd::AsRawFd;
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(file);
+    }
+    let err = std::io::Error::last_os_error();
+    if err.kind() == std::io::ErrorKind::WouldBlock {
+        anyhow::bail!(
+            "another OpenCode start is in progress for {}",
+            lock_path.display()
+        );
+    }
+    Err(anyhow::Error::from(err).context(format!("lock OpenCode start {}", lock_path.display())))
 }
 
 pub async fn stop(

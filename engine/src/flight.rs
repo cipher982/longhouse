@@ -9,11 +9,11 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::Arc;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
-use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 
@@ -25,7 +25,7 @@ const RETENTION_DAYS: i64 = 7;
 
 #[derive(Clone)]
 pub struct FlightRecorder {
-    tx: Sender<Value>,
+    tx: SyncSender<Value>,
     dropped: Arc<AtomicU64>,
 }
 
@@ -49,7 +49,7 @@ impl FlightRecorder {
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
             .unwrap_or(DEFAULT_BUFFER_CAPACITY);
-        let (tx, rx) = bounded(capacity);
+        let (tx, rx) = sync_channel(capacity);
         std::thread::Builder::new()
             .name("longhouse-flight-recorder".to_string())
             .spawn(move || writer_loop(dir, rx))

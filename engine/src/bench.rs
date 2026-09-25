@@ -6,8 +6,6 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use rayon::prelude::*;
-
 use crate::pipeline;
 use crate::pipeline::compressor::CompressionAlgo;
 use crate::shipping::client::ShipperClient;
@@ -228,19 +226,13 @@ pub fn run_benchmark_with(files: &[PathBuf], compress: bool, algo: CompressionAl
     }
 }
 
-/// Run benchmark with rayon parallel file processing and specified compression.
+/// Run benchmark with `workers` threads pulling files off a shared index.
 pub fn run_benchmark_parallel_with(
     files: &[PathBuf],
     compress: bool,
     workers: usize,
     algo: CompressionAlgo,
 ) -> BenchResult {
-    // Configure rayon thread pool
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(workers)
-        .build_global()
-        .ok(); // Ignore if already initialized
-
     let overall_start = Instant::now();
 
     // Atomic counters for progress reporting
@@ -249,68 +241,93 @@ pub fn run_benchmark_parallel_with(
     let events_done = AtomicUsize::new(0);
     let total_files = files.len();
 
-    // Process files in parallel, collect results
-    let results: Vec<FileResult> = files
-        .par_iter()
-        .filter_map(|path| {
-            let file_size = match std::fs::metadata(path) {
-                Ok(m) => m.len(),
-                Err(_) => return None,
-            };
+    // Process files in parallel: each worker takes the next unclaimed file
+    // (files arrive biggest first), then results are gathered.
+    let next_file = AtomicUsize::new(0);
+    let process = |path: &PathBuf| -> Option<FileResult> {
+        let file_size = match std::fs::metadata(path) {
+            Ok(m) => m.len(),
+            Err(_) => return None,
+        };
 
-            let parse_start = Instant::now();
-            let result = match pipeline::parser::parse_session_file(path, 0) {
-                Ok(r) => r,
-                Err(_) => return None,
-            };
-            let parse_secs = parse_start.elapsed().as_secs_f64();
+        let parse_start = Instant::now();
+        let result = match pipeline::parser::parse_session_file(path, 0) {
+            Ok(r) => r,
+            Err(_) => return None,
+        };
+        let parse_secs = parse_start.elapsed().as_secs_f64();
 
-            let compress_secs = if compress && !result.events.is_empty() {
-                let compress_start = Instant::now();
-                let source_path = path.to_string_lossy();
-                let _ = pipeline::compressor::build_and_compress_with(
-                    &result.metadata.session_id,
-                    &result.events,
-                    &result.metadata,
-                    &source_path,
-                    "claude",
-                    None,
-                    algo,
-                );
-                compress_start.elapsed().as_secs_f64()
-            } else {
-                0.0
-            };
+        let compress_secs = if compress && !result.events.is_empty() {
+            let compress_start = Instant::now();
+            let source_path = path.to_string_lossy();
+            let _ = pipeline::compressor::build_and_compress_with(
+                &result.metadata.session_id,
+                &result.events,
+                &result.metadata,
+                &source_path,
+                "claude",
+                None,
+                algo,
+            );
+            compress_start.elapsed().as_secs_f64()
+        } else {
+            0.0
+        };
 
-            let event_count = result.events.len();
+        let event_count = result.events.len();
 
-            // Update progress atomically
-            let done = files_done.fetch_add(1, Ordering::Relaxed) + 1;
-            bytes_done.fetch_add(file_size, Ordering::Relaxed);
-            events_done.fetch_add(event_count, Ordering::Relaxed);
+        // Update progress atomically
+        let done = files_done.fetch_add(1, Ordering::Relaxed) + 1;
+        bytes_done.fetch_add(file_size, Ordering::Relaxed);
+        events_done.fetch_add(event_count, Ordering::Relaxed);
 
-            if done % 1000 == 0 || done == total_files {
-                let elapsed = overall_start.elapsed().as_secs_f64();
-                let mb = bytes_done.load(Ordering::Relaxed) as f64 / 1_048_576.0;
-                let evts = events_done.load(Ordering::Relaxed);
-                eprintln!(
-                    "  [{}/{}] {:.1} MB, {} events, {:.1} MB/s",
-                    done,
-                    total_files,
-                    mb,
-                    evts,
-                    mb / elapsed,
-                );
-            }
+        if done % 1000 == 0 || done == total_files {
+            let elapsed = overall_start.elapsed().as_secs_f64();
+            let mb = bytes_done.load(Ordering::Relaxed) as f64 / 1_048_576.0;
+            let evts = events_done.load(Ordering::Relaxed);
+            eprintln!(
+                "  [{}/{}] {:.1} MB, {} events, {:.1} MB/s",
+                done,
+                total_files,
+                mb,
+                evts,
+                mb / elapsed,
+            );
+        }
 
-            Some(FileResult {
-                bytes: file_size,
-                events: event_count,
-                parse_secs,
-                compress_secs,
-            })
+        Some(FileResult {
+            bytes: file_size,
+            events: event_count,
+            parse_secs,
+            compress_secs,
         })
-        .collect();
+    };
+    let results: Vec<FileResult> = std::thread::scope(|scope| {
+        let threads = if workers == 0 {
+            crate::config::cpu_count()
+        } else {
+            workers
+        };
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut mine = Vec::new();
+                    loop {
+                        let index = next_file.fetch_add(1, Ordering::Relaxed);
+                        let Some(path) = files.get(index) else {
+                            break;
+                        };
+                        mine.extend(process(path));
+                    }
+                    mine
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|handle| handle.join().expect("bench worker panicked"))
+            .collect()
+    });
 
     let total_seconds = overall_start.elapsed().as_secs_f64();
 
@@ -964,7 +981,7 @@ pub fn discover_session_files() -> Vec<PathBuf> {
         files = entries;
     }
 
-    // Sort by size descending (biggest first — helps rayon work-stealing)
+    // Sort by size descending (biggest first, so the parallel run ends evenly)
     files.sort_by(|a, b| {
         let sa = std::fs::metadata(a).map(|m| m.len()).unwrap_or(0);
         let sb = std::fs::metadata(b).map(|m| m.len()).unwrap_or(0);
