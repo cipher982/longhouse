@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from click.exceptions import Exit as ClickExit
+import typer
 
 from zerg.cli import connect
 
@@ -11,7 +11,7 @@ from zerg.cli import connect
 def test_ship_requires_configured_url(monkeypatch):
     monkeypatch.setattr(connect, "get_zerg_url", lambda config_dir=None: None)
 
-    with pytest.raises(ClickExit) as exc:
+    with pytest.raises(typer.Exit) as exc:
         connect.ship(url=None, token=None, file=None, claude_dir=None, verbose=False, quiet=False)
     assert exc.value.exit_code == 1
 
@@ -33,7 +33,7 @@ def test_ship_drives_the_engine_binary_not_a_facade_verb(monkeypatch):
         lambda args, **kwargs: calls.append(args) or type("R", (), {"returncode": 0})(),
     )
 
-    with pytest.raises(ClickExit) as exc:
+    with pytest.raises(typer.Exit) as exc:
         connect.ship(url=None, token=None, file=None, claude_dir=None, verbose=False, quiet=True)
 
     assert exc.value.exit_code == 0
