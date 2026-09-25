@@ -57,7 +57,7 @@ concurrency:
 jobs:
   changes:
     timeout-minutes: 10
-    runs-on: cube-fast
+    runs-on: cube-gate
     name: "Detect runtime deploy scope"
     outputs:
       deploy_verify: ${{ steps.decide.outputs.deploy_verify }}
@@ -752,7 +752,7 @@ jobs:
   profile-deploy:
     timeout-minutes: 30
     name: "Profile deploy wall time"
-    runs-on: cube-fast
+    runs-on: cube-gate
     needs: [changes, deploy_demo, reprovision_canary, fast_smoke]
     if: ${{ always() && needs.changes.outputs.deploy_verify == 'true' }}
     steps:
