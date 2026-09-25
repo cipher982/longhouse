@@ -13,16 +13,11 @@ import { type APIRequestContext } from '@playwright/test';
  * Reset database to clean state (call in beforeEach).
  * STRICT: Throws on failure to fail fast and avoid dirty state propagation.
  * Includes aggressive retry logic to handle lock contention under high concurrency.
- * Adds initial stagger delay to prevent all workers from hitting reset simultaneously.
  */
 export async function resetDatabase(request: APIRequestContext): Promise<void> {
   const maxRetries = 5;
   const baseDelay = 200;
   const maxJitter = 300; // Wider spread to reduce concurrent retries
-
-  // Add initial stagger delay (0-500ms) to spread out reset calls across workers
-  // This prevents all beforeEach hooks from hitting the backend simultaneously
-  await new Promise(r => setTimeout(r, Math.random() * 500));
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
