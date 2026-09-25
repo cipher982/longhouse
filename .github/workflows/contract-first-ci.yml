@@ -72,6 +72,7 @@ jobs:
       image_tag: ${{ steps.image.outputs.tag }}
       image_manifest: ${{ steps.image.outputs.manifest_sha }}
       image_arm64_exists: ${{ steps.image.outputs.arm64_exists }}
+      image_ref: ${{ steps.image.outputs.image_ref }}
       image_index_complete: ${{ steps.image.outputs.index_complete }}
     permissions:
       contents: read
@@ -107,8 +108,12 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "manifest_sha=$(jq -r '.manifest_sha256' <<< "$key")" >> "$GITHUB_OUTPUT"
           # CI tests run on arm64 and wait only for that variant.
-          if docker buildx imagetools inspect "$IMAGE_NAME:$tag-arm64" >/dev/null 2>&1; then
+          if digest="$(docker buildx imagetools inspect "$IMAGE_NAME:$tag-arm64" --format '{{json .Manifest}}' 2>/dev/null | jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))')"; then
             echo "arm64_exists=true" >> "$GITHUB_OUTPUT"
+            # The common case resolves the pinned digest right here, so tests
+            # start without waiting on a separate prepare job.
+            echo "image_ref=$IMAGE_NAME@$digest" >> "$GITHUB_OUTPUT"
+            echo "fixture image $IMAGE_NAME@$digest (arm64, already published)"
           else
             echo "arm64_exists=false" >> "$GITHUB_OUTPUT"
           fi
@@ -208,7 +213,10 @@ jobs:
     name: "Prepare immutable fixture image"
     # Waits for the arm64 build only; the amd64 build never delays tests.
     needs: [changes, test-image-arm64]
-    if: ${{ !cancelled() && needs.changes.result == 'success' && (needs.test-image-arm64.result == 'success' || (needs.test-image-arm64.result == 'skipped' && needs.changes.outputs.image_arm64_exists == 'true')) && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    # Only after a fresh arm64 build; otherwise Changed paths already
+    # resolved the digest and this job is skipped (Deploy and Verify treats a
+    # skipped required job as passed).
+    if: ${{ !cancelled() && needs.test-image-arm64.result == 'success' }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 10
     permissions:
@@ -247,7 +255,7 @@ jobs:
     # would now skip this whole job, because it needs that job's outputs. When the
     # filter cannot tell, the gated live proof below is skipped and everything
     # else still runs.
-    if: ${{ !cancelled() && needs.prepare-test-image.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ !cancelled() && (needs.changes.outputs.image_ref != '' || needs.prepare-test-image.result == 'success') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-24.04-arm
     name: "Validation"
     # Must exceed the sum of the step budgets below, or the job kills a healthy
@@ -255,7 +263,7 @@ jobs:
     timeout-minutes: 50
 
     env:
-      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
+      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref || needs.prepare-test-image.outputs.image_ref }}
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -348,7 +356,7 @@ jobs:
     needs: [changes, prepare-test-image]
     # !cancelled(): an image build skipped upstream (tag already published)
     # must not skip this job; the prepare result is the real gate.
-    if: ${{ !cancelled() && needs.prepare-test-image.result == 'success' && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ !cancelled() && (needs.changes.outputs.image_ref != '' || needs.prepare-test-image.result == 'success') && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-24.04-arm
     name: "Backend tests shard ${{ matrix.shard }}/3"
     # A hosted runner's four vCPUs take ~5 min for the whole suite even under
@@ -362,7 +370,7 @@ jobs:
       LONGHOUSE_TEST_SHARD: ${{ matrix.shard }}/3
       PYTEST_XDIST_WORKERS: "4"
       PYTEST_ADDOPTS: "--durations=25 --durations-min=2.0"
-      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
+      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref || needs.prepare-test-image.outputs.image_ref }}
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
@@ -403,12 +411,12 @@ jobs:
     # proves the source-only provider assertions that do not belong in the
     # provider-launch factory matrix.
     timeout-minutes: 15
-    needs: prepare-test-image
-    if: ${{ !cancelled() && needs.prepare-test-image.result == 'success' && github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    needs: [changes, prepare-test-image]
+    if: ${{ !cancelled() && (needs.changes.outputs.image_ref != '' || needs.prepare-test-image.result == 'success') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-24.04-arm
     name: "Provider contract tests"
     env:
-      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
+      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref || needs.prepare-test-image.outputs.image_ref }}
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
@@ -426,11 +434,11 @@ jobs:
   engine-tests:
     timeout-minutes: 45
     needs: [changes, prepare-test-image]
-    if: ${{ !cancelled() && needs.prepare-test-image.result == 'success' && (needs.changes.outputs.engine == 'true' || needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ !cancelled() && (needs.changes.outputs.image_ref != '' || needs.prepare-test-image.result == 'success') && (needs.changes.outputs.engine == 'true' || needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-24.04-arm
     name: "Engine tests"
     env:
-      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
+      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref || needs.prepare-test-image.outputs.image_ref }}
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
@@ -452,11 +460,11 @@ jobs:
   frontend-tests:
     timeout-minutes: 20
     needs: [changes, prepare-test-image]
-    if: ${{ !cancelled() && needs.prepare-test-image.result == 'success' && (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.runner == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ !cancelled() && (needs.changes.outputs.image_ref != '' || needs.prepare-test-image.result == 'success') && (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.runner == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-24.04-arm
     name: "Frontend + runner tests"
     env:
-      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
+      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref || needs.prepare-test-image.outputs.image_ref }}
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
@@ -503,11 +511,11 @@ jobs:
   wheel-package:
     timeout-minutes: 20
     needs: [changes, prepare-test-image]
-    if: ${{ !cancelled() && needs.prepare-test-image.result == 'success' && (needs.changes.outputs.packaging == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ !cancelled() && (needs.changes.outputs.image_ref != '' || needs.prepare-test-image.result == 'success') && (needs.changes.outputs.packaging == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-24.04-arm
     name: "CLI wheel packaging"
     env:
-      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
+      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref || needs.prepare-test-image.outputs.image_ref }}
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
@@ -523,12 +531,12 @@ jobs:
   e2e-core:
     timeout-minutes: 30
     needs: [changes, prepare-test-image]
-    if: ${{ !cancelled() && needs.prepare-test-image.result == 'success' && (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ !cancelled() && (needs.changes.outputs.image_ref != '' || needs.prepare-test-image.result == 'success') && (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-24.04-arm
     name: "Core E2E tests"
     env:
       CI: "1"
-      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
+      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref || needs.prepare-test-image.outputs.image_ref }}
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:
@@ -577,12 +585,12 @@ jobs:
   oss-qa:
     timeout-minutes: 30
     needs: [changes, prepare-test-image]
-    if: ${{ !cancelled() && needs.prepare-test-image.result == 'success' && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ !cancelled() && (needs.changes.outputs.image_ref != '' || needs.prepare-test-image.result == 'success') && (needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-24.04-arm
     name: "OSS onboarding smoke"
     env:
       CI: "1"
-      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
+      LONGHOUSE_TEST_IMAGE_REF: ${{ needs.changes.outputs.image_ref || needs.prepare-test-image.outputs.image_ref }}
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
     steps:

@@ -391,8 +391,16 @@ test-frontend: ## Frontend unit tests + type-check (~1min)
 	@# pinned the suite to one worker: 44s against 15s on a 4-CPU guest.
 	@cd web && bun run validate:types && bun run test -- --run --maxWorkers=100%
 
-test-engine: test-engine-projection-failure test-engine-omp-helm ## Rust engine tests (~20s)
+test-engine: test-engine-omp-helm ## Rust engine tests (~20s)
+	@python3 scripts/build/generate_build_identity.py
 	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release)
+	@# The projection-failure proof (test-engine-projection-failure) spends ~30s
+	@# waiting on a real daemon, nearly idle, and the test harness takes ~40s to
+	@# compile. Overlap them: compile the harness in the background while the
+	@# proof runs, then run the suite with nothing left to build.
+	@$(CARGO_ENGINE) nextest run --manifest-path engine/Cargo.toml --cargo-profile $(or $(CARGO_PROFILE),release) --bins --tests --no-run & harness=$$!; \
+	uv run --no-project python scripts/tests/daemon-projection-failure.test.py --engine "$$( $(CARGO_ARTIFACT) --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine )" || { status=$$?; wait $$harness; exit $$status; }; \
+	wait $$harness
 	@# --bins is load-bearing: engine/src/longhouse.rs is a second bin
 	@# target holding launch_managed_claude/opencode/codex, and every cargo test
 	@# in this repo passed only --bin longhouse-engine, so its tests -- including
