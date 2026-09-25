@@ -29,6 +29,7 @@ mod cursor_print;
 mod cursor_store;
 mod cursor_visibility;
 mod daemon;
+mod daily_log;
 mod device;
 mod discovery;
 mod durability_audit;
@@ -1439,7 +1440,7 @@ fn prune_old_logs(log_dir: &std::path::Path, keep_days: u64) {
     if let Ok(entries) = std::fs::read_dir(log_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            // tracing_appender rolling::daily creates files named "engine.log.YYYY-MM-DD"
+            // daily_log::DailyLogFile writes files named "engine.log.YYYY-MM-DD"
             // Match by file_name prefix rather than extension
             let is_engine_log = path
                 .file_name()
@@ -1518,20 +1519,15 @@ fn main() -> anyhow::Result<()> {
 
     // For Connect (daemon) mode: use rolling file appender.
     // For all other commands: log to stderr as usual.
-    let _guard;
     match &cli.command {
         Commands::Connect { log_dir, .. } => {
             let log_path = resolve_log_dir(log_dir.as_deref());
             std::fs::create_dir_all(&log_path)?;
             prune_old_logs(&log_path, 7);
 
-            let file_appender = tracing_appender::rolling::daily(&log_path, "engine.log");
-            let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-            _guard = Some(guard);
-            init_tracing_subscriber(non_blocking, false)?;
+            init_tracing_subscriber(daily_log::DailyLogFile::new(log_path, "engine.log"), false)?;
         }
         _ => {
-            _guard = None;
             init_tracing_subscriber(std::io::stderr, true)?;
         }
     }

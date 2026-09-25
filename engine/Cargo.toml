@@ -57,7 +57,6 @@ clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 # RUST_LOG is parsed as `filter::Targets` (target=level); no env-filter/regex.
 tracing-subscriber = "0.3"
-tracing-appender = "0.2"
 
 # Random (jitter for 429 backoff)
 rand = "0.9"
