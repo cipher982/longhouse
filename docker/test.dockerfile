@@ -32,7 +32,9 @@ RUN bun install --frozen-lockfile \
     && node -e 'if (require("playwright/package.json").version !== process.env.PLAYWRIGHT_VERSION) throw new Error("Update PLAYWRIGHT_VERSION to match bun.lock")'
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 COPY server/pyproject.toml server/uv.lock server/
-RUN cd server && uv sync --frozen --extra dev --no-install-project \
+# Precompiled bytecode: the venv otherwise ships zero .pyc files and every
+# fresh container recompiles fastapi/pydantic/sqlalchemy on first import.
+RUN cd server && UV_COMPILE_BYTECODE=1 uv sync --frozen --extra dev --no-install-project \
     && uv venv /opt/build-deps \
     && uv pip install --python /opt/build-deps/bin/python hatchling editables \
     && uv pip install --python .venv/bin/python hatchling editables \
@@ -42,5 +44,21 @@ RUN mkdir -p engine/src && touch engine/src/main.rs engine/src/longhouse.rs \
     && cargo fetch --manifest-path engine/Cargo.toml --locked \
     && rm -rf engine/src
 RUN rustup component add rustfmt
+# cargo-nextest runs each engine test in its own process (`make test-engine`).
+# Pinned release binary, verified against the GitHub release asset digest.
+ARG NEXTEST_VERSION=0.9.146
+RUN set -eu; \
+    arch="$(uname -m)"; \
+    case "$arch" in \
+      x86_64) sum=682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428 ;; \
+      aarch64) sum=b2e33d7c72de7ade0ff7b3a948ac37516b24f8a836b7a8870c1f634a94be9de9 ;; \
+      *) echo "no pinned cargo-nextest for $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL --retry 5 -o /tmp/cargo-nextest.tgz \
+      "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${NEXTEST_VERSION}/cargo-nextest-${NEXTEST_VERSION}-${arch}-unknown-linux-gnu.tar.gz"; \
+    echo "$sum  /tmp/cargo-nextest.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/cargo-nextest.tgz -C /usr/local/cargo/bin cargo-nextest; \
+    rm /tmp/cargo-nextest.tgz; \
+    cargo nextest --version
 # No credentials, user HOME, provider binaries, git configuration, or daemon socket.
 ENV UV_OFFLINE=1 UV_NO_SYNC=1 CARGO_NET_OFFLINE=true

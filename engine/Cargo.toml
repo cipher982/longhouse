@@ -102,9 +102,9 @@ fd-lock = "4"
 tempfile = "3"
 pretty_assertions = "1"
 temp-env = "0.3.6"
-# Paused time, so a test that asserts a bounded wait terminates does not have to
-# spend that wait in real seconds.
-tokio = { version = "1", features = ["test-util"] }
+# No tokio `test-util` here: a dev-only feature makes Cargo resolve a second
+# dependency graph for test targets, which recompiled tokio's dependents and
+# both engine binaries on every `cargo test`. Tests pass short budgets instead.
 
 [profile.dev]
 incremental = true
@@ -127,3 +127,18 @@ inherits = "release"
 lto = false
 codegen-units = 8
 incremental = false
+
+# CI test lane (contract-first-ci "Engine tests"). The suite waits on
+# subprocesses, sockets, and SQLite, not CPU, so optimizing the 140k-line
+# engine crate buys nothing while costing ~4x its compile time. Dependencies
+# stay at opt-level 3 (SQLite, zstd, serde_json do the heavy lifting), and
+# release semantics (no debug assertions or overflow checks) are kept.
+[profile.ci-test]
+inherits = "release"
+opt-level = 0
+lto = false
+codegen-units = 16
+incremental = false
+
+[profile.ci-test.package."*"]
+opt-level = 3

@@ -80,7 +80,7 @@ def _human_bytes(value: int) -> str:
 
 def _incremental_stats(target: Path) -> tuple[int, float | None, float | None]:
     directories: list[Path] = []
-    for profile in ("debug", "release", "ci"):
+    for profile in ("debug", "release", "ci", "ci-test"):
         incremental = target / profile / "incremental"
         if incremental.is_dir() and not incremental.is_symlink():
             directories.extend(path for path in incremental.iterdir() if path.is_dir())
@@ -145,7 +145,7 @@ def _health(*, fail_over_budget: bool) -> int:
     print(f"cargo target: {target}")
     print(f"cargo target size: {_human_bytes(total)} / {_human_bytes(budget)} budget")
     if target.exists():
-        for profile in ("debug", "release", "ci"):
+        for profile in ("debug", "release", "ci", "ci-test"):
             profile_path = target / profile
             if profile_path.exists():
                 print(f"  {profile}: {_human_bytes(_size_bytes(profile_path))}")

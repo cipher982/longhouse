@@ -2,7 +2,7 @@
 
 # Dispatch before reading dotenv: tests never inherit the operator's login.
 # Only a live invocation-scoped child record can bypass host dispatch.
-ISOLATED_GOALS := $(filter test test-% validate validate-% lint-% import-smoke simlab-run menubar-harness ios-ui-shot ios-previews benchmark-ios-transcript onboarding-funnel launch-gate-local hosted-shipper-mixed-bench render-canary cohort-journey qa-% provider-%,$(MAKECMDGOALS))
+ISOLATED_GOALS := $(filter test test-% validate validate-% lint-% import-smoke simlab-run menubar-harness ios-ui-shot ios-previews benchmark-ios-transcript onboarding-funnel launch-gate-local hosted-shipper-mixed-bench render-canary cohort-journey qa-% provider-% ci-%,$(MAKECMDGOALS))
 ifneq ($(shell python3 scripts/qa/test_boundary.py && printf isolated),isolated)
 ifneq ($(strip $(ISOLATED_GOALS)),)
 ifneq ($(words $(ISOLATED_GOALS)),$(words $(MAKECMDGOALS)))
@@ -13,7 +13,7 @@ endif
 endif
 
 ifeq ($(LONGHOUSE_TEST_DISPATCH),1)
-export ARGS TEST MODE FILES SCENARIOS CARGO_PROFILE VERBOSE PYTEST_XDIST_WORKERS PLAYWRIGHT_WORKERS IOS_TEST_SCHEMES PROJECT UNIVERSAL_PROVIDER PROVIDER PRODUCER_CLASS INVOCATION_ID RUN_REFERENCE LONGHOUSE_GIT_SHA PROVIDER_VERSION PROVIDER_EXECUTABLE_IDENTITY STORE_ROOT BUNDLE_OUTPUT ARTIFACT EVIDENCE_ROOT LONGHOUSE_NATIVE_SMOKE_REMOTE LONGHOUSE_NATIVE_SMOKE_EXPECTED_VERSION LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG
+export ARGS TEST MODE FILES SCENARIOS CARGO_PROFILE LIFECYCLE VERBOSE PYTEST_XDIST_WORKERS PLAYWRIGHT_WORKERS IOS_TEST_SCHEMES PROJECT UNIVERSAL_PROVIDER PROVIDER PRODUCER_CLASS INVOCATION_ID RUN_REFERENCE LONGHOUSE_GIT_SHA PROVIDER_VERSION PROVIDER_EXECUTABLE_IDENTITY STORE_ROOT BUNDLE_OUTPUT ARTIFACT EVIDENCE_ROOT LONGHOUSE_NATIVE_SMOKE_REMOTE LONGHOUSE_NATIVE_SMOKE_EXPECTED_VERSION LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG
 .PHONY: $(ISOLATED_GOALS)
 $(ISOLATED_GOALS):
 	@python3 scripts/qa/test-isolation.py --target "$@"
@@ -35,7 +35,7 @@ SOURCE_REVIEW_NOTE ?= Provider release proof invoked from Makefile.
 BASELINE_ROOT ?= .provider-release-proofs
 PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 
-.PHONY: help check-push-readiness dev dev-demo stop test test-backend-single test-session-state test-session-propagation-sla test-ios test-ios-perf test-ios-session-open profile-ios-live-cold benchmark-ios-transcript ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-codex-console-warm-canary test-claude-console-live-canary test-cursor-console-live-canary test-opencode-console-live-canary test-opencode-console-product-e2e test-console-served-state-e2e test-cursor-helm-gate0 test-cursor-helm-product-e2e test-cursor-helm-gate0-unit test-runner test-e2e test-e2e-core qa-landing-live hero-frames test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-ios-api validate-provider-brands validate-makefile validate-build-identity validate-build-scripts validate-public-surface validate-managed-codex-contract validate-managed-session-contract validate-session-state-contract validate-phase-contract generate-phase-contract generate-managed-identity validate-managed-identity validate-qa-scripts validate-ops-scripts validate-managed-provider-contracts validate-provider-capabilities generate-provider-capabilities validate-provider-census validate-provider-factory-plan validate-session-state-fault-matrix validate-session-state-deep-health validate-no-python-device-path validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-staged-old-new provider-release-proof-universal-smoke provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-sdk generate-ios-api generate-provider-brands generate-provider-census generate-provider-factory-plan qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e provider-live-route-e2e-opencode-transcript reprovision deploy-status launch-readiness ship-watch ship release ui-capture import-bench landing-screenshots demo-render qa-remote-scene qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-synthetic-bench test-shipper-premerge test-wheel-package test-managed-launch-lifecycle test-install test-hosted-instance test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest dogfood dogfood-refresh dogfood-check observability-up observability-down
+.PHONY: help check-push-readiness dev dev-demo stop test test-backend-single test-session-state test-session-propagation-sla test-ios test-ios-perf test-ios-session-open profile-ios-live-cold benchmark-ios-transcript ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-codex-console-warm-canary test-claude-console-live-canary test-cursor-console-live-canary test-opencode-console-live-canary test-opencode-console-product-e2e test-console-served-state-e2e test-cursor-helm-gate0 test-cursor-helm-product-e2e test-cursor-helm-gate0-unit test-runner test-frontend-runner test-e2e test-e2e-core qa-landing-live hero-frames test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-ios-api validate-provider-brands validate-makefile validate-build-identity validate-build-scripts validate-public-surface validate-managed-codex-contract validate-managed-session-contract validate-session-state-contract validate-phase-contract generate-phase-contract generate-managed-identity validate-managed-identity validate-qa-scripts validate-ops-scripts validate-managed-provider-contracts validate-provider-capabilities generate-provider-capabilities validate-provider-census validate-provider-factory-plan validate-session-state-fault-matrix validate-session-state-deep-health validate-no-python-device-path validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-staged-old-new provider-release-proof-universal-smoke provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-sdk generate-ios-api generate-provider-brands generate-provider-census generate-provider-factory-plan qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e provider-live-route-e2e-opencode-transcript reprovision deploy-status launch-readiness ship-watch ship release ui-capture import-bench landing-screenshots demo-render qa-remote-scene qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-synthetic-bench test-shipper-premerge test-wheel-package test-managed-launch-lifecycle test-install test-hosted-instance test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest dogfood dogfood-refresh dogfood-check observability-up observability-down
 .PHONY: test-antigravity-conversation-reset test-claude-conversation-reset test-codex-conversation-reset test-cursor-conversation-reset test-opencode-conversation-reset
 .PHONY: provider-fidelity-coverage test-provider-fidelity-coverage fidelity-coverage-gate
 .PHONY: validate-dogfood-runtime test-storage-v2-b2 test-shipper-synthetic-live-bench
@@ -55,6 +55,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: test-provider-contract test-isolation
 .PHONY: affected-check
 .PHONY: validate-affected-check
+.PHONY: ci-validation ci-backend
 
 # ---------------------------------------------------------------------------
 # Help
@@ -384,33 +385,28 @@ ios-unit: ## Hermetic iOS unit tests on this machine (~35s) — iteration only, 
 		-only-testing:LonghouseIOSTests \
 		test
 
-test-frontend: ## Frontend unit tests + type-check (~2min)
-	@cd web && bun run validate:types && bun run test -- --run --runInBand
+test-frontend: ## Frontend unit tests + type-check (~1min)
+	@# One vitest worker per CPU the guest actually has (Node's
+	@# availableParallelism honours the container's cgroup quota). --runInBand
+	@# pinned the suite to one worker: 44s against 15s on a 4-CPU guest.
+	@cd web && bun run validate:types && bun run test -- --run --maxWorkers=100%
 
 test-engine: test-engine-projection-failure test-engine-omp-helm ## Rust engine tests (~20s)
 	$(CARGO_ENGINE) build --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release)
-	@# --bin longhouse is load-bearing: engine/src/longhouse.rs is a second bin
+	@# --bins is load-bearing: engine/src/longhouse.rs is a second bin
 	@# target holding launch_managed_claude/opencode/codex, and every cargo test
 	@# in this repo passed only --bin longhouse-engine, so its tests -- including
 	@# the only coordination-token scoping assertion -- had never run in CI. The
 	@# identical iOS scheme drift is documented above; the Rust lane had the same
 	@# hole.
 	@# The main binary's tests mutate process-wide HOME/PATH/config variables in
-	@# several modules. Module-local locks cannot make those mutations safe
-	@# against one another, so run this binary serially instead of accepting a
-	@# timing-dependent CI gate.
-	@engine_test_log="$$(mktemp -t longhouse-engine-tests.XXXXXX)"; \
-	status=0; \
-	($(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine -- --test-threads=1) >"$$engine_test_log" 2>&1 || status=$$?; \
-	cat "$$engine_test_log"; \
-	if [ "$$status" -ne 0 ]; then rm -f "$$engine_test_log"; exit "$$status"; fi; \
-	if ! grep -q '^test result: ok\.' "$$engine_test_log"; then \
-		echo "ERROR: longhouse-engine test harness exited without a completion summary" >&2; \
-		rm -f "$$engine_test_log"; \
-		exit 1; \
-	fi; \
-	rm -f "$$engine_test_log"
-	$(CARGO_ENGINE) test --manifest-path engine/Cargo.toml --profile $(or $(CARGO_PROFILE),release) --bin longhouse --test managed_teardown --test golden_parser_contract --test adversarial_parser --test coordination_mcp_handshake --test cursor_native_hooks
+	@# several modules, which is unsafe between threads of one harness.
+	@# nextest runs every test in its own process, so those mutations cannot
+	@# race and the suite runs in parallel instead of serially (--test-threads=1
+	@# took ~9 min on CI; engine/.config/nextest.toml bounds a hung test). A
+	@# harness that vanishes mid-run fails nextest outright, which the old
+	@# completion-summary grep existed to catch.
+	$(CARGO_ENGINE) nextest run --manifest-path engine/Cargo.toml --cargo-profile $(or $(CARGO_PROFILE),release) --bins --tests
 
 test-engine-omp-helm: ## OMP Helm extension contract tests
 	@cd engine && bun test assets/longhouse-omp-helm.test.ts
@@ -492,9 +488,13 @@ test-cursor-helm-gate0-unit: ## Cursor Helm Gate 0 harness unit tests
 test-runner: ## Runner unit tests (~5s)
 	@cd runner && bun test
 
-test-e2e: ## Launch-surface E2E (core + a11y)
+test-frontend-runner: ## Frontend + runner unit tests in one isolated container (CI lane)
+	@# Runner tests take under a second; their own container cost 30-65s.
+	@$(MAKE) --no-print-directory test-frontend
+	@$(MAKE) --no-print-directory test-runner
+
+test-e2e: ## Launch-surface E2E (core + a11y, one backend boot)
 	$(MAKE) test-e2e-core
-	$(MAKE) test-e2e-a11y
 
 qa-landing-live: ## Headless QA of the landing live demo (URL=... RUN=1 to execute an instruction)
 	cd e2e && node scripts/qa-landing-live-demo.mjs $(or $(URL),http://localhost:5173/landing) $(if $(RUN),--run,) $(if $(SHOTS),--shots $(SHOTS),) $(if $(SEED),--seed=$(SEED),) $(ARGS)
@@ -502,11 +502,14 @@ qa-landing-live: ## Headless QA of the landing live demo (URL=... RUN=1 to execu
 hero-frames: ## Render the landing hero demo frame by frame (STEP=1 VIEWPORT=desktop|mobile) to artifacts/hero-frames/
 	bun scripts/qa/hero-frames.ts $(if $(STEP),--step=$(STEP),) $(if $(VIEWPORT),--viewport=$(VIEWPORT),)
 
-test-e2e-core: ## @internal Core E2E — no retries
+test-e2e-core: ## @internal Core E2E plus accessibility — no retries
+	@# The axe pages are read-only and cost seconds once the backend and
+	@# frontend are up; a separate lane paid a whole container and boot for them.
 	@$(MAKE) ensure-playwright-browser
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
 		LONGHOUSE_HISTORICAL_MIN_FREE_BYTES=0 LONGHOUSE_HISTORICAL_MIN_FREE_RATIO=0 \
-		bunx playwright test --project=core --retries=0 --workers=1
+		bunx playwright test --project=core --project=chromium --retries=0 --workers=1 \
+		tests/core/ tests/accessibility.spec.ts
 
 test-e2e-a11y: ## @internal Accessibility checks
 	@$(MAKE) ensure-playwright-browser
@@ -591,6 +594,19 @@ test-full: ## Full suite — all tiers (>10min)
 	$(MAKE) test-shipper-e2e
 	$(MAKE) test-e2e
 
+# One isolated guest per CI job. Every `make <test goal>` pays a fresh guest
+# (source tarball, git snapshot, editable install, cold imports: 20-60s each on
+# cube), so a job with three steps paid it three times.
+ci-validation: ## @internal CI Validation job: validate, optional lifecycle proof (LIFECYCLE=1), capability proof
+	@$(MAKE) --no-print-directory validate
+	@if [ "$(LIFECYCLE)" = "1" ]; then $(MAKE) --no-print-directory test-managed-launch-lifecycle; fi
+	@$(MAKE) --no-print-directory provider-capability-coordination-proof
+
+ci-backend: ## @internal CI Backend tests job: backend unit tests plus hosted-instance and iOS helper tests
+	@$(MAKE) --no-print-directory test
+	@$(MAKE) --no-print-directory test-hosted-instance
+	@$(MAKE) --no-print-directory test-ios-helper
+
 # CI-referenced test helpers (keep for workflow compatibility)
 test-managed-launch-lifecycle: ## @internal Real Runtime Host + real `longhouse <provider>` launch
 	@# The one lane where a real FastAPI server answers a real launcher. The
@@ -654,39 +670,50 @@ dogfood-check: ## Show installed local runtime status + local health
 # ---------------------------------------------------------------------------
 # Validation (contract drift checks)
 # ---------------------------------------------------------------------------
+# Independent contract checks, run concurrently. Listed longest-first (as
+# measured on CI) so the critical path starts before the short checks; add new
+# members anywhere. -O keeps each member's output together, -k reports every
+# failing member instead of stopping at the first.
+VALIDATE_MEMBERS := \
+	validate-provider-cli-canaries \
+	validate-ops-scripts \
+	validate-sdk \
+	validate-build-scripts \
+	validate-cohort-journey \
+	validate-provider-factory-plan \
+	validate-legacy-nouns \
+	validate-managed-codex-contract \
+	validate-qa-scripts \
+	validate-provider-census \
+	validate-ws \
+	validate-makefile \
+	validate-build-identity \
+	validate-playwright-install \
+	validate-public-surface \
+	validate-format \
+	validate-provider-brands \
+	validate-managed-session-contract \
+	validate-session-state-contract \
+	validate-phase-contract \
+	validate-managed-identity \
+	validate-managed-provider-contracts \
+	validate-provider-capabilities \
+	validate-session-state-fault-matrix \
+	validate-session-state-deep-health \
+	validate-no-python-device-path \
+	validate-native-device-entrypoints \
+	validate-affected-check \
+	validate-ship-monitor \
+	validate-dogfood-runtime \
+	lint-test-patterns
+
+# The guest's CPU count: test-isolation exports it as CARGO_BUILD_JOBS; else the
+# cgroup v2 quota (docker --cpus); else the visible cores. nproc alone ignores a
+# CPU quota, which would be -j24 in cube's 2-CPU guests.
+VALIDATE_JOBS ?= $(or $(CARGO_BUILD_JOBS),$(shell awk '$$1 != "max" { n = int(($$1 + $$2 - 1) / $$2) } END { if (!n) exit 1; print n }' /sys/fs/cgroup/cpu.max 2>/dev/null || nproc 2>/dev/null || echo 2))
+
 validate: ## Run all contract checks
-	@$(MAKE) validate-ws
-	@$(MAKE) validate-sdk
-	@$(MAKE) validate-ios-api
-	@$(MAKE) validate-makefile
-	@$(MAKE) validate-build-identity
-	@$(MAKE) validate-build-scripts
-	@$(MAKE) validate-playwright-install
-	@$(MAKE) validate-public-surface
-	@$(MAKE) validate-format
-	@$(MAKE) validate-provider-brands
-	@$(MAKE) validate-legacy-nouns
-	@$(MAKE) validate-managed-codex-contract
-	@$(MAKE) validate-managed-session-contract
-	@$(MAKE) validate-session-state-contract
-	@$(MAKE) validate-phase-contract
-	@$(MAKE) validate-managed-identity
-	@$(MAKE) validate-qa-scripts
-	@$(MAKE) validate-ops-scripts
-	@$(MAKE) validate-managed-provider-contracts
-	@$(MAKE) validate-provider-capabilities
-	@$(MAKE) validate-provider-census
-	@$(MAKE) validate-provider-factory-plan
-	@$(MAKE) validate-session-state-fault-matrix
-	@$(MAKE) validate-session-state-deep-health
-	@$(MAKE) validate-no-python-device-path
-	@$(MAKE) validate-native-device-entrypoints
-	@$(MAKE) validate-provider-cli-canaries
-	@$(MAKE) validate-affected-check
-	@$(MAKE) validate-ship-monitor
-	@$(MAKE) validate-dogfood-runtime
-	@$(MAKE) validate-cohort-journey
-	@$(MAKE) lint-test-patterns
+	@$(MAKE) --no-print-directory -k -j$(VALIDATE_JOBS) -O $(VALIDATE_MEMBERS)
 
 validate-playwright-install: ## @internal Playwright installer wrapper regression tests
 	@python3 scripts/tests/playwright-install.test.py
@@ -718,7 +745,9 @@ validate-build-identity: ## @internal Build identity freshness check
 	@python3 scripts/build/check_build_identity_fresh.py
 
 validate-build-scripts: ## @internal Unit tests for the Rust build wrapper and build-identity generator
-	@uv run --no-project --with pytest pytest -q scripts/build/test_cargo.py scripts/build/test_generate_build_identity.py
+	@# The server venv already has pytest; `--no-project --with pytest` built a
+	@# throwaway environment first (~5s on cube) to run the same pytest.
+	@cd server && uv run --extra dev pytest -q ../scripts/build/test_cargo.py ../scripts/build/test_generate_build_identity.py
 
 validate-managed-codex-contract: ## @internal Guard against reintroducing packaged managed Codex runtimes
 	@bash scripts/qa/check-managed-codex-contract.sh
@@ -787,18 +816,25 @@ validate-native-device-entrypoints: ## @internal Guard native replacements for P
 	@python3 scripts/qa/check-native-device-entrypoints.py
 	@python3 scripts/tests/native-device-entrypoints.test.py
 
-validate-provider-cli-canaries: ## @internal Provider release canary wrapper tests
-	@python3 scripts/tests/codex-provider-release-canary.test.py
-	@python3 scripts/tests/provider-release-profile-canary.test.py
-	@python3 scripts/tests/provider-release-proof.test.py
-	@python3 scripts/tests/provider-release-proof-baseline.test.py
-	@python3 scripts/tests/provider-release-proof-old-new.test.py
-	@python3 scripts/tests/provider-release-proof-maturity.test.py
-	@python3 scripts/tests/provider-release-proof-make.test.py
-	@python3 scripts/tests/provider-control-e2e-canary.test.py
-	@python3 scripts/tests/provider-live-canary.test.py
-	@python3 scripts/tests/provider-live-proof-publish.test.py
-	@python3 scripts/tests/provider-live-route-e2e.test.py
+# One prerequisite per test file so `make validate`'s -j pool interleaves them;
+# run alone, they still execute one after another. Longest first.
+PROVIDER_CLI_CANARY_TESTS := \
+	codex-provider-release-canary \
+	provider-live-canary \
+	provider-release-proof \
+	provider-release-proof-make \
+	provider-live-route-e2e \
+	provider-release-proof-baseline \
+	provider-control-e2e-canary \
+	provider-release-profile-canary \
+	provider-release-proof-old-new \
+	provider-release-proof-maturity \
+	provider-live-proof-publish
+
+provider-cli-canary-test-%:
+	@python3 scripts/tests/$*.test.py
+
+validate-provider-cli-canaries: $(PROVIDER_CLI_CANARY_TESTS:%=provider-cli-canary-test-%) ## @internal Provider release canary wrapper tests
 	@$(MAKE) provider-release-proof-universal-smoke UNIVERSAL_SCENARIO="adapter_conformance action_matrix control_surface old_new_release_diff"
 
 provider-interaction-probe: ## Run the explicit provider-native interaction probe
