@@ -1613,15 +1613,30 @@ class CatalogStore:
             # 2026-09-24 owner catalog 15,442 of 40,222 sessions were behind
             # their generation, served only from a search.db built before the
             # re-render, and a rebuild dropped them silently. Raise the target
-            # to the session's revision; embeddings follow via the alignment
-            # below.
-            current_generation_revision = (
-                select(RenderGeneration.__table__.c.commit_seq)
-                .where(RenderGeneration.__table__.c.generation_id == sessions.c.current_render_generation)
-                .scalar_subquery()
+            # to the newest revision of the session's current render; embeddings
+            # follow via the alignment below.
+            # The render objects themselves were rewritten too, past both the
+            # session and generation revisions, so the target is the newest of
+            # the three: the first fix (session revision) still froze one
+            # 2,373-object session at 168 visible objects.
+            render_objects = RenderObject.__table__
+            current_generation_revision = func.max(
+                sessions.c.commit_seq,
+                func.coalesce(
+                    select(RenderGeneration.__table__.c.commit_seq)
+                    .where(RenderGeneration.__table__.c.generation_id == sessions.c.current_render_generation)
+                    .scalar_subquery(),
+                    0,
+                ),
+                func.coalesce(
+                    select(func.max(render_objects.c.commit_seq))
+                    .where(render_objects.c.generation_id == sessions.c.current_render_generation)
+                    .scalar_subquery(),
+                    0,
+                ),
             )
             session_revision = (
-                select(sessions.c.commit_seq)
+                select(current_generation_revision)
                 .where(
                     sessions.c.session_id == states.c.session_id,
                     *eligible_filter,
