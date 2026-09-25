@@ -186,6 +186,13 @@
     border-width: 3px;
   }
 
+  /* Fallback while a lazily loaded route chunk downloads (routes/App.tsx). */
+  .route-loading {
+    display: flex;
+    justify-content: center;
+    padding: var(--space-8, 48px) 0;
+  }
+
   /* --- Icon Button --- */
   .ui-icon-button {
     display: inline-flex;

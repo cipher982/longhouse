@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { useRoutes, Outlet, Navigate } from "react-router";
 import Layout from "../components/Layout";
 import LandingPage from "../pages/LandingPage";
@@ -17,15 +18,6 @@ import ChangelogPage from "../pages/ChangelogPage";
 import PrivacyPage from "../pages/PrivacyPage";
 import SecurityPage from "../pages/SecurityPage";
 import TermsPage from "../pages/TermsPage";
-import ProfilePage from "../pages/ProfilePage";
-import SettingsPage from "../pages/SettingsPage";
-import DevicesPage from "../pages/DevicesPage";
-import ObservabilityPage from "../pages/ObservabilityPage";
-import ProviderCapabilitiesPage from "../pages/ProviderCapabilitiesPage";
-import RunnersPage from "../pages/RunnersPage";
-import RunnerDetailPage from "../pages/RunnerDetailPage";
-import SessionsPage from "../pages/SessionsPage";
-import SessionDetailPage from "../pages/SessionDetailPage";
 import DemoBanner from "../components/DemoBanner";
 import { AuthGuard } from "../lib/auth";
 import { ErrorBoundary } from "../components/ErrorBoundary";
@@ -33,6 +25,36 @@ import {
   usePerformanceMonitoring,
 } from "../lib/usePerformance";
 import config from "../lib/config";
+import { Spinner } from "../components/ui/Spinner";
+
+// Pages behind the app shell load on demand. Anonymous visitors to the
+// landing, docs and legal pages never download them, or the markdown, syntax
+// highlighting and drag-and-drop libraries only these pages use.
+const ProfilePage = lazy(() => import("../pages/ProfilePage"));
+const SettingsPage = lazy(() => import("../pages/SettingsPage"));
+const DevicesPage = lazy(() => import("../pages/DevicesPage"));
+const ObservabilityPage = lazy(() => import("../pages/ObservabilityPage"));
+const ProviderCapabilitiesPage = lazy(() => import("../pages/ProviderCapabilitiesPage"));
+const RunnersPage = lazy(() => import("../pages/RunnersPage"));
+const RunnerDetailPage = lazy(() => import("../pages/RunnerDetailPage"));
+const SessionsPage = lazy(() => import("../pages/SessionsPage"));
+const SessionDetailPage = lazy(() => import("../pages/SessionDetailPage"));
+
+// Suspense sits inside Layout so the shell (nav, status footer, WebSocket)
+// stays mounted while a page chunk loads.
+function PageOutlet() {
+  return (
+    <Suspense
+      fallback={
+        <div className="route-loading">
+          <Spinner size="md" label="Loading page" />
+        </div>
+      }
+    >
+      <Outlet />
+    </Suspense>
+  );
+}
 
 type RoutingConfig = {
   demoMode: boolean;
@@ -45,7 +67,7 @@ function AuthenticatedApp() {
   return (
     <AuthGuard clientId={config.googleClientId}>
       <Layout>
-        <Outlet />
+        <PageOutlet />
       </Layout>
     </AuthGuard>
   );
@@ -57,7 +79,7 @@ function DemoApp() {
     <>
       <DemoBanner />
       <Layout>
-        <Outlet />
+        <PageOutlet />
       </Layout>
     </>
   );

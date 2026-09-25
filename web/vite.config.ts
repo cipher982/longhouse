@@ -140,24 +140,26 @@ export default defineConfig(({ mode }) => {
     build: {
       sourcemap: true,
       outDir: "dist",
-      rollupOptions: {
+      rolldownOptions: {
         output: {
-          manualChunks(id) {
-            if (id.includes("node_modules")) {
-              // xterm is used ONLY by the lazily-loaded live hero demo. Letting
-              // it fall into `vendor` would ship ~283KB of terminal emulator to
-              // every visitor on every page for a demo almost nobody opens;
-              // returning undefined leaves it in its importer's lazy chunk.
-              if (id.includes("@xterm")) {
-                return undefined;
-              }
-              return "vendor";
-            }
+          codeSplitting: {
+            groups: [
+              {
+                // Only the libraries the app shell needs on every page share a
+                // long-lived vendor chunk. Every other dependency follows its
+                // importer: markdown, syntax highlighting and dnd-kit ride with
+                // the lazily loaded session pages, xterm with the lazy landing
+                // demo, so none of them reach the landing page's first load.
+                name: "vendor",
+                test: /[\\/]node_modules[\\/](react|react-dom|scheduler|react-router|@tanstack|react-hot-toast|goober)[\\/]/,
+              },
+            ],
           },
         },
       },
-      // The app shell already lazy-loads the heaviest routes; keep a warning floor
-      // that still catches regressions without tripping on the intentional shell size.
+      // Pages behind the app shell and the landing demos are lazy chunks
+      // (routes/App.tsx, pages/LandingPage.tsx); the remaining eager shell is
+      // well under this floor, which still catches a regression.
       chunkSizeWarningLimit: 750,
     },
     test: {
