@@ -223,6 +223,21 @@ jobs:
         # census artifact from silently going stale.
         run: make validate
 
+      - name: Isolation wrapper fails when the guest fails
+        # Every CI test lane trusts scripts/qa/test-isolation.py to return the
+        # guest's exit status. When it returned None instead, failing backend
+        # tests reported green (2026-09-24). The image is already local here.
+        timeout-minutes: 3
+        run: |
+          set +e
+          python3 scripts/qa/test-isolation.py --target isolation-exit-probe --command sh -c 'exit 3'
+          status=$?
+          set -e
+          if [[ "$status" -ne 3 ]]; then
+            echo "::error::test-isolation.py returned $status for a guest that exited 3"
+            exit 1
+          fi
+
       - name: Managed launch lifecycle against a real Runtime Host
         # Gated on the surfaces that can invalidate it. This proof starts a real
         # Runtime Host, real SQLite, real device-token auth and scripted provider

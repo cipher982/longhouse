@@ -220,6 +220,38 @@ def test_claim_replay_token_probes_use_indexes(store: CatalogStore) -> None:
     assert "ix_projector_state_failure_token" in indexes
 
 
+def test_claim_token_lookup_is_pinned_to_its_index_despite_stale_statistics(store: CatalogStore) -> None:
+    for _ in range(3):
+        _seed_row(store, projector="search-v2", session_id=str(uuid4()))
+    with store.engine.begin() as connection:
+        # The shape of the production catalog's statistics: every row shares
+        # one claim_token value.
+        connection.exec_driver_sql("ANALYZE")
+        connection.exec_driver_sql(
+            "INSERT OR REPLACE INTO sqlite_stat1(tbl, idx, stat) VALUES ('projector_state', 'ix_projector_state_claim_token', '196 196')"
+        )
+        connection.exec_driver_sql("ANALYZE sqlite_schema")
+    compiled = str(catalog_store._PROJECTOR_ROWS_BY_CLAIM_TOKEN.compile())
+    with store.engine.connect() as connection:
+        plan = " ".join(
+            str(row[-1])
+            for row in connection.exec_driver_sql(
+                "EXPLAIN QUERY PLAN " + compiled.replace(":claim_token", "'token'").replace(":projector", "'search-v2'")
+            )
+        )
+    assert "ix_projector_state_claim_token" in plan
+
+    claimed = store.claim_projector_lag(
+        projector="search-v2", worker_id="worker", claim_token=str(uuid4()), now=datetime.now(UTC), lease_seconds=60, limit=3
+    )
+    assert len(claimed["claimed"]) == 3
+
+    assert store.refresh_projector_statistics() == {"rows": 3}
+    with store.engine.connect() as connection:
+        stat = connection.exec_driver_sql("SELECT stat FROM sqlite_stat1 WHERE idx = 'ix_projector_state_claim_token'").scalar_one()
+    assert stat != "196 196"
+
+
 def test_reaper_deletes_retired_generations_and_spares_live_ones(store: CatalogStore) -> None:
     """Renaming the embedding projector must not strand its rows forever."""
 
