@@ -540,7 +540,9 @@ def load_credentials(path: Path) -> dict[str, str]:
 # pods keep the historical 2 CPU / 4 GiB default.
 CONTAINER_CPUS = os.environ.get("LONGHOUSE_TEST_CPUS", "2")
 CONTAINER_MEMORY = os.environ.get("LONGHOUSE_TEST_MEMORY", "4g")
-MEMORY_TMP_TARGETS = frozenset({"test", "test-backend-single"})
+MEMORY_TMP_TARGETS = frozenset(
+    {"test", "test-backend-single", "test-provider-contract", "ci-backend"}
+)
 
 
 def memory_backed_tmp(target: str) -> list[str]:

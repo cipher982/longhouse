@@ -24,7 +24,8 @@ echo "🏗️  Building frontend dist for wheel packaging..."
   cd "$ROOT_DIR"
   bun install --frozen-lockfile --silent
   cd "$WEB_DIR"
-  bun run build >/dev/null
+  # vite only: `bun run build` adds tsc, which the frontend lane already runs.
+  bunx vite build >/dev/null
 )
 
 echo "📦 Building Longhouse wheel..."

@@ -307,21 +307,23 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  backend-tests:
+  backend-shards:
     timeout-minutes: 30
     needs: [changes, prepare-test-image]
     if: ${{ (needs.changes.outputs.backend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
-    name: "Backend tests (${{ matrix.mode }})"
+    name: "Backend tests shard ${{ matrix.shard }}/3"
+    # A hosted runner's four vCPUs take ~5 min for the whole suite even under
+    # xdist; three runners take ~2. "Backend tests" below is the one name that
+    # Deploy and Verify and ship tooling wait on.
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - mode: xdist-4
-            workers: "4"
+        shard: [0, 1, 2]
     env:
-      PYTEST_XDIST_WORKERS: ${{ matrix.workers }}
-      PYTEST_ADDOPTS: "--durations=40 --durations-min=1.0"
+      LONGHOUSE_TEST_SHARD: ${{ matrix.shard }}/3
+      PYTEST_XDIST_WORKERS: "4"
+      PYTEST_ADDOPTS: "--durations=25 --durations-min=2.0"
       LONGHOUSE_TEST_IMAGE_REF: ${{ needs.prepare-test-image.outputs.image_ref }}
       LONGHOUSE_TEST_PULL_TOKEN: ${{ github.token }}
 
@@ -343,10 +345,27 @@ jobs:
         run: make test
 
       - name: Run Hosted-Instance Helper Tests
+        if: ${{ matrix.shard == 0 }}
         run: make test-hosted-instance
 
       - name: Run iOS simulator helper tests
+        if: ${{ matrix.shard == 0 }}
         run: make test-ios-helper
+
+  backend-tests:
+    name: "Backend tests"
+    needs: backend-shards
+    # Skipped shards (backend unchanged) leave this skipped too, as before.
+    if: ${{ !cancelled() && needs.backend-shards.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every backend shard passed
+        env:
+          SHARDS: ${{ needs.backend-shards.result }}
+        run: |
+          echo "backend shards: $SHARDS"
+          [[ "$SHARDS" == "success" ]]
 
   provider-contract-tests:
     # Always run: Loop 2 accepts an exact Longhouse SHA only after this job
