@@ -1123,16 +1123,32 @@ echo "ok: provider exit code propagates"
 #    does after the provider is spawned may take that away.
 # ---------------------------------------------------------------------------
 start_fault_proxy() {
-  local path="$1" mode="$2" count="$3" log="$4" fault_port attempt
-  fault_port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+  local path="$1" mode="$2" count="$3" log="$4" port_file="$4.port" fault_port="" attempt
+  # The proxy binds port 0 itself and reports the port it holds. Probing for a
+  # free port and handing it over released it first, and with four fault
+  # matrices starting proxies at once two of them could draw the same one.
+  rm -f "$port_file"
   python3 "$ROOT_DIR/scripts/ci/runtime-host-fault-proxy.py" \
-    --listen "127.0.0.1:$fault_port" \
+    --listen "127.0.0.1:0" \
+    --port-file "$port_file" \
     --target "127.0.0.1:$PORT" \
     --fault-path "$path" \
     --fault-mode "$mode" \
     --fault-count "$count" \
     >"$log" 2>&1 &
   FAULT_PROXY_PID=$!
+  for attempt in $(seq 1 60); do
+    if [[ -s "$port_file" ]]; then
+      fault_port="$(cat "$port_file")"
+      break
+    fi
+    if ! kill -0 "$FAULT_PROXY_PID" 2>/dev/null; then break; fi
+    sleep 0.1
+  done
+  if [[ -z "$fault_port" ]]; then
+    cat "$log" >&2 || true
+    fail "fault proxy never reported its listening port"
+  fi
   FAULT_URL="http://127.0.0.1:$fault_port"
   # /api/health does not match any fault path, so a healthy answer here proves
   # the proxy relays cleanly before the launch depends on it.
