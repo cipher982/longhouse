@@ -575,9 +575,15 @@ def _create_declared_indexes(engine: Engine, metadata: MetaData) -> None:
     indexes now rather than leaving production silently unindexed.
     """
 
-    for table in metadata.sorted_tables:
-        for index in table.indexes:
-            index.create(bind=engine, checkfirst=True)
+    # One sqlite_master read, not ``checkfirst`` per index: that reflects every
+    # index of the table for each index it checks, which was most of catalog
+    # startup (~50 ms per open, paid by every daemon and test catalog).
+    with engine.begin() as connection:
+        existing = set(connection.exec_driver_sql("SELECT tbl_name, name FROM sqlite_master WHERE type = 'index'").all())
+        for table in metadata.sorted_tables:
+            for index in table.indexes:
+                if (table.name, index.name) not in existing:
+                    index.create(bind=connection)
 
 
 def _user_version(connection) -> int:
