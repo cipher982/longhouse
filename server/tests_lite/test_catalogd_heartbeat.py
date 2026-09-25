@@ -33,11 +33,11 @@ from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveDeviceToken
 from zerg.models.live_store import LiveHeartbeatStamp
+from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
-from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionThread
 from zerg.routers.heartbeat import ManagedSessionLeaseIn
 from zerg.services.managed_provider_contracts import require_contract_for_provider
@@ -731,7 +731,10 @@ def _seed_long_absent_run(connection, *, session_id: str, run_id: str, thread_id
         .values(state="missing", updated_at=missing_since)
     )
     connection.execute(
-        LiveControlLease.__table__.update().where(LiveControlLease.__table__.c.session_id == session_id).values(state="missing")
+        # The absence clock is this lease stamp: when the omission was accepted.
+        LiveControlLease.__table__.update()
+        .where(LiveControlLease.__table__.c.session_id == session_id)
+        .values(state="missing", heartbeat_at=missing_since)
     )
 
 

@@ -8,6 +8,7 @@ from datetime import timezone
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import and_
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -241,7 +242,12 @@ def retire_stale_absent_runs(
 
     - Console runs: the Runtime Host dispatches those with no local process, so
       a machine's enumeration says nothing about their execution.
-    - Runs younger than `ABSENT_RUN_RETIRE_AGE`.
+    - Runs younger than `ABSENT_RUN_RETIRE_AGE`, and sessions whose accepted
+      absence is younger than that. The absence clock is the control lease's
+      `heartbeat_at`, which `mark_missing_live_control_leases` stamps when it
+      accepts the omission and never refreshes while the session stays missing;
+      `live_sessions.updated_at` is re-stamped by runtime and lease touches and
+      therefore cannot answer how long a session has been gone.
     - Runs that still show live evidence: a lease in an attached/degraded state
       inside the control lease, a runtime state still being signalled or
       asserted, or an unexpired pending launch attempt. The attachment's own
@@ -263,12 +269,21 @@ def retire_stale_absent_runs(
         .join(LiveSessionThread, LiveSessionThread.id == LiveSessionRun.thread_id)
         .join(LiveSession, LiveSession.session_id == LiveSessionThread.session_id)
         .join(LiveSessionCatalog, LiveSessionCatalog.session_id == LiveSessionThread.session_id)
+        .join(
+            LiveControlLease,
+            and_(
+                LiveControlLease.session_id == LiveSessionThread.session_id,
+                LiveControlLease.device_id == LiveSession.device_id,
+            ),
+        )
         .filter(
             LiveSessionRun.ended_at.is_(None),
             LiveSessionRun.started_at <= absent_before,
             LiveSession.device_id == normalized_device_id,
             LiveSession.state == "missing",
-            LiveSession.updated_at <= absent_before,
+            LiveControlLease.state == "missing",
+            LiveControlLease.heartbeat_at.is_not(None),
+            LiveControlLease.heartbeat_at <= absent_before,
             LiveSessionThread.is_primary == 1,
             LiveSessionThread.branch_kind == "root",
             or_(LiveSessionCatalog.origin_kind.is_(None), LiveSessionCatalog.origin_kind != "console"),
