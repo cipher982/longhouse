@@ -9,9 +9,13 @@ options:
 packages:
   LonghousePackage:
     path: ..
+  # Remote packages are pinned exactly. The full graph (including transitive
+  # packages) is committed in Package.resolved next to this spec; `make
+  # ios-project` copies it into the generated project so every build resolves
+  # the same revisions.
   SnapshotPreviews:
     url: https://github.com/EmergeTools/SnapshotPreviews
-    from: "0.14.0"
+    exactVersion: "0.19.0"
 
 targets:
   Longhouse:

@@ -36,6 +36,7 @@ run_scheme() {
     -scheme "${scheme}" \
     -destination "${DESTINATION}" \
     -derivedDataPath "${DERIVED_DATA_PATH}" \
+    -disableAutomaticPackageResolution \
     build-for-testing
 
   if [[ -n "${result_bundle}" ]]; then

@@ -45,7 +45,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: test-engine-projection-failure test-engine-focused
 .PHONY: provider-interaction-probe
 .PHONY: test-cursor-console-product-e2e cursor-observed-install-qualification
-.PHONY: ios-project ios-project-check ios-unit
+.PHONY: ios-project ios-project-check ios-package-update ios-unit
 
 .PHONY: profile-ios-live-console
 .PHONY: validate-native-device-entrypoints
@@ -161,11 +161,23 @@ test-session-state: ## @internal Focused canonical session-state and Phase 7 fau
 IOS_MERGE_TEST_SCHEMES ?= Longhouse LonghouseSmoke
 IOS_PERF_TEST_SCHEMES ?= LonghouseChatStress
 
+# The generated .xcodeproj is gitignored, so the committed SwiftPM pin file
+# lives next to project.yml and is copied into the project on every generation.
+IOS_PACKAGE_RESOLVED := ios/XcodeHarness/LonghouseIOS.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+
 ios-project: ## Regenerate the local Xcode project and freshness stamp
 	@python3 scripts/build/generate_build_identity.py
 	@bash scripts/build/stage_ios_build_identity.sh
 	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
+	@mkdir -p $(dir $(IOS_PACKAGE_RESOLVED))
+	@cp ios/XcodeHarness/Package.resolved $(IOS_PACKAGE_RESOLVED)
 	@shasum -a 256 ios/XcodeHarness/project.yml | cut -d ' ' -f 1 > ios/XcodeHarness/.project-source-sha256
+
+ios-package-update: ## Re-resolve iOS Swift packages after changing a pin in project.yml, then commit Package.resolved
+	@$(MAKE) ios-project
+	@rm -f $(IOS_PACKAGE_RESOLVED)
+	@xcodebuild -resolvePackageDependencies -project ios/XcodeHarness/LonghouseIOS.xcodeproj -scheme Longhouse
+	@cp $(IOS_PACKAGE_RESOLVED) ios/XcodeHarness/Package.resolved
 
 ios-project-check: ## Regenerate and verify Xcode source membership
 	@$(MAKE) ios-project

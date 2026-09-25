@@ -534,7 +534,7 @@ jobs:
           persist-credentials: false
 
       - name: Install XcodeGen
-        run: brew install xcodegen
+        run: scripts/ci/install_xcodegen.sh
 
       - name: Run iOS fixture in the isolated GitHub-hosted macOS VM
         env:

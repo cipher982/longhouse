@@ -65,7 +65,7 @@ jobs:
         if: ${{ inputs.target == 'simlab-run' || inputs.target == 'test-e2e-onboarding' }}
       - name: Install XcodeGen
         if: ${{ inputs.target != 'menubar-harness' && inputs.target != 'test-runtime-packaging-macos' && inputs.target != 'test-e2e-onboarding' && inputs.target != 'test-install' }}
-        run: brew install xcodegen
+        run: scripts/ci/install_xcodegen.sh
       - name: Run native fixtures in disposable VM
         env:
           NATIVE_TARGET: ${{ inputs.target }}

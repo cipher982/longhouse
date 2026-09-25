@@ -216,6 +216,9 @@ def main() -> int:
                 [
                     "xcodebuild",
                     "-resolvePackageDependencies",
+                    # Fail instead of re-resolving when project.yml pins and the
+                    # committed ios/XcodeHarness/Package.resolved disagree.
+                    "-onlyUsePackageVersionsFromResolvedFile",
                     "-project",
                     "ios/XcodeHarness/LonghouseIOS.xcodeproj",
                     "-scheme",
