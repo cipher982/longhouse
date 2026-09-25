@@ -168,13 +168,17 @@ mkdir -p "$HOME_DIR" "$BIN_DIR"
 # ---------------------------------------------------------------------------
 # Build the real facade + engine pair
 # ---------------------------------------------------------------------------
+# Dev profile on purpose: this proves lifecycle plumbing against a real Runtime
+# Host, not optimized codegen. The `ci` profile (opt-level 3) cost ~7.5 minutes
+# of a 2-CPU guest compiling from scratch; dev builds the same pair in about a
+# third of that, and debug assertions are, if anything, stricter here.
 python3 "$ROOT_DIR/scripts/build/generate_build_identity.py" >/dev/null
 python3 "$ROOT_DIR/scripts/build/cargo.py" exec -- build \
-  --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile ci \
+  --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile dev \
   --bin longhouse --bin longhouse-engine >/dev/null
-cp "$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile ci --bin longhouse)" \
+cp "$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile dev --bin longhouse)" \
   "$BIN_DIR/longhouse"
-cp "$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile ci --bin longhouse-engine)" \
+cp "$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile dev --bin longhouse-engine)" \
   "$BIN_DIR/longhouse-engine"
 
 # Both Runtime Host and providers must use the disposable identity, even when

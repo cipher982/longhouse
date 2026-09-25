@@ -85,8 +85,11 @@ main() {
     --no-docker-prune
   )
 
+  # KEEP_SNAPSHOTS is 5, so 7 rounds leave 2 archives per instance to prune --
+  # enough to prove retention. Each round sleeps 1s so second-resolution
+  # archive names stay unique; 16 rounds spent 16s asserting the same thing.
   local round
-  for round in $(seq 1 16); do
+  for round in $(seq 1 7); do
     create_db "$live_root/alice/longhouse.db" "$((2 + round))" "$((5 + round))"
     create_db "$live_root/bob/longhouse.db" "$((1 + round))" "$((3 + round))"
     run_ops backup "${common_args[@]}"

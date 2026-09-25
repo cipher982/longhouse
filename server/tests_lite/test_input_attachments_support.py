@@ -32,7 +32,6 @@ def test_attachment_bytes_must_match_the_declared_image_type():
     assert excinfo.value.status_code == 415
 
 
-
 def test_every_provider_has_a_console_row_except_none_and_helm_excludes_antigravity():
     providers = {"codex", "claude", "opencode", "cursor", "pi", "omp", "antigravity"}
     assert {provider for provider, mode in ATTACHMENT_DELIVERY if mode == "console"} == providers
@@ -79,12 +78,8 @@ def test_normalize_strips_the_engine_attachment_block_so_receipts_still_link():
     # Provider echoes commonly add a final newline after the generated suffix.
     assert normalize_input_text(echoed + "\n") == normalize_input_text(receipt)
     # A user-authored report-shaped sentence in the middle is not a suffix.
-    assert normalize_input_text(
-        "quote this: Longhouse bug report evidence is staged at `/tmp/report`."
-        " Then continue."
-    ) == (
-        "quote this: Longhouse bug report evidence is staged at `/tmp/report`."
-        " Then continue."
+    assert normalize_input_text("quote this: Longhouse bug report evidence is staged at `/tmp/report`. Then continue.") == (
+        "quote this: Longhouse bug report evidence is staged at `/tmp/report`. Then continue."
     )
     # Ordinary text is untouched beyond whitespace folding.
     assert normalize_input_text("  a \n b ") == "a b"
