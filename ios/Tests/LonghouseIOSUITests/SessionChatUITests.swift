@@ -14,6 +14,7 @@ final class SessionChatUITests: XCTestCase {
 
     private enum LaunchArgument {
         static let appearanceOverride = "-LONGHOUSE_UI_TEST_APPEARANCE"
+        static let preferredContentSizeCategoryName = "-UIPreferredContentSizeCategoryName"
     }
 
     private enum Appearance: String {
@@ -204,10 +205,13 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(summary.waitForExistence(timeout: Self.webTranscriptTimeout))
         XCTAssertTrue(summary.label.contains("1 agent"))
         XCTAssertTrue(summary.label.contains("1 command"))
-
         summary.tap()
         let childTask = app.buttons["session-runtime-background-task-agent-1"]
         XCTAssertTrue(childTask.waitForExistence(timeout: 5))
+        let sheetShot = XCTAttachment(screenshot: app.screenshot())
+        sheetShot.name = "background-task-sheet"
+        sheetShot.lifetime = .keepAlways
+        add(sheetShot)
         childTask.tap()
 
         let childID = "019fc50b-1111-4111-8111-111111111111"
@@ -232,6 +236,42 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(summary.label.contains("unknown"))
         summary.tap()
         XCTAssertTrue(app.staticTexts["Background work status unknown"].waitForExistence(timeout: 5))
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "background-task-unknown"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
+    func testBackgroundTaskSheetRemainsReadableAtAccessibilitySize() {
+        let app = launchChatFixture(
+            name: "background-tasks",
+            eventCount: 0,
+            dynamicTypeCategory: "UICTContentSizeCategoryAccessibilityXXXL"
+        )
+        let summary = app.buttons["session-runtime-background-summary"]
+        XCTAssertTrue(summary.waitForExistence(timeout: Self.webTranscriptTimeout))
+        summary.tap()
+
+        let agent = app.buttons["session-runtime-background-task-agent-1"]
+        XCTAssertTrue(agent.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(agent.frame.height, 44)
+        XCTAssertGreaterThanOrEqual(agent.frame.minX, 0)
+        XCTAssertLessThanOrEqual(agent.frame.maxX, app.windows.firstMatch.frame.width)
+
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "background-task-sheet-accessibility-size"
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
+    func testBackgroundTaskExplicitEmptyRendersNoSummary() {
+        let app = launchChatFixture(name: "background-tasks-empty", eventCount: 0)
+        XCTAssertTrue(app.staticTexts["Idle"].waitForExistence(timeout: Self.webTranscriptTimeout))
+        XCTAssertFalse(app.buttons["session-runtime-background-summary"].waitForExistence(timeout: 2))
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "background-task-none"
+        shot.lifetime = .keepAlways
+        add(shot)
     }
 
     func testBackgroundTaskLocalExpiryOfExplicitEmptyHidesSummary() {
@@ -370,7 +410,8 @@ final class SessionChatUITests: XCTestCase {
         eventCount: Int,
         appearance: Appearance = .light,
         tailDelayMs: Int? = nil,
-        detailDelayMs: Int? = nil
+        detailDelayMs: Int? = nil,
+        dynamicTypeCategory: String? = nil
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment[LaunchEnvironment.chatFixture] = name
@@ -382,6 +423,12 @@ final class SessionChatUITests: XCTestCase {
             app.launchEnvironment[LaunchEnvironment.mobileDetailDelayMs] = String(detailDelayMs)
         }
         app.launchArguments += [LaunchArgument.appearanceOverride, appearance.rawValue]
+        if let dynamicTypeCategory {
+            app.launchArguments += [
+                LaunchArgument.preferredContentSizeCategoryName,
+                dynamicTypeCategory
+            ]
+        }
         app.launch()
         addTeardownBlock { [weak self] in
             guard let self, (self.testRun?.failureCount ?? 0) > 0 else { return }

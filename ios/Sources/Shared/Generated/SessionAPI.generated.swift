@@ -6,6 +6,16 @@
 
 import Foundation
 
+struct APIMachineSearchCoverage: Codable, Hashable, Sendable {
+    let indexedSessions: Int
+    let expectedSessions: Int
+    let complete: Bool
+    let laggingSessions: Int
+    let providers: [String]?
+    let oldestSessionAt: String?
+    let newestSessionAt: String?
+}
+
 struct APIMachineSearchLaneFailure: Codable, Hashable, Sendable {
     let lane: String
     let statusCode: Int
@@ -535,6 +545,7 @@ struct APITimelineSessionsListResponse: Codable, Hashable, Sendable {
     let hasRealSessions: Bool?
     let lanes: [String]?
     let degraded: [APIMachineSearchLaneFailure]?
+    let coverage: APIMachineSearchCoverage?
     let historyImports: [APITimelineHistoryImportResponse]?
 }
 

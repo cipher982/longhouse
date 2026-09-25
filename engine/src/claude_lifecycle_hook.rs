@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::sync::{LazyLock, Mutex};
 
@@ -268,6 +268,8 @@ const DELEGATION_TASK_LIMIT: usize = 256;
 const DELEGATION_ID_MAX_CHARS: usize = 256;
 const DELEGATION_STATUS_MAX_CHARS: usize = 32;
 const DELEGATION_DESCRIPTION_MAX_CHARS: usize = 256;
+const DELEGATION_TOOL_CALL_ID_MAX_CHARS: usize = 256;
+const DELEGATION_SIDECAR_MAX_BYTES: u64 = 64 * 1024;
 
 fn bounded_task_text(value: Option<&Value>, limit: usize) -> Option<String> {
     let text = value?.as_str()?.trim();
@@ -304,6 +306,63 @@ fn delegation_kind(raw: &str) -> &'static str {
         "mcp_task" => "mcp_task",
         _ => "other",
     }
+}
+
+fn safe_task_path_component(task_id: &str) -> bool {
+    !task_id.is_empty()
+        && task_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+}
+
+fn bounded_tool_use_id(value: Option<&Value>) -> Option<String> {
+    let value = bounded_required_task_text(value, DELEGATION_TOOL_CALL_ID_MAX_CHARS)?;
+    (!value.chars().any(char::is_control)).then_some(value)
+}
+
+/// Read only the exact provider sidecar named by a task in a parent Stop.
+///
+/// Claude task ids are local path components, not globally unique aliases.
+/// Requiring the parent transcript's exact stem and an existing regular file
+/// avoids directory scans and prevents guessed child joins.
+fn parent_tool_call_id(input: &Value, task_id: &str) -> Option<String> {
+    if input.get("hook_event_name").and_then(Value::as_str) != Some("Stop")
+        || !safe_task_path_component(task_id)
+    {
+        return None;
+    }
+    let transcript_path = input
+        .get("transcript_path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(Path::new)?;
+    if !transcript_path.is_absolute()
+        || transcript_path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+        || transcript_path.extension().and_then(|value| value.to_str()) != Some("jsonl")
+        || !std::fs::metadata(transcript_path)
+            .map(|metadata| metadata.is_file())
+            .unwrap_or(false)
+    {
+        return None;
+    }
+    let parent_stem = transcript_path.with_extension("");
+    let subagents = parent_stem.join("subagents");
+    let sidecar = subagents.join(format!("agent-{task_id}.meta.json"));
+    let sidecar_metadata = std::fs::metadata(&sidecar).ok()?;
+    if !sidecar_metadata.is_file() || sidecar_metadata.len() > DELEGATION_SIDECAR_MAX_BYTES {
+        return None;
+    }
+    let canonical_subagents = std::fs::canonicalize(&subagents).ok()?;
+    let canonical_sidecar = std::fs::canonicalize(&sidecar).ok()?;
+    if !canonical_sidecar.starts_with(&canonical_subagents) {
+        return None;
+    }
+    let bytes = std::fs::read(sidecar).ok()?;
+    let sidecar: Value = serde_json::from_slice(&bytes).ok()?;
+    bounded_tool_use_id(sidecar.get("toolUseId"))
 }
 
 fn delegation_snapshot(input: &Value, observed_at: &str) -> Option<Value> {
@@ -349,12 +408,18 @@ fn delegation_snapshot(input: &Value, observed_at: &str) -> Option<Value> {
         let description =
             bounded_task_text(task.get("description"), DELEGATION_DESCRIPTION_MAX_CHARS)
                 .or_else(|| bounded_task_text(task.get("name"), DELEGATION_DESCRIPTION_MAX_CHARS));
-        items.push(json!({
+        let mut item = json!({
             "id": id,
             "kind": kind,
             "status": status,
             "description": description,
-        }));
+        });
+        if kind == "subagent" {
+            if let Some(parent_tool_call_id) = parent_tool_call_id(input, &id) {
+                item["parent_tool_call_id"] = json!(parent_tool_call_id);
+            }
+        }
+        items.push(item);
     }
 
     Some(json!({
@@ -1133,6 +1198,79 @@ mod tests {
         assert_eq!(snapshot["items"][0]["description"], "first");
         assert_eq!(snapshot["items"][1]["description"], "Provider monitor");
         assert!(snapshot["items"][1].get("command").is_none());
+    }
+
+    #[test]
+    fn stop_subagent_snapshot_uses_exact_parent_sidecar_tool_use_id() {
+        let root = tempfile::tempdir().unwrap();
+        let transcript = root.path().join("parent.jsonl");
+        std::fs::write(&transcript, b"").unwrap();
+        let subagents = transcript.with_extension("").join("subagents");
+        std::fs::create_dir_all(&subagents).unwrap();
+        std::fs::write(
+            subagents.join("agent-a9b75dc9dc1004699.meta.json"),
+            br#"{"toolUseId":"toolu_parent_proof"}"#,
+        )
+        .unwrap();
+
+        let snapshot = delegation_snapshot(
+            &json!({
+                "hook_event_name": "Stop",
+                "transcript_path": transcript,
+                "background_tasks": [{
+                    "id": "a9b75dc9dc1004699",
+                    "type": "subagent",
+                    "status": "running",
+                    "description": "Sleep and report completion",
+                }],
+            }),
+            "2026-09-25T17:34:21.637638Z",
+        )
+        .unwrap();
+
+        assert_eq!(
+            snapshot["items"][0]["parent_tool_call_id"],
+            "toolu_parent_proof"
+        );
+    }
+
+    #[test]
+    fn sidecar_link_rejects_missing_malformed_and_traversal_inputs() {
+        let root = tempfile::tempdir().unwrap();
+        let transcript = root.path().join("parent.jsonl");
+        std::fs::write(&transcript, b"").unwrap();
+        let subagents = transcript.with_extension("").join("subagents");
+        std::fs::create_dir_all(&subagents).unwrap();
+        std::fs::write(
+            subagents.join("agent-malformed.meta.json"),
+            br#"{"toolUseId":7}"#,
+        )
+        .unwrap();
+        let transcript_path = transcript.to_string_lossy().into_owned();
+        let snapshot_for = |id: &str| {
+            delegation_snapshot(
+                &json!({
+                    "hook_event_name": "Stop",
+                    "transcript_path": transcript_path.clone(),
+                    "background_tasks": [{
+                        "id": id,
+                        "type": "subagent",
+                        "status": "running",
+                    }],
+                }),
+                "2026-09-25T17:34:21.637638Z",
+            )
+            .unwrap()
+        };
+
+        for id in ["missing", "malformed", "../escape"] {
+            assert!(
+                snapshot_for(id)["items"][0]
+                    .get("parent_tool_call_id")
+                    .is_none(),
+                "untrusted sidecar input must not create a parent link: {id}"
+            );
+        }
     }
 
     /// Serialize an environment mutation against the shared lock and restore it.

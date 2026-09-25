@@ -6782,6 +6782,8 @@ export interface components {
              */
             degraded?: components["schemas"]["RecallLaneFailure"][];
             coverage?: components["schemas"]["RecallCoverageSummary"] | null;
+            /** Coverage Unavailable Reason */
+            coverage_unavailable_reason?: string | null;
         };
         /**
          * RecallSearchResult
@@ -10255,6 +10257,7 @@ export interface components {
             lanes?: ("lexical" | "dense")[];
             /** Degraded */
             degraded?: components["schemas"]["MachineSearchLaneFailure"][];
+            coverage?: components["schemas"]["MachineSearchCoverage"] | null;
             /** History Imports */
             history_imports?: components["schemas"]["TimelineHistoryImportResponse"][];
         };

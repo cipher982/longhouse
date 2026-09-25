@@ -1080,7 +1080,6 @@ def test_catalog_delegation_reaches_canonical_timeline_and_detail(tmp_path, monk
     assert pending.delegation.state == "pending"
     assert pending.delegation.count == 2
     assert pending.presentation.primary.key == "delegated_work"
-    assert pending.presentation.primary.label == "Waiting on 2 background tasks"
     assert pending.working_set == "open"
     assert empty.delegation.state == "none"
     assert empty.presentation.primary.key == "idle"

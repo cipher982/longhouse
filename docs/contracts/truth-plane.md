@@ -43,6 +43,11 @@ timestamps, and a navigable child session ID, are supplied only through exact,
 unambiguous child lineage. Historical child end times do not decide whether a
 background task is still active.
 
+For Claude, a parent Stop registry's task ID selects only that parent's exact
+`subagents/agent-<id>.meta.json` sidecar. Its provider-authored `toolUseId` joins
+the existing child lineage; missing, malformed, or ambiguous evidence leaves
+the task visible without a transcript link.
+
 ## Non-goals
 
 - No generic contract DSL, registry, or proof engine.

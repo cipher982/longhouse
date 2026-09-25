@@ -531,23 +531,22 @@ struct SessionRuntimeDock: View {
         "\(detail.id):\(detail.stateFacts.activityValidUntil ?? "")"
     }
     private var statusSignature: String {
-        [
-            detail.id,
-            detail.stateFacts.primary?.key ?? "",
-            detail.stateFacts.activityState,
-            detail.stateFacts.activityTool ?? "",
-            detail.stateFacts.activitySource ?? "",
-            detail.stateFacts.activityObservedAt ?? "",
-            detail.stateFacts.activityValidUntil ?? "",
-            detail.stateFacts.lastResultAt ?? "",
-            detail.stateFacts.delegation?.state ?? "",
-            detail.stateFacts.delegation?.observedAt ?? "",
-            detail.stateFacts.delegation?.validUntil ?? "",
-            String(describing: ledger(asOf: evidenceNow)),
-            String(describing: realtimeConnection),
-            detail.runtimeDisplay.hostState,
-            detail.stateFacts.transcriptConvergence
-        ].joined(separator: "|")
+        var components = [detail.id]
+        components.append(detail.stateFacts.primary?.key ?? "")
+        components.append(detail.stateFacts.activityState)
+        components.append(detail.stateFacts.activityTool ?? "")
+        components.append(detail.stateFacts.activitySource ?? "")
+        components.append(detail.stateFacts.activityObservedAt ?? "")
+        components.append(detail.stateFacts.activityValidUntil ?? "")
+        components.append(detail.stateFacts.lastResultAt ?? "")
+        components.append(detail.stateFacts.delegation?.state ?? "")
+        components.append(detail.stateFacts.delegation?.observedAt ?? "")
+        components.append(detail.stateFacts.delegation?.validUntil ?? "")
+        components.append(String(describing: ledger(asOf: evidenceNow)))
+        components.append(String(describing: realtimeConnection))
+        components.append(detail.runtimeDisplay.hostState)
+        components.append(detail.stateFacts.transcriptConvergence)
+        return components.joined(separator: "|")
     }
 
 
