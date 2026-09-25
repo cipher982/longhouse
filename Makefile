@@ -2,7 +2,7 @@
 
 # Dispatch before reading dotenv: tests never inherit the operator's login.
 # Only a live invocation-scoped child record can bypass host dispatch.
-ISOLATED_GOALS := $(filter test test-% validate validate-% lint-% import-smoke simlab-run menubar-harness ios-ui-shot ios-previews benchmark-ios-transcript onboarding-funnel launch-gate-local hosted-shipper-mixed-bench render-canary cohort-journey qa-% provider-%,$(MAKECMDGOALS))
+ISOLATED_GOALS := $(filter test test-% validate validate-% lint-% import-smoke simlab-run menubar-harness ios-ui-shot ios-previews benchmark-ios-transcript onboarding-funnel launch-gate-local hosted-shipper-mixed-bench render-canary cohort-journey qa-% provider-% ci-%,$(MAKECMDGOALS))
 ifneq ($(shell python3 scripts/qa/test_boundary.py && printf isolated),isolated)
 ifneq ($(strip $(ISOLATED_GOALS)),)
 ifneq ($(words $(ISOLATED_GOALS)),$(words $(MAKECMDGOALS)))
@@ -13,7 +13,7 @@ endif
 endif
 
 ifeq ($(LONGHOUSE_TEST_DISPATCH),1)
-export ARGS TEST MODE FILES SCENARIOS CARGO_PROFILE VERBOSE PYTEST_XDIST_WORKERS PLAYWRIGHT_WORKERS IOS_TEST_SCHEMES PROJECT UNIVERSAL_PROVIDER PROVIDER PRODUCER_CLASS INVOCATION_ID RUN_REFERENCE LONGHOUSE_GIT_SHA PROVIDER_VERSION PROVIDER_EXECUTABLE_IDENTITY STORE_ROOT BUNDLE_OUTPUT ARTIFACT EVIDENCE_ROOT LONGHOUSE_NATIVE_SMOKE_REMOTE LONGHOUSE_NATIVE_SMOKE_EXPECTED_VERSION LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG
+export ARGS TEST MODE FILES SCENARIOS CARGO_PROFILE LIFECYCLE VERBOSE PYTEST_XDIST_WORKERS PLAYWRIGHT_WORKERS IOS_TEST_SCHEMES PROJECT UNIVERSAL_PROVIDER PROVIDER PRODUCER_CLASS INVOCATION_ID RUN_REFERENCE LONGHOUSE_GIT_SHA PROVIDER_VERSION PROVIDER_EXECUTABLE_IDENTITY STORE_ROOT BUNDLE_OUTPUT ARTIFACT EVIDENCE_ROOT LONGHOUSE_NATIVE_SMOKE_REMOTE LONGHOUSE_NATIVE_SMOKE_EXPECTED_VERSION LONGHOUSE_NATIVE_SMOKE_EXPECTED_COMMIT LONGHOUSE_NATIVE_SMOKE_PREVIOUS_TAG
 .PHONY: $(ISOLATED_GOALS)
 $(ISOLATED_GOALS):
 	@python3 scripts/qa/test-isolation.py --target "$@"
@@ -55,6 +55,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: test-provider-contract test-isolation
 .PHONY: affected-check
 .PHONY: validate-affected-check
+.PHONY: ci-validation ci-backend
 
 # ---------------------------------------------------------------------------
 # Help
@@ -590,6 +591,19 @@ test-full: ## Full suite — all tiers (>10min)
 	$(MAKE) test-engine
 	$(MAKE) test-shipper-e2e
 	$(MAKE) test-e2e
+
+# One isolated guest per CI job. Every `make <test goal>` pays a fresh guest
+# (source tarball, git snapshot, editable install, cold imports: 20-60s each on
+# cube), so a job with three steps paid it three times.
+ci-validation: ## @internal CI Validation job: validate, optional lifecycle proof (LIFECYCLE=1), capability proof
+	@$(MAKE) --no-print-directory validate
+	@if [ "$(LIFECYCLE)" = "1" ]; then $(MAKE) --no-print-directory test-managed-launch-lifecycle; fi
+	@$(MAKE) --no-print-directory provider-capability-coordination-proof
+
+ci-backend: ## @internal CI Backend tests job: backend unit tests plus hosted-instance and iOS helper tests
+	@$(MAKE) --no-print-directory test
+	@$(MAKE) --no-print-directory test-hosted-instance
+	@$(MAKE) --no-print-directory test-ios-helper
 
 # CI-referenced test helpers (keep for workflow compatibility)
 test-managed-launch-lifecycle: ## @internal Real Runtime Host + real `longhouse <provider>` launch
