@@ -38,12 +38,6 @@ run_scheme() {
     -derivedDataPath "${DERIVED_DATA_PATH}" \
     build-for-testing
 
-  if [[ -n "${simulator_id:-}" ]]; then
-    local wait_started=${SECONDS}
-    xcrun simctl bootstatus "${simulator_id}" -b >/dev/null
-    echo "[ios] simulator ready; waited $((SECONDS - wait_started))s after the build"
-  fi
-
   if [[ -n "${result_bundle}" ]]; then
     xcodebuild \
       -project "${PROJECT_PATH}" \
@@ -62,19 +56,7 @@ run_scheme() {
   fi
 }
 
-# A cold hosted simulator takes minutes to boot, and xcodebuild otherwise boots
-# it only after the build. Boot it now, in parallel with the build.
-simulator_id=""
-if [[ "${DESTINATION}" =~ id=([0-9A-Fa-f-]+) ]]; then
-  simulator_id="${BASH_REMATCH[1]}"
-  (xcrun simctl boot "${simulator_id}" >/dev/null 2>&1 || true) &
-fi
-
-started=${SECONDS}
 echo "Running iOS schemes: ${IOS_TEST_SCHEMES}"
 for scheme in ${IOS_TEST_SCHEMES}; do
-  scheme_started=${SECONDS}
   run_scheme "${scheme}"
-  echo "[ios] ${scheme}: $((SECONDS - scheme_started))s"
 done
-echo "[ios] total $((SECONDS - started))s"

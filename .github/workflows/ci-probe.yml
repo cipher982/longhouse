@@ -8,17 +8,18 @@ permissions:
   contents: read
   packages: read
 
-env:
-  IMAGE: ghcr.io/cipher982/longhouse-test@sha256:7f3fb268defae5d3a5b06cd9128eb9e5050aad08f65c381662d2cb7c05028584
 
 jobs:
   pull:
-    name: "pull ${{ matrix.variant }}"
-    runs-on: ubuntu-latest
+    name: "pull ${{ matrix.variant }} ${{ matrix.os }}"
+    runs-on: ${{ matrix.os }}
+    env:
+      IMAGE: ${{ matrix.os == 'ubuntu-24.04-arm' && 'ghcr.io/cipher982/longhouse-test-arm64-lab@sha256:3cab960d08c1281230d7bfc5e487900c48a69e7c83344284adf0ec32f703202b' || 'ghcr.io/cipher982/longhouse-test@sha256:7f3fb268defae5d3a5b06cd9128eb9e5050aad08f65c381662d2cb7c05028584' }}
     strategy:
       fail-fast: false
       matrix:
-        variant: [mnt, root, mnt-snapshotter, mnt-conc16, tmpfs-probe]
+        variant: [mnt, mnt-snapshotter]
+        os: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
       - name: Machine
         run: |
@@ -63,7 +64,11 @@ jobs:
           echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           s=$(date +%s.%N); docker pull -q "$IMAGE"; e=$(date +%s.%N)
           echo "PULL ${{ matrix.variant }}: $(echo "$e - $s" | bc) s"
-          s=$(date +%s.%N); docker run --rm --entrypoint true "$IMAGE"; e=$(date +%s.%N)
-          echo "first container start: $(echo "$e - $s" | bc) s"
+          for n in 1 2 3; do
+            s=$(date +%s.%N); docker run --rm --entrypoint true "$IMAGE"; e=$(date +%s.%N)
+            echo "container start $n: $(echo "$e - $s" | bc) s"
+          done
+          s=$(date +%s.%N); docker create --name probe "$IMAGE" true >/dev/null; docker cp . probe:/work >/dev/null; docker rm -f probe >/dev/null; e=$(date +%s.%N)
+          echo "create+cp source+rm: $(echo "$e - $s" | bc) s"
           df -h / /mnt
 
