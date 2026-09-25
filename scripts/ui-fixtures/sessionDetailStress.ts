@@ -1220,7 +1220,11 @@ export function buildSessionResumeFixture(): SessionDetailFixture {
 // (composer, gutter rule, runtime strip) key off
 // `session_state.presentation.primary.tone`, so this is the fixture that lets
 // an agent see all of them side by side without a live session.
-export const SESSION_TONES = ["running", "thinking", "active", "idle", "stalled", "blocked", "closed"] as const;
+//
+// `unknown` is the one frame no served primary tone produces: it is the
+// viewer's own verdict on an activity window that has passed, and its case
+// below keeps the served `primary.tone` at `running` on purpose.
+export const SESSION_TONES = ["running", "thinking", "active", "idle", "stalled", "blocked", "closed", "unknown"] as const;
 export type SessionTone = (typeof SESSION_TONES)[number];
 
 export function buildSessionToneFixture(tone: SessionTone): SessionDetailFixture {
@@ -1260,6 +1264,39 @@ export function buildSessionToneFixture(tone: SessionTone): SessionDetailFixture
       fixture.session.session_state = makeSessionState({
         activity: { state: "quiescent", raw_kind: "waiting", tool: null, source: "managed_local_transport", observed_at: now, valid_until: null },
         presentation: { primary: primary("blocked", "Waiting for approval"), access, transcript: null },
+      });
+      return fixture;
+    case "unknown":
+      // The viewer's own verdict, not the server's: this snapshot was minted
+      // while the turn was live, so `primary` still claims work and only the
+      // reader's clock can tell that the window has passed. Neither working nor
+      // broken, just unobserved -- the frame the "Activity uncertain" alarm used
+      // to be painted on.
+      //
+      // The stale host lease is what makes this tone reachable in a capture at
+      // all: the harness freezes `Date.now` at the fixture time, so the
+      // initial-connection grace (a 2s *duration*) never lifts and an
+      // expiry-only frame renders as `quiet`. Host concern bypasses that grace
+      // and lands on the same tone, the same headline and the same CSS.
+      fixture.session.session_state = makeSessionState({
+        // The session-detail fixtures never carried a `working_set`, so
+        // `openSession` was false and every tone frame fell to the closed-tier
+        // quiet branch. This frame needs the open tier for its tone to exist.
+        working_set: "open",
+        activity: {
+          state: "executing",
+          raw_kind: "running",
+          tool: "exec_command",
+          source: "managed_local_transport",
+          observed_at: "2026-04-15T15:50:00Z",
+          valid_until: "2026-04-15T16:02:00Z",
+        },
+        host: { state: "stale", observed_at: "2026-04-15T15:41:00Z" },
+        presentation: {
+          primary: { key: "executing", label: "Using exec_command", tone: "running", observed_at: "2026-04-15T15:50:00Z" },
+          access,
+          transcript: null,
+        },
       });
       return fixture;
     case "closed": {

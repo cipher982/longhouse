@@ -91,8 +91,12 @@ struct SessionSignalField<Content: View>: View {
     private var materialKind: SessionSignalMaterialKind {
         switch detail.ledgerEvidence(connection: realtimeConnection, asOf: fieldNow) {
         case .working: return .working
-        case .attention, .uncertain: return .exception
-        case .quiet: return .settled
+        // Exception material is reserved for a state the user owns: a question,
+        // an approval, a stalled turn, a control fault. "No current
+        // observation" is information, not an alarm, and the warm wash made it
+        // read as a fault the moment a session opened on a stale snapshot.
+        case .attention: return .exception
+        case .uncertain, .quiet: return .settled
         }
     }
 
@@ -532,6 +536,14 @@ struct SessionRuntimeDock: View {
     private var isExecuting: Bool { isOpen && detail.isSessionExecuting }
     private func ledger(asOf now: Date) -> SessionLedgerEvidence {
         guard isOpen else { return .quiet }
+        // A screen that has never seen a connected stream starts quiet, for the
+        // same window the transport subline already uses. The viewer socket is
+        // not provider evidence (`SessionRealtimeConnection`), so `connecting`
+        // is the ordinary first frame of every open and of every return from
+        // the background; scoring it as an exception opened each session with a
+        // red card and a claim ("no fresh provider evidence") that the served
+        // facts contradicted.
+        if !hasObservedConnection, !startupGraceExpired { return .quiet }
         return detail.ledgerEvidence(connection: realtimeConnection, asOf: now)
     }
 
@@ -668,7 +680,10 @@ struct SessionRuntimeDock: View {
 
 
     private func headlineColor(for state: SessionLedgerEvidence) -> Color {
-        if state == .uncertain { return TranscriptPalette.attention }
+        // Uncertainty reads as quiet text, not as the attention ember. The dot
+        // (`style.dot`) still carries the served tone; this only stops a
+        // missing observation from looking like a fault.
+        if state == .uncertain { return Ember.textSecondary }
         switch style.dot {
         case .attention: return TranscriptPalette.attention
         case .live: return Ember.text
@@ -737,9 +752,17 @@ struct SessionRuntimeDock: View {
     private func exceptionReason(_ state: SessionLedgerEvidence) -> String? {
         switch state {
         case .uncertain:
-            return realtimeConnection == .disconnected
-                ? "Connection lost. The agent may still be working."
-                : "No fresh provider evidence. The agent may still be working."
+            // Three different causes used to share one sentence, so a sleeping
+            // host and a stale observation read alike. Name the one that is
+            // actually true; none of them is a fault the user caused.
+            if realtimeConnection == .disconnected {
+                return "Updates are disconnected. The agent may still be working."
+            }
+            let hostState = detail.runtimeDisplay.hostState
+            if hostState == "offline" || hostState == "stale" {
+                return "The host is \(hostState). The agent may still be working."
+            }
+            return "No fresh provider evidence. The agent may still be working."
         case .attention:
             return detail.activePauseRequest == nil
                 ? nil

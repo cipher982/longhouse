@@ -548,6 +548,15 @@ struct SessionStreamResumeTests {
         #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, ticks: 30))
         #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: true, managed: false, ticks: 11))
         #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: true, ticks: 5))
+        // A claim whose evidence window has passed has no other corrector when
+        // the stream is healthy: nothing further ever arrives, and the compact
+        // detail lane refuses a response carrying no newer catalog commit. The
+        // poll is the one path that gets the server's own verdict back.
+        #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, activityStale: true, ticks: 4))
+        #expect(SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, activityStale: true, ticks: 6))
+        #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, activityStale: true, ticks: 11))
+        #expect(SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, activityStale: true, ticks: 12))
+        #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, activityStale: false, ticks: 6))
 
         let createdAt = Date()
         let working = SubmittedInput(

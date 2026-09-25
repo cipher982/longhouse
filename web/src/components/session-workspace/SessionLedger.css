@@ -177,9 +177,20 @@
   overflow-wrap: anywhere;
 }
 
-.session-ledger[data-work-state="unknown"] .session-ledger__headline,
+/* "Unknown" is information, not a fault: the viewer has no current
+   observation, which is nothing the user owes. The warning color stays
+   reserved for `attention` — a question, an approval, a stalled turn — so a
+   session that opens on a stale or not-yet-connected snapshot reads quiet
+   instead of broken. */
+.session-ledger[data-work-state="unknown"] .session-ledger__headline {
+  color: var(--color-text-secondary);
+}
+
 .session-ledger[data-work-state="unknown"] .session-ledger__glyph,
-.session-ledger[data-work-state="unknown"] .session-ledger__note,
+.session-ledger[data-work-state="unknown"] .session-ledger__note {
+  color: var(--color-text-muted);
+}
+
 .session-ledger[data-work-state="attention"] .session-ledger__headline,
 .session-ledger[data-work-state="attention"] .session-ledger__glyph,
 .session-ledger[data-work-state="attention"] .session-ledger__note {

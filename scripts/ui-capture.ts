@@ -876,7 +876,7 @@ async function captureBundle(
       if (!el) return { selector: sel, found: false };
       const r = el.getBoundingClientRect();
       const c = getComputedStyle(el);
-      const pick = ["display", "position", "flex", "flexGrow", "flexShrink", "flexBasis", "width", "maxWidth", "minWidth", "margin", "padding", "justifyContent", "alignItems", "alignSelf", "gap", "gridTemplateColumns"];
+      const pick = ["display", "position", "flex", "flexGrow", "flexShrink", "flexBasis", "width", "maxWidth", "minWidth", "margin", "padding", "justifyContent", "alignItems", "alignSelf", "gap", "gridTemplateColumns", "color", "backgroundColor", "borderColor"];
       const styles = {};
       for (const k of pick) styles[k] = c[k];
       return { selector: sel, found: true, box: { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }, className: String(el.className).slice(0, 120), styles };

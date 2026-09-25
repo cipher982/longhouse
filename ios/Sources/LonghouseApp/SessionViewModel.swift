@@ -1565,12 +1565,14 @@ final class SessionViewModel: ObservableObject {
                 try? await Task.sleep(nanoseconds: delay)
                 if Task.isCancelled { break }
                 ticks += 1
-                let (connected, hasRunningTool, setupPending, stillHasPendingInput) = await MainActor.run {
-                    (
+                let (connected, hasRunningTool, setupPending, stillHasPendingInput, activityStale) = await MainActor.run {
+                    let now = Date()
+                    return (
                         self.streamConnected,
                         self.lastWorkspaceEvents.contains { $0.toolCallState == .running },
                         self.detail?.canDraftBeforeSendReady == true,
-                        Self.pendingInputPollDelay(submittedInputs: self.submittedInputs, now: Date()) != nil
+                        Self.pendingInputPollDelay(submittedInputs: self.submittedInputs, now: now) != nil,
+                        self.heldActivityEvidenceIsStale(asOf: now)
                     )
                 }
                 let managed = await MainActor.run {
@@ -1590,11 +1592,12 @@ final class SessionViewModel: ObservableObject {
                     managed: managed,
                     setupPending: setupPending,
                     pendingInput: stillHasPendingInput,
+                    activityStale: activityStale,
                     ticks: ticks
                 ) {
                     self.openWaterfall?.mark(
                         "poll_tail",
-                        "connected=\(connected) setup_pending=\(setupPending) pending_input=\(stillHasPendingInput) running_tool=\(hasRunningTool) tick=\(ticks)"
+                        "connected=\(connected) setup_pending=\(setupPending) pending_input=\(stillHasPendingInput) running_tool=\(hasRunningTool) activity_stale=\(activityStale) tick=\(ticks)"
                     )
                     await self.pollTick(sessionId: sessionId, appState: appState)
                 }
@@ -1608,6 +1611,7 @@ final class SessionViewModel: ObservableObject {
         managed: Bool,
         setupPending: Bool = false,
         pendingInput: Bool = false,
+        activityStale: Bool = false,
         ticks: Int
     ) -> Bool {
         if ticks <= 3 { return !connected }
@@ -1624,9 +1628,28 @@ final class SessionViewModel: ObservableObject {
         // Console launch into a 750ms request/build/WebKit-render loop.
         if setupPending { return !connected }
         if !connected { return true }
+        // An activity window is decided by the reader's clock, not by a
+        // provider frame, so a healthy stream can hold a claim nothing will
+        // ever correct: a wedged turn ships nothing further, and the compact
+        // detail lane refuses a response that carries no newer catalog commit.
+        // One slow fetch replaces the client's own guess with the server's
+        // verdict ("Last observed thinking").
+        if activityStale { return ticks.isMultiple(of: 6) }
         if hasRunningTool, ticks % 12 == 0 { return true }
         _ = managed
         return false
+    }
+
+    /// Is this viewer still rendering provider work from a window that has
+    /// passed? Mirrors `SessionStateFacts.activityEvidenceIsLive`, and
+    /// deliberately only asks about evidence the *served facts* claim is live
+    /// work: an unobserved session needs no reconciliation.
+    private func heldActivityEvidenceIsStale(asOf now: Date) -> Bool {
+        guard let facts = detail?.stateFacts else { return false }
+        guard facts.activityState == "thinking" || facts.activityState == "executing" else {
+            return false
+        }
+        return !facts.activityEvidenceIsLive(asOf: now)
     }
 
     static func visiblePollDelayNanoseconds(completedTicks: Int) -> UInt64 {
