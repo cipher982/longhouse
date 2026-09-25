@@ -3806,7 +3806,6 @@ impl EmptyStringFallback for String {
     name = "engine.heartbeat.send",
     skip(client, payload),
     fields(
-        otel.kind = "client",
         http.request.method = "POST",
         http.route = "/api/agents/heartbeat",
         longhouse.spool_pending_count = payload.spool_pending_count as u64,

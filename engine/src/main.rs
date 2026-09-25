@@ -64,7 +64,6 @@ mod managed_source_claim;
 mod managed_terminal;
 mod media_redaction;
 mod media_upload;
-mod observability;
 mod omp_helm_control;
 mod omp_helm_launcher;
 mod omp_print;
@@ -1460,88 +1459,7 @@ fn prune_old_logs(log_dir: &std::path::Path, keep_days: u64) {
     }
 }
 
-fn command_name(command: &Commands) -> &'static str {
-    match command {
-        Commands::Parse { .. } => "parse",
-        Commands::RecoverState { .. } => "recover-state",
-        Commands::BuildIdentity { .. } => "build-identity",
-        Commands::Update { command } => match command {
-            UpdateCommands::Status { .. } => "update-status",
-            UpdateCommands::Check { .. } => "update-check",
-            UpdateCommands::Releases { .. } => "update-releases",
-            UpdateCommands::Rollback { .. } => "update-rollback",
-        },
-        Commands::Device { command } => match command {
-            DeviceCommands::Plan { .. } => "device-plan",
-            DeviceCommands::Status { .. } => "device-status",
-            DeviceCommands::LocalHealth { .. } => "device-local-health",
-            DeviceCommands::ShippingInspect { .. } => "device-shipping-inspect",
-            DeviceCommands::DurabilityAudit { .. } => "device-durability-audit",
-            DeviceCommands::ShippingDiscard { .. } => "device-shipping-discard",
-            DeviceCommands::RepairPlan { .. } => "device-repair-plan",
-            DeviceCommands::Repair { .. } => "device-repair",
-        },
-        Commands::Bench { .. } => "bench",
-        Commands::Ship { .. } => "ship",
-        Commands::Connect { .. } => "connect",
-        Commands::Bind { .. } => "bind",
-        Commands::AntigravityConsoleArgv { .. } => "antigravity-console-argv",
-        Commands::CodexAppServerCanary { .. } => "codex-app-server-canary",
-        Commands::CodexBridge { command } => match command {
-            CodexBridgeCommands::Start { .. } => "codex-bridge-start",
-            CodexBridgeCommands::Run { .. } => "codex-bridge-run",
-            CodexBridgeCommands::Attach { .. } => "codex-bridge-attach",
-            CodexBridgeCommands::Send { .. } => "codex-bridge-send",
-            CodexBridgeCommands::Interrupt { .. } => "codex-bridge-interrupt",
-            CodexBridgeCommands::Steer { .. } => "codex-bridge-steer",
-            CodexBridgeCommands::PauseResponse { .. } => "codex-bridge-pause-response",
-            CodexBridgeCommands::Stop { .. } => "codex-bridge-stop",
-        },
-        Commands::OpencodeBridge { command } => match command {
-            OpencodeBridgeCommands::Start { .. } => "opencode-bridge-start",
-            OpencodeBridgeCommands::Stop { .. } => "opencode-bridge-stop",
-            OpencodeBridgeCommands::Attach { .. } => "opencode-bridge-attach",
-        },
-        Commands::ClaudeChannel { command } => match command {
-            ClaudeChannelCommands::Serve { .. } => "claude-channel-serve",
-            ClaudeChannelCommands::Send { .. } => "claude-channel-send",
-            ClaudeChannelCommands::Interrupt { .. } => "claude-channel-interrupt",
-            ClaudeChannelCommands::Inspect { .. } => "claude-channel-inspect",
-        },
-        Commands::ClaudePermissionGate => "claude-permission-gate",
-        Commands::ClaudeLifecycleHook => "claude-lifecycle-hook",
-        Commands::CursorLifecycleHook { .. } => "cursor-lifecycle-hook",
-        Commands::CursorPermissionHook { .. } => "cursor-permission-hook",
-        Commands::CursorHelm { command } => match command {
-            CursorHelmCommands::ConfigureHooks { .. } => "cursor-helm-configure-hooks",
-            CursorHelmCommands::Launch { .. } => "cursor-helm-launch",
-            CursorHelmCommands::Stop { .. } => "cursor-helm-stop",
-            CursorHelmCommands::Send { .. } => "cursor-helm-send",
-            CursorHelmCommands::Interrupt { .. } => "cursor-helm-interrupt",
-            CursorHelmCommands::CoordinationMcp => "cursor-helm-coordination-mcp",
-        },
-        Commands::PiHelm { command } => match command {
-            PiHelmCommands::Launch { .. } => "pi-helm-launch",
-            PiHelmCommands::Send { .. } => "pi-helm-send",
-            PiHelmCommands::Steer { .. } => "pi-helm-steer",
-            PiHelmCommands::Abort { .. } => "pi-helm-abort",
-            PiHelmCommands::Terminate { .. } => "pi-helm-terminate",
-        },
-        Commands::OmpHelm { command } => match command {
-            OmpHelmCommands::Launch { .. } => "omp-helm-launch",
-            OmpHelmCommands::Send { .. } => "omp-helm-send",
-            OmpHelmCommands::Steer { .. } => "omp-helm-steer",
-            OmpHelmCommands::Abort { .. } => "omp-helm-abort",
-            OmpHelmCommands::Terminate { .. } => "omp-helm-terminate",
-        },
-    }
-}
-
-fn init_tracing_subscriber<W>(
-    writer: W,
-    ansi: bool,
-    command_name: &'static str,
-) -> anyhow::Result<Option<observability::OtelGuard>>
+fn init_tracing_subscriber<W>(writer: W, ansi: bool) -> anyhow::Result<()>
 where
     W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
 {
@@ -1550,24 +1468,15 @@ where
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_writer(writer)
         .with_ansi(ansi);
-    let registry = tracing_subscriber::registry()
+    tracing_subscriber::registry()
         .with(env_filter)
-        .with(fmt_layer);
-
-    if let Some(otel) = observability::build_otel_setup(command_name)? {
-        registry
-            .with(tracing_opentelemetry::layer().with_tracer(otel.tracer))
-            .try_init()?;
-        Ok(Some(otel.guard))
-    } else {
-        registry.try_init()?;
-        Ok(None)
-    }
+        .with(fmt_layer)
+        .try_init()?;
+    Ok(())
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let command_name = command_name(&cli.command);
 
     // Drop leftover image-attach blobs from prior processes before touching
     // anything else. Cheap, best-effort, no-op when empty.
@@ -1579,7 +1488,6 @@ fn main() -> anyhow::Result<()> {
     // For Connect (daemon) mode: use rolling file appender.
     // For all other commands: log to stderr as usual.
     let _guard;
-    let otel_shutdown_guard;
     match &cli.command {
         Commands::Connect { log_dir, .. } => {
             let log_path = resolve_log_dir(log_dir.as_deref());
@@ -1589,14 +1497,13 @@ fn main() -> anyhow::Result<()> {
             let file_appender = tracing_appender::rolling::daily(&log_path, "engine.log");
             let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
             _guard = Some(guard);
-            otel_shutdown_guard = init_tracing_subscriber(non_blocking, false, command_name)?;
+            init_tracing_subscriber(non_blocking, false)?;
         }
         _ => {
             _guard = None;
-            otel_shutdown_guard = init_tracing_subscriber(std::io::stderr, true, command_name)?;
+            init_tracing_subscriber(std::io::stderr, true)?;
         }
     }
-    let _ = &otel_shutdown_guard;
 
     match cli.command {
         Commands::BuildIdentity { json } => {

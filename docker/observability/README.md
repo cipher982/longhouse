@@ -47,10 +47,8 @@ RUNTIME_METRICS_TARGET=host.docker.internal:47300 make observability-up
 
 ## Traces (later)
 
-OTEL trace export is already implemented on both the server
-(`server/zerg/observability.py`) and engine (`engine/src/observability.rs`),
-opt-in via `OTEL_EXPORTER_OTLP_ENDPOINT`. A Tempo backend is intentionally not
-included yet: the engine and server do not currently propagate W3C
-`traceparent` across the ship hop, so traces would be disjoint per process.
-Add Tempo together with trace-context propagation when end-to-end traces are
-worth the wiring.
+OTEL trace export is implemented on the server only
+(`server/zerg/observability.py`), opt-in via `OTEL_EXPORTER_OTLP_ENDPOINT`.
+The engine does not export OTLP: its telemetry path is the heartbeat it
+already sends to the server. A Tempo backend is intentionally not included
+yet.
