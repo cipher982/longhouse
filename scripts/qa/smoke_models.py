@@ -3,7 +3,6 @@
 
 Text models: "What is 2+2?" (max_tokens=5)
 Embedding models: embed the word "test"
-Anthropic models: uses Anthropic SDK (messages API)
 
 Skips models whose API key env var is not set.
 Runs all calls concurrently for speed (~2-3s total).
@@ -35,7 +34,6 @@ PROVIDER_DEFAULT_KEYS = {
     "openrouter": "OPENROUTER_API_KEY",
     "xai": "XAI_API_KEY",
     "groq": "GROQ_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
 }
 
 
@@ -144,28 +142,6 @@ def build_openai_smoke_request(model_id: str) -> dict:
     return request
 
 
-async def smoke_text_anthropic(model_id: str, api_key: str, base_url: str | None) -> str:
-    """Ping an Anthropic-compatible text model."""
-    from anthropic import AsyncAnthropic
-
-    kwargs: dict = {"api_key": api_key, "timeout": 15.0}
-    if base_url:
-        kwargs["base_url"] = base_url
-    client = AsyncAnthropic(**kwargs)
-    try:
-        resp = await client.messages.create(
-            model=model_id,
-            max_tokens=32,
-            messages=[{"role": "user", "content": "What is 2+2? Reply with just the number."}],
-        )
-        content = resp.content[0].text if resp.content else ""
-        if len(content) > 0:
-            return "pass"
-        return "empty response"
-    finally:
-        await client.close()
-
-
 async def smoke_embedding(model_id: str, api_key: str, dims: int, base_url: str | None = None) -> str:
     """Ping an embedding model."""
     from openai import AsyncOpenAI
@@ -194,15 +170,12 @@ async def smoke_one_model(model_id: str, model_info: dict, category: str) -> dic
     if not api_key:
         return {"model": model_id, "category": category, "status": "skipped", "reason": f"{env_var} not set"}
 
-    provider = model_info["provider"]
     base_url = model_info.get("baseUrl")
     t0 = time.monotonic()
 
     try:
         if category == "embedding":
             result = await smoke_embedding(model_id, api_key, model_info.get("dims", 256), base_url)
-        elif provider == "anthropic":
-            result = await smoke_text_anthropic(model_id, api_key, base_url)
         else:
             result = await smoke_text_openai(model_id, api_key, base_url)
 

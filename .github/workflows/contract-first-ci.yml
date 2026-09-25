@@ -622,7 +622,7 @@ jobs:
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
 
       - name: Smoke test all models
-        run: uv run --with openai --with anthropic python scripts/qa/smoke_models.py --ci
+        run: uv run --with openai python scripts/qa/smoke_models.py --ci
 
   oss-qa:
     timeout-minutes: 30
