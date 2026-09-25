@@ -42,6 +42,7 @@ PORT="${LONGHOUSE_LIFECYCLE_SMOKE_PORT:-0}"
 
 FAULT_PROXY_PID=""
 FAULT_URL=""
+FAULT_WORKER_PIDS=()
 CLEANUP_FAILURE=0
 FAILURE_ARTIFACT_DIR=""
 
@@ -136,6 +137,10 @@ cleanup() {
   if [[ "$exit_status" != "0" && -z "$FAILURE_ARTIFACT_DIR" ]]; then
     retain_failure_diagnostics "lifecycle smoke exited with status $exit_status"
   fi
+  local worker
+  for worker in ${FAULT_WORKER_PIDS[@]+"${FAULT_WORKER_PIDS[@]}"}; do
+    stop_child "$worker" "fault matrix worker"
+  done
   stop_child "$FAULT_PROXY_PID" "fault proxy"
   stop_child "$CURSOR_CONTROL_PID" "cursor control"
   stop_child "$CLAUDE_CONTROL_PID" "claude control"
@@ -168,17 +173,19 @@ mkdir -p "$HOME_DIR" "$BIN_DIR"
 # ---------------------------------------------------------------------------
 # Build the real facade + engine pair
 # ---------------------------------------------------------------------------
-# Dev profile on purpose: this proves lifecycle plumbing against a real Runtime
-# Host, not optimized codegen. The `ci` profile (opt-level 3) cost ~7.5 minutes
-# of a 2-CPU guest compiling from scratch; dev builds the same pair in about a
-# third of that, and debug assertions are, if anything, stricter here.
+# The `ci-test` profile, the same one the Engine tests job builds: the fixture
+# image (docker/test.dockerfile) ships its dependencies precompiled, so this
+# compiles only the longhouse-engine crate. This proves lifecycle plumbing
+# against a real Runtime Host, not optimized codegen; ci-test leaves the engine
+# crate unoptimized. CARGO_PROFILE still overrides it for a local rerun.
+LIFECYCLE_CARGO_PROFILE="${CARGO_PROFILE:-ci-test}"
 python3 "$ROOT_DIR/scripts/build/generate_build_identity.py" >/dev/null
 python3 "$ROOT_DIR/scripts/build/cargo.py" exec -- build \
-  --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile dev \
+  --manifest-path "$ROOT_DIR/engine/Cargo.toml" --profile "$LIFECYCLE_CARGO_PROFILE" \
   --bin longhouse --bin longhouse-engine >/dev/null
-cp "$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile dev --bin longhouse)" \
+cp "$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile "$LIFECYCLE_CARGO_PROFILE" --bin longhouse)" \
   "$BIN_DIR/longhouse"
-cp "$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile dev --bin longhouse-engine)" \
+cp "$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile "$LIFECYCLE_CARGO_PROFILE" --bin longhouse-engine)" \
   "$BIN_DIR/longhouse-engine"
 
 # Both Runtime Host and providers must use the disposable identity, even when
@@ -329,6 +336,8 @@ launch_attempt_state() {
     "SELECT state FROM live_session_launch_attempts WHERE session_id = '$1' ORDER BY id DESC LIMIT 1;"
 }
 
+# Only meaningful while launches run one at a time; the concurrent fault matrix
+# below reads each launch's own session identity from its output instead.
 latest_launch_session_id() {
   sqlite3 "$TEST_ROOT/longhouse-live.db" \
     "SELECT session_id FROM live_session_launch_attempts ORDER BY id DESC LIMIT 1;"
@@ -466,6 +475,7 @@ if sys.argv[1:2] == ["create-chat"]:
     raise SystemExit(0)
 
 print("CURSOR_LIFECYCLE_PTY_OK", flush=True)
+print("LONGHOUSE_FAKE_SESSION_ID=" + os.environ.get("LONGHOUSE_MANAGED_SESSION_ID", ""), flush=True)
 if os.environ.get("LONGHOUSE_FAKE_CURSOR_CONTROL") != "1":
     import time
 
@@ -607,6 +617,7 @@ if sys.argv[1:2] == ["auth"]:
     raise SystemExit(0)
 
 print("CLAUDE_LIFECYCLE_PTY_OK", flush=True)
+print("LONGHOUSE_FAKE_SESSION_ID=" + os.environ.get("LONGHOUSE_MANAGED_SESSION_ID", ""), flush=True)
 if os.environ.get("LONGHOUSE_FAKE_CLAUDE_CONTROL") != "1":
     raise SystemExit(int(os.environ.get("LONGHOUSE_FAKE_CLAUDE_EXIT", "0")))
 
@@ -1112,16 +1123,32 @@ echo "ok: provider exit code propagates"
 #    does after the provider is spawned may take that away.
 # ---------------------------------------------------------------------------
 start_fault_proxy() {
-  local path="$1" mode="$2" count="$3" fault_port attempt
-  fault_port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+  local path="$1" mode="$2" count="$3" log="$4" port_file="$4.port" fault_port="" attempt
+  # The proxy binds port 0 itself and reports the port it holds. Probing for a
+  # free port and handing it over released it first, and with four fault
+  # matrices starting proxies at once two of them could draw the same one.
+  rm -f "$port_file"
   python3 "$ROOT_DIR/scripts/ci/runtime-host-fault-proxy.py" \
-    --listen "127.0.0.1:$fault_port" \
+    --listen "127.0.0.1:0" \
+    --port-file "$port_file" \
     --target "127.0.0.1:$PORT" \
     --fault-path "$path" \
     --fault-mode "$mode" \
     --fault-count "$count" \
-    >"$TEST_ROOT/fault-proxy.log" 2>&1 &
+    >"$log" 2>&1 &
   FAULT_PROXY_PID=$!
+  for attempt in $(seq 1 60); do
+    if [[ -s "$port_file" ]]; then
+      fault_port="$(cat "$port_file")"
+      break
+    fi
+    if ! kill -0 "$FAULT_PROXY_PID" 2>/dev/null; then break; fi
+    sleep 0.1
+  done
+  if [[ -z "$fault_port" ]]; then
+    cat "$log" >&2 || true
+    fail "fault proxy never reported its listening port"
+  fi
   FAULT_URL="http://127.0.0.1:$fault_port"
   # /api/health does not match any fault path, so a healthy answer here proves
   # the proxy relays cleanly before the launch depends on it.
@@ -1130,7 +1157,7 @@ start_fault_proxy() {
     if ! kill -0 "$FAULT_PROXY_PID" 2>/dev/null; then break; fi
     sleep 0.2
   done
-  cat "$TEST_ROOT/fault-proxy.log" >&2 || true
+  cat "$log" >&2 || true
   fail "fault proxy never relayed to the Runtime Host"
 }
 
@@ -1174,6 +1201,19 @@ launch_through_fault() {
   esac
 }
 
+# The exact session this launch registered. The fault matrix runs providers
+# concurrently, so "the newest launch attempt" may belong to another provider.
+launched_session_id() {
+  local provider="$1" out_file="$2" pattern
+  case "$provider" in
+    # The scripted provider echoes the LONGHOUSE_MANAGED_SESSION_ID it was given.
+    cursor | claude) pattern='s/^LONGHOUSE_FAKE_SESSION_ID=\([0-9a-f-]*\).*/\1/p' ;;
+    codex | opencode) pattern="s/^Attach: longhouse $provider attach --session-id \([0-9a-f-]*\).*/\1/p" ;;
+    *) fail "no session identity recipe for $1" ;;
+  esac
+  sed -n "$pattern" "$out_file" | tail -1 | tr -d '\r'
+}
+
 # The detached providers leave a bridge and a provider process behind. Their
 # session identity comes from the launcher's own attach hint rather than the
 # database, because a degraded launch never reaches the database at all.
@@ -1193,11 +1233,11 @@ teardown_faulted_launch() {
 # provider, faulted path, fault mode, fault budget, optional expected durable state
 assert_opens_under_fault() {
   local provider="$1" path="$2" mode="$3" count="$4" expected_state="${5:-}"
-  local slug out_file status state
+  local slug out_file status state session_id
   slug="$(printf '%s-%s-%s' "$provider" "${path##*/}" "$mode" | tr -c 'a-zA-Z0-9._-' '_')"
   out_file="$TEST_ROOT/fault-$slug.out"
 
-  start_fault_proxy "$path" "$mode" "$count"
+  start_fault_proxy "$path" "$mode" "$count" "$TEST_ROOT/fault-proxy-$slug.log"
   set +e
   launch_through_fault "$provider" "$out_file"
   status=$?
@@ -1213,7 +1253,9 @@ assert_opens_under_fault() {
     || fail "$provider never started when the Runtime Host answered $mode on $path"
 
   if [[ -n "$expected_state" ]]; then
-    state="$(launch_attempt_state "$(latest_launch_session_id)")"
+    session_id="$(launched_session_id "$provider" "$out_file")"
+    [[ -n "$session_id" ]] || fail "$provider launch under $mode printed no session identity"
+    state="$(launch_attempt_state "$session_id")"
     [[ "$state" == "$expected_state" ]] \
       || fail "$provider: durable launch state was $state, expected $expected_state under $mode"
   fi
@@ -1221,7 +1263,14 @@ assert_opens_under_fault() {
   teardown_faulted_launch "$provider" "$out_file"
 }
 
-for provider in cursor claude codex opencode; do
+# One provider's whole fault matrix, run in its own subshell. Providers run
+# concurrently (the control cycle in 3e already shares this Runtime Host and
+# HOME across all four); cases within one provider stay serial, so no two
+# launches of the same provider overlap. Each case owns its proxy, port, log,
+# and output file, and reads back the exact session it launched.
+fault_matrix() {
+  local provider="$1"
+  trap 'stop_fault_proxy' EXIT
   # The Runtime Host is unreachable for the call, so nothing is committed.
   assert_opens_under_fault "$provider" launch-outcome status:503 0
   # The write commits and only the response is lost. This is the exact incident
@@ -1234,35 +1283,51 @@ for provider in cursor claude codex opencode; do
   # No answer at all, so the launcher's own timeout decides.
   assert_opens_under_fault "$provider" launch-outcome hang 0
   echo "ok: $provider opens through every launch-outcome fault"
-done
 
-# A foreground registration can commit after its response deadline. If the
-# provider then fails before readiness, the replay can also lose its response;
-# the abort must still settle the exact client-minted session rather than pass
-# because the state lookup is empty or leave a late registration pending.
-late_opencode_out="$TEST_ROOT/opencode-late-registration-start-failed.out"
-start_fault_proxy managed-local/this-device forward-status:503 2
-set +e
-LONGHOUSE_FAKE_OPENCODE_START_FAIL=1 \
-  launch_through_fault opencode "$late_opencode_out"
-late_opencode_status=$?
-set -e
-stop_fault_proxy
-[[ "$late_opencode_status" != "0" ]] \
-  || fail "OpenCode startup failure after late registration returned success"
-late_opencode_session_id="$(sed -n 's/^Longhouse OpenCode session: \([0-9a-f-]*\).*/\1/p' \
-  "$late_opencode_out" | tail -1 | tr -d '\r')"
-[[ -n "$late_opencode_session_id" ]] \
-  || fail "late OpenCode startup failure did not print its exact session identity"
-wait_for_value "late OpenCode startup abort" failed 20 \
-  launch_attempt_state "$late_opencode_session_id"
-echo "ok: OpenCode aborts an accepted registration after both responses are lost"
+  if [[ "$provider" == "opencode" ]]; then
+    # A foreground registration can commit after its response deadline. If the
+    # provider then fails before readiness, the replay can also lose its
+    # response; the abort must still settle the exact client-minted session
+    # rather than pass because the state lookup is empty or leave a late
+    # registration pending.
+    local late_out="$TEST_ROOT/opencode-late-registration-start-failed.out"
+    local late_status late_session_id
+    start_fault_proxy managed-local/this-device forward-status:503 2 \
+      "$TEST_ROOT/fault-proxy-opencode-late-registration.log"
+    set +e
+    LONGHOUSE_FAKE_OPENCODE_START_FAIL=1 launch_through_fault opencode "$late_out"
+    late_status=$?
+    set -e
+    stop_fault_proxy
+    [[ "$late_status" != "0" ]] \
+      || fail "OpenCode startup failure after late registration returned success"
+    late_session_id="$(sed -n 's/^Longhouse OpenCode session: \([0-9a-f-]*\).*/\1/p' \
+      "$late_out" | tail -1 | tr -d '\r')"
+    [[ -n "$late_session_id" ]] \
+      || fail "late OpenCode startup failure did not print its exact session identity"
+    wait_for_value "late OpenCode startup abort" failed 20 \
+      launch_attempt_state "$late_session_id"
+    echo "ok: OpenCode aborts an accepted registration after both responses are lost"
+  fi
 
-for provider in cursor claude codex opencode; do
   # Registration degradation has its own recovery path; assert it against the
   # same invariant so both stages are one guarantee rather than two.
   assert_opens_under_fault "$provider" managed-local/this-device status:503 1
   echo "ok: $provider opens when registration is refused"
+}
+
+fault_matrix_started=$SECONDS
+for provider in cursor claude codex opencode; do
+  ( fault_matrix "$provider" ) &
+  FAULT_WORKER_PIDS+=("$!")
 done
+fault_matrix_failures=0
+for worker in "${FAULT_WORKER_PIDS[@]}"; do
+  wait "$worker" || fault_matrix_failures=$((fault_matrix_failures + 1))
+done
+FAULT_WORKER_PIDS=()
+((fault_matrix_failures == 0)) \
+  || fail "$fault_matrix_failures provider fault matrices failed; each reason is printed above"
+echo "ok: every provider fault matrix passed in $((SECONDS - fault_matrix_started))s"
 
 echo "managed launch lifecycle smoke passed"

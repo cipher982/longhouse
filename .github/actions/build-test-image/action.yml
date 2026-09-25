@@ -1,0 +1,44 @@
+name: Build fixture image for one arch
+description: >-
+  Build docker/test.dockerfile from the dependency manifests alone and push it
+  as <tag>-<arch>. Runs on a native runner for the arch (no QEMU: the image
+  compiles Rust dependencies). The caller has checked out the repo and logged
+  in to GHCR.
+inputs:
+  arch:
+    description: amd64 or arm64
+    required: true
+  tag:
+    description: Manifest-hash tag from scripts/qa/test-isolation.py --print-image-key
+    required: true
+  manifest_sha:
+    description: Manifest sha256 baked into the image label
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/hosted-docker-disk
+    - name: Stage the dependency manifests as the build context
+      id: context
+      shell: bash
+      run: |
+        set -euo pipefail
+        context="$RUNNER_TEMP/longhouse-test-image-context"
+        while IFS= read -r path; do
+          mkdir -p "$context/$(dirname "$path")"
+          cp -- "$path" "$context/$path"
+        done < <(python3 scripts/qa/test-isolation.py --print-image-key | jq -r '.manifests[]')
+        echo "context=$context" >> "$GITHUB_OUTPUT"
+    - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+    - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+      with:
+        context: ${{ steps.context.outputs.context }}
+        file: ${{ steps.context.outputs.context }}/docker/test.dockerfile
+        platforms: linux/${{ inputs.arch }}
+        build-args: TEST_MANIFEST_SHA=${{ inputs.manifest_sha }}
+        labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+        tags: ghcr.io/${{ github.repository_owner }}/longhouse-test:${{ inputs.tag }}-${{ inputs.arch }}
+        # zstd, not gzip: every consumer job unpacks ~9 GB.
+        outputs: type=image,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+        cache-from: type=gha,scope=longhouse-test-deps-${{ inputs.arch }}
+        cache-to: type=gha,mode=max,scope=longhouse-test-deps-${{ inputs.arch }}

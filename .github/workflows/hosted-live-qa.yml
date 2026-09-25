@@ -93,7 +93,17 @@ jobs:
           set -euo pipefail
           key="$(python3 scripts/qa/test-isolation.py --print-image-key | jq -r '.tag')"
           image="ghcr.io/${{ github.repository_owner }}/longhouse-test:${key}"
-          digest="$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' | jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))')"
+          # CI publishes this multi-arch tag after its amd64 build, which runs
+          # off CI's critical path; after a dependency change the deploy can
+          # finish first, so wait for the tag (registry calls, no API quota).
+          for attempt in $(seq 1 40); do
+            if digest="$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' 2>/dev/null | jq -er '.digest | select(test("^sha256:[a-f0-9]{64}$"))')"; then
+              break
+            fi
+            [[ "$attempt" -lt 40 ]] || { echo "fixture image $image never appeared" >&2; exit 1; }
+            echo "waiting for fixture image $image ($attempt/40)"
+            sleep 30
+          done
           echo "LONGHOUSE_TEST_IMAGE_REF=${image%:*}@${digest}" >> "$GITHUB_ENV"
 
       - name: Pull credential-free isolation image by digest

@@ -25,6 +25,7 @@ Fault modes:
 """
 
 import argparse
+import os
 import socket
 import struct
 import threading
@@ -208,6 +209,10 @@ def main() -> None:
     )
     parser.add_argument("--hang-seconds", type=float, default=20.0)
     parser.add_argument("--forward-timeout", type=float, default=30.0)
+    parser.add_argument(
+        "--port-file",
+        help="after listening, write the bound port here (use with --listen HOST:0)",
+    )
     args = parser.parse_args()
 
     if not (
@@ -224,6 +229,14 @@ def main() -> None:
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(args.listen)
     listener.listen(128)
+    if args.port_file:
+        # Bind port 0 and report what the kernel chose: probing for a free port
+        # and binding it later lets a concurrent caller take it in between.
+        # Rename so a reader never sees a partially written file.
+        partial = args.port_file + ".partial"
+        with open(partial, "w") as handle:
+            handle.write(f"{listener.getsockname()[1]}\n")
+        os.replace(partial, args.port_file)
     while True:
         client, _ = listener.accept()
         threading.Thread(target=serve_client, args=(client, args, budget), daemon=True).start()

@@ -575,9 +575,15 @@ def _create_declared_indexes(engine: Engine, metadata: MetaData) -> None:
     indexes now rather than leaving production silently unindexed.
     """
 
-    for table in metadata.sorted_tables:
-        for index in table.indexes:
-            index.create(bind=engine, checkfirst=True)
+    # One sqlite_master read, not ``checkfirst`` per index: that reflects every
+    # index of the table for each index it checks, which was most of catalog
+    # startup (~50 ms per open, paid by every daemon and test catalog).
+    with engine.begin() as connection:
+        existing = set(connection.exec_driver_sql("SELECT tbl_name, name FROM sqlite_master WHERE type = 'index'").all())
+        for table in metadata.sorted_tables:
+            for index in table.indexes:
+                if (table.name, index.name) not in existing:
+                    index.create(bind=connection)
 
 
 def _user_version(connection) -> int:
@@ -897,6 +903,83 @@ def _initialize_storage_telemetry_accounting(engine: Engine) -> None:
             connection.exec_driver_sql(statement)
 
 
+def _create_declared_schema(engine: Engine) -> None:
+    LiveBase.metadata.create_all(bind=engine)
+    CatalogBase.metadata.create_all(bind=engine)
+    _catalog_metadata.create_all(bind=engine)
+
+
+def _database_is_empty(engine: Engine) -> bool:
+    with engine.connect() as connection:
+        return connection.exec_driver_sql("SELECT COUNT(*) FROM sqlite_master").scalar_one() == 0
+
+
+_declared_schema_ddl: tuple[str, ...] | None = None
+
+
+def _declared_schema_statements() -> tuple[str, ...]:
+    """The CREATE statements ``_create_declared_schema`` emits, in order.
+
+    Compiled once per process from an in-memory catalog. Two threads racing
+    here both compute the same tuple, so no lock is needed.
+    """
+
+    global _declared_schema_ddl
+    if _declared_schema_ddl is None:
+        template = create_catalog_engine("sqlite://")
+        try:
+            _create_declared_schema(template)
+            with template.connect() as connection:
+                rows = connection.exec_driver_sql(
+                    "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY rowid"
+                ).all()
+        finally:
+            template.dispose()
+        _declared_schema_ddl = tuple(row[0] for row in rows)
+    return _declared_schema_ddl
+
+
+def _replay_declared_schema_if_empty(engine: Engine) -> bool:
+    """Create the declared schema from cached DDL text if the database is empty.
+
+    Emitting the ~300 CREATE statements through SQLAlchemy costs ~20 ms per
+    catalog, almost all of it DDL compilation, and a fresh catalog is created
+    per test many hundreds of times a suite. The statement text is compiled
+    once per process and replayed here. The emptiness recheck and the replay
+    share one ``BEGIN IMMEDIATE`` transaction, so SQLite's write lock --
+    which spans threads and processes, in WAL mode too -- guarantees no
+    other writer created anything in between. Returns False, having written
+    nothing, when the database is not empty or the connection is busy.
+    """
+
+    statements = _declared_schema_statements()
+    raw = engine.raw_connection()
+    try:
+        driver = raw.driver_connection
+        if driver.in_transaction:
+            return False
+        cursor = driver.cursor()
+        try:
+            cursor.execute("BEGIN IMMEDIATE")
+            try:
+                empty = cursor.execute("SELECT COUNT(*) FROM sqlite_master").fetchone()[0] == 0
+                if empty and cursor.execute("PRAGMA user_version").fetchone()[0] == 0:
+                    for statement in statements:
+                        cursor.execute(statement)
+                    cursor.execute("COMMIT")
+                    return True
+                cursor.execute("ROLLBACK")
+                return False
+            except BaseException:
+                if driver.in_transaction:
+                    cursor.execute("ROLLBACK")
+                raise
+        finally:
+            cursor.close()
+    finally:
+        raw.close()
+
+
 def initialize_catalog_schema(engine: Engine) -> CatalogMeta:
     """Create or idempotently upgrade the v1 live catalog schema."""
 
@@ -934,15 +1017,17 @@ def initialize_catalog_schema(engine: Engine) -> CatalogMeta:
     elif user_version != 0:
         raise CatalogSchemaMismatchError(f"PRAGMA user_version={user_version} is set but catalog_meta is missing")
 
-    LiveBase.metadata.create_all(bind=engine)
-    CatalogBase.metadata.create_all(bind=engine)
-    _catalog_metadata.create_all(bind=engine)
-    _safe_additive_columns(engine, LiveBase.metadata)
-    _safe_additive_columns(engine, CatalogBase.metadata)
-    _safe_additive_columns(engine, _catalog_metadata)
-    _create_declared_indexes(engine, LiveBase.metadata)
-    _create_declared_indexes(engine, CatalogBase.metadata)
-    _create_declared_indexes(engine, _catalog_metadata)
+    # The unlocked pre-check keeps existing catalogs off the write lock; the
+    # replay rechecks under it.
+    replayed = not table_names and user_version == 0 and _database_is_empty(engine) and _replay_declared_schema_if_empty(engine)
+    if not replayed:
+        _create_declared_schema(engine)
+        _safe_additive_columns(engine, LiveBase.metadata)
+        _safe_additive_columns(engine, CatalogBase.metadata)
+        _safe_additive_columns(engine, _catalog_metadata)
+        _create_declared_indexes(engine, LiveBase.metadata)
+        _create_declared_indexes(engine, CatalogBase.metadata)
+        _create_declared_indexes(engine, _catalog_metadata)
     _validate_fact_reducer_schema(engine)
 
     if not has_meta_table:

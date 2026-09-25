@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC
 from datetime import datetime
@@ -49,6 +50,79 @@ def test_greenfield_catalog_has_pragmas_live_schema_and_identity(tmp_path):
         "fact_receipts",
         "fact_conflicts",
     }.issubset(tables)
+
+
+def _schema_rows(engine):
+    with engine.connect() as connection:
+        return connection.exec_driver_sql(
+            "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name != 'unrelated' ORDER BY type, name"
+        ).all()
+
+
+def test_empty_catalog_copied_from_template_matches_emitted_ddl(tmp_path):
+    # An empty database takes the page-copied template; one holding any other
+    # object runs the CREATE statements. Both must end in the same schema.
+    copied = create_catalog_engine(tmp_path / "copied.db")
+    emitted = create_catalog_engine(tmp_path / "emitted.db")
+    with emitted.begin() as connection:
+        connection.exec_driver_sql("CREATE TABLE unrelated (id INTEGER)")
+
+    copied_meta = initialize_catalog_schema(copied)
+    emitted_meta = initialize_catalog_schema(emitted)
+    second_copied = create_catalog_engine(tmp_path / "second.db")
+    second_meta = initialize_catalog_schema(second_copied)
+
+    assert _schema_rows(copied) == _schema_rows(emitted)
+    assert len(_schema_rows(copied)) > 100
+    assert len({copied_meta.catalog_id, emitted_meta.catalog_id, second_meta.catalog_id}) == 3
+    with copied.connect() as connection:
+        assert connection.exec_driver_sql("PRAGMA journal_mode").scalar_one() == "wal"
+        assert connection.exec_driver_sql("PRAGMA user_version").scalar_one() == CATALOG_SCHEMA_VERSION
+        assert connection.exec_driver_sql("PRAGMA integrity_check").scalar_one() == "ok"
+    for engine in (copied, emitted, second_copied):
+        engine.dispose()
+
+
+def test_greenfield_race_never_replaces_a_committed_catalog_identity(tmp_path):
+    # B decides the database is empty, then A creates the whole catalog and
+    # commits its identity before B writes any schema. B must not replace
+    # A's catalog; failing with the same error the create_all path raises
+    # (duplicate catalog_meta singleton) is acceptable.
+    database = tmp_path / "longhouse-live.db"
+    b_checked_empty = threading.Event()
+    a_committed = threading.Event()
+    b_engine = create_catalog_engine(database)
+
+    @event.listens_for(b_engine, "after_cursor_execute")
+    def pause_after_emptiness_check(conn, cursor, statement, parameters, context, executemany):
+        if "COUNT(*) FROM sqlite_master" in statement and not b_checked_empty.is_set():
+            b_checked_empty.set()
+            assert a_committed.wait(timeout=10)
+
+    b_outcome: list[object] = []
+
+    def initialize_b():
+        try:
+            b_outcome.append(initialize_catalog_schema(b_engine))
+        except Exception as exc:  # noqa: BLE001 - the outcome is asserted below
+            b_outcome.append(exc)
+
+    b_thread = threading.Thread(target=initialize_b)
+    b_thread.start()
+    assert b_checked_empty.wait(timeout=10)
+    a_engine = create_catalog_engine(database)
+    a_meta = initialize_catalog_schema(a_engine)
+    a_committed.set()
+    b_thread.join(timeout=20)
+    assert not b_thread.is_alive()
+
+    durable = catalog_schema.read_catalog_meta(a_engine)
+    assert durable.catalog_id == a_meta.catalog_id
+    (outcome,) = b_outcome
+    if not isinstance(outcome, Exception):
+        assert outcome.catalog_id == a_meta.catalog_id
+    for engine in (a_engine, b_engine):
+        engine.dispose()
 
 
 def test_initialize_is_idempotent_and_preserves_catalog_identity(tmp_path):

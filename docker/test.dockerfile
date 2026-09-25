@@ -43,6 +43,37 @@ COPY engine/Cargo.toml engine/Cargo.lock engine/
 RUN mkdir -p engine/src && touch engine/src/main.rs engine/src/longhouse.rs \
     && cargo fetch --manifest-path engine/Cargo.toml --locked \
     && rm -rf engine/src
+# --- Prebuilt engine dependencies (ci-test profile) -------------------------
+# Self-contained: inputs are engine/Cargo.toml + Cargo.lock (already in the
+# image hash, MANIFESTS in scripts/qa/test-isolation.py), the toolchain, and the
+# registry fetched above; the only output is /work/.build/cargo-target, the
+# directory scripts/build/cargo.py resolves for /work inside the guest.
+# Every CI engine build (Engine tests, the Validation lifecycle proof) uses
+# CARGO_PROFILE=ci-test, so a guest compiles just the longhouse-engine crate
+# instead of ~240 dependencies. Both dependency sets are built: `build --bins`
+# and nextest's `test --no-run --bins --tests`, since dev-dependencies can
+# unify features differently.
+# The stub crate has no build.rs and empty bins; its own outputs and
+# fingerprints are deleted so the real source (whose tarred mtimes may predate
+# this layer) can never look fresh. Dependency fingerprints stay valid in the
+# guest: registry packages are fingerprinted by version, not mtime, and paths,
+# rustc, profile and features are identical. Other profiles still build from
+# scratch into the same target directory.
+RUN set -eu; \
+    target=/work/.build/cargo-target; \
+    mkdir -p engine/src; \
+    printf 'fn main() {}\n' > engine/src/main.rs; \
+    cp engine/src/main.rs engine/src/longhouse.rs; \
+    CARGO_TARGET_DIR="$target" cargo build --manifest-path engine/Cargo.toml \
+      --locked --offline --profile ci-test --bins; \
+    CARGO_TARGET_DIR="$target" cargo test --manifest-path engine/Cargo.toml \
+      --locked --offline --profile ci-test --bins --tests --no-run; \
+    rm -rf engine/src \
+      "$target"/ci-test/longhouse* \
+      "$target"/ci-test/deps/longhouse* \
+      "$target"/ci-test/.fingerprint/longhouse-engine-*; \
+    du -sh "$target"
+# ---------------------------------------------------------------------------
 RUN rustup component add rustfmt
 # cargo-nextest runs each engine test in its own process (`make test-engine`).
 # Pinned release binary, verified against the GitHub release asset digest.
