@@ -125,7 +125,6 @@ MANIFESTS = (
     "web/package.json",
     "e2e/package.json",
     "runner/package.json",
-    "video/package.json",
     "server/pyproject.toml",
     "server/uv.lock",
     "engine/Cargo.toml",

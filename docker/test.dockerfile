@@ -135,7 +135,6 @@ COPY package.json bun.lock ./
 COPY web/package.json web/package.json
 COPY e2e/package.json e2e/package.json
 COPY runner/package.json runner/package.json
-COPY video/package.json video/package.json
 RUN bun install --frozen-lockfile \
     && node -e 'if (require("playwright/package.json").version !== process.env.PLAYWRIGHT_VERSION) throw new Error("Update PLAYWRIGHT_VERSION to match bun.lock")'
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
