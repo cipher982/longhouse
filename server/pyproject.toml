@@ -119,6 +119,13 @@ exclude = [
 [tool.uv]
 # Keep cache inside repo for hermetic test runs
 cache-dir = "./.uv_cache"
+# tokenizers declares huggingface-hub (which pulls hf-xet, a Rust network
+# client for HF storage, plus fsspec and filelock) for Tokenizer.from_pretrained.
+# The local embedder only calls Tokenizer.from_file on a checksum-pinned
+# artifact fetched by zerg/services/embedding_artifact.py, which works without
+# the hub. Applies to uv-built installs (the runtime image, dev); a plain
+# `uv tool install longhouse` from PyPI still resolves tokenizers' metadata.
+exclude-dependencies = ["huggingface-hub"]
 
 [tool.ruff]
 line-length = 140
