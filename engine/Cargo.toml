@@ -29,10 +29,10 @@ flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 zstd = "0.13"
 
 # HTTP
-base64 = "0.22"
+base64 = "0.23"
 reqwest = { version = "0.12", features = ["json", "gzip", "rustls-tls"], default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "io-std", "signal", "sync", "time", "process", "macros"] }
-tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots", "rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots", "rustls-tls-webpki-roots"] }
 futures-util = "0.3"
 
 # SQLite
@@ -43,7 +43,7 @@ rayon = "1"
 crossbeam-channel = "0.5"
 
 # Filesystem watching
-notify = "7"
+notify = "8.2"
 
 # Memory-mapped I/O
 memmap2 = "0.9"
@@ -61,7 +61,7 @@ opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.31.1", features = ["trace", "http-proto", "reqwest-client", "reqwest-rustls"] }
 
 # Random (jitter for 429 backoff)
-rand = "0.8"
+rand = "0.9"
 
 # System calls (disk free bytes)
 libc = "0.2"

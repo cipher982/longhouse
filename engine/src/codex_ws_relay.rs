@@ -35,7 +35,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use base64::Engine as _;
-use rand::RngCore as _;
+use rand::TryRngCore as _;
 use std::time::Duration;
 use tokio::io::{copy, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -72,7 +72,9 @@ fn accept_error_needs_backoff(err: &std::io::Error) -> bool {
 /// no caller should have to reason about.
 pub fn generate_auth_token() -> String {
     let mut bytes = [0_u8; 24];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    rand::rngs::OsRng
+        .try_fill_bytes(&mut bytes)
+        .expect("OS random source is unavailable");
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 

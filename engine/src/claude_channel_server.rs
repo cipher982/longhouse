@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use base64::Engine as _;
 use chrono::{DateTime, Utc};
-use rand::RngCore;
+use rand::TryRngCore;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
@@ -1514,7 +1514,9 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
 
 fn random_token() -> String {
     let mut bytes = [0_u8; 24];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    rand::rngs::OsRng
+        .try_fill_bytes(&mut bytes)
+        .expect("OS random source is unavailable");
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 

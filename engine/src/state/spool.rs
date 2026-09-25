@@ -1280,7 +1280,7 @@ impl<'a> Spool<'a> {
 
 fn jittered_chrono_delay(delay: Duration) -> chrono::Duration {
     let max_millis = delay.as_millis().min((BACKOFF_MAX * 1000.0) as u128).max(1) as i64;
-    let jitter_millis = rand::thread_rng().gen_range(1..=max_millis);
+    let jitter_millis = rand::rng().random_range(1..=max_millis);
     chrono::Duration::milliseconds(jitter_millis)
 }
 
@@ -1290,7 +1290,7 @@ fn retry_after_chrono_delay(delay: Duration) -> chrono::Duration {
         .min(15_000)
         .min((BACKOFF_MAX * 1000.0) as u128)
         .max(1) as i64;
-    let jitter_millis = rand::thread_rng().gen_range(1..=jitter_cap);
+    let jitter_millis = rand::rng().random_range(1..=jitter_cap);
     base + chrono::Duration::milliseconds(jitter_millis)
 }
 

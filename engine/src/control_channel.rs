@@ -864,7 +864,7 @@ async fn run_once(
     });
     send_control_message(
         &mut stream,
-        Message::Text(hello.to_string()),
+        Message::Text(hello.to_string().into()),
         "machine control hello",
         status,
     )
@@ -906,7 +906,7 @@ async fn run_once(
                 if let Some(frame) = readiness_update_frame(&last_capabilities, &capabilities) {
                     send_control_message(
                         &mut stream,
-                        Message::Text(frame.to_string()),
+                        Message::Text(frame.to_string().into()),
                         "machine control readiness update",
                         status,
                     )
@@ -919,7 +919,7 @@ async fn run_once(
                 completed_commands.insert(command_id, result.clone());
                 send_control_message(
                     &mut stream,
-                    Message::Text(result.to_string()),
+                    Message::Text(result.to_string().into()),
                     "machine control command result",
                     status,
                 )
@@ -939,7 +939,7 @@ async fn run_once(
                 next_heartbeat_due = now + heartbeat_interval;
                 send_control_message(
                     &mut stream,
-                    Message::Text(heartbeat_frame().to_string()),
+                    Message::Text(heartbeat_frame().to_string().into()),
                     "machine control heartbeat",
                     status,
                 )
@@ -987,7 +987,7 @@ async fn run_once(
                     let result = command_error("", "invalid_command", "command_id is required");
                     send_control_message(
                         &mut stream,
-                        Message::Text(result.to_string()),
+                        Message::Text(result.to_string().into()),
                         "machine control command result",
                         status,
                     )
@@ -998,7 +998,7 @@ async fn run_once(
                     if let Some(result) = completed_commands.get(&command_id) {
                         send_control_message(
                             &mut stream,
-                            Message::Text(result.to_string()),
+                            Message::Text(result.to_string().into()),
                             "machine control command result",
                             status,
                         )
