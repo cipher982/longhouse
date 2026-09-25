@@ -327,10 +327,9 @@ def _google_jwks() -> jwt.PyJWKClient:
 
 def _verify_google_id_token(id_token_str: str) -> dict[str, Any]:
     """Verify a Google Identity Services ID token: RS256 signature against
-    Google's JWKS, issuer, audience (one of our OAuth client IDs) and expiry."""
-    settings = get_settings()
-    valid_client_ids = [cid for cid in [settings.google_client_id, settings.google_ios_client_id] if cid]
-    if not valid_client_ids:
+    Google's JWKS, issuer, audience (our web OAuth client ID) and expiry."""
+    client_id = get_settings().google_client_id
+    if not client_id:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="GOOGLE_CLIENT_ID not set")
 
     try:
@@ -339,7 +338,7 @@ def _verify_google_id_token(id_token_str: str) -> dict[str, Any]:
             id_token_str,
             signing_key.key,
             algorithms=["RS256"],
-            audience=valid_client_ids,
+            audience=client_id,
             issuer=_GOOGLE_ISSUERS,
             options={"require": ["exp", "iat", "iss", "aud", "sub"]},
         )

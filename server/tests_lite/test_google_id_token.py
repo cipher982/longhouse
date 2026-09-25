@@ -21,7 +21,7 @@ def _google_keys(monkeypatch):
     monkeypatch.setattr(
         auth_browser,
         "get_settings",
-        lambda: SimpleNamespace(google_client_id=CLIENT_ID, google_ios_client_id=None),
+        lambda: SimpleNamespace(google_client_id=CLIENT_ID),
     )
     signing_key = SimpleNamespace(key=_KEY.public_key())
     monkeypatch.setattr(auth_browser, "_google_jwks", lambda: SimpleNamespace(get_signing_key_from_jwt=lambda _token: signing_key))
