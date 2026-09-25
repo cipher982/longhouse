@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from typing import Any
 from typing import Literal
 from typing import Optional
 from uuid import UUID
@@ -467,6 +468,17 @@ async def search_storage_v2_context(
     return _RecallContextPayload.model_validate(result)
 
 
+# Coverage rides on every recall, sessions and timeline response, but it moves
+# only as a rebuild progresses. Computing it per request cost two extra round
+# trips, one of them a full count of searchd's session index (~94 ms on the
+# 38k-session owner corpus) queued on searchd's single reader lane ahead of
+# the next search. A short cache keeps the notice current enough.
+_SEARCH_COVERAGE_TTL_SECONDS = 30.0
+# Keyed by the searchd client too, so a replaced client (restart, test fake)
+# never serves another client's answer; the entry holds the client alive.
+_search_coverage_cache: dict[tuple[int, int], tuple[float, object, dict[str, object]]] = {}
+
+
 async def read_search_coverage(*, owner_id: int) -> dict[str, object] | None:
     """Best-effort scope and freshness of the searched lexical index.
 
@@ -479,6 +491,17 @@ async def read_search_coverage(*, owner_id: int) -> dict[str, object] | None:
     search = get_searchd_client()
     if search is None:
         return None
+    key = (owner_id, id(search))
+    cached = _search_coverage_cache.get(key)
+    if cached is not None and time.monotonic() - cached[0] < _SEARCH_COVERAGE_TTL_SECONDS:
+        return cached[2]
+    coverage = await _read_search_coverage_uncached(owner_id=owner_id, search=search)
+    if coverage is not None:
+        _search_coverage_cache[key] = (time.monotonic(), search, coverage)
+    return coverage
+
+
+async def _read_search_coverage_uncached(*, owner_id: int, search: Any) -> dict[str, object] | None:
     try:
         payload = await search.call("search.coverage.v2", {"owner_id": str(owner_id)}, timeout_seconds=1.5)
     except Exception:
