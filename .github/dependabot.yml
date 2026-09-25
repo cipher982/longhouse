@@ -6,7 +6,6 @@ updates:
   - package-ecosystem: "github-actions"
     directories:
       - "/"
-      - "/.github/actions/check-freshness"
       - "/.github/actions/wait-for-ci"
     schedule:
       interval: "weekly"
@@ -14,5 +13,26 @@ updates:
       prefix: "ci"
     groups:
       github-actions:
+        patterns:
+          - "*"
+
+  # Container bases are digest-pinned; Dependabot refreshes the digests (and
+  # patch tags) so pinned images still pick up security rebuilds.
+  - package-ecosystem: "docker"
+    directories:
+      - "/docker"
+      - "/runner"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "docker"
+    ignore:
+      # Python and Bun minor lines are moved deliberately, not by a bot.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "oven/bun"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+    groups:
+      docker-bases:
         patterns:
           - "*"

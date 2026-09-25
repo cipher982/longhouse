@@ -1,0 +1,13 @@
+# BuildKit uses this instead of the root .dockerignore for runner/Dockerfile.
+# Root context, narrow allowlist: the workspace lockfile, every workspace
+# manifest (Bun validates the lockfile against all of them), and runner source.
+*
+!package.json
+!bun.lock
+!web/package.json
+!video/package.json
+!e2e/package.json
+!runner/package.json
+!runner/tsconfig.json
+!runner/src/
+!runner/src/**

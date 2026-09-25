@@ -7,6 +7,8 @@ on:
       - "runner-v*"
     paths:
       - "runner/**"
+      - "package.json"
+      - "bun.lock"
       - ".github/workflows/runner-image.yml"
   workflow_dispatch: {}
 
@@ -52,7 +54,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
-          context: runner
+          context: .
           file: runner/Dockerfile
           push: true
           platforms: linux/amd64,linux/arm64
