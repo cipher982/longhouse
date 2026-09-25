@@ -90,6 +90,27 @@ final class LaunchProviderPickerTests: XCTestCase {
         open(picker: "launch-model-picker", pushed: "Choose Model", in: app)
     }
 
+    /// The model row must say what it is. The provider row directly above it
+    /// already reads "Coding agent", so a bare provider name or a
+    /// "Coding model" subtitle here reads as a near-duplicate label rather than
+    /// as an answer about which model will run.
+    func testLaunchSheetModelRowStatesTheChoice() {
+        let app = launchLaunchSheet()
+
+        let row = app.descendants(matching: .any)["launch-model-picker"]
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "Launch sheet did not render the model row.")
+        attach(app.screenshot(), name: "launch-model-row")
+
+        XCTAssertTrue(
+            row.label.contains("Model ·"),
+            "Model row does not name itself. label=\(row.label)"
+        )
+        XCTAssertFalse(
+            row.label.contains("Coding model"),
+            "Model row still uses the near-duplicate subtitle. label=\(row.label)"
+        )
+    }
+
     private func launchLaunchSheet() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment[LaunchEnvironment.launchSessionFixture] = "1"

@@ -266,7 +266,15 @@ struct LaunchSessionSheet: View {
                     } label: {
                         LaunchSummaryRow(
                             title: selectedModelTitle,
-                            subtitle: "Coding model",
+                            // The provider row directly above already says
+                            // "Coding agent", so "Coding model" here read as a
+                            // near-duplicate label rather than as an answer.
+                            // Name the row, and when nothing is pinned say why
+                            // no model name appears: the agent's own config on
+                            // that machine decides.
+                            subtitle: normalizedModel == nil
+                                ? "Model · let \(providerDisplayName(selectedProvider)) on this machine choose"
+                                : "Model · set for this session",
                             showsChevron: true
                         )
                     }
