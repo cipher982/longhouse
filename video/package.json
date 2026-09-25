@@ -30,9 +30,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "remotion": "4.0.261",
-    "@remotion/cli": "4.0.261",
-    "@remotion/transitions": "4.0.261",
+    "remotion": "4.0.528",
+    "@remotion/cli": "4.0.528",
+    "@remotion/transitions": "4.0.528",
     "react": "19.2.1",
     "react-dom": "19.2.1"
   },

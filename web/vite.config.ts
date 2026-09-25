@@ -103,6 +103,14 @@ export default defineConfig(({ mode }) => {
     base: basePath,
     resolve: {
       preserveSymlinks: false,
+      // The landing demo's data and TerminalGrid live in video/src/demo, which
+      // imports nothing from Remotion. Reach it by path so the default
+      // workspace install never pulls Remotion; video/ is its own install
+      // (`cd video && bun install`) used only to render. Mirrored in
+      // tsconfig.base.json `paths`.
+      alias: {
+        "@longhouse/video/demo": path.resolve(import.meta.dirname, "../video/src/demo/index.ts"),
+      },
       // Prevent React duplication across workspaces/hoisting
       dedupe: ["react", "react-dom", "react/jsx-runtime", "react/jsx-dev-runtime"],
     },

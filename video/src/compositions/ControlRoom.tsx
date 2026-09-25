@@ -27,6 +27,7 @@ import {
   claudeGrid,
   claudeTile,
   codexTile,
+  opencodeTile,
 } from "../demo";
 
 /**
@@ -50,7 +51,7 @@ const BG = DEMO_PALETTE.bg;
 const GOLD = DEMO_PALETTE.gold;
 const CREAM = DEMO_PALETTE.cream;
 
-const RECORDINGS = { claudeTile, codexTile } as const;
+const RECORDINGS = { claudeTile, codexTile, opencodeTile } as const;
 
 const Caption: React.FC<{ text: string; delay?: number }> = ({ text, delay = 8 }) => {
   const frame = useCurrentFrame();

@@ -7,8 +7,7 @@
   "workspaces": [
     "web",
     "e2e",
-    "runner",
-    "video"
+    "runner"
   ],
   "scripts": {
     "dev": "make dev",

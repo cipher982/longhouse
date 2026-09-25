@@ -185,7 +185,8 @@ Verify loop (never skip; this is the vision-check rule):
    personal instance.
 2. `make test-frontend`; `make qa-landing-live` (layout + handoff causality).
 3. Export lane when it matters (composition or recordings changed):
-   `cd video && bunx tsc --noEmit && bun run render:control`, extract
+   `cd video && bun install && bunx tsc --noEmit && bun run render:control`
+   (video/ is its own Bun project, outside the root workspaces), extract
    frames per beat with ffmpeg, LOOK at them; `make demo-render` to
    publish mp4/poster/og.
 
@@ -218,8 +219,9 @@ Recording:
   the previous turn's final-reply frame instead (story.ts `HANDOFF.holdSec`).
 - **The sandbox refuses symlinked binaries (exit 126).** In a worktree,
   copy `.sandbox/<provider>` and `.sandbox/srt` from the primary checkout;
-  don't symlink them. A worktree also needs its own `bun install`: borrowed
-  `node_modules` resolve `@longhouse/video` to the primary checkout's code.
+  don't symlink them. `@longhouse/video/demo` is a path alias (web
+  vite.config.ts + tsconfig.base.json `paths`) to this checkout's
+  `video/src/demo`, so web never resolves it through `node_modules`.
 - **Sentinels drift with provider releases.** Claude 2.1.219+ removed
   "esc to interrupt"; the working signal is the token-counter line. Profiles
   live in providers.yml; expect one calibration take after provider updates.
@@ -263,7 +265,8 @@ Compile/render:
 - **The web hero must never import Remotion.** It consumes the
   `@longhouse/video/demo` subpath only; `TerminalGrid` and `demo/*` stay
   free of Remotion imports so the web bundle stays player-free (~13KB
-  gzip lazy chunk, all four recordings included).
+  gzip lazy chunk, all four recordings included). Remotion is not in the
+  root install, so a stray import fails the web build outright.
 - **The marketing page never blocks on the API.** LandingPage only shows
   its loading gate when an auth redirect is actually possible; the
   `/landing` preview route renders immediately even with `/api` dead.

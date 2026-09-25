@@ -6,7 +6,8 @@
     "lib": ["DOM", "DOM.Iterable", "ES2022"],
     "baseUrl": "./src",
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./*"],
+      "@longhouse/video/demo": ["../../video/src/demo/index.ts"]
     },
     "allowJs": false,
     "strict": true,

@@ -1169,7 +1169,8 @@ landing-screenshots: ## Regenerate the landing showcase images (Timeline/Search/
 	@./scripts/landing-screenshots.sh
 
 demo-render: ## Render the ControlRoom hero demo (mp4 + poster) from committed real-PTY grid timelines
-	@cd video && bun run render:control && bun run render:control-poster
+	@# video/ is its own Bun project (Remotion stays out of the root install).
+	@cd video && bun install --frozen-lockfile && bun run render:control && bun run render:control-poster
 	@# Strip the silent AAC track Remotion muxes in (halves the asset size).
 	@ffmpeg -y -v error -i video/out/control-room.mp4 -c:v copy -an web/public/videos/control-room.mp4
 	@cp video/out/control-poster.png web/public/images/landing/control-poster.png
