@@ -92,9 +92,12 @@ SHIP_MACHINE_ID="$(resolve_ship_machine_id "$API_URL" "$LONGHOUSE_DEVICE_TOKEN")
 
 echo "Running hosted mixed live/archive shipper bench against $API_URL" >&2
 python3 "$ROOT_DIR/scripts/build/generate_build_identity.py"
-python3 "$ROOT_DIR/scripts/build/cargo.py" exec -- run \
+cargo_profile="${CARGO_PROFILE:-release}"
+python3 "$ROOT_DIR/scripts/build/cargo.py" exec -- build \
   --manifest-path "$ROOT_DIR/engine/Cargo.toml" \
-  --profile "${CARGO_PROFILE:-release}" --bin longhouse-engine -- bench \
+  --profile "$cargo_profile" --bin longhouse-engine
+engine_binary="$(python3 "$ROOT_DIR/scripts/build/cargo.py" artifact --profile "$cargo_profile" --bin longhouse-engine)"
+"$engine_binary" bench \
   --synthetic-files "${HOSTED_SHIPPER_BENCH_FILES:-4}" \
   --synthetic-events-per-file "${HOSTED_SHIPPER_BENCH_EVENTS_PER_FILE:-40}" \
   --synthetic-bytes-per-event "${HOSTED_SHIPPER_BENCH_BYTES_PER_EVENT:-1024}" \
