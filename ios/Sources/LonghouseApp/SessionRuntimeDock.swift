@@ -64,7 +64,6 @@ enum SessionSignalMaterialKind: Equatable {
 struct SessionSignalField<Content: View>: View {
     let detail: SessionDetail
     @ObservedObject var activity: ActivityPulseStore
-    let realtimeConnection: SessionRealtimeConnection
     let content: Content
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -79,12 +78,10 @@ struct SessionSignalField<Content: View>: View {
     init(
         detail: SessionDetail,
         activity: ActivityPulseStore,
-        realtimeConnection: SessionRealtimeConnection,
         @ViewBuilder content: () -> Content
     ) {
         self.detail = detail
         self.activity = activity
-        self.realtimeConnection = realtimeConnection
         self.content = content()
     }
 
@@ -194,7 +191,6 @@ struct SessionSignalField<Content: View>: View {
                 lastObservedPulseAt = latest
                 startReceiptAccent()
             }
-            .onChange(of: realtimeConnection) { _, _ in fieldNow = Date() }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active { fieldNow = Date() }
             }
@@ -581,12 +577,16 @@ struct SessionRuntimeDock: View {
 
     private var statusGeometrySignature: String {
         let state = ledger(asOf: evidenceNow)
-        return [
+        // Explicitly typed for the same reason as `statusSignature`: a literal
+        // of optional-returning calls is inference work the CI toolchain will
+        // not spend.
+        let parts: [String] = [
             "\(shouldExpand)", "\(evidenceDisclosure)", "\(noticeIsVisible)",
             headline(for: state), operationLine(for: state) ?? "",
             subline(for: state, asOf: evidenceNow) ?? "",
             delegationSummaryLabel ?? "", exceptionReason(state) ?? ""
-        ].joined(separator: "|")
+        ]
+        return parts.joined(separator: "|")
     }
 
     private func reanchorElapsed() {

@@ -283,8 +283,7 @@ private struct SessionScreenPreview: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 SessionSignalField(
                     detail: detail,
-                    activity: activity,
-                    realtimeConnection: connection
+                    activity: activity
                 ) {
                     VStack(alignment: .leading, spacing: 8) {
                         SessionRuntimeDock(detail: detail, activity: activity, realtimeConnection: connection)
