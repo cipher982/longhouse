@@ -7,7 +7,7 @@ const baseMocks = vi.hoisted(() => ({
 
 vi.mock("../base", () => baseMocks);
 
-import { createConsoleSession, fetchWorkspaceSuggestions, listMachines } from "../launch";
+import { createConsoleSession, fetchRecentModels, fetchWorkspaceSuggestions, listMachines } from "../launch";
 
 describe("fetchWorkspaceSuggestions", () => {
   beforeEach(() => {
@@ -40,6 +40,34 @@ describe("fetchWorkspaceSuggestions", () => {
     await fetchWorkspaceSuggestions("cinder");
 
     expect(baseMocks.request).toHaveBeenCalledWith("/timeline/machines/cinder/workspaces");
+  });
+});
+
+describe("fetchRecentModels", () => {
+  beforeEach(() => {
+    baseMocks.request.mockReset();
+    baseMocks.request.mockResolvedValue({
+      device_id: "cinder",
+      provider: "codex",
+      days_back: 90,
+      models: [],
+    });
+  });
+
+  it("reads recent models through the cookie-authed browser timeline route", async () => {
+    await fetchRecentModels("cinder", "codex");
+
+    expect(baseMocks.request).toHaveBeenCalledWith(
+      "/timeline/machines/cinder/providers/codex/models",
+    );
+  });
+
+  it("url-encodes the device id and provider", async () => {
+    await fetchRecentModels("dev/box", "open/code");
+
+    expect(baseMocks.request).toHaveBeenCalledWith(
+      "/timeline/machines/dev%2Fbox/providers/open%2Fcode/models",
+    );
   });
 });
 
@@ -76,5 +104,17 @@ describe("createConsoleSession", () => {
     expect(body).toMatchObject({ device_id: "cinder", provider: "claude", cwd: "/Users/me/repo" });
     expect(body).not.toHaveProperty("initial_prompt");
     expect(body).not.toHaveProperty("execution_lifetime");
+  });
+
+  it("includes a chosen model in the create request", async () => {
+    await createConsoleSession({
+      device_id: "cinder",
+      provider: "claude",
+      cwd: "/Users/me/repo",
+      model: "claude-fable-5-1",
+    });
+
+    const body = JSON.parse((baseMocks.request.mock.calls[0][1] as RequestInit).body as string);
+    expect(body).toMatchObject({ model: "claude-fable-5-1" });
   });
 });

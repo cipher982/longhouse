@@ -8,6 +8,7 @@ import type { MachineDirectoryEntry } from "../../services/api";
 const apiMocks = vi.hoisted(() => ({
   createConsoleSession: vi.fn(),
   fetchWorkspaceSuggestions: vi.fn(),
+  fetchRecentModels: vi.fn(),
   listMachines: vi.fn(),
   startProviderSignIn: vi.fn(),
   submitProviderSignInCode: vi.fn(),
@@ -71,10 +72,14 @@ function machine(overrides: Partial<MachineDirectoryEntry> = {}): MachineDirecto
 
 describe("LaunchSessionModal", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
     apiMocks.fetchWorkspaceSuggestions.mockResolvedValue({
       device_id: "cinder",
       workspaces: [],
+    });
+    apiMocks.fetchRecentModels.mockResolvedValue({
+      device_id: "cinder",
+      provider: "codex",
+      models: [],
     });
   });
 
@@ -284,6 +289,46 @@ describe("LaunchSessionModal", () => {
         cwd: "/Users/me/repo",
         launch_surface: "web",
       }),
+    );
+    expect(apiMocks.createConsoleSession.mock.calls[0][0]).not.toHaveProperty("model");
+  });
+
+  it("renders recent models and sends a selected model", async () => {
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [machine({ device_id: "cinder", machine_name: "cinder" })],
+    });
+    apiMocks.fetchRecentModels.mockResolvedValue({
+      device_id: "cinder",
+      provider: "codex",
+      models: [
+        { model: "gpt-5.6-luna", last_used_at: "2026-09-25T12:00:00Z" },
+        { model: "gpt-5.5", last_used_at: "2026-09-24T12:00:00Z" },
+      ],
+    });
+    apiMocks.createConsoleSession.mockResolvedValue({
+      session_id: "model-session-id",
+      thread_id: "model-thread-id",
+      created: true,
+    });
+
+    const user = userEvent.setup();
+    renderModal();
+
+    const modelPicker = await screen.findByTestId("launch-model-select");
+    await user.click(modelPicker.querySelector("summary")!);
+    expect(screen.getByRole("button", { name: /gpt-5\.6-luna/ })).toHaveTextContent(
+      "Last used",
+    );
+    expect(screen.getByRole("button", { name: /gpt-5\.5/ })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /gpt-5\.6-luna/ }));
+
+    await user.type(screen.getByTestId("launch-cwd-input"), "/Users/me/repo");
+    await user.click(screen.getByTestId("launch-submit"));
+
+    await waitFor(() =>
+      expect(apiMocks.createConsoleSession).toHaveBeenCalledWith(
+        expect.objectContaining({ model: "gpt-5.6-luna" }),
+      ),
     );
   });
 

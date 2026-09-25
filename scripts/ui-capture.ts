@@ -77,6 +77,7 @@ const SCENES = [
   "missing-api-key",
   "timeline-card-stress",
   "launch-unavailable",
+  "launch-model-picker",
   "session-detail-stress",
   "session-question",
   "session-attention",
@@ -235,6 +236,7 @@ function sceneUsesMockApi(scene: SceneName): boolean {
   return (
     scene === "timeline-card-stress" ||
     scene === "launch-unavailable" ||
+    scene === "launch-model-picker" ||
     LANDING_TIMELINE_SCENES.includes(scene) ||
     scene === "landing-session" ||
     scene === "session-detail-stress" ||
@@ -625,6 +627,41 @@ async function installSceneMocks(
       return;
     }
 
+    if (scene === "launch-model-picker" && pathname === "/api/timeline/machines") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(LAUNCH_MODEL_PICKER_MACHINES) });
+      return;
+    }
+
+    if (scene === "launch-model-picker" && pathname.startsWith("/api/timeline/machines/") && pathname.endsWith("/workspaces")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          device_id: "workbench",
+          workspaces: [{ path: "/Users/you/git/longhouse", label: "longhouse", git_repo: null, last_used_at: null, session_count: 3 }],
+        }),
+      });
+      return;
+    }
+
+    if (scene === "launch-model-picker" && pathname.includes("/providers/") && pathname.endsWith("/models")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          device_id: "workbench",
+          provider: "codex",
+          days_back: 90,
+          models: [
+            { model: "gpt-5.6-luna", last_used_at: hoursBeforeFixtureNow(2) },
+            { model: "gpt-5.6-sol", last_used_at: hoursBeforeFixtureNow(26) },
+            { model: "gpt-5.5", last_used_at: hoursBeforeFixtureNow(24 * 5) },
+          ],
+        }),
+      });
+      return;
+    }
+
     await sealOrFallback(route, scene, pathname);
   });
 }
@@ -656,6 +693,42 @@ const LAUNCH_UNAVAILABLE_MACHINES = {
         claude: { state: "not_authenticated", remediation: "Sign in to claude on this machine" },
         codex: { state: "not_authenticated", remediation: "Sign in to codex on this machine" },
         omp: { state: "unknown" },
+      },
+    },
+  ],
+};
+
+// A launchable machine so the launch sheet renders its happy path, including
+// the Model row: the coding agent is chosen here, and the model is either the
+// provider's own default or one of the ids this machine last ran for it.
+// Recency is the whole point of that row, so the timestamps are derived from
+// the clock the capture freezes the page at (see fixtureNowIso) rather than
+// from real time -- real "now" sits months in the future of that clock, which
+// rendered every row as an absolute date instead of "2 hours ago".
+const LAUNCH_FIXTURE_NOW = Date.parse("2026-04-15T16:12:00Z");
+const hoursBeforeFixtureNow = (hours: number): string => new Date(LAUNCH_FIXTURE_NOW - hours * 3_600_000).toISOString();
+
+const LAUNCH_MODEL_PICKER_MACHINES = {
+  machines: [
+    {
+      device_id: "workbench",
+      machine_name: "workbench",
+      online: true,
+      control_channel_status: "connected",
+      supports: ["codex.turn_start", "claude.turn_start"],
+      control_operations_by_provider: { codex: ["turn_start"], claude: ["turn_start"] },
+      last_seen_at: "2026-04-15T16:11:00Z",
+      connected_since: "2026-04-15T12:00:00Z",
+      engine_build: "fixture",
+      launch: {
+        blocked_by: null,
+        providers: [{ provider: "codex" }, { provider: "claude" }],
+        default_provider: "codex",
+        unavailable_providers: [],
+      },
+      provider_readiness: {
+        codex: { state: "ready" },
+        claude: { state: "ready" },
       },
     },
   ],
@@ -759,6 +832,15 @@ async function captureBundle(
     await page.waitForSelector("[data-testid='launch-unavailable-providers']", { timeout: 5000 });
     await page.click("[data-testid='launch-signin-codex']");
     await page.waitForSelector("[data-testid='launch-signin-panel-codex']", { timeout: 5000 });
+  }
+
+  // Open the launch sheet and expand its Model row so the frame carries the
+  // recents the launch picker offers on this machine.
+  if (scene === "launch-model-picker") {
+    await page.click("[data-testid='sessions-start-session']");
+    await page.waitForSelector("[data-testid='launch-model-select']", { timeout: 5000 });
+    await page.click("[data-testid='launch-model-select'] summary");
+    await page.waitForSelector("[data-testid='launch-model-select-input']", { timeout: 5000 });
   }
 
   // Inject CSS to kill animations for deterministic screenshots

@@ -101,6 +101,8 @@ export interface AgentSession {
   execution_lifetime?: "one_shot" | "live_control" | null;
   launch_actor?: string | null;
   launch_surface?: string | null;
+  /** Model selected for Console turns; distinct from observed usage_latest.model. */
+  selected_model?: string | null;
   is_sidechain?: boolean;
   /**
    * Attribution for the user whose signed share link or legacy

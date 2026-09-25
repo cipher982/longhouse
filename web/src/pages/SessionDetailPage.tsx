@@ -359,6 +359,8 @@ function SessionDetailWorkspaceRoute({
     id: branchSourceSession.id,
     project: branchSourceSession.project,
     provider: branchSourceSession.provider,
+    device_id: branchSourceSession.device_id,
+    selected_model: branchSourceSession.selected_model,
     capabilities: branchSourceSession.capabilities,
     session_state: branchSourceSession.session_state,
   };

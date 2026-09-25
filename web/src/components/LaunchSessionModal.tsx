@@ -11,6 +11,7 @@ import {
 import { Button, Spinner } from "./ui";
 import { getProviderLabel } from "../lib/providers";
 import ProviderSignInList from "./ProviderSignInList";
+import ModelPicker from "./ModelPicker";
 
 interface LaunchSessionModalProps {
   isOpen: boolean;
@@ -46,13 +47,14 @@ export default function LaunchSessionModal({
     refetchOnMount: "always",
     refetchInterval: isOpen ? 5000 : false,
   });
-
   const machinePickerRef = useRef<HTMLDetailsElement | null>(null);
   const providerPickerRef = useRef<HTMLDetailsElement | null>(null);
+  const modelPickerRef = useRef<HTMLDetailsElement | null>(null);
   const workspacePickerRef = useRef<HTMLDetailsElement | null>(null);
   const advancedPickerRef = useRef<HTMLDetailsElement | null>(null);
   const [deviceId, setDeviceId] = useState<string>("");
   const [provider, setProvider] = useState<string>("");
+  const [model, setModel] = useState<string>("");
   const [cwd, setCwd] = useState<string>("");
   const [workspaceSearch, setWorkspaceSearch] = useState<string>("");
   const [displayName, setDisplayName] = useState<string>("");
@@ -121,6 +123,7 @@ export default function LaunchSessionModal({
     const providers = launchProvidersForMachine(selectedMachine);
     if (!provider || !providers.includes(provider)) {
       setProvider(defaultProvider(selectedMachine));
+      setModel("");
     }
   }, [isOpen, selectedMachine, provider]);
 
@@ -135,6 +138,7 @@ export default function LaunchSessionModal({
     if (isOpen) return;
     setDeviceId("");
     setProvider("");
+    setModel("");
     setCwd("");
     setWorkspaceSearch("");
     setDisplayName("");
@@ -148,8 +152,13 @@ export default function LaunchSessionModal({
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        const openPicker = [workspacePickerRef.current, providerPickerRef.current, machinePickerRef.current, advancedPickerRef.current]
-          .find((picker) => picker?.open);
+        const openPicker = [
+          workspacePickerRef.current,
+          modelPickerRef.current,
+          providerPickerRef.current,
+          machinePickerRef.current,
+          advancedPickerRef.current,
+        ].find((picker) => picker?.open);
         if (openPicker) {
           openPicker.open = false;
           openPicker.querySelector<HTMLElement>("summary")?.focus();
@@ -172,6 +181,7 @@ export default function LaunchSessionModal({
         provider,
         cwd: cwd.trim(),
         display_name: displayName.trim() || null,
+        ...(model.trim() ? { model: model.trim() } : {}),
         launch_surface: "web",
       });
       onLaunched(result.session_id);
@@ -184,7 +194,7 @@ export default function LaunchSessionModal({
     } finally {
       setSubmitting(false);
     }
-  }, [canSubmit, deviceId, provider, cwd, displayName, onLaunched]);
+  }, [canSubmit, deviceId, provider, model, cwd, displayName, onLaunched]);
 
   if (!isOpen) return null;
 
@@ -246,6 +256,7 @@ export default function LaunchSessionModal({
                           const nextProvider = defaultProvider(machine);
                           setDeviceId(machine.device_id);
                           setProvider(nextProvider);
+                          setModel("");
                           setCwd("");
                           setWorkspaceSearch("");
                           setError(null);
@@ -289,6 +300,7 @@ export default function LaunchSessionModal({
                       {launchProvidersForMachine(selectedMachine).map((p) => (
                         <button key={p} type="button" className="launch-option-row" onClick={() => {
                           setProvider(p);
+                          setModel("");
                           setError(null);
                           if (providerPickerRef.current) providerPickerRef.current.open = false;
                         }}>
@@ -300,6 +312,14 @@ export default function LaunchSessionModal({
                 ) : (
                   <div className="launch-static-choice"><strong>{getProviderLabel(provider)}</strong><small>Coding agent</small></div>
                 )}
+                <ModelPicker
+                  deviceId={deviceId || null}
+                  provider={provider}
+                  value={model}
+                  onChange={setModel}
+                  pickerRef={modelPickerRef}
+                  testId="launch-model-select"
+                />
                 {selectedMachine && <ProviderSignInList machine={selectedMachine} />}
 
                 <details ref={workspacePickerRef} className="launch-choice launch-choice--nested">

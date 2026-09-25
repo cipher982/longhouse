@@ -74,6 +74,7 @@ function makeSession(
     id: "sess-1",
     project: "zerg",
     provider: "claude",
+    device_id: null,
     session_state: makeSessionStateFacts({
       access: "live_control",
       interruptAvailable: true,
@@ -220,6 +221,78 @@ describe("SessionChat", () => {
     URL.createObjectURL = vi.fn(() => "blob:test-preview");
     URL.revokeObjectURL = vi.fn();
     window.localStorage.clear();
+  });
+
+  it("shows the Console model chip and sends its selected model", async () => {
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/providers/codex/models")) {
+        return Promise.resolve({
+          device_id: "cinder",
+          provider: "codex",
+          models: [
+            { model: "gpt-5.6-luna", last_used_at: "2026-09-25T12:00:00Z" },
+          ],
+        });
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body ?? "{}")) as {
+          client_request_id?: string;
+        };
+        return Promise.resolve({
+          outcome: "sent",
+          input_id: 1,
+          intent: "auto",
+          client_request_id: body.client_request_id,
+          queued: [],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    const user = userEvent.setup();
+    renderSessionChat({
+      chatMode: "managed_local",
+      session: makeSession({
+        device_id: "cinder",
+        provider: "codex",
+        selected_model: "gpt-5.5",
+        session_state: makeSessionStateFacts({
+          access: "live_control",
+          mode: "console",
+        }),
+      }),
+    });
+
+    expect(await screen.findByTestId("session-model-select")).toHaveTextContent(
+      "gpt-5.5",
+    );
+    await user.click(
+      screen.getByTestId("session-model-select").querySelector("summary")!,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /gpt-5\.6-luna/ })).toBeInTheDocument(),
+    );
+    await user.click(screen.getByRole("button", { name: /gpt-5\.6-luna/ }));
+    await user.type(
+      screen.getByRole("textbox", { name: "Next instruction" }),
+      "Continue with this model",
+    );
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => {
+      const inputCall = requestMock.mock.calls.find(
+        ([path, init]) =>
+          String(path).endsWith("/input") &&
+          (init as RequestInit | undefined)?.method === "POST",
+      );
+      expect(inputCall).toBeTruthy();
+      expect(JSON.parse(String((inputCall?.[1] as RequestInit).body))).toMatchObject({
+        model: "gpt-5.6-luna",
+      });
+    });
   });
   it("expires turn-specific actions without another update while retaining the draft", async () => {
     vi.useFakeTimers();

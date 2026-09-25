@@ -35,6 +35,26 @@ export async function fetchWorkspaceSuggestions(
   );
 }
 
+export type RecentModel = {
+  model: string;
+  last_used_at: string | null;
+};
+
+export type RecentModelsResponse = {
+  device_id: string;
+  provider: string;
+  models: RecentModel[];
+};
+
+export async function fetchRecentModels(
+  deviceId: string,
+  provider: string,
+): Promise<RecentModelsResponse> {
+  return request<RecentModelsResponse>(
+    `/timeline/machines/${encodeURIComponent(deviceId)}/providers/${encodeURIComponent(provider)}/models`,
+  );
+}
+
 export type LaunchState =
   | "launching"
   | "live"
@@ -61,6 +81,7 @@ export type ConsoleSessionCreateRequest = {
   cwd: string;
   project?: string | null;
   display_name?: string | null;
+  model?: string | null;
   launch_surface?: "web" | "ios" | "api";
 };
 

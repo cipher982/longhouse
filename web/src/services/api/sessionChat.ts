@@ -52,11 +52,18 @@ export interface SessionInterruptResponse {
 
 export async function postSessionInput(
   sessionId: string,
-  body: { text: string; intent: SessionInputIntent; client_request_id: string },
+  body: {
+    text: string;
+    intent: SessionInputIntent;
+    client_request_id: string;
+    model?: string | null;
+  },
 ): Promise<SessionInputResponse> {
+  const payload = { ...body };
+  if (!payload.model?.trim()) delete payload.model;
   return request<SessionInputResponse>(`/sessions/${sessionId}/input`, {
     method: "POST",
-    body: JSON.stringify(body),
+    body: JSON.stringify(payload),
   });
 }
 
@@ -71,6 +78,7 @@ export async function postSessionInputMultipart(
     text: string;
     attachments: MultipartAttachment[];
     client_request_id: string;
+    model?: string | null;
   },
 ): Promise<SessionInputResponse> {
   // Multipart route is auto-intent only in v1; the server enforces this.
@@ -78,6 +86,7 @@ export async function postSessionInputMultipart(
   form.append("text", body.text);
   form.append("intent", "auto");
   form.append("client_request_id", body.client_request_id);
+  if (body.model?.trim()) form.append("model", body.model);
   body.attachments.forEach((a) => form.append("attachments", a.blob, a.filename));
   const totalBytes = body.attachments.reduce((sum, a) => sum + a.blob.size, 0);
   const started = performance.now();

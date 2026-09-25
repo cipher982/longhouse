@@ -46,6 +46,7 @@ import {
 } from "./session-workspace/sessionHeaderState";
 import { ProviderGlyph } from "./ProviderGlyph";
 import { getProviderLabel } from "../lib/providers";
+import ModelPicker from "./ModelPicker";
 import { useWallClock } from "../hooks/useWallClock";
 import {
   isActivityExecuting,
@@ -126,9 +127,14 @@ interface SessionChatProps {
 
 export type SessionChatTarget = Pick<
   AgentSession,
-  "id" | "project" | "provider" | "capabilities" | "session_state"
+  | "id"
+  | "project"
+  | "provider"
+  | "device_id"
+  | "selected_model"
+  | "capabilities"
+  | "session_state"
 >;
-
 function newClientRequestId(): string {
   const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
   if (randomUUID) return `web-${randomUUID()}`;
@@ -481,10 +487,16 @@ export function SessionChat({
     isComposerDisabled && !retainDockComposer;
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState("");
+  const [selectedModel, setSelectedModel] = useState(
+    () => session.selected_model?.trim() ?? "",
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isInterrupting, setIsInterrupting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [blockedKeyboardSubmit, setBlockedKeyboardSubmit] = useState(false);
+  useEffect(() => {
+    setSelectedModel(session.selected_model?.trim() ?? "");
+  }, [session.id, session.selected_model]);
 
   const [sentConfirmation, setSentConfirmation] = useState(false);
   const [pendingManagedLocalInputs, setPendingManagedLocalInputs] = useState<
@@ -856,11 +868,13 @@ export function SessionChat({
               text: message,
               attachments,
               client_request_id: clientRequestId,
+              ...(selectedModel.trim() ? { model: selectedModel.trim() } : {}),
             })
           : await postSessionInput(session.id, {
               text: message,
               intent,
               client_request_id: clientRequestId,
+              ...(selectedModel.trim() ? { model: selectedModel.trim() } : {}),
             });
 
         queryClient.setQueryData<QueuedInputSummary[]>(
@@ -1132,6 +1146,7 @@ export function SessionChat({
       markInputDelivered,
       queryClient,
       refreshCurrentSessionWorkspace,
+      selectedModel,
       session.id,
     ],
   );
@@ -1886,13 +1901,23 @@ export function SessionChat({
                     ) : null}
                   </>
                 )}
+                {session.session_state.mode === "console" ? (
+                  <ModelPicker
+                    deviceId={session.device_id}
+                    provider={session.provider}
+                    value={selectedModel}
+                    onChange={setSelectedModel}
+                    compact
+                    testId="session-model-select"
+                  />
+                ) : null}
+                {composerHeaderAccessory ? (
+                  <span className="session-chat-composer__head-accessory">
+                    {composerHeaderAccessory}
+                  </span>
+                ) : null}
               </>
             )}
-            {composerHeaderAccessory ? (
-              <span className="session-chat-composer__head-accessory">
-                {composerHeaderAccessory}
-              </span>
-            ) : null}
           </div>
         ) : null}
         {isDock ? queuedBanner : null}

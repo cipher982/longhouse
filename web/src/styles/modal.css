@@ -334,6 +334,65 @@
     color: var(--color-text-secondary);
     font-size: var(--font-size-sm);
   }
+  .model-picker-panel > .launch-option-row > span:first-child {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.16rem;
+  }
+
+  .model-picker-panel > .launch-option-row small {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    font-weight: 400;
+  }
+
+  .model-picker--compact {
+    flex: none;
+    position: relative;
+    border: 0;
+    background: transparent;
+  }
+
+  .model-picker--compact > summary {
+    min-height: 0;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--color-surface-elevated) 78%, transparent);
+  }
+
+  .model-picker--compact > summary .launch-choice-copy {
+    gap: 0.05rem;
+  }
+
+  .model-picker--compact > summary .launch-choice-copy strong {
+    max-width: 16rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--font-size-sm);
+  }
+
+  .model-picker--compact > summary .launch-choice-copy small {
+    font-size: 0.68rem;
+  }
+
+  .model-picker--compact > summary::after {
+    font-size: 1rem;
+  }
+
+  .model-picker--compact[open] > .model-picker-panel {
+    position: absolute;
+    top: calc(100% + 0.35rem);
+    right: 0;
+    z-index: 20;
+    width: min(20rem, 80vw);
+    border: 1px solid var(--color-border-primary);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-primary);
+    box-shadow: var(--shadow-lg);
+  }
 
   .launch-path-suggestions {
     display: flex;
