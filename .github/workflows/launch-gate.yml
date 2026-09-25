@@ -130,7 +130,10 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ github.event.release.tag_name || github.ref }}
+          # The triggering commit, not the branch tip at checkout time: another
+          # push landing between trigger and checkout built a different commit
+          # than the one build identity was stamped for (2026-09-25).
+          ref: ${{ github.event.release.tag_name || github.sha }}
           fetch-depth: 1
 
       - name: Set up Python
@@ -452,7 +455,10 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          ref: ${{ github.event.release.tag_name || github.ref }}
+          # The triggering commit, not the branch tip at checkout time: another
+          # push landing between trigger and checkout built a different commit
+          # than the one build identity was stamped for (2026-09-25).
+          ref: ${{ github.event.release.tag_name || github.sha }}
           fetch-depth: 1
 
       - name: Run fresh-clone onboarding funnel in the portable isolation boundary
