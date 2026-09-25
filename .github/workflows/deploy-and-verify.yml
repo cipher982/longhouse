@@ -214,6 +214,7 @@ jobs:
         uses: ./.github/actions/wait-for-ci
         with:
           head_sha: ${{ steps.meta.outputs.runtime_image_tag }}
+          head_branch: ${{ steps.meta.outputs.head_branch }}
           superseded_branch: ${{ github.event_name == 'push' && github.ref_name || '' }}
           # The action's 20m default is shorter than a queued run: on 2026-09-18
           # `Core E2E tests` took 15m of runtime but only started ~20m after the
@@ -229,7 +230,7 @@ jobs:
           # this gate for 30m41s and then failed it with no runtime mutation.
           # Path detection and fixture publication are prerequisites for every
           # filtered suite; a failed prerequisite cannot turn skipped tests green.
-          required_jobs: Changed paths,Prepare immutable fixture image,Backend tests,Engine tests,Frontend + runner tests
+          required_jobs: Changed paths,Prepare immutable fixture image,Backend tests,Engine tests,Frontend + runner tests,Provider contract tests
           ignored_failure_jobs: Core E2E tests,Accessibility E2E tests,Model smoke tests,OSS onboarding smoke
 
       - name: Wait for full CI gate (temporary opt-in)
@@ -238,10 +239,11 @@ jobs:
         uses: ./.github/actions/wait-for-ci
         with:
           head_sha: ${{ steps.meta.outputs.runtime_image_tag }}
+          head_branch: ${{ steps.meta.outputs.head_branch }}
           superseded_branch: ${{ github.event_name == 'push' && github.ref_name || '' }}
           github_token: ${{ github.token }}
           event: ""
-          required_jobs: Changed paths,Prepare immutable fixture image,Backend tests,Engine tests,Core E2E tests,Accessibility E2E tests,CLI wheel packaging
+          required_jobs: Changed paths,Prepare immutable fixture image,Backend tests,Engine tests,Core E2E tests,Accessibility E2E tests,CLI wheel packaging,Provider contract tests
           ignored_failure_jobs: OSS onboarding smoke
 
       - name: Wait for exact runtime image publication
@@ -250,6 +252,7 @@ jobs:
         uses: ./.github/actions/wait-for-ci
         with:
           head_sha: ${{ steps.meta.outputs.runtime_image_tag }}
+          head_branch: ${{ steps.meta.outputs.head_branch }}
           superseded_branch: ${{ github.event_name == 'push' && github.ref_name || '' }}
           github_token: ${{ github.token }}
           workflow_id: runtime-image.yml

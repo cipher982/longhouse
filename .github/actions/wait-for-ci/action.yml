@@ -42,10 +42,10 @@ inputs:
 
   superseded_branch:
     description: >-
-      When set (e.g. main), a run that concluded cancelled while the target SHA
-      is no longer this branch's head is reported as superseded instead of
-      failing: main CI drops queued runs for older commits, and the newer head
-      carries them. Outputs superseded_by=<head sha>.
+      When set (e.g. main), a cancelled run is superseded only when this
+      branch's new head descends from the target SHA. Main CI drops queued
+      runs for older commits; the descendant carries them.
+      Outputs superseded_by=<head sha>.
     required: false
     default: ""
 
@@ -238,9 +238,19 @@ runs:
               params.event = workflowEvent;
             }
 
-            const { data } = await github.rest.actions.listWorkflowRuns(params);
-
-            const run = data.workflow_runs.find((c) => c.head_sha === sha);
+            let run = null;
+            for (let page = 1; ; page += 1) {
+              const { data } = await github.rest.actions.listWorkflowRuns({ ...params, page });
+              run = data.workflow_runs.find((candidate) => candidate.head_sha === sha);
+              if (
+                run ||
+                page * params.per_page >= data.total_count ||
+                data.workflow_runs.length < params.per_page ||
+                Date.now() >= deadline
+              ) {
+                break;
+              }
+            }
             if (run) {
               lastMatchedRun = run;
               core.info(`${workflowId} run ${run.id}: status=${run.status} conclusion=${run.conclusion}`);
@@ -259,9 +269,18 @@ runs:
                     branch: supersededBranch,
                   });
                   if (head.commit.sha !== sha) {
-                    core.notice(`${workflowId} for ${sha} was dropped from the queue because ${supersededBranch} moved to ${head.commit.sha}, which contains it; that commit's run covers this one.`);
-                    core.setOutput('superseded_by', head.commit.sha);
-                    return;
+                    const { data: comparison } = await github.rest.repos.compareCommits({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      base: sha,
+                      head: head.commit.sha,
+                    });
+                    if (comparison.status === 'ahead' || comparison.status === 'identical') {
+                      core.notice(`${workflowId} for ${sha} was dropped from the queue because ${supersededBranch} moved to ${head.commit.sha}, which contains it; that commit's run covers this one.`);
+                      core.setOutput('superseded_by', head.commit.sha);
+                      return;
+                    }
+                    core.warning(`${supersededBranch} moved to ${head.commit.sha} without containing ${sha}; cancelled CI is not superseded`);
                   }
                 }
                 if (sawFailure) {
