@@ -42,6 +42,26 @@ description: Zerg testing workflow (unit + E2E). Use when running or debugging t
 - If authoritative retention fails, preserve the disposable isolation as evidence, mark cleanup failed, and report its exact owner and removal condition; never delete the only source and call cleanup complete.
 - Rendered frames and verification transcripts are evidence, not durable user-facing artifacts: keep only the required receipt under ignored artifacts and remove named QA windows/sessions before handoff. A screenshot is never a cleanup substitute; any visible simulator, provider TUI, browser tab, or verification conversation opened by the run must be closed in that run's `finally` path, or the run remains incomplete.
 - Cleanup is a release gate, not a follow-up: re-read `git status --short`, the exact owned PID/process-group inventory, hosted session inventory, and `xcrun simctl list devices` before declaring the run complete.
+## Attributing a failure before you chase it
+
+- **Running the suite from inside a managed session produces false failures.**
+  `LONGHOUSE_MANAGED_SESSION_ID` / `LONGHOUSE_COORDINATION_TOKEN` /
+  `LONGHOUSE_RUN_ID` in the ambient shell make the MCP and coordination clients
+  attach `X-Agents-Token` and `X-Longhouse-Session-Id`, so tests asserting exact
+  request arguments fail on the extra headers. Re-run with those unset before
+  concluding anything; on 2026-09-25 that accounted for 4 of 5 local `tests_lite`
+  failures that looked like a real regression.
+- `test_raw_object_workers.py::test_broken_pool_cleanup_terminates_surviving_owned_child`
+  is load-sensitive: it passes in isolation and can fail under the full suite.
+- **A focused selection is not a gate.** Regressions have shipped in changes
+  whose own tests passed, because an edit replaced a neighbouring line instead of
+  adding a sibling: a shared budget dict lost an entry, a response constructor
+  lost two keyword arguments, and a module `__all__` lost a name. Anything
+  touching those three shapes needs the full `tests_lite`, the full core E2E,
+  and `make validate-sdk`.
+- New routes or response fields fail `validate-sdk` until `make generate-sdk`
+  runs; regenerate in the same change.
+
 ## Core Commands
 ```bash
 make test                # unit tests
