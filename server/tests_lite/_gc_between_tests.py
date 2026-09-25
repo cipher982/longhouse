@@ -20,6 +20,13 @@ every pass slower than the last (5 ms early, 600 ms by the end; 34 s of a
 them; reference counting still frees anything they release. Objects frozen
 while alive that later become *cyclic* garbage are never reclaimed, so the
 pass runs after the test's own fixtures are torn down.
+
+That bound is real: module-, class- and session-scoped fixtures (and any
+other state) alive at a freeze are frozen with it, and whatever cyclic
+garbage they leave at their own later teardown stays for the rest of the
+process. Measured on the serial suite, peak RSS rose ~6% (930 -> 992 MB)
+while full-collection time fell from 38 s to 8 s. If a worker's memory ever
+matters more than that, freeze less often or unfreeze before collecting.
 """
 
 import gc
