@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter } from "react-router-dom";
+import { BrowserRouter } from "react-router";
 import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "./lib/auth";
 import { ConfirmProvider } from "./components/confirm";
@@ -157,12 +157,7 @@ ReactDOM.createRoot(container).render(
       <AuthProvider>
         <ConfirmProvider>
           <SessionPickerProvider>
-          <BrowserRouter
-            future={{
-              v7_startTransition: true,
-              v7_relativeSplatPath: true,
-            }}
-          >
+          <BrowserRouter>
             <App />
             <Toaster
             position="top-right"

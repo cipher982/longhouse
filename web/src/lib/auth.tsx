@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, type ReactNode } from 'react';
 import config from './config';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Navigate, useLocation } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router';
 import { toast } from 'react-hot-toast';
 import {
   beginLogoutBarrier,

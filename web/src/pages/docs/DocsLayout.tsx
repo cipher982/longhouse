@@ -1,4 +1,4 @@
-import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation } from "react-router";
 import { SwarmLogo } from "../../components/SwarmLogo";
 import { usePublicPageScroll } from "../../hooks/usePublicPageScroll";
 import "../../styles/docs.css";

@@ -13,7 +13,7 @@
 
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Navigate, useParams } from "react-router-dom";
+import { Navigate, useParams } from "react-router";
 import { Button, Spinner } from "../components/ui";
 import { useAuth } from "../lib/auth";
 import { buildLoginUrl } from "../lib/loginRedirect";

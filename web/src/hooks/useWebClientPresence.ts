@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation } from "react-router";
 import config from "../lib/config";
 import { postWebClientPresence } from "../services/api/clientPresence";
 import { useDocumentVisible } from "./useDocumentVisible";

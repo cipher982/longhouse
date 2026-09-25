@@ -17,7 +17,7 @@ import {
   useNavigate,
   useParams,
   useSearchParams,
-} from "react-router-dom";
+} from "react-router";
 import { toast } from "react-hot-toast";
 import { Button, EmptyState, Spinner } from "../components/ui";
 import { SessionChat, type SessionChatTarget } from "../components/SessionChat";

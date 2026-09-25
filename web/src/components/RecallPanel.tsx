@@ -7,7 +7,7 @@
 
 import { useState } from "react";
 import "../styles/recall-panel.css";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { useRecall, useRecallContext } from "../hooks/useAgentSessions";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import type { RecallSearchResult, RecallExpandedTurn, RecallFilters } from "../services/api/agents";

@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import remarkGfm from "remark-gfm";
 import { EmptyState, Spinner } from "../ui";
 import { FunnelIcon } from "../icons";

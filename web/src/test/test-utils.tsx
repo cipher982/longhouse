@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
-import { MemoryRouter, type MemoryRouterProps } from "react-router-dom";
+import { MemoryRouter, type MemoryRouterProps } from "react-router";
 
 /**
- * MemoryRouter wrapper with React Router v7 future flags enabled.
- * Use this in tests to match the production BrowserRouter configuration.
+ * MemoryRouter wrapper for tests. Mirrors the production BrowserRouter,
+ * which runs React Router v7 with default behavior (no future flags).
  */
 export function TestRouter({
   children,
@@ -18,10 +18,6 @@ export function TestRouter({
     <MemoryRouter
       initialEntries={initialEntries}
       initialIndex={initialIndex}
-      future={{
-        v7_startTransition: true,
-        v7_relativeSplatPath: true,
-      }}
     >
       {children}
     </MemoryRouter>

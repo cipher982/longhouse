@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { BlogHeader } from "../components/blog/BlogHeader";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { usePublicPageScroll } from "../hooks/usePublicPageScroll";

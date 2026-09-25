@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Navigate, useSearchParams } from 'react-router-dom';
+import { Navigate, useSearchParams } from 'react-router';
 import { clearLogoutBarrier, markLoginAttempt } from '../lib/auth-refresh';
 import { sanitizeReturnTo } from '../lib/loginRedirect';
 import config from '../lib/config';

@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Route, Routes } from "react-router-dom";
-import * as reactRouterDom from "react-router-dom";
+import { Route, Routes } from "react-router";
+import * as reactRouterDom from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Runner } from "../../services/api";
 import { TestRouter } from "../../test/test-utils";

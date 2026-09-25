@@ -1,4 +1,4 @@
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import config from "../../lib/config";
 import { LandingHeader, type LandingNavLink } from "../landing/LandingHeader";
 

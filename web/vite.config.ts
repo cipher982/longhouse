@@ -55,7 +55,7 @@ function buildHashPlugin(): Plugin {
 
 export default defineConfig(({ mode }) => {
   // Load .env from repo root (monorepo root contains single .env file)
-  const repoRoot = path.resolve(__dirname, "..");
+  const repoRoot = path.resolve(import.meta.dirname, "..");
   const rootEnv = loadEnv(mode, repoRoot, "");
 
   const frontendPort = Number(rootEnv.FRONTEND_PORT || 3000);

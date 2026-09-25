@@ -35,6 +35,8 @@ describe("procedural demo stories", () => {
     }
   });
 
+  // ~10s of synchronous expect() calls under full-suite load; the 5s default
+  // timeout trips intermittently on Vitest 4.
   it("satisfies event and terminal invariants across 1,000 stories", () => {
     for (let ordinal = 0; ordinal < 1_000; ordinal += 1) {
       const story = generateDemoStory(`property-${ordinal % 37}`, ordinal);
@@ -76,7 +78,7 @@ describe("procedural demo stories", () => {
         }
       }
     }
-  });
+  }, 30_000);
 
   it("includes a visible failed test followed by a passing retry", () => {
     const retryOrdinal = Array.from({ length: DEMO_RECIPES.length }, (_, ordinal) => ordinal)

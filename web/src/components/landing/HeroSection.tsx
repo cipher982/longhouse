@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
 import { Button } from "../ui";
 import config from "../../lib/config";
 import { trackAcquisitionEvent } from "../../lib/analytics";

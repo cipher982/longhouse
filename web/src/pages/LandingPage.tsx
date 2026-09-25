@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { Navigate, useLocation, useNavigate } from "react-router-dom";
+import { Navigate, useLocation, useNavigate } from "react-router";
 import { useAuth } from "../lib/auth";
 import config from "../lib/config";
 import { SwarmLogo } from "../components/SwarmLogo";

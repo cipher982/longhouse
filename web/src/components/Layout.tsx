@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import { useState, useCallback, useEffect, useRef, type PropsWithChildren } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth, useAuthMethods } from "../lib/auth";
 import { buildLoginUrl } from "../lib/loginRedirect";

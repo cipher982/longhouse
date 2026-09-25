@@ -211,9 +211,9 @@ class MockWebSocket {
 // @ts-expect-error – jsdom lacks WebSocket; provide lightweight shim for tests
 global.WebSocket = MockWebSocket;
 
-// Mock react-router-dom hooks for components that use navigation
-vi.mock("react-router-dom", async () => {
-  const actual = await vi.importActual("react-router-dom");
+// Mock react-router hooks for components that use navigation
+vi.mock("react-router", async () => {
+  const actual = await vi.importActual("react-router");
   return {
     ...actual,
     useNavigate: () => vi.fn(),

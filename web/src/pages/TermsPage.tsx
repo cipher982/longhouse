@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { SwarmLogo } from "../components/SwarmLogo";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { usePublicPageScroll } from "../hooks/usePublicPageScroll";

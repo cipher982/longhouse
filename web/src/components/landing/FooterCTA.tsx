@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { SwarmLogo } from "../SwarmLogo";
 import { Button } from "../ui";
 import { trackAcquisitionEvent } from "../../lib/analytics";

@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { usePageMeta } from "../../hooks/usePageMeta";
 import { CodeBlock } from "./CodeBlock";
 
