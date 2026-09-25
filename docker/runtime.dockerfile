@@ -75,6 +75,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /tmp
+# CFLAGS replaces Python's own -O3 for this build, so without -O2 SQLite
+# compiles unoptimized: plain queries 204 vs 112 ms and FTS5 47 vs 19 ms on one
+# micro-benchmark, slower than Debian's stdlib 3.40.1. catalogd and searchd
+# both run on this module.
 RUN pip install --upgrade setuptools wheel \
     && curl -fsSLO "https://sqlite.org/2026/sqlite-autoconf-${SQLITE_VERSION}.tar.gz" \
     && test "$(openssl dgst -sha3-256 "sqlite-autoconf-${SQLITE_VERSION}.tar.gz" | awk '{print $2}')" = "${SQLITE_SHA3}" \
@@ -82,7 +86,7 @@ RUN pip install --upgrade setuptools wheel \
     && pip download --no-binary=:all: pysqlite3==0.6.0 \
     && tar -xzf pysqlite3-0.6.0.tar.gz \
     && cp "sqlite-autoconf-${SQLITE_VERSION}/sqlite3.c" "sqlite-autoconf-${SQLITE_VERSION}/sqlite3.h" pysqlite3-0.6.0/ \
-    && cd pysqlite3-0.6.0 && CFLAGS="-DSQLITE_ENABLE_DBSTAT_VTAB" python setup.py bdist_wheel \
+    && cd pysqlite3-0.6.0 && CFLAGS="-O2 -DSQLITE_ENABLE_DBSTAT_VTAB" python setup.py bdist_wheel \
     && mkdir -p /dist && cp dist/*.whl /dist/
 
 # =============================================================================
