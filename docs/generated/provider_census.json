@@ -9,7 +9,7 @@
     "opencode",
     "pi"
   ],
-  "file_count": 291,
+  "file_count": 292,
   "files": [
     {
       "path": "desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ActionSink.swift",
@@ -151,6 +151,13 @@
         "omp",
         "opencode",
         "pi"
+      ]
+    },
+    {
+      "path": "engine/src/disk_guard.rs",
+      "providers": [
+        "cursor",
+        "omp"
       ]
     },
     {

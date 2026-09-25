@@ -8,7 +8,6 @@ fixture mode. Dependency installation runs separately while building the image.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import hashlib
 import io
 import json
@@ -23,6 +22,8 @@ import tarfile
 import tempfile
 import time
 import uuid
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -381,8 +382,10 @@ def prepare_image(scratch: Path) -> ImagePreparation:
 # Every lockfile change mints a new ~6.7 GB image and nothing removed the old
 # ones: a day of dependency work left twelve behind and helped fill a laptop
 # disk (2026-09-25). A few are kept so sibling worktrees on other branches
-# still hit their cache.
+# still hit their cache, and nothing recent is removed: a sibling may have
+# resolved an image and not started its container yet.
 LOCAL_IMAGES_KEPT = 3
+LOCAL_IMAGE_MIN_AGE_SECONDS = 2 * 3600
 
 
 def prune_local_images(keep: str) -> None:
@@ -391,7 +394,7 @@ def prune_local_images(keep: str) -> None:
         "--filter",
         f"label={LABEL}.image=true",
         "--format",
-        "{{.Repository}}:{{.Tag}}",
+        "{{.Repository}}:{{.Tag}}\t{{.CreatedAt}}",
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
@@ -400,9 +403,18 @@ def prune_local_images(keep: str) -> None:
     if listed.returncode:
         return
     # `docker images` lists newest first.
-    refs = [line for line in listed.stdout.splitlines() if line and not line.endswith(":<none>")]
-    stale = [r for r in refs if r != keep][LOCAL_IMAGES_KEPT - 1 :]
-    for stale_ref in stale:
+    rows = [line.split("\t", 1) for line in listed.stdout.splitlines() if "\t" in line]
+    refs = [(ref, created) for ref, created in rows if not ref.endswith(":<none>")]
+    stale = [(ref, created) for ref, created in refs if ref != keep][LOCAL_IMAGES_KEPT - 1 :]
+    now = time.time()
+    for stale_ref, created in stale:
+        try:
+            # e.g. "2026-09-25 13:16:06 -0400 EDT"
+            age = now - datetime.strptime(created[:25], "%Y-%m-%d %H:%M:%S %z").timestamp()
+        except ValueError:
+            continue
+        if age < LOCAL_IMAGE_MIN_AGE_SECONDS:
+            continue
         # No --force: an image a container still uses stays.
         docker("image", "rm", stale_ref, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 

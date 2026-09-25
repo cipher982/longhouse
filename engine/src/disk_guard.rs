@@ -163,7 +163,12 @@ fn burn_rate(samples: &VecDeque<Sample>) -> f64 {
 pub(crate) struct SessionRoot {
     pub session_id: String,
     pub provider: String,
+    /// Pids whose identity the provider scan verified (pid plus start time).
     pub pids: Vec<u32>,
+    /// Recorded but unverified agent pids (e.g. Cursor's TUI). One counts as
+    /// agent only while it descends from a verified pid of the same session,
+    /// so a recycled pid can never become a root whose descendants get paused.
+    pub dependent_pids: Vec<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -175,6 +180,8 @@ pub(crate) struct ProcInfo {
     pub start: u64,
     pub written: u64,
     pub name: String,
+    /// Already stopped (job control, a debugger, or a prior freeze).
+    pub stopped: bool,
 }
 
 type ProcKey = (u32, u64);
@@ -205,11 +212,27 @@ pub(crate) fn attribute(
     sessions: &[SessionRoot],
 ) -> Vec<SessionActivity> {
     let parent: HashMap<u32, u32> = procs.iter().map(|p| (p.pid, p.ppid)).collect();
-    let root_owner: HashMap<u32, usize> = sessions
+    let own_pid = std::process::id();
+    let mut root_owner: HashMap<u32, usize> = sessions
         .iter()
         .enumerate()
         .flat_map(|(index, session)| session.pids.iter().map(move |pid| (*pid, index)))
         .collect();
+    for (index, session) in sessions.iter().enumerate() {
+        for pid in &session.dependent_pids {
+            let mut cursor = parent.get(pid).copied();
+            for _ in 0..64 {
+                match cursor {
+                    Some(ancestor) if root_owner.get(&ancestor) == Some(&index) => {
+                        root_owner.insert(*pid, index);
+                        break;
+                    }
+                    Some(ancestor) if ancestor > 1 => cursor = parent.get(&ancestor).copied(),
+                    _ => break,
+                }
+            }
+        }
+    }
 
     let mut activity: Vec<SessionActivity> = sessions
         .iter()
@@ -223,7 +246,7 @@ pub(crate) fn attribute(
     let names: HashMap<u32, &str> = procs.iter().map(|p| (p.pid, p.name.as_str())).collect();
 
     for proc in procs {
-        if root_owner.contains_key(&proc.pid) {
+        if root_owner.contains_key(&proc.pid) || proc.pid == own_pid {
             continue;
         }
         // Climb to the nearest agent process; the step below it is the tree top.
@@ -343,13 +366,15 @@ pub(crate) struct DiskGuard {
     previous_counters: Option<HashMap<ProcKey, u64>>,
     window: VecDeque<HashMap<ProcKey, u64>>,
     paused: Vec<PausedProcess>,
+    /// Processes stopped at the last process-table read.
+    stopped: HashSet<ProcKey>,
     last_steer: HashMap<String, (Level, Instant)>,
 }
 
 impl DiskGuard {
     /// Watch the volume holding `volume`. Processes a previous engine left
-    /// paused are resumed now: a guard that died mid-freeze must not strand
-    /// agent work in a stopped state.
+    /// paused are adopted, not resumed: the disk may still be critical. They
+    /// resume through the normal recovery path, which starts from `freeze`.
     pub(crate) fn new(volume: PathBuf, state_path: Option<PathBuf>) -> Self {
         Self::with_free_source(volume, state_path, Box::new(free_bytes))
     }
@@ -359,25 +384,40 @@ impl DiskGuard {
         state_path: Option<PathBuf>,
         free_source: FreeSource,
     ) -> Self {
-        if let Some(previous) = state_path.as_deref().and_then(read_state) {
-            let resumed = resume_processes(&previous.paused);
-            if resumed > 0 {
-                tracing::warn!(
-                    resumed,
-                    "Disk guard resumed processes left paused by a previous engine"
-                );
-            }
+        let adopted: Vec<PausedProcess> = state_path
+            .as_deref()
+            .and_then(read_state)
+            .map(|previous| previous.paused)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| process_start(p.pid) == Some(p.start))
+            .collect();
+        if !adopted.is_empty() {
+            tracing::warn!(
+                adopted = adopted.len(),
+                "Disk guard adopted processes a previous engine left paused"
+            );
         }
+        let policy = if adopted.is_empty() {
+            Policy::default()
+        } else {
+            Policy {
+                level: Level::Freeze,
+                calm_ticks: 0,
+            }
+        };
+        let level = policy.level;
         Self {
             volume,
             free_source,
             state_path,
             samples: VecDeque::new(),
-            policy: Policy::default(),
-            level: Level::Ok,
+            policy,
+            level,
             previous_counters: None,
             window: VecDeque::new(),
-            paused: Vec::new(),
+            paused: adopted,
+            stopped: HashSet::new(),
             last_steer: HashMap::new(),
         }
     }
@@ -527,6 +567,11 @@ impl DiskGuard {
 
     fn observe_processes(&mut self, sessions: &[SessionRoot]) -> Vec<SessionActivity> {
         let procs = read_processes();
+        self.stopped = procs
+            .iter()
+            .filter(|p| p.stopped)
+            .map(|p| (p.pid, p.start))
+            .collect();
         let counters: HashMap<ProcKey, u64> = procs
             .iter()
             .map(|p| ((p.pid, p.start), p.written))
@@ -559,23 +604,30 @@ impl DiskGuard {
     }
 
     fn pause_command_trees(&mut self, activity: &[SessionActivity]) -> Vec<PausedProcess> {
-        let already: HashSet<ProcKey> = self.paused.iter().map(|p| (p.pid, p.start)).collect();
-        let mut newly = Vec::new();
+        let ours: HashSet<ProcKey> = self.paused.iter().map(|p| (p.pid, p.start)).collect();
+        let mut planned = Vec::new();
+        let mut restop = Vec::new();
         for session in activity {
             for tree in &session.trees {
                 // Top first, so the tree cannot spawn new work mid-pause.
                 let mut members = tree.members.clone();
                 members.sort_by_key(|(pid, _)| *pid != tree.top_pid);
-                for (pid, start) in &members {
-                    if already.contains(&(*pid, *start))
-                        || !signal_if_same(*pid, *start, libc::SIGSTOP)
-                    {
+                for key in members {
+                    if self.stopped.contains(&key) {
+                        // Stopped by someone else (never ours to resume), or
+                        // still paused by us.
                         continue;
                     }
-                    newly.push(PausedProcess {
-                        pid: *pid,
-                        start: *start,
-                        name: if *pid == tree.top_pid {
+                    if ours.contains(&key) {
+                        // Ours, but continued behind our back (`disk-guard
+                        // resume` while still critical): stop it again.
+                        restop.push(key);
+                        continue;
+                    }
+                    planned.push(PausedProcess {
+                        pid: key.0,
+                        start: key.1,
+                        name: if key.0 == tree.top_pid {
                             tree.top_name.clone()
                         } else {
                             String::new()
@@ -585,15 +637,46 @@ impl DiskGuard {
                 }
             }
         }
+        for (pid, start) in restop {
+            signal_if_same(pid, start, libc::SIGSTOP);
+        }
+        if planned.is_empty() {
+            return Vec::new();
+        }
+        // Record before signalling, so an engine that dies right after still
+        // leaves a list to resume. On a full disk this write may fail; the
+        // pause still happens, because keeping the host alive comes first.
+        self.paused.extend(planned.iter().cloned());
+        self.persist_paused();
+        let mut newly: Vec<PausedProcess> = Vec::new();
+        let mut failed: HashSet<ProcKey> = HashSet::new();
+        for process in planned {
+            if signal_if_same(process.pid, process.start, libc::SIGSTOP) {
+                newly.push(process);
+            } else {
+                failed.insert((process.pid, process.start));
+            }
+        }
+        self.paused.retain(|p| !failed.contains(&(p.pid, p.start)));
         if !newly.is_empty() {
             tracing::warn!(
                 paused = newly.len(),
                 "Disk guard paused agent command trees"
             );
         }
-        self.paused.extend(newly.iter().cloned());
         newly.retain(|p| !p.name.is_empty());
         newly
+    }
+
+    fn persist_paused(&self) {
+        let Some(path) = self.state_path.as_deref() else {
+            return;
+        };
+        let mut state = read_state(path).unwrap_or_default();
+        state.level = Level::Freeze;
+        state.paused = self.paused.clone();
+        state.updated_at = Some(Utc::now());
+        write_state(path, &state);
     }
 }
 
@@ -667,9 +750,10 @@ pub(crate) fn free_bytes(path: &Path) -> Option<u64> {
     }
 }
 
-/// Signal `pid` only if it is still the process that started at `start`.
+/// Signal `pid` only if it is still the process that started at `start`, and
+/// is never the engine itself.
 fn signal_if_same(pid: u32, start: u64, signal: libc::c_int) -> bool {
-    if pid <= 1 || process_start(pid) != Some(start) {
+    if pid <= 1 || pid == std::process::id() || process_start(pid) != Some(start) {
         return false;
     }
     // SAFETY: kill has no memory effects; identity was checked just above.
@@ -763,6 +847,8 @@ pub(crate) fn read_processes() -> Vec<ProcInfo> {
                 start: info.ri_proc_start_abstime,
                 written: info.ri_diskio_byteswritten,
                 name,
+                // SSTOP in <sys/proc.h>.
+                stopped: bsd.pbi_status == 4,
             })
         })
         .collect()
@@ -867,6 +953,7 @@ mod tests {
             start: pid as u64 * 10,
             written: 0,
             name: name.into(),
+            stopped: false,
         }
     }
 
@@ -889,6 +976,7 @@ mod tests {
             session_id: "s1".into(),
             provider: "omp".into(),
             pids: vec![100, 101],
+            dependent_pids: vec![],
         }];
         let activity = attribute(&procs, &window, &sessions);
         assert_eq!(activity.len(), 1);
@@ -934,6 +1022,13 @@ mod tests {
             .spawn()
             .unwrap();
         std::thread::sleep(Duration::from_millis(300));
+        // Stopped by the user (job control) before the freeze: never ours.
+        let mut user_stopped = std::process::Command::new("/bin/sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        unsafe { libc::kill(user_stopped.id() as libc::pid_t, libc::SIGSTOP) };
+        std::thread::sleep(Duration::from_millis(100));
         let free = Arc::new(Mutex::new(5.0 * GIB));
         let source = free.clone();
         let dir = std::env::temp_dir().join(format!("disk-guard-test-{}", std::process::id()));
@@ -948,6 +1043,7 @@ mod tests {
             session_id: "s1".into(),
             provider: "omp".into(),
             pids: vec![std::process::id()],
+            dependent_pids: vec![],
         }];
 
         let outcome = guard.tick(&sessions);
@@ -960,6 +1056,29 @@ mod tests {
             let state = read_state(&state_path).unwrap();
             assert_eq!(state.level, Level::Freeze);
             assert!(state.paused.iter().any(|p| p.pid == child.id()));
+            assert!(
+                state.paused.iter().all(|p| p.pid != user_stopped.id()),
+                "an already-stopped process is not recorded as ours"
+            );
+
+            // A restarted engine adopts the paused set instead of resuming
+            // it while the disk is still critical.
+            let adopt_free = free.clone();
+            let mut restarted = DiskGuard::with_free_source(
+                dir.clone(),
+                Some(state_path.clone()),
+                Box::new(move |_| Some(*adopt_free.lock().unwrap() as u64)),
+            );
+            assert!(
+                stat(child.id()).starts_with('T'),
+                "adoption does not resume"
+            );
+            restarted.tick(&sessions);
+            assert!(
+                stat(child.id()).starts_with('T'),
+                "still critical, still paused"
+            );
+            guard = restarted;
             assert!(
                 state.paused.iter().all(|p| p.pid != std::process::id()),
                 "the agent itself is never paused"
@@ -983,7 +1102,14 @@ mod tests {
             );
             assert!(outcome.notify.is_some());
             assert!(read_state(&state_path).unwrap().paused.is_empty());
+            assert!(
+                stat(user_stopped.id()).starts_with('T'),
+                "the user's stop is left alone"
+            );
         }));
+        unsafe { libc::kill(user_stopped.id() as libc::pid_t, libc::SIGCONT) };
+        let _ = user_stopped.kill();
+        let _ = user_stopped.wait();
         let _ = child.kill();
         let _ = child.wait();
         // `sleep` was stopped with its shell; make sure it is not left behind.
@@ -1010,8 +1136,34 @@ mod tests {
             .expect("own process listed");
         assert_eq!(Some(own.start), process_start(me));
         assert!(
-            signal_if_same(me, own.start, 0),
-            "signal 0 probes identity only"
+            !signal_if_same(me, own.start, 0),
+            "the engine never signals itself, even with a matching identity"
+        );
+    }
+
+    #[test]
+    fn dependent_pids_are_roots_only_under_a_verified_pid() {
+        // launcher 100 (verified) -> cursor 101 (dependent) -> bash 102
+        // recycled 500 (dependent, unrelated) -> vim 501
+        let procs = vec![
+            proc(100, 1, "longhouse-engine"),
+            proc(101, 100, "cursor-agent"),
+            proc(102, 101, "bash"),
+            proc(500, 1, "zsh"),
+            proc(501, 500, "vim"),
+        ];
+        let sessions = vec![SessionRoot {
+            session_id: "c1".into(),
+            provider: "cursor".into(),
+            pids: vec![100],
+            dependent_pids: vec![101, 500],
+        }];
+        let activity = attribute(&procs, &HashMap::new(), &sessions);
+        let tops: Vec<u32> = activity[0].trees.iter().map(|t| t.top_pid).collect();
+        assert_eq!(
+            tops,
+            vec![102],
+            "the TUI is agent, not a command tree; the recycled pid owns nothing"
         );
     }
 }
