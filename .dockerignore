@@ -9,9 +9,10 @@
 
 # Bun resolves the monorepo lockfile against every declared workspace. The
 # runtime image builds only web, but it still needs the sibling manifests.
+# video/ is not a workspace; web reads the landing demo from video/src and
+# video/scripts through a path alias.
 !video/
 video/*
-!video/package.json
 !video/src/
 !video/scripts/
 !video/scripts/**

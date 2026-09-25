@@ -51,19 +51,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy the root workspace manifests for dependency caching. The web app imports
-# @longhouse/video, so Bun must see every declared workspace while resolving the
-# lockfile even though only web is built in this image.
+# Copy the root workspace manifests for dependency caching. Bun resolves the
+# root lockfile against every declared workspace (web, e2e, runner) even though
+# only web is built in this image.
 COPY package.json bun.lock ./
 COPY web/package.json ./web/package.json
-COPY video/package.json ./video/package.json
 COPY e2e/package.json ./e2e/package.json
 COPY runner/package.json ./runner/package.json
 
 # Every workspace manifest is staged above, so the root lockfile resolves as-is.
 RUN bun install --frozen-lockfile
 
-# Copy frontend source
+# Copy frontend source. The landing demo's data comes from video/src/demo (a
+# path alias, not a workspace) and its terminal fixtures under video/scripts.
 COPY web/ ./web/
 COPY video/src/ ./video/src/
 COPY video/scripts/ ./video/scripts/
